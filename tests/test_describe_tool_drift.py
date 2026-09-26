@@ -788,3 +788,25 @@ async def test_describe_reports_a_legacy_alias_own_narrower_operation():
     assert router["operation"] == "write"
     guess = json.loads((await handle_describe_tool({"tool_name": "checkin", "lite": True}))[0].text)
     assert guess["operation"] == "write"  # no override: process_agent_update's class
+
+
+@pytest.mark.asyncio
+async def test_describe_tool_handler_default_matches_the_advertised_default():
+    """The advertised default is lite=false (DescribeToolParams), and every
+    validated route got the full record. The handler's own fallback said
+    lite=true ("LITE-FIRST"), so only in-process callers that omitted lite got
+    the short form, and list_tools' tip, which named the unqualified call "for
+    parameters", described neither consistently."""
+    import json
+
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+    from src.mcp_handlers.schemas.admin import DescribeToolParams
+
+    assert DescribeToolParams.model_validate({"tool_name": "sync_state"}).lite is False
+    bare = json.loads((await handle_describe_tool({"tool_name": "sync_state"}))[0].text)
+    full = json.loads(
+        (await handle_describe_tool({"tool_name": "sync_state", "lite": False}))[0].text
+    )
+    bare.pop("server_time", None)
+    full.pop("server_time", None)
+    assert bare == full

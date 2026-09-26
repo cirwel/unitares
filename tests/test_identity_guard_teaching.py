@@ -152,7 +152,9 @@ async def test_describe_tool_observe_examples_pass_the_bound_alias_path():
     """Live discovery examples must survive the same alias/guard path as calls."""
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
 
-    described = await handle_describe_tool({"tool_name": "observe_agent"})
+    # common_patterns ride on the lite view; lite=false is the advertised
+    # default, and the handler no longer assumes lite for in-process callers.
+    described = await handle_describe_tool({"tool_name": "observe_agent", "lite": True})
     common_patterns = json.loads(described[0].text)["common_patterns"]
     assert len(common_patterns) == 3
 

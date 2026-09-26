@@ -1,0 +1,471 @@
+"""The default check_working_state envelope says each fact once, and every
+size or next-step hint an envelope emits resolves.
+
+Built from real producer output (tests/helpers/metrics_producer.py and the
+real response formatter), because the gaps pinned here survived behind
+hand-built payloads: the default envelope was 3.2 KB live with about 43% of
+it restated, include_state doubled it, and hints named paths the response did
+not contain or the mode already in effect (external agent report,
+2026-09-25).
+
+A hint resolves when it names a field present in the returned object, or a
+read-only call in a DIFFERENT mode; never the mode in effect, a new mint, or a
+repeated write.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from copy import deepcopy
+
+import pytest
+from mcp.types import TextContent
+
+from src.mcp_handlers.middleware.envelope_step import (
+    _attach_response_size,
+    apply_experience_envelope,
+    build_experience_envelope,
+)
+from src.mcp_handlers.middleware import DispatchContext
+from src.mcp_handlers.response_formatter import format_response
+from src.mcp_handlers.support.param_normalization import resolve_metrics_verbosity
+from tests.helpers.metrics_producer import agent_signature, real_metrics_payload
+
+# A default read, provisional verdict (two check-ins), measured 1,986 B on the
+# real producer; it was 3,350 B before this budget existed.
+DEFAULT_METRICS_READ_BUDGET = 2_100
+
+_SEE = re.compile(r" See ([a-z_.]+) for provenance\.")
+
+
+def _wire(obj) -> int:
+    return len(json.dumps(obj, ensure_ascii=False).encode("utf-8"))
+
+
+async def _metrics_envelope(arguments=None, *, check_ins=2, **kwargs):
+    payload, validated = await real_metrics_payload(arguments, check_ins=check_ins)
+    return build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated, **kwargs
+    )
+
+
+def _resolve(env: dict, dotted: str):
+    node = env
+    for key in dotted.split("."):
+        assert isinstance(node, dict) and key in node, f"{dotted!r} not in response"
+        node = node[key]
+    return node
+
+
+# ---------------------------------------------------------------------------
+# Each fact once
+# ---------------------------------------------------------------------------
+
+
+def _assert_one_next_step(env: dict, payload: dict) -> None:
+    """The lifecycle contract's next_action, said once: state_summary does not
+    repeat the verdict's step beside it, and action_summary.reason is neither
+    the verdict's meaning nor the payload's guidance (a step, not a reason)."""
+    assert env["next_action"]
+    assert "next_action" not in env["state_summary"]
+    reason = env["action_summary"].get("reason")
+    if reason is not None:
+        assert reason != env["state_summary"].get("meaning")
+        assert reason != payload.get("guidance")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check_ins", [0, 2, 30])
+async def test_default_read_says_each_fact_once(check_ins):
+    payload, validated = await real_metrics_payload({}, check_ins=check_ins)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+    state = env["state_summary"]
+
+    # E/I/S/V and risk are bare values; their per-field contract rides once on
+    # the tool description, the risk band in risk_summary.
+    for key in ("E", "I", "S", "V"):
+        assert isinstance(state[key], (int, float)), key
+    assert not isinstance(state.get("risk_score"), dict)
+
+    # Legacy coherence keeps its inline badge (#1872) in sync_state's shape,
+    # and the separate legacy_diagnostics block that repeated it is gone.
+    assert set(state["coherence"]) == {"value", "status", "source", "role"}
+    assert state["coherence"]["role"] == "ode_control_feedback"
+    if check_ins:
+        assert "not health-rated" in state["coherence"]["status"]
+        assert "legacy_diagnostics" not in env
+    else:
+        # Before the first check-in the badge reads "pending", so the block
+        # that says "not a health score" stays.
+        assert "not health-rated" not in state["coherence"]["status"]
+        assert env["legacy_diagnostics"]["health_evidence"] is False
+
+    # One tier ladder, not two. Before the first check-in it names only
+    # 'full': no tier has basin or mode yet.
+    assert ("response_options" in env) + ("raw_governance_hint" in env) == 1
+    if not check_ins:
+        assert "verbosity='standard'" not in env["raw_governance_hint"]
+        assert "verbosity='full'" in env["raw_governance_hint"]
+    # One next step. Uninitialized, it used to be said three times: the
+    # {tool, example} step, the verdict's prose step, and the guidance as the
+    # action reason.
+    _assert_one_next_step(env, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [{"verbosity": "standard"}, {"verbosity": "full"}])
+@pytest.mark.parametrize("check_ins", [0, 3])
+async def test_other_tiers_state_one_next_step(tier, check_ins):
+    payload, validated = await real_metrics_payload(tier, check_ins=check_ins)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+    _assert_one_next_step(env, payload)
+
+
+def test_unbound_read_states_one_next_step():
+    from src.mcp_handlers.core import unbound_metrics_payload
+
+    payload = {"success": True, **unbound_metrics_payload()}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {}
+    )
+    _assert_one_next_step(env, payload)
+    # Every tier returns the same unbound payload until the caller binds, so
+    # no tier hint and no claim that more is fetchable; next_action names
+    # the step that changes it.
+    assert "raw_governance_hint" not in env
+    assert "raw_governance_available" not in env
+    assert "response_options" not in env
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tier", [{}, {"verbosity": "standard"}, {"verbosity": "full"}]
+)
+@pytest.mark.parametrize("confidence", [0.6, 0.2])
+async def test_paused_agent_next_action_follows_the_decision(tier, confidence):
+    """interpret_state's guidance does not know the decision, so on standard
+    and full it told a paused agent "Near basin boundary - state may flip.
+    Maintain consistency." (or that a dimension was borderline) as its
+    lifecycle next_action. A stop decision's step comes first on every tier."""
+    payload, validated = await real_metrics_payload(
+        tier,
+        check_ins=3,
+        complexity=0.9,
+        confidence=confidence,
+        status="paused",
+        recent_decisions=["pause"],
+    )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+    assert env["action_summary"]["action"] == "pause"
+    guidance = payload.get("guidance") or (payload.get("state") or {}).get("guidance")
+    assert env["next_action"] != guidance
+    assert "The decision was pause" in env["next_action"] or (
+        env["next_action"].startswith("Pause")
+    )
+    _assert_one_next_step(env, payload)
+
+
+@pytest.mark.asyncio
+async def test_default_read_stays_inside_its_budget_and_under_standard():
+    minimal = await _metrics_envelope({})
+    standard = await _metrics_envelope({"verbosity": "standard"})
+    assert _wire(minimal) <= DEFAULT_METRICS_READ_BUDGET
+    assert _wire(minimal) <= _wire(standard)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [{}, {"verbosity": "standard"}, {"verbosity": "full"}])
+async def test_include_state_changes_nothing(tier):
+    """include_state never added state (runtime_queries overwrites the
+    monitor's dict before any tier is built) and no longer forces the raw
+    payload, so it is a no-op on the handler and on the envelope."""
+    plain_payload, _ = await real_metrics_payload(tier)
+    with_state_payload, _ = await real_metrics_payload({**tier, "include_state": True})
+    assert set(with_state_payload) == set(plain_payload)
+
+    plain = await _metrics_envelope(tier)
+    with_state = await _metrics_envelope({**tier, "include_state": True})
+    assert set(with_state) == set(plain)
+    assert abs(_wire(with_state) - _wire(plain)) < 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [{}, {"verbosity": "standard"}, {"verbosity": "full"}])
+async def test_include_state_changes_nothing_when_interpretation_fails(tier):
+    """When interpret_state raised, the monitor's raw state dict survived: full
+    carried it, and standard and minimal emitted mode and basin as
+    {"value": null}. The handler no longer requests it."""
+    from unittest.mock import patch
+
+    with patch(
+        "src.governance_state.GovernanceState.interpret_state",
+        side_effect=RuntimeError("interpretation failed"),
+    ):
+        plain, _ = await real_metrics_payload(tier, check_ins=5)
+        with_state, _ = await real_metrics_payload(
+            {**tier, "include_state": True}, check_ins=5
+        )
+    assert set(with_state) == set(plain)
+    for key in ("state", "mode", "basin"):
+        assert key not in with_state, key
+
+
+# ---------------------------------------------------------------------------
+# Hints resolve
+# ---------------------------------------------------------------------------
+
+
+def _sync_source(check_ins: int) -> dict:
+    """A real monitor check-in result, the base of process_agent_update's
+    full-mode payload."""
+    from src.governance_monitor import UNITARESMonitor
+
+    monitor = UNITARESMonitor(f"hint-source-{check_ins}", load_state=False)
+    result = None
+    for step in range(check_ins):
+        result = monitor.process_update(
+            {"response_text": f"step {step}: edited files", "complexity": 0.4},
+            confidence=0.8,
+            task_type="mixed",
+        )
+    return {"success": True, **result}
+
+
+_SYNC_MODES = ("auto", "compact", "mirror", "standard", "minimal", "full")
+
+
+def _assert_caveat_pointer_resolves(env: dict) -> None:
+    caveat = env.get("verdict_caveat")
+    if not caveat:
+        return
+    match = _SEE.search(caveat)
+    if match is None:
+        assert "raw_governance" not in caveat
+        return
+    _resolve(env, match.group(1))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("check_ins", [0, 1, 2])
+@pytest.mark.parametrize(
+    "arguments", [{}, {"verbosity": "standard"}, {"verbosity": "full"}]
+)
+async def test_metrics_verdict_caveat_names_a_path_in_the_response(check_ins, arguments):
+    env = await _metrics_envelope(arguments, check_ins=check_ins)
+    assert "verdict_caveat" in env  # all three are provisional
+    _assert_caveat_pointer_resolves(env)
+    if "raw_governance" not in env:
+        # The default read carries the evidence itself.
+        if "evidence" in env["state_summary"]:
+            assert "See state_summary.evidence" in env["verdict_caveat"]
+
+
+@pytest.mark.parametrize("check_ins", [1, 3, 30])
+@pytest.mark.parametrize("mode", _SYNC_MODES)
+def test_sync_verdict_caveat_never_points_into_an_absent_payload(check_ins, mode):
+    """A bounded check-in has no evidence object and no raw_governance, and
+    re-calling sync_state to fetch one would write another check-in, so its
+    caveat states the basis inline and names no path."""
+    formatted = format_response(
+        deepcopy(_sync_source(check_ins)), {"response_mode": mode}, task_type="mixed"
+    )
+    env = build_experience_envelope(
+        "sync_state", "process_agent_update", formatted, {"response_mode": mode}
+    )
+    _assert_caveat_pointer_resolves(env)
+
+
+def _names_mode(text: str, mode: str) -> bool:
+    return f"'{mode}'" in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {},
+        {"lite": True},
+        {"include_state": True},
+        {"verbosity": "standard"},
+        {"verbosity": "standard", "include_state": True},
+        {"verbosity": "full"},
+        {"lite": False},
+    ],
+)
+async def test_metrics_hints_never_name_the_tier_in_effect(arguments):
+    env = await _metrics_envelope(arguments)
+    _, validated = await real_metrics_payload(arguments)
+    current = resolve_metrics_verbosity(validated)
+    # These envelopes stay under the 4,000 B size-hint threshold, so only
+    # raw_governance_hint is exercised here; reduce_with has its own padded
+    # table below, which also asserts when advice must be present.
+    # The hint rides only where raw_governance is left out (the default
+    # tier); standard and full carry raw_governance and no hint.
+    assert ("raw_governance_hint" in env) is ("raw_governance" not in env), env.keys()
+    assert ("raw_governance" not in env) is (current == "minimal"), current
+    hint = env.get("raw_governance_hint") or ""
+    assert not _names_mode(hint, current), (current, hint)
+
+
+@pytest.mark.parametrize("mode", _SYNC_MODES)
+def test_sync_hints_never_name_the_mode_in_effect(mode):
+    formatted = format_response(
+        deepcopy(_sync_source(3)), {"response_mode": mode}, task_type="mixed"
+    )
+    env = build_experience_envelope(
+        "sync_state", "process_agent_update", formatted, {"response_mode": mode}
+    )
+    current = formatted.get("_mode") or ("full" if mode == "full" else mode)
+    # These envelopes stay under the 4,000 B size-hint threshold, so only
+    # raw_governance_hint is exercised here; reduce_with has its own padded
+    # table below, which also asserts when advice must be present.
+    # The hint rides exactly where raw_governance is left out; full keeps
+    # raw_governance, so a hint there would name the mode in effect.
+    assert ("raw_governance_hint" in env) is ("raw_governance" not in env), env.keys()
+    if current == "full":
+        assert "raw_governance" in env
+    hint = env.get("raw_governance_hint") or ""
+    assert not _names_mode(hint, current), (current, hint)
+
+
+# Direct table over the size hint: every alias that has one, every mode, with
+# an envelope padded past the 4,000 B threshold. response_options is absent in
+# exactly the cases where the old code could not see the mode in effect.
+_PAD = {"padding": "x" * 4_500}
+
+
+# advised: whether a smaller route exists from this mode. The smallest tier
+# of a tool has none, so it gets no advice rather than advice naming itself.
+@pytest.mark.parametrize(
+    "friendly_name, arguments, payload, current, advised",
+    [
+        ("check_working_state", {}, {}, "minimal", False),
+        ("check_working_state", {"include_state": True}, {}, "minimal", False),
+        ("check_working_state", {"verbosity": "standard"}, {}, "standard", True),
+        ("check_working_state", {"verbosity": "full"}, {}, "full", True),
+        ("check_working_state", {"lite": False}, {}, "full", True),
+        ("sync_state", {"response_mode": "minimal"}, {"_mode": "minimal"}, "minimal", False),
+        ("sync_state", {}, {"_mode": "compact"}, "compact", True),
+        ("sync_state", {}, {"_mode": "mirror"}, "mirror", True),
+        ("sync_state", {"response_mode": "standard"}, {"_mode": "standard"}, "standard", True),
+        ("sync_state", {"response_mode": "full"}, {}, "full", True),
+        ("sync_state", {"response_mode": "verbose"}, {}, "full", True),
+        # A lean search keeps the open-one route. include_details is forced
+        # false outside full mode, so it is a lever only in full.
+        ("search_shared_memory", {}, {}, "lean", True),
+        ("search_shared_memory", {"response_mode": "compact"}, {}, "compact", True),
+        ("search_shared_memory", {"response_mode": "full"}, {"discoveries": [{"id": "a"}]}, "full", True),
+        # Details inline (asked for, or auto-included for 1-3 results).
+        ("search_shared_memory", {"response_mode": "full"}, {"discoveries": [{"id": "a", "details": "x"}]}, "full", True),
+        ("search_shared_memory", {"response_mode": "full", "include_details": True}, {"discoveries": [{"id": "a", "details": "x"}]}, "full", True),
+    ],
+)
+def test_reduce_with_never_names_the_mode_in_effect(
+    friendly_name, arguments, payload, current, advised
+):
+    envelope = {"success": True, "tool": friendly_name, **_PAD}
+    _attach_response_size(envelope, friendly_name, arguments, payload)
+    reduce_with = envelope["_response_size"].get("reduce_with")
+    assert (reduce_with is not None) is advised, (current, reduce_with)
+    if reduce_with:
+        assert not _names_mode(reduce_with, current), (current, reduce_with)
+    if friendly_name == "search_shared_memory":
+        assert "knowledge(action='details'" in reduce_with
+        # Named exactly when details are inline in this response.
+        inline = any(d.get("details") for d in payload.get("discoveries", []))
+        assert ("include_details=false" in reduce_with) is inline, reduce_with
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{}, {"response_mode": "minimal"}, {"response_mode": "full"}, {"verbose": True}],
+)
+def test_start_session_size_receipt_never_suggests_another_mint(arguments):
+    """Acting on a start_session size hint would mint a second identity."""
+    payload = {
+        "success": True,
+        "uuid": "54d62846-70bc-41e0-afcf-087d94b5d747",
+        "client_session_id": "agent-54d62846-70b",
+        "identity_resolution_outcome": "minted_force_new",
+        "thread_context": {
+            "position": 2,
+            "predecessor": {"uuid": "11111111-2222-3333-4444-555555555555"},
+            "honest_message": "x" * 4_500,
+        },
+    }
+    env = build_experience_envelope("start_session", "onboard", payload, arguments)
+    assert env["response_shape"] == "full"
+    assert env["_response_size"]["approx_bytes"] >= 4_000
+    assert "reduce_with" not in env["_response_size"]
+
+
+# ---------------------------------------------------------------------------
+# A server-inferred binding is marked
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "proof_origin, source, marked",
+    [
+        ("server_inferred", "ip_ua_fingerprint", True),
+        ("server_inferred", "sticky_cache:explicit_client_session_id", True),
+        ("caller_asserted", "explicit_client_session_id", False),
+        (None, None, False),
+    ],
+)
+async def test_inferred_binding_is_marked_on_a_real_read(
+    monkeypatch, proof_origin, source, marked
+):
+    """A nested use_tool dispatch can serve real state on a server-inferred
+    binding (the injected agent_id passes the handler's guard). The canonical
+    payload cannot say so: agent_signature collapses to {"uuid": null} for a
+    server-inferred binding. The description promises identity_assurance
+    caller_proven=false, so the envelope reads the request's proof."""
+    import src.mcp_handlers.context as context
+
+    monkeypatch.setattr(context, "get_session_proof_origin", lambda: proof_origin)
+    monkeypatch.setattr(context, "get_session_resolution_source", lambda: source)
+    signature = {"uuid": None} if proof_origin == "server_inferred" else agent_signature()
+    payload, validated = await real_metrics_payload({}, signature=signature)
+    result = await apply_experience_envelope(
+        "get_governance_metrics",
+        validated,
+        DispatchContext(original_name="check_working_state"),
+        [TextContent(type="text", text=json.dumps(payload))],
+    )
+    env = json.loads(result[0].text)
+    assert env["tool"] == "check_working_state"
+    if marked:
+        assert env["identity_assurance"] == {
+            "tier": "weak",
+            "caller_proven": False,
+            "session_source": source,
+        }
+    else:
+        assert "identity_assurance" not in env
+
+
+@pytest.mark.asyncio
+async def test_unbound_read_is_not_marked(monkeypatch):
+    """The unbound payload reads nobody's state; there is nothing to mark."""
+    import src.mcp_handlers.context as context
+    from src.mcp_handlers.core import unbound_metrics_payload
+
+    monkeypatch.setattr(context, "get_session_proof_origin", lambda: "server_inferred")
+    monkeypatch.setattr(context, "get_session_resolution_source", lambda: "ip_ua_fingerprint")
+    payload = {"success": True, **unbound_metrics_payload(), "agent_signature": {"uuid": None}}
+    result = await apply_experience_envelope(
+        "get_governance_metrics",
+        {},
+        DispatchContext(original_name="check_working_state"),
+        [TextContent(type="text", text=json.dumps(payload))],
+    )
+    assert "identity_assurance" not in json.loads(result[0].text)

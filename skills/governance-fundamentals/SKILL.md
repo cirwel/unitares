@@ -92,9 +92,10 @@ Your state sits in a basin — a region of the EISV space:
   `basin` and `margin` are two different notions of "edge", and the boundary condition is carried
   by `basin`, the `guide` sub-action, and the guidance text, not by the margin enum.
 
-Use `check_working_state()` (`get_governance_metrics()` canonically) as the
-source of truth for the current basin/mode labels rather than assuming they are
-constant across runtime versions.
+Use `check_working_state(verbosity="standard")` (`get_governance_metrics()`
+canonically) as the source of truth for the current basin/mode labels rather
+than assuming they are constant across runtime versions; the default
+`check_working_state()` envelope leaves them out.
 
 When a response includes `policy_evaluation.inputs.basin`, read it as the
 decision-time policy basin. Agent-facing state fields can be sourced from the
@@ -200,8 +201,9 @@ When the numbers look surprising, do not guess first. Use:
 
 - `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it mints a fresh identity instead of answering about yours)
 - `health_check()` to verify the server and knowledge graph are healthy
-- `check_working_state()` for the current interpreted state, risk provenance,
-  and compatibility thresholds
+- `check_working_state()` for the current interpreted state and risk
+  provenance; canonical `get_governance_metrics()` also returns the
+  compatibility thresholds
 
 ## What NOT to Do
 

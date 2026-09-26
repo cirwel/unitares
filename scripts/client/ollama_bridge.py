@@ -224,7 +224,9 @@ def make_wrappers(mcp_tools: dict, identity: "IdentityConfig", session: "Session
     @tool
     def get_metrics() -> str:
         """Get your current EISV state vector, coherence, risk score, and verdict."""
-        return mcp_tools["check_working_state"](**session.bind(include_state="true", lite="true"))
+        # verbosity='standard' adds basin and mode; include_state never added
+        # anything and no longer forces the raw payload.
+        return mcp_tools["check_working_state"](**session.bind(verbosity="standard"))
 
     @tool
     def search_knowledge(query: str) -> str:
