@@ -147,8 +147,9 @@ class TestInferenceHostRegistry:
             "hf:router",
             "codex:host-adapter",
             "claude:host-adapter",
+            "antigravity:host-adapter",
         }
-        assert parsed["count"] == 4
+        assert parsed["count"] == 5
         assert next(h for h in parsed["hosts"] if h["host_id"] == "ollama:local")["models"] == [
             "test-local:latest"
         ]

@@ -128,7 +128,12 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # corrected. Numbered after 1.16.0 (#2435). Nothing
 # callable is removed or renamed; many input digests and the surface digest
 # move.
-INTERFACE_CONTRACT_VERSION = "1.17.0"
+# 1.18.0 (2026-09-26): delegate_inference.host_id accepts a third value,
+# "antigravity:host-adapter" (the operator's Antigravity CLI). The default stays
+# "claude:host-adapter" and nothing is removed or renamed;
+# delegate_inference's and list_inference_hosts' input_schema_sha256 and the
+# surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.18.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

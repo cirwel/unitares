@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.17.0",
+  "version": "1.18.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "d0cf4995b022823588b0d89afaf5fd1b58962e4f2d5b616600a8c9da4d1d38c0",
+  "surface_sha256": "2257a668c7ba7a57897293b1f903322b37616839757707b47a45c88b592da286",
   "capabilities": [
     {
       "name": "start_session",
@@ -312,7 +312,7 @@
       "name": "list_inference_hosts",
       "implementation": "list_inference_hosts",
       "kind": "canonical_tool",
-      "input_schema_sha256": "4eddfcab9b033e1bbc9358f6850f6eaff75c0a7b983e9636e717137d78946e8f",
+      "input_schema_sha256": "0edb23d1b0850da0ab0874405ba3822864c3906231ad9fc06e9cd37479a8e859",
       "transport_names": {
         "mcp_streamable_http": "list_inference_hosts",
         "rest_v1_tools": "list_inference_hosts",
@@ -356,7 +356,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "e7e403a676770b6bff0c1220fce58b883cb2e512030867430124b688b37be832",
+      "input_schema_sha256": "0e501645d5d0d7ff3410bf57a74087fe85733af9521aba2f78e04f66d41860d9",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",

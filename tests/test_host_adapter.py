@@ -589,11 +589,11 @@ def test_registry_reflects_availability(monkeypatch):
     assert hosts2["codex:host-adapter"]["available"] is False
 
 
-def test_both_host_adapters_are_agent_callable(monkeypatch):
+def test_every_host_adapter_is_agent_callable(monkeypatch):
     """Availability is not callability.
 
     Reachability describes a routing contract and therefore does not flap with
-    runtime readiness: both subscription-CLI adapters accept a host_id from
+    runtime readiness: every subscription-CLI adapter accepts a host_id from
     delegate_inference whether or not this install has the flag, the CLI, or
     the bearer token. Readiness is what `available` answers.
     """
@@ -605,7 +605,9 @@ def test_both_host_adapters_are_agent_callable(monkeypatch):
         else:
             monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
         hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
-        for host_id in ("codex:host-adapter", "claude:host-adapter"):
+        for host_id in (
+            "codex:host-adapter", "claude:host-adapter", "antigravity:host-adapter",
+        ):
             assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference"]
             assert hosts[host_id]["implementation_status"] == "active"
 
@@ -762,3 +764,117 @@ def test_current_username_falls_back_to_env_when_lookup_raises(monkeypatch):
 
 def _raise_lookup_error():
     raise KeyError("no such uid")
+
+
+def _agy_envelope(**fields):
+    return json.dumps({"schema": "unitares.antigravity_cli_result.v1", **fields})
+
+
+def test_antigravity_runs_through_its_client_not_a_bare_shell(monkeypatch):
+    """agy needs an empty workspace, an allowlisted env and resume-on-stall,
+    none of which a bare `exec agy` can give it; the client owns all three."""
+    cli, shell_command, family = ha._HOST_COMMANDS["antigravity:host-adapter"]
+    assert (cli, family) == ("agy", "google_antigravity")
+    assert shell_command == 'exec "$HA_PYTHON" "$HA_ANTIGRAVITY_CLIENT" </dev/null'
+    assert ha.host_cli_env_var("antigravity:host-adapter") == "UNITARES_ANTIGRAVITY_CLI"
+
+
+def test_resolve_antigravity_cli_from_operator_override(monkeypatch):
+    monkeypatch.setenv("UNITARES_ANTIGRAVITY_CLI", "/opt/operator/bin/agy")
+    monkeypatch.setattr(ha, "_is_executable", lambda path: path == "/opt/operator/bin/agy")
+    assert ha.resolve_host_cli("antigravity:host-adapter") == "/opt/operator/bin/agy"
+
+
+def test_invoke_antigravity_happy_path(monkeypatch):
+    _enable(monkeypatch)
+    answer = {"schema": "unitares.terminal_answer.v1", "status": "complete", "answer": "hi"}
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-agy"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": [
+            "some stderr noise",
+            _agy_envelope(status="SUCCESS", response=json.dumps(answer) + "\n",
+                          usage={"total_tokens": 42}, conversation_id="c-1",
+                          exit_status=0, resumes={"denied": 1}),
+        ]}}),
+    ])
+    r = _run(ha.invoke_host_adapter("antigravity:host-adapter", "q", timeout_s=77))
+
+    env = state["calls"][0][1]["json"]["env"]
+    assert env["HA_ANTIGRAVITY_CLIENT"].endswith("antigravity_cli_client.py")
+    # The client's deadline lands before the await window closes.
+    assert env["HA_TIMEOUT_S"] == str(77 - 15)
+    assert env["HA_PROMPT"].startswith("q")
+    assert r["ok"] is True and r["text"] == "hi"
+    prov = r["provenance"]
+    assert prov["model_family"] == "google_antigravity"
+    assert prov["tokens_used"] == 42
+    assert prov["model_used"] is None
+    assert prov["antigravity_resumes"] == {"denied": 1}
+    assert prov["provider_thread_id"] == "c-1"
+
+
+def test_invoke_antigravity_client_error_fails_even_on_a_valid_envelope(monkeypatch):
+    """The client reports an unrecovered stall as an error; a stale answer in
+    the response must not be delivered as if the turn had completed."""
+    _enable(monkeypatch)
+    answer = {"schema": "unitares.terminal_answer.v1", "status": "complete", "answer": "x"}
+    _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-agy"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": [
+            _agy_envelope(status="ERROR", response=json.dumps(answer),
+                          error="output limit not recovered after 1 resume(s)"),
+        ]}}),
+    ])
+    r = _run(ha.invoke_host_adapter("antigravity:host-adapter", "q", timeout_s=5))
+    assert r["ok"] is False
+    assert r["error"] == "Antigravity CLI reported: output limit not recovered after 1 resume(s)"
+
+
+def test_invoke_antigravity_without_an_envelope_fails_closed(monkeypatch):
+    _enable(monkeypatch)
+    _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"execution_id": "ex-agy"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": ["Traceback ..."]}}),
+    ])
+    r = _run(ha.invoke_host_adapter("antigravity:host-adapter", "q", timeout_s=5))
+    assert r["ok"] is False
+    assert r["status"] == "malformed"
+
+
+def test_disabled_hosts_switch_off_one_host_and_keep_the_rest(monkeypatch):
+    """A suspended provider account still has a working CLI, so availability
+    probing cannot see it; the operator names it instead."""
+    _enable(monkeypatch)
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", " Codex ")
+    assert ha.host_adapter_disabled_hosts() == frozenset({"codex:host-adapter"})
+    assert ha.host_adapter_available("codex:host-adapter") is False
+    assert ha.host_adapter_available("claude:host-adapter") is True
+    assert ha.host_adapter_available("antigravity:host-adapter") is True
+
+    state = _patch_httpx(monkeypatch, [])
+    r = _run(ha.invoke_host_adapter("codex:host-adapter", "q", timeout_s=5))
+    assert r["ok"] is False
+    assert r["dispatch_phase"] == "preflight"
+    assert "UNITARES_HOST_ADAPTER_DISABLED_HOSTS" in r["error"]
+    assert state["calls"] == []
+
+
+def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch, caplog):
+    """A typo must not silently leave the lane it meant to switch off running."""
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "agy, OpenAI, nope, gemini")
+    monkeypatch.setattr(ha, "_WARNED_UNKNOWN_DISABLED", set())
+    with caplog.at_level("WARNING"):
+        assert ha.host_adapter_disabled_hosts() == frozenset(
+            {"antigravity:host-adapter", "codex:host-adapter"}
+        )
+        ha.host_adapter_disabled_hosts()
+    assert caplog.text.count("unknown host 'nope'") == 1  # once, not per probe
+    # "gemini" names the external dialectic reviewer elsewhere, never this host.
+    assert "unknown host 'gemini'" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("timeout_s", "client_s"), [(5, 1), (20, 12), (40, 30), (60, 45), (420, 405)]
+)
+def test_the_agy_client_deadline_leaves_a_short_budget_usable(timeout_s, client_s):
+    assert ha._client_deadline_s(timeout_s) == client_s
