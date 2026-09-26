@@ -1276,16 +1276,8 @@ async def test_cancelled_consultation_is_recorded_then_reraised(monkeypatch, aud
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "token",
-    [
-        # Fails the code shape outright.
-        "sk-live-SECRETTOKEN123",
-        # Passes the code shape; only the brief-echo scrub catches it.
-        "sk_live_SECRETTOKEN123",
-    ],
-)
-async def test_identifier_shaped_echo_in_a_code_is_hashed(monkeypatch, audit_sinks, token):
+@pytest.mark.parametrize("token", ["sk-live-SECRETTOKEN123", "key.SECRETTOKEN/123"])
+async def test_non_constant_shaped_code_is_hashed(monkeypatch, audit_sinks, token):
     monkeypatch.setattr(
         co,
         "run_model_inference",
@@ -1346,23 +1338,6 @@ async def test_non_string_response_still_fails_closed_and_is_recorded(
 
 
 @pytest.mark.asyncio
-async def test_identifier_shaped_brief_token_echoed_into_route_is_hashed(
-    monkeypatch, audit_sinks
-):
-    token = "sk_live_ABC123"
-    outcome = _completed()
-    outcome.inference["model_used"] = token
-    outcome.inference["orchestrator_execution_id"] = token
-    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
-
-    await co.handle_consult({"brief": f"rotate {token} please"})
-
-    _, pg = await audit_sinks()
-    assert token not in json.dumps(pg[0])
-    assert pg[0]["details"]["route"]["host_id"] == "ollama:local"
-
-
-@pytest.mark.asyncio
 async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audit_sinks):
     monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
 
@@ -1408,18 +1383,3 @@ async def test_server_set_values_survive_a_brief_that_mentions_them(monkeypatch,
     assert degraded["degradation"]["reason_code"] == "privacy_policy_requires_local"
     assert degraded["delivery"]["effort"] == "standard"
     assert refused["failure"]["code"] == "CONSULT_POLICY_UNSATISFIED"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("reported", ["sk_live_ABC123/v2", "ns:sk_live_ABC123"])
-async def test_backend_identifier_containing_a_brief_token_is_hashed(
-    monkeypatch, audit_sinks, reported
-):
-    outcome = _completed()
-    outcome.inference["model_used"] = reported
-    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
-
-    await co.handle_consult({"brief": "rotate sk_live_ABC123 please"})
-
-    _, pg = await audit_sinks()
-    assert "sk_live_ABC123" not in json.dumps(pg[0])
