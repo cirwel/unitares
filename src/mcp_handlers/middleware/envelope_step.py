@@ -1871,20 +1871,23 @@ def _attach_response_size(
         if friendly_name == "search_shared_memory":
             # Name only levers that shrink this response. Outside full mode
             # normalize_compact_search_details already forces
-            # include_details=false, so it is named only in full, where the
-            # caller can still have it on.
+            # include_details=false, so it is named only in full, and there
+            # unless the caller explicitly turned details off: an omitted
+            # include_details auto-includes them for 1-3 results
+            # (_resolve_detail_inclusion).
             open_one = (
                 "open one discovery with knowledge(action='details', "
                 "discovery_id='...')"
             )
             if current == "full":
-                details_on = _as_bool(
-                    (arguments or {}).get("include_details"), default=False
+                requested = (arguments or {}).get("include_details")
+                details_off = requested is not None and not _as_bool(
+                    requested, default=False
                 )
                 levers = (
-                    "include_details=false, response_mode='lean' or a lower limit"
-                    if details_on
-                    else "response_mode='lean' or a lower limit"
+                    "response_mode='lean' or a lower limit"
+                    if details_off
+                    else "include_details=false, response_mode='lean' or a lower limit"
                 )
                 reduce_with = f"Use {levers}; {open_one}."
             elif current == "compact":
