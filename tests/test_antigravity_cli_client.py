@@ -75,7 +75,8 @@ def test_answer_on_the_first_turn(tmp_path):
     (call,) = _calls(log)
     argv = call["argv"]
     assert argv[0] == "-p" and argv[1].startswith("question") and client.TEXT_ONLY in argv[1]
-    for flag in ("--mode", "plan", "--sandbox", "--output-format", "json"):
+    for flag in ("--mode", "plan", "--sandbox", "--disable-slash-commands",
+                 "--output-format", "json"):
         assert flag in argv
     assert argv[argv.index("--model") + 1] == "gemini-x"
 
@@ -104,7 +105,37 @@ def test_agy_gets_an_allowlisted_environment_only(tmp_path):
     assert "UNITARES_MCP_BEARER_TOKEN" not in env
     assert "ANTHROPIC_API_KEY" not in env
     assert not any(k.startswith("HA_") for k in env)
-    assert env["LANG"] == "C.UTF-8" and env["HOME"] == os.environ.get("HOME", "/")
+    assert env["LANG"] == "C.UTF-8"
+
+
+def test_agy_gets_an_isolated_home_with_only_the_login_keychain(tmp_path):
+    """The operator's ~/.gemini holds standing permission grants and MCP
+    servers; agy must not load them for a caller's prompt."""
+    real_home = tmp_path / "real-home"
+    (real_home / ".gemini" / "config").mkdir(parents=True)
+    (real_home / "Library" / "Keychains").mkdir(parents=True)
+    script, log = _fake_agy(tmp_path, [DENIED, ANSWERED])
+    _run(script, HOME=str(real_home), XDG_CONFIG_HOME=str(real_home / ".config"))
+    first, second = _calls(log)
+    home = Path(first["env"]["HOME"])
+    assert home != real_home and "XDG_CONFIG_HOME" not in first["env"]
+    assert second["env"]["HOME"] == str(home)  # a resume finds its conversation
+    assert Path(first["cwd"]).resolve().parent == home.resolve().parent
+    assert not home.exists()  # cleaned up with the workspace
+
+
+def test_isolated_home_links_only_the_keychain(tmp_path):
+    real_home = tmp_path / "real"
+    (real_home / "Library" / "Keychains").mkdir(parents=True)
+    (real_home / ".gemini").mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+    home = Path(client.isolated_home(str(root), str(real_home)))
+    assert sorted(p.name for p in home.iterdir()) == ["Library"]
+    assert (home / "Library" / "Keychains").resolve() == (real_home / "Library" / "Keychains")
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert list(Path(client.isolated_home(str(bare), str(tmp_path / "none"))).iterdir()) == []
 
 
 def test_a_denied_command_is_resumed_in_the_same_conversation(tmp_path):

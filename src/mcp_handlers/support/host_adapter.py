@@ -104,9 +104,27 @@ _CLI_ENV_OVERRIDES = {
 }
 
 _ANTIGRAVITY_RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
+
+#: Short names accepted by UNITARES_HOST_ADAPTER_DISABLED_HOSTS.
+_HOST_ALIASES = {
+    "claude": "claude:host-adapter",
+    "anthropic": "claude:host-adapter",
+    "codex": "codex:host-adapter",
+    "openai": "codex:host-adapter",
+    "antigravity": "antigravity:host-adapter",
+    "agy": "antigravity:host-adapter",
+    "gemini": "antigravity:host-adapter",
+    "google": "antigravity:host-adapter",
+}
 # Seconds the agy client's own deadline stays ahead of the orchestrator await:
 # covers child start-up, the kill-and-reap after a timeout, and the envelope.
+# Scaled down for short budgets so a small valid timeout_s is not eaten whole.
 _CLIENT_DEADLINE_MARGIN_S = 15
+
+
+def _client_deadline_s(timeout_s: int) -> int:
+    margin = min(_CLIENT_DEADLINE_MARGIN_S, max(1, timeout_s // 4))
+    return max(1, timeout_s - margin)
 
 _TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
 _CODEX_APP_SERVER_RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
@@ -212,10 +230,12 @@ def host_adapter_enabled() -> bool:
 def host_adapter_disabled_hosts() -> frozenset[str]:
     """Hosts the operator switched off individually.
 
-    Comma-separated host ids or their short names (``codex`` for
-    ``codex:host-adapter``). Exists because availability probing only sees the
-    local side: a CLI whose provider account is suspended still resolves and
-    still looks available.
+    Comma-separated host ids, or a short name for one (``codex``, ``openai``;
+    ``claude``, ``anthropic``; ``antigravity``, ``agy``, ``gemini``,
+    ``google``). Exists because availability probing only sees the local side:
+    a CLI whose provider account is suspended still resolves and still looks
+    available. A name that matches no host is logged, not silently accepted,
+    since a typo here leaves the lane it meant to switch off running.
     """
     raw = os.environ.get("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "")
     disabled = set()
@@ -223,7 +243,14 @@ def host_adapter_disabled_hosts() -> frozenset[str]:
         name = item.strip().lower()
         if not name:
             continue
-        disabled.add(name if ":" in name else f"{name}:host-adapter")
+        host_id = name if name in _HOST_COMMANDS else _HOST_ALIASES.get(name)
+        if host_id is None:
+            logger.warning(
+                "[host_adapter] UNITARES_HOST_ADAPTER_DISABLED_HOSTS names unknown "
+                "host %r; known: %s", name, ", ".join(sorted(_HOST_COMMANDS)),
+            )
+            continue
+        disabled.add(host_id)
     return frozenset(disabled)
 
 
@@ -689,7 +716,7 @@ async def invoke_host_adapter(
             # Ahead of the await window below, so a hung or over-budget agy
             # is reported by the client's own envelope rather than surfacing
             # as an await timeout on a child that is still running.
-            "HA_TIMEOUT_S": str(max(1, timeout_s - _CLIENT_DEADLINE_MARGIN_S)),
+            "HA_TIMEOUT_S": str(_client_deadline_s(timeout_s)),
             "HA_PYTHON": sys.executable,
             "USER": _current_username(),
             # Neutralise console-API credentials so this stays a SUBSCRIPTION

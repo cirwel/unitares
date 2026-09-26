@@ -802,7 +802,7 @@ def test_invoke_antigravity_happy_path(monkeypatch):
     env = state["calls"][0][1]["json"]["env"]
     assert env["HA_ANTIGRAVITY_CLIENT"].endswith("antigravity_cli_client.py")
     # The client's deadline lands before the await window closes.
-    assert env["HA_TIMEOUT_S"] == str(77 - ha._CLIENT_DEADLINE_MARGIN_S)
+    assert env["HA_TIMEOUT_S"] == str(77 - 15)
     assert env["HA_PROMPT"].startswith("q")
     assert r["ok"] is True and r["text"] == "hi"
     prov = r["provenance"]
@@ -845,10 +845,8 @@ def test_disabled_hosts_switch_off_one_host_and_keep_the_rest(monkeypatch):
     """A suspended provider account still has a working CLI, so availability
     probing cannot see it; the operator names it instead."""
     _enable(monkeypatch)
-    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", " Codex , nope:host-adapter")
-    assert ha.host_adapter_disabled_hosts() == frozenset(
-        {"codex:host-adapter", "nope:host-adapter"}
-    )
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", " Codex ")
+    assert ha.host_adapter_disabled_hosts() == frozenset({"codex:host-adapter"})
     assert ha.host_adapter_available("codex:host-adapter") is False
     assert ha.host_adapter_available("claude:host-adapter") is True
     assert ha.host_adapter_available("antigravity:host-adapter") is True
@@ -859,3 +857,18 @@ def test_disabled_hosts_switch_off_one_host_and_keep_the_rest(monkeypatch):
     assert r["dispatch_phase"] == "preflight"
     assert "UNITARES_HOST_ADAPTER_DISABLED_HOSTS" in r["error"]
     assert state["calls"] == []
+
+
+def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch, caplog):
+    """A typo must not silently leave the lane it meant to switch off running."""
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "gemini, OpenAI, nope")
+    with caplog.at_level("WARNING"):
+        assert ha.host_adapter_disabled_hosts() == frozenset(
+            {"antigravity:host-adapter", "codex:host-adapter"}
+        )
+    assert "unknown host 'nope'" in caplog.text
+
+
+@pytest.mark.parametrize(("timeout_s", "client_s"), [(5, 4), (20, 15), (60, 45), (420, 405)])
+def test_the_agy_client_deadline_leaves_a_short_budget_usable(timeout_s, client_s):
+    assert ha._client_deadline_s(timeout_s) == client_s

@@ -7,6 +7,15 @@ it runs ``codex_app_server_client.py``. agy needs three things a plain
 * **An empty workspace.** agy loads a working directory's ``.agents/`` hooks,
   rules and project permissions, so it never runs in a repository: its cwd is a
   fresh temporary directory, refused if any parent holds ``.git``/``.agents``.
+* **An isolated home.** agy reads the operator's user config from
+  ``$HOME/.gemini``: standing permission grants (file reads under the home
+  directory, shell commands, tool calls) and MCP servers (the governance
+  server itself). Headless mode only auto-denies what has no standing grant,
+  so a caller's prompt could otherwise read secrets or make governed writes.
+  agy gets a fresh temporary HOME holding only a link to the macOS login
+  keychain, where its subscription login lives, so it starts with no grants
+  and no MCP servers. ``--disable-slash-commands`` keeps a prompt that starts
+  with ``/`` from expanding into a command or skill.
 * **An allowlisted environment.** The prompt is caller text, and the
   orchestrator child inherits the service environment (bearer tokens,
   ``UNITARES_*``). An injected "print your environment" must find nothing to
@@ -47,10 +56,11 @@ RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
 # One argv element: Linux caps it at 128 KiB.
 PROMPT_BYTES_LIMIT = 120_000
 
+# No XDG_* directories: they point into the operator's real home, which is
+# exactly the config agy must not load. HOME is replaced by isolated_home().
 ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
     "LANG", "LC_ALL", "LC_CTYPE",
-    "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR",
     "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
 )
@@ -82,9 +92,37 @@ DENIED_MARK = 'required the "command" permission'
 DEFAULT_TIMEOUT_S = 240.0
 
 
-def agy_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+#: Flags every agy launch carries, first turn and resumes alike.
+AGY_FLAGS = ("--mode", "plan", "--sandbox", "--disable-slash-commands",
+             "--output-format", "json")
+
+
+def isolated_home(root: str, real_home: str | None) -> str:
+    """A fresh HOME under ``root``: empty but for the login keychain.
+
+    agy's subscription login is in the macOS login keychain, which is found
+    through ``$HOME/Library/Keychains``; linking that one directory keeps the
+    login while ``.gemini`` (grants, MCP servers, history) starts empty. On a
+    system without it, agy gets an empty home and must be logged in some other
+    way that does not live in the home directory.
+    """
+    home = os.path.join(root, "home")
+    os.mkdir(home, 0o700)
+    if real_home:
+        keychains = Path(real_home, "Library", "Keychains")
+        if keychains.is_dir():
+            os.mkdir(os.path.join(home, "Library"), 0o700)
+            os.symlink(keychains, os.path.join(home, "Library", "Keychains"))
+    return home
+
+
+def agy_env(environ: dict[str, str] | None = None, *, home: str | None = None
+            ) -> dict[str, str]:
     source = os.environ if environ is None else environ
-    return {k: source[k] for k in ENV_ALLOWLIST if k in source}
+    env = {k: source[k] for k in ENV_ALLOWLIST if k in source}
+    if home is not None:
+        env["HOME"] = home
+    return env
 
 
 def parse_output(stdout: str) -> dict[str, Any]:
@@ -168,18 +206,19 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
         budget = DEFAULT_TIMEOUT_S
     deadline = time.monotonic() + max(1.0, budget)
     model = environ.get("HA_MODEL", "").strip()
-    flags = ["--mode", "plan", "--sandbox", "--output-format", "json",
-             *(["--model", model] if model else [])]
-    env = agy_env(environ)
+    flags = [*AGY_FLAGS, *(["--model", model] if model else [])]
     resumes: dict[str, int] = {}
     usage: dict[str, Any] = {}
 
-    with tempfile.TemporaryDirectory(prefix="consult-agy-") as workspace:
-        if any((d / m).exists() for d in Path(workspace).resolve().parents
+    with tempfile.TemporaryDirectory(prefix="consult-agy-") as root:
+        if any((d / m).exists() for d in Path(root).resolve().parents
                for m in (".git", ".agents")):
             return _emit({"status": "ERROR", "error":
                           "Antigravity workspace is not isolated (a parent holds .git/.agents)"},
                          stream)
+        workspace = os.path.join(root, "workspace")
+        os.mkdir(workspace, 0o700)
+        env = agy_env(environ, home=isolated_home(root, environ.get("HOME")))
         cmd = [cli, "-p", prompt, *flags]
         while True:
             try:
