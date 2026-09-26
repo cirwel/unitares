@@ -39,6 +39,12 @@ STUB_SYNC = """#!/usr/bin/env bash
 SRC="$(cd "$(dirname "$0")/../.." && pwd)/skills"
 mkdir -p "$UNITARES_PLUGIN_REPO/skills"
 rsync -a --checksum --delete --exclude /SKILLS_MANIFEST.sha256 "$SRC/" "$UNITARES_PLUGIN_REPO/skills/"
+# Like the real script: the manifest is rewritten from the mirrored tree, so a
+# content change always changes it too.
+(cd "$UNITARES_PLUGIN_REPO/skills" && find . -name SKILL.md | sort | xargs cat | cksum) \
+  >"$UNITARES_PLUGIN_REPO/skills/SKILLS_MANIFEST.sha256"
+[ -n "${RULE_MISMATCH:-}" ] && { echo "rule disagrees" >&2; exit 5; }
+exit 0
 """
 
 
@@ -67,7 +73,7 @@ def _write_exec(path: Path, text: str) -> None:
 
 
 class Fixture:
-    def __init__(self, root: Path, plugin_branch: str = "master"):
+    def __init__(self, root: Path, plugin_branch: str = "master", shallow: bool = False):
         self.root = root
         self.env = dict(GIT_ENV)
 
@@ -79,7 +85,8 @@ class Fixture:
         _git(self.u_origin, "add", "-A")
         _git(self.u_origin, "commit", "-qm", "alpha v1")
         self.unitares = root / "unitares"
-        _git(root, "clone", "-q", str(self.u_origin), str(self.unitares))
+        depth = ["--depth", "1"] if shallow else []
+        _git(root, "clone", "-q", *depth, f"file://{self.u_origin}", str(self.unitares))
 
         self.p_bare = root / "plugin-origin.git"
         _git(root, "init", "-q", "--bare", f"--initial-branch={plugin_branch}", str(self.p_bare))
@@ -87,12 +94,14 @@ class Fixture:
         _git(root, "clone", "-q", str(self.p_bare), str(seed))
         (seed / "skills" / "alpha").mkdir(parents=True)
         (seed / "skills" / "alpha" / "SKILL.md").write_text("alpha v1\n")
-        (seed / "skills" / "SKILLS_MANIFEST.sha256").write_text("manifest\n")
+        (seed / "skills" / "SKILLS_MANIFEST.sha256").write_text(
+            subprocess.run(["cksum"], input="alpha v1\n", capture_output=True, text=True).stdout
+        )
         _git(seed, "add", "-A")
         _git(seed, "commit", "-qm", "seed")
         _git(seed, "push", "-q", "origin", f"HEAD:{plugin_branch}")
         self.plugin = root / "plugin"
-        _git(root, "clone", "-q", str(self.p_bare), str(self.plugin))
+        _git(root, "clone", "-q", *depth, f"file://{self.p_bare}", str(self.plugin))
         _git(self.plugin, "remote", "set-head", "origin", plugin_branch)
 
         self.stub = root / "gh-stub"
@@ -173,6 +182,8 @@ def test_dry_run_names_the_drift_and_pushes_nothing(fx):
     proc = fx.run("--dry-run")
     assert proc.returncode == 0, _out(proc)
     assert "BEHIND" in _out(proc) and "alpha" in _out(proc)
+    # The manifest changed too (the stand-in rewrites it), but it is derived
+    # data and must not be counted.
     assert "1 file(s)" in _out(proc), "the mirror-only manifest must not be counted"
     assert fx.remote_branch() == ""
     assert fx.calls("pr create") == []
@@ -184,7 +195,10 @@ def test_behind_commits_one_branch_and_opens_one_pr(fx):
     proc = fx.run()
     assert proc.returncode == 0, _out(proc)
     assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
-    assert fx.branch_file("skills/SKILLS_MANIFEST.sha256") == "manifest", "manifest must survive"
+    manifest = fx.branch_file("skills/SKILLS_MANIFEST.sha256")
+    assert manifest and manifest != subprocess.run(
+        ["cksum"], input="alpha v1\n", capture_output=True, text=True
+    ).stdout.strip(), "the regenerated manifest must be committed with the mirror"
     creates = fx.calls("pr create")
     assert len(creates) == 1 and "--base master" in creates[0]
     assert fx.leftovers() == []
@@ -228,6 +242,33 @@ def test_default_branch_is_asked_of_the_remote(tmp_path):
     assert proc.returncode == 0, _out(proc)
     creates = fx.calls("pr create")
     assert len(creates) == 1 and "--base main" in creates[0]
+
+
+def test_shallow_ci_style_checkouts_work(tmp_path):
+    # Both repos cloned --depth 1, as the workflow's actions/checkout does:
+    # worktree creation, the sync, the commit and the push must all work.
+    fx = Fixture(tmp_path, shallow=True)
+    assert _git(fx.plugin, "rev-parse", "--is-shallow-repository") == "true"
+    fx.bump("alpha v2")
+    proc = fx.run()
+    assert proc.returncode == 0, _out(proc)
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
+    assert fx.leftovers() == []
+
+
+def test_attestation_rule_mismatch_is_a_warning_not_a_failure(fx):
+    # sync-plugin-skills.sh exits 5 after writing the mirror when only the
+    # plugin's rule port disagrees; the sync PR must still be opened, with the
+    # note carried into its body.
+    fx.bump("alpha v2")
+    proc = fx.run(RULE_MISMATCH="1")
+    assert proc.returncode == 0, _out(proc)
+    assert "attestation-rule port disagrees" in _out(proc)
+    creates = fx.calls("pr create")
+    assert len(creates) == 1
+    # The body spans several lines of the call log; search all of it.
+    assert "- Attestation rule: the plugin's attestation-rule port disagrees" in (fx.stub / "calls").read_text()
+    assert fx.branch_file("skills/alpha/SKILL.md") == "alpha v2"
 
 
 def test_hand_opened_sync_pr_makes_it_step_aside(fx):

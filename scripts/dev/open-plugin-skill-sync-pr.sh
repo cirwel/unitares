@@ -116,8 +116,19 @@ git -C "$PLUGIN_REPO" worktree add -q --detach "$DST_WT" "origin/$BASE" >/dev/nu
   || fail "could not create $DST_WT"
 DST_MADE=1
 
-SYNC_LOG="$(cd "$SRC_WT" && UNITARES_PLUGIN_REPO="$DST_WT" bash "$SYNC" 2>&1)" \
-  || { printf '%s\n' "$SYNC_LOG" | tail -5 >&2; fail "sync-plugin-skills.sh failed"; }
+SYNC_LOG="$(cd "$SRC_WT" && UNITARES_PLUGIN_REPO="$DST_WT" bash "$SYNC" 2>&1)"
+SYNC_RC=$?
+RULE_NOTE=""
+case "$SYNC_RC" in
+  0) ;;
+  # sync-plugin-skills.sh exit 5: the mirror WAS written, but the plugin's
+  # port of the attestation rule disagrees with canonical's. A re-sync cannot
+  # fix that (ship.sh treats it as a warning too), so carry on and say so.
+  5) RULE_NOTE="the plugin's attestation-rule port disagrees with canonical (sync-plugin-skills.sh exit 5); port src/skill_attestations.py into the plugin's _check_freshness.py"
+     printf '  skills: warning: %s\n' "$RULE_NOTE" >&2 ;;
+  *) printf '%s\n' "$SYNC_LOG" | tail -5 >&2
+     fail "sync-plugin-skills.sh failed (exit $SYNC_RC)" ;;
+esac
 
 CHANGED="$(git -C "$DST_WT" status --porcelain -- skills)"
 if [ -z "$CHANGED" ]; then
@@ -175,6 +186,7 @@ BODY="$(printf '%s\n' \
   "" \
   "- Changed: $SUMMARY" \
   "- Freshness: $FRESH" \
+  ${RULE_NOTE:+"- Attestation rule: $RULE_NOTE"} \
   "" \
   "Opened automatically by \`scripts/dev/open-plugin-skill-sync-pr.sh\` in unitares. Later runs replace this branch with the newest unitares master, so this stays the only sync PR. Nothing outside \`skills/\` changes. Merging is left to the maintainer.")"
 
