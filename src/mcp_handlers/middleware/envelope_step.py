@@ -667,37 +667,73 @@ def _metrics_state_summary(payload: Dict[str, Any]) -> Dict[str, Any]:
     return state
 
 
+# Decisions that stop the agent (governance_glossary._STOP_ACTIONS).
+_METRICS_STOP_DECISIONS = frozenset({"pause", "reject"})
+
+
+def _metrics_decision(payload: Dict[str, Any]) -> Optional[str]:
+    """The decision a metrics read's verdict rode on: explain_verdict's
+    decision_action on the minimal and standard tiers, last_decision_action
+    beside the full tier's bare-string verdict."""
+    verdict = payload.get("verdict")
+    decision = (
+        verdict.get("decision_action") if isinstance(verdict, dict) else None
+    )
+    if decision is None:
+        decision = payload.get("last_decision_action")
+    return str(decision).lower() if decision is not None else None
+
+
+def _metrics_verdict_step(
+    payload: Dict[str, Any],
+    decision: Optional[str],
+) -> Any:
+    """The verdict's recommended step, which follows the decision: the wrapped
+    verdict's own next_action, or the glossary entry for a bare-string one."""
+    verdict = payload.get("verdict")
+    if isinstance(verdict, dict):
+        return verdict.get("next_action") or None
+    if isinstance(verdict, str) and verdict:
+        try:
+            from src.governance_glossary import explain_verdict
+
+            return explain_verdict(verdict, decision_action=decision).get(
+                "next_action"
+            )
+        except Exception:  # pragma: no cover - defensive; glossary is pure
+            return None
+    return None
+
+
 def _metrics_next_action(payload: Dict[str, Any]) -> Any:
     """The next step a metrics read recommends, from the state it reports.
 
     unitares.lifecycle-envelope.v1 requires next_action on check_working_state.
     The canonical payload carries one only when uninitialized or unbound
-    (next_action) or when interpret_state has advice (guidance), so the
-    verdict's own recommended step is next, then the full tier's interpreted
-    guidance, then the glossary entry for the verdict value with the decision
-    it rode on (the full tier keeps its verdict a bare string).
+    (next_action). A stop decision comes next: interpret_state's guidance is
+    written without knowing the decision (governance_state._generate_guidance),
+    so ahead of it a paused agent was told "Near basin boundary - state may
+    flip. Maintain consistency."; the verdict's step follows the decision.
+    Otherwise the standard tier's interpreted guidance, then the verdict's own
+    step, then the full tier's interpreted guidance, then the glossary entry
+    for the full tier's bare-string verdict with the decision it rode on.
     """
-    for value in (payload.get("next_action"), payload.get("guidance")):
-        if value:
-            return value
+    if payload.get("next_action"):
+        return payload["next_action"]
+    decision = _metrics_decision(payload)
+    if decision in _METRICS_STOP_DECISIONS:
+        step = _metrics_verdict_step(payload, decision)
+        if step:
+            return step
+    if payload.get("guidance"):
+        return payload["guidance"]
     verdict = payload.get("verdict")
     if isinstance(verdict, dict) and verdict.get("next_action"):
         return verdict["next_action"]
     state = payload.get("state")
     if isinstance(state, dict) and state.get("guidance"):
         return state["guidance"]
-    if isinstance(verdict, str) and verdict:
-        try:
-            from src.governance_glossary import explain_verdict
-
-            decision = payload.get("last_decision_action")
-            return explain_verdict(
-                verdict,
-                decision_action=str(decision) if decision is not None else None,
-            ).get("next_action")
-        except Exception:  # pragma: no cover - defensive; glossary is pure
-            return None
-    return None
+    return _metrics_verdict_step(payload, decision)
 
 
 def _metrics_identity_assurance(
@@ -1627,9 +1663,9 @@ def _raw_governance_policy(
     arguments = arguments or {}
     if friendly_name == "check_working_state":
         # The tier alone decides. include_state adds no state on any tier
-        # (runtime_queries replaces the monitor's state dict with the
-        # interpreted one before any tier is built), so escalating on it
-        # (#1715) only doubled the default read with a copy of itself.
+        # (runtime_queries never requests the monitor's state dict), so
+        # escalating on it (#1715) only doubled the default read with a copy
+        # of itself.
         # The minimal envelope's E/I/S/V are bare values too, so what
         # 'standard' adds is basin, mode and guidance.
         return resolve_metrics_verbosity(arguments) != "minimal", (
@@ -2208,14 +2244,25 @@ def build_experience_envelope(
         # tool useless.
         state_summary = _metrics_state_summary(payload)
         next_action = _metrics_next_action(payload)
-        if next_action is not None and state_summary.get("next_action") == next_action:
-            # Lifted from the verdict: said once, at the top level.
-            state_summary.pop("next_action")
+        if next_action is not None:
+            # One next step, at the top level. The verdict's step is either
+            # the one lifted there or one it outranks (an uninitialized read's
+            # {tool, example} step says what the verdict's prose says), and on
+            # standard and full raw_governance still carries the verdict.
+            state_summary.pop("next_action", None)
         summary = envelope.get("action_summary")
-        meaning = _one_line(state_summary.get("meaning"))
-        if isinstance(summary, dict) and meaning and summary.get("reason") == meaning:
-            # The reason fell through to the verdict's meaning, which
-            # state_summary already carries.
+        if isinstance(summary, dict) and summary.get("reason") in {
+            text
+            for text in (
+                # The verdict's meaning, which state_summary already carries.
+                _one_line(state_summary.get("meaning")),
+                # The payload's guidance: a next step, not a reason. It is the
+                # top-level next_action, or a pause-blind one a stop decision
+                # outranks (raw_governance keeps it on standard and full).
+                _one_line(payload.get("guidance")),
+            )
+            if text
+        }:
             summary.pop("reason")
         assurance = _metrics_identity_assurance(payload, binding_assurance)
         if assurance:

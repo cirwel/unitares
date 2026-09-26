@@ -63,10 +63,25 @@ def _resolve(env: dict, dotted: str):
 # ---------------------------------------------------------------------------
 
 
+def _assert_one_next_step(env: dict, payload: dict) -> None:
+    """The lifecycle contract's next_action, said once: state_summary does not
+    repeat the verdict's step beside it, and action_summary.reason is neither
+    the verdict's meaning nor the payload's guidance (a step, not a reason)."""
+    assert env["next_action"]
+    assert "next_action" not in env["state_summary"]
+    reason = env["action_summary"].get("reason")
+    if reason is not None:
+        assert reason != env["state_summary"].get("meaning")
+        assert reason != payload.get("guidance")
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("check_ins", [0, 2, 30])
 async def test_default_read_says_each_fact_once(check_ins):
-    env = await _metrics_envelope({}, check_ins=check_ins)
+    payload, validated = await real_metrics_payload({}, check_ins=check_ins)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
     state = env["state_summary"]
 
     # E/I/S/V and risk are bare values; their per-field contract rides once on
@@ -83,13 +98,63 @@ async def test_default_read_says_each_fact_once(check_ins):
         assert "not health-rated" in state["coherence"]["status"]
     assert "legacy_diagnostics" not in env
 
-    # The verdict's meaning is not repeated as the action reason.
-    assert env["action_summary"].get("reason") != state.get("meaning")
     # One tier ladder, not two.
     assert ("response_options" in env) + ("raw_governance_hint" in env) == 1
-    # The lifecycle contract's next_action, said once.
-    assert env["next_action"]
-    assert state.get("next_action") != env["next_action"]
+    # One next step. Uninitialized, it used to be said three times: the
+    # {tool, example} step, the verdict's prose step, and the guidance as the
+    # action reason.
+    _assert_one_next_step(env, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [{"verbosity": "standard"}, {"verbosity": "full"}])
+@pytest.mark.parametrize("check_ins", [0, 3])
+async def test_other_tiers_state_one_next_step(tier, check_ins):
+    payload, validated = await real_metrics_payload(tier, check_ins=check_ins)
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+    _assert_one_next_step(env, payload)
+
+
+def test_unbound_read_states_one_next_step():
+    from src.mcp_handlers.core import unbound_metrics_payload
+
+    payload = {"success": True, **unbound_metrics_payload()}
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, {}
+    )
+    _assert_one_next_step(env, payload)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tier", [{}, {"verbosity": "standard"}, {"verbosity": "full"}]
+)
+@pytest.mark.parametrize("confidence", [0.6, 0.2])
+async def test_paused_agent_next_action_follows_the_decision(tier, confidence):
+    """interpret_state's guidance does not know the decision, so on standard
+    and full it told a paused agent "Near basin boundary - state may flip.
+    Maintain consistency." (or that a dimension was borderline) as its
+    lifecycle next_action. A stop decision's step comes first on every tier."""
+    payload, validated = await real_metrics_payload(
+        tier,
+        check_ins=3,
+        complexity=0.9,
+        confidence=confidence,
+        status="paused",
+        recent_decisions=["pause"],
+    )
+    env = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", payload, validated
+    )
+    assert env["action_summary"]["action"] == "pause"
+    guidance = payload.get("guidance") or (payload.get("state") or {}).get("guidance")
+    assert env["next_action"] != guidance
+    assert "The decision was pause" in env["next_action"] or (
+        env["next_action"].startswith("Pause")
+    )
+    _assert_one_next_step(env, payload)
 
 
 @pytest.mark.asyncio
@@ -114,6 +179,27 @@ async def test_include_state_changes_nothing(tier):
     with_state = await _metrics_envelope({**tier, "include_state": True})
     assert set(with_state) == set(plain)
     assert abs(_wire(with_state) - _wire(plain)) < 64
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [{}, {"verbosity": "standard"}, {"verbosity": "full"}])
+async def test_include_state_changes_nothing_when_interpretation_fails(tier):
+    """When interpret_state raised, the monitor's raw state dict survived: full
+    carried it, and standard and minimal emitted mode and basin as
+    {"value": null}. The handler no longer requests it."""
+    from unittest.mock import patch
+
+    with patch(
+        "src.governance_state.GovernanceState.interpret_state",
+        side_effect=RuntimeError("interpretation failed"),
+    ):
+        plain, _ = await real_metrics_payload(tier, check_ins=5)
+        with_state, _ = await real_metrics_payload(
+            {**tier, "include_state": True}, check_ins=5
+        )
+    assert set(with_state) == set(plain)
+    for key in ("state", "mode", "basin"):
+        assert key not in with_state, key
 
 
 # ---------------------------------------------------------------------------

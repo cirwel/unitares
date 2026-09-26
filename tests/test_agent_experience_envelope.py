@@ -844,9 +844,11 @@ def test_metrics_envelope_translates_state_summary_coaching():
     assert "process_agent_update" in payload["verdict"]["next_action"]
 
 
-def test_metrics_state_summary_coaching_still_speaks_the_friendly_register():
-    """A verdict step that differs from the top-level next_action stays in
-    state_summary, translated like next_action."""
+def test_metrics_read_states_one_next_step_when_the_payload_has_its_own():
+    """The payload's guidance outranks a verdict step that says the same
+    thing in other words; state_summary does not keep the second copy, and
+    the guidance is not repeated as action_summary.reason (standard tier,
+    uninitialized)."""
     payload = {
         "success": True,
         "verdict": {
@@ -859,8 +861,8 @@ def test_metrics_state_summary_coaching_still_speaks_the_friendly_register():
     }
     env = build_experience_envelope("check_working_state", "get_governance_metrics", payload)
     assert env["next_action"] == "Submit one check-in to activate governance."
-    assert "sync_state" in env["state_summary"]["next_action"]
-    assert "process_agent_update" not in env["state_summary"]["next_action"]
+    assert "next_action" not in env["state_summary"]
+    assert "reason" not in env["action_summary"]
 
 
 def test_metrics_envelope_full_escape_hatch_preserves_raw_payload():
