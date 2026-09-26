@@ -2009,3 +2009,107 @@ def test_the_denied_resume_prompt_fits_a_denied_file_read():
     text = rg.AGY_RESUME_PROMPTS["denied"]
     assert "inside your working directory" in text and "Continue the review" in text
     assert "diff.patch" in text and "files/" in text
+
+
+# --- local rounds count toward the cap ---------------------------------------
+
+_H = "a" * 40
+
+
+def _local(key, verdict, n, reviewer="claude", head=_H, when="2026-09-26T01:00:00Z",
+           text="", disposed=False, association="OWNER"):
+    rec = rg.Record(key * 64 if len(key) == 1 else key, verdict, n, disposed, reviewer, head=head)
+    return {"author_association": association, "html_url": f"u-{key}-{when}", "created_at": when,
+            "body": rg.render_marker(rec) + "\n" + text}
+
+
+def test_marker_carries_the_reviewed_head_and_old_markers_still_parse():
+    rec = rg.Record("k" * 64, "FINDINGS", 1, False, "claude", head=_H)
+    assert rg.parse_record(rg.render_marker(rec)).head == _H
+    old = rg.render_marker(rg.Record("k" * 64, "CLEAN", 0, False, "claude"))
+    assert "head=" not in old and rg.parse_record(old).head == ""
+    forged = old.replace("reviewer=claude", "reviewer=claude head=$(rm)")
+    assert rg.parse_record(forged).head == ""
+
+
+def test_local_rounds_count_distinct_diffs_that_name_their_commit():
+    comments = [
+        _local("1", "FINDINGS", 1, when="2026-09-26T01:00:00Z", text="**[P2]** a"),
+        _local("1", "CLEAN", 0, when="2026-09-26T01:10:00Z"),        # quieter re-run, same diff
+        _local("2", "FAILED", 0, when="2026-09-26T02:00:00Z"),       # never a round
+        _local("3", "FINDINGS", 1, head="", when="2026-09-26T03:00:00Z"),  # no commit: not counted
+        _local("4", "FINDINGS", 1, reviewer="subagent:x", when="2026-09-26T04:00:00Z"),  # a `record`
+        _local("5", "FINDINGS", 1, association="NONE", when="2026-09-26T05:00:00Z"),
+        _local("6", "FINDINGS", 2, reviewer="antigravity", when="2026-09-26T06:00:00Z",
+               text="**[P3]** stale doc\n**[P2]** b.py:4 drops it"),
+    ]
+    rounds = rg.local_rounds(comments)
+    assert rounds.count == 2 and rounds.last_head == _H
+    assert [f["body"].split()[0] for f in rounds.last_findings] == ["**[P3]**", "**[P2]**"]
+
+
+def _three_local_rounds(last_text, last_n=2):
+    return [
+        _local("1", "FINDINGS", 1, when="2026-09-26T01:00:00Z", text="**[P2]** a"),
+        _local("2", "FINDINGS", 1, when="2026-09-26T02:00:00Z", text="**[P3]** b"),
+        _local("3", "FINDINGS", last_n, when="2026-09-26T03:00:00Z", text=last_text),
+    ]
+
+
+@pytest.mark.parametrize("last_text,last_n,capped", [
+    ("**[P2]** x.py:1 a\n**[P3]** doc", 2, True),
+    ("**[P1]** x.py:1 loses data\n**[P3]** doc", 2, False),   # a P1 fix gets a full run
+    ("**[P2]** x.py:1 a", 2, False),                          # labels don't number the findings
+    ("x.py:1 loses data, no label", 1, False),                # unlabelled counts as severe
+])
+def test_local_cap_applies_to_labelled_p2_p3_loops_only(last_text, last_n, capped):
+    assert rg.local_rounds(_three_local_rounds(last_text, last_n)).capped() is capped
+
+
+def test_a_clean_last_round_a_disposition_or_a_retarget_lifts_the_local_cap():
+    base = _three_local_rounds("**[P2]** a\n**[P3]** b")
+    assert rg.local_rounds(base).capped()
+    clean = base + [_local("4", "CLEAN", 0, when="2026-09-26T04:00:00Z")]
+    assert not rg.local_rounds(clean).capped()
+    disposed = base + [_local("3", "FINDINGS", 2, disposed=True, when="2026-09-26T04:00:00Z",
+                              text="1. fixed in abc\n2. rebutted: no")]
+    assert not rg.local_rounds(disposed).capped()
+    assert not rg.local_rounds(base, [{"event": "base_ref_changed"}]).capped()
+
+
+def test_pr_rounds_prefers_whichever_count_is_capped(monkeypatch):
+    local = rg.local_rounds(_three_local_rounds("**[P2]** a\n**[P3]** b"))
+    native = rg.CodexRounds(1)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([], rounds=native, local_rounds=local))
+    assert rg.pr_rounds("o/r", 1, "k", "h", []) is local
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([], rounds=native, local_rounds=rg.CodexRounds(1)))
+    assert rg.pr_rounds("o/r", 1, "k", "h", []) is native
+
+
+def test_past_a_local_cap_verified_fixes_spend_no_full_run(repo, monkeypatch):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/change"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    last = _git(repo, "rev-parse", "HEAD")
+    (repo / "a.txt").write_text("a fixed\n")
+    _git(repo, "commit", "-qam", "fix")
+    comments = [
+        _local("1", "FINDINGS", 1, head=last, when="2026-09-26T01:00:00Z", text="**[P2]** a"),
+        _local("2", "FINDINGS", 1, head=last, when="2026-09-26T02:00:00Z", text="**[P3]** b"),
+        _local("3", "FINDINGS", 2, head=last, when="2026-09-26T03:00:00Z",
+               text="**[P2]** a.txt:1 wrong value\n**[P3]** stale comment"),
+    ]
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview(
+        [], rounds=rg.CodexRounds(), local_rounds=rg.local_rounds(comments)))
+    monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("spent a full run past the cap"))
+    _git(repo, "config", "review.verifier", "ollama:gemma4:latest")
+    prompts = []
+    monkeypatch.setattr(rg, "ask_verifier", lambda v, prompt: prompts.append(prompt) or "ADDRESSED")
+    posted = []
+    monkeypatch.setattr(rg, "post_record", lambda pr, rec, heading, text: posted.append((rec, text)))
+    monkeypatch.setattr(rg, "finish_record", lambda *a: 0)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 0
+    (rec, text), = posted
+    assert rec.verdict == "CLEAN" and rec.reviewer.startswith("fix-verify:")
+    assert len(prompts) == 2 and "a.txt:1 wrong value" in prompts[0] and "a fixed" in prompts[0]
+    assert "None:None" not in text

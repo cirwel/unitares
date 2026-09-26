@@ -79,6 +79,7 @@ from datetime import datetime
 from pathlib import Path
 
 MARKER = "unitares-review v1"
+HEAD_RE = re.compile(r"[0-9a-f]{7,40}")
 STATUS_CONTEXT = "review"
 CACHE_DIR = ".review-cache"
 DEFAULT_BASE = "origin/master"
@@ -93,10 +94,11 @@ COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
 NATIVE_WAIT_S = 600
-# Full Codex reviews per PR before the remaining findings are answered without
+# Full reviews per PR before the remaining findings are answered without
 # another run (conventions §Review workflow, "Round cap"). Each run spends the
 # same subscription quota authoring does, and past the third round most
-# findings are about text the previous fix added.
+# findings are about text the previous fix added. Native Codex runs and local
+# runs are counted separately (codex_rounds, local_rounds); either can cap.
 ROUND_CAP = 3
 # Codex renders severity as an image badge; plain `[P1]` titles occur too.
 SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]|\[P[01]\]")
@@ -213,6 +215,9 @@ class Record:
     url: str = ""
     text: str = ""
     created_at: str = ""
+    # The commit a local run reviewed. Local records name it so the round cap
+    # can count them and fix verification can diff from it (see local_rounds).
+    head: str = ""
 
     def status(self) -> tuple[str, str]:
         if self.verdict == "CLEAN":
@@ -225,8 +230,9 @@ class Record:
 
 
 def render_marker(r: Record) -> str:
+    head = f" head={r.head}" if r.head else ""
     return (f"<!-- {MARKER} key={r.key} verdict={r.verdict} findings={r.findings} "
-            f"disposed={int(r.disposed)} reviewer={r.reviewer} -->")
+            f"disposed={int(r.disposed)} reviewer={r.reviewer}{head} -->")
 
 
 def parse_record(body: str) -> Record | None:
@@ -241,6 +247,7 @@ def parse_record(body: str) -> Record | None:
             findings=int(attrs.get("findings", "0")),
             disposed=attrs.get("disposed") == "1",
             reviewer=attrs.get("reviewer", "unknown"),
+            head=attrs.get("head", "") if HEAD_RE.fullmatch(attrs.get("head", "")) else "",
         )
     except (KeyError, ValueError):
         return None
@@ -343,6 +350,7 @@ class NativeReview:
     unavailable_reason: str = ""
     completed: bool = False
     rounds: CodexRounds | None = None
+    local_rounds: CodexRounds | None = None
 
 
 @dataclass
@@ -376,11 +384,9 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
                  events: list[dict] = ()) -> CodexRounds:
     """Count completed native Codex runs by the distinct commits they name.
 
-    Local fallback records are not counted: they name no commit, no start
-    time and no per-finding severity, so each attempt to count them opened a
-    stale-base or severity gap (PR #2401 rounds 4-7). The cap still stops a
-    capped PR from starting a local run, and the fallback only runs when
-    native review is unavailable.
+    Local records are counted separately by local_rounds, and only those that
+    name their commit: records without one gave each earlier attempt to count
+    them a stale-base or severity gap (PR #2401 rounds 4-7).
 
     Native findings arrive as a submitted review; a clean result as a comment
     naming the commit or an activity row marked Completed. Heads are compared
@@ -538,6 +544,69 @@ def native_records(comments: list[dict], reviews: list[dict], inline: list[dict]
     return result
 
 
+def split_findings(rec: Record) -> list[dict]:
+    """One pseudo-comment per finding of a local FINDINGS record.
+
+    Local reviews write findings as prose led by a severity label, so the text
+    is cut at each label. When the labels do not number exactly the findings
+    the record claims, the findings cannot be told apart: each comes back
+    unlabelled, which CodexRounds.last_severe reads as severe, so the cap does
+    not apply to that round. On 287 records checked on 2026-09-26 the count
+    differed in 44%; those rounds keep getting full reviews.
+    """
+    text = RECORD_RE.sub("", rec.text or "")
+    # Cut at the start of each labelled line, so markup around a label stays
+    # with its finding; two labels on one line leave the count short.
+    starts = sorted({text.rfind("\n", 0, m.start()) + 1 for m in SEVERITY_LABEL_RE.finditer(text)})
+    if len(starts) != rec.findings:
+        return [{"body": "", "html_url": rec.url} for _ in range(rec.findings)]
+    ends = starts[1:] + [len(text)]
+    return [{"body": text[a:b].strip(), "html_url": rec.url} for a, b in zip(starts, ends)]
+
+
+def local_rounds(comments: list[dict], events: list[dict] = ()) -> CodexRounds:
+    """Count completed local gate reviews, one round per distinct diff key.
+
+    codex_rounds counts native Codex runs only; while native review is
+    unavailable (Codex disabled repo-wide from 2026-09-25) every review is a
+    local run, and none was capped: 74 merged PRs got 490 runs in two days,
+    median 4 per PR, up to 33. Only records that name the commit they reviewed
+    (``head=``, written since this change) count, so fix verification has a
+    base to diff from and PRs mid-review when this landed are not capped
+    retroactively. Records from ``review.sh record`` and fix verifications
+    are not runs. A base change voids the count, as it does for native runs.
+    """
+    if any(e.get("event") in {"base_ref_changed", "base_ref_force_pushed"} for e in events):
+        return CodexRounds()
+    rounds: dict[str, tuple[float, Record]] = {}
+    answered_at = 0.0
+    for c in comments:
+        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        body = c.get("body", "")
+        rec = parse_record(body)
+        if rec is None:
+            continue
+        t = timestamp(c.get("created_at", ""))
+        if rec.disposed or rec.reviewer.startswith("fix-verify:"):
+            answered_at = max(answered_at, t)
+            continue
+        if rec.reviewer not in KNOWN_PROVIDERS or rec.verdict not in {"CLEAN", "FINDINGS"} or not rec.head:
+            continue
+        rec.url, rec.text, rec.created_at = c.get("html_url", ""), body, c.get("created_at", "")
+        prior = rounds.get(rec.key)
+        # A quieter re-run on the same diff does not clear its findings (the
+        # rule latest_matching applies to the status).
+        if prior and prior[1].verdict == "FINDINGS" and rec.verdict == "CLEAN":
+            continue
+        rounds[rec.key] = (t, rec)
+    if not rounds:
+        return CodexRounds()
+    last_at, last = max(rounds.values(), key=lambda r: r[0])
+    findings = split_findings(last) if last.verdict == "FINDINGS" else []
+    return CodexRounds(len(rounds), last.head, findings, answered_since=answered_at > last_at)
+
+
 def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> NativeReview:
     reviews = api_pages(f"repos/{repo}/pulls/{pr}/reviews")
     inline = api_pages(f"repos/{repo}/pulls/{pr}/comments") if reviews else []
@@ -547,6 +616,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     reactions = api_pages(f"repos/{repo}/issues/{pr}/reactions") if summary else []
     snapshot = native_records(comments, reviews, inline, events, key, head, reactions)
     snapshot.rounds = codex_rounds(comments, reviews, inline, events)
+    snapshot.local_rounds = local_rounds(comments, events)
     return snapshot
 
 
@@ -1417,7 +1487,11 @@ def cmd_review(args) -> int:
 
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
-    return read_native(repo, pr, key, head, comments).rounds or CodexRounds()
+    """Native Codex rounds, or local rounds when those are the ones capped."""
+    snapshot = read_native(repo, pr, key, head, comments)
+    native = snapshot.rounds or CodexRounds()
+    local = snapshot.local_rounds or CodexRounds()
+    return local if local.capped() and not native.capped() else native
 
 
 VERIFY_PROMPT = """\
@@ -1442,6 +1516,8 @@ VERIFY_TIMEOUT_S = 300
 def finding_text(comment: dict) -> str:
     body = re.sub(r"\*\*<sub><sub>!\[P\d Badge\][^\n]*?</sub></sub>\s*", "**", comment.get("body") or "")
     body = body.split("\nUseful?")[0]
+    if not comment.get("path"):  # a finding split from a local review's prose
+        return body.strip()
     return f"{comment.get('path')}:{comment.get('line') or comment.get('original_line')}\n{body.strip()}"
 
 
@@ -1502,7 +1578,7 @@ def verify_fix(verifier: str, finding: str, diff: str) -> bool:
 
 
 def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRounds) -> int:
-    """Answer the last round's findings without spending another Codex run.
+    """Answer the last round's findings without spending another full run.
 
     Reached only when this diff has no record, i.e. fixes were pushed after
     the last round. A configured verifier checks each finding against those
@@ -1519,12 +1595,13 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
                if not verifier else f"last reviewed commit {rounds.last_head} is not in this clone")
         print(f"[review] UNREVIEWED: {why}. Past the cap, answer findings with "
               "`review.sh dispose` on the reviewed diff instead of pushing fixes, or spend "
-              "a round deliberately with `review.sh --reviewer codex`.")
+              "a round deliberately with `review.sh --reviewer <provider>`.")
         return UNREVIEWED
     results = []
     try:
         for comment in rounds.last_findings:
-            diff = git("diff", last, head, "--", comment.get("path", ""), check=False)
+            path = comment.get("path") or ""
+            diff = git("diff", last, head, "--", path, check=False) if path else ""
             diff = diff or git("diff", last, head, check=False)
             results.append((comment, verify_fix(verifier, finding_text(comment), diff)))
     except (RuntimeError, ValueError, json.JSONDecodeError, KeyError) as exc:
@@ -1533,7 +1610,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     open_ = [c for c, ok in results if not ok]
     done = [c for c, ok in results if ok]
     lines = [f"Review round cap reached ({rounds.count} of {ROUND_CAP}). {verifier} checked each "
-             f"finding from the last Codex round (`{last[:10]}`) against the fixes pushed since "
+             f"finding from the last round (`{last[:10]}`) against the fixes pushed since "
              f"(`{last[:10]}..{head[:10]}`). It checks the fixes only; it did not review the "
              "new lines for new problems.", ""]
     lines += [f"{i}. NOT ADDRESSED: {finding_text(c)}\n   {c.get('html_url', '')}"
@@ -1597,6 +1674,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
     diff_path.write_text(diff_text(args.base, "HEAD"))
+    reviewed_head = git("rev-parse", "HEAD").strip()
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -1612,12 +1690,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     parsed = parse_verdict(text) if note == "exit 0" else None
     if parsed is None:
         remember_unavailable(reviewer, text, note)
-        rec = Record(key, "FAILED", 0, False, reviewer)
+        rec = Record(key, "FAILED", 0, False, reviewer, head=reviewed_head)
         heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
     else:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
-        rec = Record(key, verdict, n, False, reviewer)
+        rec = Record(key, verdict, n, False, reviewer, head=reviewed_head)
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
