@@ -2143,3 +2143,13 @@ class TestServerInfoVersion:
             read_resource=_noop,
         )
         assert built is not None
+
+
+def test_both_transports_report_the_unitares_server_name():
+    """serverInfo.name is what clients display (e.g. Gemini's connector);
+    it was "governance-monitor-v1" until the rename."""
+    from src import mcp_server
+    from src.mcp_server_std import server
+
+    assert server.name == "unitares"
+    assert mcp_server.mcp.name == "unitares"
