@@ -34,23 +34,18 @@ that signs a receipt third parties verify.
 
 The party scheme has also gone unexercised: as of 2026-09-25 no resolution
 record in the maintainer deployment carries a signature keyed on a party's
-`api_key` under the current scheme. The four 2026 records that carry a
+`api_key` under the v2 scheme. The four 2026 records that carry a
 signature used a uuid-derived fallback key, forgeable from public data and
 removed in #2155; the most recent records carrying two signatures are legacy
-v1 rows from 2025-12-13 (UTC), which cannot be verified. What a receipt minted
-today would countersign depends on the path. An LLM-assisted session passes an
-empty reviewer key, so its record carries at most `signature_a`: with the
-fallback gone, and no agent created since January 2026 holding an `api_key`, a
-new agent's record carries no party attestation, while an older agent with a
-key on file gets a single-signer attestation. Either way the receipt would
-carry `both_signatures_present: false`. A peer-reviewed session signs
-`signature_b` with the reviewer's key on file, if any, and `signature_a` with
-the paused agent's key on file. When the paused agent has no key, `signature_a`
-is keyed on whatever `api_key` the synthesis submitter supplied, so a record for
-a keyless agent can still report `single_signer` without that agent holding any
-key; #2155 removed the uuid-derived fallback from the LLM-assisted paths only.
-A peer resolution between two parties that both hold keys would still produce a
-bilateral record, and its receipt would carry `both_signatures_present: true`.
+v1 rows from 2025-12-13 (UTC), which cannot be verified. No path mints a
+party signature any more: party-HMAC minting is retired (decided 2026-09-25 as
+D5 in [`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md),
+[#2449](https://github.com/cirwel/unitares/issues/2449)). A receipt minted
+today over a new record would countersign `signature_version` 3 with both
+signature fields empty, and would carry `both_signatures_present: false`. A
+historical record keeps what it was finalized with: an LLM-assisted session
+carried at most `signature_a`, and a peer-reviewed one could carry both, so a
+receipt over an old bilateral row would carry `both_signatures_present: true`.
 In every case the flag records that strings were stored, not who held the
 keys.
 
@@ -109,11 +104,12 @@ Design points that came out of review rather than the first draft:
 |---|---|
 | The holder of the private half of `kid` persisted, as `resolved`, a record whose covered fields had exactly these values | That either party intended the resolution |
 | The session id and party identifiers the deployment associated with the record | That the parties' symmetric signatures are valid; a peer cannot check them |
-| Whether two non-empty signature strings were stored (`both_signatures_present`) | That `signature_a` was keyed on a real `api_key`. An LLM-assisted session signs it with the agent's key when one is on file, stores an empty string when none is (#2155 removed the uuid-derived fallback, which was forgeable from public data, so such a record reports `unsigned`), and leaves `signature_b` empty either way |
+| Whether two non-empty signature strings were stored (`both_signatures_present`) | That a stored signature was keyed on a real `api_key`. New records store none (party-HMAC minting retired, #2449); on historical rows an LLM-assisted session signed `signature_a` with the agent's key when one was on file and left `signature_b` empty, and the uuid-derived fallback #2155 removed was forgeable from public data |
 | The `iat` the signer wrote | When the record was actually created; `iat` is a claim, unchecked, with no expiry and no revocation |
 
 A named `reviewer_agent_id` can therefore appear on a record that reviewer never
-signed. The verifier prints warnings for a single-signer record, for a session
+signed. The verifier prints warnings for a single-signer or unsigned record
+(naming a `signature_version` 3 record as unsigned by design), for a session
 id taken from the same document as the receipt, and for an unchecked issuer;
 `verified: true` is a statement about the covered bytes, not about the
 resolution's standing.
