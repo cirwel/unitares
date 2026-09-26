@@ -529,8 +529,10 @@ def _success(
     # From here on the inference has run and its provenance is well-formed,
     # so every failure below carries the route: once a result came back, the
     # record says where the brief went even when no advice is returned. An
-    # upstream failure (no result) records the lane, requested privacy and
-    # failure code, not where the attempt went.
+    # upstream failure (no result) records no route block: the lane,
+    # requested privacy and failure code, plus, for a thorough call, the
+    # target host (request.thorough_host_id) and any possibly-running
+    # execution id. A failed standard call does not say where it was tried.
     provenance = _safe_provenance(
         outcome,
         requester_uuid=request.requester_uuid,

@@ -22,8 +22,9 @@ Expose two primary verbs for model-mediated help:
 > now also writes an `audit.events` row, `event_type='consultation'`
 > (`unitares.consultation_record.v1`): requester, policy, outcome, the route
 > whenever a well-formed inference result came back (an upstream failure, or a
-> result without valid provenance, records the lane, requested privacy and
-> failure code but not where the attempt went),
+> result without valid provenance, records no route block: a failed thorough
+> call still names its target host, a failed standard call does not say
+> where it was tried),
 > and HMAC hashes of the brief, prompt and advice under a key returned only
 > to the caller. The advice stays advisory and off the governed record; the
 > fact that it was sought is on it.
