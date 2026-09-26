@@ -386,8 +386,10 @@ def _create_session_wrapper(
         # (mcp 2.x `func_metadata.ArgModelBase.model_dump_one_level`), so the
         # key is always present here; the filter below then drops the None.
         # An omitted id therefore reaches dispatch absent, and derive_session_key
-        # resolves the call from transport signals: an X-Session-ID header at
-        # step 4 (caller_asserted), else the fingerprint pin (server_inferred).
+        # resolves the call from transport signals (steps 3-7): a client-sent
+        # Mcp-Session-Id, an X-Session-ID header, the OAuth client id and an
+        # X-Client-Id header are caller_asserted; only the fingerprint pin is
+        # server_inferred.
         # Only direct wrapper calls (tests) and the nested use_tool path
         # (tool_registration._invoke_mcp_nested_tool, which injects on its own)
         # reach an injection. Do not "repair" this by testing the value instead

@@ -278,9 +278,10 @@ Operational rules:
    `client_session_id`. Adapters should do this automatically. If your adapter
    does not thread it, the server falls back to the weak transport-fingerprint
    pin, which can fragment under co-residency; under `STRICT_IDENTITY_REQUIRED`
-   a `sync_state` resolved that way is refused. On a transport with no session
-   signal of its own (stateless `/mcp/` without an `X-Session-ID` header, plain
-   REST), the `start_session` response reports `tier` weak and `caller_proven`
+   a `sync_state` resolved that way is refused. When the minting call carries
+   no session or client signal of its own (bearer-token `/mcp/` or plain REST
+   with no `X-Session-ID`, `Mcp-Session-Id`, `X-Client-Id` or OAuth client
+   id), the `start_session` response reports `tier` weak and `caller_proven`
    false, with `baseline` `fresh_identity` and a `session_source` naming how
    the server inferred that call (`ip_ua_fingerprint`, for example): that
    describes the minting call, not whether later calls are threaded. Confirm

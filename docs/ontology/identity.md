@@ -16,9 +16,10 @@ the full ontology:
 1. **New driver process:** call `start_session(force_new=true)` and save the
    returned `uuid` plus `client_session_id`.
 2. **Same running process:** pass `client_session_id` on check-ins and writes.
-   Client adapters should do this automatically. On a transport with no
-   session signal of its own (stateless `/mcp/` without an `X-Session-ID`
-   header, plain REST), the `start_session` response reports `tier` weak and
+   Client adapters should do this automatically. When the minting call
+   carries no session or client signal of its own (bearer-token `/mcp/` or
+   plain REST with no `X-Session-ID`, `Mcp-Session-Id`, `X-Client-Id` or
+   OAuth client id), the `start_session` response reports `tier` weak and
    `caller_proven` false, with `baseline` `fresh_identity`: that describes the
    minting call, which cannot carry the id it is about to receive, not whether
    later calls are threaded. Confirm threading on the next call:

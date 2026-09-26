@@ -704,9 +704,9 @@ async def _resolve_http_session_binding(
             # predicate: this one takes any caller_asserted derivation, which
             # on REST also admits an X-Client-Id header that the MCP
             # short-circuit does not count (it names a client, not a process),
-            # while the MCP one checks argument presence (client_session_id,
-            # agent_uuid, a UUID X-Agent-Id) plus an X-Session-ID that won the
-            # derivation. A server-inferred derivation (fingerprint, pin,
+            # while the MCP one checks argument presence (a verified
+            # continuity_token, client_session_id, agent_uuid, a UUID
+            # X-Agent-Id) plus an X-Session-ID that won the derivation. A server-inferred derivation (fingerprint, pin,
             # injected session id) still stays unbound: a read never mints,
             # and never shows a co-located sibling's state.
             from src.mcp_handlers.context import get_session_proof_origin
