@@ -6,7 +6,8 @@ Streamable HTTP MCP can connect to a local governance server at
 bridge through stdio. Claude is one example client family, not a server-side
 assumption. Codex, Hermes, other MCP-capable editors and agent CLIs, hosted
 connectors, and custom hosts can use the same server when they expose MCP or go
-through a thin adapter.
+through a thin adapter. For Hermes Agent, that adapter is the `unitares` plugin
+from [`unitares-host-adapter`](https://github.com/cirwel/unitares-host-adapter).
 
 ## Streamable HTTP clients
 
