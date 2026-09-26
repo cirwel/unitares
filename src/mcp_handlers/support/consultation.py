@@ -928,7 +928,9 @@ def _consultation_record(
     else:
         hashes = {
             "scheme": "hmac-sha256",
-            "brief": _keyed_hash(key, request.brief),
+            # handle_consult already strips; stripping here too makes the
+            # caller note's recipe hold for any ConsultRequest.
+            "brief": _keyed_hash(key, request.brief.strip()),
             "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
         }
         record["hashes"] = hashes

@@ -1360,3 +1360,14 @@ async def test_identifier_shaped_brief_token_echoed_into_route_is_hashed(
     _, pg = await audit_sinks()
     assert token not in json.dumps(pg[0])
     assert pg[0]["details"]["route"]["host_id"] == "ollama:local"
+
+
+@pytest.mark.asyncio
+async def test_padded_brief_verifies_against_its_stripped_form(monkeypatch, audit_sinks):
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+
+    parsed = _payload(await co.handle_consult({"brief": "  needs review \n"}))
+
+    _, pg = await audit_sinks()
+    key = parsed["record"]["hash_key"]
+    assert pg[0]["details"]["hashes"]["brief"] == _verify(key, "needs review")
