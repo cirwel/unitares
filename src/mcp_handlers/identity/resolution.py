@@ -1687,6 +1687,12 @@ async def resolve_session_identity(
                 identity_metadata["node_index"] = thread_position
             if label:
                 identity_metadata["label"] = label
+                # Write-once record that the server chose this label, so
+                # agent_signature can report it as label_source "auto" rather
+                # than "claimed". Nothing updates it: a later claim changes
+                # the label and leaves this behind, and upsert_identity merges
+                # metadata, so later writes keep it.
+                identity_metadata["auto_label"] = label
             await db.upsert_identity(
                 agent_id=agent_uuid,
                 api_key_hash="",
@@ -1705,6 +1711,7 @@ async def resolve_session_identity(
                     agent_uuid,
                     status="active",
                     label=label,
+                    auto_label=label,
                     public_agent_id=agent_id,
                     parent_agent_id=parent_agent_id,
                     spawn_reason=spawn_reason,

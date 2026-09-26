@@ -100,10 +100,13 @@ async def execute_nested_http_tool(
     from src.http_routes import access
     from src.mcp_handlers.context import (
         get_context_client_session_id,
+        get_csid_injected_source,
         get_csid_transport_injected,
         get_session_signals,
+        reset_csid_injected_source,
         reset_csid_transport_injected,
         reset_session_context,
+        set_csid_injected_source,
         set_csid_transport_injected,
         set_session_context,
     )
@@ -119,10 +122,14 @@ async def execute_nested_http_tool(
         nested["client_session_id"] = session_id
 
     # A nested explicit session is caller input just like a direct REST body.
-    # An inherited session retains the outer route's injected/proven status.
+    # An inherited session retains the outer route's injected/proven status,
+    # and the header it was derived from, if any.
     inherited_injected = get_csid_transport_injected()
     csid_token = set_csid_transport_injected(
         False if explicit_session else inherited_injected
+    )
+    source_token = set_csid_injected_source(
+        None if explicit_session else get_csid_injected_source()
     )
     context_token = set_session_context(
         session_key=session_id,
@@ -166,6 +173,7 @@ async def execute_nested_http_tool(
         return await execute_http_tool(tool_name, nested)
     finally:
         reset_session_context(context_token)
+        reset_csid_injected_source(source_token)
         reset_csid_transport_injected(csid_token)
 
 async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any:
@@ -189,8 +197,13 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
             bound_agent_id = None
             transport_injected = False
         if not bound_agent_id:
-            sent = bool(arguments.get("client_session_id")) and not transport_injected
-            return unbound_metrics_payload(caller_sent_session_id=sent)
+            from src.mcp_handlers.identity_bootstrap import (
+                caller_sent_usable_session_id,
+            )
+
+            return unbound_metrics_payload(
+                caller_sent_session_id=caller_sent_usable_session_id(arguments)
+            )
     agent_id, error = require_agent_id(arguments)
     if error:
         return [error]
@@ -302,8 +315,40 @@ def _strict_identity_refusal_or_none(
         "typed refusal (no auto-mint)",
         tool_name,
     )
+    # The recovery depends on why nothing bound, and the prebind recorded the
+    # resolver's result (access._record_unbound_resolution). The builder is the
+    # one the MCP middleware uses for the same result, so a session miss, a
+    # hijack-guard rejection, a substrate resident over HTTP and a server-side
+    # failure each get the same recovery on both transports. A session miss's
+    # recovery keys on whether the caller itself sent a client_session_id. On
+    # REST every call carries one, so an id the transport put there (from the
+    # fingerprint, a pin, or a header it derived) does not count.
+    from src.mcp_handlers.context import (
+        get_http_prebind_resolution,
+    )
+    from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
+
+    resolution = get_http_prebind_resolution()
+    if resolution is not None and "caller_sent_session_id" in resolution:
+        # Recorded by the prebind (caller_sent_usable_session_id).
+        caller_sent_session_id = bool(resolution["caller_sent_session_id"])
+    else:
+        from src.mcp_handlers.identity_bootstrap import (
+            caller_sent_usable_session_id,
+        )
+
+        caller_sent_session_id = caller_sent_usable_session_id(arguments)
+    options, surface_extra = unbound_call_refusal(
+        tool_name,
+        resolution,
+        caller_sent_session_id=caller_sent_session_id,
+        token_failed_verification=bool(
+            resolution and resolution.get("token_failed_verification")
+        ),
+    )
     return strict_identity_refusal_payload(
         tool_name,
+        **options,
         surface_context={
             "transport_surface": "rest_tool_call",
             "lifecycle_automation": "not_confirmed",
@@ -311,6 +356,7 @@ def _strict_identity_refusal_or_none(
                 "REST /v1/tools/call refusal; direct tool reachability does "
                 "not prove client lifecycle-hook automation."
             ),
+            **surface_extra,
         },
     )
 
