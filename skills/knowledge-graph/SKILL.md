@@ -55,10 +55,7 @@ callers. A blank explicit filter is rejected, and surrounding whitespace is
 trimmed. Search also supports `include_provenance`;
 request `response_mode="full"` when you need the full result fields. The search
 alias omits controls for other actions, such as closure evidence and synthesis;
-use the corresponding `knowledge` action for those tasks.
-`closure_class` and `closure_evidence` are declared only on
-`knowledge(action="update")`: `update_finding`'s schema omits them, so a direct
-MCP call drops them before the handler runs.
+use `update_finding` or the corresponding `knowledge` action for those tasks.
 Date filters (`created_after` / `created_before`) are not supported by this
 search action. A supplied-but-blank query is rejected so a caller mistake cannot turn
 into an accidental broad scan. Omit `include_details` to let the server expand a
@@ -218,20 +215,27 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
 - **When you resolve something, update its status and add
   `resolution_notes`.** Omitted fields are preserved; do not resend stale
   content just to close the row. When the new status is a closing one
-  (`resolved`, `closed`, `wont_fix`, `superseded`), name the standard you
-  closed by in `resolution_notes`: `fix_verified`, `unobserved`,
-  `not_reproducible`, `obsolete` or `duplicate`, with its evidence (`deployed`
-  and `observed` for `fix_verified`, `window` and `instrument_check` for
-  `unobserved`). On `knowledge(action="update")` the `closure_class`
-  parameter (a string) and `closure_evidence` (an object with those keys) take
-  the same values and are validated, but neither storage backend writes them
-  yet, so the row keeps `closure_class` NULL and the response says so in
-  `closure_class_note`; `resolution_notes` is stored. A closure that declares
-  no class is accepted and answered with `closure_class: null` and a
-  `closure_class_note`. On another agent's high or critical finding,
-  `resolution_notes` is accepted only in the same call as a cross-agent
-  closing status (`resolved`, `closed` or `wont_fix`).
-- **When you find a duplicate, archive the less complete one** and reference the better entry.
+  (`resolved`, `closed`, `wont_fix`, `superseded`), declare the standard you
+  closed by with `closure_class`, a string: `fix_verified`, `unobserved`,
+  `not_reproducible`, `obsolete` or `duplicate`. Its evidence goes in
+  `closure_evidence`, an object: `deployed` and `observed` for
+  `fix_verified`, `window` and `instrument_check` for `unobserved`. Both are
+  parameters of `update_finding` and `knowledge(action="update")`, are
+  validated, and are stored. The response's `closure_class` is the value read
+  back from the record. `knowledge(action="details")` returns the class and
+  its evidence. Search results name the class in full mode, the `knowledge`
+  router's default; `search_shared_memory` names it only with
+  `response_mode="full"`, since its digests leave it out. The class stays with the
+  finding when the lifecycle archives it or moves it to cold, and an update
+  that reopens it (`open` or `disputed`) clears both. Sent without a status, a
+  class classifies a finding that is already closed, and is refused on an
+  open one. A closure that declares no class is accepted and answered with
+  `closure_class: null` and a `closure_class_note` naming the call that adds
+  one. On another agent's high or critical finding, `resolution_notes` and
+  `closure_class` are accepted only in the same call as a cross-agent closing
+  status (`resolved`, `closed` or `wont_fix`).
+- **When you find a duplicate, archive the less complete one** and reference the better entry
+  (`closure_class="duplicate"` records why).
 - **When a finding is outdated, archive it** with a note about what superseded it.
 - **Periodically audit stale open entries** with `knowledge(action="audit")`
   (read-only), and run `knowledge(action="cleanup")` (dry-run by default) to
