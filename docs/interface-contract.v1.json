@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "37d0ea7886de58c9480c6c5c63e4aad22978da175cb28f2c47783e3da5f430c7",
+  "surface_sha256": "8eb75c9678d5586056c6f57c5613d06818d0e20c7318661aa63ebb7bc0861767",
   "capabilities": [
     {
       "name": "start_session",
@@ -81,7 +81,7 @@
       "name": "update_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "6a863e89854fb5341f09269b6a18c13b2bb51e46bf4d374fb3dfd167e144b43d",
+      "input_schema_sha256": "01651b4bcc3ce2b67a623392d8feec186f049feb0c6906860643f4b37b633f72",
       "transport_names": {
         "mcp_streamable_http": "update_finding",
         "rest_v1_tools": "update_finding",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "e2b86b4754322ab3065c13c4f0004fcaf560c58ca1ae00a61306fbd92acae781",
+      "input_schema_sha256": "d59dc050efe80563a027ca08b3ad72248b6b39daae604ea0e99064112784ae74",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",
@@ -488,7 +488,7 @@
       "name": "observe",
       "implementation": "observe",
       "kind": "canonical_tool",
-      "input_schema_sha256": "371708aafed4edf20708b237979259ca467d6d7aff54d2fa129f406ad85d19c1",
+      "input_schema_sha256": "724018a64585fbbf4e19e8d8883ccfc9d9619373568f10085de6e6963bd49042",
       "transport_names": {
         "mcp_streamable_http": "observe",
         "rest_v1_tools": "observe",

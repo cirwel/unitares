@@ -214,6 +214,20 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
             "description": "Filter by severity: low, medium, high, critical.",
         },
     },
+    # The router's discovery_type text leads with store, which defaults an
+    # omitted type to note. update_finding pins action=update, where an omitted
+    # type keeps the stored one (_apply_update_metadata_fields sets `type` only
+    # when discovery_type is passed); it validates against the same set store
+    # does (VALID_DISCOVERY_TYPES).
+    "update_finding": {
+        "discovery_type": {
+            "description": (
+                "New discovery type for this finding; omitted keeps the stored "
+                "type. Takes the same values as store_finding's discovery_type."
+            ),
+            "brief": "New type; omitted keeps the stored one. Same values as store_finding.",
+        },
+    },
     # The router's agent_id text describes the read actions ("Filter by
     # agent"). On the store alias it names the writer, and an unbound call
     # honors it verbatim for a low/medium write (params_step keeps an explicit

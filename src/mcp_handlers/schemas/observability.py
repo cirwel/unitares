@@ -107,18 +107,23 @@ class ObserveParams(AgentIdentityMixin):
     # action=agent resolves a label through the agent metadata
     # (_resolve_agent_from_memory); audit_events and outcome_evidence pass the
     # value to their query as-is and match it against the stored agent_id.
+    # That stored value is not always a UUID: audit writers such as the stuck
+    # sweep (agent_id="system") and residents like sentinel record a name, so
+    # the text must not tell a caller to pass a UUID there.
     target_agent_id: Optional[str] = Field(
         None,
         description=(
             "Agent to observe or filter by. action=agent takes a UUID or label; "
             "audit_events and outcome_evidence match it exactly against the "
-            "stored agent_id, a UUID, and do not resolve labels. Use list_agents "
-            "to find."
+            "stored agent_id and do not resolve labels. That is a UUID for most "
+            "agents, but some audit writers are stored by name (e.g. system, "
+            "sentinel). Use list_agents to find."
         ),
         json_schema_extra={
             "brief": (
                 "Agent to observe (action=agent: UUID or label) or filter by "
-                "(audit_events, outcome_evidence: UUID, no label lookup)."
+                "(audit_events, outcome_evidence: exact stored agent_id, no "
+                "label lookup)."
             )
         },
     )

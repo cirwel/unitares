@@ -484,9 +484,15 @@ class KnowledgeParams(AgentIdentityMixin):
         None,
         # Not required: the store handler defaults an omitted type to note
         # (_parse_single_store_request). It said "Required for action=store" until
-        # 2026-09-26.
+        # 2026-09-26. Four actions read it, each differently: store defaults it to
+        # note, promote to insight (handle_promote_memory_claim), update retypes
+        # the finding only when it is passed (_apply_update_metadata_fields), and
+        # search filters by it. update_finding carries its own text
+        # (ALIAS_SCHEMA_PROPERTY_OVERRIDES), since "defaults to note" is false there.
         description=(
-            "Discovery type for action=store; defaults to note. One of: "
+            "Discovery type. action=store defaults it to note and promote to "
+            "insight; update sets a new type (omitted keeps the stored one); "
+            "search filters by it. One of: "
             + ", ".join(get_args(DiscoveryType)) + "."
         ),
         # The list IS the description here, so the authored brief keeps it and
@@ -531,10 +537,16 @@ class KnowledgeParams(AgentIdentityMixin):
     # same silent-strip shape as the supersession-link finding below.
     closure_class: Optional[str] = Field(
         None,
+        # Where the handler admits a class (_validate_closure_class): with a
+        # status that admits one, or, when the call sets no status, on a row whose
+        # stored status admits one. Refused on open and disputed, which clear it.
         description=(
-            "By what standard this was closed (for action=update with a closing "
-            "status): fix_verified | unobserved | not_reproducible | obsolete | "
-            "duplicate. 'fix_verified' means a change is deployed AND its effect "
+            "By what standard this was closed (for action=update): fix_verified | "
+            "unobserved | not_reproducible | obsolete | duplicate. Admitted on "
+            "resolved, closed, wont_fix, superseded, archived and cold: pass it "
+            "with one of those statuses, or alone on a finding that already has "
+            "one. Refused on open or disputed; reopening clears it. "
+            "'fix_verified' means a change is deployed AND its effect "
             "was positively observed — the old symptom merely being absent is "
             "'unobserved', not 'fix_verified'."
         ),
@@ -548,9 +560,13 @@ class KnowledgeParams(AgentIdentityMixin):
     )
     closure_evidence: Optional[Dict[str, Any]] = Field(
         None,
+        # The 8 KiB bound is MAX_CLOSURE_EVIDENCE_BYTES
+        # (src/mcp_handlers/knowledge/limits.py), enforced by
+        # _validate_closure_class; tests hold this text to it.
         description=(
             "Evidence for closure_class. Required keys: fix_verified needs "
-            "{deployed, observed}; unobserved needs {window, instrument_check}."
+            "{deployed, observed}; unobserved needs {window, instrument_check}. "
+            "At most 8 KiB as JSON; longer material goes in resolution_notes."
         ),
     )
     # Supersession LINK params. Without these declared here the unified tool's

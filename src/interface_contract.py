@@ -152,11 +152,16 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # row move to archived and cold); until now /mcp/ dropped them from an
 # update_finding call, and only knowledge(action='update') carried them to the
 # handler. Descriptions that lagged their handlers are corrected: knowledge
-# discovery_type says store defaults it to note (it said "Required"); observe
+# discovery_type says store defaults it to note (it said "Required"), promote
+# to insight, update retypes and search filters; observe
 # target_agent_id names the audit_events and outcome_evidence filters and says
-# they match a UUID without resolving labels, until names outcome_evidence, and
-# agent_ids names the anomalies and aggregate scope; dialectic
-# issue_description names action=quick. Nothing is removed, retyped or
+# they match the stored agent_id exactly without resolving labels (a UUID for
+# most agents; some audit writers are stored by name), until names
+# outcome_evidence, and agent_ids names the anomalies and aggregate scope;
+# dialectic issue_description names action=quick. On update_finding,
+# discovery_type says an omitted type keeps the stored one. closure_class says
+# a class may also be set alone on a finding that is already closed, and
+# closure_evidence states its 8 KiB bound. Nothing is removed, retyped or
 # renamed; the input digests of update_finding, knowledge, store_finding,
 # observe, dialectic and request_review, and the surface digest, move.
 INTERFACE_CONTRACT_VERSION = "1.20.0"
