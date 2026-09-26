@@ -247,15 +247,16 @@ def test_full_envelope_reads_the_canonical_payload_first(read):
 @pytest.mark.parametrize("read", CLIENTS)
 @pytest.mark.parametrize("word", ["guide", "resumed", "not_paused", "approve"])
 def test_a_canonical_lifecycle_word_reads_as_the_policy_action(read, word):
-    """A direct get_governance_metrics caller (no envelope) gets the same
-    proceed/pause the envelope would report, not the raw lifecycle word."""
-    raw = deepcopy(FULL)
-    raw.pop("action_summary", None)
-    raw["raw_governance"]["last_decision_action"] = word
-    if isinstance(raw["raw_governance"].get("verdict"), dict):
-        raw["raw_governance"]["verdict"]["decision_action"] = word
+    """A direct get_governance_metrics caller (no envelope: the canonical
+    payload at the top level) gets the same proceed/pause the envelope would
+    report, not the raw lifecycle word."""
+    canonical = {"success": True, **deepcopy(FULL["raw_governance"])}
+    canonical["last_decision_action"] = word
+    if isinstance(canonical.get("verdict"), dict):
+        canonical["verdict"]["decision_action"] = word
+    assert "action_summary" not in canonical and "raw_governance" not in canonical
 
-    assert read(raw).action == "proceed"
+    assert read(canonical).action == "proceed"
 
 
 @pytest.mark.parametrize("read", CLIENTS)

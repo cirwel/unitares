@@ -10,9 +10,11 @@ action in ``action_summary``, and the canonical payload rides under
 key ``MetricsResult`` read, so ``MetricsResult.metrics`` came back ``{}`` on
 every call: the same drift #2366 fixed for check-ins.
 
-Precedence follows :mod:`unitares_sdk._checkin_fields`: canonical first (a
-direct ``get_governance_metrics`` caller's top level, then the
-``raw_governance`` copy), then the envelope's summaries. The default minimal
+Precedence for the reading follows :mod:`unitares_sdk._checkin_fields`:
+canonical first (a direct ``get_governance_metrics`` caller's top level, then
+the ``raw_governance`` copy), then the envelope's summaries. ``action`` is the
+exception: the envelope's ``action_summary.action`` is already the policy
+action and comes first; a canonical lifecycle word is mapped to it. The default minimal
 tier badges each value (``{"value": ..., "label": ...}``), and the envelope
 badges a legacy coherence the same way; both resolve to their ``value``.
 """
