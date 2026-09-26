@@ -1,0 +1,35 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-09-26T11:40:59Z",
+  "verified_date": "2026-09-26",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "c25b13bc3ac17565",
+    "unitares/skills/discord-bridge/SKILL.md": "b1bf0f1276d8756a",
+    "unitares/skills/governance-fundamentals/SKILL.md": "bf84b3728888aedc",
+    "unitares/skills/governance-lifecycle/SKILL.md": "5c4b81bb70da0504",
+    "unitares/skills/knowledge-graph/SKILL.md": "ac591c9770b67d30",
+    "unitares/skills/unitares-dashboard/SKILL.md": "d98449e0076fc584",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "0d2d4a143e72c951",
+    "unitares/src/mcp_handlers/identity/handlers.py": "ccd5919013452344",
+    "unitares/src/mcp_handlers/identity/session.py": "e0918cc3410bf61a",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "9669bc5252090dd9",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "7fc154e56c2e2583",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "f50ccc2629ef7832",
+    "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
+    "unitares/src/mcp_handlers/tool_stability.py": "a527552f03a9eff9",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "cce173b777ca01c3"
+  },
+  "skill_digest": "1c927a199f153219",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "5e6a3c6bfc78aa4f"
+    ]
+  }
+}
