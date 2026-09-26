@@ -279,10 +279,36 @@ def test_uds_persistent_resident_gets_a_token_free_anchor(env, monkeypatch):
     """The SDK deliberately writes uuid-only there; a token would be a leak."""
     monkeypatch.setenv("UNITARES_UDS_SOCKET", "/tmp/unitares.sock")
     seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
-    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 0
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply",
+                     "--transport", "uds"]) == 0
     data = json.loads(env.read_text())
     assert data == {"agent_uuid": UUID}
     assert "identity" not in {n for n, _ in seen}
+
+
+def test_server_env_socket_alone_does_not_choose_the_shape(env, monkeypatch, capsys):
+    """The documented run loads the server's env, which always sets the socket.
+
+    Before --transport, that alone made every persistent resident uuid-only,
+    unverified, even one that resumes over MCP HTTP with a token.
+    """
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/tmp/unitares.sock")
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply"]) == 2
+    assert not env.exists()
+    assert seen == []
+    assert "--transport" in capsys.readouterr().err
+
+
+def test_http_transport_under_server_env_writes_a_verified_token_anchor(env, monkeypatch):
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", "/tmp/unitares.sock")
+    seen = _wire(monkeypatch, {"agent": _agent_get(), "identity": _identity_ok()})
+    assert pra.main(["--agent-uuid", UUID, "--name", NAME, "--apply",
+                     "--transport", "http"]) == 0
+    saved = json.loads(env.read_text())
+    assert saved["agent_uuid"] == UUID
+    assert saved["continuity_token"] == "v1.fresh.sig"
+    assert [n for n, _ in seen] == ["agent", "identity"]
 
 
 # --------------------------------------------------------------------------
