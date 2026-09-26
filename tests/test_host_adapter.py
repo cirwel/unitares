@@ -861,7 +861,7 @@ def test_disabled_hosts_switch_off_one_host_and_keep_the_rest(monkeypatch):
 
 def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch, caplog):
     """A typo must not silently leave the lane it meant to switch off running."""
-    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "gemini, OpenAI, nope")
+    monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "agy, OpenAI, nope, gemini")
     monkeypatch.setattr(ha, "_WARNED_UNKNOWN_DISABLED", set())
     with caplog.at_level("WARNING"):
         assert ha.host_adapter_disabled_hosts() == frozenset(
@@ -869,6 +869,8 @@ def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch,
         )
         ha.host_adapter_disabled_hosts()
     assert caplog.text.count("unknown host 'nope'") == 1  # once, not per probe
+    # "gemini" names the external dialectic reviewer elsewhere, never this host.
+    assert "unknown host 'gemini'" in caplog.text
 
 
 @pytest.mark.parametrize(

@@ -117,13 +117,15 @@ _HOST_ALIASES = {
     "openai": "codex:host-adapter",
     "antigravity": "antigravity:host-adapter",
     "agy": "antigravity:host-adapter",
-    "gemini": "antigravity:host-adapter",
-    "google": "antigravity:host-adapter",
+    # Not "gemini": UNITARES_DIALECTIC_REVIEWER_HOST=gemini means the external
+    # OpenAI-compatible reviewer, and the two must not share a name.
 }
 # Seconds the agy client's own deadline stays ahead of the orchestrator await:
 # covers child start-up, the kill-and-reap after a timeout, and the envelope.
-# Scaled down for long-ish short budgets, but never below the client's own
-# 5 s post-kill reap plus start-up, or a hung agy outlives the await window.
+# Scaled down for shorter budgets, but not below the client's own 5 s
+# post-kill reap plus start-up, or a hung agy outlives the await window. Below
+# timeout_s=9 the client gets 1 s and the margin cannot hold: such a budget is
+# too small for this lane, and a hung agy there surfaces as still_running.
 _CLIENT_DEADLINE_MARGIN_S = 15
 _CLIENT_DEADLINE_MIN_MARGIN_S = 8
 
@@ -238,8 +240,10 @@ def host_adapter_disabled_hosts() -> frozenset[str]:
     """Hosts the operator switched off individually.
 
     Comma-separated host ids, or a short name for one (``codex``, ``openai``;
-    ``claude``, ``anthropic``; ``antigravity``, ``agy``, ``gemini``,
-    ``google``). Exists because availability probing only sees the local side:
+    ``claude``, ``anthropic``; ``antigravity``, ``agy``). It covers the
+    host-adapter lanes (``delegate_inference`` and thorough ``consult``) only;
+    the dialectic reviewer's backend is chosen by
+    ``UNITARES_DIALECTIC_REVIEWER_HOST``. Exists because availability probing only sees the local side:
     a CLI whose provider account is suspended still resolves and still looks
     available. A name that matches no host is logged, not silently accepted,
     since a typo here leaves the lane it meant to switch off running.
