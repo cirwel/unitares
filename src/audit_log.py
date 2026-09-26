@@ -645,6 +645,31 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_consultation(
+        self,
+        *,
+        agent_id: Optional[str],
+        record: Dict,
+    ) -> None:
+        """Record that an advisory consultation happened, never what was said.
+
+        ``record`` is the envelope built by
+        ``consultation._consultation_record``: route, policy, outcome, and
+        SHA-256 hashes of the brief, the constructed prompt and the returned
+        advice. The texts themselves stay with the caller; the hashes let a
+        caller who kept them prove which exchange this row describes. A
+        consultation stays off the governed record (``on_record: False``);
+        this row is the accountability trace that it occurred.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_id,
+            event_type="consultation",
+            confidence=1.0,
+            details=record,
+        )
+        self._write_entry(entry)
+
     def _write_entry(self, entry: AuditEntry):
         """Write audit entry to JSONL log file with locking.
 
