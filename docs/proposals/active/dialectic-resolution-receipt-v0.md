@@ -11,8 +11,13 @@ tests `tests/test_dialectic_receipt.py`.
 **Grounds in:** `docs/SCOPE_AND_THREAT_MODEL.md` ("The attestation half of the
 same boundary"), the AIC prototype `agent-identity-credential-aic-v0.md`, the
 identity plan's custody invariant (`docs/ontology/plan.md`, S19 B-strict), and
-the federation trust-model commitment (per-principal governance, no shared
+the multi-principal trust-model commitment (per-principal governance, no shared
 administrative root, cross-principal interaction via verifiable attestation).
+**Decision record:**
+[`federation-trust-decisions-2026-09-25.md`](federation-trust-decisions-2026-09-25.md)
+records multi-principal trust work as not scheduled (D3a) and custody for this
+receipt's key as deferred behind it (D3b). It does not change the wake criteria
+below.
 
 ## The gap
 
@@ -143,7 +148,14 @@ resolution's standing.
    defining property is the absence of a shared root. The evidence would be a
    second operator with an independent channel to pin the key and a reason to
    check a record; that party does not exist and this document does not
-   schedule one.
+   schedule one. As of 2026-09-25 that is a recorded decision, not an omission:
+   D3a of the [decision record](federation-trust-decisions-2026-09-25.md)
+   records multi-principal trust work as not scheduled. Its wake condition is a
+   real outside party, a person or organisation with its own administrative
+   root, asking to verify a record from this deployment. D3b defers custody for
+   the receipt key behind that wake; its framing is a preference for whoever
+   wakes it, not an amendment, so the five preconditions below stand, and
+   citing the record does not satisfy the non-exportable custody criterion.
 5. **The upstream decision is still the operator's.** The threat model parks
    the choice of verification semantics with the operator. Shipping one option,
    even dormant, creates gravity: it becomes the cheapest thing to extend. The
