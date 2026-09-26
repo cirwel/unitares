@@ -876,6 +876,65 @@ def _antigravity_text(stdout: str) -> str:
     return stdout
 
 
+#: agy stalls in two ways without answering; each is resumed in the same
+#: conversation (same workspace, env and flags) with a prompt for that case.
+#: Measured on 15 review runs (2026-09-25): 10 ended SUCCESS with an EMPTY
+#: answer because a shell command was auto-denied in headless mode, and a
+#: live resume then answered; 3 hit the output-token limit, and resuming one
+#: of them 3x hit it again each time (agy re-reasons), hence one try only.
+AGY_RESUME_LIMITS = {"denied": 2, "truncated": 1}
+AGY_RESUME_PROMPTS = {
+    "denied": (
+        "Your command was denied: this review session has no tools and cannot run "
+        "commands. Do not try any tool again. Write your complete review now from the "
+        "diff and files already in this conversation: every finding, then the VERDICT line."
+    ),
+    "truncated": (
+        "Your previous answer was cut off by the output limit before it was delivered "
+        "in full. Send your complete final review again from the beginning: every "
+        "finding, then the VERDICT line. Do not investigate further; write it out."
+    ),
+}
+#: A resume needs at least this much budget left to be worth starting.
+AGY_RESUME_MIN_SECONDS = 5.0
+_AGY_DENIED_MARK = 'required the "command" permission'
+
+
+def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
+    """(kind, conversation id) when agy stopped without a usable answer.
+
+    "truncated": status ERROR at the output-token limit; the response is not
+    trusted as the review. "denied": status SUCCESS with an empty response
+    after headless mode auto-denied a command. (None, None) otherwise; a
+    missing conversation id means the stall cannot be resumed."""
+    try:
+        data = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else {}
+    except (ValueError, IndexError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    cid = data.get("conversation_id")
+    cid = cid if isinstance(cid, str) and cid else None
+    if data.get("status") != "SUCCESS":
+        if "output token limit" in str(data.get("error") or "").lower():
+            return "truncated", cid
+        return None, None
+    if not str(data.get("response") or "").strip() and _AGY_DENIED_MARK in stderr:
+        return "denied", cid
+    return None, None
+
+
+def _agy_truncation(stdout: str) -> tuple[bool, str | None]:
+    """(truncated, conversation id); see _agy_stall."""
+    kind, cid = _agy_stall(stdout, "")
+    return kind == "truncated", cid if kind == "truncated" else None
+
+
+def _agy_output_limited(stdout: str) -> str | None:
+    """The conversation id to resume after a truncation, or None."""
+    return _agy_truncation(stdout)[1]
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tuple[str, str]:
     """Return (final text, status note). Never raises on reviewer failure."""
     last = (out_dir / "last-message.txt").resolve()
@@ -906,35 +965,86 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int) -> tu
         workspace.cleanup()
         return ("temporary workspace sits under a .git/.agents directory; set TMPDIR "
                 "to a plain directory", "skipped: workspace not isolated")
-    with open(log, "w") as fh:
+    deadline = time.monotonic() + budget_s
+
+    def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
+        """Run once; (exit code, None) or (None, failure note)."""
         # antigravity: stdout is the JSON answer, kept apart from stderr.
         out = open(last, "w") if isolated else fh
         try:
             # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
             try:
-                proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=out,
+                proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if isolated else subprocess.STDOUT,
                                         cwd=workspace.name if workspace else None,
                                         env=agy_env() if isolated else None,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
-                return str(exc), f"could not start {reviewer}: {exc.__class__.__name__}"
+                return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
             try:
-                rc = proc.wait(timeout=budget_s)
+                return proc.wait(timeout=timeout), None
             except subprocess.TimeoutExpired:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
-                return log.read_text(errors="replace"), f"killed at the {budget_s}s budget"
+                return None, f"killed at the {budget_s}s budget"
         finally:
             if out is not fh:
                 out.close()
-            if workspace:
-                workspace.cleanup()
+
+    resumes: dict[str, int] = {}
+    stall: str | None = None
+    try:
+        with open(log, "w") as fh:
+            # The first launch gets exactly the budget, as before resumes existed.
+            rc, failure = launch(cmd, fh, budget_s)
+            while failure is None and isolated:
+                fh.flush()
+                # agy writes stderr straight to the log's fd, so scope the
+                # check to what followed the latest resume marker.
+                stderr_now = log.read_text(errors="replace").rsplit("[review_gate] agy", 1)[-1]
+                stall, cid = _agy_stall(
+                    last.read_text(errors="replace") if last.exists() else "", stderr_now)
+                if (
+                    stall is None or cid is None
+                    or resumes.get(stall, 0) >= AGY_RESUME_LIMITS[stall]
+                    or deadline - time.monotonic() < AGY_RESUME_MIN_SECONDS
+                ):
+                    break
+                resumes[stall] = resumes.get(stall, 0) + 1
+                fh.write(f"\n[review_gate] agy {stall}; resuming {cid} "
+                         f"({resumes[stall]}/{AGY_RESUME_LIMITS[stall]})\n")
+                fh.flush()
+                # Same flags as the first launch (cmd[3:]), so an isolation
+                # change there can never miss the resumed run.
+                rc, failure = launch(
+                    ["agy", "-p", AGY_RESUME_PROMPTS[stall], "--conversation", cid, *cmd[3:]],
+                    fh, deadline - time.monotonic())
+    finally:
+        if workspace:
+            workspace.cleanup()
+    resumed = sum(resumes.values())
+    if failure is None and isolated and stall is not None:
+        # Still stalled after its last resume, too little budget left, or no
+        # conversation to resume: a failure, never "exit 0".
+        failure = {
+            "truncated": "output limit not recovered",
+            "denied": "no answer after a denied command",
+        }[stall] + f" after {resumes.get(stall, 0)} resume(s)"
+    if failure is not None:
+        if failure.startswith("could not start"):
+            note, _, detail = failure.partition("|")
+            return detail, note
+        return log.read_text(errors="replace"), failure
     text = last.read_text(errors="replace") if last.exists() else ""
     if isolated:
         text = _antigravity_text(text)
     # An empty answer must surface the log, where auth/quota errors land.
     text = text if text.strip() else log.read_text(errors="replace")
+    if resumed:
+        # Reported beside the note, never in it: callers accept a review only
+        # when the note is exactly "exit 0".
+        detail = ", ".join(f"{k} {n}x" for k, n in sorted(resumes.items()))
+        print(f"[review] {reviewer} resumed after a stall ({detail})", file=sys.stderr)
     return text, ("exit 0" if rc == 0 else f"exit {rc}")
 
 
