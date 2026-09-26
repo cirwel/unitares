@@ -1913,6 +1913,10 @@ def _raw_governance_policy(
         # which still returns the omitted canonical payload.
         verdict = (payload or {}).get("verdict")
         verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
+        if verdict_value == "unbound":
+            # Every tier returns the same unbound payload until the caller
+            # binds; next_action names that step, so no tier hint.
+            return resolve_metrics_verbosity(arguments) != "minimal", None
         uninitialized = verdict_value == "uninitialized" or "uninitialized" in str(
             (payload or {}).get("status") or ""
         )
@@ -3051,9 +3055,12 @@ def build_experience_envelope(
         # for an identical prediction-bound outcome while the binding is
         # retained; a bare flag cannot carry those conditions, so the hint
         # states them (see _write_ack_raw_policy).
+        # An unbound metrics read (no tier hint) has nothing more to fetch
+        # at any tier until the caller binds.
         if (
             friendly_name != "start_session"
             and friendly_name not in _COMPACT_WRITE_ALIASES
+            and not (friendly_name == "check_working_state" and raw_hint is None)
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:

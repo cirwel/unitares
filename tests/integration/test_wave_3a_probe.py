@@ -419,8 +419,9 @@ class TestDescribeToolEnvelope:
 class TestListToolsDescribeToolDeterminism:
     """§2.6 + determinism: list_tools / describe_tool must be byte-equal
     across two calls (the masked `server_time` is the only volatile field;
-    `agent_signature` is the deterministic unbound `{"uuid": null}`). Same
-    contract as the tool_registry determinism guard."""
+    list_tools(lite=true) carries no `agent_signature`, and describe_tool's
+    is the deterministic unbound `{"uuid": null}`). Same contract as the
+    tool_registry determinism guard."""
 
     def test_list_tools_two_calls_byte_equal(
         self, client: TestClient, token_set: str

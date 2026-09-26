@@ -134,6 +134,12 @@ def test_unbound_read_states_one_next_step():
         "check_working_state", "get_governance_metrics", payload, {}
     )
     _assert_one_next_step(env, payload)
+    # Every tier returns the same unbound payload until the caller binds, so
+    # no tier hint and no claim that more is fetchable; next_action names
+    # the step that changes it.
+    assert "raw_governance_hint" not in env
+    assert "raw_governance_available" not in env
+    assert "response_options" not in env
 
 
 @pytest.mark.asyncio
