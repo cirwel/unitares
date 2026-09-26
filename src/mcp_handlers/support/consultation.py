@@ -811,7 +811,12 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         privacy=str(arguments.get("privacy", "local")),
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
-        thorough_host_id=_thorough_host_for_caller(),
+        # Only a thorough consult delegates; a standard one never probes hosts.
+        **(
+            {"thorough_host_id": _thorough_host_for_caller()}
+            if arguments.get("effort") == "thorough"
+            else {}
+        ),
     )
     if requester_uuid is None:
         outcome = _failed(

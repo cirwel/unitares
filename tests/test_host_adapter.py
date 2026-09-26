@@ -862,13 +862,17 @@ def test_disabled_hosts_switch_off_one_host_and_keep_the_rest(monkeypatch):
 def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch, caplog):
     """A typo must not silently leave the lane it meant to switch off running."""
     monkeypatch.setenv("UNITARES_HOST_ADAPTER_DISABLED_HOSTS", "gemini, OpenAI, nope")
+    monkeypatch.setattr(ha, "_WARNED_UNKNOWN_DISABLED", set())
     with caplog.at_level("WARNING"):
         assert ha.host_adapter_disabled_hosts() == frozenset(
             {"antigravity:host-adapter", "codex:host-adapter"}
         )
-    assert "unknown host 'nope'" in caplog.text
+        ha.host_adapter_disabled_hosts()
+    assert caplog.text.count("unknown host 'nope'") == 1  # once, not per probe
 
 
-@pytest.mark.parametrize(("timeout_s", "client_s"), [(5, 4), (20, 15), (60, 45), (420, 405)])
+@pytest.mark.parametrize(
+    ("timeout_s", "client_s"), [(5, 1), (20, 12), (40, 30), (60, 45), (420, 405)]
+)
 def test_the_agy_client_deadline_leaves_a_short_budget_usable(timeout_s, client_s):
     assert ha._client_deadline_s(timeout_s) == client_s

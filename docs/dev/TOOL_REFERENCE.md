@@ -1280,7 +1280,7 @@ Return the registry record for one inference host named by host_id, including re
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. effort='thorough' asks a strong model from a different family than the caller's (Claude, Codex or Antigravity, whichever the operator has available). Requires a bound identity. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
+Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. effort='thorough' asks a strong model from a different family than the caller's when the caller's family can be detected (Claude, Codex or Antigravity, whichever the operator has available); an undetected caller may get any of them. Requires a bound identity. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
 ### `call_model`
 

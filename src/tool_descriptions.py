@@ -152,8 +152,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "default privacy='local' it refuses outright unless "
         "allow_degraded=true, which returns a standard local answer instead. "
         "effort='thorough' asks a strong model from a different family than "
-        "the caller's (Claude, Codex or Antigravity, whichever the operator "
-        "has available). Requires a bound identity. Use call_model or "
+        "the caller's when the caller's family can be detected (Claude, Codex "
+        "or Antigravity, whichever the operator has available); an "
+        "undetected caller may get any of them. Requires a bound identity. "
+        "Use call_model or "
         "delegate_inference only for explicit provider, host, model or "
         "timeout control."
     ),

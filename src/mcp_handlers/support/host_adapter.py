@@ -105,6 +105,10 @@ _CLI_ENV_OVERRIDES = {
 
 _ANTIGRAVITY_RESULT_SCHEMA = "unitares.antigravity_cli_result.v1"
 
+#: Unknown disabled-host names already warned about, so a typo logs once per
+#: process rather than on every availability probe.
+_WARNED_UNKNOWN_DISABLED: set[str] = set()
+
 #: Short names accepted by UNITARES_HOST_ADAPTER_DISABLED_HOSTS.
 _HOST_ALIASES = {
     "claude": "claude:host-adapter",
@@ -118,12 +122,15 @@ _HOST_ALIASES = {
 }
 # Seconds the agy client's own deadline stays ahead of the orchestrator await:
 # covers child start-up, the kill-and-reap after a timeout, and the envelope.
-# Scaled down for short budgets so a small valid timeout_s is not eaten whole.
+# Scaled down for long-ish short budgets, but never below the client's own
+# 5 s post-kill reap plus start-up, or a hung agy outlives the await window.
 _CLIENT_DEADLINE_MARGIN_S = 15
+_CLIENT_DEADLINE_MIN_MARGIN_S = 8
 
 
 def _client_deadline_s(timeout_s: int) -> int:
-    margin = min(_CLIENT_DEADLINE_MARGIN_S, max(1, timeout_s // 4))
+    margin = min(_CLIENT_DEADLINE_MARGIN_S,
+                 max(_CLIENT_DEADLINE_MIN_MARGIN_S, timeout_s // 4))
     return max(1, timeout_s - margin)
 
 _TERMINAL_ANSWER_SCHEMA = "unitares.terminal_answer.v1"
@@ -245,10 +252,13 @@ def host_adapter_disabled_hosts() -> frozenset[str]:
             continue
         host_id = name if name in _HOST_COMMANDS else _HOST_ALIASES.get(name)
         if host_id is None:
-            logger.warning(
-                "[host_adapter] UNITARES_HOST_ADAPTER_DISABLED_HOSTS names unknown "
-                "host %r; known: %s", name, ", ".join(sorted(_HOST_COMMANDS)),
-            )
+            if name not in _WARNED_UNKNOWN_DISABLED:
+                _WARNED_UNKNOWN_DISABLED.add(name)
+                logger.warning(
+                    "[host_adapter] UNITARES_HOST_ADAPTER_DISABLED_HOSTS names "
+                    "unknown host %r; known: %s",
+                    name, ", ".join(sorted(_HOST_COMMANDS)),
+                )
             continue
         disabled.add(host_id)
     return frozenset(disabled)
