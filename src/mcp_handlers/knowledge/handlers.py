@@ -17,6 +17,7 @@ from functools import wraps
 from typing import Dict, Any, Sequence, Optional
 from mcp.types import TextContent
 from datetime import datetime, timezone, timedelta
+from types import SimpleNamespace
 import hashlib
 import json
 import os
@@ -164,6 +165,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "superseded",
     "superseded_by",
     "staleness_warning",
+    "last_activity_days",
     "authority",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
@@ -651,28 +653,60 @@ async def _record_supersession_edge(graph, *, new_id: str, old_id: str) -> Optio
     return None
 
 
-def _compute_staleness_warning(discovery, current_server_version: str) -> Optional[str]:
-    """Flag open entries whose LAST write is likely stale.
+_STALE_AFTER_DAYS = 60
+
+
+def _is_durable_entry(discovery) -> bool:
+    """Whether ``open`` is this entry's resting status rather than "unresolved".
+
+    Reuses the lifecycle's retention classification (the permanent types and
+    the permanent/foundational/architecture/decision tags) instead of keeping
+    a second list that can drift, plus ``insight``, which is resting-open but
+    deliberately not a permanent type: adding it there would change retention.
+    Known edge (operator decision, 2026-09-26): an open ``bug_found`` tagged
+    ``architecture`` counts as durable here, because the tag makes it
+    permanent for retention.
+    """
+    from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
+
+    kind = getattr(discovery, "type", None)
+    if kind == "insight":
+        return True
+    # A read path: a malformed legacy tag must not make set() raise mid-search.
+    tags = [tag for tag in (getattr(discovery, "tags", None) or []) if isinstance(tag, str)]
+    view = SimpleNamespace(type=kind, tags=tags)
+    return KnowledgeGraphLifecycle().get_lifecycle_policy(view) == "permanent"
+
+
+def _compute_staleness(discovery) -> Optional[tuple[int, str]]:
+    """``(days since the last write, warning)`` for an open entry past the
+    staleness threshold, else ``None``.
 
     Keyed on the last write (``updated_at`` when newer than the store time),
-    not the first store. Before 2026-08-16 both checks keyed on store-time
+    not the first store. Before 2026-08-16 the checks keyed on store-time
     facts, so long-lived entries that are actively maintained — e.g. the
     memory-mirror corpus, re-pushed on every source-file edit — warned forever,
     and a warning that always fires trains readers to ignore it (observed live:
     an entry updated 25 minutes earlier still said "written against v2.14.0").
 
-    The version claim is only made when the content has never been updated
-    since store: after an update, provenance's store-time ``system_version`` no
-    longer describes the current content, and the update-time version is not
-    recorded anywhere, so the claim would be a guess. The age check carries the
-    staleness signal for updated entries instead.
+    There is no version clause. Until 2026-09-26 a never-updated entry also
+    warned when its store-time ``system_version`` was 2+ minor releases behind
+    the server's. Both values come from the VERSION file, so that counted
+    release cuts, not code change: it fired on entries 22-57 days old
+    depending on when releases happened, and never on a leave_note, which
+    records no version (operator decision D1, 2026-09-26). ``system_version``
+    stays on the result as store-time provenance.
+
+    The wording follows the entry's type (operator decision D2): for durable
+    entries, where ``open`` is the resting status, "still open" would frame a
+    record as a neglected task, so they get a neutral sentence that still says
+    to verify — permanent rules carry volatile details too.
 
     ``updated_at`` is stamped by any field update (status, tags, severity), not
     only content rewrites — accepted imprecision: a lifecycle touch on an open
     entry is itself a recency signal, and content-hash timestamps are not worth
     the machinery.
     """
-    warning_parts = []
 
     def _parse_utc(value):
         ts = datetime.fromisoformat(value) if isinstance(value, str) else value
@@ -682,7 +716,7 @@ def _compute_staleness_warning(discovery, current_server_version: str) -> Option
             ts = ts.replace(tzinfo=timezone.utc)
         return ts
 
-    # Age-based check: >60 days since the last write. Compare in UTC.
+    # >60 days since the last write. Compare in UTC.
     was_updated = False
     try:
         last_write = _parse_utc(discovery.timestamp)
@@ -695,33 +729,27 @@ def _compute_staleness_warning(discovery, current_server_version: str) -> Option
         except (ValueError, TypeError):
             pass
         age_days = (datetime.now(timezone.utc) - last_write).days
-        if age_days > 60:
-            if was_updated:
-                warning_parts.append(f"This entry was last updated {age_days} days ago and is still open.")
-            else:
-                warning_parts.append(f"This entry is {age_days} days old and still open.")
     except (ValueError, TypeError):
-        pass
+        return None
+    if age_days <= _STALE_AFTER_DAYS:
+        return None
 
-    # Version-based check: 2+ minor versions behind current — only meaningful
-    # while the store-time version still describes the content (never updated).
-    entry_version = None
-    if not was_updated and discovery.provenance and isinstance(discovery.provenance, dict):
-        entry_version = discovery.provenance.get("system_version")
-    if entry_version and current_server_version and current_server_version != "unknown":
-        try:
-            ev = [int(x) for x in str(entry_version).split(".")]
-            cv = [int(x) for x in str(current_server_version).split(".")]
-            if len(ev) >= 2 and len(cv) >= 2:
-                minor_distance = (cv[0] - ev[0]) * 100 + (cv[1] - ev[1])
-                if minor_distance >= 2:
-                    warning_parts.append(f"Written against v{entry_version} (current: v{current_server_version}).")
-        except (ValueError, IndexError):
-            pass
+    if _is_durable_entry(discovery):
+        return age_days, (
+            f"Last written {age_days} days ago; durable entries can carry "
+            "volatile details (ports, paths, refs) — verify before acting on them."
+        )
+    if was_updated:
+        sentence = f"This entry was last updated {age_days} days ago and is still open."
+    else:
+        sentence = f"This entry is {age_days} days old and still open."
+    return age_days, sentence + " It may be outdated — verify before acting on it."
 
-    if warning_parts:
-        return " ".join(warning_parts) + " It may be outdated — verify before acting on it."
-    return None
+
+def _compute_staleness_warning(discovery) -> Optional[str]:
+    """The canonical per-entry ``staleness_warning`` string, or ``None``."""
+    staleness = _compute_staleness(discovery)
+    return staleness[1] if staleness else None
 
 
 async def _build_s7_provenance_chain_with_fallback(
@@ -2379,7 +2407,6 @@ def _serialize_search_discoveries(
     *,
     include_details: bool,
 ) -> list[dict[str, Any]]:
-    current_server_version = getattr(mcp_server, "SERVER_VERSION", "unknown")
     discoveries = []
     for document in state.results:
         provenance = document.provenance if isinstance(document.provenance, dict) else None
@@ -2422,9 +2449,15 @@ def _serialize_search_discoveries(
         item["_agent_id"] = document.agent_id
         item["system_version"] = provenance.get("system_version") if provenance else None
         if document.status == "open":
-            warning = _compute_staleness_warning(document, current_server_version)
-            if warning:
-                item["staleness_warning"] = warning
+            staleness = _compute_staleness(document)
+            if staleness:
+                # The prose is the canonical field (the dashboard reads it);
+                # `last_activity_days` is the same fact in structured form,
+                # present only when the warning is, so a digest can carry it
+                # without the sentence. The name is the one
+                # knowledge(action='audit') already gives days since the last
+                # write; its `age_days` counts from creation instead.
+                item["last_activity_days"], item["staleness_warning"] = staleness
         if state.request.include_provenance:
             item["provenance"] = document.provenance
             if document.provenance_chain:
@@ -3635,6 +3668,12 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                 "discovery": discovery.to_dict(include_details=True),
                 "message": f"Full details for discovery '{discovery_id}'"
             }
+
+        # This is the route a search digest's open_one hint points at, so a
+        # superseded record has to name its replacement here too; the stored
+        # row carries no successor column, only the AGE SUPERSEDES edge.
+        if response["discovery"].get("status") == "superseded":
+            await _annotate_supersession([response["discovery"]], graph)
 
         # Response chain traversal (Dec 2025 - restores get_response_chain_graph functionality)
         include_chain = arguments.get("include_response_chain", False)

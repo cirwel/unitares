@@ -22,7 +22,7 @@ import sys
 import os
 from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Optional, List, Dict, Any
@@ -246,6 +246,91 @@ class TestSearchKnowledgeGraph:
         disc = next(d for d in data["discoveries"] if d["id"] == "ok-1")
         assert "superseded" not in disc
         mock_graph.get_superseded_by.assert_not_awaited()  # no superseded ids -> no AGE read
+
+    @pytest.mark.asyncio
+    async def test_details_names_the_successor_of_a_superseded_discovery(self, patch_common):
+        """details is the digest's open_one route, so a superseded record has
+        to say what replaced it there too, not only in a full-mode search."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        mock_graph.get_discovery = AsyncMock(
+            return_value=make_discovery(id="old-1", status="superseded")
+        )
+        mock_graph.get_superseded_by = AsyncMock(return_value={"old-1": ["new-1"]})
+
+        for mode in ("full", "lean"):
+            data = parse_result(await handle_get_discovery_details(
+                {"discovery_id": "old-1", "response_mode": mode}
+            ))
+            discovery = data["discovery"]
+            assert discovery["superseded_by"] == ["new-1"], mode
+            assert "Current version: new-1" in discovery["superseded_warning"], mode
+        mock_graph.get_superseded_by.assert_awaited_with(["old-1"])
+
+    @pytest.mark.asyncio
+    async def test_details_superseded_without_age_backend_keeps_status_only(self, patch_common):
+        """The relational backend has no successor lookup: details still says
+        superseded, without inventing a successor."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        mock_graph.get_discovery = AsyncMock(
+            return_value=make_discovery(id="old-2", status="superseded")
+        )
+        if hasattr(mock_graph, "get_superseded_by"):
+            del mock_graph.get_superseded_by
+
+        data = parse_result(await handle_get_discovery_details({"discovery_id": "old-2"}))
+        assert data["success"] is True
+        assert data["discovery"]["status"] == "superseded"
+        assert "superseded_by" not in data["discovery"]
+        assert "superseded_warning" in data["discovery"]
+
+    @pytest.mark.asyncio
+    async def test_details_of_an_open_discovery_does_no_successor_read(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_get_discovery_details
+
+        mock_graph.get_discovery = AsyncMock(return_value=make_discovery(id="ok-2"))
+        mock_graph.get_superseded_by = AsyncMock(return_value={})
+
+        data = parse_result(await handle_get_discovery_details({"discovery_id": "ok-2"}))
+        assert "superseded_warning" not in data["discovery"]
+        mock_graph.get_superseded_by.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stale_row_carries_last_activity_days_beside_the_warning(self, patch_common):
+        """The structured age is computed where the warning is, on the same
+        last-write basis, and survives the canonical lean projection. A
+        fresh entry stored under an older release carries neither (the
+        version clause is retired) but keeps system_version as provenance."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+
+        now = datetime.now(timezone.utc)
+        stale = make_discovery(id="stale-1", summary="old deploy runbook")
+        stale.timestamp = (now - timedelta(days=90)).isoformat()
+        fresh = make_discovery(
+            id="fresh-1", summary="new deploy runbook",
+            provenance={"system_version": "2.14.0"},
+        )
+        mock_graph.full_text_search = AsyncMock(return_value=[stale, fresh])
+        if hasattr(mock_graph, "semantic_search"):
+            del mock_graph.semantic_search
+
+        for mode in ("full", "lean"):
+            data = parse_result(await handle_search_knowledge_graph(
+                {"query": "deploy runbook", "response_mode": mode}
+            ))
+            rows = {d["id"]: d for d in data["discoveries"]}
+            assert rows["stale-1"]["last_activity_days"] == 90, mode
+            assert "90 days old and still open" in rows["stale-1"]["staleness_warning"], mode
+            assert "last_activity_days" not in rows["fresh-1"], mode
+            assert "staleness_warning" not in rows["fresh-1"], mode
+        full = parse_result(await handle_search_knowledge_graph({"query": "deploy runbook"}))
+        fresh_row = next(d for d in full["discoveries"] if d["id"] == "fresh-1")
+        assert fresh_row["system_version"] == "2.14.0"
 
     @pytest.mark.asyncio
     async def test_update_superseded_by_records_edge(self, patch_common, registered_agent):
@@ -1071,6 +1156,287 @@ class TestSearchKnowledgeGraph:
         assert data["count"] == 1
         assert "provenance" in data["discoveries"][0]
         assert "provenance_chain" in data["discoveries"][0]
+
+
+# ============================================================================
+# search_shared_memory digest, from the real handler serialization
+# ============================================================================
+
+# Synthetic writers at live lengths (2026-09-26 captures): UUID identities,
+# write-time labels of 30, 15 and 49 characters.
+_LIVE_WRITERS = (
+    ("claude-migration-drift-triager", "5b0c1f7e-1a2b-4c3d-8e9f-0000000000a1"),
+    ("claude_5b0c1f7e", "5b0c1f7e-1a2b-4c3d-8e9f-0000000000a2"),
+    ("claude-code-kg-retrieval-assessment-claude_5b0c1f", "5b0c1f7e-1a2b-4c3d-8e9f-0000000000a3"),
+)
+_LIVE_SUMMARY = (
+    "DEPLOY: all live services now on master — lease plane + governance MCP "
+    "(deploy worktree, via deploy-lease-plane.sh / deploy-mcp.sh), sentinel-beam "
+    "+ gateway-mcp (dev checkout, kickstart). Migration 042 was applied MANUALLY "
+    "mid-deploy: deploy scripts do NOT run DB migrations, so diff the migrations "
+    "directory against core.schema_migrations and apply the gap before restart."
+)
+_LIVE_TAGS = [
+    "deploy", "migrations", "schema-migrations", "ops-gotcha", "lease-plane",
+    "cirwel-unitares", "for-future-agents",
+]
+
+
+def _live_row(rank, *, days_old=5, type="note", status="open", label=None,
+              summary=_LIVE_SUMMARY, version="2.18.0"):
+    written = datetime.now(timezone.utc) - timedelta(days=days_old, microseconds=rank)
+    default_label, agent_id = _LIVE_WRITERS[rank % len(_LIVE_WRITERS)]
+    return DiscoveryNode(
+        id=written.isoformat(),  # live ids are store timestamps
+        agent_id=agent_id,
+        type=type,
+        summary=summary,
+        details="Sibling of the earlier gotcha. " * 40,
+        tags=list(_LIVE_TAGS),
+        severity="high",
+        status=status,
+        timestamp=written.isoformat(),
+        provenance={
+            "writer_label_at_write": label or default_label,
+            "system_version": version,
+        },
+    )
+
+
+async def _friendly_payload(graph, rows, *, lexical=True, **arguments):
+    """The canonical payload search_shared_memory's envelope receives: the
+    alias's argument normalization, then the canonical handler (and its
+    response-mode shaping). Returns ``(payload, arguments)``."""
+    from src.mcp_handlers.knowledge.handlers import handle_search_knowledge_graph
+    from src.mcp_handlers.support.param_normalization import (
+        normalize_compact_search_details,
+    )
+
+    graph.semantic_search = AsyncMock(
+        return_value=[(row, 0.5 - rank / 100) for rank, row in enumerate(rows)]
+    )
+    graph.full_text_search = AsyncMock(return_value=list(rows) if lexical else [])
+    args = {"query": "how do deploys apply schema changes", "search_mode": "hybrid",
+            **arguments}
+    normalize_compact_search_details(args)
+    payload = parse_result(await handle_search_knowledge_graph(dict(args)))
+    return payload, args
+
+
+async def _friendly_search(graph, rows, *, lexical=True, **arguments):
+    """search_shared_memory as served: _friendly_payload, then the envelope."""
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    payload, args = await _friendly_payload(graph, rows, lexical=lexical, **arguments)
+    return build_experience_envelope("search_shared_memory", "knowledge", payload, args)
+
+
+def _wire_bytes(envelope):
+    return len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
+
+
+def _assert_attribution_whole(envelope, rows):
+    writers = {row.id: (row.provenance["writer_label_at_write"], row.agent_id) for row in rows}
+    for digest in envelope["memory_suggestions"]:
+        label, agent_id = writers[digest["discovery_id"]]
+        assert digest["agent_id"] == agent_id
+        assert digest["by"] == label
+    assert "digest_attribution_omitted" not in envelope
+
+
+class TestFriendlySearchDigest:
+    """The lean digest a default search_shared_memory call returns, built
+    from real handler output rather than hand-written envelope input."""
+
+    @pytest.mark.asyncio
+    async def test_superseded_row_names_its_successor(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        rows = [
+            _live_row(0, status="superseded"),
+            _live_row(1, days_old=108),
+            _live_row(2, days_old=90),
+        ]
+        successor = "2026-08-24T08:00:00.000001+00:00"
+        mock_graph.get_superseded_by = AsyncMock(return_value={rows[0].id: [successor]})
+
+        env = await _friendly_search(mock_graph, rows)
+
+        digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
+        assert len(digests) == 3
+        old = digests[rows[0].id]
+        assert old["status"] == "superseded"
+        assert old["superseded_by"] == successor
+        assert "superseded_warning" not in old  # status + successor say it
+        assert _wire_bytes(env) <= 3_000
+        _assert_attribution_whole(env, rows)
+
+    @pytest.mark.asyncio
+    async def test_stale_rows_carry_last_activity_days_and_one_note(self, patch_common):
+        """A durable stale row and an open-means-unresolved stale row both
+        carry `last_activity_days` in the digest, never the per-row sentence; one note
+        explains the field. A fresh row stored two releases back carries no
+        staleness at all (D1)."""
+        mock_mcp_server, mock_graph = patch_common
+        rows = [
+            _live_row(0, days_old=108, type="pattern"),
+            _live_row(1, days_old=90, type="bug_found"),
+            _live_row(2, days_old=5, version="2.14.0"),
+        ]
+
+        env = await _friendly_search(mock_graph, rows)
+
+        digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
+        assert digests[rows[0].id]["last_activity_days"] == 108
+        assert digests[rows[1].id]["last_activity_days"] == 90
+        assert "last_activity_days" not in digests[rows[2].id]
+        assert all("staleness_warning" not in d for d in digests.values())
+        note = env["state_summary"]["staleness_note"]
+        assert "last_activity_days" in note and "verify" in note
+        assert json.dumps(env).count(note) == 1
+        assert _wire_bytes(env) <= 3_000
+        _assert_attribution_whole(env, rows)
+
+        full = await _friendly_search(mock_graph, rows, response_mode="full")
+        canonical = {d["id"]: d for d in full["raw_governance"]["discoveries"]}
+        durable = canonical[rows[0].id]["staleness_warning"]
+        assert durable.startswith("Last written 108 days ago")
+        assert "verify before acting" in durable
+        unresolved = canonical[rows[1].id]["staleness_warning"]
+        assert "90 days old and still open" in unresolved
+        assert "staleness_warning" not in canonical[rows[2].id]
+        assert canonical[rows[2].id]["system_version"] == "2.14.0"
+        assert "Written against" not in json.dumps(full)
+
+    @pytest.mark.asyncio
+    async def test_low_confidence_search_says_it_once_and_keeps_its_results(self, patch_common):
+        """A semantic-only result set is flagged and its note stated once. The
+        second copy used to be paid for with a whole digest here (2 of 3
+        shown). Low-confidence envelopes are the tightest the digest gets, so
+        attribution is asserted in rank order and by the marker, not as
+        3/3: that margin is a few dozen bytes."""
+        mock_mcp_server, mock_graph = patch_common
+        rows = [_live_row(rank, days_old=days) for rank, days in enumerate((90, 5, 108))]
+
+        env = await _friendly_search(mock_graph, rows, lexical=False)
+
+        assert env["low_confidence"] is True
+        assert env["state_summary"]["low_confidence"] is True
+        note = env["confidence_note"]
+        assert json.dumps(env, ensure_ascii=False).count(note) == 1
+        digests = env["memory_suggestions"]
+        assert [d["discovery_id"] for d in digests] == [row.id for row in rows]
+        assert [("last_activity_days" in d) for d in digests] == [True, False, True]
+        assert "staleness_note" in env["state_summary"]
+        assert _wire_bytes(env) <= 3_000
+        top_label, top_id = _LIVE_WRITERS[0]
+        assert (digests[0]["by"], digests[0]["agent_id"]) == (top_label, top_id)
+        withheld = any("agent_id" not in d or "by" not in d for d in digests)
+        assert (env.get("digest_attribution_omitted") is True) == withheld
+
+    @pytest.mark.asyncio
+    async def test_withheld_attribution_is_always_marked(self, patch_common):
+        """Swept across label and summary lengths, stale and fresh rows, and
+        lexical and semantic-only result sets: the digest stays inside its
+        budget, and a digest never loses attribution without the marker
+        saying so (live 2026-09-26, 'migration' and 'sentinel lease' lost it
+        on all three digests unmarked)."""
+        mock_mcp_server, mock_graph = patch_common
+        withheld_seen = 0
+        # Summaries step 3 characters on each of 3 digests (9 bytes a step
+        # of the attribution-free envelope), so the sweep lands inside any
+        # ~36-byte window below the budget; labels vary what must fit there.
+        for summary_len in range(150, 243, 3):
+            for label_len in (15, 30, 50):
+                for days_old in (5, 90):
+                    for lexical in (True, False):
+                        rows = [
+                            _live_row(
+                                rank, days_old=days_old + rank,
+                                label=f"writer-{rank}-" + "x" * (label_len - 9),
+                                summary=_LIVE_SUMMARY[:summary_len],
+                            )
+                            for rank in range(3)
+                        ]
+                        env = await _friendly_search(mock_graph, rows, lexical=lexical)
+                        case = (label_len, summary_len, days_old, lexical)
+                        assert _wire_bytes(env) <= 3_000, case
+                        digests = env["memory_suggestions"]
+                        assert digests, case
+                        withheld = any(
+                            "agent_id" not in d or "by" not in d for d in digests
+                        )
+                        withheld_seen += withheld
+                        assert (env.get("digest_attribution_omitted") is True) == withheld, case
+                        for digest in digests:
+                            if "agent_id" in digest:
+                                row = next(r for r in rows if r.id == digest["discovery_id"])
+                                assert digest["agent_id"] == row.agent_id, case
+        # The tightest cases (semantic-only, every row stale, long labels) do
+        # still withhold a label or a digest's attribution; the sweep must
+        # reach them so the marker equality above is actually exercised.
+        assert withheld_seen
+
+    @pytest.mark.asyncio
+    async def test_coaching_gives_attribution_only_the_room_it_takes(self, patch_common):
+        """Review on this change: coaching used to yield to attribution all
+        at once, so a response that was never over budget lost the tier
+        ladder, the all-inline route and the include_details override
+        disclosure together, and ended hundreds of bytes under budget. Each
+        piece now yields in turn and comes back if it still fits, and the
+        override disclosure never yields (a lean envelope carries no
+        normalized_parameters, so it is the only notice). Compared with the
+        same real payload stripped of attribution."""
+        from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+        mock_mcp_server, mock_graph = patch_common
+        ladder_only, ladder_back = 0, 0
+        for summary_len in range(150, 300, 10):
+            for label_len in (15, 59):
+                for days_old in (5, 90):
+                    for details in (False, True):
+                        rows = [
+                            _live_row(
+                                rank, days_old=days_old + rank,
+                                label=f"writer-{rank}-" + "x" * (label_len - 9),
+                                summary=_LIVE_SUMMARY[:summary_len],
+                            )
+                            for rank in range(3)
+                        ]
+                        extra = {"include_details": True} if details else {}
+                        payload, args = await _friendly_payload(mock_graph, rows, **extra)
+                        bare_payload = json.loads(json.dumps(payload))
+                        for row in bare_payload["discoveries"]:
+                            row.pop("by", None)
+                            row.pop("_agent_id", None)
+                        env = build_experience_envelope(
+                            "search_shared_memory", "knowledge", payload, dict(args))
+                        bare = build_experience_envelope(
+                            "search_shared_memory", "knowledge", bare_payload, dict(args))
+                        case = (summary_len, label_len, days_old, details)
+                        if bare.get("projection_truncated"):
+                            continue  # the budget steps' own trimming, not attribution's
+                        assert _wire_bytes(env) <= 3_000, case
+                        _assert_attribution_whole(env, rows)
+                        # Whatever gave way would not fit back; the rest is
+                        # exactly as the attribution-free response had it,
+                        # in the same place.
+                        gave_way = [
+                            key for key in ("response_options", "discovery_retrieval_options")
+                            if env.get(key) != bare.get(key)
+                        ]
+                        for key in gave_way:
+                            assert _wire_bytes({**env, key: bare[key]}) > 3_000, (case, key)
+                        assert [k for k in env if k in bare] == [k for k in bare if k in env], case
+                        if details:
+                            retrieval = env["discovery_retrieval_options"]
+                            assert retrieval["requested_tier"] == "full_inline", case
+                            assert "before serialization" in retrieval["details_omitted_by"], case
+                        ladder_only += gave_way == ["response_options"]
+                        ladder_back += gave_way == ["discovery_retrieval_options"]
+        # Both outcomes the old wholesale drop threw away are reached: the
+        # ladder alone yielding, and the ladder coming back once the
+        # retrieval extras made room.
+        assert ladder_only and ladder_back
 
 
 # ============================================================================

@@ -130,6 +130,10 @@ belonging to other actions are still accepted and ignored.
 `search_shared_memory` defaults to a lean discovery digest. Its
 `memory_suggestions` retain ids, one-line summaries, lifecycle/type metadata,
 bounded tags, and one relevance score; detail previews and score maps are omitted.
+Where the AGE supersession edge exists, a superseded result names its
+replacement as `superseded_by`. An open result last written more than 60 days
+ago carries `last_activity_days`, which `state_summary.staleness_note` explains
+once per response.
 `discovery_retrieval_options` shows how to open one record or deliberately
 expand all results. Expanding every result through the friendly alias requires
 both `response_mode="full"` and `include_details=true`; compact mode remains a

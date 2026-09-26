@@ -15,6 +15,7 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/tool_descriptions.json
   - unitares/src/mcp_handlers/support/param_normalization.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py
   - unitares/src/knowledge_graph.py
   - unitares/src/knowledge_graph_lifecycle.py
   - unitares/src/storage/knowledge_graph_age.py
@@ -176,7 +177,9 @@ open  -->  resolved / closed / wont_fix
   on the AGE backend; on the default Postgres backend use
   `update(status="superseded", superseded_by=<newer>)` or
   `store(..., supersedes=<older>)` and expect a `supersession_warning` that the
-  edge was not recorded
+  edge was not recorded. Where the edge exists, a search result or a `details`
+  read of the older entry names its replacement in `superseded_by` (the
+  default `search_shared_memory` digest carries the first successor id)
 - **disputed**: Contested and still worth retaining
 - **closed / wont_fix**: Terminal generic closure / deliberate non-action
 
@@ -227,9 +230,23 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   pass archives `ephemeral`-tagged open rows older than 7 days.
 
 Unresolved entries create noise. Closed loops create trust in the graph.
-Open-entry staleness warnings use the latest write (`updated_at` when present),
-not merely the original creation time, so a genuinely maintained finding does
-not age as if untouched.
+Search flags an open entry whose latest write (`updated_at` when present, not
+merely the original creation time) is more than 60 days old, so a genuinely
+maintained finding does not age as if untouched. The result carries
+`staleness_warning` (a sentence) and `last_activity_days` (days since that
+write, in UTC; `knowledge(action="audit")` uses the same name for days since
+its own last-activity time, computed in server-local time, so the two can
+differ by a day near a day boundary; the audit's `age_days` counts from
+creation). For a durable entry, one the
+lifecycle keeps permanently (the permanent types and tags above) or an
+`insight`, the sentence gives the age without calling the entry "still open",
+since open is its resting status. It still says to verify,
+because durable rules carry volatile details such as ports, paths and refs.
+The classification is the retention one, so an open bug tagged `architecture`
+also gets the neutral sentence. There is no release-version clause:
+`system_version` on a result is store-time provenance, not a staleness signal.
+The default `search_shared_memory` digest carries `last_activity_days` without
+the sentence and explains the field once, in `state_summary.staleness_note`.
 
 ## Synthesis: rolling up topics
 
