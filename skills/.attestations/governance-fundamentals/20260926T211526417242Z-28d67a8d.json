@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-09-26T20:59:27Z",
+  "verified_at": "2026-09-26T21:15:26Z",
   "verified_date": "2026-09-26",
-  "verifier": "Kenny Wang",
+  "verifier": "Claude (inferred read paths closed; rebased onto #2479-#2481; argless self-read examples pass client_session_id; claims re-checked)",
   "source_digests": {
     "unitares/config/governance_config.py": "78b1adae3cd8ec79",
     "unitares/governance_core/coherence.py": "ef819003ee72b388",
@@ -29,10 +29,5 @@
     "unitares/src/monitor_result.py": "07ef4ae4a00fa05e",
     "unitares/src/services/runtime_queries.py": "7cf8f102c0d8d40f"
   },
-  "skill_digest": "bf84b3728888aedc",
-  "superseded_digests": {
-    "unitares/src/mcp_handlers/tool_stability.py": [
-      "bdbc37c33a828716"
-    ]
-  }
+  "skill_digest": "b5c9b0f22b92a5d6"
 }

@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "dialectic-reasoning",
-  "verified_at": "2026-09-26T20:19:04Z",
+  "verified_at": "2026-09-26T21:15:26Z",
   "verified_date": "2026-09-26",
-  "verifier": "Kenny Wang",
+  "verifier": "Claude (inferred read paths closed; rebased onto #2479-#2481; argless self-read examples pass client_session_id; claims re-checked)",
   "source_digests": {
     "unitares/src/dialectic_protocol.py": "421424fd0d8087cd",
     "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
@@ -15,16 +15,8 @@
     "unitares/src/mcp_handlers/dialectic/session.py": "eb5ed22eb5684038",
     "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
     "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
-    "unitares/src/mcp_handlers/schemas/dialectic.py": "56b8b36fb7b8ea4c",
-    "unitares/src/mcp_handlers/tool_stability.py": "bdbc37c33a828716"
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "6a4ff1a7f8735c42",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424"
   },
-  "skill_digest": "c25b13bc3ac17565",
-  "superseded_digests": {
-    "unitares/src/mcp_handlers/lifecycle/query.py": [
-      "8c73f88a5c8b5575"
-    ],
-    "unitares/src/mcp_handlers/tool_stability.py": [
-      "a527552f03a9eff9"
-    ]
-  }
+  "skill_digest": "683eefd8f32b8544"
 }

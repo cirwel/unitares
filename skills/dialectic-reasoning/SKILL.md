@@ -340,8 +340,9 @@ finalized with.
 - **Propose measurable conditions.** "Entropy below X within Y check-ins" is verifiable. "I will be more careful" is not.
 - **Do not be defensive.** A pause verdict is data, not judgment. Analyze why it happened.
 - **Acknowledge valid concerns.** If the antithesis raises a real issue, say so. Partial agreement strengthens your position.
-- **Look at attributed evidence, not feelings.** Call `check_working_state()`
-  (`get_governance_metrics()` canonically) for the current values and inspect
+- **Look at attributed evidence, not feelings.** Call
+  `check_working_state(client_session_id=...)` (`get_governance_metrics()`
+  canonically) for the current values and inspect
   `risk_score_source` and `verdict_source` / `verdict_resolution_source`; the
   `policy_evaluation` and `enforcement` blocks come back on your last
   `sync_state()` check-in, not on the metrics call. EISV is proprioceptive
