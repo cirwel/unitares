@@ -130,8 +130,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # move.
 # 1.18.0 (2026-09-26): onboard's `resume` description (and so the
 # start_session alias) no longer names continuity_token, agent_id and name
-# as resume signals. A name is not proof (name-based reconnection was removed
-# 2026-04-17) and a continuity_token without force_new is refused (S1-c); the
+# as resume signals. A name is never looked up (name-based reconnection was
+# removed 2026-04-17), though it still counts as an S13 proof signal, and a continuity_token without force_new is refused (S1-c); the
 # text now says what resume does. No parameter is added, removed, retyped or
 # renamed; onboard's and start_session's input_schema_sha256 and the surface
 # digest move.
