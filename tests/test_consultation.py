@@ -1328,4 +1328,24 @@ async def test_non_string_response_still_fails_closed_and_is_recorded(
 
     assert parsed["error_code"] == "INTERNAL_INFERENCE_CONTRACT"
     _, pg = await audit_sinks()
-    assert pg[0]["details"]["failure"]["reason"] == "empty_advisory_response"
+    record = pg[0]["details"]
+    assert record["failure"]["reason"] == "empty_advisory_response"
+    # The inference ran, so the record still says where it went.
+    assert record["route"]["host_id"] == "ollama:local"
+
+
+@pytest.mark.asyncio
+async def test_identifier_shaped_brief_token_echoed_into_route_is_hashed(
+    monkeypatch, audit_sinks
+):
+    token = "sk_live_ABC123"
+    outcome = _completed()
+    outcome.inference["model_used"] = token
+    outcome.inference["orchestrator_execution_id"] = token
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=outcome))
+
+    await co.handle_consult({"brief": f"rotate {token} please"})
+
+    _, pg = await audit_sinks()
+    assert token not in json.dumps(pg[0])
+    assert pg[0]["details"]["route"]["host_id"] == "ollama:local"

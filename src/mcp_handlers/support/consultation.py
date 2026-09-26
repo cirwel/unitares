@@ -526,8 +526,17 @@ def _success(
             failure_details={"reason": "invalid_inference_schema"},
             degradation=degradation,
         )
+    # From here on the inference has run and its provenance is well-formed,
+    # so every failure below carries the route: the record must say where a
+    # brief went even when no advice comes back.
+    provenance = _safe_provenance(
+        outcome,
+        requester_uuid=request.requester_uuid,
+        brief_hash=brief_hash,
+        constructed_prompt_hash=prompt_hash,
+    )
     if outcome.inference.get("accountability_class") != "tool_evidence":
-        return _failed(
+        return dataclasses.replace(_failed(
             request,
             message="Inference returned an authority class that consult cannot carry",
             code="CONSULT_AUTHORITY_POSTCONDITION_FAILED",
@@ -538,13 +547,7 @@ def _success(
             ),
             failure_details={"reason": "non_advisory_accountability_class"},
             degradation=degradation,
-        )
-    provenance = _safe_provenance(
-        outcome,
-        requester_uuid=request.requester_uuid,
-        brief_hash=brief_hash,
-        constructed_prompt_hash=prompt_hash,
-    )
+        ), provenance=provenance)
     postcondition_error = _delivery_postcondition_error(
         outcome,
         delivery_policy,
@@ -552,8 +555,6 @@ def _success(
     )
     if postcondition_error:
         code, reason = postcondition_error
-        # The inference already ran on the wrong route; the record must say
-        # where it went even though no advice is returned.
         return dataclasses.replace(_failed(
             request,
             message=(
@@ -570,7 +571,7 @@ def _success(
             degradation=degradation,
         ), provenance=provenance)
     if not isinstance(outcome.response, str) or not outcome.response.strip():
-        return _failed(
+        return dataclasses.replace(_failed(
             request,
             message="Inference completed without an advisory response",
             code="INTERNAL_INFERENCE_CONTRACT",
@@ -578,7 +579,7 @@ def _success(
             recovery_action="Retry once; if this persists, inspect the inference service logs.",
             failure_details={"reason": "empty_advisory_response"},
             degradation=degradation,
-        )
+        ), provenance=provenance)
 
     data = _base_data(request)
     privacy_class = provenance.get("privacy_class", "unknown")
@@ -904,10 +905,10 @@ def _consultation_record(
     brief against the row; the caller, holding the key and the text, can
     prove which exchange the row describes. Every other string passes
     ``_record_value``: it is kept only when it has the shape of an
-    identifier (codes: of an internal constant), and otherwise as a keyed
-    hash. The limit of that guarantee is an identifier-shaped echo -- a
-    single token of the brief that a backend reports as a model name would
-    be kept as-is.
+    identifier (codes: of a snake_case constant), and otherwise as a keyed
+    hash; any kept string that occurs verbatim in the brief is hashed as
+    well (``_scrub_brief_echo``), so an identifier-shaped echo of a brief
+    token is not stored as text either.
     """
     data = outcome.data
     hashes = {
@@ -939,10 +940,35 @@ def _consultation_record(
             for name in _RECORD_ROUTE_FIELDS
             if outcome.provenance.get(name) is not None
         }
+    for field_name in ("route", "delivery", "degradation", "failure"):
+        if field_name in record:
+            record[field_name] = _scrub_brief_echo(
+                record[field_name], request.brief, key
+            )
     advice = data.get("advice")
     if isinstance(advice, str):
         hashes["advice"] = _keyed_hash(key, advice)
     return record
+
+
+_ECHO_MIN_CHARS = 4
+
+
+def _scrub_brief_echo(value: Any, brief: str, key: str) -> Any:
+    """Hash any kept string that occurs verbatim in the brief.
+
+    The identifier-shape check alone would keep a single brief token a
+    backend echoed back as, say, a model name. A legitimate route value
+    that the brief happens to mention is hashed too; that loss is the price
+    of the guarantee that no part of the brief is stored as text.
+    """
+    if isinstance(value, dict):
+        return {k: _scrub_brief_echo(item, brief, key) for k, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_brief_echo(item, brief, key) for item in value]
+    if isinstance(value, str) and len(value) >= _ECHO_MIN_CHARS and value in brief:
+        return {"unrecorded_text": _keyed_hash(key, value)}
+    return value
 
 
 def _record_consultation(
