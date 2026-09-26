@@ -1203,11 +1203,12 @@ class TestHandleDetectAnomalies:
 
         The original defect was one saying yes and the other saying nothing:
         the `limit` description named `anomalies` while ACTION_FIELDS declared
-        no fields for it, and the handler read neither.
+        no fields for it, and the handler read neither. (ACTION_FIELDS now
+        declares agent_ids, which the handler does read.)
         """
         from src.mcp_handlers.schemas.observability import ObserveParams
 
-        assert ObserveParams.ACTION_FIELDS["anomalies"] == ()
+        assert "limit" not in ObserveParams.ACTION_FIELDS["anomalies"]
         description = ObserveParams.model_fields["limit"].description
         applies_to = description.split(").", 1)[0]
         assert "anomalies" not in applies_to, (

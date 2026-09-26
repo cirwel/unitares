@@ -105,8 +105,24 @@ class RecoveryResult(_GovModel):
 
 
 class MetricsResult(_GovModel):
+    """A governance-state read (``get_metrics``).
+
+    Resolved by ``_metrics_fields.resolve_metrics_fields``, because the
+    ``check_working_state`` envelope carries the reading in ``state_summary``
+    and ``action_summary`` and has no ``metrics`` key. Until then ``metrics``
+    was always ``{}``. It now holds the reading as scalars (E, I, S, V,
+    coherence, risk_score, verdict, primary_eisv_source, whichever the
+    response carries); the other fields are added and default to ``None``.
+    """
+
     success: bool
     metrics: dict = Field(default_factory=dict)
+    verdict: str | None = None
+    # Policy action: proceed or pause. With no decision to report it is
+    # "uninitialized" (no check-in yet) or "unbound" (no identity on the call).
+    action: str | None = None
+    coherence: float | None = None
+    risk: float | None = None
 
 
 class InferenceHost(_GovModel):
