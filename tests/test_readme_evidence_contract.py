@@ -35,7 +35,7 @@ def test_readme_links_to_evidence_instead_of_repeating_the_ledger() -> None:
 def test_detailed_qualifications_remain_on_the_evidence_surface() -> None:
     for phrase in (
         "single-operator and co-development dogfood",
-        "Local control and future federation",
+        "Local control and cross-operator trust",
         "Identity binding and the lease plane",
     ):
         assert phrase in EVIDENCE

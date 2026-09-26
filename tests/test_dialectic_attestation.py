@@ -7,11 +7,16 @@ last_msg.sign(api_key_b)). The reviewer's "signature" was over a message
 they never wrote — only signed with their key. Bilateral cryptographic
 attestation was effectively single-signer-with-two-keys.
 
-Fix: Resolution.signature_version=2 attestation. finalize_resolution now
-signs the canonical resolution payload (action, conditions, root_cause,
+Fix: Resolution.signature_version=2 attestation. finalize_resolution signed
+the canonical resolution payload (action, conditions, root_cause,
 reasoning, timestamp — sorted/deterministic) with each agent's own api_key
 independently. verify_signatures() can independently confirm that both
 parties signed the same payload.
+
+Since #2449 finalize_resolution mints nothing (see
+test_dialectic_party_hmac_retired.py). v2 rows remain in history and must
+still verify, so these tests build a v2 row the way finalize used to
+(``_historical_v2``) and pin that the reading side is unchanged.
 """
 
 import sys
@@ -33,7 +38,7 @@ from src.dialectic_protocol import (
 )
 
 
-def _converged_session(api_key_a="key-a", api_key_b="key-b"):
+def _converged_session():
     """SYNTHESIS-phase session with thesis + antithesis + agreed synthesis from each side."""
     s = DialecticSession(
         paused_agent_id="agent-a",
@@ -64,6 +69,20 @@ def _converged_session(api_key_a="key-a", api_key_b="key-b"):
     ))
     s.phase = DialecticPhase.RESOLVED  # finalize_resolution requires this
     return s
+
+
+def _historical_v2(api_key_a="key-a", api_key_b="key-b", session=None):
+    """A v2 row as finalize_resolution minted it before #2449.
+
+    Same payload, same construction: the resolution finalize builds today,
+    re-stamped v2 and signed with each party's key over its canonical payload.
+    """
+    r = (session or _converged_session()).finalize_resolution()
+    r.signature_version = 2
+    payload = r.canonical_payload()
+    r.signature_a = Resolution.compute_signature(payload, api_key_a)
+    r.signature_b = Resolution.compute_signature(payload, api_key_b)
+    return r
 
 
 class TestResolutionSchema:
@@ -124,19 +143,18 @@ class TestResolutionSchema:
 
 
 class TestBilateralAttestation:
-    def test_finalize_produces_v2_resolution(self):
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
-        assert r.signature_version == 2
+    def test_finalize_no_longer_produces_v2(self):
+        """v2 is history now; finalize stamps the retired scheme (#2449)."""
+        r = _converged_session().finalize_resolution()
+        assert r.signature_version == 3
+        assert r.signature_a == "" and r.signature_b == ""
 
     def test_finalize_signatures_verify_with_correct_keys(self):
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         assert r.verify_signatures("key-a", "key-b") is True
 
     def test_finalize_signatures_do_not_verify_with_wrong_keys(self):
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         assert r.verify_signatures("key-a", "wrong-key") is False
         assert r.verify_signatures("wrong-key", "key-b") is False
 
@@ -146,8 +164,7 @@ class TestBilateralAttestation:
         hashes when both parties used the same api_key, and over the same
         last_msg with different keys produced same-message-different-key
         which isn't bilateral attestation)."""
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         assert r.signature_a != r.signature_b
         assert r.signature_a != ""
         assert r.signature_b != ""
@@ -155,15 +172,13 @@ class TestBilateralAttestation:
     def test_swapping_keys_at_verify_time_fails(self):
         """signature_a is signed by api_key_a; supplying api_key_b in its
         place must fail. Otherwise swap-attacks succeed silently."""
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         assert r.verify_signatures("key-b", "key-a") is False  # swapped
 
     def test_tampered_resolution_fails_verification(self):
         """Mutating any canonical-payload field after signing must
         invalidate the signatures."""
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         assert r.verify_signatures("key-a", "key-b") is True
 
         # Tamper with conditions
@@ -171,17 +186,15 @@ class TestBilateralAttestation:
         assert r.verify_signatures("key-a", "key-b") is False
 
     def test_empty_reviewer_key_falls_back_to_unverifiable(self):
-        """LLM-assisted dialectic passes empty api_key_b — verify must
+        """Historical LLM-assisted rows had an empty api_key_b — verify must
         return False (not vacuously True from empty==empty)."""
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="")
+        r = _historical_v2(api_key_a="key-a", api_key_b="")
         assert r.signature_b == ""
         assert r.verify_signatures("key-a", "") is False
         assert r.verify_signatures("key-a", "key-b") is False  # any non-empty key fails too
 
     def test_v2_resolution_serializes_signature_version(self):
-        s = _converged_session()
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
+        r = _historical_v2()
         d = r.to_dict()
         assert d["signature_version"] == 2
         # Round-trip preserves everything
@@ -192,23 +205,26 @@ class TestBilateralAttestation:
 class TestNew2RegressionGuard:
     """Direct guards that the specific NEW-2 failure mode cannot recur."""
 
-    def test_signatures_are_not_simply_last_message_hashes(self):
-        """If finalize_resolution regressed to signing the last synthesis
-        message (the NEW-2 bug shape), signature_a would equal
-        last_msg.sign(api_key_a). Assert it does NOT — the v2 signatures
-        are over the canonical resolution payload."""
+    def test_verify_rejects_last_message_signed_row(self):
+        """Since #2449 nothing mints, so the NEW-2 property lives on the read
+        side: production ``verify_signatures`` must accept only signatures
+        over the canonical resolution payload. A v2 row whose slots carry
+        ``last_msg.sign(key)`` (the NEW-2 bug shape) must NOT verify, and the
+        canonical-payload row built from the same session must."""
         s = _converged_session()
-        # Capture last agreed synthesis message before finalization
         last_msg = next(
             m for m in reversed(s.transcript)
             if m.phase == "synthesis" and m.agrees
         )
-        legacy_a = last_msg.sign("key-a")
-        r = s.finalize_resolution(api_key_a="key-a", api_key_b="key-b")
-        assert r.signature_a != legacy_a, (
-            "v2 attestation must sign the canonical resolution payload, "
+        new2_shaped = s.finalize_resolution()
+        new2_shaped.signature_version = 2
+        new2_shaped.signature_a = last_msg.sign("key-a")
+        new2_shaped.signature_b = last_msg.sign("key-b")
+        assert new2_shaped.verify_signatures("key-a", "key-b") is False, (
+            "verify_signatures must check the canonical resolution payload, "
             "NOT the last synthesis message (NEW-2 regression)"
         )
+        assert _historical_v2(session=s).verify_signatures("key-a", "key-b") is True
 
     def test_two_resolutions_with_same_keys_produce_same_signatures_only_when_payload_matches(self):
         """Determinism property: two identical canonical payloads signed

@@ -168,25 +168,30 @@ inventory](dev/GOVERNANCE_SENSITIVITY.md) enumerates the constants and
 anti-gaming tests whose movement materially changes enforcement, and CI labels
 any PR touching them and asks for the expected effect on pause/verdict rates —
 conspicuousness, deliberately not a block, so the human merge gate stays the
-control rather than being routed around. **This binds hardest on federation.** A
+control rather than being routed around. **This binds hardest on cross-operator
+trust.** A
 partner governor calibrating a peer's telemetry has to model who authored that
 peer's thresholds; an operator who cannot answer that is asking to be trusted
 rather than verified, which is the one thing a mutually-distrustful exchange
 cannot supply. Tracked in [#1671](https://github.com/cirwel/unitares/issues/1671).
 
 **The attestation half of the same boundary.** The party-level resolution
-attestation scheme in the code is HMAC keyed on each agent's `api_key`. That is
+attestation scheme in the code was HMAC keyed on each agent's `api_key`. That is
 a symmetric construction: a verifier needs the signing key to recompute a
 signature, and a party holding that key could also forge one.
 `Resolution.compute_signature` states this in its own docstring. The recorded
 decision to keep a symmetric stack, with asymmetric DPoP shelved on 2026-04-19,
 covers agent identity (see [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md));
-it is not a decision to keep the party HMAC. Whether to restore key issuance for
-that scheme or delete it is still open, as the `describe_attestation` docstring
-in `src/dialectic_protocol.py` records. The scheme is designed for one operator
+it was not a decision to keep the party HMAC. Minting it is retired (decided
+2026-09-25 as D5 in
+[`federation-trust-decisions-2026-09-25.md`](proposals/active/federation-trust-decisions-2026-09-25.md),
+implemented in [#2449](https://github.com/cirwel/unitares/issues/2449)): new
+resolutions carry `signature_version` 3 with both signature fields empty, and
+`describe_attestation` reports them as `unsigned` by design. Historical rows are
+kept as they were. The scheme was designed for one operator
 attesting inside their own trust boundary. As of 2026-09-25 no
 resolution record in the maintainer deployment carries a signature keyed on a
-party's `api_key` under the current scheme: the four 2026 records that carry a
+party's `api_key` under the v2 scheme: the four 2026 records that carry a
 signature used a uuid-derived fallback key, forgeable from public data and
 removed in #2155, and the most recent records carrying two signatures are
 legacy v1 rows from 2025-12-13 (UTC), which cannot be verified.
@@ -217,7 +222,14 @@ a witness that authenticates an issuer through a separate channel can sign a
 receipt third parties verify. Both introduce different trust assumptions rather
 than removing them. The decision genuinely upstream of any exchange work is
 therefore which verification semantics a multi-principal deployment requires;
-what key material that implies follows from it, and is not settled here.
+what key material that implies follows from it, and is not settled here. No
+multi-principal trust work is scheduled to settle it: D3a of the
+[decision record](proposals/active/federation-trust-decisions-2026-09-25.md)
+records it as not scheduled, because as of 2026-09-25 no second principal and
+no external verifier exist. The recorded wake condition is a real outside
+party, a person or organisation with its own administrative root, asking to
+verify a record from this deployment. Custody for the receipt key is deferred
+behind that wake (D3b).
 
 **The highest-stakes surface: the governed-effect execute plane.** Everything above
 concerns the *signal* and whether an agent can game it. The most security-relevant
