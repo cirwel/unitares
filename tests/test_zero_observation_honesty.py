@@ -486,7 +486,7 @@ async def test_unbound_guidance_leads_with_the_callers_own_id():
                      "check_working_state", id="transport-injected"),
         # An id the caller sent that names no agent: repeating it cannot help.
         pytest.param({"client_session_id": "agent-missing"}, False,
-                     "start_session", id="caller-sent-unknown"),
+                     "identity", id="caller-sent-unknown"),
     ],
 )
 async def test_unbound_structured_next_action_forks_no_identity(arguments, injected, leads_with):
@@ -513,7 +513,9 @@ async def test_unbound_structured_next_action_forks_no_identity(arguments, injec
         assert "force_new" not in step["example"]
         assert step["otherwise"] == "start_session(force_new=true)"
     else:
-        assert step["example"] == "start_session(force_new=true)"
+        # Rebind first, as the strict refusal does; the mint is "otherwise".
+        assert step["example"].startswith("identity(") and "resume=true" in step["example"]
+        assert step["otherwise"] == "start_session(force_new=true)"
         assert "cannot help" in step["note"]
 
 
