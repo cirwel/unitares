@@ -24,9 +24,10 @@ start_session budgets per mint class, measured on the real handler
   establish lineage. That sentence is kept, not trimmed to fit: it is what
   stops the earlier node's uuid being read as this process's parent.
 - each lifted mint notice adds up to 300 B on top of its class. A named
-  mint's compact resident_registration is 284 B for not_on_roster (the
-  status plus one sentence on what it costs and why minting again does not
-  help) and 70-81 B for the other statuses; a written bootstrap ack is
+  mint's compact resident_registration is about 294 B for not_on_roster
+  (the status plus a short detail: what it costs, that this identity cannot
+  gain the tags, and the roster -> restart -> fresh-mint fix) and 70-81 B for
+  the other statuses; a written bootstrap ack is
   224 B. Named at position 1: 1,424 B against 1,500; named sibling_locus:
   1,733 B against 1,850.
 """
