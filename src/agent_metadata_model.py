@@ -263,10 +263,13 @@ class AgentMetadata:
     # The display label the server assigned: at mint ([AUTO_NAME]), written
     # once to core.identities.metadata and never updated, or the Agent_<uuid8>
     # name a knowledge write gives an agent with no meaningful label (in
-    # memory only, where that name is set). The label is server-assigned while
-    # it still equals this value; any later write, a claim or a collision
-    # rename of one, makes them differ. None for agents minted on a server
-    # that did not yet run this change (#2478) and for lazily persisted mints.
+    # memory only, where that name is set). label_source reads "auto" while
+    # the name it reads (display_name, else label) still equals this value.
+    # A claim through set_agent_label updates label only, so after a
+    # knowledge-write auto-name the stale display_name can keep reading
+    # "auto" (pre-existing display_name staleness, not fixed here). None for
+    # agents minted on a server that did not yet run this change (#2478) and
+    # for lazily persisted mints.
     auto_label: str = None
     preferences: dict = None
 

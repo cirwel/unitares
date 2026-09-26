@@ -688,10 +688,11 @@ def _record_unbound_resolution(
     identity_bootstrap.unbound_call_refusal). The MCP middleware reads the
     same resolver result directly.
 
-    ``caller_sent_session_id`` is taken before the derivation, which drops an
-    invalid client_session_id from the arguments: a caller that sent one sent
-    an id that names nothing, as the MCP middleware (which reads the id
-    before its derivation) also judges it.
+    ``caller_sent_session_id`` comes from
+    identity_bootstrap.caller_sent_usable_session_id, the one rule the MCP
+    middleware applies too. It normalizes the id first, so an invalid id
+    counts as not sent whether it is judged before or after the derivation
+    drops it.
     """
     from src.mcp_handlers.context import set_http_prebind_resolution
 

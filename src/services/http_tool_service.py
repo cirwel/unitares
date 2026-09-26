@@ -330,7 +330,7 @@ def _strict_identity_refusal_or_none(
 
     resolution = get_http_prebind_resolution()
     if resolution is not None and "caller_sent_session_id" in resolution:
-        # Judged by the prebind before its derivation dropped an invalid id.
+        # Recorded by the prebind (caller_sent_usable_session_id).
         caller_sent_session_id = bool(resolution["caller_sent_session_id"])
     else:
         from src.mcp_handlers.identity_bootstrap import (

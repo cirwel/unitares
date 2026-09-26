@@ -216,13 +216,13 @@ def first_line(s: str | None) -> str:
 # SCOPE IS DELIBERATELY agent_id + agent_name ONLY. client_session_id and
 # continuity_token are NOT stripped, and that is load-bearing:
 #   - A claude.ai remote-connector client only sends params present in the
-#     advertised inputSchema. These two tools are in
-#     TOOLS_NEEDING_SESSION_INJECTION, so when the client omits client_session_id
-#     the server injects one from context — but for stateless streamable transport
-#     (no Mcp-Session-Id) that injected value is the ip_ua_fingerprint, which
-#     derive_session_key launders into `explicit_client_session_id` (strong/1.0).
-#     The effect: multiple distinct agents behind one gateway IP+UA collapse onto
-#     a single shared-fingerprint identity. Advertising client_session_id lets a
+#     advertised inputSchema. When such a client omits client_session_id, the
+#     call resolves on transport signals: for stateless streamable transport
+#     (no session header) that is the ip_ua_fingerprint and its pin, so
+#     distinct agents behind one gateway IP+UA share one fingerprint binding.
+#     (The server-side injection this comment once described no longer runs:
+#     FastMCP None-fills the argument on a direct call, and the nested use_tool
+#     path stopped copying it in #2478.) Advertising client_session_id lets a
 #     well-behaved agent send its unique agent-{uuid} key instead, keeping
 #     attribution isolated. See tests/test_onboard_pin.py::TestToolSchemaClientSessionId.
 #   - continuity_token has NO injection fallback; stripping it would break
