@@ -179,6 +179,7 @@ signing key; the lease plane verifies a short-lived token bound to a
 deployment-specific audience plus the exact method, path, and request-body hash,
 then consumes its nonce once. This version accepts one explicitly trusted issuer.
 Multi-issuer trust, which any cross-operator lease exchange would need, remains
-blocked until lease principals persist both issuer and subject; active leases must be drained before changing issuer.
+blocked until lease principals persist both issuer and subject; active leases
+must be drained before changing issuer.
 `legacy`, `hybrid`, and `attestation` proof modes support staged upgrades. The
 lease plane listens on `http://127.0.0.1:8788` with bearer auth.
