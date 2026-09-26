@@ -1962,7 +1962,17 @@ def test_colliding_material_paths_keep_the_first_and_are_listed(tmp_path):
     assert (tmp_path / "files/README.md").read_bytes() == b"upper"
     omitted = (tmp_path / "omitted.txt").read_text()
     assert "files/AGENTS.md.review-copy" in omitted and "files/readme.md" in omitted
-    assert "files/foo/bar" in omitted
+    # Through the same-path branch, not the OSError fallback that would also
+    # list it if that check were removed.
+    assert "files/foo/bar: another changed file has the same path here" in omitted
+    assert "could not be written" not in omitted
+
+
+def test_unicode_normalization_variants_collide_too(tmp_path):
+    nfc, nfd = "files/caf\u00e9.py", "files/cafe\u0301.py"
+    assert rg.write_agy_materials(str(tmp_path), [
+        ("diff.patch", b"D"), (nfc, b"composed"), (nfd, b"decomposed")]) is None
+    assert nfd in (tmp_path / "omitted.txt").read_text()
 
 
 def test_an_unwritable_changed_file_is_listed_not_fatal(tmp_path):
