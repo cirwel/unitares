@@ -96,9 +96,16 @@ where the governance server's environment is available, so the signing secret
 `UNITARES_API_TOKEN`) matches the server's:
 
 ```bash
-python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name>          # dry run
-python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --apply
+python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http          # dry run
+python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http --apply
 ```
+
+`--transport` says how the resident reaches the server, and the script refuses
+without it whenever `UNITARES_UDS_SOCKET` is set. The server's own environment
+always sets that variable (it names the socket the server listens on), so it
+says nothing about the resident. `http` is a resident that presents a
+continuity token, such as a harness session over MCP; `uds` is an SDK resident
+whose own environment sets the socket.
 
 It reads the identity back (must be `active`, carry `persistent` +
 `autonomous`, and have a server label equal to `<name>` lowercased, because the
@@ -128,8 +135,11 @@ deferred the failure to the resident's next session. The script now requires
 
 On a UDS deployment a `persistent` resident attests by peer credential rather
 than by token, and the SDK deliberately writes a UUID-only anchor for it
-(`_save_session`). The script matches that and writes no token there, rather
-than leaking a bearer credential into a file designed to hold none.
+(`_save_session`). With `--transport uds` the script matches that and writes no
+token, rather than leaking a bearer credential into a file designed to hold
+none. The SDK makes that choice from the resident's environment; until
+2026-09-25 this script made it from its own, which under the server's
+environment turned every persistent resident uuid-only and unverified.
 
 The anchor is a credential: it stays outside git and outside any session record.
 A resident resuming from it should present the fresh token the resume returns on
