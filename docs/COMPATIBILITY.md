@@ -50,15 +50,20 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   `list_tools` gain declarations instead, which tightens validation for REST
   and in-process callers that used to receive those keys raw: a string boolean
   is now parsed, and an explicit null for a parameter that has a default is
-  refused. One database migration is introduced,
-  `db/postgres/migrations/070_outcome_prediction_bindings.sql`, and the server
-  never applies migrations itself: run
+  refused. Two database migrations are introduced,
+  `db/postgres/migrations/070_outcome_prediction_bindings.sql` and
+  `071_knowledge_closure_class_survives_tiering.sql`, and the server never
+  applies migrations itself: run
   `python3 scripts/dev/apply_migrations.py --apply` against an existing
   database, or `scripts/install/bootstrap_postgres.sh --apply` on a fresh one,
-  before the new code starts. Until it lands, an `outcome_event` /
+  before the new code starts. Until 070 lands, an `outcome_event` /
   `record_result` call carrying `prediction_id` fails with `DB_ERROR`; calls
-  without one are unaffected. `scripts/ops/deploy-mcp.sh` refuses to restart
-  across that gap and prints the apply recipe. Discovery profiles are gone
+  without one are unaffected. Until 071 lands, a finding closed with a
+  `closure_class` cannot be archived or moved to cold: the knowledge-graph
+  lifecycle leaves it `resolved` and logs the refusal on every run (on the
+  Postgres knowledge backend the run stops at that row), and an update that
+  sets `archived` or `cold` on it fails. `scripts/ops/deploy-mcp.sh` refuses
+  to restart across either gap and prints the apply recipe. Discovery profiles are gone
   (#2137): every transport advertises one complete catalog — every registered
   tool plus the primary workflow aliases — so a client that selected tools from
   discovery on v2.22.0 sees additional names, and no removals beyond
