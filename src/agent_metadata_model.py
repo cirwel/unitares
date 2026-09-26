@@ -260,6 +260,12 @@ class AgentMetadata:
     public_agent_id: str = None
     structured_id: str = None
     label: str = None
+    # The display label the server assigned at mint ([AUTO_NAME]), written
+    # once to core.identities.metadata and never updated. The label is
+    # server-assigned while it still equals this value; any later write, a
+    # claim or a collision rename of one, makes them differ. None for agents
+    # minted before 2026-09-26 and for lazily persisted mints.
+    auto_label: str = None
     preferences: dict = None
 
     def __post_init__(self):

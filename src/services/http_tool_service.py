@@ -100,10 +100,13 @@ async def execute_nested_http_tool(
     from src.http_routes import access
     from src.mcp_handlers.context import (
         get_context_client_session_id,
+        get_csid_injected_source,
         get_csid_transport_injected,
         get_session_signals,
+        reset_csid_injected_source,
         reset_csid_transport_injected,
         reset_session_context,
+        set_csid_injected_source,
         set_csid_transport_injected,
         set_session_context,
     )
@@ -119,10 +122,14 @@ async def execute_nested_http_tool(
         nested["client_session_id"] = session_id
 
     # A nested explicit session is caller input just like a direct REST body.
-    # An inherited session retains the outer route's injected/proven status.
+    # An inherited session retains the outer route's injected/proven status,
+    # and the header it was derived from, if any.
     inherited_injected = get_csid_transport_injected()
     csid_token = set_csid_transport_injected(
         False if explicit_session else inherited_injected
+    )
+    source_token = set_csid_injected_source(
+        None if explicit_session else get_csid_injected_source()
     )
     context_token = set_session_context(
         session_key=session_id,
@@ -166,6 +173,7 @@ async def execute_nested_http_tool(
         return await execute_http_tool(tool_name, nested)
     finally:
         reset_session_context(context_token)
+        reset_csid_injected_source(source_token)
         reset_csid_transport_injected(csid_token)
 
 async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any:
@@ -302,8 +310,27 @@ def _strict_identity_refusal_or_none(
         "typed refusal (no auto-mint)",
         tool_name,
     )
+    # Same recovery as the MCP middleware's session_resolve_miss refusal,
+    # keyed on the same fact: did the caller itself send a client_session_id?
+    # On REST every call carries one, so an id the transport put there (from
+    # the fingerprint, a pin, or a header it derived) does not count.
+    from src.mcp_handlers.context import (
+        get_csid_injected_source,
+        get_csid_transport_injected,
+    )
+    from src.mcp_handlers.identity_bootstrap import session_miss_refusal_options
+
+    caller_sent_session_id = bool(
+        isinstance(arguments, dict)
+        and arguments.get("client_session_id")
+        and not get_csid_transport_injected()
+        and get_csid_injected_source() is None
+    )
     return strict_identity_refusal_payload(
         tool_name,
+        **session_miss_refusal_options(
+            tool_name, caller_sent_session_id=caller_sent_session_id
+        ),
         surface_context={
             "transport_surface": "rest_tool_call",
             "lifecycle_automation": "not_confirmed",

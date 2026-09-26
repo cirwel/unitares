@@ -868,12 +868,15 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # client-sent Mcp-Session-Id outranks it (step 3) and is connection-scoped
     # — Claude Code subagents share the parent's connection — so it is not
     # proof here, and neither are oauth_client_id / x_client_id, which name a
-    # client rather than a process.
+    # client rather than a process. The REST prebind judges a header through
+    # the same predicate (identity/session.transport_session_is_read_proof),
+    # so the two read gates cannot drift on which transport sources count.
     from ..context import get_session_resolution_source
+    from ..identity.session import transport_session_is_read_proof
     _header_session_proof = bool(
         signals
         and signals.x_session_id
-        and get_session_resolution_source() == "x_session_id"
+        and transport_session_is_read_proof(get_session_resolution_source())
     )
     _has_identity_proof = bool(
         _token_agent_uuid
@@ -1034,10 +1037,31 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                             "spawn_reason=\"explicit\") "
                             "or retry with a valid continuity_token."
                         )
+                    _refusal_options: Dict[str, Any] = {"hint": _hint_override}
+                    if _resolve_error == "session_resolve_miss":
+                        # Nothing resolved. The most common caller is a
+                        # process that called start_session and did not send
+                        # its id on this call, so the recovery leads with that
+                        # id, not with a second mint. Keyed only on what the
+                        # caller itself sent; the REST gate uses the same
+                        # builder, so the transports cannot drift.
+                        from src.mcp_handlers.context import (
+                            get_csid_transport_injected,
+                        )
+                        from src.mcp_handlers.identity_bootstrap import (
+                            session_miss_refusal_options,
+                        )
+                        _refusal_options = session_miss_refusal_options(
+                            name,
+                            caller_sent_session_id=bool(
+                                client_session_id
+                                and not get_csid_transport_injected()
+                            ),
+                        )
                     return success_response(strict_identity_refusal_payload(
                         name,
-                        hint=_hint_override,
                         surface_context=_surface_context,
+                        **_refusal_options,
                     ))
                 # Pre-mint recovery: a rotated session key is not a new agent.
                 # Only a genuine session_resolve_miss is recoverable — a resume
