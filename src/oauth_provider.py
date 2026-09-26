@@ -743,13 +743,14 @@ def _log_safe(value) -> str:
 
 
 def _strip_queries(text):
-    """Drop URL query strings and userinfo from an error description (the SDK
-    echoes an unregistered redirect URI in full)."""
+    """Drop URL userinfo, query strings and fragments from an error
+    description (the SDK echoes an unregistered redirect URI in full)."""
     if not text:
         return text
     text = re.sub(r"//[^/\s'\"@]*@", "//", str(text))
     # Everything from "?" to whitespace: a custom-scheme redirect URI need
     # not percent-encode quotes, so stopping at a quote would leak the rest.
+    text = re.sub(r"#\S*", "#...", text)
     return re.sub(r"\?\S*", "?...", text)
 
 

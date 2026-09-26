@@ -179,6 +179,7 @@ def test_a_newline_cannot_forge_an_oauth_log_line(caplog):
         _authorize(client, scope=forged)
         client.post("/token", data={"grant_type": "g" * 70000})
     msgs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("[OAUTH]")]
+    assert msgs  # the forged request must itself have been logged
     assert all("\n" not in m for m in msgs)
     assert all(len(m) < 2000 for m in msgs)
 
@@ -700,3 +701,15 @@ def test_query_redaction_does_not_stop_at_a_quote(raw, leak):
 def test_userinfo_is_stripped_with_or_without_a_scheme(url):
     assert "hunter2" not in _op._url_for_log(url)
     assert "evil.example" in _op._url_for_log(url) or _op._url_for_log(url) == "unparseable"
+
+
+def test_a_fragment_in_an_echoed_redirect_uri_is_stripped(caplog):
+    client = _app(compat=False)
+    with caplog.at_level(logging.INFO, logger="src.oauth_provider"):
+        client.get("/authorize", params={
+            "response_type": "code", "client_id": CID,
+            "redirect_uri": "https://evil.example/cb#access_token=FRAGSECRET",
+            "code_challenge": "c" * 43, "code_challenge_method": "S256",
+        }, follow_redirects=False)
+    ours = "\n".join(r.getMessage() for r in caplog.records if r.name == "src.oauth_provider")
+    assert "[OAUTH] authorize" in ours and "FRAGSECRET" not in ours
