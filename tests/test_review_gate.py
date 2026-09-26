@@ -1570,6 +1570,7 @@ def test_agy_model_defaults_to_pro_and_is_overridable(monkeypatch):
 
 
 def test_materials_are_written_into_the_agy_workspace(monkeypatch, tmp_path):
+    monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
     seen = {}
 
     class Proc:
@@ -1615,7 +1616,9 @@ def test_antigravity_runs_in_an_empty_workspace_read_only(monkeypatch, tmp_path)
     # Review of da5835a (P2): no caller secrets reach a prompt-steerable agent.
     assert seen["env"] is not None and "GITHUB_TOKEN" not in seen["env"]
     assert "UNITARES_MCP_BEARER_TOKEN" not in seen["env"]
-    assert {"--sandbox", "plan", "json", "--disable-slash-commands"} <= set(seen["cmd"])
+    assert {"--sandbox", "plan", "json"} <= set(seen["cmd"])
+    # agy 1.2.11 turns plan mode OFF when --disable-slash-commands is set.
+    assert "--disable-slash-commands" not in seen["cmd"]
     # Round 4 of #2470: the operator's ~/.gemini holds standing permission
     # grants and MCP servers that headless mode does not deny, and this lane
     # posts its output publicly, so agy must get a fresh HOME.
@@ -1717,7 +1720,7 @@ def test_a_truncated_agy_answer_is_resumed_not_accepted(monkeypatch, tmp_path):
     assert second["env"] is not None and "GITHUB_TOKEN" not in second["env"]
     # the resume keeps the isolated HOME, where agy stores the conversation
     assert second["env"]["HOME"] == first["env"]["HOME"] != str(Path.home())
-    assert "--disable-slash-commands" in second["cmd"]
+    assert "--mode" in second["cmd"] and "--disable-slash-commands" not in second["cmd"]
     assert not Path(first["cwd"]).exists()  # removed once, at the end
 
 
@@ -1939,3 +1942,51 @@ def test_agy_isolated_home_links_only_the_keychain(monkeypatch, tmp_path):
     home = Path(rg.agy_isolated_home(str(root)))
     assert sorted(p.name for p in home.iterdir()) == ["Library"]
     assert (home / "Library" / "Keychains").resolve() == (real / "Library" / "Keychains")
+
+
+def test_colliding_material_paths_keep_the_first_and_are_listed(tmp_path):
+    """AGENTS.md -> AGENTS.md.review-copy can meet a real AGENTS.md.review-copy,
+    and README.md meets readme.md on a case-insensitive disk: neither may
+    silently replace the other."""
+    rc = rg.write_agy_materials(str(tmp_path), [
+        ("diff.patch", b"D"),
+        ("files/AGENTS.md.review-copy", b"real AGENTS.md"),
+        ("files/AGENTS.md.review-copy", b"decoy"),
+        ("files/README.md", b"upper"),
+        ("files/readme.md", b"lower"),
+        ("files/foo", b"file"),
+        ("files/foo/bar", b"nested"),
+    ])
+    assert rc is None
+    assert (tmp_path / "files/AGENTS.md.review-copy").read_bytes() == b"real AGENTS.md"
+    assert (tmp_path / "files/README.md").read_bytes() == b"upper"
+    omitted = (tmp_path / "omitted.txt").read_text()
+    assert "files/AGENTS.md.review-copy" in omitted and "files/readme.md" in omitted
+    assert "files/foo/bar" in omitted
+
+
+def test_an_unwritable_changed_file_is_listed_not_fatal(tmp_path):
+    rc = rg.write_agy_materials(str(tmp_path), [
+        ("diff.patch", b"D"), ("files/" + "x" * 300, b"too long a name")])
+    assert rc is None and "could not be written" in (tmp_path / "omitted.txt").read_text()
+
+
+def test_a_material_write_failure_falls_back_instead_of_crashing(monkeypatch, tmp_path):
+    """The gate must not exit 1 with a traceback (ship.sh reads that as
+    findings); a failed write is an unreviewed attempt so the next reviewer runs."""
+    monkeypatch.setattr(rg.subprocess, "Popen",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
+    monkeypatch.setattr(rg, "write_agy_materials", lambda *a: "could not write the review material: disk full")
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30, [("diff.patch", b"D")])
+    assert note == "skipped: review material could not be written" and "disk full" in text
+
+
+def test_a_denied_file_read_is_resumed_like_a_denied_command():
+    # PR #2476's own review: agy was auto-denied read_file, and the stall
+    # check only knew the "command" wording, so nothing resumed.
+    out = '{"conversation_id":"c","status":"SUCCESS","response":""}'
+    err = ('jetski: no output produced — a tool required the "read_file" permission '
+           "that headless mode cannot prompt for, so it was auto-denied.")
+    assert rg._agy_stall(out, err) == ("denied", "c")
+    listed = '{"conversation_id":"c","status":"SUCCESS","response":"","denied_actions":[{"action":"read_file"}]}'
+    assert rg._agy_stall(listed, "") == ("denied", "c")

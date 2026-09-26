@@ -300,10 +300,13 @@ full post-change text of every changed file at its repository path. It reads
 them with its own file tool, which needs no permission grant inside its
 workspace, and never executes them. A changed file whose name `agy` would load
 as instructions (`AGENTS.md`, `GEMINI.md`, `CLAUDE.md`, anything under
-`.agents/` or `.gemini/`) is written with a `.review-copy` suffix. It also gets
+`.agents/`, `.agent/` or `.gemini/`) is written with a `.review-copy` suffix.
+Two changed files that would land on the same path keep the first, and any file
+not placed is listed in `omitted.txt`. It also gets
 a fresh temporary `HOME` (only the login keychain is linked in), so the
 operator's standing permission grants and MCP servers in `~/.gemini` never
-load, plus `--mode plan --sandbox --disable-slash-commands`. The trade-off is
+load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
+`agy` 1.2.11 switches plan mode off when it is set.) The trade-off is
 that the reviewer cannot browse the rest of the repository. There is no size
 limit: the material used to be inlined as one command-line argument, capped
 at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
@@ -313,9 +316,11 @@ the only model that found real defects, so treat it as a starting point. A
 shell command `agy` reaches for is denied and the conversation is resumed with
 a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths
-outside the repository never reach the prompt. The dialectic reviewer has the
-same backend: set `UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
-orchestrator's environment. Setup on a machine:
+outside the repository never reach the prompt. The dialectic reviewer can use
+Antigravity too (`UNITARES_DIALECTIC_REVIEWER_HOST=antigravity` in the
+orchestrator's environment), but through its own backend: it inlines a short
+self-contained prompt, keeps the ~120 KB argument cap, and does not read
+`REVIEW_AGY_MODEL`. Setup on a machine:
 
 ```bash
 curl -fsSL https://antigravity.google/cli/install.sh | bash
