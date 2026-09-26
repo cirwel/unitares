@@ -117,9 +117,11 @@ operations, security, compatibility, research, and the full tool surface.
 
 UNITARES works with the
 [governance plugin](https://github.com/cirwel/unitares-governance-plugin) for
-Codex and Claude Code, the public [Python SDK](agents/sdk/README.md), and the
-[resident agent runtime](https://github.com/cirwel/unitares-resident). These are
-separate userlands connected by the same operator-owned record.
+Codex and Claude Code, the
+[host adapter](https://github.com/cirwel/unitares-host-adapter) for Hermes Agent
+and OpenAI-compatible clients, the public [Python SDK](agents/sdk/README.md), and
+the [resident agent runtime](https://github.com/cirwel/unitares-resident). These
+are separate userlands connected by the same operator-owned record.
 
 ## Citation and license
 

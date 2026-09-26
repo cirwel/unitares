@@ -4,7 +4,7 @@
 #
 #   docker compose up
 #
-# Then point an MCP client at http://localhost:8767/mcp/ and call onboard().
+# Then point an MCP client at http://localhost:8767/mcp/ and call start_session().
 #
 # This brings up:
 #   - postgres-age      Postgres 18 + Apache AGE + pgvector  (port 5432)
