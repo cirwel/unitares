@@ -419,3 +419,69 @@ def test_unassessed_calibration_does_not_trigger_corrective_feedback():
         feedback = get_calibration_feedback(include_complexity=False)
 
     assert feedback == {}
+
+
+# ---------------------------------------------------------------------------
+# The unbound read points a caller that dropped its id back to that id.
+#
+# An unbound read also reaches a process that already called start_session
+# and simply omitted client_session_id on this call. Its only next step used
+# to be start_session(force_new=true), which mints a second identity and
+# splits that process's work across two records (external-agent friction
+# report, 2026-09-26). The guidance is conditional because the server cannot
+# tell that process from one with no identity without naming a binding it
+# only inferred.
+# ---------------------------------------------------------------------------
+
+
+def _before(text: str, first: str, second: str) -> bool:
+    return first in text and second in text and text.index(first) < text.index(second)
+
+
+@pytest.mark.asyncio
+async def test_unbound_guidance_leads_with_the_callers_own_id():
+    """Built from the real handler, then the real check_working_state envelope."""
+    from src.mcp_handlers.core import handle_get_governance_metrics
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    with patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=None
+    ):
+        data = _parse_tc(await handle_get_governance_metrics({}))
+
+    # The ignorance tokens trust_contract_lint keys on are unchanged.
+    assert data["status"] == "⚪ unbound"
+    assert data["verdict"]["value"] == "unbound"
+    assert data["verdict"]["meaning"] == "No caller-proven identity on this call."
+
+    note = data["next_action"]["note"]
+    assert _before(note, "client_session_id it returned", "force_new=true")
+    assert "check_working_state(client_session_id=" in note
+    assert _before(
+        data["verdict"]["next_action"], "client_session_id", "force_new=true"
+    )
+
+    envelope = build_experience_envelope(
+        "check_working_state", "get_governance_metrics", data, {}
+    )
+    state = envelope["state_summary"]
+    assert state["value"] == "unbound"
+    assert state["meaning"] == "No caller-proven identity on this call."
+    assert _before(state["next_action"], "client_session_id", "force_new=true")
+    assert _before(
+        envelope["next_action"]["note"], "client_session_id it returned", "force_new=true"
+    )
+
+
+def test_unbound_guidance_names_no_binding():
+    """The guidance must not confirm, name or hint at an inferred binding: that
+    would expose a co-located sibling or present a fingerprint as the caller."""
+    import json
+    import re
+
+    from src.mcp_handlers.core import unbound_metrics_payload
+
+    text = json.dumps(unbound_metrics_payload())
+    assert not re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-", text)
+    assert "agent-" not in text
+    assert "reads never" not in text
