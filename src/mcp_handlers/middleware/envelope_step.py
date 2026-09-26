@@ -1928,8 +1928,11 @@ def _raw_governance_policy(
         verdict = (payload or {}).get("verdict")
         verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
         if verdict_value == "unbound":
-            # Every tier returns the same unbound payload until the caller
-            # binds; next_action names that step, so no tier hint.
+            # No tier shows agent state until the caller binds, and
+            # next_action names that step and why nothing bound, so no tier
+            # hint. 'standard' and 'full' still include the raw unbound
+            # payload under raw_governance, with its unbound_reason when
+            # resolution failed or a resume was refused.
             return resolve_metrics_verbosity(arguments) != "minimal", None
         uninitialized = verdict_value == "uninitialized" or "uninitialized" in str(
             (payload or {}).get("status") or ""

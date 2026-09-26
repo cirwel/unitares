@@ -162,7 +162,11 @@ def unbound_metrics_payload(
     Those last two used to get the session-miss text, which told a caller
     with a valid id that its id "names no identity" and offered a rebind or
     a mint. ``unbound_reason`` then carries the keys the strict refusal puts
-    in its ``surface_context`` for the same result.
+    in its ``surface_context`` for the same result. It is part of this raw
+    payload: get_governance_metrics returns it, and check_working_state only
+    under raw_governance at verbosity 'standard' or 'full'; its default
+    envelope omits the raw payload, so there the cause reaches the caller
+    through next_action alone.
     """
     from src.governance_glossary import explain_verdict
 

@@ -572,11 +572,6 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
         if ctx.agent_uuid in mcp_server.agent_metadata:
             meta = mcp_server.agent_metadata[ctx.agent_uuid]
             meta.label = ctx.label
-            # The label set here is the one displayed, not a knowledge
-            # write's earlier Agent_<uuid8> auto-name.
-            from ..identity.persistence import drop_stale_display_name
-
-            drop_stale_display_name(meta, ctx.label)
 
     # Substrate-agnostic resident-tag reconcile: server-side equivalent of the
     # SDK's GovernanceAgent._reconcile_resident_tags (#754). The creation-time

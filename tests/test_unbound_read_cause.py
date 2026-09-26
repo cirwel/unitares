@@ -167,6 +167,30 @@ async def test_the_digest_read_carries_the_same_next_step(monkeypatch, transport
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["mcp", "rest"])
+async def test_the_digest_read_shows_unbound_reason_only_under_raw_governance(
+    monkeypatch, transport
+):
+    """The default envelope omits the raw payload, so there the cause
+    reaches the caller only through next_action; verbosity='standard' (or
+    'full') includes the raw unbound payload, unbound_reason with it."""
+    read = _mcp_read if transport == "mcp" else _rest_read
+
+    default = await read(monkeypatch, "check_working_state", PG_FAILURE)
+    standard = await read(
+        monkeypatch, "check_working_state", PG_FAILURE,
+        {**PROOF, "verbosity": "standard"},
+    )
+
+    assert "unbound_reason" not in default
+    assert "raw_governance" not in default
+    assert standard["raw_governance"]["unbound_reason"] == {
+        "identity_resolution": "failed",
+        "identity_resolution_failure": "pg_lookup_exception",
+    }
+
+
+@pytest.mark.asyncio
 async def test_a_resolver_that_raised_on_mcp_is_a_server_failure(monkeypatch):
     payload = await _mcp_read(
         monkeypatch, "get_governance_metrics", RuntimeError("resolver down"),
