@@ -569,7 +569,7 @@ ANTIGRAVITY_PROMPT_LIMIT = 120_000
 # (this script runs standalone, so it keeps its own copy).
 AGY_ENV_ALLOWLIST = (
     "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM",
-    "LANG", "LC_ALL", "LC_CTYPE",
+    "LANG", "LC_ALL", "LC_CTYPE", "XDG_RUNTIME_DIR",
     "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "no_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR",
 )
