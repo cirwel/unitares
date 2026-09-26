@@ -371,8 +371,9 @@ async def test_orientation_compact_view_is_name_only_and_under_four_kib(binding)
 
     assert len(raw.encode("utf-8")) <= 4096
     assert "agent_signature" not in payload
-    # "For parameters" names the parameter view: an unqualified describe_tool
-    # is the full record (10-17 KB for the core write tools).
+    # "For parameters" names the parameter view explicitly: an unqualified
+    # describe_tool is the full record on the Python route (10-17 KB for the
+    # core write tools) and the short form via the Wave 3a BEAM probe.
     assert "describe_tool(tool_name=..., lite=true)" in payload["tip"]
     assert payload["tools"]
     assert all(set(tool) == {"name"} for tool in payload["tools"])

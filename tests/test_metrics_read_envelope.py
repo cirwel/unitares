@@ -291,6 +291,10 @@ async def test_metrics_hints_never_name_the_tier_in_effect(arguments):
     # These envelopes stay under the 4,000 B size-hint threshold, so only
     # raw_governance_hint is exercised here; reduce_with has its own padded
     # table below, which also asserts when advice must be present.
+    # The hint rides only where raw_governance is left out (the default
+    # tier); standard and full carry raw_governance and no hint.
+    assert ("raw_governance_hint" in env) is ("raw_governance" not in env), env.keys()
+    assert ("raw_governance" not in env) is (current == "minimal"), current
     hint = env.get("raw_governance_hint") or ""
     assert not _names_mode(hint, current), (current, hint)
 
@@ -307,6 +311,11 @@ def test_sync_hints_never_name_the_mode_in_effect(mode):
     # These envelopes stay under the 4,000 B size-hint threshold, so only
     # raw_governance_hint is exercised here; reduce_with has its own padded
     # table below, which also asserts when advice must be present.
+    # The hint rides exactly where raw_governance is left out; full keeps
+    # raw_governance, so a hint there would name the mode in effect.
+    assert ("raw_governance_hint" in env) is ("raw_governance" not in env), env.keys()
+    if current == "full":
+        assert "raw_governance" in env
     hint = env.get("raw_governance_hint") or ""
     assert not _names_mode(hint, current), (current, hint)
 

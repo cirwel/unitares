@@ -486,9 +486,11 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             "total_available": len(tools_list),
             "shown": len(lite_tools),
             "more": "list_tools(lite=false) for descriptions, categories, tiers, workflows, and relationships",
-            # An unqualified describe_tool returns the full record (lite=false
-            # is its advertised default, 10-17 KB for the core write tools), so
-            # the pointer "for parameters" names the parameter view.
+            # An unqualified describe_tool returns the full record on the
+            # Python route (lite=false is its advertised default, 10-17 KB for
+            # the core write tools); with WAVE_3A_DESCRIBE_TOOL_ON_BEAM on,
+            # BEAM serves it through the Wave 3a probe, which asks for lite.
+            # The tip names lite explicitly, so it holds on both.
             "tip": "describe_tool(tool_name=..., lite=true) for parameters (action=... on a router); lite=false for the full schema; use_tool(tool_name=..., arguments={...}) when the capability is absent from the initial tools/list",
             "advertisement": {
                 "mode": TOOL_MODE,
@@ -881,8 +883,12 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
         include_schema = arguments.get("include_schema", True)
         include_full_description = arguments.get("include_full_description", True)
         # The schema default (DescribeToolParams.lite=False, the advertised
-        # contract) decides on every validated route; this matches it for
-        # in-process callers, which pass lite explicitly for the short form.
+        # contract) decides on every validated Python route; this matches it
+        # for in-process callers, which pass lite explicitly for the short
+        # form. Exception: with WAVE_3A_DESCRIBE_TOOL_ON_BEAM on, the wrappers
+        # hand raw arguments to BEAM, whose Wave 3a probe passes lite=True, so
+        # an unqualified call is served short there (pre-existing; the
+        # probe's pinned parity bytes depend on it).
         lite = arguments.get("lite", False)
 
         from ..tool_stability import (
