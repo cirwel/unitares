@@ -2,8 +2,8 @@
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
 same day, before any window started** (§10, Amendment 1). ⛔Ratified is
-not met: the §8 council round was held on 2026-09-27, but the §8 design pass (at §7 step 5) has not
-run and the W_pre window (§10 A6) has not started. The signature
+not met: the §8 council round was held on 2026-09-27; the W_pre window (§10 A6) has not started, and
+the gate completes at §7 step 4 (§10 A10). The signature
 authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
 artifacts are still owed.)
 
@@ -697,7 +697,11 @@ session (a resolve, a reviewer assignment, or a new protocol message) that eithe
 and its effect after it, within a **correlation bound of 6 hours** (a session id can be reused by a
 reopen, so an unbounded search would match unrelated rounds); or (b) lands between the sweeper's
 decision read of the session and its guarded commit. (b) covers a reviewer write that revives a
-session just before the sweeper reaps it: both writes succeed, and the sweeper acts on stale state. It is
+session just before the sweeper reaps it: both writes succeed, and the sweeper acts on stale state.
+Because a reap overwrites the session's `updated_at`, (b) cannot be reconstructed from the session
+row; the instrument emits one `dialectic_guarded_write` record per guarded sweeper write (decision-read
+time, the reviewer, phase, status and `updated_at` it read, commit time, outcome), and the report
+reads those. It is
 measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
 durable tables, including a saga-versus-row status join, and by the `dialectic_resolve_already_terminal`
 event, because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no
@@ -727,8 +731,10 @@ hung loop. The complete instrument is `instrument_version = "wave3-instrument-v2
 
 **A6 — the window, named and denominated in exposure.** The §7 step 3 window is **W_pre**, distinct
 from R1's post-port window. W_pre starts at the first periodic `dialectic_sweep_cycle` row with
-`instrument_version = "wave3-instrument-v2"` written after this amendment is on `master`; the row
-records its own start, so §7 step 2's slot is filled from it rather than from memory. W_pre closes
+`instrument_version = "wave3-instrument-v2"` written after this amendment is on `master`. The start
+record is that row **together with its `code_commit`** (the running checkout's commit, carried in the
+payload), which must be a commit on `master` at or after this amendment; §7 step 2's slot is filled
+from that pair, not from memory, and a row without a resolvable commit cannot start W_pre. W_pre closes
 when **both** hold: at least **30 calendar days**, and at least **60 guarded sweeper reaps**. Pilot
 rows before that start may inform priors and are never counted.
 
@@ -757,8 +763,11 @@ every A3 writer, and it is measured by writer coverage (a static inventory, 100%
 bypasses), not by (b1)'s channel. R2's evidence needs a BEAM-side emitter with the §3.1 schema,
 specified at step 5, because R1 disables the Python resolver that emits the current channel.
 
-**A10 — §8, split.** The council round is held (2026-09-27). The design pass is defined on §1.2's
-chosen option and runs at §7 step 5; the gate is not met until it has. Hours against the §4
+**A10 — §8, split, and how the gate completes.** The council round is held (2026-09-27). The gate
+completes at §7 step 4 in one of two ways. If W_pre fires (b1), the gate concludes **no port** and is
+met; no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
+instead, the port becomes eligible for step 5, where the design pass runs on the chosen §1.2 option,
+and nothing is built until it has and the gate is signed again as amended. Hours against the §4
 projection were not tracked for either round and are reported as not measured.
 
 **A11 — consistency.** §9 inventories both paths while §2's disconfirmers and §4's exit criteria
