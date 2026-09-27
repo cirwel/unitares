@@ -348,3 +348,63 @@ async def test_concurrent_stated_resets_keep_the_later_statement(monkeypatch):
     assert ha._state["codex:host-adapter"]["retry_after"] == now + 600
     stored = json.loads(await fake.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
     assert stored["retry_after"] == now + 600
+
+
+class _SlowOp:
+    """Fake Redis whose named operation is delayed once, to force the network
+    completion order the opposite way round from the call order."""
+
+    def __init__(self, fake, slow: str):
+        self._fake, self._slow, self._left = fake, slow, 1
+
+    def __getattr__(self, name):
+        attr = getattr(self._fake, name)
+        if name != self._slow:
+            return attr
+
+        async def _delayed(*a, **k):
+            if self._left:
+                self._left -= 1
+                await asyncio.sleep(0.05)
+            return await attr(*a, **k)
+
+        return _delayed
+
+
+async def _race(monkeypatch, slow: str, first, second):
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    client = _SlowOp(fake, slow)
+
+    async def _redis():
+        return client
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    task = asyncio.ensure_future(first())
+    await asyncio.sleep(0.01)  # the first call is now inside its slow operation
+    await second()
+    await task
+    return await fake.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter")
+
+
+@pytest.mark.asyncio
+async def test_a_slow_write_cannot_resurrect_a_window_a_newer_success_cleared(monkeypatch):
+    """Codex review (P2): a failure's SET that lands after a newer success's
+    DEL would reload a cleared window on the next restart."""
+    stored = await _race(
+        monkeypatch, "set",
+        lambda: ha.record_unavailable_async("codex:host-adapter", QUOTA),
+        lambda: ha.clear_async("codex:host-adapter"),
+    )
+    assert ha.cooldown("codex:host-adapter") is None
+    assert stored is None  # Redis agrees with the process
+
+
+@pytest.mark.asyncio
+async def test_a_slow_delete_cannot_erase_a_newer_failure(monkeypatch):
+    stored = await _race(
+        monkeypatch, "delete",
+        lambda: ha.clear_async("codex:host-adapter"),
+        lambda: ha.record_unavailable_async("codex:host-adapter", QUOTA),
+    )
+    assert ha.cooldown("codex:host-adapter") is not None
+    assert stored is not None  # the newer failure survives a restart

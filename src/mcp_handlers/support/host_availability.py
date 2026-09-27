@@ -39,6 +39,7 @@ import math
 import re
 import threading
 import time
+import weakref
 from datetime import datetime, timedelta
 from typing import Any, Optional
 
@@ -297,16 +298,32 @@ async def _pull(host_id: str, now: float) -> None:
         _adopt(host_id, _decode(raw), now)
 
 
-async def _push(host_id: str, now: float) -> None:
+# Per event loop, per host: one async write sequence at a time. Overlapping
+# calls for one host (a success and a limit failure in flight together) would
+# otherwise race their SET and DEL over the network, and completion order,
+# not observation order, would decide what a restart reloads.
+_write_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, asyncio.Lock]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _write_lock(host_id: str) -> asyncio.Lock:
+    per_loop = _write_locks.setdefault(asyncio.get_running_loop(), {})
+    return per_loop.setdefault(host_id, asyncio.Lock())
+
+
+async def _sync(host_id: str, now: float) -> Any:
+    """Make the Redis copy match the cache's current view of ``host_id``:
+    SET while a window is live, DEL otherwise. Called under the host's write
+    lock, so the last sequence to run writes the final state."""
     with _lock:
         entry = dict(_state.get(host_id) or {})
     ttl = math.ceil(entry.get("retry_after", 0) - now)
+    key = REDIS_KEY_PREFIX + host_id
     if ttl <= 0:
-        return
+        return await _bounded(lambda r: r.delete(key), f"delete {host_id}")
     payload = json.dumps(entry, sort_keys=True)
-    await _bounded(
-        lambda r: r.set(REDIS_KEY_PREFIX + host_id, payload, ex=ttl), f"write {host_id}",
-    )
+    return await _bounded(lambda r: r.set(key, payload, ex=ttl), f"write {host_id}")
 
 
 async def record_unavailable_async(
@@ -317,9 +334,10 @@ async def record_unavailable_async(
     first (another process or a previous run may hold a live window), apply
     the window rules, then write the result through."""
     now = time.time() if now is None else now
-    await _pull(host_id, now)
-    view = record_unavailable(host_id, classified, detail=detail, now=now)
-    await _push(host_id, now)
+    async with _write_lock(host_id):
+        await _pull(host_id, now)
+        view = record_unavailable(host_id, classified, detail=detail, now=now)
+        await _sync(host_id, now)
     return view
 
 
@@ -331,9 +349,9 @@ async def clear_async(host_id: str) -> None:
     its TTL runs out reloads the window, and the host is refused until it
     lapses (at most the 12h cap; consult fails over meanwhile). That is
     logged, because nothing else would show why a working host is cooling."""
-    clear(host_id)
-    result = await _bounded(
-        lambda r: r.delete(REDIS_KEY_PREFIX + host_id), f"delete {host_id}")
+    async with _write_lock(host_id):
+        clear(host_id)
+        result = await _sync(host_id, time.time())
     if result is _FAILED:
         logger.warning(
             "[HOST_COOLDOWN] %s recovered but its Redis copy %s%s was not deleted; "
@@ -380,3 +398,4 @@ def _public(host_id: str, entry: dict[str, Any]) -> dict[str, Any]:
 def _reset_for_tests() -> None:
     with _lock:
         _state.clear()
+    _write_locks.clear()
