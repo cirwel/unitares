@@ -19,7 +19,7 @@ diagnosis and operator recovery, not as the primary architecture reference.
 > | `tail -f data/logs/mcp_server.log` | `docker compose logs -f governance-mcp` |
 > | `launchctl unload …` then `launchctl load …` | `docker compose restart governance-mcp` |
 > | `launchctl print gui/$(id -u)/com.unitares.governance-mcp` | `docker compose ps governance-mcp` |
-> | environment in the plist | environment in `.env`, then `docker compose up -d` |
+> | environment in the plist | `.env` for a variable `docker-compose.yml` passes through; any other variable goes in the `governance-mcp` `environment:` block. Then `docker compose up -d` |
 
 ### Check Server Status
 ```bash

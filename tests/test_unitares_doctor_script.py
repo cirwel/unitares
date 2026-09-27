@@ -1544,9 +1544,39 @@ def test_producer_never_reported_skips_on_a_database_no_producer_posted_to(
     _write_producer(tmp_path, "scripts/ops/deploy_drift_doctor.py",
                     'FINDING_KIND = "deploy_drift_finding"\n')
     _mock_psql(doctor, monkeypatch, "")
-    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    result = doctor.check_producer_never_reported(
+        "postgresql://x/y", tmp_path, producers_expected=False)
     assert result.status == doctor.Status.SKIP
     assert "sentinel_finding" not in result.message
+
+
+def test_producer_never_reported_warns_when_every_producer_is_never_born(
+        doctor, monkeypatch, tmp_path):
+    """Producer agents run here, yet nothing has ever posted: every producer
+    broke before its first post (a shared import or scheduling failure). That
+    is the case this check exists for, so an empty history must still warn."""
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _mock_psql(doctor, monkeypatch, "")
+    result = doctor.check_producer_never_reported(
+        "postgresql://x/y", tmp_path, producers_expected=True)
+    assert result.status == doctor.Status.WARN
+    assert "sentinel_finding" in result.message
+
+
+def test_producer_agents_present_reads_labels_and_plists(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    gov = doctor.GOVERNANCE_LAUNCHD_LABEL
+    # Governance alone is not a producer.
+    assert not doctor._producer_agents_present({gov}, agents)
+    (agents / f"{gov}.plist").write_text("")
+    assert not doctor._producer_agents_present(set(), agents)
+    # Any other UNITARES agent, loaded or installed, is.
+    assert doctor._producer_agents_present({"com.unitares.some-resident"}, agents)
+    (agents / "com.unitares.some-resident.plist").write_text("")
+    assert doctor._producer_agents_present(set(), agents)
+    assert not doctor._producer_agents_present(set(), tmp_path / "absent")
 
 
 # --- constraint_drift -------------------------------------------------------

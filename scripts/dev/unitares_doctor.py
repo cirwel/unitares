@@ -3188,7 +3188,31 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
     return declared
 
 
-def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
+def _producer_agents_present(loaded: set[str], agents_dir: Path | None = None) -> bool:
+    """Whether this host shows any sign of running finding producers.
+
+    Producers run as UNITARES LaunchAgents other than the governance server
+    itself (the reference residents, the operator's scheduled doctors). Any
+    such label loaded, or any such plist installed, is evidence that producers
+    are expected here, so an empty finding history is then a failure to
+    diagnose, not a fresh install.
+    """
+    prefix = "com.unitares."
+    if any(label.startswith(prefix) and label != GOVERNANCE_LAUNCHD_LABEL
+           for label in loaded):
+        return True
+    directory = agents_dir if agents_dir is not None else (
+        Path.home() / "Library" / "LaunchAgents")
+    try:
+        return any(p.name != f"{GOVERNANCE_LAUNCHD_LABEL}.plist"
+                   for p in directory.glob(f"{prefix}*.plist"))
+    except OSError:
+        return False
+
+
+def check_producer_never_reported(
+    db_url: str, repo_root: Path, producers_expected: bool = True,
+) -> CheckResult:
     """WARN when source declares a finding producer that has NEVER posted once.
 
     ``finding_producer_live`` is self-relative: it judges a producer against its
@@ -3221,17 +3245,20 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
 
     seen = {r[0] for r in rows if r and r[0]}
-    if not seen:
-        # A database no producer has ever posted to is a fresh install, not a
-        # fleet of never-born producers: the declarations scanned above live
-        # in the reference residents (agents/) and one operator's control plane
-        # (scripts/ops/), which such an install does not run. Asking "which of
-        # these never fired" there only lists somebody else's fleet.
+    if not seen and not producers_expected:
+        # No finding has ever been posted AND nothing on this host runs a
+        # producer: a fresh install, not a fleet of never-born producers. The
+        # declarations scanned above live in the reference residents (agents/)
+        # and one operator's control plane (scripts/ops/), which such an
+        # install does not run, so "which of these never fired" would only
+        # list somebody else's fleet. With producer agents present, an empty
+        # history is exactly the all-broken case this check exists for, and
+        # it falls through to the warning.
         return CheckResult(
             name, mode, Status.SKIP,
-            f"no finding has ever been posted on this database; the "
-            f"{len(declared)} declared producer(s) are reference residents and "
-            f"operator scripts this install may not run",
+            f"no finding has ever been posted on this database and no producer "
+            f"LaunchAgent runs on this host; the {len(declared)} declared "
+            f"producer(s) are reference residents and operator scripts",
         )
     never = sorted(declared - seen)
     if not never:
@@ -3838,7 +3865,9 @@ def build_checks(
         # Companion to the above: that one catches DIED, this one catches
         # NEVER-BORN. Neither sees the other's case.
         Check("producer_never_reported", "operator",
-              lambda: check_producer_never_reported(db_url, repo_root)),
+              lambda: check_producer_never_reported(
+                  db_url, repo_root,
+                  producers_expected=_producer_agents_present(loaded()))),
         # Third of the family. Those two ask whether findings are BEING MADE;
         # this one asks whether any of them can be CONSUMED. A producer that is
         # alive and loud satisfies both of the above while contributing nothing
