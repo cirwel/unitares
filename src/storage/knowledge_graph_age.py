@@ -14,7 +14,13 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 from src.logging_utils import get_logger
-from src.knowledge_graph import DiscoveryNode, ResponseTo
+from src.knowledge_graph import (
+    DiscoveryNode,
+    ResponseTo,
+    apply_closure_reopen_rule,
+    closure_evidence_from_stored,
+    closure_evidence_to_json,
+)
 from src.mcp_handlers.knowledge.limits import EMBED_DETAILS_WINDOW
 import src.db as db_module
 from src.db.age_queries import (
@@ -143,12 +149,14 @@ class KnowledgeGraphAGE:
                 id, agent_id, type, severity, status,
                 created_at, updated_at, resolved_at,
                 summary, details, tags, references_files, related_to,
-                response_to_id, response_type, provenance, epoch
+                response_to_id, response_type, provenance, epoch,
+                closure_class, closure_evidence
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15, $16, $17
+                $14, $15, $16, $17,
+                $18, $19
             )
             ON CONFLICT (id) DO UPDATE SET
                 agent_id = EXCLUDED.agent_id,
@@ -166,7 +174,9 @@ class KnowledgeGraphAGE:
                 response_to_id = EXCLUDED.response_to_id,
                 response_type = EXCLUDED.response_type,
                 provenance = EXCLUDED.provenance,
-                epoch = EXCLUDED.epoch
+                epoch = EXCLUDED.epoch,
+                closure_class = EXCLUDED.closure_class,
+                closure_evidence = EXCLUDED.closure_evidence
             """,
             discovery.id,
             discovery.agent_id,
@@ -185,6 +195,13 @@ class KnowledgeGraphAGE:
             response_type,
             json.dumps(discovery.provenance) if discovery.provenance else None,
             GovernanceConfig.CURRENT_EPOCH,
+            # The row carries the pair the AGE vertex gets, so a classified
+            # node round-trips (graph unavailable, or rebuilt from SQL). Like
+            # every other column, an upsert takes the incoming values, status
+            # included, so a re-add that reopens a row clears its class
+            # rather than tripping discoveries_closure_class_requires_closed.
+            discovery.closure_class,
+            closure_evidence_to_json(discovery.closure_evidence),
         )
 
         await self._sync_discovery_tags(conn, discovery.id, discovery.tags or [])
@@ -307,6 +324,7 @@ class KnowledgeGraphAGE:
         """Sync AGE discovery updates into durable PostgreSQL tables."""
         set_parts = []
         params: List[Any] = []
+        updates = apply_closure_reopen_rule(updates)
 
         field_map = {
             "status": "status",
@@ -314,12 +332,17 @@ class KnowledgeGraphAGE:
             "type": "type",
             "summary": "summary",
             "details": "details",
+            "closure_class": "closure_class",
         }
 
         for key, column in field_map.items():
             if key in updates:
                 params.append(updates[key])
                 set_parts.append(f"{column} = ${len(params)}")
+
+        if "closure_evidence" in updates:
+            params.append(closure_evidence_to_json(updates["closure_evidence"]))
+            set_parts.append(f"closure_evidence = ${len(params)}")
 
         for key in ("resolved_at", "updated_at"):
             if key in updates:
@@ -629,6 +652,8 @@ class KnowledgeGraphAGE:
             coherence=coherence,
             tags=discovery.tags,
             metadata=metadata,
+            closure_class=discovery.closure_class,
+            closure_evidence=closure_evidence_to_json(discovery.closure_evidence),
         )
 
         # Execute rate limit + all graph operations in a single transaction
@@ -748,6 +773,8 @@ class KnowledgeGraphAGE:
             coherence=coherence,
             tags=tags,
             metadata=metadata,
+            closure_class=discovery.closure_class,
+            closure_evidence=closure_evidence_to_json(discovery.closure_evidence),
         )
 
         async with db.transaction() as conn:
@@ -1336,6 +1363,8 @@ class KnowledgeGraphAGE:
             resolved_at=d.get("resolved_at"),
             updated_at=d.get("updated_at"),
             provenance=d.get("provenance"),
+            closure_class=d.get("closure_class"),
+            closure_evidence=closure_evidence_from_stored(d.get("closure_evidence")),
         )
 
     def _node_to_discovery(self, node_data: Dict[str, Any]) -> Optional[DiscoveryNode]:
@@ -1387,20 +1416,39 @@ class KnowledgeGraphAGE:
             confidence=metadata.get("confidence"),
             provenance=metadata.get("provenance"),
             provenance_chain=metadata.get("provenance_chain"),
+            closure_class=node_data.get("closure_class"),
+            closure_evidence=closure_evidence_from_stored(
+                node_data.get("closure_evidence")
+            ),
         )
 
-    async def _sql_update_discovery(self, discovery_id: str, updates: Dict[str, Any]) -> bool:
-        """SQL UPDATE fallback for SQL-only discoveries that have no AGE node."""
+    async def _sql_update_discovery(
+        self, discovery_id: str, updates: Dict[str, Any], conn: Any = None
+    ) -> bool:
+        """SQL UPDATE fallback for SQL-only discoveries that have no AGE node.
+
+        ``conn`` is a connection already inside a transaction. update_discovery
+        passes its own when the Cypher MATCH finds no node, so the fallback
+        runs in that transaction instead of taking a second pool connection
+        while the first is held (with a one-connection pool, or a pool full of
+        such updates, that waits forever). Without one, the fallback opens its
+        own transaction.
+        """
         from src.knowledge_graph import normalize_tags
         db = await self._get_db()
+        updates = apply_closure_reopen_rule(updates)
 
         set_parts: List[str] = []
         params: List[Any] = []
 
-        for key in ("status", "severity", "type", "summary", "details"):
+        for key in ("status", "severity", "type", "summary", "details", "closure_class"):
             if key in updates:
                 params.append(updates[key])
                 set_parts.append(f"{key} = ${len(params)}")
+
+        if "closure_evidence" in updates:
+            params.append(closure_evidence_to_json(updates["closure_evidence"]))
+            set_parts.append(f"closure_evidence = ${len(params)}")
 
         for key in ("resolved_at", "updated_at"):
             if key in updates:
@@ -1416,26 +1464,39 @@ class KnowledgeGraphAGE:
             return True
 
         params.append(discovery_id)
-        result = await db._pool.fetchval(
-            f"UPDATE knowledge.discoveries SET {', '.join(set_parts)} WHERE id = ${len(params)} RETURNING id",
-            *params,
-        )
-        if result is not None and "tags" in updates:
-            async with db._pool.acquire() as conn:
-                await self._sync_discovery_tags(conn, discovery_id, updates.get("tags") or [])
-        return result is not None
+        # Through the backend, not db._pool: since the ExecutorPool (#218) the
+        # pool has no fetchval, so every update on this path raised
+        # AttributeError (reported as a failed update, or as "Discovery not
+        # found" when reached from a missing AGE node) while tests that faked
+        # the pool passed. In a transaction, not on a bare connection: the
+        # UPDATE and the tag sync commit together, so a failed tag sync cannot
+        # leave the row half-updated.
+        sql = f"UPDATE knowledge.discoveries SET {', '.join(set_parts)} WHERE id = ${len(params)} RETURNING id"
+
+        async def _apply(tx_conn) -> bool:
+            result = await tx_conn.fetchval(sql, *params)
+            if result is not None and "tags" in updates:
+                await self._sync_discovery_tags(tx_conn, discovery_id, updates.get("tags") or [])
+            return result is not None
+
+        if conn is not None:
+            return await _apply(conn)
+        async with db.transaction() as own_conn:
+            return await _apply(own_conn)
 
     async def update_discovery(self, discovery_id: str, updates: Dict[str, Any]) -> bool:
         """Update discovery fields in AGE graph.
 
         Supports updating: status, resolved_at, updated_at, tags, severity, type,
-        summary, and details.
+        summary, details, closure_class and closure_evidence. An update that
+        reopens the row (status open or disputed) clears the closure pair.
         Falls back to direct SQL UPDATE when the discovery has no AGE node.
         Retries once on AGE concurrent-update conflicts ("Entity failed to be
         updated"), which AGE raises instead of re-evaluating the tuple the way
         plain PostgreSQL UPDATE does under READ COMMITTED.
         """
         db = await self._get_db()
+        updates = apply_closure_reopen_rule(updates)
 
         if not await db.graph_available():
             logger.warning("AGE graph not available for update; falling back to SQL")
@@ -1460,6 +1521,14 @@ class KnowledgeGraphAGE:
                 param_name = "val_tags"
                 set_parts.append(f"d.tags = ${{{param_name}}}")
                 params[param_name] = json.dumps(value if isinstance(value, list) else [value])
+            elif key == "closure_class":
+                # NULL removes the property, which reads back as None.
+                set_parts.append("d.closure_class = ${val_closure_class}")
+                params["val_closure_class"] = value
+            elif key == "closure_evidence":
+                # Stored as JSON text on the node, as tags and metadata are.
+                set_parts.append("d.closure_evidence = ${val_closure_evidence}")
+                params["val_closure_evidence"] = closure_evidence_to_json(value)
 
         if not set_parts:
             return True  # Nothing to update
@@ -1475,9 +1544,30 @@ class KnowledgeGraphAGE:
             try:
                 async with db.transaction() as conn:
                     result = await db.graph_query(cypher, params, conn=conn)
-                    if not result or (isinstance(result[0], dict) and "error" in result[0]):
-                        # No AGE node — fall back to SQL for SQL-only orphans.
-                        return await self._sql_update_discovery(discovery_id, updates)
+                    if not result:
+                        # A genuinely empty result set: the Cypher MATCH found
+                        # no Discovery vertex with this id. That is the only
+                        # condition that means "no AGE node" — fall back to
+                        # SQL for SQL-only orphans, in this transaction.
+                        return await self._sql_update_discovery(
+                            discovery_id, updates, conn=conn
+                        )
+                    if isinstance(result[0], dict) and "error" in result[0]:
+                        # A row that reports an error is a failed query, not a
+                        # missing node, so it is a failure here rather than a
+                        # redirect to the SQL fallback, which would write SQL
+                        # and leave the AGE node behind. Defensive: no current
+                        # graph_query path returns such a row. An oversized
+                        # parameter (over _MAX_PARAM_LENGTH, 128 KiB) raises in
+                        # _sanitize_cypher_param, the transaction rolls back,
+                        # and the except below returns False. This keeps the
+                        # orphan fallback keyed on an empty result alone.
+                        logger.error(
+                            f"AGE update query for discovery {discovery_id} "
+                            f"returned an error result (not a missing node): "
+                            f"{result[0].get('error')}"
+                        )
+                        return False
                     await self._sync_updated_discovery_row(conn, discovery_id, updates)
                     if "tags" in updates:
                         await self._sync_age_tag_edges(
@@ -1944,6 +2034,10 @@ class KnowledgeGraphAGE:
             resolved_at=resolved_at,
             tags=row.get("tags") or [],
             metadata=metadata or None,
+            closure_class=row.get("closure_class"),
+            closure_evidence=closure_evidence_to_json(
+                closure_evidence_from_stored(row.get("closure_evidence"))
+            ),
         )
         await db.graph_query(cypher, params, conn=conn)
 

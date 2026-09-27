@@ -97,6 +97,8 @@ from src.http_routes.telemetry import (
     _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS,
     _eisv_telemetry_health_cache,
     http_eisv_telemetry_health,
+    http_eisv_agents,
+    http_governance_trend,
     http_events,
     _LIFECYCLE_EVENT_TYPES,
     http_enforcement_divergence,
@@ -331,6 +333,8 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/telemetry-health", http_eisv_telemetry_health, methods=["GET"]))
+    app.routes.append(Route("/v1/governance/trend", http_governance_trend, methods=["GET"]))
+    app.routes.append(Route("/v1/eisv/agents", http_eisv_agents, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))
@@ -341,25 +345,22 @@ def register_http_routes(
     app.routes.append(Route("/v1/runtime/observe", http_runtime_observe, methods=["POST"]))
     app.routes.append(Route("/v1/runtime/activity", http_runtime_activity, methods=["GET"]))
     app.routes.append(Route("/v1/substrate/dark_sessions", http_substrate_dark_sessions, methods=["GET"]))
-    app.routes.append(Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]))
-    app.routes.append(Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]))
-    app.routes.append(Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]))
-    app.routes.append(Route("/v1/sentinel/model-adjudicate", http_sentinel_model_adjudicate, methods=["POST"]))
     app.routes.append(Route("/v1/harness/outcome", http_harness_outcome, methods=["POST"]))
     app.routes.append(Route("/v1/metrics", http_post_metric, methods=["POST"]))
     app.routes.append(Route("/v1/metrics/series", http_get_metrics, methods=["GET"]))
     app.routes.append(Route("/v1/metrics/catalog", http_get_metrics_catalog, methods=["GET"]))
     app.routes.append(Route("/v1/progress_flat/recent", http_get_progress_flat_recent, methods=["GET"]))
-    app.routes.append(Route("/v1/watcher/summary", http_watcher_summary, methods=["GET"]))
     app.routes.append(Route("/v1/bootstrap/silent", http_bootstrap_silent, methods=["GET"]))
-    app.routes.append(Route("/v1/sentinel/summary", http_sentinel_summary, methods=["GET"]))
-    app.routes.append(Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]))
     app.routes.append(Route("/v1/agents/tier_distribution", http_tier_distribution, methods=["GET"]))
     app.routes.append(Route("/v1/agents/{agent_id}/history", http_agent_history, methods=["GET"]))
-    app.routes.append(Route("/api/automations", http_automations, methods=["GET"]))
     app.routes.append(Route("/api/activity", http_activity, methods=["GET"]))
     app.routes.append(Route("/api/incidents", http_incidents, methods=["GET"]))
     app.routes.append(Route("/v1/residents", http_residents, methods=["GET"]))
+    # Deployment-specific routes (reference residents, automation census) are
+    # mounted only when UNITARES_ROUTE_PACKS names their pack; see
+    # src/http_routes/packs.py. The shipped default mounts none.
+    from src.http_routes.packs import register_route_packs
+    register_route_packs(app, logger=logger)
     app.routes.append(Route("/v1/residents/tag_audit", http_resident_tag_audit, methods=["GET"]))
     app.routes.append(Route("/v1/taxonomy", http_taxonomy, methods=["GET"]))
     app.routes.append(WebSocketRoute("/ws/eisv", websocket_eisv_stream))

@@ -91,6 +91,7 @@ def _fat_event(agent_id="a"):
     return {
         "type": "eisv_update",
         "agent_id": agent_id,
+        "agent_name": "agent-" + agent_id,
         "timestamp": "2026-08-28T00:00:00+00:00",
         "eisv": {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1},
         "coherence": 0.48,
@@ -135,7 +136,7 @@ def test_compact_keeps_every_field_the_chart_reads():
     body = _client().get("/v1/eisv/recent?fields=compact").json()
     assert body["fields"] == "compact"
     event = body["events"][0]
-    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+    for key in ("type", "timestamp", "agent_id", "agent_name", "eisv", "coherence", "risk"):
         assert key in event, key
     assert event["eisv"] == {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1}
     assert event["risk"] == 0.31
@@ -160,8 +161,11 @@ def test_compact_drops_the_payload_nothing_reads():
     http_api.broadcaster_instance.event_history.append(_fat_event())
 
     event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
-    for key in ("decision", "drift_trends", "inputs", "risk_reason"):
+    for key in ("drift_trends", "inputs", "risk_reason"):
         assert key not in event, f"{key} has zero consumers and must not be polled"
+    # The verdict is read (the Overview's recent-check-ins feed); the ~1.9 KB
+    # of reasoning around it is not.
+    assert event["decision"] == {"action": "guide"}
     # Telemetry is whitelisted, so a large diagnostic sub-object goes too.
     assert "derivation" not in event["eisv_telemetry"]
     # And the projection must actually be smaller, not merely reshaped.
@@ -190,3 +194,108 @@ def test_unknown_fields_value_falls_back_to_the_full_shape():
     body = _client().get("/v1/eisv/recent?fields=nonsense").json()
     assert body["fields"] == "full"
     assert "decision" in body["events"][0]
+
+
+# --- /api/activity coverage ---------------------------------------------------
+
+def test_activity_coverage_starts_at_process_start_inside_the_window():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 600  # restarted ten minutes ago
+    assert abs(b.activity_coverage_start(60) - b.started_at) < 1
+
+
+def test_activity_coverage_is_the_window_when_history_is_older():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    assert abs(b.activity_coverage_start(60) - (time.time() - 3600)) < 1
+
+
+def test_activity_coverage_moves_up_when_the_ring_is_full():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    oldest = time.time() - 300
+    for i in range(b.activity_history.maxlen):
+        b.activity_history.append((oldest + i * 0.1, "proceed"))
+    assert abs(b.activity_coverage_start(60) - oldest) < 1
+
+
+# --- /v1/eisv/agents: one row per agent, folded server-side ------------------
+
+def _agents_client():
+    from src.http_api import http_eisv_agents
+    app = Starlette(routes=[Route("/v1/eisv/agents", http_eisv_agents, methods=["GET"])])
+    return TestClient(app, client=("127.0.0.1", 50000))
+
+
+def test_agents_returns_latest_event_per_agent_newest_first():
+    h = http_api.broadcaster_instance.event_history
+    h.clear()
+    h.append(_make_event("a", 0.1, ts="2026-09-27T00:00:01+00:00"))
+    h.append(_make_event("b", 0.2, ts="2026-09-27T00:00:02+00:00"))
+    h.append({"type": "lifecycle_paused", "agent_id": "a"})
+    h.append(dict(_fat_event("a"), timestamp="2026-09-27T00:00:03+00:00"))
+
+    body = _agents_client().get("/v1/eisv/agents").json()
+    assert [r["agent_id"] for r in body["agents"]] == ["a", "b"]
+    a = body["agents"][0]
+    assert a["checkins"] == 2 and a["agent_name"] == "agent-a"
+    assert a["decision"] == {"action": "guide"}  # compact projection, not the full event
+    assert "drift_trends" not in a
+    assert isinstance(body["coverage_start"], float)
+
+
+def test_agents_is_empty_not_an_error_on_a_fresh_server():
+    http_api.broadcaster_instance.event_history.clear()
+    body = _agents_client().get("/v1/eisv/agents").json()
+    assert body["count"] == 0 and body["agents"] == []
+
+
+# --- verdict = sub_action when present (review #2502) ------------------------
+
+def test_guided_checkin_counts_as_guide_not_proceed():
+    """A guided check-in is decision.action="proceed", sub_action="guide" — the
+    rule record_agent_state persists by. Reading `action` alone made the
+    Overview's guide count zero while the fleet produced thousands."""
+    import asyncio
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    for decision in ({"action": "proceed", "sub_action": "guide"}, {"action": "proceed"},
+                     {"action": "proceed", "sub_action": "risk_pause"}, {"action": "approve"}):
+        asyncio.run(b.broadcast({"type": "eisv_update", "decision": decision}))
+    totals = {"proceed": 0, "guide": 0, "pause": 0}
+    for bucket in b.get_activity_buckets(60, 5):
+        for k in totals:
+            totals[k] += bucket[k]
+    assert totals == {"proceed": 2, "guide": 1, "pause": 1}
+
+
+def test_compact_keeps_sub_action_with_action():
+    http_api.broadcaster_instance.event_history.clear()
+    http_api.broadcaster_instance.event_history.append(
+        dict(_fat_event(), decision={"action": "proceed", "sub_action": "guide", "reason": "x" * 400}))
+    event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
+    assert event["decision"] == {"action": "proceed", "sub_action": "guide"}
+
+
+def test_activity_totals_cover_the_whole_window_not_just_aligned_buckets():
+    """Buckets start at an aligned boundary up to one bucket inside the window;
+    a check-in 58 minutes ago is in the hour but may sit before the first
+    bucket. The exact totals must still count it."""
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.activity_history.append((time.time() - 58 * 60, "proceed"))
+    b.activity_history.append((time.time() - 61 * 60, "proceed"))  # outside
+    b.activity_history.append((time.time() - 60, "risk_pause"))
+    assert b.activity_totals(60) == {"proceed": 1, "guide": 0, "pause": 1}

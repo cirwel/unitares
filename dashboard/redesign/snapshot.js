@@ -1,248 +1,179 @@
 /*
- * Bundled real snapshot — pulled live from the governance server on
- * 2026-06-19 (/v1/residents + /health). Lets the redesign render
- * portably (opened as a file, no auth) and gives data.js a truthful
- * fallback when a live endpoint is unreachable. Retargeting to live is
- * data.js's job, not a rewrite of any view.
+ * SYNTHETIC offline fixture. Every name, id, number and sentence below is
+ * invented; nothing is a capture of any deployment.
+ *
+ * data.js reads this only where there is no server to ask: the page opened
+ * from a file, or a design preview passed ?snapshot=1. On a served page a
+ * failed read renders "unavailable" instead (see SNAPSHOT_FALLBACK in data.js).
+ * Until 2026-09-27 this file was a real capture of the maintainer's fleet —
+ * resident names, EISV vectors, verdicts, knowledge-graph text — shipped in
+ * every checkout and image. The shapes are unchanged, so every view renders
+ * offline exactly as it does live.
+ *
+ * Values come from a seeded generator (so the file is deterministic) and
+ * timestamps are relative to page load (so "3m ago" reads as recent in a
+ * preview opened today).
  */
-window.SNAPSHOT = {
-  capturedAt: "2026-06-19T19:30:00Z",
-  health: { version: "2.13.0", uptime: "21h 15m", db: "connected" },
-  residents: [
-    { id:"mcp_20260416_907e3195", name:"Watcher",    status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.66,S:0.24,V:+0.10}, silence:25,    silenceThreshold:3600,   event_driven:true },
-    { id:"mcp_20260406_e55caaf1", name:"Vigil",      status:"healthy", coherence:0.49, risk:0.00, verdict:"proceed", eisv:{E:0.75,I:0.77,S:0.16,V:-0.02}, silence:101,   silenceThreshold:3600 },
-    { id:"mcp_20260428_69a1a4f7", name:"Lumen",      status:"careful", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.31,I:0.83,S:0.15,V:-0.52}, silence:56,    silenceThreshold:3600 },
-    { id:"mcp_20260407_f92dcea8", name:"Sentinel",   status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.77,I:0.68,S:0.26,V:+0.09}, silence:273,   silenceThreshold:3600 },
-    { id:"mcp_20260419_chron001", name:"Chronicler", status:"healthy", coherence:0.50, risk:0.00, verdict:"proceed", eisv:{E:0.81,I:0.68,S:0.22,V:+0.11}, silence:67156, silenceThreshold:172800 },
-  ],
-  // Bundled per-agent trajectory for the offline drill-down demo — Lumen's
-  // energy declining into the strained cell the heatmap flags. Live uses
-  // /v1/agents/{id}/history (thousands of real points); this is just the
-  // offline stand-in for one agent.
-  agentHistory: {
-    "mcp_20260428_69a1a4f7": [
-      { t:"2026-06-06", E:0.55, I:0.84, S:0.11, V:-0.30, coherence:0.51, risk:0.10, action:"approve", verdict:"safe" },
-      { t:"2026-06-07", E:0.53, I:0.84, S:0.12, V:-0.33, coherence:0.51, risk:0.11, action:"approve", verdict:"safe" },
-      { t:"2026-06-08", E:0.50, I:0.83, S:0.12, V:-0.36, coherence:0.50, risk:0.12, action:"guide", verdict:"safe" },
-      { t:"2026-06-09", E:0.48, I:0.84, S:0.13, V:-0.39, coherence:0.50, risk:0.13, action:"guide", verdict:"safe" },
-      { t:"2026-06-10", E:0.46, I:0.83, S:0.13, V:-0.41, coherence:0.50, risk:0.14, action:"guide", verdict:"safe" },
-      { t:"2026-06-11", E:0.44, I:0.83, S:0.14, V:-0.43, coherence:0.50, risk:0.15, action:"guide", verdict:"caution" },
-      { t:"2026-06-12", E:0.42, I:0.83, S:0.14, V:-0.45, coherence:0.50, risk:0.16, action:"guide", verdict:"caution" },
-      { t:"2026-06-13", E:0.40, I:0.83, S:0.14, V:-0.47, coherence:0.50, risk:0.17, action:"guide", verdict:"caution" },
-      { t:"2026-06-14", E:0.38, I:0.83, S:0.15, V:-0.48, coherence:0.50, risk:0.18, action:"guide", verdict:"caution" },
-      { t:"2026-06-15", E:0.36, I:0.83, S:0.15, V:-0.49, coherence:0.50, risk:0.18, action:"guide", verdict:"caution" },
-      { t:"2026-06-16", E:0.35, I:0.83, S:0.15, V:-0.50, coherence:0.50, risk:0.19, action:"guide", verdict:"caution" },
-      { t:"2026-06-17", E:0.33, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19, action:"risk_pause", verdict:"high-risk" },
-      { t:"2026-06-18", E:0.32, I:0.83, S:0.15, V:-0.51, coherence:0.50, risk:0.19, action:"guide", verdict:"caution" },
-      { t:"2026-06-19", E:0.31, I:0.83, S:0.15, V:-0.52, coherence:0.50, risk:0.19 },
-    ],
-  },
-  // representative until wired to live tool calls (agent/detect_stuck/knowledge/calibration)
-  stats: {
-    // This capture predates explicit binding/lease presence counts. Keep the
-    // lifecycle count for offline context without presenting it as liveness.
-    agentsActive: 6, agentsLive: null, agentsPresenceUnknown: null,
-    agentsPresenceUnavailable: null, agentsTotal: 658,
-    stuck: 2, discoveries: 1204, discoveriesToday: 12,
-    dialectic: 0, systemHealth: "OK", calibration: 0.71, anomalies: 1,
-    // This capture predates the server's anomaly `scan` block, so scope is
-    // genuinely unknown for it rather than known-complete. Null, not false:
-    // claiming an untruncated scan here would invent coverage the capture
-    // never recorded, and null renders the card exactly as this capture did.
-    anomaliesTruncated: null, anomaliesScanned: null, anomaliesActive: null,
-    // The offline fixture carries the same shape the live card reads: a
-    // healthy-looking trajectory_health alongside a NEGATIVE calibration
-    // verdict, which is the exact combination that made the old
-    // number-only card misleading. Keeping it here means the offline
-    // render exercises the honest path rather than a flattering one.
-    calibrated: false, calibrationStatus: "miscalibrated", calibrationSignal: "stale",
-    // Non-empty on purpose: `stuck: 0` never exercises the card body, so the
-    // offline page could not show (or review) the drill-down at all. Second
-    // entry is deliberately NOT in agentsList below, so the offline page also
-    // demonstrates the honest "outside the loaded window" branch.
-    //
-    // The second id is SYNTHETIC by rule. A stuck entry is an accusation, and
-    // this fixture is the fallback DATA.stuckAgents() serves when the live
-    // detection call fails ON ITS OWN — while the agent table beside it is
-    // still live. It was first captured verbatim from the 2026-07-31 fleet,
-    // where that id (Claude_Code_20260731_3745aa33) was a healthy live agent,
-    // so any join reaching live rows would have libelled a real, named one.
-    // Worse, hours later the live detector DID flag that same agent — for
-    // `cadence_silence`, not this entry's `critical_margin_timeout`: a captured
-    // id does not stay true, it goes quietly wrong. agents.js now refuses to
-    // cross the provenance seam; this keeps the fixture harmless even if a
-    // future caller forgets to. Any id here that is NOT also in agentsList
-    // below must stay obviously fake.
-    stuckList: [
-      { id:"Claude_Code_20260618_a0382d76", name:"claude-dispatch_beam#0b06a37f", reason:"cadence_silence", soft:true,
-        details:"Active cadence ~10.3 min over 15 updates, then silent 742 min (> 62 min threshold). Possibly hung/abandoned mid-work — verify. Soft signal; not auto-recovered." },
-      { id:"Claude_Code_00000000_synthetic", name:"claude-example#outside-window", reason:"critical_margin_timeout", soft:false,
-        details:"Critical margin (risk) for 12.4 minutes" },
-    ],
-    // Real tier vocabulary + scope from /v1/agents/tier_distribution 2026-07-31.
-    // The pre-rename strong/medium/weak names no longer exist server-side and
-    // would resolve to no --tier-* token at all.
-    trustTiers: [
-      { tier:"verified", n:9 }, { tier:"established", n:17 },
-      { tier:"emerging", n:318 }, { tier:"provisional", n:15 },
-    ],
-    trustEarned: 359, trustFleet: 5859, trustUnknown: 5500,
-  },
-  // Real subset from agent(list) on 2026-06-19T20:03Z — covers residents
-  // (verified/persistent), engaged-ephemerals (emerging), one-shots (unknown),
-  // a redacted resident, an event-driven resident, and an anon. Plus the
-  // real fleet summary so counts and the never-participated cohort are true.
-  agentsSummary: { total:620, active:584, archived:36, paused:0,
-    observed:259, unobserved:361, live:null,
-    presenceUnknown:null, presenceUnavailable:620 },
-  agentsList: [
-    { agent_id:"mcp_20260428_69a1a4f7", label:"Lumen", status:"active", tier:"verified", updates:125681, last:"2026-06-19T20:01:21Z", purpose:"Lumen — embodied digital creature", tags:["pinned","autonomous","embodied","persistent"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.497,risk:0.191,verdict:"safe",E:0.851,I:0.854,S:0.048,V:-0.005} },
-    { agent_id:"mcp_20260407_f92dcea8", label:"Sentinel", status:"active", tier:"verified", updates:15669, last:"2026-06-19T19:59:05Z", purpose:"Sentinel — analytical resident, WebSocket fleet monitor", tags:["persistent","autonomous"], event_driven:false, health:"healthy", redacted:true, lifecycleReason:"Self-recovery probe", metrics:{coherence:0.497,risk:0.265,verdict:"safe",E:0.764,I:0.768,S:0.095,V:-0.006} },
-    { agent_id:"mcp_20260416_907e3195", label:"Watcher", status:"active", tier:"verified", updates:5182, last:"2026-06-19T19:55:54Z", purpose:"Watcher — diagnostic resident, event-driven on Edit/Write", tags:["persistent","autonomous"], event_driven:true, health:"healthy", redacted:true, metrics:{coherence:0.499,risk:0.248,verdict:"safe",E:0.765,I:0.766,S:0.077,V:-0.002} },
-    { agent_id:"mcp_20260406_e55caaf1", label:"Vigil", status:"active", tier:"verified", updates:3171, last:"2026-06-19T19:56:56Z", purpose:"Vigil — janitorial resident, 30min cron", tags:["persistent","autonomous","cadence.30min"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.489,risk:0.221,verdict:"safe",E:0.792,I:0.808,S:0.059,V:-0.023} },
-    { agent_id:"7a424397-3f2c-4a33-8b8a-fd706c3a5ac8", label:"dashboard-redesign", status:"active", tier:"unknown", updates:2, last:"2026-06-19T20:00:50Z", purpose:"implementation", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:false, metrics:{coherence:0.489,risk:0.282,verdict:"safe",E:0.729,I:0.796,S:0.142,V:-0.022} },
-    { agent_id:"Claude_Code_20260619_18d9a014", label:"claude-cirwel#49251cfd", status:"active", tier:"emerging", updates:26, last:"2026-06-19T19:56:00Z", purpose:null, tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.506,risk:0.283,verdict:"safe",E:0.778,I:0.770,S:0.083,V:0.012} },
-    { agent_id:"Claude_20260619_18ff4568", label:"claude_code-claude_18ff4568", status:"active", tier:"emerging", updates:21, last:"2026-06-19T17:38:01Z", purpose:"review", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.504,risk:0.261,verdict:"safe",E:0.788,I:0.780,S:0.076,V:0.008} },
-    { agent_id:"Claude_Code_20260618_a0382d76", label:"claude-dispatch_beam#0b06a37f", status:"active", tier:"provisional", updates:12, last:"2026-06-19T14:59:09Z", purpose:"testing", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.500,risk:0.306,verdict:"safe",E:0.776,I:0.766,S:0.088,V:-0.000} },
-    { agent_id:"Gpt_5_5_20260619_11723403", label:"UNITARES Dogfood Pulse", status:"active", tier:"unknown", updates:1, last:"2026-06-19T18:32:35Z", purpose:"review", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.496,risk:0.259,verdict:"safe",E:0.708,I:0.799,S:0.174,V:-0.009} },
-    { agent_id:"anon_20260619_3a73a16c", label:"Euler", status:"active", tier:"unknown", updates:1, last:"2026-06-19T15:09:52Z", purpose:null, tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.499,risk:0.263,verdict:"safe",E:0.703,I:0.800,S:0.190,V:-0.003} },
-    { agent_id:"anon_20260619_98e07da6", label:"Codex Weekly Release Notes", status:"active", tier:"unknown", updates:3, last:"2026-06-19T15:02:54Z", purpose:"deployment", tags:["engaged_ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.490,risk:0.296,verdict:"safe",E:0.722,I:0.797,S:0.138,V:-0.020} },
-    { agent_id:"anon_20260619_b59c548a", label:null, status:"active", tier:"unknown", updates:1, last:"2026-06-19T14:42:34Z", purpose:"review", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.499,risk:0.266,verdict:"safe",E:0.703,I:0.800,S:0.190,V:-0.003} },
-    { agent_id:"Hermes_Agent_20260618_ea594d5d", label:"Hermes Agent_ea594d5d", status:"active", tier:"unknown", updates:2, last:"2026-06-19T02:19:47Z", purpose:"debugging", tags:["ephemeral"], event_driven:false, health:"healthy", redacted:true, metrics:{coherence:0.493,risk:0.260,verdict:"safe",E:0.713,I:0.798,S:0.161,V:-0.013} },
-  ],
-  // Real KG entries + aggregate stats from knowledge(list/search) 2026-06-19T20:14Z.
-  discoveries: {
-    total: 1075,
-    byType: { note:474, insight:234, improvement:104, bug_found:89, trajectory_continuity_score:50, pattern:30, answer:22, architectural_decision:19, bug_fix:13, recovery_reflection:13, question:11, experiment:8, exploration:2 },
-    byStatus: { open:134, resolved:84, archived:774, superseded:18, closed:2 },
-    list: [
-      { id:"2026-04-21T08:29:49Z", type:"insight", status:"resolved", by:"Claude_Opus_4_7_20260419", tags:["identity","metaphysics","research-direction","behavioral-identity","lifespan-as-trust"], summary:"Identity metaphysics — layer identification: the persistent-per-role vs per-instance question is mis-fixed at the harness layer. UNITARES's offering is a different layer — tools the harness can't provide. Four candidate directions captured for research, not code.", details:"Kenny is aiming for heterogeneity by default, not shared continuity. Behavioral identity (EISV trajectory fingerprint), lifespan-as-earned-trust, self-discontinuity detection, heterogeneous shared context." },
-      { id:"2026-06-16T15:36:34Z", type:"note", status:"open", by:"Hermes GPT-5.5 CLI dogfood", tags:["unitares","ablation","calibration-harness","synthetic-negative-control"], summary:"Calibration-harness strict_bad alert traced to a controlled probe (overconfidence_probe, seeded assertion failure) rather than a prevented production bad outcome. Fix: mark harness outcomes synthetic_calibration_fixture and exclude from live ablation reports.", details:"Refuse known live governance ports in probe_one; preserve fixtures in isolated harness analysis only." },
-      { id:"2026-06-16T08:10:44Z", type:"recovery_reflection", status:"open", by:"Codex Desktop UNITARES", tags:["recovery","self-reflection","tight"], summary:"Self-recovery reflection: thread moving quickly through several sidecar increments; governance flagged a tight coherence margin. Keeping the pass narrowly scoped, avoiding identity-contract changes, running focused + full validation before shipping.", details:"Metrics at reflection: coherence=0.493, risk=0.333, void=-0.014" },
-      { id:"2025-12-13T04:49:59Z", type:"pattern", status:"open", by:"cursor-opus-exploration", tags:["calibration","overconfidence","trajectory-health","epistemic-humility"], summary:"Inverted-U in calibration: low-confidence agents (0.0–0.5) show 95.7% trajectory health vs 33.1% for high-confidence (0.9–1.0). Epistemic humility correlates with good outcomes.", details:"From 1605 samples over 24h. Confidence 0.7–0.8 bin dips to 7.6% trajectory health.", stale:true },
-      { id:"2026-05-20T07:39:29Z", type:"note", status:"resolved", by:"Hermes", tags:["unitares","dogfood","calibration","mirror-mode","resolved"], summary:"Mirror-mode calibration wording finding resolved: a fresh strong-identity check-in now says \"Fleet calibration: 99% trajectory health\" instead of labeling the strategic proxy as \"accuracy\". calibration(check) still exposes tactical accuracy=0.804 separately.", details:"" },
-      { id:"2026-04-16T03:25:50Z", type:"insight", status:"open", by:"opus_dogfood_claude_code", tags:["governance-plugin","calibration","eisv-trajectory","check-in-cadence"], summary:"Governance plugin binds identity but doesn't generate continuous EISV trajectory — 4 check-ins across a 4.5h session leaves calibration with no data. The system can't distinguish a healthy agent from an absent one.", details:"Approaches: auto-check-in per turn, derive EISV from observable signals (tool calls/commits/tests), or both.", stale:true },
-      { id:"2025-12-14T21:44:32Z", type:"improvement", status:"resolved", by:"claude-opus-hikewa", tags:["architecture","identity","agi-forward","refactor"], summary:"AGI-Forward Identity Refactor spec — removes scaffolding for confused LLMs, designs for genuine self-concept. Triggered by Qwen/Goose trying to bind to another agent's ID.", details:"Remove candidate lists; strict authentication; treat IDs as identities to respect, not resources to use." },
-      { id:"2025-12-13T05:53:10Z", type:"pattern", status:"open", by:"cursor-opus-exploration", tags:["design-principle","self-governance","calibration","philosophy"], summary:"Design principle: self-governance over human-as-oracle — agents should calibrate from objective outcomes (tests, linters, commands) rather than treating human judgment as ground truth.", details:"Human-as-oracle creates bottlenecks, is often wrong, and is philosophically flawed.", stale:true },
-    ],
-  },
-  // Real dialectic sessions from dialectic(list) 2026-06-19T20:30Z.
-  dialectic: {
-    counts: { total:12, resolved:8, active:0, failed:4 },
-    sessions: [
-      { id:"51902877fe3c5632", phase:"resolved", type:"review", paused:"37f5f08e", reviewer:null, synthesizer:"llm-synthetic-reviewer", topic:"Live post-deploy verification of end-to-end path on the deploy-worktree process, reframed as an audit of governance resilience under synthetic stress.", created:"2026-06-17T19:55:49Z", msgs:3, resolution:{ action:"resume", reasoning:"Core goal remains confirming end-to-end path functionality, but execution is reframed as an audit of governance resilience under synthetic stress.", conditions:3, rootCause:"Live post-deploy verification; synthetic-reviewer completion (PR #825) drives the thesis to a resolved synthesis inline." } },
-      { id:"818cc0592c4ac70b", phase:"failed", type:"review", paused:"fac35bde", reviewer:null, synthesizer:null, topic:"Council (conceptual + implementation) diverges on whether a protected Core tier is safe for an identity-bearing store. Need adversarial pressure-test before committing code.", created:"2026-06-16T07:42:25Z", msgs:1, resolution:null },
-      { id:"95c9ddfd6bb09308", phase:"resolved", type:"review", paused:"07d0f9c7", reviewer:"9f60251c", synthesizer:null, topic:"Next step after a proposal to first audit existing Discord/leave_note/KG overlap; warned Hermes should not author the RFC alone. Need parallel dialectic seasoning before implementation.", created:"2026-04-30T10:04:15Z", msgs:5, resolution:{ action:"resume", reasoning:"Antithesis hardens v1 boundaries rather than overturning the thesis. Shrink the primitive to a PostgreSQL-backed lease table with validated evidence references and explicit fork/compaction handling.", conditions:0, rootCause:"Missing low-latency but bounded coordination primitive for single-writer surfaces across concurrent loci." } },
-      { id:"aeca25ec9a2097a6", phase:"resolved", type:"review", paused:"6c0e4190", reviewer:"6c0e4190", synthesizer:null, topic:"Required re-run review pass on changed load-bearing identity-resolution/auth surfaces before merge.", created:"2026-04-30T06:50:03Z", msgs:3, resolution:{ action:"resume", reasoning:"Implementation is locally coherent and addresses council findings with tests, but should stay an implementation candidate until a real external council/verifier reviews the diff.", conditions:4, rootCause:"Council found a missing PATH0 persisted-status handoff and an unbounded DB await." } },
-      { id:"2364de8c0c08c971", phase:"resolved", type:"review", paused:"fe5975a6", reviewer:"fe5975a6", synthesizer:null, topic:"Exploration scope vs synthesis rhythm.", created:"2026-04-29T02:06:05Z", msgs:4, resolution:{ action:"resume", reasoning:"Converged synthesis: keep exploration scope but enforce synthesis rhythm. The failure was execution (timing), not strategy (scope).", conditions:5, rootCause:"Timing failure in exploration — not scope; enforce synthesis rhythm during breadth-first discovery." } },
-      { id:"fa26935f484a9890", phase:"resolved", type:"review", paused:"086a9abd", reviewer:"4e706031", synthesizer:null, topic:"Should verdict action semantics be class-conditional, or does the uniform-contract view win? The cost of honoring pause varies by 4 orders of magnitude across the fleet.", created:"2026-04-19T08:32:05Z", msgs:4, resolution:{ action:"resume", reasoning:"Converged: the verdict CONTRACT stays class-invariant for interpretability; the real gap is the verdict payload lacking class context. This is payload completeness, not contract redefinition.", conditions:4, rootCause:"Session recursively self-demonstrated the framework's facilitator-load (auto-assigned a monitoring agent with no thesis-response code)." } },
-      { id:"56bead4ed32ab6a5", phase:"failed", type:"review", paused:"f92dcea8", reviewer:"f92dcea8", synthesizer:null, topic:"Exploration — probing whether UNITARES' self-governance loop produces useful insights or just recursive noise.", created:"2026-04-25T22:47:21Z", msgs:3, resolution:null },
-      { id:"cbdfc95a258c6470", phase:"resolved", type:"recovery", paused:"69a1a4f7", reviewer:"9d3ac2cb", synthesizer:null, topic:"", created:"2026-03-12T13:15:04Z", msgs:0, resolution:{ action:"resume", reasoning:"Session auto-created for non-reasoning embodied agent; root cause fixed at system level.", conditions:0, rootCause:"Trust-tier calculation bug (Lumen observation_count used anima cycle count instead of governance lifetime updates), fixed in bed604a." } },
-    ],
-  },
-  // Real event stream + activity histogram from /api/events + /api/activity 2026-06-19T20:30Z.
-  activity: {
-    operational: {
-      available: true, source: "snapshot", windowHours: 24,
-      summary: { processes:2, agents:2, recent_processes:1, observations:19, processes_after_reflection:2, last_operational_at:"2026-06-19T20:28:00Z", last_reflection_at:"2026-06-19T18:32:35Z", execution_modes:{ automation:1, unknown:1 } },
-      processes: [
-        { process_id:"11723403:ab12cd34", agent_id:"11723403-9f10-4fa8-b374-67db05f6704e", agent_label:"UNITARES Dogfood Pulse", slot_hash:"ab12cd34ef56", host_family:"codex", plugin_version:"0.4.12", execution_mode:"unknown", execution_mode_source:"unspecified", model:"gpt-5.6-sol", latest_kind:"activity_rollup", observation_count:12, tool_count:184, tools_in_window:37, last_operational_at:"2026-06-19T20:28:00Z", last_heartbeat_at:"2026-06-19T20:12:00Z", operational_recent:true, last_reflection_at:"2026-06-19T18:32:35Z", last_interpretation_at:null, reflection_count:1, operational_after_reflection:true, host_process_alive:true, restoration_capsule:{ schema:"unitares.restoration_capsule.v1", operational:{event_id:"11723403-9f10-4fa8-b374-67db05f6704e"}, reflection:{context:{}}, continuity:{relationship:"operations_after_reflection",missing:["authored_task_context"],restore_basis:"operational_evidence_only"} } },
-        { process_id:"98e07da6:de45fa67", agent_id:"98e07da6-6ccf-40c4-b169-644c358470da", agent_label:"Codex Weekly Release Notes", slot_hash:"de45fa678901", host_family:"codex", plugin_version:"0.4.12", execution_mode:"automation", execution_mode_source:"explicit_env", model:"gpt-5.4", latest_kind:"heartbeat", observation_count:7, tool_count:63, tools_in_window:18, last_operational_at:"2026-06-19T17:55:00Z", last_heartbeat_at:"2026-06-19T17:55:00Z", operational_recent:false, last_reflection_at:"2026-06-19T15:02:54Z", last_interpretation_at:"2026-06-19T17:56:00Z", reflection_count:3, operational_after_reflection:true, host_process_alive:true, restoration_capsule:{ schema:"unitares.restoration_capsule.v1", operational:{event_id:"98e07da6-6ccf-40c4-b169-644c358470da"}, reflection:{context:{task_label:"weekly release notes",task_outcome:"drafted"}}, continuity:{relationship:"operations_after_reflection",missing:[],restore_basis:"operational_and_authored_context"} } },
-      ],
-      semantics: { operational:"identity-bound substrate observations; never EISV", reflection:"agent_state rows explicitly labeled agent_report", interpretation:"substrate_interpretation rows remain separately labeled" },
-    },
-    buckets: [ {p:5,g:0,x:0},{p:7,g:0,x:0},{p:8,g:0,x:0},{p:3,g:0,x:0},{p:10,g:0,x:0},{p:4,g:0,x:0},{p:7,g:0,x:0},{p:9,g:0,x:0},{p:12,g:0,x:0},{p:5,g:0,x:0},{p:10,g:0,x:0},{p:5,g:0,x:0} ],
-    windowMin: 60, bucketMin: 5,
-    events: [
-      { type:"sentinel_alarm_finding", severity:"high", agent:"Sentinel", ts:"2026-06-19T20:29:58Z", message:"forced release: td:/force-release-contract-test (lease d52d1995…)" },
-      { type:"agent_new", severity:"info", agent:"Codex #425 identity guard handoff", ts:"2026-06-19T20:23:11Z", message:"New agent onboarded" },
-      { type:"sentinel_finding", severity:"medium", agent:"Sentinel", ts:"2026-06-19T20:18:59Z", vclass:"BEH", message:"5 governance events in 10min: identity_assurance_change, knowledge_read, knowledge_write" },
-      { type:"agent_new", severity:"info", agent:"Hermes Agent_10c43cd7", ts:"2026-06-19T19:59:33Z", message:"New agent onboarded" },
-      { type:"agent_new", severity:"info", agent:"dashboard-redesign", ts:"2026-06-19T19:58:37Z", message:"New agent onboarded" },
-      { type:"sentinel_finding", severity:"medium", agent:"Sentinel", ts:"2026-06-19T19:44:00Z", vclass:"ENT", message:"claude-cirwel#49251cfd entropy outlier (z=2.6, S=0.366)" },
-      { type:"agent_new", severity:"info", agent:"Hermes Agent_8838508f", ts:"2026-06-19T19:41:15Z", message:"New agent onboarded" },
-      { type:"agent_new", severity:"info", agent:"Hermes Agent_69e0c0bb", ts:"2026-06-19T19:40:44Z", message:"New agent onboarded" },
-      { type:"agent_new", severity:"info", agent:"claude-unitares#74e219d4", ts:"2026-06-19T19:37:17Z", message:"New agent onboarded" },
-      { type:"agent_new", severity:"info", agent:"claude-dashboard#74e219d4", ts:"2026-06-19T19:24:42Z", message:"New agent onboarded" },
-      { type:"sentinel_finding", severity:"medium", agent:"Sentinel", ts:"2026-06-19T19:20:00Z", vclass:"ENT", message:"claude-cirwel#49251cfd entropy outlier (z=2.1, S=0.287)" },
-    ],
-  },
-  // Real fleet-average EISV series (1-min buckets) from /v1/eisv/recent 2026-06-19T20:38Z.
-  eisv: {
-    coherenceEq: 0.50,
-    sourceLanes: [
-      {source:"legacy_snapshot",events:16,E:0.665,I:0.704,S:0.306,V:-0.093,confidence:null,missingObservations:16,missingInputs:["eisv_telemetry"],enforcementRequested:0,enforcementApplied:0,latest:"2026-06-19T20:38:00Z"},
-    ],
-    series: [
-      {t:"20:22",E:0.292,I:0.826,S:0.171,V:-0.517,C:0.497,R:0.0},
-      {t:"20:23",E:0.733,I:0.735,S:0.250,V:0.045,C:0.498,R:0.138},
-      {t:"20:24",E:0.775,I:0.647,S:0.263,V:0.116,C:0.499,R:0.10},
-      {t:"20:25",E:0.288,I:0.826,S:0.173,V:-0.519,C:0.497,R:0.0},
-      {t:"20:26",E:0.741,I:0.781,S:0.152,V:-0.020,C:0.489,R:0.148},
-      {t:"20:27",E:0.783,I:0.650,S:0.319,V:0.123,C:0.503,R:0.10},
-      {t:"20:28",E:0.607,I:0.713,S:0.249,V:-0.103,C:0.497,R:0.041},
-      {t:"20:29",E:0.790,I:0.653,S:0.354,V:0.129,C:0.506,R:0.20},
-      {t:"20:30",E:0.735,I:0.651,S:0.447,V:-0.001,C:0.497,R:0.05},
-      {t:"20:31",E:0.734,I:0.649,S:0.440,V:0.008,C:0.498,R:0.20},
-      {t:"20:32",E:0.508,I:0.736,S:0.297,V:-0.254,C:0.498,R:0.089},
-      {t:"20:33",E:0.765,I:0.671,S:0.314,V:0.092,C:0.496,R:0.102},
-      {t:"20:35",E:0.279,I:0.825,S:0.173,V:-0.526,C:0.497,R:0.131},
-      {t:"20:36",E:0.734,I:0.643,S:0.424,V:0.023,C:0.503,R:0.05},
-      {t:"20:37",E:0.732,I:0.640,S:0.431,V:0.030,C:0.504,R:0.05},
-      {t:"20:38",E:0.521,I:0.749,S:0.247,V:-0.218,C:0.496,R:0.0},
-    ],
-  },
-  // Resident freshness for the Agents pane, captured 2026-06-19T20:41Z.
-  // `coherence` rides along so the Agents pane applies DATA.residentLiveness
-  // (the one predicate) rather than inferring liveness from `silence != null`.
-  // Lumen = reporting. Add a `coherence: null` entry here to exercise the
-  // alive-no-eisv branch offline, or a `status:"silent"` one for the
-  // `overdue` badge.
-  residentFreshness: {
-    Lumen: { silence: 95, status: "healthy", coherence: 0.50 },
-  },
+(function () {
+  "use strict";
+  let seed = 20260927;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const r3 = (x) => Math.round(x * 1000) / 1000;
+  const between = (lo, hi) => r3(lo + rnd() * (hi - lo));
+  const NOW = Date.now();
+  const at = (secondsAgo) => new Date(NOW - secondsAgo * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+  const hhmm = (secondsAgo) => at(secondsAgo).slice(11, 16);
+  const eisv = () => ({ E: between(0.55, 0.8), I: between(0.6, 0.85), S: between(0.1, 0.3), V: between(-0.1, 0.1) });
 
-  // Offline stand-in for the Risk section. Live reads Chronicler's daily
-  // governance.* scrape via /v1/metrics/series; these points only need the
-  // right SHAPE — risk near the floor, pause in the tens, guide in the
-  // thousands — so the dual-axis pressure chart is exercised offline.
-  riskTrend: {
-    windowDays: 30,
-      risk: [
-        {ts:"2026-05-21T08:00:00Z",value:0.03},{ts:"2026-05-22T08:00:00Z",value:0.0383},{ts:"2026-05-23T08:00:00Z",value:0.0452},
-        {ts:"2026-05-24T08:00:00Z",value:0.0498},{ts:"2026-05-25T08:00:00Z",value:0.0516},{ts:"2026-05-26T08:00:00Z",value:0.0512},
-        {ts:"2026-05-27T08:00:00Z",value:0.0493},{ts:"2026-05-28T08:00:00Z",value:0.047},{ts:"2026-05-29T08:00:00Z",value:0.0453},
-        {ts:"2026-05-30T08:00:00Z",value:0.0446},{ts:"2026-05-31T08:00:00Z",value:0.0445},{ts:"2026-06-01T08:00:00Z",value:0.0443},
-        {ts:"2026-06-02T08:00:00Z",value:0.0431},{ts:"2026-06-03T08:00:00Z",value:0.04},{ts:"2026-06-04T08:00:00Z",value:0.0347},
-        {ts:"2026-06-05T08:00:00Z",value:0.0276},{ts:"2026-06-06T08:00:00Z",value:0.0196},{ts:"2026-06-07T08:00:00Z",value:0.0122},
-        {ts:"2026-06-08T08:00:00Z",value:0.008},{ts:"2026-06-09T08:00:00Z",value:0.008},{ts:"2026-06-10T08:00:00Z",value:0.008},
-        {ts:"2026-06-11T08:00:00Z",value:0.008},{ts:"2026-06-12T08:00:00Z",value:0.0111},{ts:"2026-06-13T08:00:00Z",value:0.0158},
-        {ts:"2026-06-14T08:00:00Z",value:0.0198},{ts:"2026-06-15T08:00:00Z",value:0.0226},{ts:"2026-06-16T08:00:00Z",value:0.0244},
-        {ts:"2026-06-17T08:00:00Z",value:0.0257},{ts:"2026-06-18T08:00:00Z",value:0.0276},{ts:"2026-06-19T08:00:00Z",value:0.0308},
-      ],
-      pause: [
-        {ts:"2026-05-21T08:00:00Z",value:13},{ts:"2026-05-22T08:00:00Z",value:14},{ts:"2026-05-23T08:00:00Z",value:19},
-        {ts:"2026-05-24T08:00:00Z",value:23},{ts:"2026-05-25T08:00:00Z",value:19},{ts:"2026-05-26T08:00:00Z",value:19},
-        {ts:"2026-05-27T08:00:00Z",value:25},{ts:"2026-05-28T08:00:00Z",value:21},{ts:"2026-05-29T08:00:00Z",value:15},
-        {ts:"2026-05-30T08:00:00Z",value:15},{ts:"2026-05-31T08:00:00Z",value:14},{ts:"2026-06-01T08:00:00Z",value:7},
-        {ts:"2026-06-02T08:00:00Z",value:9},{ts:"2026-06-03T08:00:00Z",value:4},{ts:"2026-06-04T08:00:00Z",value:2},
-        {ts:"2026-06-05T08:00:00Z",value:2},{ts:"2026-06-06T08:00:00Z",value:5},{ts:"2026-06-07T08:00:00Z",value:7},
-        {ts:"2026-06-08T08:00:00Z",value:6},{ts:"2026-06-09T08:00:00Z",value:10},{ts:"2026-06-10T08:00:00Z",value:12},
-        {ts:"2026-06-11T08:00:00Z",value:19},{ts:"2026-06-12T08:00:00Z",value:20},{ts:"2026-06-13T08:00:00Z",value:19},
-        {ts:"2026-06-14T08:00:00Z",value:25},{ts:"2026-06-15T08:00:00Z",value:23},{ts:"2026-06-16T08:00:00Z",value:18},
-        {ts:"2026-06-17T08:00:00Z",value:17},{ts:"2026-06-18T08:00:00Z",value:19},{ts:"2026-06-19T08:00:00Z",value:16},
-      ],
-      guide: [
-        {ts:"2026-05-21T08:00:00Z",value:2400},{ts:"2026-05-22T08:00:00Z",value:2677},{ts:"2026-05-23T08:00:00Z",value:2942},
-        {ts:"2026-05-24T08:00:00Z",value:3184},{ts:"2026-05-25T08:00:00Z",value:3397},{ts:"2026-05-26T08:00:00Z",value:3581},
-        {ts:"2026-05-27T08:00:00Z",value:3741},{ts:"2026-05-28T08:00:00Z",value:3885},{ts:"2026-05-29T08:00:00Z",value:4027},
-        {ts:"2026-05-30T08:00:00Z",value:4178},{ts:"2026-05-31T08:00:00Z",value:4350},{ts:"2026-06-01T08:00:00Z",value:4550},
-        {ts:"2026-06-02T08:00:00Z",value:4779},{ts:"2026-06-03T08:00:00Z",value:5035},{ts:"2026-06-04T08:00:00Z",value:5308},
-        {ts:"2026-06-05T08:00:00Z",value:5587},{ts:"2026-06-06T08:00:00Z",value:5859},{ts:"2026-06-07T08:00:00Z",value:6113},
-        {ts:"2026-06-08T08:00:00Z",value:6339},{ts:"2026-06-09T08:00:00Z",value:6536},{ts:"2026-06-10T08:00:00Z",value:6706},
-        {ts:"2026-06-11T08:00:00Z",value:6856},{ts:"2026-06-12T08:00:00Z",value:6997},{ts:"2026-06-13T08:00:00Z",value:7142},
-        {ts:"2026-06-14T08:00:00Z",value:7304},{ts:"2026-06-15T08:00:00Z",value:7491},{ts:"2026-06-16T08:00:00Z",value:7707},
-        {ts:"2026-06-17T08:00:00Z",value:7952},{ts:"2026-06-18T08:00:00Z",value:8218},{ts:"2026-06-19T08:00:00Z",value:8496},
-      ],
-  },
-};
+  // ── residents: a small, generic roster so the strip renders offline ────────
+  const residents = [
+    { id: "res-alpha-0001", name: "resident-alpha", status: "healthy", coherence: 0.50, risk: 0.04, verdict: "proceed", eisv: eisv(), silence: 40, silenceThreshold: 3600, event_driven: true },
+    { id: "res-beta-0002", name: "resident-beta", status: "healthy", coherence: 0.49, risk: 0.07, verdict: "proceed", eisv: eisv(), silence: 420, silenceThreshold: 3600 },
+    { id: "res-gamma-0003", name: "resident-gamma", status: "healthy", coherence: 0.50, risk: 0.02, verdict: "proceed", eisv: eisv(), silence: 30000, silenceThreshold: 172800 },
+  ];
+
+  // ── agents that checked in recently (Overview feed, Risk picker) ───────────
+  const ACTIONS = ["proceed", "proceed", "proceed", "guide", "proceed", "guide", "proceed", "pause"];
+  const recentAgents = {
+    coverageStart: (NOW - 6 * 3600 * 1000) / 1000,
+    agents: [
+      ["a1f0c2d4", "coding-agent-1", 45], ["b7e2a913", "resident-alpha", 120], ["c3d9e0f1", "review-bot", 600],
+      ["d4a8b2c6", "coding-agent-2", 1500], ["e5f1c7a0", "resident-beta", 2400], ["f6b3d8e2", "research-agent", 5400],
+      ["a7c4e9f3", "docs-agent", 9000], ["b8d5f0a4", "coding-agent-3", 14000],
+    ].map(([id, name, ago], i) => ({
+      id: id + "-0000-4000-8000-000000000000", name, ts: at(ago), eisv: eisv(),
+      coherence: between(0.47, 0.51), risk: between(0.03, 0.35), action: ACTIONS[i], checkins: 2 + Math.floor(rnd() * 40),
+    })),
+  };
+
+  // Daily trajectory for one agent's drill-down (Agents and Risk panes).
+  const agentHistory = {};
+  agentHistory[recentAgents.agents[0].id] = Array.from({ length: 14 }, (_, i) => {
+    const t = at((14 - i) * 86400).slice(0, 10);
+    const risk = r3(0.08 + i * 0.01);
+    const action = i === 11 ? "pause" : i > 6 ? "guide" : "approve";
+    return { t, E: r3(0.7 - i * 0.02), I: 0.8, S: r3(0.12 + i * 0.004), V: r3(-0.1 - i * 0.02), coherence: 0.5, risk, action, verdict: risk > 0.18 ? "caution" : "safe" };
+  });
+
+  const TIERS = ["verified", "established", "emerging", "emerging", "provisional", "unknown"];
+  const PURPOSES = ["implement feature", "code review", "docs update", "debugging", "research", "refactor"];
+  const agentsList = recentAgents.agents.map((a, i) => ({
+    agent_id: a.id, label: a.name, status: "active", tier: TIERS[i % TIERS.length],
+    updates: a.checkins * 7, last: a.ts, purpose: PURPOSES[i % PURPOSES.length],
+    tags: i < 2 ? ["persistent"] : ["ephemeral"], event_driven: i === 1, health: "healthy", redacted: false,
+    metrics: { coherence: a.coherence, risk: a.risk, verdict: a.risk > 0.3 ? "caution" : "safe", E: a.eisv.E, I: a.eisv.I, S: a.eisv.S, V: a.eisv.V },
+  }));
+
+  const stuckList = [
+    { id: recentAgents.agents[7].id, name: recentAgents.agents[7].name, reason: "cadence_silence", soft: true,
+      details: "Active cadence ~10 min over 12 updates, then silent 230 min. Possibly abandoned mid-work — verify. Soft signal; not auto-recovered." },
+  ];
+
+  // ── knowledge graph ─────────────────────────────────────────────────────────
+  const DISC = [
+    ["insight", "resolved", "Retry storms come from two clients sharing one session id; give each process its own.", "Observed as bursts of identical tool calls within a second."],
+    ["bug_found", "open", "Search returns archived entries first when the query is a single short word.", "Ranking weights recency below the archived flag; reproduce with any three-letter query."],
+    ["note", "open", "The nightly export finishes in about four minutes on the example dataset.", "Timing only; no action needed."],
+    ["pattern", "resolved", "Agents that check in every few minutes stay in the high basin; long gaps drift toward boundary.", "Descriptive, from the example fleet."],
+    ["improvement", "open", "Show the reviewer's model name on each dialectic session card.", "Operators asked which backend produced a verdict."],
+    ["answer", "resolved", "Yes: a paused agent can resume itself when its risk is below the recovery threshold.", "See self_recovery."],
+  ];
+  const discoveries = {
+    total: 128,
+    byType: { note: 52, insight: 30, bug_found: 14, improvement: 12, pattern: 9, answer: 6, question: 5 },
+    byStatus: { open: 41, resolved: 57, archived: 26, superseded: 4 },
+    list: DISC.map(([type, status, summary, details], i) => ({
+      id: at((i + 1) * 43000), type, status, by: recentAgents.agents[i % recentAgents.agents.length].name,
+      tags: [type, "example"], summary, details,
+    })),
+  };
+
+  // ── dialectic ───────────────────────────────────────────────────────────────
+  const TOPICS = [
+    "Agent paused after a burst of failed tool calls; asks to resume with a smaller batch size.",
+    "Review of a schema change before it lands.",
+    "Agent disputes a guide verdict on a long-running refactor.",
+    "Recovery after a stuck detection during a test run.",
+    "Review of a proposed retry policy.",
+  ];
+  const sessions = TOPICS.map((topic, i) => {
+    const failed = i === 2;
+    return {
+      id: (0x5a1e0000 + i).toString(16) + "c0ffee00", phase: failed ? "failed" : "resolved", type: i === 3 ? "recovery" : "review",
+      paused: recentAgents.agents[i].id.slice(0, 8), reviewer: "review-bot", synthesizer: "review-bot", topic,
+      created: at((i + 1) * 20000), msgs: failed ? 2 : 3,
+      resolution: failed ? null : { action: "resume", reasoning: "Conditions agreed; resume with the narrower scope.", conditions: 2, rootCause: "Scope too wide for one step." },
+    };
+  });
+  const dialectic = { counts: { total: 5, resolved: 4, active: 0, failed: 1 }, sessions };
+
+  // ── activity ────────────────────────────────────────────────────────────────
+  const buckets = Array.from({ length: 12 }, (_, i) => ({ p: 3 + Math.floor(rnd() * 8), g: i % 4 === 1 ? 1 : 0, x: i === 9 ? 1 : 0 }));
+  const EVENTS = [
+    ["agent_new", "info", null, "New agent registered"],
+    ["sentinel_finding", "medium", "BEH", "Agent check-in cadence changed sharply"],
+    ["agent_new", "info", null, "New agent registered"],
+    ["sentinel_finding", "medium", "ENT", "Risk rose across three consecutive check-ins"],
+    ["agent_new", "info", null, "New agent registered"],
+  ];
+  const activity = {
+    operational: { available: false, source: "snapshot", windowHours: 24, summary: {}, processes: [] },
+    buckets, windowMin: 60, bucketMin: 5,
+    events: EVENTS.map(([type, severity, vclass, message], i) => ({
+      type, severity, vclass, agent: recentAgents.agents[i].name, ts: at((i + 1) * 300), message,
+    })),
+  };
+
+  // ── EISV chart: a smooth minute series, one measurement lane ─────────────────
+  const series = Array.from({ length: 16 }, (_, i) => {
+    const w = Math.sin(i / 3);
+    return { t: hhmm((16 - i) * 60), E: r3(0.68 + 0.05 * w), I: r3(0.74 - 0.03 * w), S: r3(0.2 + 0.03 * w), V: r3(-0.02 + 0.04 * w), C: r3(0.495 + 0.004 * w), R: r3(0.1 + 0.05 * Math.abs(w)) };
+  });
+  const eisvChart = {
+    coherenceEq: 0.5,
+    sourceLanes: [{ source: "behavioral", events: 16, E: 0.68, I: 0.74, S: 0.2, V: -0.02, confidence: 0.9,
+      missingObservations: 0, missingInputs: [], enforcementRequested: 0, enforcementApplied: 0, latest: at(60) }],
+    series,
+  };
+
+  // ── Risk trend: trailing-7-day series, one point per day ───────────────────
+  const days = 30;
+  const riskTrend = { windowDays: days, risk: [], pause: [], guide: [] };
+  for (let i = days - 1; i >= 0; i--) {
+    const ts = at(i * 86400).slice(0, 10) + "T00:00:00Z";
+    const k = days - i;
+    riskTrend.risk.push({ ts, value: r3(0.04 + 0.015 * Math.sin(k / 5)) });
+    riskTrend.pause.push({ ts, value: Math.max(0, Math.round(3 + 3 * Math.sin(k / 4))) });
+    riskTrend.guide.push({ ts, value: Math.round(900 + 300 * Math.sin(k / 6)) });
+  }
+
+  const checkinActivity = (() => {
+    const t = buckets.reduce((acc, b) => ({ proceed: acc.proceed + b.p, guide: acc.guide + b.g, pause: acc.pause + b.x }), { proceed: 0, guide: 0, pause: 0 });
+    return Object.assign(t, { total: t.proceed + t.guide + t.pause, windowMin: 60, coverageStart: (NOW - 6 * 3600 * 1000) / 1000 });
+  })();
+
+  window.SNAPSHOT = {
+    synthetic: true,
+    capturedAt: at(0),
+    health: { version: "0.0.0-example", uptime: "3h 12m", db: "connected" },
+    residents,
+    residentFreshness: Object.fromEntries(residents.map((r) => [r.name, { silence: r.silence, status: r.status, coherence: r.coherence }])),
+    recentAgents,
+    checkinActivity,
+    agentHistory,
+    stats: {
+      agentsActive: 8, agentsLive: 5, agentsPresenceUnknown: 3, agentsPresenceUnavailable: 0, agentsTotal: 40,
+      discoveries: discoveries.total, discoveriesToday: null,
+      dialectic: 0, dialecticRecent: 5, dialecticFailed: 1,
+      systemHealth: "OK", systemHealthDetail: "11 ok · 0 warn", degraded: 0,
+      stuckList,
+    },
+    agentsSummary: { total: 40, active: 36, archived: 4, paused: 0, observed: 20, unobserved: 20, live: 5, presenceUnknown: 3, presenceUnavailable: 0 },
+    agentsList,
+    discoveries,
+    dialectic,
+    activity,
+    eisv: eisvChart,
+    riskTrend,
+  };
+})();
