@@ -372,6 +372,9 @@ async def _attempt_guarded_write(
         counts.write_error_count += 1
         raise
     commit_ts = datetime.now(timezone.utc)
+    # The database clock at the write itself (the DB helper returns it through
+    # the same dict it fills with the refusal winner).
+    effect_ts = winner.get("effect_ts")
 
     if not written:
         counts.skipped_count += 1
@@ -404,7 +407,7 @@ async def _attempt_guarded_write(
 
     counts.write_succeeded_count += 1
     counts.pending_row = {**record, "outcome": "succeeded", "commit_ts": commit_ts,
-                          "probe_outcome": "probe_failed"}
+                          "effect_ts": effect_ts, "probe_outcome": "probe_failed"}
     try:
         probe = await _probe_write_overlap(
             session_id,
@@ -422,7 +425,8 @@ async def _attempt_guarded_write(
         counts.overlap_clean_count += 1
     else:
         counts.overlap_probe_failed_count += 1
-    await _write_row(outcome="succeeded", commit_ts=commit_ts, probe_outcome=probe)
+    await _write_row(outcome="succeeded", commit_ts=commit_ts, effect_ts=effect_ts,
+                     probe_outcome=probe)
     return True
 
 
@@ -794,12 +798,13 @@ async def _auto_resolve_stuck_sessions(
             # in the row, because nothing here wrote it. Two costs, both
             # measured by replaying the sweeper over one stuck session:
             #
-            #   1. `add_message` inserts into dialectic_messages and does
-            #      NOT touch dialectic_sessions.updated_at (no trigger;
-            #      migration 003), so the row kept looking stuck and this
-            #      branch re-fired every sweep — three cycles, three
+            #   1. With no flag in the row, nothing marked the request as
+            #      already raised, so this branch re-fired whenever the row
+            #      was back in the stuck set — three cycles, three
             #      identical transcript messages, `facilitation_count`
-            #      counting cycles rather than sessions.
+            #      counting cycles rather than sessions. (The replay was
+            #      measured when the message insert did not move
+            #      `updated_at`; see the correction below.)
             #   2. At the 4h timeout the row was reaped with
             #      `awaiting_facilitation=false`, so `reopen_session` and
             #      `_apply_reviewer_reassignment` — both of which key on
@@ -810,12 +815,22 @@ async def _auto_resolve_stuck_sessions(
             #      the flag to be rescued by.
             #
             # The re-entry guard is what keeps the request to one
-            # message and one count: `mark_awaiting_facilitation`
-            # deliberately leaves `updated_at` alone (see its
-            # docstring), so the row stays in the stuck set and this
-            # branch is re-entered on every sweep — which, at ANTITHESIS,
-            # is what keeps `select_reviewer` retrying while a human is
-            # waited on. The SYNTHESIS path never calls it.
+            # message and one count: once the flag is set this branch is
+            # skipped. `mark_awaiting_facilitation` deliberately leaves
+            # `updated_at` alone (see its docstring) so the row would stay
+            # in the stuck set and keep `select_reviewer` retrying while a
+            # human is waited on.
+            #
+            # ⛔CORRECTION (2026-09-27, Wave 3 instrument v2): the
+            # facilitation note appended below goes through
+            # `DialecticDB.add_message`, which DOES move `updated_at` -- its
+            # second statement is `UPDATE core.dialectic_sessions SET
+            # updated_at = now()`, on every message, terminal rows included.
+            # So in practice the note resets the staleness clock and the
+            # row leaves the stuck set for STUCK_SESSION_THRESHOLD after the
+            # request is raised. Behavior is unchanged here; this comment
+            # used to say the insert did not touch `updated_at`, which was
+            # wrong. The SYNTHESIS path never calls `select_reviewer`.
             if (
                 facilitation_reason
                 and check_time and check_time > fail_time

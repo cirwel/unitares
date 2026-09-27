@@ -98,12 +98,14 @@ class DialecticDB:
         synthesis_round: int = None,
         paused_agent_state: Dict = None,
         trigger_source: str = None,
+        *,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new dialectic session."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             try:
-                await conn.execute("""
+                row = await conn.fetchrow(f"""
                     INSERT INTO core.dialectic_sessions (
                         session_id, paused_agent_id, reviewer_agent_id,
                         phase, status, session_type, topic,
@@ -111,6 +113,7 @@ class DialecticDB:
                         max_synthesis_rounds, synthesis_round, paused_agent_state_json,
                         trigger_source
                     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    RETURNING {self._EFFECT_TS}
                 """,
                     session_id,
                     paused_agent_id,
@@ -128,6 +131,7 @@ class DialecticDB:
                     trigger_source,
                 )
                 logger.info(f"Created dialectic session {session_id[:16]}... for agent {paused_agent_id}")
+                self._record_effect(detail, row)
                 return {"session_id": session_id, "created": True}
             except Exception as e:
                 if "duplicate key" in str(e).lower() or "unique" in str(e).lower():
@@ -210,7 +214,8 @@ class DialecticDB:
             return sessions
 
     async def update_session_phase(
-        self, session_id: str, phase: str, synthesis_round: Optional[int] = None
+        self, session_id: str, phase: str, synthesis_round: Optional[int] = None,
+        *, detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Update session phase, and the synthesis round when one is supplied.
 
@@ -228,15 +233,17 @@ class DialecticDB:
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET phase = $1,
                     synthesis_round = COALESCE($3, synthesis_round),
                     updated_at = now()
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
+                RETURNING {self._EFFECT_TS}
             """, phase, session_id, synthesis_round)
-            if "UPDATE 1" in result:
+            self._record_effect(detail, row)
+            if row is not None:
                 return True
             logger.info(
                 f"update_session_phase: {session_id[:16]}... phase sync skipped "
@@ -244,7 +251,9 @@ class DialecticDB:
             )
             return False
 
-    async def reopen_session(self, session_id: str, phase: str) -> bool:
+    async def reopen_session(
+        self, session_id: str, phase: str, *, detail: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Return a swept session to `active` at a workable phase.
 
         The ONLY path that un-terminalises a session, and deliberately narrow:
@@ -263,14 +272,16 @@ class DialecticDB:
             return False
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET phase = $1, status = 'active', updated_at = now()
                 WHERE session_id = $2
                   AND status = 'failed'
                   AND awaiting_facilitation = true
+                RETURNING {self._EFFECT_TS}
             """, phase, session_id)
-            return "UPDATE 1" in result
+            self._record_effect(detail, row)
+            return row is not None
 
     # Row-statuses no in-place writer may modify. Exactly the set
     # `resolve_session` and DialecticSaga.commit_session_row (dialectic_saga.ex
@@ -324,12 +335,36 @@ class DialecticDB:
         except Exception:  # pragma: no cover - attribution must never fail a write path
             return
 
+    # Every Python session writer returns its effect time from the SAME
+    # statement: `RETURNING clock_timestamp() AS effect_ts`. clock_timestamp()
+    # and not now(): now() is the transaction's START (for these single-
+    # statement autocommit writes, the moment the statement began), which can
+    # precede an unbounded wait for the row lock; clock_timestamp() is read as
+    # the RETURNING row is produced, i.e. after the lock is held and the row
+    # modified, and before the commit that makes it visible. It is therefore
+    # the tightest single database-clock time for when this write took effect.
+    # The Wave 3 collision report orders competing writes by it
+    # (`dialectic_session_write` responses carry it as `effect_ts`).
+    _EFFECT_TS = "clock_timestamp() AS effect_ts"
+
+    @staticmethod
+    def _record_effect(detail: Optional[Dict[str, Any]], row) -> None:
+        """Fill the caller's ``detail`` with whether THIS statement wrote, and when."""
+        if detail is None:
+            return
+        try:
+            detail["written"] = row is not None
+            detail["effect_ts"] = row["effect_ts"] if row is not None else None
+        except Exception:  # pragma: no cover - observability must not fail a write
+            return
+
     async def update_session_reviewer(
         self,
         session_id: str,
         reviewer_agent_id: str,
         *,
         winner: Optional[Dict[str, Any]] = None,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Assign reviewer to session.
 
@@ -341,13 +376,15 @@ class DialecticDB:
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET reviewer_agent_id = $1, updated_at = now()
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
+                RETURNING {self._EFFECT_TS}
             """, reviewer_agent_id, session_id)
-            if "UPDATE 1" in result:
+            self._record_effect(detail, row)
+            if row is not None:
                 return True
             existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
             self._record_winner(winner, existing)
@@ -366,6 +403,7 @@ class DialecticDB:
         status: str,
         *,
         winner: Optional[Dict[str, Any]] = None,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Update session status (e.g., to 'failed' for auto-resolve).
 
@@ -385,13 +423,15 @@ class DialecticDB:
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $1, updated_at = now()
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
+                RETURNING {self._EFFECT_TS}
             """, status, session_id)
-            if "UPDATE 1" in result:
+            self._record_effect(detail, row)
+            if row is not None:
                 return True
             existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
             self._record_winner(winner, existing)
@@ -414,6 +454,7 @@ class DialecticDB:
         session_id: str,
         *,
         winner: Optional[Dict[str, Any]] = None,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Record a standing facilitation request on a LIVE session.
 
@@ -447,13 +488,15 @@ class DialecticDB:
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET awaiting_facilitation = true
                 WHERE session_id = $1
                   AND status NOT IN ('resolved', 'failed')
+                RETURNING {self._EFFECT_TS}
             """, session_id)
-            if "UPDATE 1" in result:
+            self._record_effect(detail, row)
+            if row is not None:
                 return True
             existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
             self._record_winner(winner, existing)
@@ -466,7 +509,9 @@ class DialecticDB:
                 )
             return False
 
-    async def update_session_awaiting_facilitation(self, session_id: str, awaiting: bool) -> bool:
+    async def update_session_awaiting_facilitation(
+        self, session_id: str, awaiting: bool, *, detail: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Persist the awaiting_facilitation flag (#1167 Ask 2).
 
         Mirrors the in-memory DialecticSession.awaiting_facilitation attribute so
@@ -474,12 +519,14 @@ class DialecticDB:
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            result = await conn.execute("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET awaiting_facilitation = $1, updated_at = now()
                 WHERE session_id = $2
+                RETURNING {self._EFFECT_TS}
             """, awaiting, session_id)
-            return "UPDATE 1" in result
+            self._record_effect(detail, row)
+            return row is not None
 
     async def resolve_session(
         self,
@@ -513,16 +560,15 @@ class DialecticDB:
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
         phase = "resolved" if status == "resolved" else status
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("""
+            row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
                 WHERE session_id = $4 AND status NOT IN ('resolved', 'failed')
-                RETURNING session_id
+                RETURNING session_id, {self._EFFECT_TS}
             """, status, phase, json.dumps(resolution), session_id)
             if row is not None:
                 logger.info(f"Resolved session {session_id[:16]}... with status {status}")
-                if detail is not None:
-                    detail["written"] = True
+                self._record_effect(detail, row)
                 return True
             # No row written: inspect why (idempotent replay vs conflict vs missing).
             existing = await conn.fetchrow(
@@ -673,8 +719,17 @@ class DialecticDB:
         concerns: List[str] = None,
         agrees: bool = None,
         signature: str = None,
+        *,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> int:
-        """Add a message to a session."""
+        """Add a message to a session.
+
+        Two statements: the message INSERT, and the session's ``updated_at``
+        bump (the sweeper's staleness clock). ``detail``, when given, receives
+        ``message_ts`` (the message row's own timestamp) and ``effect_ts`` (the
+        database clock at the ``updated_at`` bump -- the write that changes the
+        session's sweep eligibility).
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
@@ -683,7 +738,7 @@ class DialecticDB:
                     root_cause, proposed_conditions, reasoning,
                     observed_metrics, concerns, agrees, signature
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING message_id
+                RETURNING message_id, timestamp
             """,
                 session_id,
                 agent_id,
@@ -697,9 +752,17 @@ class DialecticDB:
                 signature,
             )
 
-            await conn.execute("""
+            bump = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+                RETURNING {self._EFFECT_TS}
             """, session_id)
+            if detail is not None:
+                try:
+                    detail["message_ts"] = row["timestamp"] if row else None
+                    detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
+                    detail["written"] = row is not None
+                except Exception:  # pragma: no cover
+                    pass
 
             return row["message_id"] if row else 0
 
@@ -1002,11 +1065,13 @@ async def create_session_async(**kwargs) -> Dict[str, Any]:
         kind=KIND_CREATE, session_id=kwargs.get("session_id"),
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.create_session(**kwargs)
+        detail: Dict[str, Any] = {}
+        result = await db.create_session(**kwargs, detail=detail)
         # A duplicate id answers a truthy dict with created=False: no write.
         created = result.get("created") if isinstance(result, dict) else None
         rec.respond(outcome=("not_written" if created is False
-                             else written_outcome(result)))
+                             else written_outcome(result)),
+                    effect_ts=detail.get("effect_ts"))
         return result
 
 
@@ -1060,15 +1125,36 @@ async def has_recently_reviewed_async(reviewer_id: str, paused_agent_id: str, ho
 async def add_message_async(**kwargs) -> int:
     # A message insert also bumps the session's updated_at -- the sweeper's
     # staleness clock -- so it is a session write by the Wave 3 rule and is
-    # recorded like the others. The attempt's timestamp is its causal time.
+    # recorded like the others, with the database-clock time of that bump.
     async with record_session_write(
         kind=KIND_MESSAGE, session_id=kwargs.get("session_id"),
         requested=kwargs.get("message_type"),
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.add_message(**kwargs)
-        rec.respond(outcome="written" if result else "not_written")
+        detail: Dict[str, Any] = {}
+        result = await db.add_message(**kwargs, detail=detail)
+        rec.respond(outcome="written" if result else "not_written",
+                    effect_ts=detail.get("effect_ts"), message_ts=detail.get("message_ts"))
         return result
+
+
+async def _recorded_write(rec, write, *, winner: Optional[Dict[str, Any]] = None,
+                          outcome=None) -> Any:
+    """Run one DB write with a ``detail`` out-param and record its response.
+
+    The response carries ``effect_ts`` -- the database clock read by the write
+    statement itself (`DialecticDB._EFFECT_TS`). When the caller passed a
+    ``winner`` dict (the sweeper does), the same ``effect_ts`` is copied into
+    it, so the sweeper's own per-write row carries the database commit time
+    too. The helper's return value is passed through unchanged.
+    """
+    detail: Dict[str, Any] = {}
+    result = await write(detail)
+    if winner is not None:
+        winner["effect_ts"] = detail.get("effect_ts")
+    rec.respond(outcome=outcome(result, detail) if outcome else written_outcome(result),
+                effect_ts=detail.get("effect_ts"), **_winner_fields(winner))
+    return result
 
 
 async def update_session_phase_async(
@@ -1078,9 +1164,8 @@ async def update_session_phase_async(
         kind=KIND_PHASE, session_id=session_id, requested=phase,
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.update_session_phase(session_id, phase, synthesis_round)
-        rec.respond(outcome=written_outcome(result))
-        return result
+        return await _recorded_write(rec, lambda d: db.update_session_phase(
+            session_id, phase, synthesis_round, detail=d))
 
 
 async def reopen_session_async(session_id: str, phase: str) -> bool:
@@ -1088,9 +1173,8 @@ async def reopen_session_async(session_id: str, phase: str) -> bool:
         kind=KIND_REOPEN, session_id=session_id, requested=phase,
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.reopen_session(session_id, phase)
-        rec.respond(outcome=written_outcome(result))
-        return result
+        return await _recorded_write(rec, lambda d: db.reopen_session(
+            session_id, phase, detail=d))
 
 
 async def update_session_reviewer_async(
@@ -1103,14 +1187,8 @@ async def update_session_reviewer_async(
         kind=KIND_REVIEWER, session_id=session_id, requested=reviewer_agent_id,
     ) as rec:
         db = await get_dialectic_db()
-        if winner is None:
-            result = await db.update_session_reviewer(session_id, reviewer_agent_id)
-        else:
-            result = await db.update_session_reviewer(
-                session_id, reviewer_agent_id, winner=winner
-            )
-        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
-        return result
+        return await _recorded_write(rec, lambda d: db.update_session_reviewer(
+            session_id, reviewer_agent_id, winner=winner, detail=d), winner=winner)
 
 
 async def update_session_status_async(
@@ -1123,12 +1201,8 @@ async def update_session_status_async(
         kind=KIND_STATUS, session_id=session_id, requested=status,
     ) as rec:
         db = await get_dialectic_db()
-        if winner is None:
-            result = await db.update_session_status(session_id, status)
-        else:
-            result = await db.update_session_status(session_id, status, winner=winner)
-        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
-        return result
+        return await _recorded_write(rec, lambda d: db.update_session_status(
+            session_id, status, winner=winner, detail=d), winner=winner)
 
 
 async def mark_awaiting_facilitation_async(
@@ -1140,12 +1214,8 @@ async def mark_awaiting_facilitation_async(
         kind=KIND_FACILITATION, session_id=session_id, requested=True,
     ) as rec:
         db = await get_dialectic_db()
-        if winner is None:
-            result = await db.mark_awaiting_facilitation(session_id)
-        else:
-            result = await db.mark_awaiting_facilitation(session_id, winner=winner)
-        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
-        return result
+        return await _recorded_write(rec, lambda d: db.mark_awaiting_facilitation(
+            session_id, winner=winner, detail=d), winner=winner)
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:
@@ -1153,9 +1223,8 @@ async def update_session_awaiting_facilitation_async(session_id: str, awaiting: 
         kind=KIND_FACILITATION, session_id=session_id, requested=bool(awaiting),
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.update_session_awaiting_facilitation(session_id, awaiting)
-        rec.respond(outcome=written_outcome(result))
-        return result
+        return await _recorded_write(rec, lambda d: db.update_session_awaiting_facilitation(
+            session_id, awaiting, detail=d))
 
 
 async def resolve_session_async(session_id: str, resolution: Dict[str, Any], status: str = "resolved") -> bool:
@@ -1171,6 +1240,7 @@ async def resolve_session_async(session_id: str, resolution: Dict[str, Any], sta
         else:
             outcome = written_outcome(result)
         rec.respond(outcome=outcome, existing_status=detail.get("existing_status"),
+                    effect_ts=detail.get("effect_ts"),
                     reason=(resolution or {}).get("reason")
                     if isinstance(resolution, dict) else None)
         return result

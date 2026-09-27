@@ -387,6 +387,7 @@ async def emit_guarded_write(
     decision_read_ts: Optional[datetime],
     early_check_ts: Optional[datetime],
     commit_ts: Optional[datetime],
+    effect_ts: Optional[datetime] = None,
     read_state: Optional[Dict[str, Any]] = None,
     paused_agent_id: Optional[str] = None,
     new_reviewer_agent_id: Optional[str] = None,
@@ -427,8 +428,12 @@ async def emit_guarded_write(
       ``read_updated_at``: that state, as read. A later reviewer or phase that
       differs, with no sweeper write to explain it, is a competing writer.
     * ``early_check_ts``: just before the per-session saga check.
-    * ``commit_ts``: when the guarded write returned. For a succeeded write
-      the commit happened at or before it; the upper bound of ordering (b).
+    * ``commit_ts``: when the guarded write returned (Python clock). For a
+      succeeded write the commit happened at or before it.
+    * ``effect_ts``: the database clock read by the write statement itself
+      (``RETURNING clock_timestamp()``), after the row was locked and changed
+      and before its commit. When present, the collision report orders the
+      write by this, not by ``commit_ts``.
     * ``cycle_id``: joins the row to its ``dialectic_sweep_cycle`` row. The
       per-write rows of one cycle sum to that row's write counts.
     * ``attempt_id``: joins the row to the ``dialectic_session_write``
@@ -488,6 +493,7 @@ async def emit_guarded_write(
                 "decision_read_ts": _iso_or_str(decision_read_ts),
                 "early_check_ts": _iso_or_str(early_check_ts),
                 "commit_ts": _iso_or_str(commit_ts),
+                "effect_ts": _iso_or_str(effect_ts),
                 "cycle_id": cycle_id,
                 "attempt_id": attempt_id,
                 "source": source,

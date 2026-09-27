@@ -499,9 +499,12 @@ def competing_writes(
         started = (attempt or {}).get("ts") or effect
         cause = (_ts((attempt or {}).get("decision_ts"))
                  or _latest_message_at_or_before(session_messages, started) or started)
-        # The effect's exact time is known only to the database; Python
-        # brackets it between the attempt and the response. The DB-clock
-        # commit time (`effect_ts` on the response) is used when present.
+        # A Python write's response carries `effect_ts`: the database clock
+        # read by the write statement itself (RETURNING clock_timestamp()).
+        # Only a BEAM-over-HTTP write has no database time Python can read;
+        # its effect is bracketed between the attempt and the response. A
+        # landed Python write without effect_ts is an instrument defect,
+        # counted by `completeness`.
         exact = _ts(response.get("effect_ts"))
         out.append({
             "kind": f"session_write:{kind}",
@@ -633,7 +636,9 @@ def classify_write(
     intended = write.get("intended_status")
     terminal_intent = intended in TERMINAL_STATUSES
     decision_read = _ts(write.get("decision_read_ts"))
-    commit = _ts(write.get("commit_ts")) or _ts(write.get("ts"))
+    # The sweeper's own commit on the database clock when the row carries it.
+    commit = (_ts(write.get("effect_ts")) or _ts(write.get("commit_ts"))
+              or _ts(write.get("ts")))
     evidence: Dict[str, Any] = {"harm_a": [], "harm_b": [], "harm_reverse": [],
                                 "ambiguous": [], "same_value_overlap": [],
                                 "later_writer": [], "reviewer_drift": [], "adjudicate": []}
@@ -1026,8 +1031,9 @@ def completeness(
     Over the window, OUTSIDE the uncovered intervals (see
     `uncovered_intervals`), unit by unit:
 
-    (a) every ``dialectic_session_write`` attempt has its response, and every
-        response its attempt (per kind);
+    (a) every ``dialectic_session_write`` attempt has its response, every
+        response its attempt (per kind), and every landed Python write its
+        database-clock ``effect_ts`` (only BEAM-over-HTTP writes may lack it);
     (b) each cycle's ``dialectic_guarded_write`` rows equal its
         ``write_attempt_count`` (keyed by ``process_boot_id`` + ``cycle_seq``),
         and every guarded-write row belongs to a cycle row;
@@ -1094,7 +1100,16 @@ def completeness(
                         "ts": _iso(attempt["ts"])}
                 if _counted(attempt["ts"], item):
                     unmatched_a.append(item)
-        elif attempt is None and response is not None and _in(response["ts"]):
+        if (response is not None and _in(response["ts"])
+                and response.get("via") != "beam"
+                and response.get("outcome") == "written"
+                and not response.get("effect_ts")):
+            item = {"attempt_id": aid, "missing": "effect_ts", "kind": response.get("kind"),
+                    "via": response.get("via"), "session_id": response.get("session_id"),
+                    "ts": _iso(response["ts"])}
+            if _counted(response["ts"], item):
+                unmatched_a.append(item)
+        if attempt is None and response is not None and _in(response["ts"]):
             item = {"attempt_id": aid, "missing": "attempt", "kind": response.get("kind"),
                     "via": response.get("via"), "session_id": response.get("session_id"),
                     "ts": _iso(response["ts"])}

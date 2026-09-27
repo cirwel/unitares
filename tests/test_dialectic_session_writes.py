@@ -177,8 +177,9 @@ class TestPythonChokepoints:
 
     @pytest.mark.asyncio
     async def test_a_refused_write_is_not_written_and_names_the_winner(self, captured, fake_db):
-        async def refuse(session_id, status, winner=None):
+        async def refuse(session_id, status, winner=None, detail=None):
             winner.update(winner_status="failed", winner_reason="liveness_timeout")
+            detail.update(written=False, effect_ts=None)
             return False
 
         fake_db.update_session_status = AsyncMock(side_effect=refuse)
@@ -506,3 +507,24 @@ def test_a_relative_ledger_override_is_made_absolute(tmp_path, monkeypatch):
     monkeypatch.setattr(sw, "_LEDGER_ENSURED", None)
     sw.ensure_emit_failure_ledger()
     assert (tmp_path / "instrument-failures.jsonl").exists()
+
+
+
+@pytest.mark.asyncio
+async def test_the_response_carries_the_database_effect_time(captured, fake_db):
+    """effect_ts from the write statement lands on the response record, and
+    (for the sweeper) in the caller's winner dict."""
+    from datetime import datetime, timezone
+
+    when = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+
+    async def write(session_id, status, winner=None, detail=None):
+        detail.update(written=True, effect_ts=when)
+        return True
+
+    fake_db.update_session_status = AsyncMock(side_effect=write)
+    winner = {}
+    assert await dialectic_db.update_session_status_async("s1", "failed", winner=winner) is True
+    _attempt, response = _pair(captured)
+    assert response["effect_ts"] == when
+    assert winner["effect_ts"] == when

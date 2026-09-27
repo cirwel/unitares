@@ -91,6 +91,11 @@ def session_write(attempt_ts, response_ts, *, kind, outcome="written", via="pyth
                   **response):
     """An attempt/response pair of `dialectic_session_write` rows."""
     aid = attempt_id or f"att-{next(_ATT)}"
+    # A landed Python write carries its database-clock effect time; only a
+    # BEAM-over-HTTP write lacks one. Default it to the response time.
+    if (via != "beam" and outcome == "written" and "effect_ts" not in response
+            and response_ts is not None):
+        response["effect_ts"] = response_ts.isoformat()
     base = {"session_id": session_id, "attempt_id": aid, "kind": kind, "via": via,
             "site": None, "requested": requested,
             "decision_ts": decision_ts.isoformat() if decision_ts else None}
@@ -393,6 +398,33 @@ class TestContention:
 
 
 class TestCompleteness:
+    def test_a_landed_python_write_without_effect_ts_is_inconclusive(self):
+        result = run([write()], events=session_write(at(30), at(31), kind="phase",
+                                                     effect_ts=None))
+        assert result["completeness"]["unmatched_session_writes"][0]["missing"] == "effect_ts"
+        assert result["reading"] == "INCONCLUSIVE"
+
+    def test_a_beam_write_needs_no_effect_ts(self):
+        result = run([write()], events=session_write(at(30), at(31), kind="reviewer",
+                                                     via="beam", requested="rev-9"))
+        assert result["completeness"]["unmatched_session_writes"] == []
+
+    def test_the_effect_time_orders_a_python_write_inside_its_bracket(self):
+        """With effect_ts a bracket straddling the commit is not ambiguous."""
+        after = only(run([write()], events=session_write(
+            at(-0.2), at(0.2), kind="reviewer", via="python", requested="rev-9",
+            effect_ts=at(0.1).isoformat())))
+        assert after["class"] != "ambiguous"
+
+    def test_the_sweepers_own_effect_ts_is_its_commit(self):
+        w = write(commit_at=at(1))
+        w["payload"]["effect_ts"] = at(0).isoformat()
+        # A message at 0.5 is after the DB commit (reverse harm), though it is
+        # before the Python-clock commit_ts.
+        result = only(run([w], messages=[message(at(0.5))]))
+        assert result["class"] == "harm"
+        assert result["evidence"].get("harm_reverse")
+
     def test_a_fully_matched_window_is_complete(self):
         result = run([write()], events=session_write(at(30), at(31), kind="phase"))
         assert result["reading"] == "COMPLETE"
