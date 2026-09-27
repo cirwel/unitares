@@ -183,7 +183,21 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # client_session_id in the call that sets a display name. No parameter is
 # added, removed, retyped or renamed, and no input digest or the surface
 # digest moves.
-INTERFACE_CONTRACT_VERSION = "1.21.0"
+# 1.22.0 (2026-09-27), numbered after 1.21.0 (#2490): agent(action='archive')
+# and agent(action='delete') act only on the agent named in agent_id. Behavior
+# that changes for existing inputs: a call with no agent_id (or a blank one)
+# is refused with TARGET_AGENT_REQUIRED where it used to act on the caller's
+# own agent, because dispatch wrote the session's id in; and an agent_id that
+# resolves to no registered agent is refused with TARGET_AGENT_NOT_FOUND where
+# it used to fall back to the caller. The legacy archive_agent and
+# delete_agent names follow. get, update, resume and release_presence are
+# unchanged. agent's agent_id description says it is required for archive and
+# delete and names who get, resume and update default to; describe_tool's
+# lite view of archive and delete lists agent_id (and delete's confirm) as
+# required at call time, and of get and resume lists agent_id. No parameter is
+# added, removed, retyped or renamed; agent's input_schema_sha256 and the
+# surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.22.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

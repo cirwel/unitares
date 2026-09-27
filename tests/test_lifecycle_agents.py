@@ -1098,7 +1098,9 @@ class TestArchiveAgent:
 
         with patch_lifecycle_server(server, require_registered=(None, error)):
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({})
+            # A named target that is not registered; with no agent_id at all
+            # the call is refused earlier (test_agent_destructive_explicit_target.py).
+            result = await handle_archive_agent({"agent_id": "unregistered-agent"})
             assert "not registered" in result[0].text
 
     @pytest.mark.asyncio
@@ -1256,7 +1258,9 @@ class TestDeleteAgent:
 
         with patch_lifecycle_server(server, require_registered=(None, error)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"confirm": True})
+            result = await handle_delete_agent(
+                {"agent_id": "unregistered-agent", "confirm": True}
+            )
             assert "not registered" in result[0].text
 
 

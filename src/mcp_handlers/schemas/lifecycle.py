@@ -313,7 +313,11 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     # per-action contract; describe_tool(action=...) serves it and
     # tests/test_router_action_fields.py holds it to the routing table.
     # Identity and session parameters are common to every action and are
-    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS).
+    # not repeated here (schemas/router_actions.COMMON_ROUTER_FIELDS), with
+    # one exception: agent_id names the TARGET on get, archive, resume and
+    # delete, so those actions declare it and describe_tool's lite view shows
+    # it. update writes only the caller's own record, and list and
+    # release_presence take no target.
     ACTION_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "list": (
                 "limit", "offset", "lite", "grouped", "summary_only",
@@ -322,23 +326,45 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
                 "standardized",
         ),
         "get": (
-                "lite",
+                "agent_id", "lite",
         ),
         "update": (
                 "tags", "notes",
         ),
         "archive": (
-                "force",
+                "agent_id", "force",
         ),
-        "resume": (),
+        "resume": (
+                "agent_id",
+        ),
         "delete": (
-                "confirm",
+                "agent_id", "confirm",
         ),
         "release_presence": (),
     }
+    # What an action refuses to run without, which the flat wire schema cannot
+    # mark required for one action (see KnowledgeParams.ACTION_REQUIRED_FIELDS).
+    # archive and delete never default the target to the caller: dispatch does
+    # not inject the session's id for them and the handlers refuse a call with
+    # no agent_id (lifecycle/mutation.py, _require_named_target). delete also
+    # refuses without confirm=true.
+    ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
+        "archive": ("agent_id",),
+        "delete": ("agent_id", "confirm"),
+    }
     action: Literal["list", "get", "update", "archive", "resume", "delete", "release_presence"] = Field(..., description="Operation to perform (alias: op)")
     op: Optional[Literal["list", "get", "update", "archive", "resume", "delete", "release_presence"]] = Field(None, description="Alias for action. Use action or op.")
-    agent_id: Optional[str] = Field(None, description="Target agent ID (for get, update, archive, delete)")
+    agent_id: Optional[str] = Field(
+        None,
+        description=(
+            "Target agent's UUID or label. Required for archive and delete, "
+            "which never default to your own agent; get and resume default to "
+            "you, and update changes only your own record."
+        ),
+        json_schema_extra={
+            "brief": "Target UUID or label; required for archive and delete, which never default to you."
+        },
+    )
     tags: Optional[List[Any]] = Field(None, description="Tags to set (for action=update)")
     notes: Optional[str] = Field(None, description="Notes to set (for action=update)")
     confirm: Optional[bool] = Field(None, description="Confirm deletion (for action=delete)")

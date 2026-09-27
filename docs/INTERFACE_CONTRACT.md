@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.21.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.22.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.21.0` is the negotiated interface release. Compatible additions
+- `version: 1.22.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -250,7 +250,21 @@ The two identifiers serve different jobs:
   `caller_proven=false` on an inferred session. `identity`'s description
   names `client_session_id` in the call that sets a display name. No
   parameter is added, removed, retyped or renamed, and no input digest or the
-  surface digest moves).
+  surface digest moves;
+  1.22.0, 2026-09-27, numbered after 1.21.0 (#2490): `agent(action='archive')`
+  and `agent(action='delete')` act only on the agent named in `agent_id`.
+  Behavior that changes for existing inputs: a call with no `agent_id` (or a
+  blank one) is refused with `TARGET_AGENT_REQUIRED` where it used to act on
+  the caller's own agent, because dispatch wrote the session's id in; and an
+  `agent_id` that resolves to no registered agent is refused with
+  `TARGET_AGENT_NOT_FOUND` where it used to fall back to the caller. The
+  legacy `archive_agent` and `delete_agent` names follow; `get`, `update`,
+  `resume` and `release_presence` are unchanged. `agent`'s `agent_id`
+  description says it is required for archive and delete and names who get,
+  resume and update default to, and `describe_tool`'s lite view of archive and
+  delete lists `agent_id` (and delete's `confirm`) as required at call time.
+  No parameter is added, removed, retyped or renamed; `agent`'s input digest
+  and the surface digest move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
