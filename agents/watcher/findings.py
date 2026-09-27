@@ -27,7 +27,6 @@ from agents.watcher._util import (
     watcher_state_dir,
 )
 from agents.watcher.calibration import (
-    UNGROUPED_PATTERNS,
     classify_file,
     probe_rate_for_n,
     should_probe,
@@ -944,9 +943,10 @@ def _git_location(
     return common_dir, toplevel, rel
 
 
-# Patterns whose ``line_content_hash`` is not a hash of the source line
-# (see ``calibration.UNGROUPED_PATTERNS``).
-_UNGROUPED_PATTERNS = UNGROUPED_PATTERNS
+# Patterns whose ``line_content_hash`` is not a hash of the source line.
+# Review findings (R000) hash the hint text, so two unrelated lines with the
+# same observation would otherwise look like copies of one line.
+_UNGROUPED_PATTERNS = frozenset({"R000"})
 
 
 def _group_copies(

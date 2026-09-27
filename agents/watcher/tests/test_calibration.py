@@ -161,8 +161,7 @@ from agents.watcher.calibration import (
 )
 
 
-def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed_at=None,
-         line_content_hash=None):
+def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed_at=None):
     """Helper: build a findings.jsonl-shaped dict."""
     r = {
         "pattern": pattern,
@@ -181,8 +180,6 @@ def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed
         r["dismissed_at"] = dismissed_at
     if reason is not None:
         r["resolution_reason"] = reason
-    if line_content_hash is not None:
-        r["line_content_hash"] = line_content_hash
     return r
 
 
@@ -349,84 +346,6 @@ class TestRuleEpochs:
         ]
         result = precision_by_pattern_and_class(rows, now=self.NOW)
         assert ("P006", "app") not in result
-
-
-class TestCopiesCountOnce:
-    """One flagged line resolved in several worktrees is one judgement."""
-
-    NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
-
-    def _fp(self, file, *, h="c0ffee000000", pattern="P1", dismissed_at="2026-09-26T12:00:00Z",
-            status="dismissed", line=1):
-        row = _row(pattern=pattern, file=file, status=status,
-                   reason="fp" if status == "dismissed" else None,
-                   ts="2026-09-26T00:00:00Z", dismissed_at=dismissed_at,
-                   confirmed_at=dismissed_at if status == "confirmed" else None,
-                   line_content_hash=h)
-        row["line"] = line
-        return row
-
-    def _bucket(self, rows, key=("P1", "app")):
-        result = precision_by_pattern_and_class(
-            rows, now=self.NOW, min_weighted_n=0.1, rule_epochs={})
-        return result[key]
-
-    def test_same_line_in_several_worktrees_counts_once(self):
-        rows = [self._fp(f"/projects/wt/{t}/src/pkg/mod.py") for t in ("a", "b", "c", "d")]
-        rows.append(self._fp("/projects/unitares/src/pkg/mod.py"))
-        one = self._bucket([rows[0]]).weighted_dismissed
-        assert self._bucket(rows).weighted_dismissed == pytest.approx(one)
-
-    def test_copy_counts_at_its_most_recent_resolution(self):
-        old = self._fp("/wt/a/src/pkg/mod.py", dismissed_at="2026-07-28T12:00:00Z")
-        new = self._fp("/wt/b/src/pkg/mod.py", dismissed_at="2026-09-26T12:00:00Z")
-        expected = self._bucket([new]).weighted_dismissed
-        assert self._bucket([old, new]).weighted_dismissed == pytest.approx(expected)
-        assert self._bucket([new, old]).weighted_dismissed == pytest.approx(expected)
-
-    def test_different_line_text_or_file_counts_separately(self):
-        rows = [
-            self._fp("/wt/a/src/pkg/mod.py"),
-            self._fp("/wt/b/src/pkg/mod.py", h="different000"),
-            self._fp("/wt/a/src/pkg/other.py"),
-            self._fp("/wt/a/src/lib/mod.py"),
-        ]
-        one = self._bucket([rows[0]]).weighted_dismissed
-        assert self._bucket(rows).weighted_dismissed == pytest.approx(4 * one)
-
-    def test_same_text_handlers_in_one_file_count_separately(self):
-        """Repeated `except Exception:` clauses in one file are distinct
-        handlers. Merging them would turn ten confirmations and one
-        dismissal into one of each and bias precision down."""
-        rows = [
-            self._fp("/wt/a/src/pkg/mod.py", status="confirmed", line=n)
-            for n in range(10, 110, 10)
-        ]
-        rows.append(self._fp("/wt/a/src/pkg/mod.py", line=200))
-        bucket = self._bucket(rows)
-        one = self._bucket([rows[0]]).weighted_confirmed
-        assert bucket.weighted_confirmed == pytest.approx(10 * one)
-        assert bucket.weighted_dismissed == pytest.approx(one)
-
-    def test_line_shifted_copy_still_counts_per_line(self):
-        rows = [self._fp("/wt/a/src/pkg/mod.py", line=3), self._fp("/wt/b/src/pkg/mod.py", line=5)]
-        one = self._bucket([rows[0]]).weighted_dismissed
-        assert self._bucket(rows).weighted_dismissed == pytest.approx(2 * one)
-
-    def test_confirmed_and_dismissed_copies_both_count(self):
-        rows = [
-            self._fp("/wt/a/src/pkg/mod.py"),
-            self._fp("/wt/b/src/pkg/mod.py", status="confirmed"),
-        ]
-        bucket = self._bucket(rows)
-        assert bucket.weighted_confirmed > 0
-        assert bucket.weighted_dismissed > 0
-
-    def test_review_findings_are_never_merged(self):
-        # R000 hashes the hint text, not the line.
-        rows = [self._fp(f"/wt/{t}/src/pkg/mod.py", pattern="R000") for t in ("a", "b")]
-        one = self._bucket([rows[0]], key=("R000", "app")).weighted_dismissed
-        assert self._bucket(rows, key=("R000", "app")).weighted_dismissed == pytest.approx(2 * one)
 
 
 def test_precision_reasons_constant_shape():

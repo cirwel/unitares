@@ -302,42 +302,6 @@ PATTERN_RULE_EPOCHS: dict[str, str] = {
     "P006": "2026-09-26T00:58:47Z",
 }
 
-# Patterns whose ``line_content_hash`` is not a hash of the source line.
-# Review findings (R000) hash the hint text, so two unrelated lines with the
-# same observation would otherwise look like copies of one line. Shared by
-# the listing's grouping and by the copy count below.
-UNGROUPED_PATTERNS = frozenset({"R000"})
-
-
-def _copy_key(row: Mapping[str, object], pattern: str, file_path: str) -> tuple | None:
-    """Identify copies of one flagged line for the precision count, or None.
-
-    Watcher state is shared across worktrees and the fingerprint keeps the
-    absolute path and line, so one handler dismissed in four worktrees is
-    four rows. Those are one judgement about one piece of code, so they
-    count once. The key is the pattern, the line content hash, the line
-    number and the last two path components: most resolved rows point into
-    removed worktrees, so the repo-relative path cannot be asked of git.
-
-    The line number keeps distinct handlers with the same text in one file
-    (repeated ``except Exception:`` clauses) apart. Merging those would not
-    just shrink the sample: ten confirmed handlers and one dismissed one
-    would count as one of each, biasing precision down. The cost is that a
-    copy whose line shifted between worktrees still counts once per line,
-    as every row did before. Two rows merge only when they share the parent
-    directory name, file name, line number and line text. A file at a
-    checkout's top level keeps the checkout name in its key and is not
-    merged across worktrees.
-    """
-    content_hash = row.get("line_content_hash")
-    if not isinstance(content_hash, str) or not content_hash:
-        return None
-    if pattern in UNGROUPED_PATTERNS:
-        return None
-    tail = Path(file_path).parts[-2:]
-    return (pattern, content_hash, str(row.get("line")), *tail)
-
-
 @dataclass(frozen=True)
 class BucketStats:
     """Per-(pattern, file_class) precision summary.
@@ -377,8 +341,7 @@ def precision_by_pattern_and_class(
     A row of a pattern listed in ``rule_epochs`` (default
     ``PATTERN_RULE_EPOCHS``) counts only when it was detected at or after
     that pattern's entry; a row with no readable ``detected_at`` does not
-    count for such a pattern. Copies of one flagged line (see
-    ``_copy_key``) count once per status, at their largest decay weight.
+    count for such a pattern.
 
     Returns ``{(pattern, file_class): BucketStats}``. Buckets with
     ``weighted_n < min_weighted_n`` carry ``ci_lower=None`` so callers
@@ -395,9 +358,6 @@ def precision_by_pattern_and_class(
     }
 
     aggregates: dict[tuple[str, str], dict] = {}
-    # Largest weight counted so far per (status, file class, copy key); see
-    # _copy_key.
-    copy_weights: dict[tuple, float] = {}
 
     for row in findings:
         status = row.get("status")
@@ -438,13 +398,6 @@ def precision_by_pattern_and_class(
             key,
             {"confirmed": 0.0, "dismissed": 0.0, "latest": None},
         )
-        # A copy counts once, at the weight of its most recent resolution.
-        copy_key = _copy_key(row, pattern, file_path)
-        if copy_key is not None:
-            ledger_key = (status, file_class, copy_key)
-            seen = copy_weights.get(ledger_key)
-            copy_weights[ledger_key] = max(weight, seen or 0.0)
-            weight = max(0.0, weight - (seen or 0.0))
         if status == "confirmed":
             bucket["confirmed"] = float(bucket["confirmed"]) + weight
         else:
