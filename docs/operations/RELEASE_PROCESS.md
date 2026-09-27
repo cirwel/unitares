@@ -56,6 +56,15 @@ branch does not deploy the master-only public Pages workflow.
    [`CITATION.cff`](../../CITATION.cff), and review every generated version
    change. `VERSION` remains the source-version authority. Leave
    `PUBLISHED_VERSION` unchanged during release preparation.
+   In the same commit as the changelog fold, prune the skill attestations:
+   `python3 scripts/client/_check_freshness.py . .. --prune 3`, then
+   `python3 scripts/client/_check_freshness.py . ..` must still report
+   every skill FRESH. Prune keeps every record that vouches for the current
+   skill text or carries a source forward, so the served `last_verified` and
+   `stale` do not move; it removes history that re-verification appends
+   (about 400 files between 2026-09-24 and 09-27). The container ships
+   `skills/.attestations/`, because the server reads it at runtime, so an
+   unpruned release carries all of it.
 3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
    inputs changed **anywhere in the release range** (`vLAST..master`), not merely
    in the release PR's own diff, also run the documented Docker quickstart on a
