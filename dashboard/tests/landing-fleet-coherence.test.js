@@ -42,9 +42,6 @@ async function coherenceCard(residents) {
       agentsActive: 1, agentsLive: 1, agentsPresenceUnknown: 0, agentsPresenceUnavailable: 0,
       agentsTotal: 1, stuck: 0, stuckHard: 0, stuckSoft: 0, stuckList: [], degraded: 0,
     } }),
-    automationsSummary: async () => ({ source: "live", data: {
-      summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0,
-    } }),
   };
   dom.window.eval(landingSource);
   await dom.window.Landing.render();
