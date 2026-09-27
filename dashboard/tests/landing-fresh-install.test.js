@@ -29,9 +29,11 @@ const FRESH_STATS = {
   calibration: 0, calibrated: false, calibrationStatus: "unassessed",
   calibrationSignal: "unknown",
 };
+// A fresh stack's census has never run: the server answers with a null
+// snapshot age (src/http_routes/overview.py, missing-snapshot branch).
 const FRESH_AUTOMATIONS = {
   summary: { total: 0, by_kind: {}, needs_attention: [] },
-  ungated: 0, unclassified: 0, stale: true,
+  ungated: 0, unclassified: 0, stale: true, snapshot_age_seconds: null,
 };
 
 async function render({ residents = [], stats = {}, automations = FRESH_AUTOMATIONS } = {}) {
@@ -125,13 +127,36 @@ describe("landing on a fresh install", () => {
     expect(c.sub).toBe("live binding/lease · 30d window · 2 presence unknown");
   });
 
-  it("says none registered, neutrally, when the census answers with nothing", async () => {
+  it("says no census yet, neutrally, when no census has ever run", async () => {
     const { card } = await render();
+    const c = card("Automations");
+    expect(c.sub).toBe("no census yet");
+    expect(c.sub).not.toContain("none registered");
+    expect(c.cls).not.toContain("down");
+    expect(c.cls).not.toContain("up");
+  });
+
+  it("says none registered only when a completed census found nothing", async () => {
+    const { card } = await render({
+      automations: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: false, snapshot_age_seconds: 120 },
+    });
     const c = card("Automations");
     expect(c.num).toBe("0");
     expect(c.sub).toBe("none registered");
     expect(c.cls).not.toContain("down");
     expect(c.cls).not.toContain("up");
+  });
+
+  it("does not call the offline fallback object an empty census", async () => {
+    // data.js's automationsSummary fallback: a zero-total object with no
+    // snapshot age. It proves nothing about the fleet.
+    const { card } = await render({
+      automations: { summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, ungated: 0, stale: true },
+    });
+    const c = card("Automations");
+    expect(c.sub).not.toContain("none registered");
+    expect(c.sub).not.toContain("no census yet");
+    expect(c.sub).toContain("attention");
   });
 
   it("keeps the counters when the census did not answer", async () => {

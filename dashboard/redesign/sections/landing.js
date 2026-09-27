@@ -131,12 +131,19 @@
     const aUnclassified = (auto && typeof auto.unclassified === "number") ? auto.unclassified : 0;
     const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
     const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
-    // The census answered and registers nothing (a fresh install): say so,
-    // neutrally. Its "stale" flag then only means no census job has run, which
-    // is the same fact. A census that did not answer (auto == null) keeps the
-    // counters below, as before.
-    const aNone = !!auto && !(asum.total > 0) && aAtt === 0;
-    const autoSub = aNone ? "none registered"
+    // Three states the counters used to render alike, as a red "0 … stale":
+    //  - a census ran (numeric snapshot age) and registers nothing → "none
+    //    registered", neutrally;
+    //  - the server says no census has ever run (snapshot_age_seconds: null,
+    //    a fresh install) → "no census yet", neutral: nothing established
+    //    that there are none, and unknown is never green;
+    //  - anything else, including the offline fallback object (which carries
+    //    no snapshot age at all), keeps the counters as before.
+    const aCensusRan = !!auto && typeof auto.snapshot_age_seconds === "number";
+    const aNoCensus = !!auto && auto.snapshot_age_seconds === null;
+    const aNone = aCensusRan && !(asum.total > 0) && aAtt === 0;
+    const autoSub = aNoCensus ? "no census yet"
+      : aNone ? "none registered"
       : `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
       + ` · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
@@ -214,7 +221,7 @@
             : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
       { h: "Agent attention", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? `${stuckHard} stuck · ${stuckSoft} soft silence` : "none flagged"), cls: un(stats.stuck) ? "" : (stuckHard ? "down" : stats.stuck ? "" : "up"),
         body: stuckBody, href: stuckBody ? null : "#agents" },
-      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aNone ? "" : aWarn ? "down" : "up", href: "#automations" },
+      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aNone || aNoCensus ? "" : aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
       { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable"
           : (stats.dialectic ? "open sessions"
