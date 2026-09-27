@@ -201,7 +201,7 @@ their endpoints.
 
 | Pack | Routes | Enable when |
 |---|---|---|
-| `reference-residents` | `/v1/sentinel/{backlog,summary,adjudication-queue,adjudicate,model-adjudicate}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` (and their backlog / adjudication tooling, e.g. `scripts/ops/model_adjudicator.py`) |
+| `reference-residents` | `/v1/sentinel/{backlog,summary}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` |
 | `automation-census` | `/api/automations` | you run the `unitares-automations` census ([setup](automation-census-setup.md)) |
 
 A pack name that matches nothing is logged at startup rather than ignored.

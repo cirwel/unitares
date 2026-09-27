@@ -163,7 +163,9 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # the Risk tab no longer needs the Chronicler resident). Gated.
 # 53 -> 54: /v1/eisv/agents (latest check-in per agent from the EISV ring, for
 # the Overview feed and the Risk picker). Gated like /v1/eisv/recent.
-EXPECTED_GET_ROUTES = 54
+# 54 -> 53: /v1/sentinel/adjudication-queue removed with operator and model
+# adjudication (2026-09-27). Its two POST siblings were never counted here.
+EXPECTED_GET_ROUTES = 53
 
 
 def test_route_registry_is_readable():

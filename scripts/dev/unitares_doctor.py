@@ -2868,9 +2868,9 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
                        f"all {len(healthy)} metrics vary: {', '.join(healthy)}")
 
 
-# An adjudication family must produce BOTH verdicts. src/http_routes/sentinel.py
-# states the invariant on _SENTINEL_FINDING_EVENT_TYPES: "After adding a family,
-# watch that it still produces DISMISSALS. A family that only ever confirms has
+# An adjudication family must produce BOTH verdicts. The retired operator queue
+# (src/http_routes/sentinel.py, removed 2026-09-27) stated the invariant: "After
+# adding a family, watch that it still produces DISMISSALS. A family that only ever confirms has
 # become the all-positive generator Invariant 4 forbids, and it poisons the
 # anchor channel rather than feeding it." Nothing watched, because "watch that"
 # was a comment. This check is the watcher.
@@ -2880,45 +2880,6 @@ def check_signal_degeneracy(db_url: str) -> CheckResult:
 # The contrast is the point: watcher_finding ran 2 confirmed / 55 dismissed over
 # the same channel, so a ~96% dismissal rate is what a healthy family looks like
 # here and 0-of-17 is not small-sample noise.
-def _operator_adjudication_declared_off() -> bool:
-    """True when this deployment DECLARES it has no human adjudicator.
-
-    Declared, never inferred: "no operator verdicts lately" is also what a
-    broken dashboard or a busy week looks like, and inferring absence from it
-    would switch these checks off exactly when they are needed.
-    """
-    return os.environ.get("UNITARES_OPERATOR_ADJUDICATION", "").strip().lower() in (
-        "off", "none", "0", "false", "no",
-    )
-
-
-def _no_operator_adjudicator(name: str, mode: str, db_url: str) -> CheckResult:
-    """SKIP for a queue-feed check whose subject cannot exist on this deployment.
-
-    adjudication_feedstock asks whether the queue is fed for the OPERATOR to
-    judge. With no operator nothing is judged by construction, so its WARN
-    could never clear and would repeat every sweep forever. Not used by
-    anchor_all_positive_generator, which audits labels already recorded. Model verdicts (finding_model_adjudicated)
-    are named here as the reason the queue still drains, and deliberately NOT
-    counted as the channel's verdicts: they are telemetry, not anchors.
-    """
-    row = _psql_row(db_url, (
-        "SELECT count(*) FROM audit.events "
-        "WHERE event_type = 'finding_model_adjudicated' "
-        "  AND ts > now() - interval '7 days'"
-    ))
-    model_note = (
-        f"; {row[0]} model verdict(s) in 7d (telemetry, never anchors)"
-        if row else ""
-    )
-    return CheckResult(
-        name, mode, Status.SKIP,
-        "operator adjudication declared off (UNITARES_OPERATOR_ADJUDICATION) — "
-        "no operator verdicts reach the anchor channel on this deployment, so "
-        "there is nothing for this check to judge" + model_note,
-    )
-
-
 ALL_POSITIVE_MIN_N = 10   # below this, "no dismissals yet" is cadence, not shape
 
 
@@ -2941,9 +2902,9 @@ def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
     wrong lever.
     """
     name, mode = "anchor_all_positive_generator", "operator"
-    # Deliberately NOT skipped under UNITARES_OPERATOR_ADJUDICATION=off: this
-    # audits labels ALREADY in the anchor channel (every family, not only the
-    # queue's), and declaring no future adjudicator does not remove them.
+    # Audits labels ALREADY in the anchor channel (every family). The operator
+    # adjudication queue was removed 2026-09-27; its historical rows remain and
+    # Watcher's resolve/dismiss path still writes *_confirmed / *_dismissed.
     rows = _psql_rows(db_url, (
         "SELECT regexp_replace(outcome_type, '_(confirmed|dismissed)$', '') AS family, "
         "count(*) FILTER (WHERE outcome_type LIKE '%_confirmed') AS confirmed, "
@@ -3240,307 +3201,8 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
     )
 
 
-# The adjudication queue's own definition, mirrored from
-# src/http_routes/sentinel.py (_SENTINEL_FINDING_EVENT_TYPES, _SENTINEL_BACKLOG_DEFAULT_
-# SEVERITIES). Duplicated deliberately rather than imported: the doctor runs
-# against a DEPLOYED database from a checkout that may not be the deployed
-# tree, so importing server code would silently measure the wrong definition.
-# tests/test_adjudication_feedstock.py asserts the mirror still matches source,
-# so a change to the queue's definition cannot silently desync this check.
-ADJUDICABLE_EVENT_TYPES = (
-    "sentinel_finding", "sentinel_alarm_finding", "doctor_check_finding",
-)
-ADJUDICABLE_SEVERITIES = ("high", "critical")
-# Per-family override, mirroring _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE. The
-# doctor layer emits `warning` only, so holding it to the Sentinel default
-# would make its admission to the queue inert.
-ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {
-    "doctor_check_finding": ("warning", "high", "critical"),
-}
-
-
-def _adjudicable_severities(event_type: str) -> tuple:
-    """Severities the queue admits for one family, honouring the override."""
-    return ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.get(
-        event_type, ADJUDICABLE_SEVERITIES)
-
-
-def _adjudicable_predicate_sql() -> str:
-    """SQL predicate for 'this row is queue-eligible', per family.
-
-    ⛔Build the predicate per event_type. A single global severity list is what
-    #2086 fixed: ``ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE`` was defined, mirrored
-    from the server and asserted by tests, but never reached the query — so
-    every ``doctor_check_finding`` (the family emits ``warning`` and nothing
-    else) counted as ineligible. The check then reported the queue DRY at
-    ``0 eligible`` while the live server was admitting all of them, and invited
-    the operator to retire a lever that was working.
-    """
-    clauses = []
-    for event_type in ADJUDICABLE_EVENT_TYPES:
-        sevs = ", ".join(f"'{s}'" for s in _adjudicable_severities(event_type))
-        clauses.append(
-            f"(event_type = '{event_type}' "
-            f"AND payload->>'severity' IN ({sevs}))"
-        )
-    return "(" + " OR ".join(clauses) + ")"
-
-
-def _adjudicable_rule_text() -> str:
-    """Human-readable eligibility rule, per family — matches the predicate."""
-    return "; ".join(
-        f"{t} at {_adjudicable_severities(t)}" for t in ADJUDICABLE_EVENT_TYPES
-    )
-FEEDSTOCK_DRY_DAYS = 7       # queue-eligible findings absent this long
-FEEDSTOCK_ALIVE_MIN = 20     # ...while producers emitted at least this many
-
-
-def check_adjudication_feedstock(db_url: str) -> CheckResult:
-    """WARN when findings still flow but NONE of them can be adjudicated.
-
-    ``finding_producer_live`` asks whether producers are alive.
-    ``producer_never_reported`` asks whether they were ever born. Both are
-    answered by the finding stream itself, and both read green while the thing
-    the findings exist to feed receives nothing — because the adjudication
-    queue does not consume the stream, it consumes a narrow SLICE of it:
-    ``ADJUDICABLE_EVENT_TYPES`` at ``ADJUDICABLE_SEVERITIES``. A producer can
-    be loudly, healthily alive and contribute zero adjudicable rows, and every
-    liveness signal stays green while the falsifiability anchor starves.
-
-    That is the live state as of 2026-08-10 and the reason this check exists.
-    Sentinel emitted 201 findings in 7 days — 136 on one day — and **not one**
-    was queue-eligible: all `medium`. An empty queue and a healthy queue are
-    the same observation, and the queue had been dry for nine days with nothing
-    saying so.
-
-    ⛔CORRECTION 2026-08-19: this docstring used to conclude the lease fixes
-    (#1443/#1444/#1459) had REMOVED the producing condition, making the zero
-    permanently fair and the lever retirable. That is FALSE. A real forced
-    release fired 2026-08-10 23:46:25 on `resident:/steward_eisv_sync`
-    (held_x_ttl 87.6, holder_pid_null true, non-test surface), alarmed 28.5s
-    later, and was adjudicated 2026-08-13 via the dashboard. The fixes made the
-    condition RARE, not absent. "Removed" would justify retiring the lever;
-    "rare" justifies keeping it.
-
-    So a dry window here has three causes, not two, and this check alone cannot
-    tell them apart: (a) condition genuinely gone, (b) queue DRAINED — the last
-    eligible finding was adjudicated and none has arrived since, (c) alarm path
-    BROKEN. ⛔Do NOT "fix" this by passing when the newest eligible finding has
-    a newer adjudication: that shortcut lets case (c) go green forever against
-    a stale matched pair. The separation is `forced_release_transform`, which
-    asserts the upstream invariant; this check stays WARN by design.
-
-    Federation note, and the reason this reports PER PRODUCER rather than a
-    single boolean: most finding producers are structurally unadjudicatable
-    — wrong event_type, wrong severity, or both — and the coverage table below
-    is the measurement any fix to that has to be designed against.
-
-    ⛔"the entire falsifiability anchor rests on ONE producer's output" is
-    STALE as of #2086. It was written when doctor_check_finding never crossed
-    the severity bar in practice, so sentinel_finding's forced-release channel
-    was the only real contributor. Two things changed: the queue admits
-    doctor_check_finding at `warning` (#1914/#1917), and this check now
-    measures that correctly (#2086). Verified live 2026-09-07: the adjudication
-    queue's pending items are MAJORITY doctor findings.
-    ⛔Do not read that as the anchor being healthier. It is a different
-    material: forced-release findings assert a database FACT (a false-positive
-    dismissal is near-impossible, which is why the record reads 17/17
-    confirmed), whereas doctor findings are INFERENCES that genuinely can be
-    wrong. As of 2026-09-07 not one doctor finding has ever been adjudicated —
-    `doctor_check_finding_confirmed`/`_dismissed` appear nowhere in
-    audit.outcome_events. So the queue now holds falsifiable material that
-    nothing has yet judged; the 17/17 record does NOT extend to it, and
-    quoting that record as though it covers the present queue is wrong.
-
-    ⛔The attribution objection this text used to raise is STALE and was
-    blocking correct work. It said adjudicating a doctor finding would book the
-    outcome against SENTINEL's EISV, so attribution had to come first.
-    Attribution now comes first by construction:
-    ``http_sentinel_adjudicate`` resolves the producer via
-    ``_finding_producer_uuid`` (``src/http_routes/sentinel.py``), falls back to
-    the Sentinel substrate uuid ONLY for Sentinel's own families, and otherwise
-    returns 422 rather than mis-booking against the wrong resident.
-
-    ⛔Read that narrowly. ``event_type_is_sentinel_family`` is named for the
-    family but implemented as ``producer_ref == "sentinel"`` — a check on the
-    raw ``audit.events.agent_id`` slug, not the event type. So the fallback is
-    slug-scoped: any producer that writes the literal slug ``sentinel`` still
-    books against Sentinel. Narrower than the name promises, and worth fixing
-    before widening admits a producer that could collide with it.
-
-    ⛔That removes ONE blocker, not the gate. Widening still faces TWO
-    independent gates, both necessary, and this check measures only the first:
-
-      * ELIGIBILITY — ``ADJUDICABLE_EVENT_TYPES`` at ``ADJUDICABLE_SEVERITIES``.
-        This is what the coverage table below counts. Attribution work does not
-        move it: a fully conformant producer emitting medium-severity findings
-        still cannot enter the queue.
-      * ATTRIBUTION CONFORMANCE — a producer writing a bare slug into
-        ``audit.events.agent_id`` has no identity to attribute to, so it 422s.
-        Fail-closed and correct, but it yields no anchor. ⛔Do NOT trust any
-        list of which producers conform, including one written here: this is
-        actively changing. ``agents/watcher/findings.py`` now resolves
-        Watcher's UUID and ``agents/common/findings.py`` gives the doctor layer
-        ``doctor_layer_agent_id``, so a census written a week ago is already
-        wrong — as an earlier draft of this very paragraph was. Derive it when
-        you need it, with a LEFT JOIN from ``audit.events`` to ``core.agents``
-        over the window you care about. (And no "N of M" ratio: at roughly 24
-        findings/day that decays within a day.)
-
-    ⛔Before widening anything, resolve the harder question this check cannot
-    answer. The MECHANISM for a false positive exists — the dashboard offers a
-    "False positive" dismissal and the endpoint records it as a bad outcome
-    (``reason="fp"``), so this is not a channel that structurally cannot
-    dismiss. What is missing is MEASUREMENT: no report in ``scripts/ops`` or
-    ``scripts/dev`` computes dismissal rate per family, and the in-queue record
-    to date is 17 adjudications, all confirmed. ⛔Dismissal evidence from other
-    channels (``watcher_finding_dismissed``) is a different population on a
-    different path and does not transfer. Decide how a false positive would be
-    OBSERVED for a family before admitting it — an unmeasured channel becomes
-    the all-positive generator Invariant 4 exists to exclude, whether or not
-    the button exists.
-
-    WARN, not FAIL. A dry queue is a real condition to surface, not a broken
-    install, and the correct response is sometimes "nothing is wrong, the
-    lever retired" — which is a decision, not a defect.
-    """
-    name, mode = "adjudication_feedstock", "operator"
-    if _operator_adjudication_declared_off():
-        return _no_operator_adjudicator(name, mode, db_url)
-
-    eligible_sql = _adjudicable_predicate_sql()
-
-    rows = _psql_rows(db_url, (
-        "SELECT event_type, "
-        "  count(*), "
-        f"  count(*) FILTER (WHERE {eligible_sql}), "
-        "  coalesce(round(extract(epoch FROM (now() - max(ts))) / 86400.0, 1), -1) "
-        "FROM audit.events "
-        "WHERE event_type LIKE '%\\_finding' "
-        f"  AND ts > now() - interval '{FEEDSTOCK_DRY_DAYS} days' "
-        "GROUP BY event_type ORDER BY 2 DESC"
-    ))
-    if rows is None:
-        return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
-    if not rows:
-        # No findings at all is finding_producer_live's question, not this one.
-        return CheckResult(name, mode, Status.SKIP,
-                           f"no findings in {FEEDSTOCK_DRY_DAYS}d — liveness "
-                           "is finding_producer_live's call, not this check's")
-
-    total = sum(int(r[1]) for r in rows if len(r) > 1)
-    eligible = sum(int(r[2]) for r in rows if len(r) > 2)
-
-    coverage = ", ".join(
-        f"{r[0]}={r[2]}/{r[1]}" for r in rows if len(r) > 2
-    )
-
-    # ⛔Scope the verdict PER FAMILY. Pooling `eligible` across families makes
-    # this check self-masking, and #2086 is what armed that trap: once
-    # doctor_check_finding is (correctly) eligible at `warning`, the doctor's
-    # own escalations feed it. doctor_findings.py re-emits ANY operator-mode
-    # WARN — including THIS check's own — as a doctor_check_finding at
-    # `warning`, which the next run then counts as eligible. A single WARN
-    # would clear itself on the following tick, and routine doctor noise
-    # (~7/day) would hold the pooled sum above zero forever, so the 2026-08-10
-    # condition this check exists to catch (Sentinel loud, all `medium`, not
-    # one row adjudicable) would read PASS. Per-family, Sentinel's starvation
-    # stays visible no matter how healthy the doctor family looks.
-    # NOTE the self-feed means the doctor family can never itself read starved.
-    # That is honest here (it genuinely is not), but do not extend this check
-    # to make a starvation claim about its own producer.
-    by_family = {
-        r[0]: (int(r[1]), int(r[2])) for r in rows
-        if len(r) > 2 and r[0] in ADJUDICABLE_EVENT_TYPES
-    }
-    starved = sorted(
-        f for f, (fam_total, fam_eligible) in by_family.items()
-        if fam_eligible == 0 and fam_total >= FEEDSTOCK_ALIVE_MIN
-    )
-
-    if starved and eligible > 0:
-        # The sharper signal, and the one pooling used to hide: some families
-        # feed the queue while a loud one contributes nothing adjudicable.
-        return CheckResult(
-            name, mode, Status.WARN,
-            f"queue-eligible feedstock is UNEVEN: {', '.join(starved)} emitted "
-            f"findings in {FEEDSTOCK_DRY_DAYS}d with 0 queue-eligible",
-            detail=(
-                f"per-producer eligible/total: {coverage}. "
-                f"Eligible (per family) = {_adjudicable_rule_text()}. "
-                f"The pooled total ({eligible}/{total}) is NOT reassurance — "
-                "it is carried by other families. A producer emitting only "
-                "below-gate severities is invisible to the queue no matter how "
-                "loud it is; that is the 2026-08-10 condition this check "
-                "exists to catch. ⛔Do NOT clear this by widening the severity "
-                "gate for the starved family — read the gate's own rationale "
-                "in src/http_routes/sentinel.py first (Sentinel's `medium` "
-                "alone is ~834 distinct fingerprints/30d, and the queue is "
-                "deliberately small because outcomes join to the last prior "
-                "state snapshot)."
-            ),
-        )
-
-    if eligible > 0:
-        return CheckResult(
-            name, mode, Status.PASS,
-            f"{eligible}/{total} finding(s) in {FEEDSTOCK_DRY_DAYS}d are "
-            f"queue-eligible across {len(rows)} producer(s)",
-            detail=f"per-producer eligible/total: {coverage}",
-        )
-
-    if total < FEEDSTOCK_ALIVE_MIN:
-        # Too quiet overall to distinguish a dry queue from a quiet fleet.
-        return CheckResult(
-            name, mode, Status.PASS,
-            f"only {total} finding(s) in {FEEDSTOCK_DRY_DAYS}d — too few to "
-            "call the queue dry",
-            detail=f"per-producer eligible/total: {coverage}",
-        )
-
-    return CheckResult(
-        name, mode, Status.WARN,
-        f"adjudication queue is DRY: {total} finding(s) in "
-        f"{FEEDSTOCK_DRY_DAYS}d from {len(rows)} producer(s), 0 eligible",
-        detail=(
-            f"per-producer eligible/total: {coverage}. "
-            f"Eligible (per family) = {_adjudicable_rule_text()}. "
-            "Producers are alive; nothing they "
-            "emit can be adjudicated while every liveness check stays green. "
-            "⚠️Scope: a dry queue does NOT mean the falsifiability anchor is "
-            "starved. The queue is fed only by forced-release findings, which "
-            "assert a database fact rather than an inference — the sole bad "
-            "label is a false-positive dismissal, and a recorded fact cannot "
-            "be one. Measured: 17 adjudications, 100% confirmed, zero bad, "
-            "ever. So a FULL queue supplies the anchor only non-falsifiable "
-            "positives; what this warning tracks is adjudication coverage, not "
-            "evidence for the anchor. This is not "
-            "automatically a defect — the producing condition may have been "
-            "genuinely fixed, in which case the honest response is to retire "
-            "the lever rather than restore the alarm. Read "
-            "forced_release_transform before deciding which: it asserts the "
-            "upstream invariant and is what separates a DRAINED queue from a "
-            "DEAD one. On widening: the old ATTRIBUTION objection here is "
-            "resolved — adjudication now resolves the finding's own producer "
-            "and returns 422 rather than booking against another resident. "
-            "But that removes one blocker, not the gate. TWO independent gates "
-            f"remain, both necessary: ELIGIBILITY ({_adjudicable_rule_text()} "
-            "— what the coverage table above actually "
-            "measures) and ATTRIBUTION CONFORMANCE (a producer writing a bare "
-            "slug has no identity, so it 422s). Closing conformance does NOT "
-            "open the queue; a conformant producer emitting medium-severity "
-            "findings still cannot enter. ⛔And note what the in-queue record "
-            "says: 17 adjudications, 100% confirmed, ZERO dismissals ever. No "
-            "tooling in scripts/ops or scripts/dev measures dismissal rate. So "
-            "before widening anything, decide how a false positive would be "
-            "detected at all — a family that can only confirm is the "
-            "all-positive generator Invariant 4 exists to exclude."
-        ),
-    )
-
-
 # The transform this check asserts: every real (non-test) forced lease release
-# MUST become a queue-admissible sentinel finding. Sentinel builds the finding's
+# MUST become a sentinel finding. Sentinel builds the finding's
 # fingerprint as "forced_release:ad_hoc:{lease_plane_events.event_id}", so the
 # two substrates join deterministically on that UUID.
 #
@@ -3590,13 +3252,11 @@ def _forced_transform_surface_filter() -> str:
 
 
 def check_forced_release_transform(db_url: str) -> CheckResult:
-    """FAIL when a real forced lease release produced no queue-admissible finding.
+    """FAIL when a real forced lease release produced no Sentinel finding.
 
-    ``adjudication_feedstock`` reasons only from downstream ``audit.events``, so
-    it cannot tell a DRAINED queue (last eligible finding was adjudicated,
-    healthy) from a DEAD one (the alarm path broke and no finding will ever
-    arrive again). Both look like zero. This check supplies the orthogonal
-    signal it lacks: it reads the UPSTREAM substrate and asserts the transform.
+    A quiet finding stream cannot tell "nothing happened" from "the alarm path
+    broke and no finding will ever arrive again". Both look like zero. This
+    check reads the UPSTREAM substrate and asserts the transform.
 
     Deliberately a CONDITIONAL INVARIANT, not a heartbeat. When no real forced
     release happened it is vacuously satisfied and SKIPs — that is correct, not
@@ -3701,9 +3361,8 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
                 f"unmatched: {worst}"
                 f"{' ...' if len(unmatched) > 4 else ''}. The forced-release "
                 "alarm path is not transforming lease events into "
-                "queue-admissible findings, so the adjudication queue is DEAD, "
-                "not drained — and adjudication_feedstock cannot tell the "
-                "difference on its own. Check the Sentinel forced-release "
+                "findings, so a quiet finding stream means a broken alarm "
+                "path, not a quiet fleet. Check the Sentinel forced-release "
                 "poller and agents/sentinel/forced_release_alarm.py. Join key "
                 f"is '{prefix}' || lease_plane_events.event_id (UUID) — NOT the "
                 "finding payload's integer event_id field."
@@ -3748,8 +3407,8 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
         f"{len(matched)}/{len(rows)} real forced release(s) in "
         f"{FORCED_TRANSFORM_DAYS}d each produced a sentinel finding "
         f"({latency_note})",
-        detail=("Transform invariant holds, so a dry adjudication queue is "
-                "DRAINED, not dead."),
+        detail=("Transform invariant holds, so a quiet finding stream is "
+                "quiet, not broken."),
     )
 
 
@@ -3827,18 +3486,8 @@ def build_checks(
         # NEVER-BORN. Neither sees the other's case.
         Check("producer_never_reported", "operator",
               lambda: check_producer_never_reported(db_url, repo_root)),
-        # Third of the family. Those two ask whether findings are BEING MADE;
-        # this one asks whether any of them can be CONSUMED. A producer that is
-        # alive and loud satisfies both of the above while contributing nothing
-        # the adjudication queue will accept — which is the live 2026-08-10
-        # state and is invisible to every liveness signal.
-        Check("adjudication_feedstock", "operator",
-              lambda: check_adjudication_feedstock(db_url)),
-        # The orthogonal signal the one above lacks. adjudication_feedstock
-        # reasons only from downstream audit.events, so a DRAINED queue and a
-        # DEAD one are the same observation to it. This reads the UPSTREAM
-        # substrate and asserts the transform, which is the only thing that
-        # separates them.
+        # Reads the UPSTREAM substrate and asserts the transform, the only
+        # thing that separates a quiet finding stream from a broken alarm path.
         Check("forced_release_transform", "operator",
               lambda: check_forced_release_transform(db_url)),
     ]

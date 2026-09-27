@@ -1,4 +1,4 @@
-"""Sentinel surfaces: summary, finding intake, backlog, and adjudication.
+"""Sentinel surfaces: summary, finding intake and backlog.
 
 Split out of src/http_api.py (see that module for route registration).
 """
@@ -6,10 +6,8 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 import re
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -18,9 +16,6 @@ from starlette.responses import JSONResponse
 
 from src.logging_utils import get_logger
 from src.broadcaster import broadcaster_instance
-from src.dashboard_auth import (
-    dashboard_session_write_authorized,
-)
 
 from src.http_routes import access
 
@@ -34,9 +29,7 @@ _FINDING_SEVERITIES = frozenset({"info", "low", "medium", "warning", "high", "cr
 _FINDING_TYPE_SUFFIX = "_finding"
 # Required top-level fields on the posted JSON
 _FINDING_REQUIRED_FIELDS = ("type", "severity", "message", "agent_id", "agent_name", "fingerprint")
-# One bound for every route that takes a fingerprint. Ingest used to accept any
-# length while the model-adjudicate route rejected over this, so a long one was
-# stored, queued, judged, and only then refused. An over-long fingerprint is
+# One bound for every stored fingerprint. An over-long fingerprint is
 # NORMALIZED at ingest, never rejected: producers post findings best-effort and
 # swallow errors, so a 400 would lose the finding silently — the failure the
 # finding stream exists to catch. The digest is deterministic, so dedup and
@@ -53,92 +46,30 @@ def _bounded_fingerprint(raw: str) -> tuple[str, Optional[str]]:
     return digest, raw[:_FINGERPRINT_ORIGINAL_MAX_CHARS]
 
 
-def _canonical_fingerprint(fp) -> str:
-    """The key one logical finding is matched on, whichever form its row carries.
-
-    A row persisted before the ingest bound can hold a raw over-long
-    fingerprint, while a recurrence of the same finding is stored as its
-    digest. Exact matching would split them into two findings: the recurrence
-    would bypass a verdict, abstention or cooldown recorded under the raw form,
-    and the queue would list both. Mapping both forms to the digest (it is
-    deterministic from the raw value) keeps them one finding. A fingerprint at
-    or under the bound is its own key, so nothing else changes.
-    """
-    return _bounded_fingerprint(str(fp))[0]
-
-
-def _canonical_fingerprints(fps) -> set:
-    return {_canonical_fingerprint(fp) for fp in fps}
-# Sentinel finding event types as persisted in audit.events (the durable store
-# behind the transient ring buffer). The backlog endpoint reads these.
-# Families eligible for the adjudication queue. Widened ONE family at a time,
-# and only after that producer is verified to write a real governance UUID into
-# audit.events.agent_id -- a slug cannot be resolved by _finding_producer_uuid
-# and would just yield 422s. doctor_check_finding qualified 2026-08-26, when the
-# doctor layer's shared identity was first provisioned; the other six slug
-# producers do NOT yet.
-#
-# ⛔After adding a family, watch that it still produces DISMISSALS. A family
-# that only ever confirms has become the all-positive generator Invariant 4
-# forbids, and it poisons the anchor channel rather than feeding it.
+# Finding event types as persisted in audit.events (the durable store behind
+# the transient ring buffer). The backlog endpoint reads these.
 _SENTINEL_FINDING_EVENT_TYPES = (
     "sentinel_finding", "sentinel_alarm_finding", "doctor_check_finding",
 )
 
-# event_type -> outcome_type prefix. Identities may pool; LABELS MUST NOT.
-# These detectors have very different precision and very different volume, so a
-# shared label would move with the volume mix rather than with any detector's
-# quality -- the confound that made the pooled dialectic-reviewer number
-# describe neither instrument. Keeping doctor_check_finding_* distinct is what
-# lets a structurally-broken check (immortal_lease is a known false positive for
-# every resident:/dispatch/<thread> lease) show up as one bad detector instead
-# of quietly dragging Sentinel's precision down.
-#
-# Sentinel's two families deliberately BOTH map to "sentinel_finding": that is
-# today's behaviour, and remapping them would orphan every historical
-# sentinel_finding_* outcome row from its own dedup set.
-_FINDING_KIND_BY_EVENT_TYPE = {
-    "sentinel_finding": "sentinel_finding",
-    "sentinel_alarm_finding": "sentinel_finding",
-    "doctor_check_finding": "doctor_check_finding",
-}
-# Fallback for a fingerprint whose event_type is not a queue family. This
-# preserves today's behaviour exactly rather than changing it in passing, but
-# it is a KNOWN GAP, not a design: a watcher_finding adjudicated through this
-# endpoint is booked as sentinel_finding_confirmed. Watcher has its own local
-# resolution path, so this is reachable only by adjudicating a Watcher
-# fingerprint here directly. Giving Watcher its own mapping is a separate
-# change with its own blast radius (audit.outcome_events already carries
-# watcher_finding_% rows from that other path) and wants its own review.
-_DEFAULT_FINDING_KIND = "sentinel_finding"
 # Default severities the operator cares about when reviewing "did I miss
 # something across restarts?" — the load-bearing findings.
 _SENTINEL_BACKLOG_DEFAULT_SEVERITIES = frozenset({"high", "critical"})
 
-# ⛔The SECOND gate. Eligibility is (event_type AT severity), and adding a
-# family to _SENTINEL_FINDING_EVENT_TYPES without checking the severity half
-# admits it and then shows zero of it -- an inert wire that reads like a
-# working one.
-#
-# Severity vocabularies are NOT shared across producers. Sentinel emits
-# medium/high/info and is held at {high, critical} for a reason: its `medium`
-# alone is 834 distinct fingerprints over 30d, and the queue is deliberately
-# small because outcomes join to the last prior state snapshot, so a batch
-# sweep collapses into ONE statistical cluster.
-#
-# The doctor layer emits `warning` and nothing else. Measured 2026-08-26: 204
-# doctor_check_finding rows over 30d but only **7 distinct fingerprints** --
-# the rest are cooldown re-alerts of the same still-open conditions. So
-# admitting `warning` for this family adds ~7 items per 30d against the 22 the
-# queue sees today. That is inside "a few per day", which is the constraint
-# that matters.
+# Default backlog severities per family. Severity vocabularies are NOT shared
+# across producers: Sentinel emits medium/high/info and defaults to
+# {high, critical} (its `medium` alone was 834 distinct fingerprints over 30d),
+# while the doctor layer emits only `warning`, so its family defaults wider.
 _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE = {
     "doctor_check_finding": frozenset({"warning", "high", "critical"}),
 }
 
 
 def _adjudicable_severities(event_type):
-    """Severities eligible for the queue, for this finding family."""
+    """Default backlog severities for this finding family.
+
+    (Name kept from the retired adjudication queue, which used the same table;
+    the doctor script mirrors it by this name.)"""
     return _ADJUDICABLE_SEVERITIES_BY_EVENT_TYPE.get(
         event_type, _SENTINEL_BACKLOG_DEFAULT_SEVERITIES
     )
@@ -513,300 +444,27 @@ async def http_sentinel_backlog(request):
         return JSONResponse({"success": False, "error": str(e), "findings": []}, status_code=500)
 
 
-# --- Sentinel finding adjudication (dashboard widget backend) ----------------
+
+# --- Evidence on ingested findings (bridge-dispatch proposal §4, PR #1450)
 #
-# The exogenous-anchor channel (#1214) added operator adjudication of Sentinel
-# findings as ONE label stratum for the EISV §6.3 falsifier. It is not "the
-# ground-truth feed", which is what this comment used to say: measured
-# 2026-08-28, operator adjudications are 73 of 3,090 rows on the external_signal
-# channel — 2.4%. The other 97.6% is machine-checked harness outcome
-# (test_passed / test_failed via the harness outcome endpoint). Stating the
-# share matters because the independence question is answerable per-stratum and
-# unanswerable if a 2.4% minority is described as the feed.
-#
-# Sensitivity, measured 2026-08-28 rather than assumed. The operator reported
-# that dashboard adjudication had been performative. Recomputing the channel
-# with those rows excluded (detail->>'adjudicated_via' = 'dashboard', stamped
-# since #1343) moves nothing that the falsifier reads:
-#
-#     cohort                       n      bad   bad_days
-#     all rows                     3095   735   37
-#     excluding via=dashboard      3078   735   37
-#
-# Every dashboard row is is_bad=false, and both bad-count and bad-day are the
-# gated quantities — so the delta is exactly zero and only n falls (0.55%).
-# Recorded as a RESULT, not as a retraction: labels are not invalidated on a
-# later report of the producer's state of mind, because a standard applied
-# after the fact is not a standard. The operator's report stands as a stated
-# limitation on this stratum; the measurement stands on its own.
-#
-# These two endpoints give the dashboard a daily queue + one-click verdicts. Cadence matters more than volume: outcomes join
-# to the last prior state snapshot, so a batch sweep collapses into ONE
-# statistical cluster — the queue is deliberately small (a few per day).
-
-# Every outcome_type any queue family can produce. ⛔Must stay in sync with
-# _FINDING_KIND_BY_EVENT_TYPE: a family whose outcome_type is missing here is
-# adjudicated, recorded, and then handed straight back to the operator on the
-# next page load, because the dedup lookup never sees its row.
-_SENTINEL_ADJUDICATION_OUTCOME_TYPES = tuple(
-    f"{kind}_{suffix}"
-    for kind in dict.fromkeys(_FINDING_KIND_BY_EVENT_TYPE.values())
-    for suffix in ("confirmed", "dismissed")
-)
-# Mirrors agents/common/resolution_outcome.py semantics: only "fp" is a bad
-# label; the other reasons drop a finding that was still analytically right.
-_ADJUDICATION_DISMISS_REASONS = ("fp", "out_of_scope", "wont_fix", "dup", "unclear", "stale")
-_SENTINEL_SUBSTRATE_LABEL_PREFIX = "com.unitares.sentinel"
-
-# --- Abstention -------------------------------------------------------------
-#
-# "I cannot determine this" is not a verdict, and until now there was no way to
-# say it. Every path out of the queue wrote an outcome_event, and
-# audit.outcome_events declares `is_bad BOOLEAN NOT NULL` (migration 004) — so
-# the table is structurally incapable of recording an absence of judgement. That
-# constraint is why every non-`fp` reason silently resolves to is_bad=false: not
-# a policy choice, a schema floor.
-#
-# Note this is NOT the same thing as dismiss reason `unclear`. That reason is
-# Watcher's taxonomy (agents/watcher/findings.py) and means the FINDING is
-# unclear — a statement about the finding, which downstream calibration already
-# excludes deliberately. Abstention is a statement about the OPERATOR: no
-# judgement was formed. Collapsing the two would put "I don't know" into the
-# exogenous-anchor channel wearing an external_signal label.
-#
-# So abstention lands in audit.events instead, and is kept out of BOTH:
-#   * _SENTINEL_FINDING_EVENT_TYPES  — or the queue would re-ingest it as a finding
-#   * _SENTINEL_ADJUDICATION_OUTCOME_TYPES — so _adjudication_progress() and the
-#     409 dedup never see it. The anchor-day count stays exactly as it was.
-# It can therefore never reach is_bad, the falsifier, or the ablation matrix.
-_ADJUDICATION_ABSTAIN_EVENT_TYPE = "sentinel_adjudication_abstained"
-
-# Suppression is a COOLDOWN, never permanent. Permanent suppression with no
-# label would be an outcome_event through a side door: the finding vanishes with
-# nothing on record saying a judgement was declined, which is a worse epistemic
-# state than today, not a better one. A bounded window means an abstained
-# finding returns for a second look while it is still inside the queue's own
-# lookback (default 336h), and ages out naturally if it is never judged.
-_ABSTAIN_COOLDOWN_HOURS = float(os.getenv("UNITARES_ADJUDICATION_ABSTAIN_COOLDOWN_H", "168"))
-
-
-async def _abstained_sentinel_fingerprints() -> set:
-    """Fingerprints an operator declined to judge, within the cooldown window.
-
-    Read from audit.events, NOT audit.outcome_events — abstention carries no
-    truth value and must never occupy a row in the anchor channel.
-    """
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT DISTINCT payload->>'fingerprint' AS fp
-                 FROM audit.events
-                WHERE event_type = $1
-                  AND ts > now() - ($2 || ' hours')::interval
-                  AND payload->>'fingerprint' IS NOT NULL""",
-            _ADJUDICATION_ABSTAIN_EVENT_TYPE, str(_ABSTAIN_COOLDOWN_HOURS),
-        )
-    return {r["fp"] for r in rows if r["fp"]}
-
-
-# --- Model adjudication ------------------------------------------------------
-#
-# A model's verdict on a queue item. Built for deployments with no human
-# adjudicator: the queue otherwise fills and never drains, and its doctor
-# checks warn forever about a channel nobody can feed.
-#
-# ⛔A model verdict is NOT an operator verdict and must never become one. The
-# operator path books `external_signal` (TRUSTED_EXTERNAL), which is the label
-# channel the EISV falsifier and the registered 2026-12-01 outcome read consume
-# — swapping a model in there would change the label source of a
-# pre-registered read. So this lands where abstention lands, in audit.events,
-# and is kept out of the same two places for the same reasons:
-#   * _SENTINEL_FINDING_EVENT_TYPES — or the queue would re-ingest it
-#   * _SENTINEL_ADJUDICATION_OUTCOME_TYPES — so the 409 dedup, the anchor-day
-#     count and outcome_events never see it
-# It is telemetry: a per-detector, model-judged precision signal with the
-# judging model named on every row.
-_MODEL_ADJUDICATION_EVENT_TYPE = "finding_model_adjudicated"
-_MODEL_VERDICTS = ("confirmed", "dismissed", "abstain")
-# A model verdict suppresses the item for a cooldown, never permanently: a
-# persisting condition comes back for a fresh look, the same bounded-window
-# argument abstention makes.
-_MODEL_ADJUDICATION_COOLDOWN_HOURS = float(
-    os.getenv("UNITARES_MODEL_ADJUDICATION_COOLDOWN_H", "168")
-)
-_MODEL_RATIONALE_MAX_CHARS = 2000
-# A model verdict is not an operator label, but it IS a consequential write: a
-# confirm or dismiss hides the finding from the operator queue for the whole
-# cooldown. The generic bearer/trusted-network check authenticates any client,
-# not the adjudicator, so this route also requires its own shared secret in
-# X-Unitares-Adjudicator. Unset on the server = the route is off (503).
-_MODEL_ADJUDICATOR_TOKEN_ENV = "UNITARES_MODEL_ADJUDICATOR_TOKEN"
-_MODEL_ADJUDICATOR_HEADER = "x-unitares-adjudicator"
-_MODEL_PROVENANCE_KEYS = ("backend", "host_id", "model", "tier")
-
-
-async def _model_adjudicated_fingerprints() -> dict:
-    """``{fingerprint: newest model verdict}`` within the cooldown window."""
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT DISTINCT ON (payload->>'fingerprint')
-                      payload->>'fingerprint' AS fp, payload->>'verdict' AS verdict
-                 FROM audit.events
-                WHERE event_type = $1
-                  AND ts > now() - ($2 || ' hours')::interval
-                  AND payload->>'fingerprint' IS NOT NULL
-                ORDER BY payload->>'fingerprint', ts DESC""",
-            _MODEL_ADJUDICATION_EVENT_TYPE, str(_MODEL_ADJUDICATION_COOLDOWN_HOURS),
-        )
-    return {r["fp"]: r["verdict"] for r in rows if r["fp"]}
-
-
-async def _adjudicated_sentinel_fingerprints() -> set:
-    """Fingerprints already carrying a durable adjudication outcome (option A:
-    the outcome_event IS the adjudication record; backlog rows are immutable)."""
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT DISTINCT detail->>'fingerprint' AS fp
-               FROM audit.outcome_events
-               WHERE outcome_type = ANY($1::text[])
-                 AND detail->>'fingerprint' IS NOT NULL""",
-            list(_SENTINEL_ADJUDICATION_OUTCOME_TYPES),
-        )
-    return {r["fp"] for r in rows if r["fp"]}
-
-
-async def _already_adjudicated(fingerprint: str) -> bool:
-    """True if an operator outcome exists for this finding under EITHER form of
-    its fingerprint, so a digest-form recurrence cannot collect a second label
-    for a finding already judged under its legacy raw form (or vice versa)."""
-    return _canonical_fingerprint(fingerprint) in _canonical_fingerprints(
-        await _adjudicated_sentinel_fingerprints()
-    )
-
-
-def event_type_is_sentinel_family(producer_ref: Optional[str]) -> bool:
-    """True for Sentinel's own producer refs.
-
-    Sentinel writes the bare slug ``sentinel`` on its alarm/build findings and
-    its UUID on ``sentinel_finding``, so the slug case still needs the
-    substrate-claim lookup. Scoped to Sentinel on purpose: this is the one
-    producer for which "fall back to Sentinel's UUID" is the *correct*
-    attribution rather than a convenient one.
-    """
-    return producer_ref == "sentinel"
-
-
-async def _finding_producer_uuid(
-    fingerprint: str,
-) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    """``(producer_uuid, producer_ref, event_type)`` for the newest finding with this fingerprint.
-
-    The event_type rides along from the SAME row on purpose. It selects the
-    outcome_type family, and a second query for it could read a DIFFERENT row
-    if a finding lands in between -- booking one producer's outcome under
-    another producer's label, which is precisely the pooling this split exists
-    to prevent.
-
-    ``build_resolution_outcome_args`` states the contract: *"agent_uuid must be
-    the resident's own UUID so the handler snapshots that resident's EISV."*
-    The adjudication endpoint passed Sentinel's UUID unconditionally, which is
-    correct only because the queue is Sentinel-only. It is the landmine under
-    any widening: the first doctor finding adjudicated would book its outcome
-    against **Sentinel's** trajectory.
-
-    Producers do not agree on what they write into ``audit.events.agent_id``.
-    Measured 2026-08-15 over 14d: Sentinel's ``sentinel_finding`` (150 rows)
-    and Watcher's resolution/capability findings carry real governance UUIDs,
-    while ``doctor-findings`` (96), ``sentinel_alarm_finding`` (249),
-    ``deploy-drift-doctor`` (20), ``lumen-checkin-doctor`` (13) and
-    ``cron-unitares-dogfood-pulse`` (9) carry a stable slug instead. So this
-    returns the UUID only when the row resolves to a real agent, and hands the
-    raw ref back either way — the caller decides, rather than guessing.
-    """
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        row = await conn.fetchrow(
-            """SELECT e.agent_id AS ref, a.id AS resolved, e.event_type AS event_type
-               FROM audit.events e
-               LEFT JOIN core.agents a ON a.id = e.agent_id
-               WHERE e.event_type LIKE '%\\_finding' ESCAPE '\\'
-                 AND e.payload->>'fingerprint' = $1
-               ORDER BY e.ts DESC
-               LIMIT 1""",
-            fingerprint,
-        )
-    if row is None:
-        return None, None, None
-    return row["resolved"], row["ref"], row["event_type"]
-
-
-async def _sentinel_substrate_uuid() -> Optional[str]:
-    """Sentinel's UUID from the operator-enrolled substrate-claims registry.
-
-    This is deliberately NOT lookup-by-label identity resolution: the row is a
-    kernel-attested, operator-enrolled claim (single writer = the operator),
-    used here as configuration for which resident adjudication outcomes are
-    attributed to — the same UUID the Sentinel CLI path resolves to.
-    """
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        row = await conn.fetchrow(
-            """SELECT agent_id FROM core.substrate_claims
-               WHERE expected_launchd_label LIKE $1
-               ORDER BY enrolled_at DESC LIMIT 1""",
-            _SENTINEL_SUBSTRATE_LABEL_PREFIX + "%",
-        )
-    return row["agent_id"] if row else None
-
-
-async def _adjudication_progress() -> dict:
-    """Falsifier-progress readout: independent adjudication DAYS are what buy
-    statistical power (rows sharing a prior-state snapshot are one cluster —
-    day granularity is the operational proxy the widget can act on)."""
-    from src.db import get_db
-    db = get_db()
-    async with db.acquire() as conn:
-        row = await conn.fetchrow(
-            """SELECT count(*) AS outcomes,
-                      count(*) FILTER (WHERE is_bad) AS bad,
-                      count(DISTINCT date(ts)) AS days,
-                      count(DISTINCT date(ts)) FILTER (WHERE is_bad) AS bad_days
-               FROM audit.outcome_events
-               WHERE verification_source = 'external_signal'
-                 AND (outcome_type LIKE 'sentinel_finding_%'
-                      OR outcome_type LIKE 'watcher_finding_%')""",
-        )
-    return {
-        "outcomes": row["outcomes"], "bad": row["bad"],
-        "days": row["days"], "bad_days": row["bad_days"],
-        # ≥3 independent bad days among ~11 day-clusters puts the permutation
-        # floor near p≈0.006 — the "quotable AUC" bar the widget tracks.
-        "bad_days_target": 3,
-    }
-
-
-# --- Evidence at the point of verdict (bridge-dispatch proposal §4, PR #1450)
-#
-# Findings whose subject is a database fact get an EVENT CHECK attached to the
-# queue item. Scope honesty: the lease row and the finding's source event are
-# written by the SAME lease-plane transaction (Repo.release/2 updates
+# Findings whose subject is a database fact get an EVENT CHECK attached at
+# ingest (/api/findings). Scope honesty: the lease row and the finding's source
+# event are written by the SAME lease-plane transaction (Repo.release/2 updates
 # surface_leases and inserts the lease_plane_events row together), so a match
 # is an intra-pipeline consistency check, never independent corroboration —
 # the assessment names say so. What the check genuinely adds: the lease id
 # resolves, the pipeline copied fields faithfully, the hold-duration facts,
 # and DETECTION LATENCY (finding emission vs event time) — the one judgment-
 # relevant dimension the machine computes exactly, since late reporting is
-# this poller's documented failure mode. Severity/novelty stay the operator's.
-# Deterministic SQL only — the free path. Evidence is additive: it never gates
-# whether a finding is shown, and enrichment failure is reported as its own
-# state (``check_error``) rather than silently rendering like "no check".
+# this poller's documented failure mode. Deterministic SQL only — the free
+# path. Evidence is additive: it never gates whether a finding is recorded,
+# and enrichment failure is reported as its own state (``check_error``) rather
+# than silently rendering like "no check".
+#
+# (Operator and model adjudication of these findings were removed 2026-09-27:
+# the queue, its verdict routes and the model adjudicator. Operator verdicts
+# were 2.4% of the external_signal channel, all is_bad=false, and excluding
+# them moved nothing the EISV falsifier reads. Historical outcome rows stay.)
 
 _FORCED_RELEASE_MESSAGE_PREFIX = "forced release:"
 
@@ -920,441 +578,3 @@ async def _attach_forced_release_evidence(targets: list) -> None:
         if latency is not None:
             ev["report_latency_s"] = round(latency, 1)
         item["evidence"] = ev
-
-
-async def http_sentinel_adjudication_queue(request):
-    """GET /v1/sentinel/adjudication-queue?limit=5&window_hours=336 — the daily
-    unadjudicated slice of the Sentinel backlog, plus falsifier progress."""
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    try:
-        try:
-            limit = int(request.query_params.get("limit", "5"))
-        except (TypeError, ValueError):
-            limit = 5
-        limit = max(1, min(limit, 25))
-        try:
-            window_hours = float(request.query_params.get("window_hours", "336"))
-        except (TypeError, ValueError):
-            window_hours = 336.0
-        window_hours = max(1.0, min(window_hours, 24 * 90))
-
-        from src.audit_db import query_audit_events_async
-        start_time = (
-            datetime.now(timezone.utc) - timedelta(hours=window_hours)
-        ).isoformat()
-        events = await query_audit_events_async(
-            event_types=list(_SENTINEL_FINDING_EVENT_TYPES),
-            start_time=start_time,
-            order="desc",
-            limit=1000,
-        )
-        # Every exclusion and the dedup below match on the canonical key, so a
-        # legacy over-long row and its digest-form recurrence are one finding
-        # (see _canonical_fingerprint).
-        adjudicated = _canonical_fingerprints(await _adjudicated_sentinel_fingerprints())
-        # Two different exclusions, deliberately not merged: `adjudicated` is
-        # permanent and drives the 409; `abstained` expires and does not.
-        abstained = _canonical_fingerprints(await _abstained_sentinel_fingerprints())
-        # A model's confirm/dismiss takes the item off the queue for a
-        # cooldown. A model ABSTAIN does not — "the model could not tell" must
-        # leave the item for whoever can — unless the caller is the model
-        # adjudicator itself, which asks not to be re-shown what it already
-        # declined (?exclude_model_abstained=1).
-        # No two raw keys can collide here: the model-adjudicate route has
-        # never accepted an over-long fingerprint, so only the stored form of
-        # each finding carries a model verdict.
-        model_verdicts = {
-            _canonical_fingerprint(fp): verdict
-            for fp, verdict in (await _model_adjudicated_fingerprints()).items()
-        }
-        exclude_model_abstained = (
-            request.query_params.get("exclude_model_abstained", "") in ("1", "true")
-        )
-        # ?postable_only=1: skip items whose fingerprint the model-adjudicate
-        # route would refuse (rows persisted before the ingest bound). Done
-        # HERE, before the limit, so a caller that cannot post them is never
-        # handed a window full of them. Counted, like every other exclusion.
-        postable_only = request.query_params.get("postable_only", "") in ("1", "true")
-
-        seen: set = set()
-        queue = []
-        pending_total = 0
-        abstained_suppressed = 0
-        model_suppressed = 0
-        unpostable_suppressed = 0
-        evidence_targets = []
-        for e in events:
-            details = e.get("details") or {}
-            severity = details.get("severity")
-            if severity not in _adjudicable_severities(e.get("event_type")):
-                continue
-            fp = details.get("fingerprint")
-            if not fp:
-                continue
-            key = _canonical_fingerprint(fp)
-            if key in seen:
-                continue
-            seen.add(key)
-            if key in adjudicated:
-                continue
-            # Suppressed, not resolved. Counted and reported rather than hidden:
-            # an operator must be able to see that declined items exist, or the
-            # cooldown becomes a silent backlog.
-            if key in abstained:
-                abstained_suppressed += 1
-                continue
-            model_verdict = model_verdicts.get(key)
-            if model_verdict in ("confirmed", "dismissed") or (
-                model_verdict == "abstain" and exclude_model_abstained
-            ):
-                model_suppressed += 1
-                continue
-            if postable_only and len(fp) > _FINGERPRINT_MAX_CHARS:
-                unpostable_suppressed += 1
-                continue
-            pending_total += 1
-            if len(queue) < limit:
-                item = {
-                    "timestamp": e.get("timestamp"),
-                    # Structured provenance, so a consumer never has to infer
-                    # which producer (or which doctor check) raised this from
-                    # its prose — message text is producer-controlled.
-                    "event_type": e.get("event_type"),
-                    "check": details.get("check"),
-                    "severity": severity,
-                    "finding_type": details.get("finding_type") or details.get("alarm_kind"),
-                    "violation_class": details.get("violation_class"),
-                    "message": details.get("message"),
-                    "agent_name": details.get("agent_name"),
-                    "fingerprint": fp,
-                }
-                queue.append(item)
-                if str(details.get("message") or "").startswith(_FORCED_RELEASE_MESSAGE_PREFIX):
-                    evidence_targets.append((item, details))
-
-        try:
-            await _attach_forced_release_evidence(evidence_targets)
-        except Exception as ev_err:
-            logger.warning(f"adjudication evidence enrichment failed (queue unaffected): {ev_err}")
-
-        return JSONResponse({
-            "success": True,
-            "window_hours": window_hours,
-            "queue": queue,
-            "pending_total": pending_total,
-            "dismiss_reasons": list(_ADJUDICATION_DISMISS_REASONS),
-            # Declined items are reported, never silently dropped. Without this
-            # the cooldown would read as "queue is clear" when it is not.
-            "abstained_suppressed": abstained_suppressed,
-            "abstain_cooldown_hours": _ABSTAIN_COOLDOWN_HOURS,
-            # Same rule as abstention: judged-by-a-model items are counted,
-            # never silently dropped.
-            "model_adjudicated_suppressed": model_suppressed,
-            "unpostable_suppressed": unpostable_suppressed,
-            "model_adjudication_cooldown_hours": _MODEL_ADJUDICATION_COOLDOWN_HOURS,
-            "progress": await _adjudication_progress(),
-        })
-    except Exception as e:
-        logger.error(f"Error building adjudication queue: {e}")
-        return JSONResponse({"success": False, "error": str(e), "queue": []}, status_code=500)
-
-
-async def http_sentinel_adjudicate(request):
-    """POST /v1/sentinel/adjudicate {fingerprint, status, reason?} — operator-gated.
-
-    Records the operator verdict as an external-truth outcome_event attributed
-    to Sentinel's substrate UUID (same shared builder + semantics as the CLI
-    path in agents/sentinel/agent.py::adjudicate_finding). Idempotent per
-    fingerprint: a second verdict returns 409 rather than double-counting a
-    label the falsifier would read twice.
-    """
-    signals = access._build_http_session_signals(request)
-    from src.mcp_handlers.identity.operator import is_operator_caller
-    if not is_operator_caller(signals) and not dashboard_session_write_authorized(request):
-        return JSONResponse(
-            {"success": False,
-             "error": "operator credential or passkey session with X-Unitares-Csrf: 1 required"},
-            status_code=403,
-        )
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
-
-    fingerprint = str(body.get("fingerprint") or "").strip()
-    status = str(body.get("status") or "").strip().lower()
-    reason = (str(body.get("reason") or "").strip().lower() or None)
-    if not fingerprint:
-        return JSONResponse({"success": False, "error": "fingerprint required"}, status_code=400)
-    if status not in ("confirmed", "dismissed", "abstain"):
-        return JSONResponse(
-            {"success": False,
-             "error": "status must be 'confirmed', 'dismissed' or 'abstain'"},
-            status_code=400,
-        )
-    if status == "dismissed" and reason not in _ADJUDICATION_DISMISS_REASONS:
-        return JSONResponse(
-            {"success": False,
-             "error": f"dismissal needs a reason: {', '.join(_ADJUDICATION_DISMISS_REASONS)}"},
-            status_code=400,
-        )
-
-    # Abstention returns before any outcome_event is built. Declining to judge
-    # must cost nothing and record nothing in the anchor channel; the only
-    # durable trace is an audit event that suppresses the item for a cooldown.
-    if status == "abstain":
-        try:
-            if await _already_adjudicated(fingerprint):
-                return JSONResponse(
-                    {"success": False, "error": "already adjudicated",
-                     "fingerprint": fingerprint},
-                    status_code=409,
-                )
-            import uuid as _uuid
-            from src.db import get_db
-            from src.db.base import AuditEvent
-            await get_db().append_audit_event(AuditEvent(
-                ts=datetime.now(timezone.utc),
-                event_id=str(_uuid.uuid4()),
-                event_type=_ADJUDICATION_ABSTAIN_EVENT_TYPE,
-                payload={
-                    "fingerprint": fingerprint,
-                    "reason": reason,
-                    "adjudicated_via": "dashboard",
-                    # Stated on the row so a later reader cannot mistake this
-                    # for a verdict that merely lacks a label.
-                    "note": ("operator declined to judge; NOT a verdict and NOT "
-                             "an exogenous-truth label"),
-                },
-            ))
-            return JSONResponse({
-                "success": True,
-                "fingerprint": fingerprint,
-                "status": "abstain",
-                "recorded_outcome": False,
-                "suppressed_for_hours": _ABSTAIN_COOLDOWN_HOURS,
-            })
-        except Exception as e:
-            logger.error(f"Error recording abstention for {fingerprint}: {e}")
-            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-    try:
-        if await _already_adjudicated(fingerprint):
-            return JSONResponse(
-                {"success": False, "error": "already adjudicated", "fingerprint": fingerprint},
-                status_code=409,
-            )
-        # Attribute to the PRODUCER, not to Sentinel. Falling back to Sentinel
-        # for its own families keeps today's behaviour byte-identical (its
-        # alarm rows carry the slug 'sentinel', not a UUID) while removing the
-        # mis-attribution that would fire on the first non-Sentinel finding.
-        producer_uuid, producer_ref, event_type = await _finding_producer_uuid(fingerprint)
-        if not producer_uuid and event_type_is_sentinel_family(producer_ref):
-            producer_uuid = await _sentinel_substrate_uuid()
-            if not producer_uuid:
-                # Distinct from the 422 below: Sentinel IS the right producer
-                # here and simply is not enrolled. That is a configuration
-                # problem on this deployment, not a bad request.
-                return JSONResponse(
-                    {"success": False,
-                     "error": "no enrolled Sentinel substrate claim — cannot attribute outcome"},
-                    status_code=503,
-                )
-        if not producer_uuid:
-            # Refuse rather than book it against the wrong resident. A silent
-            # wrong attribution corrupts the anchor channel the falsifiability
-            # test depends on; an honest 422 names the missing piece.
-            return JSONResponse(
-                {"success": False,
-                 "error": (
-                     "cannot attribute outcome: finding producer "
-                     f"{producer_ref!r} has no governance identity. Adjudicating "
-                     "it would book the outcome against another resident's EISV."
-                 ),
-                 "fingerprint": fingerprint,
-                 "producer": producer_ref},
-                status_code=422,
-            )
-
-        from agents.common.resolution_outcome import build_resolution_outcome_args
-        # Per-family outcome_type. This lands together with the dedup set that
-        # filters on these exact strings (_SENTINEL_ADJUDICATION_OUTCOME_TYPES
-        # is now derived from the same map), which is the ordering the previous
-        # hardcoded "sentinel_finding" was holding the line for.
-        #
-        # ⛔_adjudication_progress() is deliberately NOT widened here. It reads
-        # the EISV falsifier's anchor-day count -- an externally quoted figure --
-        # and whether a doctor adjudication is anchor evidence of the same grade
-        # as a Sentinel one is an open operator call, not a side effect of
-        # closing the doctor loop. Doctor findings become closable now; they do
-        # not silently inflate that number.
-        finding_kind = _FINDING_KIND_BY_EVENT_TYPE.get(event_type, _DEFAULT_FINDING_KIND)
-        args = build_resolution_outcome_args(
-            finding_kind, status, fingerprint, producer_uuid, reason
-        )
-        args["detail"]["producer_ref"] = producer_ref
-        args["detail"]["adjudicated_via"] = "dashboard"
-
-        from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
-        # Operator-gated route: vouched ingestion, so the ceiling comes
-        # from the recorded provenance rather than the flat agent cap. Vouched
-        # is not unlimited -- the provenance still bounds what the payload can
-        # claim.
-        args["_trusted_ingestion"] = True
-        await _record_outcome_event_inline(args)
-        return JSONResponse({
-            "success": True,
-            "fingerprint": fingerprint,
-            "outcome_type": args["outcome_type"],
-            "is_bad": args["is_bad"],
-            "progress": await _adjudication_progress(),
-        })
-    except Exception as e:
-        logger.error(f"Error recording adjudication for {fingerprint}: {e}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-
-def _clean_provenance(raw) -> Optional[dict]:
-    """Model provenance as short strings, or None if ``backend`` is missing."""
-    if not isinstance(raw, dict):
-        return None
-    out = {}
-    for key in _MODEL_PROVENANCE_KEYS:
-        value = raw.get(key)
-        if value is not None:
-            out[key] = str(value).strip()[:100]
-    return out if out.get("backend") else None
-
-
-async def http_sentinel_model_adjudicate(request):
-    """POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item.
-
-    Body: {fingerprint, verdict: confirmed|dismissed|abstain, reason?,
-    rationale?, confidence?, model: {backend, host_id?, model?, tier?}}.
-
-    Telemetry only: writes one audit.events row and never an outcome_event, so
-    it cannot reach is_bad, the anchor channel or the falsifier (see
-    _MODEL_ADJUDICATION_EVENT_TYPE). Bearer-authenticated like /api/findings,
-    not operator-gated, precisely because it confers no operator authority.
-    """
-    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
-    if not access._check_http_auth(request, http_api_token=http_api_token):
-        return access._http_unauthorized()
-    expected = os.getenv(_MODEL_ADJUDICATOR_TOKEN_ENV, "").strip()
-    if not expected:
-        return JSONResponse(
-            {"success": False,
-             "error": f"model adjudication disabled: {_MODEL_ADJUDICATOR_TOKEN_ENV} unset"},
-            status_code=503,
-        )
-    presented = request.headers.get(_MODEL_ADJUDICATOR_HEADER, "")
-    if not presented or not secrets.compare_digest(presented, expected):
-        return JSONResponse(
-            {"success": False, "error": "adjudicator credential required"},
-            status_code=403,
-        )
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"success": False, "error": "invalid JSON body"}, status_code=400)
-    if not isinstance(body, dict):
-        return JSONResponse({"success": False, "error": "body must be a JSON object"}, status_code=400)
-
-    fingerprint = str(body.get("fingerprint") or "").strip()
-    verdict = str(body.get("verdict") or "").strip().lower()
-    reason = (str(body.get("reason") or "").strip().lower() or None)
-    if not fingerprint or len(fingerprint) > _FINGERPRINT_MAX_CHARS:
-        return JSONResponse(
-            {"success": False,
-             "error": f"fingerprint required (<={_FINGERPRINT_MAX_CHARS} chars)"},
-            status_code=400,
-        )
-    if verdict not in _MODEL_VERDICTS:
-        return JSONResponse(
-            {"success": False, "error": f"verdict must be one of {', '.join(_MODEL_VERDICTS)}"},
-            status_code=400,
-        )
-    if verdict == "dismissed" and reason not in _ADJUDICATION_DISMISS_REASONS:
-        return JSONResponse(
-            {"success": False,
-             "error": f"dismissal needs a reason: {', '.join(_ADJUDICATION_DISMISS_REASONS)}"},
-            status_code=400,
-        )
-    provenance = _clean_provenance(body.get("model"))
-    if provenance is None:
-        # An unattributed model verdict is worse than none: the whole value of
-        # this channel is knowing WHICH model judged, so tiers can be compared.
-        return JSONResponse({"success": False, "error": "model.backend required"},
-                            status_code=400)
-    confidence = body.get("confidence")
-    try:
-        confidence = None if confidence is None else float(confidence)
-    except (TypeError, ValueError):
-        confidence = math.nan
-    if confidence is not None and not math.isfinite(confidence):
-        # json and float() both accept NaN/Infinity, and a clamp would turn
-        # either into 1.0: maximal confidence nobody stated.
-        return JSONResponse({"success": False, "error": "confidence must be a finite number"},
-                            status_code=400)
-    if confidence is not None:
-        confidence = max(0.0, min(1.0, confidence))
-    rationale = str(body.get("rationale") or "")[:_MODEL_RATIONALE_MAX_CHARS]
-
-    try:
-        if await _already_adjudicated(fingerprint):
-            # An operator verdict outranks any model's; never shadow it.
-            return JSONResponse(
-                {"success": False, "error": "already adjudicated by an operator",
-                 "fingerprint": fingerprint},
-                status_code=409,
-            )
-        _, producer_ref, event_type = await _finding_producer_uuid(fingerprint)
-        if event_type not in _SENTINEL_FINDING_EVENT_TYPES:
-            return JSONResponse(
-                {"success": False, "error": "fingerprint is not a queue finding",
-                 "fingerprint": fingerprint},
-                status_code=404,
-            )
-        import uuid as _uuid
-        from src.db import get_db
-        from src.db.base import AuditEvent
-        inserted = await get_db().append_audit_event(AuditEvent(
-            ts=datetime.now(timezone.utc),
-            event_id=str(_uuid.uuid4()),
-            event_type=_MODEL_ADJUDICATION_EVENT_TYPE,
-            payload={
-                "fingerprint": fingerprint,
-                "verdict": verdict,
-                "reason": reason,
-                "rationale": rationale,
-                "confidence": confidence,
-                "model": provenance,
-                "finding_event_type": event_type,
-                "producer_ref": producer_ref,
-                "note": ("model verdict; telemetry only — NOT an operator "
-                         "adjudication and NOT an exogenous-truth label"),
-            },
-        ))
-        if not inserted:
-            # append_audit_event swallows DB errors and returns False. Saying
-            # success here would let the caller count a verdict that left no
-            # row and suppresses nothing.
-            return JSONResponse(
-                {"success": False, "error": "audit event not recorded",
-                 "fingerprint": fingerprint},
-                status_code=500,
-            )
-        return JSONResponse({
-            "success": True,
-            "fingerprint": fingerprint,
-            "verdict": verdict,
-            "recorded_outcome": False,
-            "suppressed_for_hours": (
-                _MODEL_ADJUDICATION_COOLDOWN_HOURS if verdict != "abstain" else 0
-            ),
-        })
-    except Exception as e:
-        logger.error(f"Error recording model adjudication for {fingerprint}: {e}")
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
