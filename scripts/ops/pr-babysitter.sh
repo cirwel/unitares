@@ -18,7 +18,8 @@
 #   1. Tidy the slot. An armed PR carrying the approval label that has become
 #      CONFLICTING, whose checks failed on its current head, or that has a check
 #      parked for approval, is disarmed so it stops holding the slot; its label
-#      stays, so it returns to the queue.
+#      stays, so it returns to the queue. One the script armed that now carries
+#      the hold label (PR_QUEUE_HOLD_LABEL) is disarmed too: the hold is a veto.
 #   2. Pin the head each newly labelled PR is at (see below), every tick,
 #      whether or not the slot is free.
 #   3. If a PR is still armed (including one the maintainer armed by hand, which
@@ -28,7 +29,8 @@
 #      update that one branch. Then stop.
 #   4. Otherwise walk the queue in the order the label was applied and arm the
 #      first PR that can go: its head still the one the approval covers, no
-#      open "merge after #N" dependency, MERGEABLE, no check needing approval.
+#      hold label, no "merge after #N" dependency that has not merged (one
+#      closed without merging holds too), MERGEABLE, no check needing approval.
 #      It is armed with --match-head-commit on that head.
 #      A PR whose checks failed on an up-to-date head gets its failed Actions
 #      jobs re-run once (marked by the retried label); after that it is skipped
@@ -69,6 +71,9 @@ REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
 BASE="${PR_QUEUE_BASE:-master}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
+# A veto: a PR carrying it is never armed, and an arm this script made is
+# withdrawn. The automerge-disarm detector already reads it as "held on purpose".
+HOLD_LABEL="${PR_QUEUE_HOLD_LABEL:-automerge-hold}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
@@ -215,6 +220,8 @@ while read -r pr; do
   armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
   if ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
+  elif q -e --arg h "$HOLD_LABEL" 'labelled($h)' <<<"$pr" >/dev/null; then
+    reason="it carries $HOLD_LABEL"
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
@@ -324,6 +331,8 @@ fi
 
 # --- 4. the queue ---------------------------------------------------------------
 # "merge after #N" / "merge after owner/repo#N" in the body: wait until N merges.
+# Only MERGED satisfies it. N closed without merging means what this PR was
+# ordered after never landed, which is for a person to re-read, not a go.
 dependency_open() {
   local pr="$1" dep repo num state
   for dep in $(jq -r '.body // ""' <<<"$pr" \
@@ -332,7 +341,7 @@ dependency_open() {
     repo="${dep%#*}"; num="${dep##*#}"
     [ -n "$repo" ] || repo="$REPO"
     state=$(gh pr view "$num" -R "$repo" --json state --jq .state 2>/dev/null) || state="UNREADABLE"
-    if [ "$state" != "MERGED" ] && [ "$state" != "CLOSED" ]; then
+    if [ "$state" != "MERGED" ]; then
       echo "$repo#$num ($state)"
       return 0
     fi
@@ -343,6 +352,11 @@ dependency_open() {
 while read -r _ n head; do
   [ -n "${n:-}" ] || continue
   pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
+
+  if q -e --arg h "$HOLD_LABEL" 'labelled($h)' <<<"$pr" >/dev/null; then
+    log "#$n carries $HOLD_LABEL; skipped until it is removed"
+    continue
+  fi
 
   if dep=$(dependency_open "$pr"); then
     log "#$n waits on $dep (merge after); skipped"

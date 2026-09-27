@@ -629,15 +629,25 @@ the operator's machine is awake.
   GitHub-imitating commits) is out of scope for the same reason; the guard
   there is who holds the credentials.
 - **It honours declared order.** A "merge after #N" (or
-  `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
-  unreadable dependency holds it too.
+  `owner/repo#N`) in the PR body holds the PR until N is merged. N closed
+  without merging holds it too, since what it was ordered after never landed;
+  edit the body once someone has re-read it. An unreadable dependency holds
+  it as well.
+- **`automerge-hold` is a veto.** A labelled PR that also carries
+  `automerge-hold` is skipped, and a PR the script armed is disarmed at the
+  next tick once the hold goes on (a PR armed by hand is left to whoever armed
+  it). The veto acts on the script's five-minute tick, not instantly: a PR
+  already armed and green can merge in between, so to stop one right away,
+  also run `gh pr merge <N> --disable-auto`.
 - **It only queues PRs against `master`.** A stacked PR runs no CI (see
   section 3), so arming it would merge it into its parent unchecked.
 - **Failed checks.** A queued PR whose checks failed on an up-to-date head
   gets its failed Actions jobs re-run once, marked by the `merge-retried`
   label (applied before the re-run, removed again if nothing started); after
   that it is skipped until someone removes `merge-retried`. A failure on a
-  stale head is simply armed, since GitHub re-runs everything on update. A
+  stale head is simply armed, since GitHub re-runs everything on update;
+  arming does not get past branch protection, so it still merges only once
+  the required checks pass on the updated head. A
   check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
@@ -719,7 +729,7 @@ pusher.
 | --- | --- | --- |
 | `orphan-push-guard.yml` | Commits pushed to a branch after its PR merged/closed (three confirmed incidents, 2026-08-12/19) — real-time counterpart of the weekly `stranded-work.yml` audit | Pushes to `claude/**` / `codex/**` on branches cut after the workflow landed (push workflows run the pushed ref's definition; older branches keep weekly-audit coverage) |
 | `merge-content-check.yml` | A merge whose head lacks the branch's newest recorded push (the stale-head variant of PR #1610); a push that *postdates* the merge routes to the orphan-push finding instead — and since this runs from the base side, that covers old branches too | Every merged PR into master |
-| `automerge-disarm.yml` | Auto-merge silently disarmed by a transient check failure, stranding an armed PR (PR #1476). Label a PR `automerge-hold` to mute a deliberate hold | Every 6h; one tracking issue updated in place |
+| `automerge-disarm.yml` | Auto-merge silently disarmed by a transient check failure, stranding an armed PR (PR #1476). Label a PR `automerge-hold` to mute a deliberate hold (the queue also neither arms it nor keeps an arm it made) | Every 6h; one tracking issue updated in place |
 
 All three share one rule (see `scripts/ci/merge_loss_common.py`): they fail
 open on API errors so a broken guard never blocks delivery, but a degraded

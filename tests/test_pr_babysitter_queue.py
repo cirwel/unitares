@@ -261,6 +261,13 @@ def test_merge_after_a_merged_pr_proceeds(tmp_path: Path) -> None:
     assert calls == [_arm(1)]
 
 
+def test_merge_after_a_pr_closed_without_merging_holds(tmp_path: Path) -> None:
+    # What this PR was ordered after never landed; that is for a person to re-read.
+    calls, out = _run(tmp_path, [_pr(1, body="merge after #7")], states={"o/r#7": "CLOSED"})
+    assert calls == []
+    assert "#1 waits on o/r#7 (CLOSED)" in out
+
+
 def test_an_unreadable_dependency_fails_closed(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1, body="merge after #9")])
     assert calls == []
@@ -680,3 +687,40 @@ def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1, head="aaa")])
     assert calls == [_arm(1, "aaa"), "pr merge 1 -R o/r --disable-auto"]
     assert "could not be recorded" in out
+
+
+# --- the hold label (veto) ------------------------------------------------------
+
+HOLD = "automerge-hold"
+
+
+def test_an_approved_pr_on_hold_is_skipped_to_the_next(tmp_path: Path) -> None:
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, labels=(LABEL, HOLD)), _pr(2)],
+        timelines={1: _timeline(12), 2: _timeline(8)},
+    )
+    assert calls == [_arm(2)]
+    assert "#1 carries automerge-hold; skipped" in out
+
+
+def test_a_hold_on_a_pr_the_script_armed_disarms_it(tmp_path: Path) -> None:
+    first, _ = _run(tmp_path, [_pr(3, head="aaa")])
+    assert first == [_arm(3, "aaa")]
+    calls, out = _run(
+        tmp_path, [_pr(3, labels=(LABEL, HOLD), head="aaa", armed_min_ago=0.2, state="BLOCKED"), _pr(4)]
+    )
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "#3 armed but it carries automerge-hold" in out
+
+
+def test_a_hold_on_a_hand_armed_pr_is_left_to_the_maintainer(tmp_path: Path) -> None:
+    # The script never disarms an arm it did not make; that PR still holds the slot.
+    calls, _ = _run(tmp_path, [_pr(3, labels=(LABEL, HOLD), armed_min_ago=20, state="BLOCKED"), _pr(4)])
+    assert calls == []
+
+
+def test_the_hold_label_can_be_renamed(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, labels=(LABEL, "do-not-merge")), _pr(2)], PR_QUEUE_HOLD_LABEL="do-not-merge",
+                    timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == [_arm(2)]
