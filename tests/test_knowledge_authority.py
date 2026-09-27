@@ -460,3 +460,29 @@ def test_semantic_fallback_hides_cold_rows_by_default():
     assert _candidate_matches_semantic_fallback(cold, with_cold)
     explicit = _parse_knowledge_search_request({"query": "x", "status": "cold"})
     assert _candidate_matches_semantic_fallback(cold, explicit)
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_skips_excluded_writers_before_ranking():
+    # Review on #2537 after the rebase onto #2517: the widened fallback pool
+    # let an excluded writer's native row be promoted into the page and then
+    # removed, leaving it short.
+    from src.mcp_handlers.knowledge import handlers
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(2)
+    ]
+    excluded = [_discovery(f"x{i}") for i in range(2)]
+    for row in excluded:
+        row.agent_id = "excluded-writer"
+    graph = AsyncMock()
+    graph.semantic_search = AsyncMock(return_value=[])
+    graph.full_text_search = AsyncMock(return_value=[*channel, *excluded])
+    request = handlers._parse_knowledge_search_request({
+        "query": "review", "limit": 2, "exclude_agent_labels": ["excluded-writer"],
+    })
+    state = handlers._KnowledgeSearchState(request=request, graph=graph)
+    with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
+         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+        await handlers._execute_knowledge_search(state)
+    assert [row.id for row in state.results] == ["m0", "m1"]
