@@ -37,7 +37,8 @@
 #     2. Run this script with the tool name. Verify exit 0.
 #     3. Confirm the BEAM listener is healthy (PR #4 launchd plist loaded):
 #            curl http://127.0.0.1:8770/health
-#     4. Edit ~/.config/cirwel/secrets.env:
+#     4. Edit the secrets env file ($UNITARES_SECRETS_ENV, else
+#        ~/.config/unitares/secrets.env, else legacy ~/.config/cirwel/secrets.env):
 #            export WAVE_3A_<TOOL_NAME_UPPER>_ON_BEAM=true
 #     5. Restart the MCP (so apply_env_flag_routes picks up the flag).
 #     6. Sanity-check: `curl http://127.0.0.1:8767/v1/admin/wave3a/routing-table`
@@ -123,7 +124,8 @@ if row is None or row.get("tool_name") != tool_name:
 print(
     f"ok: {tool_name!r} registered in TOOL_HANDLERS, "
     f"requires_identity={req!r}, routing row present for {env_flag}.\n"
-    f"Safe to set {env_flag}=true in ~/.config/cirwel/secrets.env and "
+    f"Safe to set {env_flag}=true in your secrets env file "
+    "($UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env) and "
     "restart the MCP."
 )
 PY
