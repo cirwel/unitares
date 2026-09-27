@@ -62,8 +62,9 @@ Two placements were rejected:
 Each run starts with a cleanup pass over the probe's own state file (see
 *Hung calls*). The pass stops every live execution the probe left behind,
 whether or not its host is still configured, so a host removed from the
-configuration cannot keep a hung call running. Then, for each host in
-`list_inference_hosts`, the script takes the first matching
+configuration cannot keep a hung call running. Then, for each host that is
+either in `list_inference_hosts` or has records in the probe's state, the
+script takes the first matching
 row below:
 
 | Host state | Action | Quota spent |
@@ -122,7 +123,10 @@ its failure happened:
 | 5. success | none | a successful probe, which closes all of the host's records. Passive evidence never appears in this table: it only skips hosts with no open record. |
 
 An observation that reached stage N closes every record from a stage before
-N, because those stages evidently worked. It reproduces a record of its own
+N, because those stages evidently worked. Two kinds of observation reflect
+earlier state rather than a call made this run: a cooldown, and a hung call
+from an earlier run. Those close only records opened before that state began,
+since a newer failure at an earlier stage is not contradicted by them. It reproduces a record of its own
 class, which stays open and is re-posted under the backoff. It leaves the
 host's other records at stage N or later untouched. For example, an old
 unclassified record stays open beside a new `auth` one, since an `auth`
@@ -136,7 +140,9 @@ that it is not cooling. A few consequences:
   nothing about whether an old `auth` fault was fixed.
 - A hung call found by the cleanup pass reproduces its timeout record.
 - A shared `gov-dispatch` record replaces the member hosts' own records of
-  that same pre-CLI failure. It is reproduced by any run in which two or more
+  that same pre-CLI failure. It lists its member hosts, and each member
+  counts as having an open record for every rule that asks, including the
+  passive-evidence check. It is reproduced by any run in which two or more
   hosts show that failure, and it closes when fewer do. A single host still
   failing then gets its own record, since the fault no longer looks shared.
 - A host the operator switches off has all its records closed, with reason
