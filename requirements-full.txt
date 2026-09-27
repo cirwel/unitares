@@ -21,6 +21,15 @@ webauthn>=2.8.0,<4.0.0
 # Ed25519 operator signatures for request-bound lease attestations and AICs.
 cryptography>=41.0.0,<51.0.0
 
+# OpenAI-compatible client for model inference. consult (call_model) and the
+# in-process dialectic reviewer reach local Ollama's /v1 endpoint through it, as
+# can any operator-configured OpenAI-compatible endpoint. It is a client SDK, not
+# a paid provider: the default endpoint is local Ollama, and a metered one is
+# only ever an opt-in the operator configures. Both modules guard the import and
+# answer DEPENDENCY_MISSING without it. Floor 1.55.3: earlier releases pass
+# `proxies=` to httpx.Client, which httpx 0.28 removed.
+openai>=1.55.3,<3.0.0
+
 # Operational dependencies (optional but recommended)
 psutil>=5.9.0,<8.0.0
 aiofiles>=23.2.1,<26.0.0

@@ -18,13 +18,16 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
+from src.local_inference_env import default_local_model, ollama_openai_base_url
+
 # Localhost Ollama's OpenAI-compatible endpoint. Not the server's `call_model`
 # tool: that carries a 30s timeout, and a small local model routinely needs
 # 40-70s for a real answer. The reviewer learned this the expensive way; a
 # resident that routes its own thinking through call_model will look flaky
-# rather than slow.
-OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
-DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
+# rather than slow. The host is the server's (src/local_inference_env.py:
+# UNITARES_OLLAMA_BASE, or its alias UNITARES_OLLAMA_BASE_URL), plus "/v1".
+OLLAMA_BASE_URL = ollama_openai_base_url()
+DEFAULT_MODEL = default_local_model()
 
 
 @dataclass(frozen=True)

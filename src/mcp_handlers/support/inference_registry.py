@@ -39,6 +39,9 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from src.local_inference_env import default_local_model, ollama_base_url
+
+from . import host_availability
 from .host_adapter import host_adapter_available, host_adapter_enabled
 
 
@@ -48,17 +51,11 @@ from .host_adapter import host_adapter_available, host_adapter_enabled
 # internal llm_delegation lane (dialectic synthetic reviewer, knowledge
 # synthesis, check-in coaching) — resolves the base URL, default model, and
 # availability through these, so UNITARES_OLLAMA_BASE / UNITARES_LLM_MODEL
-# cannot split the plane between two hosts or two defaults.
+# cannot split the plane between two hosts or two defaults. The base URL and
+# default model are resolved in src/local_inference_env.py (re-exported here),
+# which the agent processes share, so the orchestrated reviewer and the local
+# residents read the same host as the server.
 # ---------------------------------------------------------------------------
-
-def ollama_base_url() -> str:
-    """Base URL of the local Ollama endpoint (no trailing slash)."""
-    return os.getenv("UNITARES_OLLAMA_BASE", "http://localhost:11434").rstrip("/")
-
-
-def default_local_model() -> str:
-    """Default model for local inference (UNITARES_LLM_MODEL override)."""
-    return os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 
 
 def sha256_text(text: str) -> str:
@@ -89,6 +86,9 @@ class InferenceHost:
     # Agent-callable tools that actually route to this host. Empty = registered
     # but unreachable; see the module docstring.
     accepts_host_id_from: list[str]
+    # Set while the provider is cooling down after a quota or auth failure
+    # (host_availability): why, and when the next call re-checks it.
+    cooldown: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,6 +183,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("codex:host-adapter"),
+            cooldown=host_availability.cooldown("codex:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
@@ -215,6 +216,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("claude:host-adapter"),
+            cooldown=host_availability.cooldown("claude:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
@@ -240,6 +242,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("antigravity:host-adapter"),
+            cooldown=host_availability.cooldown("antigravity:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",

@@ -111,6 +111,7 @@
       `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:var(--space-4)">
          ${chips}<span class="spring"></span><span class="src-badge ${MODEL.source}">${MODEL.source}</span></div>
        ${rows.length ? `<div style="display:flex;flex-direction:column;gap:var(--space-3)">${rows.map(card).join("")}</div>`
+         : MODEL.source === "unavailable" ? `<div class="empty">Server not answering — dialectic sessions unavailable.</div>`
          : `<div class="empty">🔄 No dialectic sessions in this view. Sessions open when an agent's circuit-breaker trips or review is requested.</div>`}`;
     document.querySelectorAll(".dlc-f").forEach((b) => b.onclick = () => { phaseFilter = b.dataset.f; render(); });
     // Lazy-load each transcript on first expand (the list doesn't carry messages).

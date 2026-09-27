@@ -90,21 +90,38 @@
     return j.result !== undefined ? j.result : j;
   }
 
-  // wrap an accessor so any failure degrades to snapshot, tagged.
+  // Wrap an accessor so any failure degrades to its fallback, tagged with what
+  // the fallback actually is: "snapshot" when the bundled snapshot backs it
+  // (offline/preview renders, see SNAPSHOT_FALLBACK below), otherwise
+  // "unavailable" — the producer did not answer, which is not the same claim
+  // as a snapshot that recorded nothing.
   async function withFallback(liveFn, snapFn) {
     try {
       const v = await liveFn();
       if (v == null) throw new Error("empty");
       return { source: "live", data: v };
     } catch {
-      return { source: "snapshot", data: snapFn() };
+      return { source: SNAPSHOT_FALLBACK ? "snapshot" : "unavailable", data: snapFn() };
     }
   }
 
   // Never throws. snapshot.js can legitimately be absent (it is auth-gated and
   // a <script src> carries no bearer token), and a fallback that raises turns a
   // recoverable "no offline copy" into a dead page.
-  const S = () => window.SNAPSHOT || {};
+  //
+  // The snapshot is a capture of ONE deployment's fleet, bundled for offline
+  // and design renders. On a page served by a UNITARES server, a failed live
+  // call means THIS server did not answer (a restart, a blip), and another
+  // deployment's residents, EISV and version must not stand in for it: on
+  // 2026-09-26 a fresh install's Overview showed the bundled fleet's residents
+  // as its own after one failed /v1/residents during a restart. So the
+  // snapshot backs the fallback only when there is no server to ask — the page
+  // opened from a file — or when a design preview asks for it with ?snapshot=1.
+  // Everywhere else the fallback yields nothing and the views render
+  // "unavailable", the same path a bearer-only operator already takes.
+  const SNAPSHOT_FALLBACK = location.protocol === "file:"
+    || new URLSearchParams(location.search).get("snapshot") === "1";
+  const S = () => (SNAPSHOT_FALLBACK && window.SNAPSHOT) || {};
 
   function eisvMeasurementSource(event) {
     const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
@@ -189,6 +206,8 @@
   }
 
   const DATA = {
+    // Whether a failed live read may fall back to the bundled snapshot (see S).
+    snapshotFallback: SNAPSHOT_FALLBACK,
     bucketEisv,
     eisvMeasurementSource,
     summarizeEisvSources,
@@ -237,15 +256,18 @@
     // is derived from its authoritative source and degrades to the snapshot
     // value if that one source is unreachable. Fleet Coherence is NOT here — it
     // is derived from the live residents in the landing view.
-    //   agents/tiers  ← agent(list)            stuck       ← detect_stuck_agents
-    //   discoveries   ← knowledge(stats)        calibration ← calibration(check)
-    //   dialectic     ← dialectic(list)         anomalies   ← detect_anomalies
-    //   systemHealth  ← /health/deep
+    //   agents        ← agent(list)             dialectic    ← dialectic(list)
+    //   discoveries   ← knowledge(stats)        systemHealth ← /health/deep
+    // Stuck, calibration, anomaly and trust-tier cards were removed from the
+    // Overview (2026-09-26): each read as internal instrument state rather than
+    // something an operator of any install acts on, and together they were
+    // four of the eight calls on the default page. Stuck detection still
+    // feeds the Agents pane via stuckAgents().
     async stats() {
       const tc = (n, a) => callTool(n, a).catch(() => null);
       const rest = (p) => authFetch(p).catch(() => null);
       return withFallback(async () => {
-        const [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR] = await Promise.all([
+        const [agentsR, kgR, dlcR, healthR] = await Promise.all([
           tc("agent", { action: "list", include_metrics: false, recent_days: 30, limit: 1, status_filter: "all" }), // summary only
           tc("knowledge", { action: "stats" }),
           // fields=compact: this batch reads phase/status off 50 sessions to
@@ -253,13 +275,9 @@
           // and was 130,936 B for 1,114 B of consumed fields — on the default
           // page. Compact is a strict subset, so the mapping below is unchanged.
           tc("dialectic", { action: "list", limit: 50, fields: "compact" }),
-          tc("detect_stuck_agents", {}),
-          tc("calibration", { action: "check" }),
-          tc("detect_anomalies", {}),
           rest("/health/deep"),
-          rest("/v1/agents/tier_distribution"),
         ]);
-        if (![agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].some(Boolean)) return null;
+        if (![agentsR, kgR, dlcR, healthR].some(Boolean)) return null;
 
         // Live path: a sub-tool that fails is NULL, not a stale snapshot value.
         // Showing the bundled snapshot under a "live" badge would read as a current
@@ -279,22 +297,13 @@
             agentsPresenceUnavailable = presence.unavailable;
           }
         }
-        let trustTiers = null, trustEarned = null, trustFleet = null, trustUnknown = null;
-        if (tierR && tierR.tiers) {
-          const t = tierR.tiers;
-          trustTiers = ["verified", "established", "emerging", "provisional"].map((k) => ({ tier: k, n: t[k] || 0 }));
-          trustEarned = tierR.earned;
-          trustFleet = tierR.total;
-          trustUnknown = t.unknown || 0;
-        }
-
         const kg = kgR ? (kgR.stats || kgR) : null;
         const dlcSessions = dlcR && Array.isArray(dlcR.sessions) ? dlcR.sessions : null;
         const hb = healthR && healthR.status_breakdown ? healthR.status_breakdown : null;
 
         return {
           agentsActive, agentsLive, agentsPresenceUnknown, agentsPresenceUnavailable,
-          agentsTotal, trustTiers, trustEarned, trustFleet, trustUnknown,
+          agentsTotal,
           discoveries: kg && typeof kg.total_discoveries === "number" ? kg.total_discoveries : null,
           discoveriesToday: null, // no honest live "today" delta; show neutral subtitle
           dialectic: dlcSessions ? dlcSessions.filter((s) => !["resolved", "failed"].includes(s.phase || s.status)).length : null,
@@ -302,38 +311,15 @@
           // all-quiet even when most recent sessions failed.
           dialecticRecent: dlcSessions ? dlcSessions.length : null,
           dialecticFailed: dlcSessions ? dlcSessions.filter((s) => (s.phase || s.status) === "failed").length : null,
-          stuck: stuckR ? (stuckR.stuck_agents || []).length : null,
-          stuckHard: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft !== true).length : null,
-          stuckSoft: stuckR ? (stuckR.stuck_agents || []).filter((s) => s.soft === true).length : null,
-          // Named entries so the Stuck card can say WHICH agents and go
-          // somewhere. Capped here, not in the view: a real incident flagging
-          // 40 agents must not grow the card without bound.
-          stuckList: stuckR ? (stuckR.stuck_agents || []).slice(0, 3).map(mapStuck) : null,
-          // The card is NAMED "Calibration", so it must carry the calibration
-          // verdict — not only trajectory_health, which is a different
-          // quantity from the same response. Shipping the number alone let a
-          // reader infer "calibrated" from a healthy-looking 0.78 while the
-          // server was answering calibration_status="miscalibrated" and
-          // tactical_signal_status="stale", and the >=0.8 green threshold
-          // would have painted it OK outright.
-          calibration: calR && typeof calR.trajectory_health === "number" ? calR.trajectory_health : null,
-          calibrated: calR && typeof calR.calibrated === "boolean" ? calR.calibrated : null,
-          calibrationStatus: calR && typeof calR.calibration_status === "string" ? calR.calibration_status : null,
-          calibrationSignal: calR && typeof calR.tactical_signal_status === "string" ? calR.tactical_signal_status : null,
-          anomalies: anomR && anomR.summary ? anomR.summary.total_anomalies : null,
-          // Scope, for the same reason the Calibration card above carries its
-          // verdict and not just a number: the server scans at most
-          // scan.scan_cap active agents, so a count of 0 can mean "nothing
-          // wrong" OR "nothing wrong among the agents we looked at". Without
-          // these the card says "clear" in green for a fleet it never
-          // examined. Absent on an older server -> null -> the card renders
-          // exactly as before.
-          anomaliesTruncated: anomR && anomR.scan && typeof anomR.scan.truncated === "boolean" ? anomR.scan.truncated : null,
-          anomaliesScanned: anomR && anomR.scan && typeof anomR.scan.agents_scanned === "number" ? anomR.scan.agents_scanned : null,
-          anomaliesActive: anomR && anomR.scan && typeof anomR.scan.agents_active === "number" ? anomR.scan.agents_active : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
-          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
-          degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
+          // Name every non-healthy bucket the headline status is derived from.
+          // Omitting degraded/unavailable read "moderate · 10 ok · 0 warn" on a
+          // fresh install, a status the detail line appeared to contradict.
+          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn`
+            + (hb.degraded ? ` · ${hb.degraded} degraded` : "")
+            + (hb.unavailable ? ` · ${hb.unavailable} unavailable` : "")
+            + (hb.error ? ` · ${hb.error} err` : "") : null,
+          degraded: [agentsR, kgR, dlcR, healthR].filter((x) => !x).length,
         };
       // LAZY, deliberately. This used to read `const snap = S().stats` as the
       // first statement of stats(), before any try — so it touched the snapshot
@@ -435,8 +421,8 @@
           byStatus: st ? st.by_status : null,
         };
       }, () => {
-        const d = S().discoveries;
-        return { list: d.list, total: d.total, byType: d.byType, byStatus: d.byStatus };
+        const d = S().discoveries || {};
+        return { list: d.list || [], total: d.total, byType: d.byType, byStatus: d.byStatus };
       });
     },
 
@@ -477,7 +463,7 @@
           } else c.active++;
         });
         return { sessions, counts: c };
-      }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
+      }, () => { const dl = S().dialectic || {}; return { sessions: dl.sessions || [], counts: dl.counts || {} }; });
     },
 
     async dialecticSession(id) {
@@ -520,7 +506,7 @@
           semantics: runtime.semantics || {},
         } : { available: false, source: "unavailable", windowHours: 24, summary: {}, processes: [] };
         return { events, buckets, operational, windowMin: (act && act.window_minutes) || 60, bucketMin: (act && act.bucket_minutes) || 5 };
-      }, () => S().activity);
+      }, () => S().activity || { events: [], buckets: [], operational: null, windowMin: 60, bucketMin: 5 });
     },
 
     async eisv() {
@@ -549,59 +535,6 @@
         // re-bucket the window itself, no refetch.
         return { series: bucketEisv(evs), raw: evs, sourceLanes: summarizeEisvSources(evs), coherenceEq: 0.5 };
       }, () => { const e = S().eisv || {}; return { series: e.series || [], raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq ?? 0.5 }; });
-    },
-
-    async eisvTelemetryHealth(days) {
-      const d = Number.isFinite(days) ? Math.max(1, Math.min(90, Math.round(days))) : 30;
-      return withFallback(async () => {
-        const report = await authFetch(`/v1/eisv/telemetry-health?days=${d}`);
-        return report && report.success && report.schema === "eisv.telemetry-health.v1"
-          ? report : null;
-      }, () => S().eisvTelemetryHealth);
-    },
-
-    async automations() {
-      // Automation census snapshot (launchd/hermes/codex/claude/github-actions).
-      // FULL census — the Automations tab renders every item. The Overview card
-      // must NOT use this; see automationsSummary below.
-      return withFallback(
-        async () => authFetch("/api/automations"),
-        () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, automations: [], stale: true })
-      );
-    },
-
-    // Counts only, for the Overview card. The full census was ~206 KB of
-    // per-automation detail (228 items) on the DEFAULT page, of which the card
-    // reads the summary block, `stale`, and an ungated COUNT — about 641 B.
-    // The server computes the ungated count under ?view=summary so no notes
-    // arrays cross the wire. Loopback hides this; a tunnel does not.
-    async automationsSummary() {
-      return withFallback(
-        async () => {
-          const j = await authFetch("/api/automations?view=summary");
-          return j && j.summary ? j : null;
-        },
-        () => ({ schema: "unitares.automation_census.v1", summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, ungated: 0, stale: true })
-      );
-    },
-
-    async metricsCatalog() {
-      // Chronicler's registered metric series (fleet/project/infra). Each entry:
-      // { name, description, unit, last_point_ts } — last_point_ts lets the view
-      // suppress empty `.error` twins in one round-trip (no per-name probe).
-      return withFallback(async () => {
-        const j = await authFetch("/v1/metrics/catalog");
-        return j && Array.isArray(j.metrics) ? j.metrics : null;
-      }, () => S().metrics.catalog);
-    },
-
-    async metricsSeries(name, sinceDays) {
-      // Points for one series over the trailing window. Returns [{ ts, value }].
-      return withFallback(async () => {
-        const since = new Date(Date.now() - (sinceDays || 14) * 86400 * 1000).toISOString();
-        const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) + "&since=" + encodeURIComponent(since));
-        return j && Array.isArray(j.points) ? j.points : null;
-      }, () => (S().metrics.series[name] || []));
     },
 
     // Fleet risk history — Chronicler's daily governance.* scrape, three series
@@ -663,37 +596,6 @@
     // a browser cannot set headers on a WebSocket. Same credential authFetch
     // sends; exported rather than duplicated so the two cannot drift.
     apiToken: token,
-
-    // Daily adjudication queue + falsifier progress. Small on purpose —
-    // verdicts on separate days beat batches (cluster statistics).
-    async adjudicationQueue() {
-      return withFallback(
-        async () => {
-          const j = await authFetch("/v1/sentinel/adjudication-queue?limit=5");
-          return j && j.success ? j : null;
-        },
-        () => S().adjudication,
-      );
-    },
-
-    // POST an operator verdict. Throws on non-2xx (message carries the status
-    // code so the view can distinguish 403 token / 409 already-adjudicated).
-    async adjudicate(fingerprint, status, reason) {
-      const headers = {
-        "Content-Type": "application/json",
-        "X-Unitares-Csrf": "1",
-      };
-      const op = operatorToken();
-      if (op) headers["X-Unitares-Operator"] = op;
-      const t = token();
-      if (t) headers["Authorization"] = "Bearer " + t;
-      const r = await fetch("/v1/sentinel/adjudicate", {
-        method: "POST", credentials: "same-origin", headers,
-        body: JSON.stringify({ fingerprint, status, reason: reason || undefined }),
-      });
-      if (!r.ok) throw new Error("/v1/sentinel/adjudicate -> " + r.status);
-      return r.json();
-    },
 
     // Passkey security is live-only: rendering a snapshot of sessions or
     // credentials would be dangerously misleading. Views stay behind DATA,
@@ -774,95 +676,42 @@
       }, () => (S().stats && S().stats.stuckList) || []);
     },
 
-    async residentPanels() {
-      return withFallback(async () => {
-        const [w, sn, vg, h, res] = await Promise.all([
-          authFetch("/v1/watcher/summary").catch(() => null),
-          authFetch("/v1/sentinel/summary").catch(() => null),
-          authFetch("/v1/vigil/summary").catch(() => null),
-          authFetch("/health/deep").catch(() => null),
-          authFetch("/v1/residents").catch(() => null),
-        ]);
-        if (!w && !sn && !vg && !h && !res) return null;
-        const out = {};
-        // Watcher, Sentinel and Vigil build from their own summary endpoints,
-        // and all three of those are roster-independent: they answer on a
-        // fresh install (findings.jsonl absent = empty summary; audit.events
-        // empty; no Vigil in metadata = a success envelope with stats {}).
-        // Nothing here consulted /v1/residents, so a deployment that has none
-        // of them still got three panels under the "Always-on fleet" eyebrow
-        // and a live badge — a claim about which residents EXIST, not about
-        // their health. Gate them on roster membership, the same predicate
-        // fromResidents() already applies to Chronicler/Lumen below.
-        //
-        // Only when /v1/residents actually ANSWERED. A momentary outage also
-        // arrives as res === null, and reading that as "these residents do not
-        // exist" would silently delete three panels from a fully-rostered
-        // deployment on a blip. Unknown roster => render, as before.
-        const rosterKnown = !!(res && Array.isArray(res.residents));
-        const inRoster = (label) => !rosterKnown || res.residents.some((r) => r.label === label);
-        if (w && inRoster("Watcher")) out.watcher = { total: w.total, byStatus: w.by_status || {}, openSev: w.by_severity_open || {},
-          patterns: (w.patterns || []).map((p) => ({ p: p.pattern, confirmed: p.confirmed, dismissed: p.dismissed, surfaced: p.surfaced, ratio: p.dismiss_ratio })) };
-        if (sn && inRoster("Sentinel")) out.sentinel = { total: sn.total, bySeverity: sn.by_severity || {},
-          byClass: (sn.by_violation_class || []).map((c) => ({ c: c.violation_class, n: c.count })),
-          recent: (sn.recent || []).map((r) => ({ ts: r.timestamp, severity: r.severity, vclass: r.violation_class, type: r.finding_type, message: r.message })) };
-        if (vg && vg.stats && inRoster("Vigil")) out.vigil = { cycles24h: vg.stats.cycles_24h, writesWindow: vg.stats.total_writes_in_window, lastVerdict: vg.stats.last_verdict,
-          lastCycleAgeS: vg.stats.last_cycle_age_seconds, avgCoherence: vg.stats.avg_coherence_window,
-          eisv: vg.cycles && vg.cycles[0] ? vg.cycles[0] : null };
-        if (h) out.health = { status: h.status, version: h.version, checks: h.status_breakdown || {},
-          // Per-check detail — the 12 named checks /health/deep already returns,
-          // so the panel can name what's degraded instead of only counting.
-          items: h.checks || {}, operator: h.operator_summary || {},
-          breakers: { governance: (h.circuit_breakers && h.circuit_breakers.governance || {}).trips_24h || 0, redis: (h.circuit_breakers && h.circuit_breakers.redis || {}).trips_24h || 0 },
-          calibration: (h.checks && h.checks.calibration || {}).status, redis: h.redis_present, continuity: h.identity_continuity_mode };
-        // Chronicler and Lumen have no dedicated summary endpoints — pull
-        // their live state from /v1/residents (cadence-aware rendering happens
-        // in the view). Without these, the tab omitted residents the Overview
-        // strip lists, and the absent ones read as dead.
-        //
-        // `recent_writes` is an ARRAY of write rows (server-capped at 5), not a
-        // count. Mapping it onto a numeric `writes` field rendered the literal
-        // "[object Object]" for a resident with writes and an empty cell for one
-        // without, while the snapshot's numeric `writes` made the same card look
-        // correct offline. Keep the rows under `recent` and take the count from
-        // `total_updates`, which is durable and uncapped.
-        const fromResidents = (label) => {
-          const c = res && res.residents && res.residents.find((r) => r.label === label);
-          if (!c) return null;
-          return {
-            status: c.status, silence: c.silence_seconds, silenceThreshold: c.silence_threshold_seconds,
-            lastCheckin: c.last_checkin_at, checkinSource: c.last_checkin_source,
-            eisv: c.eisv, coherence: c.coherence, risk: c.risk_score, verdict: c.verdict,
-            updates: c.total_updates,
-            recent: Array.isArray(c.recent_writes) ? c.recent_writes : [],
-          };
-        };
-        // No snapshot fallback per resident on the live path: a stale fixture
-        // under a "live" badge is worse than a card that renders "—". If
-        // /v1/residents itself is down, withFallback drops the whole pane to
-        // the snapshot and the badge says so.
-        out.chronicler = fromResidents("Chronicler");
-        out.lumen = fromResidents("Lumen");
-        // Watcher, Sentinel and Vigil build from their own summary endpoints,
-        // which carry findings but no liveness — so their status pip was a
-        // hardcoded "healthy". Attach the same /v1/residents row the Overview
-        // strip reads so the pip means something, and so Vigil has a durable
-        // source for the fields its ring-derived stats leave null.
-        [["watcher", "Watcher"], ["sentinel", "Sentinel"], ["vigil", "Vigil"]].forEach(([key, label]) => {
-          const row = fromResidents(label);
-          if (row && out[key]) out[key].resident = row;
-        });
-        return out;
-      }, () => S().residentPanels);
+    // Operator extensions (see dashboard/EXTENSIONS.md). The manifest is
+    // served only when the deployment sets UNITARES_DASHBOARD_EXT_DIR, and
+    // only to an authenticated caller. Any failure means "no extensions" —
+    // a plain fetch, not authFetch, so a 401/404 here never redirects to
+    // sign-in or disturbs the core page.
+    async extManifest() {
+      if (location.protocol === "file:") return null;
+      try {
+        const headers = {};
+        const t = token();
+        if (t) headers["Authorization"] = "Bearer " + t;
+        const r = await fetch("/dashboard/ext/manifest.json", { credentials: "same-origin", headers });
+        if (!r.ok) return null;
+        const j = await r.json();
+        return j && Array.isArray(j.sections) ? j : null;
+      } catch { return null; }
     },
 
-    async enforcementDivergence(days) {
-      const d = Number.isFinite(days) ? days : 90;
-      return withFallback(async () => {
-        const j = await authFetch(`/v1/enforcement/divergence?days=${d}`);
-        return j && typeof j.produced_pauses === "number" ? j : null;
-      }, () => S().enforcementDivergence);
+    // Fetch one extension script's source with the same credentials as the
+    // data calls, so a bearer-only operator can load it (a <script src> sends
+    // cookies only). The caller injects it.
+    async extScript(path) {
+      const headers = {};
+      const t = token();
+      if (t) headers["Authorization"] = "Bearer " + t;
+      const r = await fetch("/dashboard/ext/" + path, { credentials: "same-origin", headers });
+      if (!r.ok) throw new Error("/dashboard/ext/" + path + " -> " + r.status);
+      return r.text();
     },
+
+    // The data seam, exported for extensions so an operator's section reads
+    // live data the same way core sections do (bearer + session, 401 -> sign-in,
+    // failure -> the fallback it supplies). Extensions add their own accessors
+    // onto DATA; they never reach into the bundled snapshot.
+    seam: { authFetch, callTool, withFallback },
+
   };
 
   window.DATA = DATA;

@@ -169,10 +169,25 @@ services:
       # private-Compose hostname (loopback remains allowed automatically).
       UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS: governance-mcp
       UNITARES_BUILD_SHA: ${UNITARES_BUILD_SHA:-}
+      # Model for consult and the in-process dialectic reviewer (see
+      # .env.example, "Model for advice and dialectic reviews"). Empty default =
+      # no model configured, unchanged behavior. To use Ollama on the Docker
+      # host, set UNITARES_OLLAMA_BASE=http://host.docker.internal:11434 (root
+      # URL, no /v1) and UNITARES_LLM_MODEL to a model you have pulled. The
+      # older name UNITARES_OLLAMA_BASE_URL is passed through too; it is read
+      # only when UNITARES_OLLAMA_BASE is empty.
+      UNITARES_OLLAMA_BASE: ${UNITARES_OLLAMA_BASE:-}
+      UNITARES_OLLAMA_BASE_URL: ${UNITARES_OLLAMA_BASE_URL:-}
+      UNITARES_LLM_MODEL: ${UNITARES_LLM_MODEL:-}
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.
       # UNITARES_EMBEDDING_MODEL: bge-m3
       # UNITARES_ENABLE_HYBRID: "1"
+    # Lets the container reach a model server on the Docker host by name.
+    # Docker Desktop resolves it already; on Linux this line is what makes it
+    # resolve (Ollama must then listen beyond 127.0.0.1; see .env.example).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - governance-data:/app/data
     depends_on:

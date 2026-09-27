@@ -1506,3 +1506,219 @@ async def test_failure_before_dispatch_names_no_route(monkeypatch, audit_sinks):
     _, pg = await audit_sinks()
     assert "route" not in pg[0]["details"]["failure"]["upstream"]
 
+
+
+def _quota_failure():
+    return _failure(
+        code="DELEGATED_INFERENCE_FAILED",
+        execution_started=True,
+        details={"provider_unavailable": {"reason": "quota", "retry_after": "2026-09-29T21:10:00"}},
+    )
+
+
+def _thorough_as(monkeypatch, *, caller, available, results):
+    """Route a thorough consult for ``caller`` with the given hosts available;
+    ``results`` maps host_id -> the outcome that host returns."""
+    calls = []
+
+    async def fake(request):
+        calls.append(request.host_id)
+        return results[request.host_id]
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    monkeypatch.setattr(co, "get_session_signals", lambda: caller)
+    monkeypatch.setattr(co, "host_adapter_available", lambda h: h in available)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_a_provider_at_its_usage_limit_fails_over_to_the_next_peer(monkeypatch):
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={
+            "codex:host-adapter": _quota_failure(),
+            "antigravity:host-adapter": _completed(
+                route="agent_orchestrator", host_id="antigravity:host-adapter",
+                privacy_class="operator_authorized_external"),
+        },
+    )
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+        "response_mode": "full",
+    }))
+    assert parsed["success"] is True
+    assert calls == ["codex:host-adapter", "antigravity:host-adapter"]
+    # The route postcondition and the record name the host that actually served.
+    assert parsed["diagnostics"]["host_id"] == "antigravity:host-adapter"
+    assert parsed["failover"] == [{
+        "from_host_id": "codex:host-adapter", "reason": "quota",
+        "to_host_id": "antigravity:host-adapter",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_failover_never_reaches_the_callers_own_family(monkeypatch):
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={
+            "codex:host-adapter": _quota_failure(),
+            "antigravity:host-adapter": _quota_failure(),
+            "claude:host-adapter": _completed(
+                route="agent_orchestrator", host_id="claude:host-adapter",
+                privacy_class="operator_authorized_external"),
+        },
+    )
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert "claude:host-adapter" not in calls
+    assert parsed["success"] is False
+    assert [f["to_host_id"] for f in parsed["failover"]] == ["antigravity:host-adapter"]
+
+
+@pytest.mark.asyncio
+async def test_no_failover_when_the_first_attempt_may_still_be_running(monkeypatch):
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={"codex:host-adapter": _failure(
+            code="DELEGATED_INFERENCE_TIMEOUT", execution_started=True, possibly_running=True)},
+    )
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert calls == ["codex:host-adapter"] and parsed["success"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_failover_on_an_ordinary_failure(monkeypatch):
+    # A malformed answer is not evidence the provider is out.
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={"codex:host-adapter": _failure(
+            code="DELEGATED_INFERENCE_FAILED", execution_started=True)},
+    )
+    await co.handle_consult({"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"})
+    assert calls == ["codex:host-adapter"]
+
+
+@pytest.mark.asyncio
+async def test_no_failover_when_too_little_time_is_left(monkeypatch):
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={"codex:host-adapter": _quota_failure()},
+    )
+    clock = iter([0.0, 300.0])
+    monkeypatch.setattr(co, "_clock", lambda: next(clock))
+    await co.handle_consult({"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"})
+    assert calls == ["codex:host-adapter"]
+
+
+
+@pytest.mark.asyncio
+async def test_the_audit_record_names_every_host_a_failover_reached(monkeypatch, audit_sinks):
+    """Review of #2486 (P2): the record named the originally chosen host and
+    never mentioned the hop, while the route said another host answered."""
+    _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={
+            "codex:host-adapter": _quota_failure(),
+            "antigravity:host-adapter": _completed(
+                route="agent_orchestrator", host_id="antigravity:host-adapter",
+                privacy_class="operator_authorized_external"),
+        },
+    )
+    await co.handle_consult({"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"})
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["request"]["thorough_host_id"] == "antigravity:host-adapter"
+    assert record["route"]["host_id"] == "antigravity:host-adapter"
+    assert record["failover"] == [{"from_host_id": "codex:host-adapter", "reason": "quota",
+                                   "to_host_id": "antigravity:host-adapter"}]
+
+
+@pytest.mark.asyncio
+async def test_a_cancellation_mid_failover_records_the_host_that_may_still_run(
+    monkeypatch, audit_sinks
+):
+    import asyncio
+
+    async def fake(request):
+        if request.host_id == "codex:host-adapter":
+            return _quota_failure()
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(co, "run_delegated_inference", fake)
+    monkeypatch.setattr(co, "get_session_signals",
+                        lambda: SessionSignals(reported_harness_type="claude-code"))
+    monkeypatch.setattr(co, "host_adapter_available", lambda h: True)
+    with pytest.raises(asyncio.CancelledError):
+        await co.handle_consult({"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"})
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["status"] == "cancelled"
+    assert record["request"]["thorough_host_id"] == "antigravity:host-adapter"
+    assert record["failover"][0]["from_host_id"] == "codex:host-adapter"
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_fallback_after_a_failover_still_reports_the_hop(monkeypatch):
+    """Review of #2486 (P3): the brief reached the first host, so a degraded
+    local answer must still say the thorough lane failed over."""
+    calls = _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available=_ALL_HOSTS,
+        results={
+            "codex:host-adapter": _quota_failure(),
+            "antigravity:host-adapter": _failure(code="INFERENCE_HOST_UNAVAILABLE"),
+        },
+    )
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=_completed()))
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "allow_degraded": True,
+    }))
+    assert calls == ["codex:host-adapter", "antigravity:host-adapter"]
+    assert parsed["status"] == "degraded"
+    assert parsed["failover"][0]["from_host_id"] == "codex:host-adapter"
+
+
+
+@pytest.mark.asyncio
+async def test_allow_degraded_treats_a_live_usage_limit_like_a_cooldown(monkeypatch):
+    """Review of #2486 (antigravity): a fresh usage limit hard-failed while the
+    retry (host now cooling down, refused pre-spawn) degraded. The caller opted
+    into degradation, so both degrade."""
+    _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available={"codex:host-adapter"},  # no peer to fail over to
+        results={"codex:host-adapter": _quota_failure()},
+    )
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "allow_degraded": True,
+    }))
+    assert parsed["status"] == "degraded"
+    assert parsed["degradation"]["reason_code"] == "DELEGATED_INFERENCE_FAILED"
+    standard.assert_awaited_once()
+
+    # Without allow_degraded the same failure stays a hard failure.
+    standard.reset_mock()
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert parsed["success"] is False
+    standard.assert_not_awaited()

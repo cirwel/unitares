@@ -45,14 +45,37 @@ describe("dashboard REST auth seam", () => {
     expect(fetch.mock.calls[0][1].credentials).toBe("same-origin");
   });
 
-  it("sends cookie credentials and CSRF on direct adjudication writes", async () => {
-    const fetch = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
-    const { context } = dataContext(fetch);
+  it("treats a missing extension manifest as no extensions, never a sign-in redirect", async () => {
+    const fetch = vi.fn(async () => ({ ok: false, status: 404 }));
+    const { context, redirects } = dataContext(fetch);
 
-    await context.window.DATA.adjudicate("fingerprint", "confirmed", null);
-    const options = fetch.mock.calls[0][1];
+    expect(await context.window.DATA.extManifest()).toBeNull();
+    expect(redirects).toEqual([]);
+
+    const unauthorized = vi.fn(async () => ({ ok: false, status: 401 }));
+    const second = dataContext(unauthorized);
+    expect(await second.context.window.DATA.extManifest()).toBeNull();
+    expect(second.redirects).toEqual([]);
+  });
+
+  it("fetches extension scripts with the same credentials as data calls", async () => {
+    const fetch = vi.fn(async () => ({ ok: true, status: 200, text: async () => "window.X = {};" }));
+    const { context } = dataContext(fetch);
+    context.localStorage.setItem("unitares_api_token", "tok");
+
+    expect(await context.window.DATA.extScript("sections/x.js")).toBe("window.X = {};");
+    const [url, options] = fetch.mock.calls[0];
+    expect(url).toBe("/dashboard/ext/sections/x.js");
     expect(options.credentials).toBe("same-origin");
-    expect(options.headers["X-Unitares-Csrf"]).toBe("1");
+    expect(options.headers.Authorization).toBe("Bearer tok");
+  });
+
+  it("exports the data seam extensions build their accessors on", () => {
+    const { context } = dataContext(vi.fn());
+    const seam = context.window.DATA.seam;
+    expect(typeof seam.authFetch).toBe("function");
+    expect(typeof seam.callTool).toBe("function");
+    expect(typeof seam.withFallback).toBe("function");
   });
 });
 
