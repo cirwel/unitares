@@ -108,7 +108,9 @@ branch does not deploy the master-only public Pages workflow.
    `Lease Plane Image` workflow builds that image for both platforms, without
    pushing, on every change to the lease plane, the SDK it copies, or this
    publishing workflow, so an emulated arm64 build that breaks fails on its
-   pull request rather than at release. A manual
+   pull request rather than at release. A lease-plane tag is never replaced
+   once published: a re-dispatch for a release that already has the image
+   skips that build, because Compose pulls the image by that tag. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A

@@ -59,3 +59,31 @@ def test_one_release_publishes_the_server_and_the_lease_plane():
     assert attest["with"]["subject-name"] == image
     assert attest["with"]["subject-digest"] == "${{ steps.push.outputs.digest }}"
     assert attest["with"]["push-to-registry"] is True
+
+
+def test_a_published_lease_plane_tag_is_never_replaced():
+    """Compose pulls the lease plane by tag; a re-dispatch must not rebuild
+    over the digest Promote Release verified."""
+    guard = _step("existing")
+    assert guard["if"] == "matrix.artifact == 'lease-plane'"
+    assert "docker buildx imagetools inspect" in guard["run"]
+    assert 'skip=true' in guard["run"]
+    steps = PUBLISH["steps"]
+    login = next(i for i, st in enumerate(steps) if "login-action" in st.get("uses", ""))
+    assert login < steps.index(guard) < steps.index(_step("push"))
+    assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
+    attest = next(st for st in steps if "attest-build-provenance" in st.get("uses", ""))
+    assert attest["if"] == "steps.existing.outputs.skip != 'true'"
+
+
+def test_lease_plane_image_check_rebuilds_on_every_build_input():
+    check = yaml.safe_load((ROOT / ".github/workflows/lease-plane-image.yml").read_text())
+    events = check.get("on", check.get(True))
+    for event in ("push", "pull_request"):
+        paths = set(events[event]["paths"])
+        assert {
+            "elixir/lease_plane/**",
+            "elixir/unitares_sdk/**",
+            ".dockerignore",
+            ".github/workflows/publish-container.yml",
+        } <= paths

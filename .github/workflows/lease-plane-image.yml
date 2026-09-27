@@ -9,7 +9,8 @@ name: Lease Plane Image
 # The Docker Quickstart job already builds amd64 through Compose; this job is
 # the only one that exercises the emulated arm64 build.
 #
-# Path-filtered to what the image is built from and to the publishing workflow.
+# Path-filtered to what the image is built from (including .dockerignore, which
+# shapes the build context) and to the publishing workflow.
 
 on:
   push:
@@ -17,6 +18,7 @@ on:
     paths:
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - '.dockerignore'
       - '.github/workflows/publish-container.yml'
       - '.github/workflows/lease-plane-image.yml'
   pull_request:
@@ -24,6 +26,7 @@ on:
     paths:
       - 'elixir/lease_plane/**'
       - 'elixir/unitares_sdk/**'
+      - '.dockerignore'
       - '.github/workflows/publish-container.yml'
       - '.github/workflows/lease-plane-image.yml'
   workflow_dispatch:

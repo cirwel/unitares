@@ -84,6 +84,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # docker-compose.yml pulls the lease plane by its release tag, not by
+      # digest, and Promote Release verified the digest that tag named. A
+      # re-dispatch for a release that already has the image must not replace
+      # it with a rebuild (a moved base image or package gives a new digest).
+      # The server image is unaffected: installs never pull it by tag.
+      - name: Keep a published lease-plane tag immutable
+        id: existing
+        if: matrix.artifact == 'lease-plane'
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}:${{ steps.release.outputs.tag }}
+        run: |
+          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
+            echo "::notice::$IMAGE is already published; not rebuilding or replacing it."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Generate image metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
@@ -95,6 +113,7 @@ jobs:
 
       - name: Build and push multi-architecture image
         id: push
+        if: steps.existing.outputs.skip != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
@@ -114,6 +133,7 @@ jobs:
           provenance: mode=max
 
       - name: Attest published image
+        if: steps.existing.outputs.skip != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
