@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "6632ef5119d617e3d3dd35c21854360ba345bf46582125532da36f332a66b69f",
+  "surface_sha256": "86baca9247aee3456766143a69af28dad7adb32ae77bd7f609b11f48e57c6e48",
   "capabilities": [
     {
       "name": "start_session",
@@ -499,7 +499,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "b3285187d9ce5f2777920c686fa85b93f13a247853debc72df53b97a950a6e7e",
+      "input_schema_sha256": "52bf7b512429476c3486df3fff86909dee030fdbb9de118b60e5127805767314",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",

@@ -1,4 +1,4 @@
-from typing import ClassVar, List, Literal, Mapping, Optional, Tuple, Union
+from typing import Any, ClassVar, List, Literal, Mapping, Optional, Tuple, Union
 from pydantic import Field, StrictBool, model_validator
 from .mixins import AgentIdentityMixin
 
@@ -256,15 +256,15 @@ class DialecticParams(AgentIdentityMixin):
     observed_metrics: Optional[dict] = Field(None, description="Observed metrics (for action=antithesis)")
     reviewer_provenance: Optional[dict] = Field(
         None,
-        description="Reviewer/model provenance for the verdict (for action=antithesis/synthesis); reviewer_kind='external_consult' files an outside-model consult as a governed record",
+        description="Reviewer/model provenance for the verdict. action=consult (required): where an outside verdict came from, at least one of backend, model_used or consult_source; the kind is always recorded as external_consult. action=antithesis/synthesis: the assigned reviewer's own backend",
         json_schema_extra={
             "brief": (
-                "Reviewer/model provenance (action=antithesis/synthesis); "
-                "reviewer_kind='external_consult' files an outside model."
+                "Reviewer/model provenance; required for action=consult "
+                "(name backend, model_used or consult_source)."
             )
         },
     )
-    concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis)")
+    concerns: Optional[List[str]] = Field(None, description="Concerns (for action=antithesis/consult)")
     take_over_if_requested: Optional[bool] = Field(None, description="Let a credentialed operator move reviewer ownership to the bound agent before antithesis")
     takeover_reason: Optional[str] = Field(None, description="Reason for reviewer takeover during antithesis")
     judgment_formed: Union[StrictBool, str, None] = Field(
@@ -274,20 +274,42 @@ class DialecticParams(AgentIdentityMixin):
             "was reached -- the model returned nothing parseable as a verdict. "
             "The server records an abstention without claiming or changing the "
             "reviewer slot, instead of filing a binding rejection nobody can act "
-            "on. Omitting "
+            "on. On action=consult, false records nothing (NO_JUDGMENT): an "
+            "abstention is not a consult. Omitting "
             "it means you judged. Not the same as disagreeing, and not the same "
             "as reviewer_provenance.degraded, which describes the backend."
         ),
     )
-    agrees: Union[bool, str, None] = Field(None, description="Agreement flag (for action=synthesis)")
+    agrees: Union[bool, str, None] = Field(None, description="Agreement flag (for action=synthesis). For action=consult, the outside verdict's position: true or false only, recorded as a position, never as a verdict; omit it to state none")
     # `vote` was removed 2026-09-08: it documented "for action=vote" against a
     # router with no `vote` action, and no handler ever read it. `conditions`
     # is live — it is the accepted alias for `proposed_conditions`
     # (dialectic/handlers._read_proposed_conditions), so it carries that
     # parameter's actions and says so.
-    conditions: Optional[List[str]] = Field(None, description="Resumption conditions; alias for proposed_conditions (for action=thesis/synthesis)")
+    conditions: Optional[List[str]] = Field(None, description="Resumption conditions; alias for proposed_conditions (for action=thesis/synthesis/consult)")
     new_reviewer_id: Optional[str] = Field(None, description="New reviewer agent ID (for action=reassign)")
     reason: Optional[str] = Field(None, description="Reason (for action=request/reassign)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _consult_agrees_is_true_or_false(cls, data: Any) -> Any:
+        """Refuse an ambiguous consult position before coercion reaches it.
+
+        ``agrees`` is ``Union[bool, str, None]``, and lax validation turns a
+        JSON 1 or 0 into a bool, so the handler could not tell ``1`` from
+        ``true``. A consult records the position it is given; only a real
+        boolean or the strings "true"/"false" are unambiguous.
+        """
+        if isinstance(data, dict) and data.get("action") == "consult":
+            value = data.get("agrees")
+            if value is not None and not isinstance(value, bool) and not (
+                isinstance(value, str) and value.strip().lower() in ("true", "false")
+            ):
+                raise ValueError(
+                    f"agrees must be true or false for action=consult, not {value!r}; "
+                    "omit it to state no position"
+                )
+        return data
 
 class ReassignReviewerParams(AgentIdentityMixin):
     """Operator/current-reviewer handoff for an active dialectic session."""

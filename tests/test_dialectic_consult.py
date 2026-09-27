@@ -177,3 +177,28 @@ def test_a_consult_is_not_a_verdict_the_guard_reads():
         phase="consult", agent_id="agent-outside",
         timestamp="2026-09-27T02:00:00+00:00", reasoning="looks fine", agrees=None))
     assert session._reviewer_objection_stands() is True
+
+
+@pytest.mark.parametrize("value", [1, 0, "1", "approve"])
+def test_the_routed_schema_refuses_an_ambiguous_position_before_coercion(value):
+    """Review on #2540: lax validation turned a JSON 1 into True before the
+    handler saw it, so the handler-level check alone was bypassed."""
+    from pydantic import ValidationError
+
+    from src.mcp_handlers.schemas.dialectic import DialecticParams
+
+    with pytest.raises(ValidationError, match="true or false"):
+        DialecticParams.model_validate({"action": "consult", "session_id": "s", "agrees": value})
+
+
+@pytest.mark.parametrize("value", [True, False, "TRUE", "false", None])
+def test_the_routed_schema_accepts_the_two_positions(value):
+    from src.mcp_handlers.schemas.dialectic import DialecticParams
+
+    DialecticParams.model_validate({"action": "consult", "session_id": "s", "agrees": value})
+
+
+def test_synthesis_keeps_its_existing_agrees_coercion():
+    from src.mcp_handlers.schemas.dialectic import DialecticParams
+
+    DialecticParams.model_validate({"action": "synthesis", "session_id": "s", "agrees": 1})
