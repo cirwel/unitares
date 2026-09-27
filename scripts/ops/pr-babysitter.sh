@@ -41,9 +41,9 @@
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
 # outright. Anything else is stale
-# until the label is re-applied, which pins afresh. A label is pinned only if
+# until the label is removed and re-added, which pins afresh. A label is pinned only if
 # the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
-# with no pin (the script was down, or its state lost) must be re-applied. The
+# with no pin (the script was down, or its state lost) must be removed and re-added. The
 # residual gap: a commit made before the label but pushed before the script
 # first sees it (normally the next tick, never beyond that window) is pinned
 # as approved.
@@ -137,7 +137,7 @@ approval_times() {
 # SHA instead. A later head stays covered only while the fingerprint matches:
 # commit metadata (committer name, message, even a web-flow signature) is
 # author-controlled or API-mintable, so it cannot prove a commit was only a
-# base update, but the content can. A re-applied label pins afresh.
+# base update, but the content can. A removed-and-re-added label pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
 pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
@@ -256,7 +256,7 @@ while read -r pr; do
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
@@ -267,7 +267,7 @@ while read -r pr; do
     # what was approved.
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
-      log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      log "#$n approval at $labelled_at was never pinned and is ${age}m old; remove and re-add $LABEL to approve its head"
       continue
     fi
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
@@ -277,7 +277,7 @@ while read -r pr; do
     if [ "$pinned_sha" != "$head" ]; then
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
-        log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        log "#$n changed since its approval at ${pinned_sha:0:8}; remove and re-add $LABEL to approve ${head:0:8}"
         continue
       fi
       pin "$n" "$head" "$labelled_at" "$fp" || true

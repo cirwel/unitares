@@ -618,10 +618,10 @@ the operator's machine is awake.
   unchanged, which a clean base update preserves; commit metadata is
   author-controlled and proves nothing. It arms with `--match-head-commit` on
   that head. A push after the label makes the approval stale, and the PR is
-  skipped until the label is re-applied. A label is pinned only if the
+  skipped until the label is removed and re-added. A label is pinned only if the
   script sees it within 15 minutes of going on; an older label with no pin
   (the machine was asleep, or the script's state was lost) must be
-  re-applied. The residual gap is a commit made before the label but pushed
+  removed and re-added. The residual gap is a commit made before the label but pushed
   before the script first sees it (normally the next five-minute tick, never
   beyond those 15 minutes), which gets pinned as approved.
 - **What the pin is for.** It catches honest mistakes: a follow-up pushed
@@ -759,6 +759,7 @@ this entirely).
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | Operator wants one PR to land outside the queue | `gh pr merge --auto <n>`, operator only (it holds the queue's slot until it lands; agents queue with the label instead) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
