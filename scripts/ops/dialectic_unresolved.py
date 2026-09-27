@@ -217,7 +217,8 @@ SUPERSEDER_QUERY = """
 SELECT s.session_id, s.created_at, v.timestamp AS accepted_at,
        COALESCE(NULLIF(s.topic, ''), s.reason, '') AS subject,
        concat_ws(E'\\n', s.topic, s.reason,
-                 (SELECT string_agg(concat_ws(' ', t.root_cause, t.reasoning), E'\\n')
+                 (SELECT string_agg(concat_ws(' ', t.root_cause, t.reasoning,
+                                                    t.proposed_conditions::text), E'\\n')
                   FROM core.dialectic_messages t
                   WHERE t.session_id = s.session_id
                     AND t.message_type = 'thesis')) AS text

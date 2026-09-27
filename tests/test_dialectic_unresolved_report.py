@@ -825,5 +825,10 @@ class TestSupersederQueryShape:
         assert "LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id" in q
         assert "(probe|canary)" in q and "^RP[0-9]" in q
 
+    def test_a_citation_in_the_thesis_conditions_is_read(self):
+        """Review round 3 on #2511: a re-review may cite the prior session
+        only in a proposed condition."""
+        assert "t.proposed_conditions::text" in report.SUPERSEDER_QUERY
+
     def test_the_acceptance_time_is_read(self):
         assert "v.timestamp AS accepted_at" in report.SUPERSEDER_QUERY
