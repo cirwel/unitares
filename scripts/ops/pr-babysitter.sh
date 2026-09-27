@@ -16,23 +16,30 @@
 #
 # This script keeps exactly one PR armed at a time. Each tick:
 #   1. Tidy the slot. An armed PR carrying the approval label that has become
-#      CONFLICTING, or whose checks failed on its current head, is disarmed so
-#      it stops holding the slot; its label stays, so it returns to the queue.
-#   2. If a PR is still armed (including one the maintainer armed by hand), it
-#      holds the slot. If it is BEHIND and neither the base nor its arming has
+#      CONFLICTING, whose checks failed on its current head, or that has a check
+#      parked for approval, is disarmed so it stops holding the slot; its label
+#      stays, so it returns to the queue.
+#   2. If a PR is still armed (including one the maintainer armed by hand, which
+#      the script never disarms, even while it conflicts), it holds the slot. If it is BEHIND and neither the base nor its arming has
 #      moved for PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not
 #      acted, so update that one branch. Then stop.
 #   3. Otherwise walk the queue in the order the label was applied and arm the
-#      first PR that can go: approval newer than its last pushed commit, no
+#      first PR that can go: its head still the one the approval covers, no
 #      open "merge after #N" dependency, MERGEABLE, no check needing approval.
+#      It is armed with --match-head-commit on that head.
 #      A PR whose checks failed on an up-to-date head gets its failed Actions
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
 #
 # The approval label is the maintainer's merge decision made ahead of time,
 # exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
-# shared contract). It approves the PR as it stood when the label went on: a
-# commit pushed afterwards makes it stale until the label is re-applied.
+# shared contract). It approves the PR as it stood when the label went on. The
+# script pins the head it first sees under a label (STATE_FILE); a later head
+# stays covered only if everything since the pin is a base-update merge, and a
+# commit dated after the label is refused outright. Anything else is stale
+# until the label is re-applied, which pins afresh. The residual gap: a commit
+# made before the label but pushed between the label and the next tick (at
+# most five minutes) is pinned as approved.
 #
 # Deliberately out of scope — these stay human or session judgment:
 #   - readying drafts (the draft→ready mark is the owning agent's gate),
@@ -48,6 +55,8 @@ RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
+# Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
+STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
 
 log() { echo "$(date -u +%FT%TZ) $*"; }
 
@@ -66,7 +75,7 @@ command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body) \
+  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # Shared jq vocabulary. A check has FAILED when a finished run concluded badly
@@ -99,6 +108,8 @@ while read -r pr; do
   reason=""
   if [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
+  elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
+    reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
        && [ "$(q 'failed | length' <<<"$pr")" -gt 0 ] \
        && [ "$(q 'pending | length' <<<"$pr")" -eq 0 ]; then
@@ -116,19 +127,21 @@ while read -r pr; do
 done <<<"$ours_armed"
 
 # --- 2. a PR holds the slot ---------------------------------------------------
-# Any armed, conflict-free PR on the base holds it, except one this tick just
-# disarmed. A hand-armed PR counts: a second armed PR is exactly the parallel
-# CI re-run the queue exists to prevent.
+# Any armed PR on the base holds it, except one this tick just disarmed. A
+# hand-armed PR counts even when it conflicts: the script never disarms it, so
+# arming another would leave two armed the moment its conflict is resolved,
+# which is exactly the parallel CI re-run the queue exists to prevent. A long
+# hold is logged below.
 holder=$(q -c --arg b "$BASE" --arg skip "$disarmed" \
   'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
-              and .mergeable != "CONFLICTING"
               and (.number as $n | $skip | contains(" \($n) ") | not)))
    | sort_by(.number) | .[0] // empty' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 if [ -n "$holder" ]; then
   n=$(jq -r .number <<<"$holder")
-  armed_at=$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$holder")
+  # gh marshals a missing time as year 0001; treat that as unknown.
+  armed_at=$(jq -r '.autoMergeRequest.enabledAt // empty | select(startswith("0001-") | not)' <<<"$holder")
   if [ -n "$armed_at" ]; then
     held=$(minutes_since "$armed_at")
     [ "$held" -ge "$STALL_WARN_MIN" ] \
@@ -164,6 +177,23 @@ approval_times() {
           else empty end'
 }
 
+# The head an approval covers. First sight of a label pins the PR's head then;
+# later heads stay covered only if every commit since the pin is a base-update
+# merge. A re-applied label (a newer label event) pins afresh.
+pinned_head() { awk -v n="$1" -v l="$2" '$1 == n && $3 == l { h = $2 } END { if (h) print h }' "$STATE_FILE" 2>/dev/null; }
+pin_head() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3" >>"$STATE_FILE"
+}
+only_base_updates_since() {  # <pr> <pinned-sha>: every PR commit after the pin is a base-update merge
+  gh api --paginate "repos/$REPO/pulls/$1/commits" 2>/dev/null | jq -rs --arg pin "$2" '
+    add // [] | (map(.sha) | index($pin)) as $i
+    | if $i == null then false
+      else .[$i + 1:] | all(.commit.committer.name == "GitHub"
+                            and (.commit.message | startswith("Merge branch ")))
+      end' 2>/dev/null | grep -qx true
+}
+
 queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
   'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
               and labelled($l))) | .[]' <<<"$prs") \
@@ -182,7 +212,18 @@ while read -r pr; do
     log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
     continue
   fi
-  ordered+="$labelled_at $n"$'\n'
+  head=$(jq -r .headRefOid <<<"$pr")
+  pin=$(pinned_head "$n" "$labelled_at")
+  if [ -z "$pin" ]; then
+    pin_head "$n" "$head" "$labelled_at" || { log "#$n could not record its approved head; skipped"; continue; }
+  elif [ "$pin" != "$head" ]; then
+    if ! only_base_updates_since "$n" "$pin"; then
+      log "#$n head moved past its approved ${pin:0:8}; re-apply $LABEL to approve ${head:0:8}"
+      continue
+    fi
+    pin_head "$n" "$head" "$labelled_at" || true
+  fi
+  ordered+="$labelled_at $n $head"$'\n'
 done <<<"$queued"
 
 # "merge after #N" / "merge after owner/repo#N" in the body: wait until N merges.
@@ -202,7 +243,7 @@ dependency_open() {
   return 1
 }
 
-while read -r _ n; do
+while read -r _ n head; do
   [ -n "${n:-}" ] || continue
   pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
 
@@ -250,8 +291,11 @@ while read -r _ n; do
       act gh run rerun "$run" --failed -R "$REPO" && started=$((started + 1))
     done
     if [ "$started" -eq 0 ]; then
-      log "#$n: no re-run started; retry not spent"
-      act gh pr edit "$n" -R "$REPO" --remove-label "$RETRIED_LABEL" || true
+      if act gh pr edit "$n" -R "$REPO" --remove-label "$RETRIED_LABEL"; then
+        log "#$n: no re-run started; retry not spent"
+      else
+        log "#$n: no re-run started, and $RETRIED_LABEL could not be removed; remove it by hand to retry"
+      fi
     else
       log "#$n: $failed failing check(s); re-ran $started run(s) once"
     fi
@@ -261,7 +305,9 @@ while read -r _ n; do
   log "#$n arming (head of queue)"
   # The repo deletes merged branches itself, so no --delete-branch: gh would
   # also try to delete a local branch in whatever directory this runs from.
-  act gh pr merge "$n" -R "$REPO" --auto --squash \
+  # --match-head-commit: arm only the head the approval covers, so a push that
+  # lands between this tick's read and the call is refused, not merged.
+  act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head" \
     || log "#$n arm failed; nothing else armed this tick"
   # Stop either way. After a failed call we cannot tell whether GitHub armed
   # it, and the next tick reads the real state.

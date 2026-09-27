@@ -572,10 +572,13 @@ hand-merging maintainer who is watching reaches it too. It runs only while
 the operator's machine is awake.
 
 - **The label is the merge decision made ahead of time**, so like arming it
-  is the maintainer's, never an agent's. It approves the PR as it stood: a
-  commit pushed after the label went on (other than a base-update merge)
-  makes the approval stale, and the PR is skipped until the label is
-  re-applied.
+  is the maintainer's, never an agent's. It approves the PR as it stood: the
+  script pins the head it first sees under the label, keeps it covered
+  through base-update merges only, and arms with `--match-head-commit` on that
+  head. A push after the label makes the approval stale, and the PR is
+  skipped until the label is re-applied. The residual gap is a commit made
+  before the label but pushed between the label and the next tick (at most
+  five minutes), which gets pinned as approved.
 - **It honours declared order.** A "merge after #N" (or
   `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
   unreadable dependency holds it too.
@@ -590,10 +593,12 @@ the operator's machine is awake.
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
 - **The slot.** Any armed PR holds it, including one armed by hand. A labelled
-  armed PR that turns `CONFLICTING`, or whose checks failed on its current
-  head, is disarmed so it stops holding the queue; its label stays. A PR armed
-  by hand is never disarmed by the script. A hold longer than 90 minutes is
-  logged.
+  armed PR that turns `CONFLICTING`, whose checks failed on its current head,
+  or that has a check parked for approval, is disarmed so it stops holding
+  the queue; its label stays. A PR armed by hand is never disarmed by the
+  script, so it keeps the slot even while it conflicts (arming another would
+  leave two armed once the conflict is resolved); a hold longer than 90
+  minutes is logged, and clearing it is the maintainer's call.
 - **The single fallback update.** If the armed PR is `BEHIND` and neither the
   base nor its arming has moved for 10 minutes, GitHub's updater has not
   acted and the script updates that one branch. The grace period is what

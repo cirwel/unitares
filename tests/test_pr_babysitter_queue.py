@@ -34,6 +34,10 @@ case "$1 $2" in
 esac
 if [ "$1" = "api" ]; then
   case "$*" in
+    */pulls/*/commits*)
+      n=$(sed -E 's#.*pulls/([0-9]+)/commits.*#\1#' <<<"$*")
+      cat "$d/commits_$n.json" 2>/dev/null || echo '[]'
+      exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
@@ -82,6 +86,7 @@ def _pr(
     base: str = "master",
     checks: list[dict] | None = None,
     body: str = "",
+    head: str | None = None,
 ) -> dict:
     return {
         "number": number,
@@ -95,6 +100,7 @@ def _pr(
         "labels": [{"name": label} for label in labels],
         "statusCheckRollup": checks if checks is not None else [_check("test")],
         "body": body,
+        "headRefOid": head or f"sha{number}",
     }
 
 
@@ -126,6 +132,8 @@ def _run(
     base_idle_min: float = 1,
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
+    commits: dict[int, list] | None = None,
+    pins: list[str] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -141,6 +149,12 @@ def _run(
     timelines = timelines or {}
     for pr in prs:
         (d / f"timeline_{pr['number']}.json").write_text(json.dumps(timelines.get(pr["number"], _timeline())))
+    for number, items in (commits or {}).items():
+        (d / f"commits_{number}.json").write_text(json.dumps(items))
+    state_file = tmp_path / "state" / "approvals"
+    if pins is not None:
+        state_file.parent.mkdir(exist_ok=True)
+        state_file.write_text("".join(line + "\n" for line in pins))
     for key, value in (states or {}).items():
         repo, number = key.split("#")
         (d / f"state_{repo.replace('/', '_')}_{number}").write_text(value + "\n")
@@ -151,6 +165,7 @@ def _run(
             "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
             "FAKE_GH_DIR": str(d),
             "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_STATE_FILE": str(state_file),
             **env,
         },
         text=True,
@@ -161,8 +176,14 @@ def _run(
     return [line for line in (d / "calls.log").read_text().splitlines() if line], result.stdout
 
 
-def _arm(n: int) -> str:
-    return f"pr merge {n} -R o/r --auto --squash"
+def _arm(n: int, head: str | None = None) -> str:
+    return f"pr merge {n} -R o/r --auto --squash --match-head-commit {head or f'sha{n}'}"
+
+
+def _commit(sha: str, *, updater: bool = False) -> dict:
+    if updater:
+        return {"sha": sha, "commit": {"committer": {"name": "GitHub"}, "message": "Merge branch 'master' into x"}}
+    return {"sha": sha, "commit": {"committer": {"name": "Kenny"}, "message": "fix: more"}}
 
 
 # --- the queue -----------------------------------------------------------------
@@ -312,6 +333,16 @@ def test_no_rerun_without_the_marker(tmp_path: Path) -> None:
     assert "not re-running" in out
 
 
+def test_a_failed_rollback_says_the_retry_is_spent(tmp_path: Path) -> None:
+    _, out = _run(
+        tmp_path,
+        [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])],
+        fail=("run rerun", "--remove-label"),
+    )
+    assert "could not be removed; remove it by hand" in out
+    assert "retry not spent" not in out
+
+
 def test_a_retry_that_started_nothing_is_not_spent(tmp_path: Path) -> None:
     calls, out = _run(
         tmp_path, [_pr(9, state="BLOCKED", checks=[_check("test", "FAILURE", run=77)])], fail=("run rerun",)
@@ -368,9 +399,24 @@ def test_an_armed_pr_failed_on_a_stale_head_keeps_the_slot(tmp_path: Path) -> No
     assert calls == []
 
 
-def test_a_hand_armed_pr_is_never_disarmed(tmp_path: Path) -> None:
+def test_a_hand_armed_pr_is_never_disarmed_and_keeps_the_slot_while_conflicting(tmp_path: Path) -> None:
+    # Arming #4 would leave two armed the moment #3's conflict is resolved.
     calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)])
-    assert calls == [_arm(4)]
+    assert calls == []
+
+
+def test_an_approved_armed_pr_parked_for_approval_is_disarmed(tmp_path: Path) -> None:
+    calls, _ = _run(
+        tmp_path, [_pr(3, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "ACTION_REQUIRED")]), _pr(4)]
+    )
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+
+
+def test_a_zero_arming_time_is_not_a_decades_long_hold(tmp_path: Path) -> None:
+    pr = _pr(3, armed_min_ago=5, state="BLOCKED")
+    pr["autoMergeRequest"]["enabledAt"] = "0001-01-01T00:00:00Z"
+    _, out = _run(tmp_path, [pr])
+    assert "held the queue" not in out
 
 
 def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
@@ -397,6 +443,65 @@ def test_behind_holder_is_updated_once_both_have_sat_idle(tmp_path: Path) -> Non
 def test_a_long_hold_is_logged(tmp_path: Path) -> None:
     _, out = _run(tmp_path, [_pr(3, armed_min_ago=120, state="BLOCKED")])
     assert "#3 has held the queue for 12" in out
+
+
+# --- the approved head ------------------------------------------------------------
+
+
+def test_first_sight_pins_the_head_and_arms_that_head(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, head="aaa")])
+    assert calls == [_arm(1, "aaa")]
+    pins = (tmp_path / "state" / "approvals").read_text().split()
+    assert pins[:2] == ["1", "aaa"]
+
+
+def test_a_head_moved_by_a_push_since_the_pin_is_stale(tmp_path: Path) -> None:
+    tl = _timeline(60)
+    labelled = tl[-1]["created_at"]
+    calls, out = _run(
+        tmp_path,
+        [_pr(1, head="bbb")],
+        pins=[f"1 aaa {labelled}"], timelines={1: tl},
+        commits={1: [_commit("aaa"), _commit("bbb")]},
+    )
+    assert calls == []
+    assert "#1 head moved past its approved aaa" in out
+
+
+def test_a_head_moved_only_by_base_updates_stays_approved(tmp_path: Path) -> None:
+    tl = _timeline(60)
+    labelled = tl[-1]["created_at"]
+    calls, _ = _run(
+        tmp_path,
+        [_pr(1, head="ccc")],
+        pins=[f"1 aaa {labelled}"], timelines={1: tl},
+        commits={1: [_commit("aaa"), _commit("bbb", updater=True), _commit("ccc", updater=True)]},
+    )
+    assert calls == [_arm(1, "ccc")]
+
+
+def test_a_force_push_that_drops_the_pin_is_stale(tmp_path: Path) -> None:
+    tl = _timeline(60)
+    labelled = tl[-1]["created_at"]
+    calls, _ = _run(
+        tmp_path, [_pr(1, head="zzz")], pins=[f"1 aaa {labelled}"], timelines={1: tl}, commits={1: [_commit("zzz")]}
+    )
+    assert calls == []
+
+
+def test_a_reapplied_label_pins_the_new_head(tmp_path: Path) -> None:
+    calls, _ = _run(
+        tmp_path,
+        [_pr(1, head="bbb")],
+        pins=["1 aaa 2020-01-01T00:00:00Z"],  # the pin belongs to an older label event
+        commits={1: [_commit("aaa"), _commit("bbb")]},
+    )
+    assert calls == [_arm(1, "bbb")]
+
+
+def test_dry_run_records_no_pin(tmp_path: Path) -> None:
+    _run(tmp_path, [_pr(1)], PR_QUEUE_DRY_RUN="1")
+    assert not (tmp_path / "state" / "approvals").exists()
 
 
 # --- plumbing -------------------------------------------------------------------
