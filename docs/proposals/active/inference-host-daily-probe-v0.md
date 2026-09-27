@@ -68,7 +68,7 @@ row below:
 
 | Host state | Action | Quota spent |
 |---|---|---|
-| A previous probe's timed-out execution was still live (the cleanup pass stopped it) | If the host is still enabled, raise its finding to **high**; if the operator has since switched it off, treat it as the next row. No new probe either way. | 0 |
+| A previous probe's timed-out execution was still live at the cleanup pass (whether or not the stop succeeded) | If the host is still enabled, raise its finding to **high**; if the operator has since switched it off, treat it as the next row. No new probe either way. | 0 |
 | Not enabled by the operator (`UNITARES_HOST_ADAPTER_ENABLED` off, or the host listed in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. An enabled host whose CLI has gone missing is not skipped: it is probed, fails at preflight at no quota cost, and is reported. | 0 |
 | In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
@@ -115,7 +115,8 @@ record depends on what the run observed for the host:
 | Probe succeeded, or passive evidence | none | all of the host's |
 | Probe failed with class C | C (re-posted under the backoff) | every other class |
 | Cooldown of class C | C: the cooldown is itself a fresh failure of that class | pre-CLI and unclassified, because a cooldown is recorded only from a call whose CLI ran to completion (`dispatch_phase == "terminal"`, which includes a CLI reporting itself logged out), so gov's dispatch path worked |
-| Hung call stopped by the cleanup pass | the timeout record, raised to high | none |
+| Hung call found live by the cleanup pass | the timeout record, raised to high (and noting a failed stop) | none |
+| Part of a shared `gov-dispatch` failure | the shared record | the host's own record of that same pre-CLI failure, which the shared one replaces |
 | Operator switched the host off | none | all, with reason `not_enabled` |
 
 This covers a changed failure: a host that failed preflight yesterday and
