@@ -1318,3 +1318,40 @@ def test_local_edits_block_migrations_even_on_the_target_release(tmp_path):
     assert result.returncode == 1
     assert "local changes to tracked files" in result.stderr
     assert " up " not in log.read_text() and " exec " not in log.read_text()
+
+
+
+def test_untracked_migration_files_block_the_update(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    stray = repo / "db" / "postgres" / "migrations"
+    stray.mkdir(parents=True)
+    (stray / "999_local_experiment.sql").write_text("DROP TABLE everything;\n")
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "999_local_experiment.sql" in result.stderr
+    assert " up " not in log.read_text() and " exec " not in log.read_text()
+
+
+def test_on_the_target_release_nothing_starts_before_confirmation(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0"],
+                            env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert result.returncode == 1
+    assert "re-run with --yes" in result.stderr
+    assert " up " not in log.read_text()
+
+
+def test_migration_uri_encodes_credentials(tmp_path):
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p;/^_migration_db_url()/,/^}}/p' "{CLI}")"
+_migration_db_url
+'''
+    env = os.environ.copy()
+    env.update(POSTGRES_USER="gov user", POSTGRES_PASSWORD="p@ss/w#rd%", POSTGRES_DB="governance")
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "postgresql://gov%20user:p%40ss%2Fw%23rd%25@localhost:5432/governance"
