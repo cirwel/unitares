@@ -800,7 +800,10 @@ async def test_record_result_hint_names_the_route_a_prediction_bound_outcome_has
     first = await submit(db, monitors, pid)
     assert first["idempotent_replay"] is False
     hint = _record_result_hint(first, {"prediction_id": pid})
-    assert "repeating this identical call with response_mode='full'" in hint
+    assert (
+        "repeating this identical call under the same identity "
+        "(pass client_session_id) with response_mode='full'"
+    ) in hint
     assert "records no second outcome" in hint
     assert "idempotent_replay: true" in hint
     assert "PREDICTION_REUSE_CONFLICT" in hint

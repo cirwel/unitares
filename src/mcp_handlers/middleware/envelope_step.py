@@ -1417,7 +1417,8 @@ def _as_bool(value: Any, *, default: bool) -> bool:
 # outcome; see _write_ack_raw_policy.
 _PREDICTION_BOUND_OUTCOME_HINT = (
     "There is no read by outcome id. This outcome is bound to its "
-    "prediction_id, so repeating this identical call with "
+    "prediction_id, so repeating this identical call under the same identity "
+    "(pass client_session_id) with "
     "response_mode='full' returns its complete payload (including the full "
     "EISV snapshot semantics) as a replay (idempotent_replay: true) and "
     "records no second outcome, while the binding is retained. A call that "

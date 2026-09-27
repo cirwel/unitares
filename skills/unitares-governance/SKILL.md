@@ -79,7 +79,8 @@ a plain fresh `start_session`, and the write aliases `store_finding`,
 `update_finding` and `record_result` omit it by default. The reads, check-ins
 and mint take their documented full-mode option to include it. A write ack's
 `raw_governance_hint` names where to read more, and names a repeat only where
-it writes nothing: an identical prediction-bound `record_result` repeated with
+it writes nothing: an identical prediction-bound `record_result` repeated under
+the same identity (pass `client_session_id`) with
 `response_mode="full"` replays the stored outcome in full. Otherwise it is
 `response_mode="full"` on a later `record_result` (without a `prediction_id` a
 repeat records a second outcome), or a `knowledge(action="details")` read of the

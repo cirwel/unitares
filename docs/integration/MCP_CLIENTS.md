@@ -356,7 +356,8 @@ payload. On the others, `raw_governance_hint` names the route to more:
 `response_mode="full"` on `sync_state` and `search_shared_memory`,
 `verbosity="full"` on `check_working_state`, and for `record_result`, which has
 no read by outcome id, one of two routes. An outcome recorded with a
-`prediction_id` can be replayed: the identical call repeated with
+`prediction_id` can be replayed: the identical call repeated under the same
+identity (pass `client_session_id`) with
 `response_mode="full"` returns the stored outcome in full
 (`idempotent_replay: true`) and records no second outcome while the binding is
 retained, and a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`.
