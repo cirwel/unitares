@@ -357,12 +357,14 @@ class TestCopiesCountOnce:
     NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
 
     def _fp(self, file, *, h="c0ffee000000", pattern="P1", dismissed_at="2026-09-26T12:00:00Z",
-            status="dismissed"):
-        return _row(pattern=pattern, file=file, status=status,
-                    reason="fp" if status == "dismissed" else None,
-                    ts="2026-09-26T00:00:00Z", dismissed_at=dismissed_at,
-                    confirmed_at=dismissed_at if status == "confirmed" else None,
-                    line_content_hash=h)
+            status="dismissed", line=1):
+        row = _row(pattern=pattern, file=file, status=status,
+                   reason="fp" if status == "dismissed" else None,
+                   ts="2026-09-26T00:00:00Z", dismissed_at=dismissed_at,
+                   confirmed_at=dismissed_at if status == "confirmed" else None,
+                   line_content_hash=h)
+        row["line"] = line
+        return row
 
     def _bucket(self, rows, key=("P1", "app")):
         result = precision_by_pattern_and_class(
@@ -391,6 +393,25 @@ class TestCopiesCountOnce:
         ]
         one = self._bucket([rows[0]]).weighted_dismissed
         assert self._bucket(rows).weighted_dismissed == pytest.approx(4 * one)
+
+    def test_same_text_handlers_in_one_file_count_separately(self):
+        """Repeated `except Exception:` clauses in one file are distinct
+        handlers. Merging them would turn ten confirmations and one
+        dismissal into one of each and bias precision down."""
+        rows = [
+            self._fp("/wt/a/src/pkg/mod.py", status="confirmed", line=n)
+            for n in range(10, 110, 10)
+        ]
+        rows.append(self._fp("/wt/a/src/pkg/mod.py", line=200))
+        bucket = self._bucket(rows)
+        one = self._bucket([rows[0]]).weighted_confirmed
+        assert bucket.weighted_confirmed == pytest.approx(10 * one)
+        assert bucket.weighted_dismissed == pytest.approx(one)
+
+    def test_line_shifted_copy_still_counts_per_line(self):
+        rows = [self._fp("/wt/a/src/pkg/mod.py", line=3), self._fp("/wt/b/src/pkg/mod.py", line=5)]
+        one = self._bucket([rows[0]]).weighted_dismissed
+        assert self._bucket(rows).weighted_dismissed == pytest.approx(2 * one)
 
     def test_confirmed_and_dismissed_copies_both_count(self):
         rows = [

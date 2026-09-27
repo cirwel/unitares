@@ -315,13 +315,18 @@ def _copy_key(row: Mapping[str, object], pattern: str, file_path: str) -> tuple 
     Watcher state is shared across worktrees and the fingerprint keeps the
     absolute path and line, so one handler dismissed in four worktrees is
     four rows. Those are one judgement about one piece of code, so they
-    count once. The key is the pattern, the line content hash and the last
-    two path components: most resolved rows point into removed worktrees,
-    so the repo-relative path cannot be asked of git. Two different files
-    that share a parent directory name and a file name, or two handlers in
-    one file with the same line text, therefore count once. Both undercount
-    evidence, which delays demotion rather than hiding findings. A file at
-    a checkout's top level keeps the checkout name in its key and is not
+    count once. The key is the pattern, the line content hash, the line
+    number and the last two path components: most resolved rows point into
+    removed worktrees, so the repo-relative path cannot be asked of git.
+
+    The line number keeps distinct handlers with the same text in one file
+    (repeated ``except Exception:`` clauses) apart. Merging those would not
+    just shrink the sample: ten confirmed handlers and one dismissed one
+    would count as one of each, biasing precision down. The cost is that a
+    copy whose line shifted between worktrees still counts once per line,
+    as every row did before. Two rows merge only when they share the parent
+    directory name, file name, line number and line text. A file at a
+    checkout's top level keeps the checkout name in its key and is not
     merged across worktrees.
     """
     content_hash = row.get("line_content_hash")
@@ -330,7 +335,7 @@ def _copy_key(row: Mapping[str, object], pattern: str, file_path: str) -> tuple 
     if pattern in UNGROUPED_PATTERNS:
         return None
     tail = Path(file_path).parts[-2:]
-    return (pattern, content_hash, *tail)
+    return (pattern, content_hash, str(row.get("line")), *tail)
 
 
 @dataclass(frozen=True)
