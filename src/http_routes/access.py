@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress as _ipaddress
+import os
 import secrets
 
 from starlette.responses import JSONResponse
@@ -83,16 +84,47 @@ def _build_http_session_signals(request):
     )
 
 # ---------------------------------------------------------------------------
-# Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
+# Trusted networks: loopback and the private RFC1918 ranges, plus any the
+# operator adds with UNITARES_TRUSTED_NETWORKS
 # ---------------------------------------------------------------------------
+# Built-in set. A Docker Compose install reaches the server through the bridge
+# gateway, which is in 172.16.0.0/12. Overlay or VPN ranges are not built in:
+# 100.64.0.0/10 (the CGNAT range that Tailscale assigns from, and that some
+# ISPs use for their own subscribers) was, which trusted one operator's network
+# layout on every install. An operator on such a network lists it explicitly.
 _TRUSTED_NETWORKS = [
     _ipaddress.ip_network("127.0.0.0/8"),
     _ipaddress.ip_network("::1/128"),
-    _ipaddress.ip_network("100.64.0.0/10"),   # Tailscale CGNAT
     _ipaddress.ip_network("192.168.0.0/16"),
     _ipaddress.ip_network("10.0.0.0/8"),
     _ipaddress.ip_network("172.16.0.0/12"),
 ]
+
+_extra_networks_cache: tuple[str, tuple] = ("", ())
+
+
+def extra_trusted_networks() -> tuple:
+    """Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS).
+
+    Comma-separated CIDRs or addresses, for example ``100.64.0.0/10`` for a
+    Tailscale tailnet. Unset or empty adds nothing. An entry that does not
+    parse is logged and skipped, never widened into something broader.
+    """
+    global _extra_networks_cache
+    raw = os.getenv("UNITARES_TRUSTED_NETWORKS", "").strip()
+    if raw == _extra_networks_cache[0]:
+        return _extra_networks_cache[1]
+    nets = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            nets.append(_ipaddress.ip_network(item, strict=False))
+        except ValueError:
+            logger.warning("UNITARES_TRUSTED_NETWORKS: ignoring %r, not a CIDR or address", item)
+    _extra_networks_cache = (raw, tuple(nets))
+    return _extra_networks_cache[1]
 
 
 # ---------------------------------------------------------------------------
@@ -114,7 +146,7 @@ def _is_trusted_network(request) -> bool:
         return False
     try:
         addr = _ipaddress.ip_address(client_ip)
-        return any(addr in net for net in _TRUSTED_NETWORKS)
+        return any(addr in net for net in (*_TRUSTED_NETWORKS, *extra_trusted_networks()))
     except ValueError:
         return False
 
@@ -189,7 +221,8 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
         origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
         return bool(origin) and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
 
-    # Loopback and Tailscale stay unauthenticated in local posture.
+    # Trusted networks (loopback, RFC1918, UNITARES_TRUSTED_NETWORKS) stay
+    # unauthenticated in local posture.
     if _is_trusted_network(websocket):
         return True
     # An unset local token is deny, not "gate disabled". Passkey sessions and
@@ -205,8 +238,9 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     a DB-validated dashboard session is required and the trusted-network bypass
     does **not** apply. This closes a real gap: the
     trusted set includes every RFC1918 range (10/8, 192.168/16, 172.16/12) plus
-    Tailscale, so a hosted server behind a cloud proxy (source IP typically
-    ``10.x``) would otherwise bypass auth on the write path. Same token, same
+    any UNITARES_TRUSTED_NETWORKS entries, so a hosted server behind a cloud
+    proxy (source IP typically ``10.x``) would otherwise bypass auth on the
+    write path. Same token, same
     rule, both transports.
 
     Local / self-host default — no MCP bearer configured: trusted networks
