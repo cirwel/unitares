@@ -27,6 +27,7 @@ source_files:
   - unitares/dashboard/tests/app-extensions.test.js
   - unitares/src/http_api.py
   - unitares/src/http_routes/dashboard.py
+  - unitares/src/http_routes/packs.py
   - unitares/src/http_routes/telemetry.py
   - unitares/src/governance_trend.py
   - unitares/dashboard/tests/landing-agent-first.test.js
@@ -254,7 +255,9 @@ badge). The WS plumbing lives in `ws.js`.
 
 The redesign sends the read bearer token everywhere; core sections are
 read-only except one area. (A finding-adjudication write endpoint, with
-`X-Unitares-Csrf: 1`, is still served, but its view is now an extension.)
+`X-Unitares-Csrf: 1`, is served only when the `reference-residents` route pack
+is mounted via `UNITARES_ROUTE_PACKS`, and its view is an extension. An
+extension that calls a pack route needs that pack enabled on the server.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the
