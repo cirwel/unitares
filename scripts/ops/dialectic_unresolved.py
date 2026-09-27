@@ -60,6 +60,32 @@ would let every change through.
 Session ids may be given as unambiguous prefixes. A prefix matching more than
 one session is refused, never guessed, and a batch with any bad id writes
 nothing.
+
+Supersession (automatic)
+------------------------
+Most of the backlog was never waiting on anyone: a LATER review of the same
+subject was accepted, and this list could not see it. The 2026-09-18 triage
+found 8 of 45 superseded that way; the 2026-09-24 one, 31 of 46. So a review is
+also left off the default listing when a later session whose reviewer's latest
+verdict is ``agrees=true`` either
+
+* cites this session's id in its topic, reason or thesis (a493adde cites
+  196acc37, edee829b cites e6dbfb10, 94001e07 cites 88dd3e27), or
+* has the same subject PR: the first PR its topic names (9cd71f4a accepted
+  unitares#2025 after 8da00e5b, 5db1710c and 0dc43b1d rejected earlier heads
+  of it; faee73eb accepted #2348 twelve minutes after 78129de5 rejected it).
+  Two subject PRs differ only by number, or by two EXPLICIT repos (a URL or
+  ``owner/repo``); see ``PrRef``.
+
+Only the subject PR counts, not every PR a thesis mentions: a review of #2064
+"stacked on #2063" is not answered by an accepted review of #2063. A same-subject
+review that names neither (83edd2d6 re-reviewing 2958a8ff's executor at a new
+commit) is not machine-detectable and stays for ``ack``.
+
+Like an acknowledgement, supersession changes nothing in the database: the
+objection still stands in its own session, and nothing here says the later
+review met its conditions. It is counted, never dropped silently, and ``--all``
+shows each superseded review with the session that superseded it.
 """
 
 from __future__ import annotations
@@ -69,8 +95,10 @@ import datetime as dt
 import getpass
 import json
 import os
+import re
 import sys
 from collections import Counter
+from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 CONNECT_TIMEOUT_S = 5
@@ -179,6 +207,132 @@ ORDER BY u.created_at DESC
 """
 
 
+# Sessions whose reviewer's latest verdict ACCEPTED: the only kind that can
+# supersede an objection. Keyed on the verdict (`agrees` on the reviewer's
+# synthesis), not on `status`, which is protocol state. A self-review
+# (reviewer = paused agent) is excluded: it can never answer anyone's objection.
+# Probe traffic is excluded by the same label rule as QUERY: a canary accepting
+# the same PR, or citing an organic session, must not hide an organic objection.
+SUPERSEDER_QUERY = """
+SELECT s.session_id, s.created_at, v.timestamp AS accepted_at,
+       COALESCE(NULLIF(s.topic, ''), s.reason, '') AS subject,
+       concat_ws(E'\\n', s.topic, s.reason,
+                 (SELECT string_agg(concat_ws(' ', t.root_cause, t.reasoning,
+                                                    t.proposed_conditions::text), E'\\n')
+                  FROM core.dialectic_messages t
+                  WHERE t.session_id = s.session_id
+                    AND t.message_type = 'thesis')) AS text
+FROM core.dialectic_sessions s
+LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id
+JOIN LATERAL (
+    SELECT dm.agrees, dm.timestamp
+    FROM core.dialectic_messages dm
+    WHERE dm.session_id = s.session_id
+      AND dm.message_type = 'synthesis'
+      AND dm.agent_id = s.reviewer_agent_id
+    ORDER BY dm.timestamp DESC, dm.message_id DESC
+    LIMIT 1
+) v ON v.agrees IS TRUE
+WHERE s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id
+  AND COALESCE(pa.label, '') !~* '(probe|canary)'
+  AND COALESCE(pa.label, '') !~ '^RP[0-9]'
+  AND s.created_at >= now() - interval '1 day' * %(window_days)s
+"""
+
+# A PR reference, most specific form first:
+#   github.com/<owner>/<repo>/pull/<n>
+#   <owner>/<repo>#<n>, <owner>/<repo> PR #<n>
+#   PR #<n>, PRs #<n>
+# A bare "#<n>" is NOT one: it names issues and clocks as often as PRs, and a
+# canary probe's "(#1387 positive control)" matched a design review that cited
+# the #1387 clock, hiding a review nothing had answered.
+_PR_REF = re.compile(
+    r"github\.com/(?P<url_repo>[\w.-]+/[\w.-]+)/pull/(?P<url_n>\d+)"
+    r"|(?P<slug_repo>[\w.-]+/[\w.-]+)(?:#|\s+PRs?\s+#)(?P<slug_n>\d+)"
+    r"|\bPRs?\s+#(?P<word_n>\d+)",
+    re.IGNORECASE,
+)
+# Session ids are 16 hex; a citation shorter than 8 is not one.
+_HEX_RUN = re.compile(r"(?<![0-9a-f])[0-9a-f]{8,16}(?![0-9a-f])")
+
+
+@dataclass(frozen=True)
+class PrRef:
+    """A subject PR. ``repo`` is ``owner/repo`` when the text named it
+    unambiguously (a URL or ``owner/repo``), else None; a fork's #42 is not
+    upstream's #42. The word before "PR" is not trusted: it is a
+    repo in "fermata PR #59" and an adjective in "the current PR #2348", and
+    no stoplist separates the two."""
+
+    number: int
+    repo: Optional[str] = None
+
+    def __str__(self) -> str:
+        return f"{self.repo or ''}#{self.number}"
+
+    def same_as(self, other: "PrRef") -> bool:
+        if self.number != other.number:
+            return False
+        return self.repo is None or other.repo is None or self.repo == other.repo
+
+
+def subject_pr(text: str) -> Optional[PrRef]:
+    """The first PR a subject line names, or None."""
+    m = _PR_REF.search(text or "")
+    if not m:
+        return None
+    if m.group("url_n"):
+        return PrRef(int(m.group("url_n")), m.group("url_repo").lower())
+    if m.group("slug_n"):
+        return PrRef(int(m.group("slug_n")), m.group("slug_repo").lower())
+    return PrRef(int(m.group("word_n")))
+
+
+def find_supersessions(
+    rows: Sequence[Dict[str, Any]], superseders: Sequence[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Map each superseded review's id to the later accepted session that
+    superseded it, and the signal that matched. Pure.
+
+    A session never supersedes itself, anything created after it, or an
+    objection raised after its own acceptance.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+    # Oldest first, so the reported superseder is the EARLIEST later acceptance.
+    by_age = sorted(superseders, key=lambda s: _as_utc(s.get("created_at")) or epoch)
+    prepared = [
+        (s, _as_utc(s.get("created_at")), _as_utc(s.get("accepted_at")),
+         set(_HEX_RUN.findall((s.get("text") or "").lower())),
+         subject_pr(s.get("subject") or ""))
+        for s in by_age
+    ]
+    for r in rows:
+        sid = r["session_id"]
+        created = _as_utc(r.get("created_at"))
+        # The objection being hidden is the standing one; an acceptance that
+        # predates it cannot have answered it.
+        objection = _as_utc(r.get("standing_since")) or created
+        own_pr = subject_pr(r.get("topic") or "")
+        # Opened after this session, not merely accepted after its objection:
+        # a review opened earlier was reviewing an earlier state, and the safe
+        # failure here is to keep showing an objection (one `ack` clears it),
+        # never to hide one it did not answer (review round 2 on #2511).
+        for s, s_created, s_accepted, cited, s_pr in prepared:
+            if (s["session_id"] == sid or created is None or s_created is None
+                    or s_accepted is None or s_created <= created
+                    or objection is None or s_accepted <= objection):
+                continue
+            if any(sid.startswith(h) for h in cited):
+                out[sid] = {"session_id": s["session_id"], "signal": "cites_session_id"}
+                break
+            if own_pr and s_pr and own_pr.same_as(s_pr):
+                out[sid] = {"session_id": s["session_id"], "signal": "same_subject_pr",
+                            "pr": str(own_pr)}
+                break
+    return out
+
+
 def _run_read_only(dsn: str, sql: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     import psycopg2
     import psycopg2.extras
@@ -205,6 +359,10 @@ def _run_read_only(dsn: str, sql: str, params: Dict[str, Any]) -> List[Dict[str,
 
 def fetch(dsn: str, window_days: int) -> List[Dict[str, Any]]:
     return _run_read_only(dsn, QUERY, {"window_days": window_days})
+
+
+def fetch_superseders(dsn: str, window_days: int) -> List[Dict[str, Any]]:
+    return _run_read_only(dsn, SUPERSEDER_QUERY, {"window_days": window_days})
 
 
 def fetch_matching_session_ids(dsn: str, prefixes: Sequence[str]) -> Dict[str, List[str]]:
@@ -415,6 +573,28 @@ def hidden_summary(hidden: List[Dict[str, Any]]) -> str:
             f"--all shows them. Ledger: {ledger_path()}")
 
 
+def split_superseded(
+    rows: List[Dict[str, Any]], supersessions: Dict[str, Dict[str, Any]]
+) -> tuple:
+    """Split into (open, superseded). Superseded rows carry ``superseded_by``."""
+    open_rows, superseded = [], []
+    for r in rows:
+        by = supersessions.get(r["session_id"])
+        if by:
+            superseded.append({**r, "superseded_by": by})
+        else:
+            open_rows.append(r)
+    return open_rows, superseded
+
+
+def superseded_summary(superseded: List[Dict[str, Any]]) -> str:
+    """The one line that stops superseded reviews vanishing silently."""
+    if not superseded:
+        return ""
+    return (f"{len(superseded)} review(s) hidden as superseded by a later accepted "
+            f"review; --all shows them.")
+
+
 def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
     """One block per review. Conditions are the point, so they are never elided
     silently -- a truncated list says how many it dropped."""
@@ -433,6 +613,11 @@ def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
         standing_since = r.get("standing_since") or r["updated_at"] or r["created_at"]
         age_days = (r["now"] - standing_since).days if r.get("now") else 0
         out.append(f"  {r['session_id']}  [{r['status']}, {age_days}d]  reviewer={r['reviewer']}")
+        by = r.get("superseded_by")
+        if by:
+            how = (f"same subject PR {by['pr']}" if by.get("signal") == "same_subject_pr"
+                   else "it cites this session")
+            out.append(f"    SUPERSEDED by accepted review {by['session_id']} ({how})")
         ack = r.get("acknowledgement")
         if ack:
             why = " ".join(str(ack.get("reason") or "").split())
@@ -635,10 +820,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(render_comment(match[0]))
         return 0
 
-    visible, hidden = partition(rows, load_acks())
+    try:
+        supersessions = find_supersessions(rows, fetch_superseders(args.dsn, args.window_days))
+    except Exception as exc:  # noqa: BLE001 -- fail toward showing, never hide on error
+        print(f"dialectic_unresolved: supersession check failed, hiding nothing for it: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        supersessions = {}
+    acks = load_acks()
+    open_rows, superseded = split_superseded(rows, supersessions)
+    visible, hidden = partition(open_rows, acks)
     if args.show_all:
-        acked = {r["session_id"]: r["acknowledgement"] for r in hidden}
-        shown = [{**r, "acknowledgement": acked.get(r["session_id"])} for r in rows]
+        # Acknowledgements are read for EVERY row, superseded or not: an
+        # operator's recorded disposition must not vanish from --all because a
+        # later review also superseded the session.
+        acked = {r["session_id"]: r["acknowledgement"] for r in partition(rows, acks)[1]}
+        by = {r["session_id"]: r["superseded_by"] for r in superseded}
+        shown = [{**r, "acknowledgement": acked.get(r["session_id"]),
+                  "superseded_by": by.get(r["session_id"])} for r in rows]
     else:
         shown = visible
 
@@ -653,6 +851,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # `reviews`; a consumer that reports a backlog size should add
                 # `acknowledged_hidden`.
                 "acknowledged_hidden": 0 if args.show_all else len(hidden),
+                # Superseded reviews are left out of `reviews` before the
+                # acknowledgement ledger is consulted, so the two never overlap.
+                "superseded_hidden": 0 if args.show_all else len(superseded),
                 "acknowledged_by_disposition": {} if args.show_all else dict(
                     Counter(r["acknowledgement"]["disposition"] for r in hidden)),
                 "ledger_path": ledger_path(),
@@ -662,11 +863,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     text = render(shown, args.max_conditions)
-    summary = "" if args.show_all else hidden_summary(hidden)
+    summaries = [] if args.show_all else [superseded_summary(superseded), hidden_summary(hidden)]
     if text:
         print(text)
-    if summary:
-        print(summary)
+    for summary in summaries:
+        if summary:
+            print(summary)
     return 0
 
 

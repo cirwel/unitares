@@ -182,7 +182,7 @@ carried `agent_submitted` and **0** carried `external_consult`. That zero was
 first read as an optional field nobody filled in. It was a missing seat: the
 only documented route was an antithesis, which needs the reviewer slot, and the
 orchestrated reviewer takes it within about a minute of the request. `consult`
-(interface contract 1.22.0, 2026-09-27) is that seat.
+(interface contract 1.23.0, 2026-09-27) is that seat.
 
 - **Stamp it, don't infer it.** The field is descriptive, not identity proof.
   Record the backend and model that actually ran.

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.22.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.23.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.22.0` is the negotiated interface release. Compatible additions
+- `version: 1.23.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -250,15 +250,25 @@ The two identifiers serve different jobs:
   `caller_proven=false` on an inferred session. `identity`'s description
   names `client_session_id` in the call that sets a display name. No
   parameter is added, removed, retyped or renamed, and no input digest or the
-  surface digest moves; 1.22.0, 2026-09-27: `dialectic` gains
-  `action="consult"`, which files an outside verdict on any session as a
-  transcript record with no authority. It needs no reviewer slot, never
-  advances a phase, never counts as a verdict, and never refreshes the
-  session's liveness clock. The route documented for an outside consult (an
-  antithesis with `reviewer_kind='external_consult'`) required the reviewer
-  slot, which the orchestrated reviewer takes within about a minute. Nothing
-  is removed, retyped or renamed; the input digests of `dialectic` and
-  `request_review`, and the surface digest, move).
+  surface digest moves;
+  1.22.0, 2026-09-27, numbered after 1.21.0 (#2490):
+  `knowledge` and `search_shared_memory` declare `sort_by` (`relevance` or
+  `created_at`), `created_after` and `created_before` for search, which
+  `search_knowledge_graph` declared without any handler reading them; its
+  `sort_by` default moves from `created_at` to unset (read as `relevance`), and its
+  never-implemented `score` and `related_count` values are refused. The
+  default order is unchanged. `search_shared_memory` advertises shorter briefs
+  for nine existing search parameters to stay inside the progressive-surface
+  ratchet; their full descriptions are unchanged. The three input digests and
+  the surface digest move; 1.23.0, 2026-09-27, numbered after 1.22.0
+  (#2517): `dialectic` gains `action="consult"`, which files an outside
+  verdict on any session as a transcript record with no authority. It needs
+  no reviewer slot, never advances a phase, never counts as a verdict, and
+  never refreshes the session's liveness clock. The route documented for an
+  outside consult (an antithesis with `reviewer_kind='external_consult'`)
+  required the reviewer slot, which the orchestrated reviewer takes within
+  about a minute. Nothing is removed, retyped or renamed; the input digests
+  of `dialectic` and `request_review`, and the surface digest, move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
