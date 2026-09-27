@@ -874,14 +874,20 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
 
     primary_failure = thorough_outcome.failure
     assert primary_failure is not None
-    fallback_safe = (
-        request.allow_degraded
-        and not primary_failure.execution_started
-        and primary_failure.code in {
-            "INFERENCE_HOST_NOT_FOUND",
-            "INFERENCE_HOST_UNREACHABLE",
-            "INFERENCE_HOST_UNAVAILABLE",
-        }
+    # allow_degraded is the caller opting into a local answer when the strong
+    # lane cannot serve. A provider that answered "usage limit" / "logged out"
+    # with nothing left running cannot serve either, exactly like a host
+    # refused before spawn while it cools down: both degrade, or the same
+    # outage would hard-fail on the first call and degrade on the retry.
+    fallback_safe = request.allow_degraded and (
+        (
+            not primary_failure.execution_started
+            and primary_failure.code in _PREFLIGHT_UNAVAILABLE_CODES
+        )
+        or (
+            not primary_failure.possibly_running
+            and isinstance(primary_failure.details.get("provider_unavailable"), dict)
+        )
     )
     if not fallback_safe:
         return _failed(

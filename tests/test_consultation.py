@@ -1692,3 +1692,33 @@ async def test_a_degraded_fallback_after_a_failover_still_reports_the_hop(monkey
     assert calls == ["codex:host-adapter", "antigravity:host-adapter"]
     assert parsed["status"] == "degraded"
     assert parsed["failover"][0]["from_host_id"] == "codex:host-adapter"
+
+
+
+@pytest.mark.asyncio
+async def test_allow_degraded_treats_a_live_usage_limit_like_a_cooldown(monkeypatch):
+    """Review of #2486 (antigravity): a fresh usage limit hard-failed while the
+    retry (host now cooling down, refused pre-spawn) degraded. The caller opted
+    into degradation, so both degrade."""
+    _thorough_as(
+        monkeypatch,
+        caller=SessionSignals(reported_harness_type="claude-code"),
+        available={"codex:host-adapter"},  # no peer to fail over to
+        results={"codex:host-adapter": _quota_failure()},
+    )
+    standard = AsyncMock(return_value=_completed())
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed", "allow_degraded": True,
+    }))
+    assert parsed["status"] == "degraded"
+    assert parsed["degradation"]["reason_code"] == "DELEGATED_INFERENCE_FAILED"
+    standard.assert_awaited_once()
+
+    # Without allow_degraded the same failure stays a hard failure.
+    standard.reset_mock()
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "effort": "thorough", "privacy": "cloud_allowed",
+    }))
+    assert parsed["success"] is False
+    standard.assert_not_awaited()
