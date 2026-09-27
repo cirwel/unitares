@@ -785,6 +785,17 @@ class TestSupersessionInTheListing:
         assert "8da00e5b5d39e337" in out
         assert "SUPERSEDED by accepted review 9cd71f4ad5933832 (same subject PR cirwel/unitares#2025)" in out
 
+    def test_all_keeps_the_acknowledgement_of_a_superseded_review(self, ledger, monkeypatch, capsys):
+        """Review round 2 on #2511: the operator's recorded disposition must
+        survive a later automatic supersession."""
+        self._two(monkeypatch)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(_ack_line("8da00e5b5d39e337", reason="PR #2025 merged") + "\n")
+        report.main(["--all"])
+        out = capsys.readouterr().out
+        assert "SUPERSEDED by accepted review 9cd71f4ad5933832" in out
+        assert "ACKNOWLEDGED superseded" in out and "PR #2025 merged" in out
+
     def test_a_failed_supersession_read_hides_nothing(self, ledger, monkeypatch, capsys):
         self._two(monkeypatch)
 

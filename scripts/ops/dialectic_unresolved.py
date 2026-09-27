@@ -313,6 +313,10 @@ def find_supersessions(
         # predates it cannot have answered it.
         objection = _as_utc(r.get("standing_since")) or created
         own_pr = subject_pr(r.get("topic") or "")
+        # Opened after this session, not merely accepted after its objection:
+        # a review opened earlier was reviewing an earlier state, and the safe
+        # failure here is to keep showing an objection (one `ack` clears it),
+        # never to hide one it did not answer (review round 2 on #2511).
         for s, s_created, s_accepted, cited, s_pr in prepared:
             if (s["session_id"] == sid or created is None or s_created is None
                     or s_accepted is None or s_created <= created
@@ -821,10 +825,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"dialectic_unresolved: supersession check failed, hiding nothing for it: "
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
         supersessions = {}
+    acks = load_acks()
     open_rows, superseded = split_superseded(rows, supersessions)
-    visible, hidden = partition(open_rows, load_acks())
+    visible, hidden = partition(open_rows, acks)
     if args.show_all:
-        acked = {r["session_id"]: r["acknowledgement"] for r in hidden}
+        # Acknowledgements are read for EVERY row, superseded or not: an
+        # operator's recorded disposition must not vanish from --all because a
+        # later review also superseded the session.
+        acked = {r["session_id"]: r["acknowledgement"] for r in partition(rows, acks)[1]}
         by = {r["session_id"]: r["superseded_by"] for r in superseded}
         shown = [{**r, "acknowledgement": acked.get(r["session_id"]),
                   "superseded_by": by.get(r["session_id"])} for r in rows]
