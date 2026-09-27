@@ -51,8 +51,13 @@ POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
   LEASE_PLANE_HOST_PORT=18788 \
   docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
-UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo
 ```
+
+The coordination demo talks to both the governance server and the lease plane,
+so give it both ports. With only the lease-plane port it falls back to the
+default governance port, 8767, and registers its demo agents on whatever server
+answers there.
 
 ### Choose a model (optional)
 
