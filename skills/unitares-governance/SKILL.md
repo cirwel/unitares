@@ -32,7 +32,6 @@ source_files:
   - unitares/skills/governance-fundamentals/SKILL.md
   - unitares/skills/knowledge-graph/SKILL.md
   - unitares/skills/dialectic-reasoning/SKILL.md
-  - unitares/skills/discord-bridge/SKILL.md
   - unitares/skills/unitares-dashboard/SKILL.md
 ---
 
@@ -122,8 +121,8 @@ response.
 
 If the call is refused for identity, the response is the typed refusal rather
 than the envelope: no `next_action`, but `status`, `hint`, `next_step`,
-`safe_options` and `do_not`. It carries `success: true`, so detect it by
-`status` or `rollout_flag`, not by `success is False`. The target tool handler
+`safe_options`, `do_not` and `refused: true`. It carries `success: true`, so
+detect it by `refused`, `status` or `rollout_flag`, not by `success is False`. The target tool handler
 did not run. Treat that as a no-handler-execution receipt, not a blanket
 no-write receipt: resolver-failure paths may already have performed
 identity-resolution bookkeeping.
@@ -143,7 +142,6 @@ The old monolithic skill was split into focused skills:
 - `skills/governance-fundamentals/SKILL.md` for EISV, basins, coherence, and verdicts
 - `skills/knowledge-graph/SKILL.md` for knowledge graph search and contribution
 - `skills/dialectic-reasoning/SKILL.md` for thesis/antithesis/synthesis workflows
-- `skills/discord-bridge/SKILL.md` for the Discord governance bridge
 - `skills/unitares-dashboard/SKILL.md` for the buildless operator dashboard
 
 If you need the full mental model, start here. If you know the task shape,

@@ -93,6 +93,11 @@ ALIAS_SCHEMA_KEEP = {
         "discovery_type",
         "tags",
         "superseded_by",
+        # Declared since the class is stored (interface contract 1.20.0).
+        # Before that FastMCP dropped both from a direct /mcp/ call, and only
+        # knowledge(action='update') carried them to the handler.
+        "closure_class",
+        "closure_evidence",
     }),
     "request_review": frozenset({
         "issue_description",
@@ -207,6 +212,77 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         },
         "severity": {
             "description": "Filter by severity: low, medium, high, critical.",
+        },
+        # Advertised briefs only; each description keeps the router's text,
+        # so describe_tool loses nothing. These paid for sort_by /
+        # created_after / created_before (2026-09-27), which the progressive
+        # surface had no headroom left to absorb.
+        "authority_mode": {
+            "description": (
+                "Search authority policy. Default prefer_governed down-ranks "
+                "imported memory in close relevance contests; all preserves raw "
+                "relevance order."
+            ),
+            "brief": "prefer_governed (default) down-ranks imported memory; all keeps raw order.",
+        },
+        "search_mode": {
+            "description": (
+                "Force retrieval mode for action=search. 'semantic' and 'hybrid' "
+                "fail honestly when unsupported by the active backend."
+            ),
+            "brief": "auto, or force fts/semantic/hybrid (refused if unsupported).",
+        },
+        "agent_id_filter": {
+            "description": (
+                "Filter search results by author agent UUID (action=search). "
+                "Takes precedence over agent_id; omit it to use the legacy "
+                "agent_id filter."
+            ),
+            "brief": "Author agent UUID filter; wins over agent_id.",
+        },
+        "semantic": {
+            "description": (
+                "Legacy action=search toggle to force or skip semantic retrieval "
+                "when supported"
+            ),
+            "brief": "Legacy semantic on/off toggle.",
+        },
+        "limit": {
+            "description": (
+                "Max results (for action=search: min 1, values above 100 are "
+                "capped, 0 or negative is rejected)"
+            ),
+            "brief": "Max results, 1-100 (more is capped).",
+        },
+        "include_provenance": {
+            "description": "Include provenance and lineage chain fields in search/details results",
+            "brief": "Add provenance fields.",
+        },
+        "include_cold": {
+            "description": "Include cold-storage (long-term) discoveries in search results (default: excluded)",
+            "brief": "Include cold-storage rows.",
+        },
+        "include_archived": {
+            "description": "Include archived discoveries in search results (default: excluded)",
+            "brief": "Include archived rows.",
+        },
+        "min_similarity": {
+            "description": "Minimum cosine similarity for semantic retrieval modes",
+            "brief": "Semantic similarity floor.",
+        },
+    },
+    # The router's discovery_type text leads with store, which defaults an
+    # omitted type to note. update_finding pins action=update, where an omitted
+    # type keeps the stored one (_apply_update_metadata_fields sets `type` only
+    # when discovery_type is passed); it validates against the same set store
+    # does (VALID_DISCOVERY_TYPES).
+    "update_finding": {
+        "discovery_type": {
+            "description": (
+                "New discovery type for this finding; omitted keeps the stored "
+                "type. Takes the same values as store_finding's discovery_type."
+            ),
+            "brief": "New type; omitted keeps the stored one. Same values as store_finding.",
         },
     },
     # The router's agent_id text describes the read actions ("Filter by

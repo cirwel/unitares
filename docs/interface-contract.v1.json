@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.19.0",
+  "version": "1.22.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "acd86ba0c4d08393e6bc74ca1b8cda1cdde7d23df35123ce8a721990b69265fb",
+  "surface_sha256": "00531d331a6f349102fb1d95f657f3b4e774afcc629023c2086c9076720569e4",
   "capabilities": [
     {
       "name": "start_session",
@@ -59,7 +59,7 @@
       "name": "search_shared_memory",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "d198a6910ae059e937a05885c2b234f7165225f9d3a11deda057492d50a20296",
+      "input_schema_sha256": "d8511097d5e4ea914885e51d02260b141bdacbbe8668bd125fe2743a5fe235f1",
       "transport_names": {
         "mcp_streamable_http": "search_shared_memory",
         "rest_v1_tools": "search_shared_memory",
@@ -81,7 +81,7 @@
       "name": "update_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "bbd168346a095be210e7d419d785c6d3417862a4a9a0e97ddfc3185526636ed1",
+      "input_schema_sha256": "01651b4bcc3ce2b67a623392d8feec186f049feb0c6906860643f4b37b633f72",
       "transport_names": {
         "mcp_streamable_http": "update_finding",
         "rest_v1_tools": "update_finding",
@@ -103,7 +103,7 @@
       "name": "request_review",
       "implementation": "dialectic",
       "kind": "workflow_alias",
-      "input_schema_sha256": "d8bd95342392c589e8ca846f945ec16272953316af014078f7ff0526aef25156",
+      "input_schema_sha256": "7126bb7bf56f2e8099b660483fdaf1098816f9bc6019188286830226851c1d33",
       "transport_names": {
         "mcp_streamable_http": "request_review",
         "rest_v1_tools": "request_review",
@@ -290,7 +290,7 @@
       "name": "search_knowledge_graph",
       "implementation": "search_knowledge_graph",
       "kind": "canonical_tool",
-      "input_schema_sha256": "17dd2efd8a7a807026faf348fe8d32f4d7a601475e809f7c081f93c9e3d83b18",
+      "input_schema_sha256": "373e6e6fed90f1f9b1af7acf0d1fefc90164bb0b00deae9b93462b3960e272ca",
       "transport_names": {
         "mcp_streamable_http": "search_knowledge_graph",
         "rest_v1_tools": "search_knowledge_graph",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "27bc883d7426990385412d39844ece3d87bb546cf0cf87b62c484682ac1f8a25",
+      "input_schema_sha256": "a8a994678504f8afde562d7392461ff026e03376e894040de1b100470972c424",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",
@@ -488,7 +488,7 @@
       "name": "observe",
       "implementation": "observe",
       "kind": "canonical_tool",
-      "input_schema_sha256": "e25d2cff9e8bf9a9d79d490f82f54cb9e9c67b3d778b364d81a3d41e8a60cc62",
+      "input_schema_sha256": "724018a64585fbbf4e19e8d8883ccfc9d9619373568f10085de6e6963bd49042",
       "transport_names": {
         "mcp_streamable_http": "observe",
         "rest_v1_tools": "observe",
@@ -499,7 +499,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "7441f9f71f9d05f5b006cdebe0062a8994bcb27b0a3eca6bd3bbfa8c62075a1e",
+      "input_schema_sha256": "19bd41713c63a3aa8b0af95624cf2c711ceaba936f91f0110d4c0b93bfbbdc19",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",

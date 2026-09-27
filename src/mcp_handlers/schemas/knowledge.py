@@ -126,9 +126,17 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
         default=None,
         description="Filter by severity"
     )
-    sort_by: Literal["created_at", "relevance", "score", "related_count"] = Field(
-        default="created_at",
-        description="Sort field"
+    # Declared here for years and read by no handler, with a default of
+    # created_at that would have flipped every search to time order the day it
+    # was wired. `score` and `related_count` never had an implementation.
+    # None means relevance; an unset default (not "relevance") so validation
+    # does not turn an omitted order into an explicit one.
+    sort_by: Optional[Literal["relevance", "created_at"]] = Field(
+        default=None,
+        description=(
+            "relevance (default) or created_at: the query's full-text matches, "
+            "newest first"
+        ),
     )
     limit: Union[int, str, None] = Field(
         default=10,
@@ -398,7 +406,8 @@ class KnowledgeParams(AgentIdentityMixin):
                 "severity", "limit", "search_mode", "include_details",
                 "include_archived", "include_cold", "exclude_agent_labels",
                 "min_similarity", "operator", "include_provenance",
-                "agent_id_filter", "authority_mode", "semantic",
+                "agent_id_filter", "authority_mode", "semantic", "sort_by",
+                "created_after", "created_before",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
@@ -482,10 +491,25 @@ class KnowledgeParams(AgentIdentityMixin):
     summary: Optional[str] = Field(None, description="Discovery summary (for action=store or promote)")
     discovery_type: Optional[str] = Field(
         None,
-        description="Required for action=store. One of: " + ", ".join(get_args(DiscoveryType)) + ".",
+        # Not required: the store handler defaults an omitted type to note
+        # (_parse_single_store_request). It said "Required for action=store" until
+        # 2026-09-26. Four actions read it, each differently: store defaults it to
+        # note, promote to insight (handle_promote_memory_claim), update retypes
+        # the finding only when it is passed (_apply_update_metadata_fields), and
+        # search filters by it. update_finding carries its own text
+        # (ALIAS_SCHEMA_PROPERTY_OVERRIDES), since "defaults to note" is false there.
+        description=(
+            "Discovery type. action=store defaults it to note and promote to "
+            "insight; update sets a new type (omitted keeps the stored one); "
+            "search filters by it. One of: "
+            + ", ".join(get_args(DiscoveryType)) + "."
+        ),
         # The list IS the description here, so the authored brief keeps it and
         # spends its savings on the framing instead. An authored brief is a
-        # deliberate choice and is not held to BRIEF_BUDGET.
+        # deliberate choice and is not held to BRIEF_BUDGET. The default stays
+        # in the full text (describe_tool): the brief never said the type is
+        # required, the schema does not require it, and the progressive
+        # surface has no bytes to spare.
         json_schema_extra={
             "brief": "action=store; one of " + ", ".join(get_args(DiscoveryType)) + ".",
         },
@@ -522,10 +546,16 @@ class KnowledgeParams(AgentIdentityMixin):
     # same silent-strip shape as the supersession-link finding below.
     closure_class: Optional[str] = Field(
         None,
+        # Where the handler admits a class (_validate_closure_class): with a
+        # status that admits one, or, when the call sets no status, on a row whose
+        # stored status admits one. Refused on open and disputed, which clear it.
         description=(
-            "By what standard this was closed (for action=update with a closing "
-            "status): fix_verified | unobserved | not_reproducible | obsolete | "
-            "duplicate. 'fix_verified' means a change is deployed AND its effect "
+            "By what standard this was closed (for action=update): fix_verified | "
+            "unobserved | not_reproducible | obsolete | duplicate. Admitted on "
+            "resolved, closed, wont_fix, superseded, archived and cold: pass it "
+            "with one of those statuses, or alone on a finding that already has "
+            "one. Refused on open or disputed; reopening clears it. "
+            "'fix_verified' means a change is deployed AND its effect "
             "was positively observed — the old symptom merely being absent is "
             "'unobserved', not 'fix_verified'."
         ),
@@ -539,9 +569,13 @@ class KnowledgeParams(AgentIdentityMixin):
     )
     closure_evidence: Optional[Dict[str, Any]] = Field(
         None,
+        # The 8 KiB bound is MAX_CLOSURE_EVIDENCE_BYTES
+        # (src/mcp_handlers/knowledge/limits.py), enforced by
+        # _validate_closure_class; tests hold this text to it.
         description=(
             "Evidence for closure_class. Required keys: fix_verified needs "
-            "{deployed, observed}; unobserved needs {window, instrument_check}."
+            "{deployed, observed}; unobserved needs {window, instrument_check}. "
+            "At most 8 KiB as JSON; longer material goes in resolution_notes."
         ),
     )
     # Supersession LINK params. Without these declared here the unified tool's
@@ -571,6 +605,32 @@ class KnowledgeParams(AgentIdentityMixin):
             "Search authority policy. Default prefer_governed down-ranks imported "
             "memory in close relevance contests; all preserves raw relevance order."
         ),
+    )
+    sort_by: Optional[Literal["relevance", "created_at"]] = Field(
+        None,
+        description=(
+            "Result order for action=search. relevance (default) ranks by match "
+            "quality. created_at returns the query's full-text matches newest "
+            "first, so an entry written a minute ago is not buried under older, "
+            "better-matching ones; it cannot be combined with "
+            "search_mode=semantic or hybrid. Without a query, results are "
+            "already newest first."
+        ),
+        json_schema_extra={"brief": "search order: relevance, or created_at (newest text matches first)."},
+    )
+    created_after: Optional[str] = Field(
+        None,
+        description=(
+            "ISO 8601 timestamp for action=search: only entries created after it. "
+            "With no query this is the 'what is new since T' read. A timestamp "
+            "without an offset is taken as UTC."
+        ),
+        json_schema_extra={"brief": "search: created after this ISO time."},
+    )
+    created_before: Optional[str] = Field(
+        None,
+        description="ISO 8601 timestamp for action=search: only entries created before it (UTC if no offset).",
+        json_schema_extra={"brief": "search: created before this ISO time."},
     )
     semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
     min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")

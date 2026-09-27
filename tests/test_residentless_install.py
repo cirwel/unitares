@@ -238,6 +238,45 @@ class TestTheGuardCoversWhatShips:
         assert not missing, f"shipped but unguarded: {sorted(missing)}"
 
 
+class TestTheDoctorExpectsNoResidents:
+    """The install doctor ships with no resident roster either.
+
+    Until 2026-09-27 ``scripts/dev/unitares_doctor.py`` carried a hardcoded
+    table of one operator's resident LaunchAgents and warned that they were
+    "not loaded" on every other install. Which residents a host runs is now
+    declared (``UNITARES_DOCTOR_RESIDENT_LAUNCHD``); with nothing declared the
+    check has nothing to expect.
+    """
+
+    @pytest.fixture
+    def doctor(self, monkeypatch):
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        name = "unitares_doctor_residentless"
+        script = Path(__file__).resolve().parents[1] / "scripts/dev/unitares_doctor.py"
+        spec = importlib.util.spec_from_file_location(name, script)
+        mod = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, mod)  # dataclasses resolve via sys.modules
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_resident_launchagent_is_declared_by_default(self, doctor, monkeypatch):
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        assert doctor.resident_launchd_slots() == ()
+
+    def test_a_launchd_host_with_no_roster_expects_no_residents(self, doctor, monkeypatch):
+        # Even on a real launchd deployment, an undeclared roster is SKIP, not
+        # a warning about somebody else's residents.
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        result = doctor.check_resident_agents({doctor.GOVERNANCE_LAUNCHD_LABEL})
+
+        assert result.status == doctor.Status.SKIP
+
+
 # --- the agent-first Overview (2026-09-27) ------------------------------------
 # The dashboard's Overview now leads with agents and hides its resident block
 # when the roster is empty (dashboard/tests/landing-agent-first.test.js). What
@@ -272,3 +311,23 @@ def test_agent_feed_and_checkin_counts_ignore_an_empty_roster(residentless):
     assert sorted(r["agent_id"] for r in feed["agents"]) == ["a", "b"]
     totals = client.get("/api/activity").json()["totals"]
     assert totals == {"proceed": 1, "guide": 1, "pause": 0}
+
+
+# --- route packs (2026-09-27) -------------------------------------------------
+# The reference residents' summary / backlog / adjudication routes are mounted
+# only by the opt-in `reference-residents` route pack. Declaring no residents is
+# the default install, and it must carry none of those endpoints — independent
+# of the roster, which does not mount a pack either way.
+
+def test_default_install_mounts_no_resident_routes(residentless, monkeypatch):
+    from starlette.applications import Starlette
+    from src.http_api import register_http_routes
+
+    monkeypatch.delenv("UNITARES_ROUTE_PACKS", raising=False)
+    app = Starlette()
+    register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0.0,
+                         server_version="t", has_streamable_http=False)
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert not [p for p in paths if p.startswith(("/v1/sentinel/", "/v1/watcher/", "/v1/vigil/"))]
+    assert "/api/automations" not in paths
+    assert "/v1/residents" in paths  # the roster endpoint is core, and answers empty

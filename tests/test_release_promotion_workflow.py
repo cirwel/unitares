@@ -18,6 +18,7 @@ JOBS = WORKFLOW["jobs"]
 DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
+DIGEST_L = "sha256:" + "d" * 64
 
 
 def _step(job: str, name: str) -> dict:
@@ -69,6 +70,7 @@ def _run_freshness(
     tag_digest: str = DIGEST_A,
     latest_digest: str = DIGEST_B,
     prior_latest: str = DIGEST_B,
+    lease_plane_digest: str = DIGEST_L,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "freshness-bin"
     bin_dir.mkdir(exist_ok=True)
@@ -77,6 +79,8 @@ def _run_freshness(
         """#!/usr/bin/env bash
 set -euo pipefail
 case "$*" in
+  *"-lease-plane:latest"*) echo "the lease plane has no latest tag" >&2; exit 2 ;;
+  *"-lease-plane:$RELEASE_TAG"*) digest="$FAKE_LEASE_PLANE_DIGEST" ;;
   *":latest"*) digest="$FAKE_LATEST_DIGEST" ;;
   *":$RELEASE_TAG"*) digest="$FAKE_TAG_DIGEST" ;;
   *) echo "unexpected docker invocation: $*" >&2; exit 2 ;;
@@ -95,8 +99,11 @@ printf '{"digest":"%s"}\n' "$digest"
         "PRIOR_LATEST": prior_latest,
         "REGISTRY": "ghcr.io",
         "IMAGE_NAME": "cirwel/unitares",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+        "LEASE_PLANE_DIGEST": DIGEST_L,
         "FAKE_TAG_DIGEST": tag_digest,
         "FAKE_LATEST_DIGEST": latest_digest,
+        "FAKE_LEASE_PLANE_DIGEST": lease_plane_digest,
     }
     return subprocess.run(
         [str(FRESHNESS_PATH), mode],
@@ -227,6 +234,46 @@ def test_freshness_guard_refuses_a_changed_release_image(tmp_path: Path):
     assert "not verified digest" in result.stderr
 
 
+def test_freshness_guard_refuses_a_changed_lease_plane_image(tmp_path: Path):
+    """The pin moves Compose onto this tag, so it must still name the verified image."""
+    repo, source_sha = _freshness_repo(tmp_path)
+    for mode, latest in (("promote", DIGEST_B), ("pin", DIGEST_A)):
+        result = _run_freshness(
+            tmp_path,
+            repo,
+            source_sha,
+            mode=mode,
+            latest_digest=latest,
+            lease_plane_digest=DIGEST_C,
+        )
+        assert result.returncode != 0, mode
+        assert "lease plane's v2.22.1 now resolves to" in result.stderr
+
+
+def test_freshness_guard_requires_lease_plane_evidence(tmp_path: Path):
+    repo, source_sha = _freshness_repo(tmp_path)
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v2.22.1",
+        "VERSION": "2.22.1",
+        "SOURCE_SHA": source_sha,
+        "DIGEST": DIGEST_A,
+        "REGISTRY": "ghcr.io",
+        "IMAGE_NAME": "cirwel/unitares",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+    }
+    result = subprocess.run(
+        [str(FRESHNESS_PATH), "pin"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "LEASE_PLANE_DIGEST is required" in result.stderr
+
+
 def test_freshness_guard_refuses_latest_drift_during_approval(tmp_path: Path):
     repo, source_sha = _freshness_repo(tmp_path)
     result = _run_freshness(
@@ -246,6 +293,89 @@ def test_freshness_guard_refuses_pin_when_latest_moved(tmp_path: Path):
     result = _run_freshness(tmp_path, repo, source_sha, mode="pin")
     assert result.returncode != 0
     assert "refusing a stale pin" in result.stderr
+
+
+def test_lease_plane_is_verified_like_the_server_image():
+    assert WORKFLOW["env"]["LEASE_PLANE_IMAGE_NAME"] == "${{ github.repository }}-lease-plane"
+    assert JOBS["verify"]["outputs"]["lease_plane_digest"] == (
+        "${{ steps.lease_plane.outputs.digest }}"
+    )
+    image = _step("verify", "Resolve the lease-plane digest, platforms, and SBOMs")
+    assert image["id"] == "lease_plane"
+    assert '"$REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG"' in image["run"]
+    assert '"linux/amd64,linux/arm64"' in image["run"]
+    assert ".SBOM" in image["run"]
+    provenance = _step("verify", "Verify lease-plane provenance from the release tag")["run"]
+    assert '"oci://$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$LEASE_PLANE_DIGEST"' in provenance
+    assert "publish-container.yml" in provenance
+    assert '--source-ref "refs/tags/$RELEASE_TAG"' in provenance
+    assert '--source-digest "$SOURCE_SHA"' in provenance
+
+    names = [step.get("name") for step in JOBS["verify"]["steps"]]
+    assert names.index("Verify lease-plane provenance from the release tag") < (
+        names.index("Record release evidence")
+    )
+
+    # Both mutation jobs re-verify the lease plane before writing anything.
+    for job, name in (
+        ("promote", "Revalidate release evidence after approval"),
+        ("pin", "Refuse a stale pin re-run"),
+    ):
+        step = _step(job, name)
+        assert step["env"]["LEASE_PLANE_DIGEST"] == (
+            "${{ needs.verify.outputs.lease_plane_digest }}"
+        )
+        assert '"oci://$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$LEASE_PLANE_DIGEST"' in step["run"]
+
+
+def test_lease_plane_is_pinned_by_version_never_tagged_latest():
+    text = WORKFLOW_PATH.read_text()
+    assert "LEASE_PLANE_IMAGE_NAME:latest" not in text
+    assert "LEASE_PLANE_IMAGE_NAME}:latest" not in text
+    freshness = FRESHNESS_PATH.read_text()
+    assert "LEASE_PLANE_IMAGE_NAME:latest" not in freshness
+    names = [step.get("name") for step in JOBS["verify"]["steps"]]
+    tagged = "Require the tagged Compose file to pull this release's lease plane"
+    assert names.index(tagged) < names.index("Record release evidence")
+
+
+def _run_tagged_compose_check(tmp_path: Path, compose_tag: str) -> subprocess.CompletedProcess[str]:
+    repo = tmp_path / "compose-repo"
+    subprocess.run(
+        ["git", "init", "-b", "master", str(repo)], capture_output=True, text=True, check=True
+    )
+    _git(repo, "config", "user.name", "Release Test")
+    _git(repo, "config", "user.email", "release-test@example.com")
+    compose = (ROOT / "docker-compose.yml").read_text()
+    current = (ROOT / "VERSION").read_text().strip()
+    (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", f":{compose_tag}"))
+    _git(repo, "add", "docker-compose.yml")
+    _git(repo, "commit", "-m", "release")
+    _git(repo, "tag", "v2.23.0")
+    # A later master edit must not satisfy a check about the tagged tree.
+    (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", ":v2.23.0"))
+    script = _step("verify", "Require the tagged Compose file to pull this release's lease plane")["run"]
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v2.23.0",
+        "REGISTRY": "ghcr.io",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+    }
+    return subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def test_tagged_compose_must_pull_the_verified_lease_plane(tmp_path: Path):
+    assert _run_tagged_compose_check(tmp_path / "ok", "v2.23.0").returncode == 0
+    stale = _run_tagged_compose_check(tmp_path / "stale", "v2.22.1")
+    assert stale.returncode != 0
+    assert "does not pin ghcr.io/cirwel/unitares-lease-plane:v2.23.0" in stale.stderr
 
 
 def test_an_existing_pin_branch_stops_the_run_before_approval():
@@ -302,6 +432,8 @@ esac
         "DIGEST": DIGEST_A,
         "REGISTRY": "ghcr.io",
         "IMAGE_NAME": "cirwel/unitares",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+        "LEASE_PLANE_DIGEST": DIGEST_L,
         "GITHUB_REPOSITORY": "cirwel/unitares",
         "FAKE_RELEASE_DRAFT": draft,
         "FAKE_ATTESTATION": attestation,

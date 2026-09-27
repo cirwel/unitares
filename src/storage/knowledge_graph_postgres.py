@@ -7,7 +7,13 @@ This provides unified storage with the main database and better FTS than AGE.
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from src.knowledge_graph import DiscoveryNode, ResponseTo
+from src.knowledge_graph import (
+    DiscoveryNode,
+    ResponseTo,
+    apply_closure_reopen_rule,
+    closure_evidence_from_stored,
+    closure_evidence_to_json,
+)
 from src.logging_utils import get_logger
 from src.storage.kg_write_budget import DEFAULT_STORES_PER_HOUR, check_store_budget
 
@@ -82,8 +88,10 @@ class KnowledgeGraphPostgres:
         limit: int = 50,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
-        """Query discoveries with filters."""
+        """Query discoveries with filters, newest first."""
         db = await self._get_db()
         # If exclude_archived and no explicit status filter, filter to non-archived
         effective_status = status
@@ -98,6 +106,8 @@ class KnowledgeGraphPostgres:
             limit=limit,
             exclude_archived=exclude_archived and not status,
             exclude_cold=exclude_cold and not status,
+            created_after=created_after,
+            created_before=created_before,
         )
         # Post-hoc filter as fallback since kg_query may not support negated status.
         # Cold storage is opt-in (include_cold), mirroring archived exclusion.
@@ -111,6 +121,11 @@ class KnowledgeGraphPostgres:
     async def full_text_search(
         self, query: str, limit: int = 20, operator: str = "AND",
         tags: Optional[List[str]] = None,
+        order_by: str = "rank",
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        before: Optional[tuple] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector. Defaults to AND (#165).
 
@@ -125,7 +140,11 @@ class KnowledgeGraphPostgres:
         already read it defensively (`getattr(disc, 'relevance', 0)`).
         """
         db = await self._get_db()
-        rows = await db.kg_full_text_search(query, limit, operator=operator, tags=tags)
+        rows = await db.kg_full_text_search(
+            query, limit, operator=operator, tags=tags, order_by=order_by,
+            created_after=created_after, created_before=created_before,
+            filters=filters, before=before,
+        )
         discoveries = []
         for row in rows:
             node = self._dict_to_discovery(row)
@@ -169,10 +188,12 @@ class KnowledgeGraphPostgres:
         """Update discovery fields.
 
         Supports updating: status, resolved_at, updated_at, tags, severity, type,
-        summary, and details.
+        summary, details, closure_class and closure_evidence. An update that
+        reopens the row (status open or disputed) clears the closure pair.
         """
         from src.knowledge_graph import normalize_tags
         db = await self._get_db()
+        updates = apply_closure_reopen_rule(updates)
 
         # Build dynamic UPDATE query
         set_clauses = []
@@ -191,6 +212,14 @@ class KnowledgeGraphPostgres:
                 tag_list = value if isinstance(value, list) else [value]
                 set_clauses.append(f"tags = ${param_idx}")
                 params.append(normalize_tags(tag_list))
+                param_idx += 1
+            elif key == "closure_class":
+                set_clauses.append(f"closure_class = ${param_idx}")
+                params.append(value)
+                param_idx += 1
+            elif key == "closure_evidence":
+                set_clauses.append(f"closure_evidence = ${param_idx}")
+                params.append(closure_evidence_to_json(value))
                 param_idx += 1
 
         if not set_clauses:
@@ -415,4 +444,6 @@ class KnowledgeGraphPostgres:
             updated_at=d.get('updated_at'),
             provenance=d.get('provenance'),
             provenance_chain=d.get('provenance_chain'),
+            closure_class=d.get('closure_class'),
+            closure_evidence=closure_evidence_from_stored(d.get('closure_evidence')),
         )

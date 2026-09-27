@@ -99,8 +99,11 @@ async def test_kg_add_discovery_persists_provenance_chain():
     )
 
     assert "provenance_chain" in captured["query"]
-    assert len(captured["args"]) == 16
+    assert len(captured["args"]) == 18
     assert json.loads(captured["args"][13]) == chain
+    # closure_class, closure_evidence: an unclassified node writes neither.
+    assert "closure_class" in captured["query"]
+    assert captured["args"][16:] == (None, None)
 
 
 def test_row_to_discovery_dict_decodes_provenance_chain_json():

@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs setup-model demo coordination-demo accountability-journey clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo accountability-journey clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -42,17 +42,17 @@ test-smoke: ## Run fast critical-path tests
 serve: ## Start server locally (foreground)
 	@python3 src/mcp_server.py --port 8767
 
-restart: ## Restart governance-mcp launchd service
+restart: ## Restart the launchd-managed server (macOS source install; Docker: docker compose restart governance-mcp)
 	@launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 	@launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 	@echo "Restarted. Checking health..."
 	@sleep 2
 	@curl -s http://localhost:8767/health | python3 -m json.tool
 
-logs: ## Tail server logs
+logs: ## Tail launchd server logs (Docker: docker compose logs -f governance-mcp)
 	@tail -f data/logs/mcp_server.log
 
-logs-err: ## Tail server error logs
+logs-err: ## Tail launchd server error logs
 	@tail -f data/logs/mcp_server_error.log
 
 # ── Documentation ────────────────────────────────────────
@@ -80,11 +80,6 @@ install-hooks: ## Install git pre-commit hooks
 uninstall-hooks: ## Remove git pre-commit hooks
 	@rm -f .git/hooks/pre-commit
 	@echo "Pre-commit hook removed"
-
-# ── Setup ────────────────────────────────────────────────
-
-setup-model: ## Pick a local Ollama model for consult and dialectic reviews (writes .env, rebuilds the server)
-	@python3 scripts/install/choose_model.py
 
 # ── Demo ─────────────────────────────────────────────────
 
