@@ -146,7 +146,25 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # (its advertised brief is unchanged, so only describe_tool shows that). No
 # parameter is added, removed, retyped or renamed; the two metrics input
 # digests and the surface digest move.
-# 1.21.0 (2026-09-26), numbered after 1.20.0 (the closure-class PR): tool
+# 1.20.0 (2026-09-26), numbered after 1.19.0 (#2472): update_finding declares
+# closure_class and closure_evidence, with the knowledge router's
+# descriptions. The server now stores both (migration 071 lets a classified
+# row move to archived and cold); until now /mcp/ dropped them from an
+# update_finding call, and only knowledge(action='update') carried them to the
+# handler. Descriptions that lagged their handlers are corrected: knowledge
+# discovery_type says store defaults it to note (it said "Required"), promote
+# to insight, update retypes and search filters; observe
+# target_agent_id names the audit_events and outcome_evidence filters and says
+# they match the stored agent_id exactly without resolving labels (a UUID for
+# most agents; some audit writers are stored by name), until names
+# outcome_evidence, and agent_ids names the anomalies and aggregate scope;
+# dialectic issue_description names action=quick. On update_finding,
+# discovery_type says an omitted type keeps the stored one. closure_class says
+# a class may also be set alone on a finding that is already closed, and
+# closure_evidence states its 8 KiB bound. Nothing is removed, retyped or
+# renamed; the input digests of update_finding, knowledge, observe,
+# dialectic and request_review, and the surface digest, move.
+# 1.21.0 (2026-09-26), numbered after 1.20.0 (#2489): tool
 # descriptions only. check_working_state and get_governance_metrics no longer
 # promise that a binding the server merely inferred returns that agent's real
 # state marked identity_assurance.caller_proven=false: no pre-onboard
