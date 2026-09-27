@@ -24,3 +24,14 @@ MAX_SUMMARY_LEN = 4000
 MAX_DETAILS_LEN = 64 * 1024
 EMBED_DETAILS_WINDOW = 6000
 DETAILS_PREVIEW_CHARS = 500
+
+# closure_evidence is a handful of named statements or pointers (what shipped,
+# what was observed), not a place for logs. It is stored as JSON text: in the
+# jsonb column and, on AGE, as a graph-node property interpolated into Cypher,
+# where GraphMixin._sanitize_cypher_param refuses any string over 128 KiB. That
+# refusal fails the whole update, status included, and the handler reports it as
+# "Discovery not found". The bound sits far below that limit and below
+# MAX_DETAILS_LEN; longer material belongs in resolution_notes, which is appended
+# to details. Measured on closure_evidence_to_json's output, the text storage
+# writes (ASCII, so characters and bytes agree).
+MAX_CLOSURE_EVIDENCE_BYTES = 8 * 1024
