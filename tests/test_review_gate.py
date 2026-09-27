@@ -2083,3 +2083,26 @@ def test_record_refuses_a_bare_verdict(monkeypatch, tmp_path):
                            reviewer_name="council", base="origin/master")
     with pytest.raises(SystemExit, match="bare verdict is not a review"):
         rg.cmd_record(args)
+
+
+
+def test_claude_diagnostics_never_count_as_review_reasoning(monkeypatch, tmp_path):
+    """PR #2500 (native Codex, P2): claude's stderr was merged into the text,
+    so 120+ characters of CLI warnings could carry a bare verdict past the floor."""
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+
+    class Proc:
+        pid = 1
+        def wait(self, timeout=None):
+            return 0
+
+    def popen(cmd, stdout=None, stderr=None, **kw):
+        assert stderr is not rg.subprocess.STDOUT
+        stderr.write("warning: " + "a long CLI diagnostic line. " * 20 + "\n")
+        stdout.write("VERDICT: CLEAN\n")
+        return Proc()
+
+    monkeypatch.setattr(rg.subprocess, "Popen", popen)
+    text, note = rg.run_reviewer("claude", "PROMPT", tmp_path, 30)
+    assert text.strip() == "VERDICT: CLEAN" and not rg.has_reasoning(text)
+    assert "diagnostic" in (tmp_path / "reviewer.log").read_text()

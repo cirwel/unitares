@@ -1093,6 +1093,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
 
     log = out_dir / "reviewer.log"
     isolated = reviewer == "antigravity"
+    separate = reviewer in ("antigravity", "claude")
     workspace = tempfile.TemporaryDirectory(prefix="review-agy-") if isolated else None
     if workspace and any((d / m).exists() for d in Path(workspace.name).resolve().parents
                          for m in (".git", ".agents")):
@@ -1115,13 +1116,16 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
 
     def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
-        # antigravity: stdout is the JSON answer, kept apart from stderr.
-        out = open(last, "w") if isolated else fh
+        # antigravity (JSON) and claude (text): stdout is the answer, kept apart
+        # from stderr, so CLI diagnostics never read as the review or count
+        # toward its reasoning (PR #2500, native Codex review). Codex writes its
+        # answer to `last` itself (--output-last-message).
+        out = open(last, "w") if separate else fh
         try:
             # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
-                                        stderr=fh if isolated else subprocess.STDOUT,
+                                        stderr=fh if separate else subprocess.STDOUT,
                                         cwd=agy_cwd,
                                         env=agy_env(agy_home) if isolated else None,
                                         start_new_session=True)
