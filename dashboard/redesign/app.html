@@ -355,10 +355,22 @@ if (window.GovSocket) window.GovSocket.make(onWsEvent, onWsStatus);
 const EXT = {};
 const EXT_ID = /^[a-z][a-z0-9-]*$/;
 const EXT_GLOBAL = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+// Evaluates `code` and throws if it threw. An inline <script> reports its
+// evaluation error to window "error" synchronously during appendChild, not to
+// the caller, so a script that assigned its global and THEN failed would
+// otherwise pass for a working one.
 function injectScript(code) {
-  const el = document.createElement("script");
-  el.textContent = code;
-  document.body.appendChild(el);
+  let failure = null;
+  const onError = (e) => { failure = e.error || new Error(e.message || "script error"); e.preventDefault(); };
+  window.addEventListener("error", onError);
+  try {
+    const el = document.createElement("script");
+    el.textContent = code;
+    document.body.appendChild(el);
+  } finally {
+    window.removeEventListener("error", onError);
+  }
+  if (failure) throw failure;
 }
 async function loadExtensions() {
   const manifest = await DATA.extManifest();
@@ -376,6 +388,9 @@ async function loadExtensions() {
     // or an earlier entry, and accepting it would let this entry register on
     // someone else's loader (and render into the wrong mount).
     if (sec.global in window) { console.warn("[dashboard ext]", sec.id, "global already defined:", sec.global); continue; }
+    // Same for the mount: an id already in the page would make the section's
+    // getElementById resolve to someone else's element.
+    if (document.getElementById(mountId)) { console.warn("[dashboard ext]", sec.id, "mount id already in use:", mountId); continue; }
     try { injectScript(await DATA.extScript(sec.script)); } catch (e) { console.warn("[dashboard ext]", sec.script, e); continue; }
     // An injected <script> that throws while evaluating does not reject the
     // try above, so check the entry point it was supposed to define: no

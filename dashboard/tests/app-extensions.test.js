@@ -73,7 +73,7 @@ describe("dashboard extensions", () => {
     expect(dom.window.document.getElementById("queue-mount").textContent).toBe("deep");
   });
 
-  it("never shadows a core section and skips malformed, unloadable, broken or global-reusing entries", async () => {
+  it("never shadows a core section and skips malformed, unloadable, broken, global- or mount-reusing entries", async () => {
     const manifest = {
       sections: [
         { id: "agents", global: "Evil", script: "evil.js" },
@@ -84,6 +84,8 @@ describe("dashboard extensions", () => {
         { id: "ok", global: "Ok", script: "ok.js" },
         { id: "dup", global: "Ok", script: "dup.js" },
         { id: "core-global", global: "Landing", script: "core.js" },
+        { id: "late-throw", global: "LateThrow", script: "late.js" },
+        { id: "core-mount", global: "CoreMount", script: "cm.js", mount: "stats" },
       ],
     };
     const dom = boot(manifest, {
@@ -94,6 +96,8 @@ describe("dashboard extensions", () => {
       "ok.js": "window.Ok = { load() {} };",
       "dup.js": "throw new Error('never defines its own');",
       "core.js": "",
+      "late.js": "window.LateThrow = { load() {} }; throw new Error('init failed');",
+      "cm.js": "window.CoreMount = { load() {} };",
     });
     dom.window.console.warn = () => {};
     await flush();
