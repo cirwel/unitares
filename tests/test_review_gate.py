@@ -2313,7 +2313,11 @@ def test_ci_reads_the_policy_from_the_prs_own_base_ref(repo, monkeypatch):
     _git(repo, "add", "scripts/dev/review_policy.json")
     _git(repo, "commit", "-q", "-m", "base policy")
     assert rg.base_policy_paths("HEAD") == ["only/on/base.py"]
-    # A ref without the file falls back to the checked-out copy.
+    # A base without the file falls back to the default branch's copy before
+    # the checked-out one (locally that may be the PR's own policy).
+    _git(repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    assert rg.base_policy_paths("HEAD~1") == ["only/on/base.py"]
+    _git(repo, "update-ref", "-d", "refs/remotes/origin/master")
     monkeypatch.setattr(rg, "second_family_paths",
                         lambda text=None: ["fallback"] if text is None else ["parsed"])
     assert rg.base_policy_paths("HEAD~1") == ["fallback"]

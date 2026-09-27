@@ -706,15 +706,19 @@ def second_family_paths(text: str | None = None) -> list[str]:
 
 def base_policy_paths(base: str) -> list[str]:
     """The policy as merged on ``base`` (a fetched, trusted ref), never the PR
-    head. Falls back to the checked-out copy when the ref has none."""
-    try:
-        proc = _launch(["git", "show", f"{base}:scripts/dev/{POLICY_FILE.name}"],
-                       capture_output=True, text=True)
-    except Exception:  # noqa: BLE001 - fall back to the trusted checkout
-        return second_family_paths()
-    if proc.returncode != 0:
-        return second_family_paths()
-    return second_family_paths(proc.stdout)
+    head. A base without one (a branch older than the policy) falls back to
+    the default branch's copy, then to the file beside this script: in CI that
+    is the trusted default-branch checkout, while locally it may be the PR's
+    own copy, which is why the default ref is tried first."""
+    for ref in (base, "origin/master", "origin/main"):
+        try:
+            proc = _launch(["git", "show", f"{ref}:scripts/dev/{POLICY_FILE.name}"],
+                           capture_output=True, text=True)
+        except Exception:  # noqa: BLE001 - try the next source
+            continue
+        if proc.returncode == 0:
+            return second_family_paths(proc.stdout)
+    return second_family_paths()
 
 
 def sensitive_paths(paths: list[str], globs: list[str] | None = None) -> list[str]:
