@@ -40,6 +40,15 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "optional_cli_installed", lambda p: p not in rg.OPTIONAL_CLI)
 
 
+
+@pytest.fixture(autouse=True)
+def _no_reasoning_floor(monkeypatch):
+    """Most tests here use short stand-in reviews ("fine / VERDICT: CLEAN") to
+    exercise routing, cooldowns and resumes. The reasoning floor has its own
+    tests below, which restore the real value."""
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", 0)
+
+
 def _git(repo: Path, *args: str) -> str:
     return subprocess.run(["git", "-C", str(repo), *args], check=True,
                           capture_output=True, text=True).stdout.strip()
@@ -2009,3 +2018,68 @@ def test_the_denied_resume_prompt_fits_a_denied_file_read():
     text = rg.AGY_RESUME_PROMPTS["denied"]
     assert "inside your working directory" in text and "Continue the review" in text
     assert "diff.patch" in text and "files/" in text
+
+
+_REAL_FLOOR = 120
+_REASONED = ("Examined review_gate.py's stall detection, the resume loop and the "
+             "material writer, and the tests that pin them; each path returns the "
+             "note its caller expects, and the collision handling lists every file "
+             "it skips. Nothing wrong found.\nVERDICT: CLEAN")
+
+
+def test_has_reasoning_needs_text_before_the_verdict(monkeypatch):
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+    assert rg.has_reasoning(_REASONED)
+    assert not rg.has_reasoning("VERDICT: CLEAN")
+    assert not rg.has_reasoning("looks fine\nVERDICT: CLEAN\n")
+    assert _REAL_FLOOR == rg.REVIEW_MIN_REASONING_CHARS  # the tests pin the shipped floor
+    # Whitespace and the verdict line itself never count toward the floor.
+    assert not rg.has_reasoning(" \n" * 500 + "VERDICT: " + "CLEAN")
+
+
+def test_a_bare_agy_verdict_is_resumed_for_its_reasoning(monkeypatch, tmp_path):
+    """PR #2486 round 1: agy read ~97K tokens and replied only VERDICT: CLEAN."""
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+    bare = '{"conversation_id":"c-bare","status":"SUCCESS","response":"VERDICT: CLEAN\\n"}\n'
+    reasoned = ('{"conversation_id":"c-bare","status":"SUCCESS","response":'
+                + json.dumps(_REASONED) + '}\n')
+    calls = _fake_agy(monkeypatch, [bare, reasoned])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "exit 0" and rg.has_reasoning(text)
+    assert calls[1]["cmd"][2] == rg.AGY_RESUME_PROMPTS["bare"]
+    assert "--conversation" in calls[1]["cmd"]
+
+
+def test_a_bare_verdict_that_stays_bare_is_not_recorded(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+    bare = '{"conversation_id":"c-bare","status":"SUCCESS","response":"VERDICT: CLEAN\\n"}\n'
+    _fake_agy(monkeypatch, [bare, bare])
+    text, note = rg.run_reviewer("antigravity", "PROMPT", tmp_path, 30)
+    assert note == "verdict without reasoning after 1 resume(s)"
+
+
+def test_any_reviewers_bare_verdict_falls_back_instead_of_recording(monkeypatch, tmp_path, capsys):
+    """Not only agy: a verdict nobody can check is never posted as a review."""
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
+    monkeypatch.setattr(rg, "git", lambda *args: "abcd")
+    monkeypatch.setattr(rg, "provider_state_path", lambda r: tmp_path / f"{r}.json")
+    monkeypatch.setattr(rg, "run_reviewer", lambda *a, **k: ("VERDICT: CLEAN", "exit 0"))
+    records = []
+    monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args))
+    rc = rg._review_locked(SimpleNamespace(base="master", budget=30), 1, "k", "claude")
+    assert rc == rg.UNREVIEWED
+    assert records[0][1].verdict == "FAILED"
+    assert "verdict without reasoning" in records[0][2]
+
+
+
+def test_record_refuses_a_bare_verdict(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
+    review = tmp_path / "review.txt"
+    review.write_text("VERDICT: CLEAN\n")
+    args = SimpleNamespace(independent=True, emit=True, file=str(review),
+                           reviewer_name="council", base="origin/master")
+    with pytest.raises(SystemExit, match="bare verdict is not a review"):
+        rg.cmd_record(args)
