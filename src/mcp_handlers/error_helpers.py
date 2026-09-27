@@ -337,6 +337,28 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
     action = call.action
 
     if getattr(call, "mints_identity", False):
+        session_id = _call_literal(arguments.get("client_session_id"), "")
+        if session_id and not arguments.get("force_new"):
+            # A named binding is resumed, not replaced; reading it settles
+            # whether anything needs repeating.
+            check = f"identity(client_session_id='{session_id}')"
+            return {
+                "action": (
+                    f"This call named an existing binding. Read it with {check} "
+                    "before calling again: if it returns your agent_uuid, the "
+                    "binding is in place and start_session is not needed."
+                ),
+                "check_before_retry": check,
+                "workflow": [
+                    f"1. Call {check}",
+                    "2. If it returns your agent_uuid, the binding is in place. "
+                    "Call again only for a change it does not show yet, such as "
+                    "a display name",
+                    "3. If it does not resolve on a read after settled_by, call "
+                    "start_session(force_new=true) once",
+                ],
+                "related_tools": ["identity", "start_session", "health_check"],
+            }
         if tool == "identity":
             return {
                 "action": (
@@ -364,15 +386,19 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
                 "client_session_id it would have returned never reached you, so no "
                 "read can find it, and every further call creates another. Call "
                 "start_session(force_new=true) once more if you need an identity; "
-                "do not retry in a loop."
+                "do not retry in a loop. If you already hold a client_session_id "
+                "from an earlier start_session, identity(client_session_id=...) "
+                "reads that binding instead."
             ),
             "check_before_retry": None,
             "workflow": [
-                "1. Call start_session(force_new=true) once more if you need an "
-                "identity; one the timed-out call created stays unused",
-                "2. If that also times out, call health_check before trying again",
+                "1. If you hold a client_session_id from an earlier start_session, "
+                "call identity(client_session_id=...) and keep that binding",
+                "2. Otherwise call start_session(force_new=true) once more; an "
+                "identity the timed-out call created stays unused",
+                "3. If that also times out, call health_check before trying again",
             ],
-            "related_tools": ["start_session", "health_check"],
+            "related_tools": ["start_session", "identity", "health_check"],
         }
 
     if tool == "knowledge" and action == "update":

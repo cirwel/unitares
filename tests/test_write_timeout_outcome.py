@@ -354,6 +354,45 @@ async def test_identity_minting_timeout_never_gets_the_retry_reply(tool_name):
     assert "start_session" in payload["recovery"]["related_tools"]
 
 
+@pytest.mark.parametrize("tool", ["onboard", "identity"])
+def test_a_call_naming_its_binding_is_told_to_read_it_not_to_mint(tool):
+    """A resume with a client_session_id must not be pushed into a fresh
+    identity; reading the named binding settles it."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    recovery = _unknown_outcome_recovery(
+        CallOperation(operation="read", tool=tool, mints_identity=True),
+        {"client_session_id": "sess-1"},
+    )
+
+    assert recovery["check_before_retry"] == "identity(client_session_id='sess-1')"
+    assert recovery["workflow"][0] == "1. Call identity(client_session_id='sess-1')"
+    assert "after settled_by" in recovery["workflow"][2]
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"force_new": True},
+        {"force_new": True, "client_session_id": "sess-1"},
+        {"client_session_id": "it's"},
+    ],
+)
+def test_a_fresh_or_unproven_onboard_is_told_a_repeat_creates_another(arguments):
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    recovery = _unknown_outcome_recovery(
+        CallOperation(operation="read", tool="onboard", mints_identity=True),
+        arguments,
+    )
+
+    assert recovery["check_before_retry"] is None
+    assert "every further call creates another" in recovery["action"]
+    assert "do not retry in a loop" in recovery["action"]
+
+
 @pytest.mark.parametrize(
     ("tool_name", "arguments"),
     [
