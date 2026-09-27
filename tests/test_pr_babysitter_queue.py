@@ -143,6 +143,7 @@ def _run(
     fail: tuple[str, ...] = (),
     compares: dict[str, dict | None] | None = None,
     timeline_fails: tuple[int, ...] = (),
+    arms: dict[int, float] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -167,6 +168,12 @@ def _run(
         # None: GitHub will not return it (unknown SHA, API error).
         target.write_text("not json" if payload is None else json.dumps(payload))
     state_file = tmp_path / "state" / "approvals"
+    if arms:
+        # Arms this script made: the arming time GitHub reports must match.
+        state_file.parent.mkdir(exist_ok=True)
+        with (tmp_path / "state" / "approvals.arms").open("a") as handle:
+            for number, minutes_ago in arms.items():
+                handle.write(f"{number} {_iso(minutes_ago)}\n")
     for key, value in (states or {}).items():
         repo, number = key.split("#")
         (d / f"state_{repo.replace('/', '_')}_{number}").write_text(value + "\n")
@@ -387,14 +394,15 @@ def test_an_armed_pr_holds_the_queue_even_when_armed_by_hand(tmp_path: Path) -> 
 
 
 def test_an_approved_armed_pr_that_conflicts_is_disarmed_and_the_queue_moves(tmp_path: Path) -> None:
-    calls, out = _run(tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)])
+    calls, out = _run(tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)], arms={3: 20})
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
     assert "#3 armed but CONFLICTING" in out
 
 
 def test_an_approved_armed_pr_that_failed_on_its_head_is_disarmed(tmp_path: Path) -> None:
     calls, _ = _run(
-        tmp_path, [_pr(3, armed_min_ago=20, state="BLOCKED", checks=[_check("test", "FAILURE")]), _pr(4)]
+        tmp_path, [_pr(3, armed_min_ago=20, state="BLOCKED", checks=[_check("test", "FAILURE")]), _pr(4)],
+        arms={3: 20},
     )
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
@@ -414,7 +422,8 @@ def test_a_hand_armed_pr_is_never_disarmed_and_keeps_the_slot_while_conflicting(
 
 def test_an_approved_armed_pr_parked_for_approval_is_disarmed(tmp_path: Path) -> None:
     calls, _ = _run(
-        tmp_path, [_pr(3, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "ACTION_REQUIRED")]), _pr(4)]
+        tmp_path, [_pr(3, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "ACTION_REQUIRED")]), _pr(4)],
+        arms={3: 20},
     )
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
@@ -427,7 +436,9 @@ def test_a_zero_arming_time_is_not_a_decades_long_hold(tmp_path: Path) -> None:
 
 
 def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)], fail=("--disable-auto",))
+    calls, _ = _run(
+        tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)], fail=("--disable-auto",), arms={3: 20}
+    )
     assert calls == ["pr merge 3 -R o/r --disable-auto"]
 
 
@@ -523,7 +534,8 @@ def _armed_then_moved(tmp_path: Path, second: dict | None, timeline_fails: tuple
     assert first_calls == [_arm(3, "aaa")]
     return _run(
         tmp_path,
-        [_pr(3, head="bbb", armed_min_ago=3, state="BLOCKED"), _pr(4)],
+        # Armed moments ago, by tick 1: GitHub's arming time matches the record.
+        [_pr(3, head="bbb", armed_min_ago=0.3, state="BLOCKED"), _pr(4)],
         timelines={3: tl, 4: _timeline(8, 20)},
         compares={"aaa": CHANGE_A, "bbb": second},
         timeline_fails=timeline_fails,
@@ -655,3 +667,16 @@ def test_a_pr_the_maintainer_rearmed_by_hand_later_is_left_alone(tmp_path: Path)
 def test_a_dry_run_records_no_arm(tmp_path: Path) -> None:
     _run(tmp_path, [_pr(3)], PR_QUEUE_DRY_RUN="1")
     assert not (tmp_path / "state" / "approvals.arms").exists()
+
+
+def test_a_labelled_pr_armed_by_hand_is_never_disarmed(tmp_path: Path) -> None:
+    # Labelled, but the maintainer armed it: no recorded arm, so it is theirs.
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)])
+    assert calls == []
+
+
+def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
+    (tmp_path / "state" / "approvals.arms").mkdir(parents=True)  # unwritable as a file
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")])
+    assert calls == [_arm(1, "aaa"), "pr merge 1 -R o/r --disable-auto"]
+    assert "could not be recorded" in out

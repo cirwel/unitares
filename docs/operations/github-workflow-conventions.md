@@ -608,14 +608,16 @@ the operator's machine is awake.
   check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
-- **The slot.** Any armed PR holds it, including one armed by hand. A labelled
-  armed PR that turns `CONFLICTING`, whose checks failed on its current head,
-  or that has a check parked for approval, is disarmed so it stops holding
-  the queue; its label stays. Removing the label withdraws the approval: a PR
-  the script armed is disarmed at the next tick once the label is gone. A PR armed by hand is never disarmed by the
-  script, so it keeps the slot even while it conflicts (arming another would
-  leave two armed once the conflict is resolved); a hold longer than 90
-  minutes is logged, and clearing it is the maintainer's call.
+- **The slot.** Any armed PR holds it, including one armed by hand. The
+  script disarms only arms it made (it records each one): such a PR that
+  turns `CONFLICTING`, whose checks failed on its current head, or that has a
+  check parked for approval is disarmed so it stops holding the queue, and
+  its label stays. Removing the label withdraws the approval, and a PR the
+  script armed is disarmed at the next tick once the label is gone. A PR
+  armed by hand, labelled or not, is never disarmed by the script, so it
+  keeps the slot even while it conflicts (arming another would leave two
+  armed once the conflict is resolved); a hold longer than 90 minutes is
+  logged, and clearing it is the maintainer's call.
 - **The single fallback update.** If the armed PR is `BEHIND` and neither the
   base nor its arming has moved for 10 minutes, GitHub's updater has not
   acted and the script updates that one branch. The grace period is what

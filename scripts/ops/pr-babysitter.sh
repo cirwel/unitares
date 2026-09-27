@@ -186,8 +186,9 @@ latest_label_time() {
 
 # --- 1. tidy the slot -----------------------------------------------------------
 # Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
-# script's when GitHub's arming time matches a recorded one; one the maintainer
-# re-armed by hand later carries a later time and is left alone.
+# script's when GitHub's arming time matches a recorded one. Only those are
+# ever disarmed; a PR the maintainer armed by hand (labelled or not, or
+# re-armed later, which carries a later time) is left alone.
 ARMS_FILE="$STATE_FILE.arms"
 record_arm() {
   [ "$DRY_RUN" = "1" ] && return 0
@@ -209,11 +210,11 @@ while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   reason=""
+  # Only arms this script made are ever disarmed; the maintainer's own arm,
+  # labelled or not, is theirs to manage.
+  armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
   if ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
-    # Unlabelled: the maintainer's own arm, unless this script armed it and the
-    # label has since been removed, which withdraws the approval.
-    armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
-    reason="its $LABEL label was removed"
+    reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
@@ -404,7 +405,11 @@ while read -r _ n head; do
   # --match-head-commit: arm only the head the approval covers, so a push that
   # lands between this tick's read and the call is refused, not merged.
   if act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head"; then
-    record_arm "$n" || log "#$n armed, but the arm could not be recorded"
+    # Unrecorded, the arm could not be withdrawn by removing the label later.
+    if ! record_arm "$n"; then
+      log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
+      act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
+    fi
   else
     log "#$n arm failed; nothing else armed this tick"
   fi
