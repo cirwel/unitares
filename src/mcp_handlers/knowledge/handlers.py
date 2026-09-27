@@ -262,6 +262,7 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "sort_by",
             "created_after",
             "created_before",
+            "recency_half_life_days",
         )
         if payload.get(key) is not None
     }
@@ -1686,6 +1687,9 @@ class _KnowledgeSearchRequest:
     # Exclusive, timezone-aware bounds on created_at.
     created_after: Optional[datetime] = None
     created_before: Optional[datetime] = None
+    # Opt-in recency weight on the relevance score (operator decision
+    # 2026-09-27: per call, default off). None = no weighting.
+    recency_half_life_days: Optional[float] = None
 
     @property
     def query_terms(self) -> list[str]:
@@ -1802,6 +1806,26 @@ def _parse_search_timestamp(name: str, value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+RECENCY_HALF_LIFE_MAX_DAYS = 36500.0
+
+
+def _parse_half_life(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        days = float(value)
+    except (TypeError, ValueError):
+        raise _SearchParameterError(
+            f"recency_half_life_days {value!r} is not a number of days."
+        ) from None
+    if not (0 < days <= RECENCY_HALF_LIFE_MAX_DAYS):
+        raise _SearchParameterError(
+            f"recency_half_life_days must be above 0 and at most "
+            f"{RECENCY_HALF_LIFE_MAX_DAYS:g}; got {value!r}."
+        )
+    return days
+
+
 def _parse_knowledge_search_request(
     arguments: Dict[str, Any],
 ) -> _KnowledgeSearchRequest:
@@ -1833,6 +1857,18 @@ def _parse_knowledge_search_request(
             "search_mode='auto' or 'fts', or omit the query to list the newest "
             "entries by filter."
         )
+    recency_half_life_days = _parse_half_life(arguments.get("recency_half_life_days"))
+    if recency_half_life_days is not None:
+        if sort_by == "created_at":
+            raise _SearchParameterError(
+                "recency_half_life_days weights relevance by age; sort_by='created_at' "
+                "already orders by time. Use one or the other."
+            )
+        if not (arguments.get("query") or arguments.get("text")):
+            raise _SearchParameterError(
+                "recency_half_life_days needs a query: without one, results are "
+                "already newest first."
+            )
     created_after = _parse_search_timestamp("created_after", arguments.get("created_after"))
     created_before = _parse_search_timestamp("created_before", arguments.get("created_before"))
     query_present = bool(arguments.get("query") or arguments.get("text"))
@@ -1956,6 +1992,7 @@ def _parse_knowledge_search_request(
         sort_by=sort_by,
         created_after=created_after,
         created_before=created_before,
+        recency_half_life_days=recency_half_life_days,
     )
 
 
@@ -2352,7 +2389,12 @@ AUTHORITY_POOL_SIZE = 50
 
 
 def _authority_pool_size(request: _KnowledgeSearchRequest) -> int:
-    return AUTHORITY_POOL_SIZE if _authority_ranking_enabled(request) else 0
+    # A recency weight reorders the same way authority does, so it needs the
+    # same pool: a fresh row just below the first page must be retrieved to
+    # be lifted.
+    if _authority_ranking_enabled(request) or request.recency_half_life_days:
+        return AUTHORITY_POOL_SIZE
+    return 0
 
 
 def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
@@ -2365,13 +2407,54 @@ def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
     return {}
 
 
+def _recency_weighted(
+    documents: list[Any],
+    scores: dict[str, float],
+    half_life_days: float,
+) -> tuple[list[Any], dict[str, float]]:
+    """Multiply each row's relevance by 0.5 ** (age / half-life) and re-sort.
+
+    A true half-life: a row half_life_days old keeps half its score. (The AGE
+    backend's semantic blend uses 1 / (1 + age / 90), which is 0.5 at 90
+    days but decays more slowly after that.) The base score is the one
+    authority ranking reads: rerank, then RRF, then semantic similarity,
+    then a full-text row's own rank, then position. RRF is rank-derived and
+    nearly flat, so on a hybrid search the weight dominates the order. A
+    row whose creation time cannot be read is left unweighted.
+    """
+    now = datetime.now(timezone.utc)
+    weighted: dict[str, float] = {}
+    for index, document in enumerate(documents):
+        document_id = str(getattr(document, "id", ""))
+        base = scores.get(document_id)
+        if not isinstance(base, (int, float)):
+            base = getattr(document, "relevance", None)
+        if not isinstance(base, (int, float)):
+            base = 1.0 / (1.0 + index * 0.05)
+        created = _document_created_at(document)
+        decay = 1.0
+        if created is not None:
+            age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+            decay = 0.5 ** (age_days / half_life_days)
+        weighted[document_id] = float(base) * decay
+    ordered = sorted(
+        enumerate(documents),
+        key=lambda item: (-weighted[str(getattr(item[1], "id", ""))], item[0]),
+    )
+    return [document for _, document in ordered], weighted
+
+
 def _rank_search_documents(
     state: _KnowledgeSearchState,
     documents: list[Any],
 ) -> list[Any]:
+    scores = _authority_score_map(state)
+    half_life = state.request.recency_half_life_days
+    if half_life:
+        documents, scores = _recency_weighted(documents, scores, half_life)
     ranked, changed = rank_by_authority(
         documents,
-        relevance_scores=_authority_score_map(state),
+        relevance_scores=scores,
         enabled=_authority_ranking_enabled(state.request),
     )
     state.authority_reranked = state.authority_reranked or changed
@@ -2400,7 +2483,7 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
     # dropped before its multiplier could lift it.
     if state.rerank_on:
         filter_cap = state.rerank_pool_size
-    elif state.hybrid_on or _authority_ranking_enabled(request):
+    elif state.hybrid_on or _authority_pool_size(request):
         filter_cap = max(request.limit, AUTHORITY_POOL_SIZE)
     else:
         filter_cap = request.limit
@@ -2839,6 +2922,8 @@ def _search_order_echo(request: _KnowledgeSearchRequest) -> dict[str, Any]:
         echo["created_after"] = request.created_after.isoformat()
     if request.created_before:
         echo["created_before"] = request.created_before.isoformat()
+    if request.recency_half_life_days:
+        echo["recency_half_life_days"] = request.recency_half_life_days
     return echo
 
 

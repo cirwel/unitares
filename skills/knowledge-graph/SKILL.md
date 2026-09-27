@@ -79,6 +79,11 @@ matches. Two controls answer "what is new":
   the "what is new since T" read, newest first:
   `search_shared_memory(created_after="2026-09-26T00:00:00Z")`.
 
+- `recency_half_life_days` keeps relevance order but weights it by age: each
+  result's score is multiplied by `0.5 ** (age_days / N)`. Off by default; it
+  needs a query and cannot be combined with `sort_by="created_at"`. Use it when
+  both relevance and freshness matter, and `sort_by` when only freshness does.
+
 An unparseable or inverted window is refused, not ignored. The response echoes
 `sort_by` and the window when they differ from the default. The default order
 is still relevance.
