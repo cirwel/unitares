@@ -68,6 +68,7 @@ additions merge cleanly. -->
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py, src/mcp_handlers/knowledge/handlers.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
+| `UNITARES_DASHBOARD_EXT_DIR` | `''` | Serve operator dashboard extensions from UNITARES_DASHBOARD_EXT_DIR. | src/http_routes/dashboard.py |
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
 | `UNITARES_DASHBOARD_ORIGIN` | `''` | Read the passkey relying party; unset means passkey sign-in is off | src/dashboard_auth.py |
 | `UNITARES_DASHBOARD_RP_ID` | `''` | Read the passkey relying party; unset means passkey sign-in is off | src/dashboard_auth.py |

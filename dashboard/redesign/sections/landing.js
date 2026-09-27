@@ -111,66 +111,17 @@
     } else { attn.hidden = true; }
   }
 
-  function renderStats(stats, residents, source, auto) {
+  function renderStats(stats, residents, source) {
     const fleet = fleetSummary(residents);
-    // Automation Health — awareness only ("do I need to care?"); the map lives in /automations.
-    const asum = (auto && auto.summary) || {};
-    const aKind = asum.by_kind || {};
-    const aAtt = (asum.needs_attention || []).length;
-    const aStale = !!(auto && auto.stale);
-    // Ungated = nothing verifies it (the role-reversal risk) — surface it here.
-    // Precomputed server-side under ?view=summary — the card only ever counted
-    // these, and shipping 228 notes arrays to compute one integer was the bulk
-    // of the Overview's payload.
-    //
-    // Report UNCLASSIFIED, not `ungated`. `ungated` counts an explicit
-    // `gate:ungated` note that nothing writes — 0 of 228 carried it on
-    // 2026-08-28 — so the card read "0 ungated" forever, which is the most
-    // reassuring possible rendering of "no determination was made". The honest
-    // number is how many have no grounding classification at all: 123 of 228,
-    // by the same rule the Automations tab uses.
-    const aUnclassified = (auto && typeof auto.unclassified === "number") ? auto.unclassified : 0;
-    const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
-    const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
-    // Three states the counters used to render alike, as a red "0 … stale":
-    //  - a current census ran (numeric snapshot age, not stale) and registers
-    //    nothing → "none registered", neutrally;
-    //  - the server says no census has ever run (snapshot_age_seconds: null,
-    //    a fresh install) → "no census yet", neutral: nothing established
-    //    that there are none, and unknown is never green;
-    //  - anything else, including the offline fallback object (which carries
-    //    no snapshot age at all), keeps the counters as before.
-    const aCensusRan = !!auto && typeof auto.snapshot_age_seconds === "number";
-    const aNoCensus = !!auto && auto.snapshot_age_seconds === null;
-    // A stale census cannot establish that none are registered now.
-    const aNone = aCensusRan && !aStale && !(asum.total > 0) && aAtt === 0;
-    const autoSub = aNoCensus ? "no census yet"
-      : aNone ? "none registered"
-      : `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
-      + ` · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
     const un = (v) => v == null;
-    // Cards that map to a section are links (href); the rest (Calibration,
-    // Anomalies — pure stats with no detail view) stay plain, so the clickable
-    // affordance is honest rather than implied on everything.
-    // Stuck card body: NAME the flagged agents, each a link to that one agent's
-    // detail. The old whole-card `href="#agents"` landed the operator on an
-    // unfiltered 100-row table with no indication which agents were meant —
-    // the count said "4 · needs attention" and the click went nowhere useful.
-    // Per-agent beats a filter: `stuck` is orthogonal to the status filter (all
-    // four live stuck agents are status=active), and agent(list) is hard-capped
-    // at 100 of ~457 server-side, so a client-side filter could render an empty
-    // table under a non-zero count. A per-agent link degrades honestly instead.
-    // Degradation window: a server that predates the stuck-entry enrichment
-    // returns neither a name nor a joinable handle. Render the reason WITHOUT a
-    // link rather than a link that goes nowhere — a dead link is the bug being
-    // fixed. Self-resolves once the server change deploys.
-    const stuckList = stats.stuckList || [];
-    const stuckHard = typeof stats.stuckHard === "number"
-      ? stats.stuckHard : stuckList.filter((s) => !s.soft).length;
-    const stuckSoft = typeof stats.stuckSoft === "number"
-      ? stats.stuckSoft : stuckList.filter((s) => s.soft).length;
+    // Every card here is one an operator of ANY install can read and act on.
+    // Agent attention, Automations, Calibration, Anomalies and Trust Tiers were
+    // removed 2026-09-26: they surfaced one deployment's instruments (its job
+    // census, its calibration research, a capped anomaly sample, identity
+    // churn) as if they were product state. An operator who wants them back
+    // adds them as a dashboard extension (dashboard/EXTENSIONS.md).
     const hasAgentPresence = typeof stats.agentsLive === "number";
     const presenceUnknown = (stats.agentsPresenceUnknown || 0)
       + (stats.agentsPresenceUnavailable || 0);
@@ -187,17 +138,6 @@
       : hasAgentPresence
         ? `live binding/lease · 30d window${presenceUnknown ? ` · ${presenceUnknown} presence unknown` : ""}`
         : un(stats.agentsActive) ? "unavailable" : "registry active / total · 30d window";
-    const stuckBody = stuckList.map((s) => {
-      const inner = `<span class="name">${esc(s.name || "agent not identified")}</span>`
-        + `<span class="reason">${esc(s.reason)}${s.soft ? " · soft" : ""}</span>`;
-      if (!s.id) {
-        return `<span class="stuck-row plain" title="${esc(s.details)}${s.name ? "" : "\n(server did not report an identifier for this detection)"}">${inner}</span>`;
-      }
-      return `<a href="#agents" class="stuck-row" data-stuck-id="${esc(s.id)}" title="${esc(s.details)}">${inner}</a>`;
-    }).join("")
-      + (typeof stats.stuck === "number" && stats.stuck > stuckList.length
-        ? `<a href="#agents" class="stuck-more">+${stats.stuck - stuckList.length} more</a>` : "");
-    const calUnassessed = stats.calibrationStatus === "unassessed";
     const cards = [
       // Class DERIVED, not hardcoded. This was `cls: "up"` from the original
       // redesign scaffold — the only card of nine that did not compute its own
@@ -212,103 +152,26 @@
       // red/green verdicts". What CAN be stated is cadence, which the subtitle
       // already computes: amber when a resident has stopped checking in.
       { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub,
-        cls: fleet.part.down.length ? "down" : "", rule: true, href: "#residents" },
+        cls: fleet.part.down.length ? "down" : "", rule: true, href: "#eisv" },
       // Name the denominator's window: this card reads a 30-day registry
-      // window, the Agents tab a 14-day one, tier_distribution ever-seen —
-      // three honest totals that read as contradictions when unlabelled.
+      // window and the Agents tab a 14-day one — two honest totals that read
+      // as a contradiction when unlabelled.
       { h: "Agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents",
         title: un(stats.agentsTotal) ? ""
           : presenceBlind
             ? `${agentHeadline} registry-active of ${stats.agentsTotal} identities seen in the last 30 days. None holds a live binding/lease, and presence is unknown for ${presenceUnknown}. The Agents tab reads a 14-day window, so its total is smaller.`
             : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
-      { h: "Agent attention", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? `${stuckHard} stuck · ${stuckSoft} soft silence` : "none flagged"), cls: un(stats.stuck) ? "" : (stuckHard ? "down" : stats.stuck ? "" : "up"),
-        body: stuckBody, href: stuckBody ? null : "#agents" },
-      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aNone || aNoCensus ? "" : aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
       { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable"
           : (stats.dialectic ? "open sessions"
             : typeof stats.dialecticRecent === "number" && stats.dialecticRecent
               ? `none open · ${typeof stats.dialecticFailed === "number" && stats.dialecticFailed ? `${stats.dialecticFailed} of ${stats.dialecticRecent} recent failed` : `${stats.dialecticRecent} recent`}`
               : "no open sessions"), href: "#dialectic" },
-      { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down"), href: "#residents" },
-      // The card's NAME promises the calibration verdict, so the verdict is
-      // what it leads with; trajectory_health is a different quantity from the
-      // same response and rides in the subtitle where it cannot be mistaken
-      // for the status. Colour follows `calibrated`, never the number: gating
-      // green on trajectory_health >= 0.8 would have painted the card OK while
-      // the server answered "miscalibrated" (live on 2026-08-28 at 0.784 —
-      // 0.016 from green). Unknown calibration stays neutral, never green.
-      // "unassessed" is the server saying there is no calibration data yet (a
-      // fresh install): calibrated=false, but not a verdict of miscalibration.
-      // Name it, neutrally — neither the red of a bad verdict nor green.
-      { h: "Calibration",
-        num: calUnassessed ? "unassessed"
-           : un(stats.calibrated) ? (un(stats.calibration) ? "—" : num(stats.calibration))
-                                  : (stats.calibrated ? "calibrated" : "miscalibrated"),
-        sub: calUnassessed ? "no calibration data yet"
-             : un(stats.calibrated) && un(stats.calibration) ? "unavailable"
-             : [un(stats.calibration) ? null : "trajectory health " + num(stats.calibration),
-                stats.calibrationSignal && stats.calibrationSignal !== "fresh"
-                  ? "tactical signal " + stats.calibrationSignal : null,
-               ].filter(Boolean).join(" · "),
-        cls: calUnassessed ? "" : stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
-      // "clear" is a claim about the fleet, so it may only be made when the
-      // scan covered the fleet. The server caps its default scan at
-      // scan.scan_cap active agents and reports scan.truncated; a truncated
-      // scan that found nothing means "nothing among the ones looked at", which
-      // is not an all-clear and must not go green — the same rule the
-      // Calibration card above follows for unknown calibration. An older server
-      // sends no scan block, so truncated is null and the card is unchanged.
-      { h: "Anomalies",
-        num: un(stats.anomalies) ? "—" : stats.anomalies,
-        sub: un(stats.anomalies) ? "unavailable"
-             : [stats.anomalies ? stats.anomalies + " active"
-                                : (stats.anomaliesTruncated ? "none found" : "clear"),
-                stats.anomaliesTruncated && !un(stats.anomaliesScanned) && !un(stats.anomaliesActive)
-                  ? "scanned " + stats.anomaliesScanned + " of " + stats.anomaliesActive + " agents"
-                  : null,
-               ].filter(Boolean).join(" · "),
-        cls: un(stats.anomalies) ? "" : (stats.anomalies ? "down" : (stats.anomaliesTruncated ? "" : "up")) },
+      { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down") },
     ];
     const degradeBanner = stats.degraded > 0
       ? `<div style="grid-column:1/-1;font-size:var(--text-xs);color:var(--warn);display:flex;gap:6px;align-items:center;margin-bottom:calc(-1 * var(--space-2))"><span>⚠</span><span>${stats.degraded} metric${stats.degraded > 1 ? "s" : ""} couldn't refresh just now — showing "—" instead of stale values.</span></div>`
       : "";
-    // Tier colours live in tokens.css (--tier-*) so this and the agents-table
-    // badge share ONE vocabulary and both themes come free. The whitelist is
-    // also the guard on the var() interpolation — a server-supplied tier name
-    // never reaches the style attribute.
-    const TIER_NAMES = ["verified", "established", "emerging", "provisional", "unknown"];
-    const tierVar = (k) => TIER_NAMES.indexOf(k) !== -1 ? `var(--tier-${k})` : "var(--tier-unknown)";
-    const tiers = stats.trustTiers || [];
-    const max = Math.max(1, ...tiers.map((t) => t.n));
-    // Horizontal + LINEAR. The card is 2 columns wide and the old bar box was a
-    // hard 34px tall, so four ~125px-wide bars rendered the three small tiers at
-    // 1.0–1.7px — unreadable and effectively un-hoverable, and Math.round on the
-    // PERCENTAGE collapsed established (5.3%) and provisional (4.7%) to the same
-    // height. Width is the axis with room (~370px track). Same linear scale, so
-    // proportion stays honest — a log scale would render established at half of
-    // emerging when it is 5% of it. Each row is self-labelling, which absorbs
-    // the separate legend that used to duplicate these numbers underneath.
-    // min-width 3px only when n > 0, so "there are none" still reads as none;
-    // worst-case distortion 3/370 = 0.8%, vs 12% for a 4px floor on 34px.
-    const tierRows = tiers.map((t) => {
-      const pct = (t.n / max) * 100;
-      return `<div class="tier-row" title="${esc(t.tier)}: ${t.n.toLocaleString()}">`
-        + `<span class="tier-name">${esc(t.tier)}</span>`
-        + `<span class="tier-track"><i style="width:${pct}%;min-width:${t.n > 0 ? 3 : 0}px;background:${tierVar(t.tier)}"></i></span>`
-        + `<span class="tier-n">${t.n.toLocaleString()}</span></div>`;
-    }).join("");
-    // "ever-seen" / "untiered", not "of N · unknown": this denominator is every
-    // identity ever registered (6k+), which reads as a contradiction next to
-    // the Agents card's 30-day total unless the scope is named.
-    const tierScope = typeof stats.trustEarned === "number"
-      ? `${stats.trustEarned.toLocaleString()} earned of ${stats.trustFleet.toLocaleString()} ever-seen · ${(stats.trustUnknown || 0).toLocaleString()} untiered`
-      : "";
-    const tierScopeTitle = "Tier denominators span every identity ever registered. Tiers are earned by evidence over time, so most one-shot sessions stay untiered.";
-
-    const trustBody = stats.trustTiers
-      ? `<div class="tier-rows">${tierRows}</div>`
-      : `<div class="sub" style="color:var(--muted)">unavailable</div>`;
     $("stats").innerHTML = degradeBanner + cards.map((s) => {
       const tag = s.href ? "a" : "div"; const attr = s.href ? ` href="${s.href}" style="text-decoration:none;color:inherit"` : "";
       const dataAttr = s.id ? ` data-card="${s.id}"` : "";
@@ -317,8 +180,7 @@
         + `<div class="num">${s.num}${s.of ? `<span class="of"> ${s.of}</span>` : ""}</div>`
         + `<div class="sub ${s.cls || ""}">${s.sub}</div>`
         + (s.body ? `<div class="card-body">${s.body}</div>` : "") + `</${tag}>`;
-    }).join("")
-      + `<div class="card wide"><h3>Trust Tiers ${tierScope ? `<span style="text-transform:none;letter-spacing:0;color:var(--faint);font-weight:400" title="${esc(tierScopeTitle)}">· ${tierScope}</span>` : ""}</h3>${trustBody}</div>`;
+    }).join("");
   }
 
   function renderPulse(residents) {
@@ -443,12 +305,12 @@
 
   // Full first render — light (residents/pulse/health) + heavy (stats) together.
   async function render() {
-    const [health, residents, stats, auto] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats(), DATA.automationsSummary()]);
+    const [health, residents, stats] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats()]);
     seedResidents(residents.data, residents.source);
     const view = viewResidents();
     applyHealth(health);
     renderResidents(view, residents.source);
-    renderStats(stats.data, view, stats.source, auto.data);
+    renderStats(stats.data, view, stats.source);
     renderPulse(view);
     footnote([residents, stats, health].some((r) => r.source === "live"));
   }
@@ -463,7 +325,7 @@
     renderPulse(view);
   }
 
-  // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse the resident
+  // Heavy refresh (slow cadence) — the headline batch; reuse the resident
   // model for fleet coherence rather than refetching it.
   async function refreshStats() {
     // refresh() re-reads residents and health, but it runs only on stream
@@ -472,27 +334,9 @@
     // never retried and its fallback stayed on screen. Retry here, on the
     // stats cadence, until both answer live.
     if (lastSource !== "live" || lastHealthSource !== "live") await refresh();
-    const [stats, auto] = await Promise.all([DATA.stats(), DATA.automationsSummary()]);
+    const stats = await DATA.stats();
     if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
-    renderStats(stats.data, viewResidents(), lastSource, auto.data);
-  }
-
-  // Stuck-row drill-down. Bound ONCE and delegated: renderStats replaces the
-  // whole #stats innerHTML every 30s, so per-render onclick handlers would be
-  // destroyed and rebound on every tick. (#stats holds no <select>/<input>, so
-  // the full rebuild is otherwise safe — this design adds none.)
-  const statsEl = $("stats");
-  if (statsEl) {
-    statsEl.addEventListener("click", (e) => {
-      const row = e.target.closest && e.target.closest("[data-stuck-id]");
-      if (!row) return;
-      e.preventDefault();
-      const id = row.dataset.stuckId;
-      // Hash FIRST so the pane is visible, then focus — Agents.focus is safe
-      // whether or not the section has loaded, and consumes itself once.
-      if (location.hash !== "#agents") location.hash = "#agents";
-      if (window.Agents && window.Agents.focus) window.Agents.focus(id);
-    });
+    renderStats(stats.data, viewResidents(), lastSource);
   }
 
   window.Landing = { render, refresh, refreshStats, applyEvent, tickSilence };

@@ -307,13 +307,3 @@ class TestLegacyFingerprintIdentity:
         assert r.status_code == 409
         appended.assert_not_awaited()
 
-
-def test_dashboard_pane_surfaces_hidden_items():
-    """The queue's only consumer must show what model verdicts hid, or an
-    emptied queue reads "Queue clear" while findings are merely out of view."""
-    from pathlib import Path
-    js = (Path(__file__).resolve().parent.parent
-          / "dashboard" / "redesign" / "sections" / "adjudication.js").read_text()
-    assert "model_adjudicated_suppressed" in js
-    assert "abstained_suppressed" in js
-    assert "the\n          queue is not clear" in js or "queue is not clear" in js

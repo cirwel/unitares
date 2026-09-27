@@ -108,6 +108,12 @@
         <string></string>
         <key>UNITARES_DASHBOARD_ORIGIN</key>
         <string></string>
+        <!-- Optional: a directory of this deployment's own dashboard tabs
+             (manifest.json + scripts), served at /dashboard/ext/ to
+             authenticated callers. Empty = core tabs only.
+             See dashboard/EXTENSIONS.md. -->
+        <key>UNITARES_DASHBOARD_EXT_DIR</key>
+        <string></string>
         <!-- Static bearer-token gate for /mcp (API-key auth). Empty/unset =
              gate OFF (localhost dev). For a publicly reachable connector set
              this to a long random secret (python3 -c "import secrets;

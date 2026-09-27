@@ -152,7 +152,10 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # (/v1/research/runs, /v1/research/runs/{run_id}, /v1/research/stats). No
 # allowlist entry was left behind — they were credential-gated, not in
 # PUBLIC_BY_DESIGN.
-EXPECTED_GET_ROUTES = 51
+# 51 -> 52: /dashboard/ext/{file:path} serves a deployment's own dashboard
+# extensions. Gated (_check_http_auth), not in PUBLIC_BY_DESIGN: an extension
+# is operator code, unlike the static shell beside it.
+EXPECTED_GET_ROUTES = 52
 
 
 def test_route_registry_is_readable():

@@ -64,7 +64,9 @@ describe("overview with no snapshot bundle", () => {
     const dom = bootWithoutSnapshot();
     await dom.window.Landing.render();
     // The regression was zero cards while residents/pulse painted.
-    expect(dom.window.document.querySelectorAll(".card").length).toBeGreaterThan(5);
+    // Five cards since the 2026-09-26 prune: Fleet Coherence, Agents,
+    // Discoveries, Dialectic, System Health.
+    expect(dom.window.document.querySelectorAll(".card").length).toBe(5);
   });
 
   it("renders the resident strip and pulse too, not one at the cost of the other", async () => {

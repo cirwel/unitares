@@ -205,6 +205,47 @@ async def http_dashboard_redesign(request):
     )
 
 
+# Operator extensions — sections that belong to ONE deployment, not to the
+# product. The core dashboard ships only sections every install can read; a
+# deployment that wants its own panels (a label queue, a census of its own
+# scheduled jobs, a research instrument) keeps them in a directory OUTSIDE this
+# repo and names it in UNITARES_DASHBOARD_EXT_DIR. Unset, this route is a 404
+# and the core dashboard renders exactly as shipped, so an outside operator
+# inherits none of another deployment's customisations.
+#
+# Every file is authenticated-only: an extension is by definition this
+# operator's own surface, and its code names what they measure. app.html reads
+# manifest.json and fetches each script with the same credentials as its data
+# calls (bearer or session cookie), so a bearer-only operator is not locked out
+# the way a plain <script src> would lock them out of snapshot.js.
+_EXT_MEDIA = {".js": "application/javascript", ".json": "application/json", ".css": "text/css"}
+
+
+async def http_dashboard_ext(request):
+    """Serve operator dashboard extensions from UNITARES_DASHBOARD_EXT_DIR."""
+    ext_dir = os.getenv("UNITARES_DASHBOARD_EXT_DIR", "").strip()
+    rel = request.path_params.get("file", "")
+    if not ext_dir:
+        return JSONResponse({"error": "No dashboard extensions configured"}, status_code=404)
+    if not rel or ".." in rel or rel.startswith("/"):
+        return JSONResponse({"error": "Invalid file path"}, status_code=400)
+    suffix = Path(rel).suffix
+    if suffix not in _EXT_MEDIA:
+        return JSONResponse({"error": "File type not allowed", "requested": rel}, status_code=403)
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+    base = Path(ext_dir).expanduser().resolve()
+    target = (base / rel).resolve()
+    if not str(target).startswith(str(base) + os.sep) or not target.is_file():
+        return JSONResponse({"error": "File not found", "requested": rel}, status_code=404)
+    return Response(
+        content=target.read_text(),
+        media_type=_EXT_MEDIA[suffix],
+        headers={"Cache-Control": "no-store", "Vary": "Cookie, Authorization"},
+    )
+
+
 async def http_dashboard_classic_redirect(request):
     """Classic was retired (PR #1012). Old /dashboard/classic links land on the
     live dashboard instead of a confusing 403 from the static allowlist."""

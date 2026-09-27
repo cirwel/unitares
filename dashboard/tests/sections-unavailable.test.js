@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
-// Every section on a served page whose server is not answering. The bundled
+// Every core section on a served page whose server is not answering (the
+// deployment-extension sections carry their own copy of this spec). The bundled
 // snapshot does not back the fallback there (see data.js `S`), so each data
 // accessor degrades to an empty fallback and each section must still render,
 // not reject and leave its pane blank. Before, several fallbacks dereferenced
@@ -19,12 +20,6 @@ const SECTIONS = [
   ["Activity", "activity", "act-mount"],
   ["EISV", "eisv", "eisv-mount"],
   ["Risk", "risk", "risk-mount"],
-  ["TelemetryHealth", "telemetry-health", "telemetry-health-mount"],
-  ["Metrics", "metrics", "met-mount"],
-  ["Residents", "residents", "res-mount"],
-  ["Automations", "automations", "auto-mount"],
-  ["Adjudication", "adjudication", "adj-mount"],
-  ["Enforcement", "enforcement", "enforcement-mount"],
   ["Security", "security", "security-mount"],
 ];
 
