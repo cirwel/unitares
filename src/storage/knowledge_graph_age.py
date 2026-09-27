@@ -2192,6 +2192,8 @@ class KnowledgeGraphAGE:
         min_similarity: float,
         agent_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[tuple[str, float]]:
         """
         Search using pgvector's HNSW index.
@@ -2207,11 +2209,25 @@ class KnowledgeGraphAGE:
 
         # agent_id is filtered by the caller after the fetch, so over-fetch for it.
         params: List[Any] = [embedding_str, min_similarity]
-        tag_join = ""
+        # Row predicates ride a join inside the ranked query: filtering the
+        # top-N afterwards drops every qualifying row that ranked below N.
+        join_conditions = []
         if tags:
             from src.knowledge_graph import normalize_tags
             params.append(normalize_tags(tags))
-            tag_join = f"JOIN knowledge.discoveries d ON d.id = de.discovery_id AND d.tags && ${len(params)}"
+            join_conditions.append(f"d.tags && ${len(params)}")
+        if created_after:
+            params.append(created_after)
+            join_conditions.append(f"d.created_at > ${len(params)}")
+        if created_before:
+            params.append(created_before)
+            join_conditions.append(f"d.created_at < ${len(params)}")
+        tag_join = (
+            "JOIN knowledge.discoveries d ON d.id = de.discovery_id AND "
+            + " AND ".join(join_conditions)
+            if join_conditions
+            else ""
+        )
         params.append(limit * 3 if agent_id else limit)
         sql = f"""
             SELECT de.discovery_id, (1 - (de.embedding <=> $1::vector)) AS similarity
@@ -2224,9 +2240,10 @@ class KnowledgeGraphAGE:
         """
 
         async with db.acquire() as conn:
-            if tags:
+            if join_conditions:
                 # A filtered HNSW scan otherwise stops after ef_search (40)
-                # candidates, so a sparse tag returns fewer rows than exist.
+                # candidates, so a sparse tag or a narrow date window returns
+                # fewer rows than exist.
                 async with conn.transaction():
                     await conn.execute("SET LOCAL hnsw.iterative_scan = relaxed_order")
                     rows = await conn.fetch(sql, *params)
@@ -2531,6 +2548,8 @@ class KnowledgeGraphAGE:
         half_life_days: float = 90.0,
         status_weight: bool = True,
         tags: Optional[List[str]] = None,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[tuple[DiscoveryNode, float]]:
         """
         Semantic search using sentence-transformer embeddings.
@@ -2601,6 +2620,8 @@ class KnowledgeGraphAGE:
                 min_similarity=min_similarity,
                 agent_id=agent_id,
                 tags=tags,
+                created_after=created_after,
+                created_before=created_before,
             )
             
             if scored_ids:
@@ -2665,6 +2686,8 @@ class KnowledgeGraphAGE:
             agent_id=agent_id,
             tags=tags,
             limit=limit * 5,
+            created_after=created_after,
+            created_before=created_before,
         )
 
         if not candidates:

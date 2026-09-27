@@ -92,11 +92,15 @@ def _pg_graph(db):
     return graph
 
 
+def _display_by_agent(agent_id):
+    return {"display_name": agent_id}
+
+
 async def _search(db, **arguments):
     graph = _pg_graph(db)
     with patch.object(handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
          patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
-         patch.object(handlers, "_resolve_agent_display", MagicMock(return_value={"display_name": "t"})):
+         patch.object(handlers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
         result = await handlers.handle_search_knowledge_graph(arguments)
     return json.loads(result[0].text)
 
@@ -223,6 +227,23 @@ class TestSearchHandlerNewestFirst:
             await seeded_db.kg_add_discovery(node)
         payload = await _search(
             seeded_db, query="coherence gate", limit=1, sort_by="created_at", discovery_type="note"
+        )
+        assert _ids(payload) == [NEW_WEAK.id]
+
+    @pytest.mark.asyncio
+    async def test_excluded_writer_does_not_take_the_only_slot(self, seeded_db):
+        # Review finding (#2517, round 2): label exclusion ran after the page
+        # was cut, so limit=1 came back empty when the newest match was
+        # written by an excluded label.
+        node = _node("excluded", age=timedelta(seconds=1), summary="coherence gate excluded writer")
+        node.agent_id = "excluded-writer"
+        await seeded_db.kg_add_discovery(node)
+        payload = await _search(
+            seeded_db,
+            query="coherence gate",
+            limit=1,
+            sort_by="created_at",
+            exclude_agent_labels=["excluded-writer"],
         )
         assert _ids(payload) == [NEW_WEAK.id]
 
@@ -381,6 +402,55 @@ class TestWindowOnCandidatesInHand:
         assert [d.id for d in state.results] == [MID.id]
         # The FTS leg was asked to window inside its query.
         assert graph.full_text_search.await_args.kwargs["created_after"] == request.created_after
+
+
+class TestPgvectorWindow:
+    """Review finding (#2517, round 2): a window applied after the semantic
+    top-k could leave semantic mode empty while in-window rows existed below
+    the cut. The bounds now ride inside the ranked pgvector query."""
+
+    @pytest.mark.asyncio
+    async def test_window_is_a_predicate_inside_the_ranked_query(self):
+        from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+        conn = MagicMock()
+        conn.fetch = AsyncMock(return_value=[])
+        conn.execute = AsyncMock()
+        tx = MagicMock()
+        tx.__aenter__ = AsyncMock(return_value=None)
+        tx.__aexit__ = AsyncMock(return_value=False)
+        conn.transaction = MagicMock(return_value=tx)
+        acquire = MagicMock()
+        acquire.__aenter__ = AsyncMock(return_value=conn)
+        acquire.__aexit__ = AsyncMock(return_value=False)
+        db = MagicMock()
+        db.acquire = MagicMock(return_value=acquire)
+
+        graph = KnowledgeGraphAGE.__new__(KnowledgeGraphAGE)
+        graph._get_db = AsyncMock(return_value=db)
+        after = NOW - timedelta(days=1)
+        with patch("src.embeddings.get_active_table_name", return_value="core.discovery_embeddings"):
+            await graph._pgvector_search([0.1, 0.2], limit=5, min_similarity=0.3, created_after=after)
+
+        sql, *params = conn.fetch.await_args.args
+        assert "d.created_at > $3" in sql
+        assert "LIMIT $4" in sql
+        assert params[2] == after
+        # The relaxed iterative scan keeps a narrow window from stopping
+        # the filtered HNSW walk at ef_search candidates.
+        conn.execute.assert_awaited_with("SET LOCAL hnsw.iterative_scan = relaxed_order")
+
+    @pytest.mark.asyncio
+    async def test_semantic_leg_is_asked_for_the_window(self, monkeypatch):
+        graph = MagicMock()
+        graph.semantic_search = AsyncMock(return_value=[(MID, 0.8)])
+        graph.full_text_search = AsyncMock(return_value=[])
+        monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+        request = _parse_knowledge_search_request(
+            {"query": "coherence gate", "created_after": (NOW - timedelta(days=20)).isoformat()}
+        )
+        await handlers._run_text_search(handlers._KnowledgeSearchState(request=request, graph=graph))
+        assert graph.semantic_search.await_args.kwargs["created_after"] == request.created_after
 
 
 # ---------------------------------------------------------------------------

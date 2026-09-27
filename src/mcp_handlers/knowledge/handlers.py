@@ -2097,6 +2097,7 @@ async def _retrieve_hybrid_candidates(
             limit=fetch_limit,
             min_similarity=state.min_similarity,
             **tag_kwargs,
+            **_window_kwargs(request),
         ),
         state.graph.full_text_search(
             str(request.query_text),
@@ -2153,6 +2154,7 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         limit=state.first_stage_limit,
         min_similarity=state.min_similarity,
         **_tag_kwargs(request),
+        **_window_kwargs(request),
     )
     if isinstance(semantic_results, tuple) and len(semantic_results) == 2 and isinstance(semantic_results[1], dict):
         state.search_degraded_warning = (
@@ -2364,7 +2366,9 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
         if request.tags and not _matches_tags(document, request.tags):
             state.tag_filter_dropped += 1
             continue
-        if _candidate_matches_search(document, state, substring_terms):
+        if _candidate_matches_search(document, state, substring_terms) and not _label_excluded(
+            document, request
+        ):
             filtered.append(document)
             if len(filtered) >= filter_cap:
                 break
@@ -2588,16 +2592,26 @@ def _candidate_matches_semantic_fallback(
     return _within_window(document, request)
 
 
+def _label_excluded(document: Any, request: _KnowledgeSearchRequest) -> bool:
+    """True when the writer's display label is one the caller excluded.
+
+    Checked while candidates are collected, not only after the page is cut:
+    otherwise an excluded writer's row can take a slot under the limit and
+    leave the page short, or empty at limit=1 under newest-first order.
+    """
+    if not request.exclude_labels:
+        return False
+    display = _resolve_agent_display(document.agent_id)
+    display_name = display.get("display_name", document.agent_id) or ""
+    return str(display_name).strip().lower() in request.exclude_labels
+
+
 def _exclude_search_labels(state: _KnowledgeSearchState) -> None:
     if not state.request.exclude_labels:
         return
-    filtered = []
-    for document in state.results:
-        display = _resolve_agent_display(document.agent_id)
-        display_name = display.get("display_name", document.agent_id) or ""
-        if str(display_name).strip().lower() not in state.request.exclude_labels:
-            filtered.append(document)
-    state.results = filtered
+    state.results = [
+        document for document in state.results if not _label_excluded(document, state.request)
+    ]
 
 
 def _serialize_search_discoveries(
