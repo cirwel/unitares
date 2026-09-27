@@ -276,6 +276,53 @@ def test_a_legacy_non_uuid_key_is_no_target_either():
 
 
 # ---------------------------------------------------------------------------
+# The refusals say truly where a UUID comes from
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "arguments,code",
+    [
+        ({"action": "archive"}, "TARGET_AGENT_REQUIRED"),
+        ({"action": "delete", "agent_id": "target-pub", "confirm": True}, "TARGET_AGENT_UUID_REQUIRED"),
+        ({"action": "archive", "agent_id": UNREGISTERED}, "TARGET_AGENT_NOT_FOUND"),
+    ],
+)
+def test_the_recovery_does_not_send_a_non_operator_to_list_for_a_uuid(arguments, code):
+    """Codex on #2532: every refusal said agent(action='list') shows each
+    agent's UUID. For a caller without operator credentials list shows its own
+    UUID and a public handle for every other agent, and the handle it gives is
+    refused here."""
+    from src.mcp_handlers.lifecycle.query import _visible_agent_identifier
+
+    with _Bound() as bound:
+        meta = bound.server.agent_metadata
+        # What list shows a non-operator caller, row by row.
+        assert _visible_agent_identifier(
+            CALLER, meta[CALLER], caller_uuid=CALLER, operator_caller=False
+        ) == (CALLER, False)
+        listed, redacted = _visible_agent_identifier(
+            TARGET, meta[TARGET], caller_uuid=CALLER, operator_caller=False
+        )
+        assert redacted and listed != TARGET
+        assert _visible_agent_identifier(
+            TARGET, meta[TARGET], caller_uuid=CALLER, operator_caller=True
+        ) == (TARGET, False)
+        _sent, via_list = asyncio.run(
+            _dispatch("agent", {"action": "archive", "agent_id": listed})
+        )
+        assert via_list.get("error_code") == "TARGET_AGENT_UUID_REQUIRED", via_list
+
+        payload = json.loads(asyncio.run(handle_agent(dict(arguments)))[0].text)
+        assert payload.get("error_code") == code, payload
+        hint = payload["recovery"]["action"]
+        assert "UUIDs only to operator callers" in hint, hint
+        assert "Your own UUID is the uuid start_session returned" in hint, hint
+        assert "shows each agent's UUID" not in hint, hint
+        assert bound.archived() == [] and bound.deleted() == []
+
+
+# ---------------------------------------------------------------------------
 # Reads and self-scoped actions keep their session default
 # ---------------------------------------------------------------------------
 

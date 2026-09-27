@@ -61,6 +61,20 @@ def _canonical_uuid(value: Any) -> Optional[str]:
         return None
 
 
+# Where a caller gets a target's UUID, for the refusals below. agent(action=
+# 'list') alone is not an answer: it shows another agent's UUID only to an
+# operator caller and gives anyone else a public handle for that row
+# (lifecycle/query.py _visible_agent_identifier), which _require_named_target
+# refuses. A caller's own row keeps its UUID.
+_FINDING_THE_UUID = (
+    "Your own UUID is the uuid start_session returned. agent(action='list') "
+    "shows other agents' UUIDs only to operator callers (X-Unitares-Operator "
+    "header); anyone else gets public handles there, which archive and delete "
+    "refuse, so without operator credentials name your own UUID or one you "
+    "were given."
+)
+
+
 def _require_named_target(
     arguments: Dict[str, Any], action: str,
 ) -> Tuple[Optional[str], Optional[TextContent]]:
@@ -104,8 +118,7 @@ def _require_named_target(
             recovery={
                 "action": (
                     f"Pass agent_id: the UUID of the agent to {action}. "
-                    "agent(action='list') shows each agent's UUID. To act on your "
-                    "own agent, pass your own UUID (start_session returned it as uuid)."
+                    + _FINDING_THE_UUID
                 ),
                 "related_tools": ["agent"],
                 "example": example,
@@ -126,11 +139,7 @@ def _require_named_target(
                 "agent_id": str(named),
             },
             recovery={
-                "action": (
-                    "Find the agent's UUID with agent(action='list') and pass "
-                    "it as agent_id. To act on your own agent, pass your own "
-                    "UUID (start_session returned it as uuid)."
-                ),
+                "action": "Pass the agent's UUID as agent_id. " + _FINDING_THE_UUID,
                 "related_tools": ["agent"],
             },
         )
@@ -160,8 +169,8 @@ def _target_not_found_error(named: str, action: str) -> TextContent:
         },
         recovery={
             "action": (
-                "Find the agent with agent(action='list') and pass its UUID "
-                "as agent_id."
+                "Pass the UUID of a registered agent as agent_id. "
+                + _FINDING_THE_UUID
             ),
             "related_tools": ["agent"],
         },
