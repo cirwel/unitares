@@ -332,7 +332,13 @@
           anomaliesScanned: anomR && anomR.scan && typeof anomR.scan.agents_scanned === "number" ? anomR.scan.agents_scanned : null,
           anomaliesActive: anomR && anomR.scan && typeof anomR.scan.agents_active === "number" ? anomR.scan.agents_active : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
-          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
+          // Name every non-healthy bucket the headline status is derived from.
+          // Omitting degraded/unavailable read "moderate · 10 ok · 0 warn" on a
+          // fresh install, a status the detail line appeared to contradict.
+          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn`
+            + (hb.degraded ? ` · ${hb.degraded} degraded` : "")
+            + (hb.unavailable ? ` · ${hb.unavailable} unavailable` : "")
+            + (hb.error ? ` · ${hb.error} err` : "") : null,
           degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
         };
       // LAZY, deliberately. This used to read `const snap = S().stats` as the

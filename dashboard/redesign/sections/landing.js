@@ -91,7 +91,12 @@
     const attn = $("attn");
     const names = (a) => a.map((n) => `<b>${n}</b>`).join(" · ");
     const fleetWide = noEisv.length >= Math.ceil(residents.length / 2);
-    if (silent.length) {
+    // No residents configured (a fresh install, or a deployment that runs
+    // none): there is nothing to await. Without this, 0 >= ceil(0/2) reads as
+    // "fleet-wide" and the band announces "0 of 0 residents awaiting".
+    if (!residents.length) {
+      attn.hidden = true;
+    } else if (silent.length) {
       attn.hidden = false; attn.className = "attn-band";
       let msg = `${names(silent)} past check-in threshold`;
       if (noEisv.length && !fleetWide) msg += ` · ${noEisv.length} awaiting first check-in`;
@@ -126,7 +131,13 @@
     const aUnclassified = (auto && typeof auto.unclassified === "number") ? auto.unclassified : 0;
     const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
     const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
-    const autoSub = `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
+    // The census answered and registers nothing (a fresh install): say so,
+    // neutrally. Its "stale" flag then only means no census job has run, which
+    // is the same fact. A census that did not answer (auto == null) keeps the
+    // counters below, as before.
+    const aNone = !!auto && !(asum.total > 0) && aAtt === 0;
+    const autoSub = aNone ? "none registered"
+      : `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
       + ` · ${aKind.dogfood || 0} dogfood · ${aKind.ablation || 0} ablation${aStale ? " · stale" : ""}`;
     // A null metric = its live source didn't answer this cycle. Show "—"
     // (unavailable), never a stale snapshot value passed off as current.
@@ -152,12 +163,21 @@
     const stuckSoft = typeof stats.stuckSoft === "number"
       ? stats.stuckSoft : stuckList.filter((s) => s.soft).length;
     const hasAgentPresence = typeof stats.agentsLive === "number";
-    const agentHeadline = hasAgentPresence ? stats.agentsLive : stats.agentsActive;
     const presenceUnknown = (stats.agentsPresenceUnknown || 0)
       + (stats.agentsPresenceUnavailable || 0);
-    const agentSub = hasAgentPresence
-      ? `live binding/lease · 30d window${presenceUnknown ? ` · ${presenceUnknown} presence unknown` : ""}`
-      : un(stats.agentsActive) ? "unavailable" : "registry active / total · 30d window";
+    // No agent carries a live signal, but some have presence the server cannot
+    // determine (clients that never hold a binding/lease, e.g. a host plugin
+    // that only checks in). "0 live" would read as "nothing is here", so lead
+    // with the registry count and say presence is unknown. One live signal is
+    // enough to switch back to the live count.
+    const presenceBlind = hasAgentPresence && stats.agentsLive === 0
+      && presenceUnknown > 0 && typeof stats.agentsActive === "number";
+    const agentHeadline = hasAgentPresence && !presenceBlind ? stats.agentsLive : stats.agentsActive;
+    const agentSub = presenceBlind
+      ? `registry active / total · 30d window · ${presenceUnknown} presence unknown`
+      : hasAgentPresence
+        ? `live binding/lease · 30d window${presenceUnknown ? ` · ${presenceUnknown} presence unknown` : ""}`
+        : un(stats.agentsActive) ? "unavailable" : "registry active / total · 30d window";
     const stuckBody = stuckList.map((s) => {
       const inner = `<span class="name">${esc(s.name || "agent not identified")}</span>`
         + `<span class="reason">${esc(s.reason)}${s.soft ? " · soft" : ""}</span>`;
@@ -168,6 +188,7 @@
     }).join("")
       + (typeof stats.stuck === "number" && stats.stuck > stuckList.length
         ? `<a href="#agents" class="stuck-more">+${stats.stuck - stuckList.length} more</a>` : "");
+    const calUnassessed = stats.calibrationStatus === "unassessed";
     const cards = [
       // Class DERIVED, not hardcoded. This was `cls: "up"` from the original
       // redesign scaffold — the only card of nine that did not compute its own
@@ -187,10 +208,13 @@
       // window, the Agents tab a 14-day one, tier_distribution ever-seen —
       // three honest totals that read as contradictions when unlabelled.
       { h: "Agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents",
-        title: un(stats.agentsTotal) ? "" : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
+        title: un(stats.agentsTotal) ? ""
+          : presenceBlind
+            ? `${agentHeadline} registry-active of ${stats.agentsTotal} identities seen in the last 30 days. None holds a live binding/lease, and presence is unknown for ${presenceUnknown}. The Agents tab reads a 14-day window, so its total is smaller.`
+            : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
       { h: "Agent attention", num: un(stats.stuck) ? "—" : stats.stuck, sub: un(stats.stuck) ? "unavailable" : (stats.stuck ? `${stuckHard} stuck · ${stuckSoft} soft silence` : "none flagged"), cls: un(stats.stuck) ? "" : (stuckHard ? "down" : stats.stuck ? "" : "up"),
         body: stuckBody, href: stuckBody ? null : "#agents" },
-      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aWarn ? "down" : "up", href: "#automations" },
+      { h: "Automations", num: asum.total || 0, sub: autoSub, cls: aNone ? "" : aWarn ? "down" : "up", href: "#automations" },
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
       { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable"
           : (stats.dialectic ? "open sessions"
@@ -205,15 +229,20 @@
       // green on trajectory_health >= 0.8 would have painted the card OK while
       // the server answered "miscalibrated" (live on 2026-08-28 at 0.784 —
       // 0.016 from green). Unknown calibration stays neutral, never green.
+      // "unassessed" is the server saying there is no calibration data yet (a
+      // fresh install): calibrated=false, but not a verdict of miscalibration.
+      // Name it, neutrally — neither the red of a bad verdict nor green.
       { h: "Calibration",
-        num: un(stats.calibrated) ? (un(stats.calibration) ? "—" : num(stats.calibration))
+        num: calUnassessed ? "unassessed"
+           : un(stats.calibrated) ? (un(stats.calibration) ? "—" : num(stats.calibration))
                                   : (stats.calibrated ? "calibrated" : "miscalibrated"),
-        sub: un(stats.calibrated) && un(stats.calibration) ? "unavailable"
+        sub: calUnassessed ? "no calibration data yet"
+             : un(stats.calibrated) && un(stats.calibration) ? "unavailable"
              : [un(stats.calibration) ? null : "trajectory health " + num(stats.calibration),
                 stats.calibrationSignal && stats.calibrationSignal !== "fresh"
                   ? "tactical signal " + stats.calibrationSignal : null,
                ].filter(Boolean).join(" · "),
-        cls: stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
+        cls: calUnassessed ? "" : stats.calibrated === true ? "up" : stats.calibrated === false ? "down" : "" },
       // "clear" is a claim about the fleet, so it may only be made when the
       // scan covered the fleet. The server caps its default scan at
       // scan.scan_cap active agents and reports scan.truncated; a truncated
