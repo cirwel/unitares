@@ -95,6 +95,20 @@ act() {
   fi
 }
 
+# One PR comment per lasting skip reason and head, so the reason is visible on
+# the PR and not only in this machine's log: whoever looks next (its owner, or
+# an agent adopting it) sees what to do. A hidden marker dedupes; a new push
+# (a new head) gets a fresh notice. PR_QUEUE_NOTIFY=0 turns it off.
+NOTIFY="${PR_QUEUE_NOTIFY:-1}"
+notify() {  # <pr> <reason-key> <head-sha> <message>
+  [ "$NOTIFY" = "1" ] || return 0
+  local marker="<!-- pr-queue-notice $2 ${3:0:12} -->" bodies
+  bodies=$(gh api --paginate "repos/$REPO/issues/$1/comments" --jq '.[].body' 2>/dev/null) || return 0
+  grep -qF -- "$marker" <<<"$bodies" && return 0
+  act gh pr comment "$1" -R "$REPO" --body "$marker
+**Merge queue:** $4" >/dev/null || log "#$1 notice could not be posted"
+}
+
 minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | floor'; }
 
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
@@ -293,6 +307,7 @@ while read -r pr; do
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
     log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, renew it: remove the label, then add it."
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
@@ -304,6 +319,7 @@ while read -r pr; do
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
       log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      notify "$n" unpinned "$head" "skipped: the \`$LABEL\` label went on at $labelled_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was approved. Renew it: remove the label, then add it."
       continue
     fi
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
@@ -314,6 +330,7 @@ while read -r pr; do
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
         log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        notify "$n" changed "$head" "skipped: the change differs from what was approved at \`${pinned_sha:0:8}\` (more than a base update). Once validation passes on \`${head:0:8}\`, renew the approval: remove the \`$LABEL\` label, then add it."
         continue
       fi
       pin "$n" "$head" "$labelled_at" "$fp" || true
@@ -394,7 +411,10 @@ while read -r _ n head; do
 
   case "$(jq -r .mergeable <<<"$pr")" in
     MERGEABLE) ;;
-    CONFLICTING) log "#$n queued but CONFLICTING; skipped"; continue ;;
+    CONFLICTING)
+      log "#$n queued but CONFLICTING; skipped"
+      notify "$n" conflicting "$head" "skipped: this PR conflicts with master. The owning agent merges master in and renews the label (remove, then add). After 12 hours with no word from the owner, any agent may adopt it (docs/operations/github-workflow-conventions.md, *adoption*)."
+      continue ;;
     # GitHub is still computing mergeability, typically right after a merge.
     # Wait for it rather than letting a later PR jump the order.
     *) exit 0 ;;
@@ -402,6 +422,7 @@ while read -r _ n head; do
 
   if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
+    notify "$n" parked "$head" "skipped: $(q -r 'parked | map(.name // .context) | unique | join(", ")' <<<"$pr") is waiting for approval (ACTION_REQUIRED). A re-run does not clear it; see the check's details."
     continue
   fi
 
@@ -413,6 +434,7 @@ while read -r _ n head; do
     fi
     if jq -e --arg l "$RETRIED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null; then
       log "#$n: $failed check(s) still failing after one retry; skipped until $RETRIED_LABEL is removed"
+      notify "$n" failing "$head" "skipped: $(q -r 'failed | map(.name // .context) | unique | join(", ")' <<<"$pr") still failing after one automatic re-run. Fix it, then remove the \`$RETRIED_LABEL\` label."
       continue
     fi
     runs=$(q -r 'failed | [.[] | (.detailsUrl // .targetUrl // "")
@@ -448,7 +470,10 @@ while read -r _ n head; do
       # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
       # an unreviewed PR): wait rather than let a later PR jump the order.
       *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
-      *) log "#$n: $unmet (must pass before arming); skipped"; continue ;;
+      *)
+        log "#$n: $unmet (must pass before arming); skipped"
+        notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
+        continue ;;
     esac
   fi
 

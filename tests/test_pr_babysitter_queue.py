@@ -46,6 +46,11 @@ if [ "$1" = "api" ]; then
       [ -f "$d/compare_default_missing" ] && exit 1
       printf '{"files":[{"filename":"f","status":"modified","sha":"b%s","patch":"@@ -1 +1 @@\\n+%s"}]}' "$sha" "$sha"
       exit 0 ;;
+    */issues/*/comments*)
+      n=$(sed -E 's#.*issues/([0-9]+)/comments.*#\1#' <<<"$*")
+      [ -f "$d/comments_$n.fail" ] && exit 1
+      cat "$d/comments_$n.txt" 2>/dev/null
+      exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       [ -f "$d/timeline_$n.fail" ] && exit 1
@@ -54,7 +59,7 @@ if [ "$1" = "api" ]; then
     */commits/*) cat "$d/base_date"; exit 0 ;;
   esac
 fi
-echo "$*" >> "$d/calls.log"
+printf '%s\n' "${*//$'\n'/ }" >> "$d/calls.log"
 if [ -f "$d/fail" ]; then
   while IFS= read -r pattern; do
     [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && exit 1
@@ -189,6 +194,7 @@ def _run(
             "FAKE_GH_DIR": str(d),
             "PR_BABYSITTER_REPO": "o/r",
             "PR_QUEUE_STATE_FILE": str(state_file),
+            "PR_QUEUE_NOTIFY": "0",
             **env,
         },
         text=True,
@@ -786,3 +792,75 @@ def test_a_script_armed_holder_left_behind_is_disarmed_before_updating(tmp_path:
     assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
     assert "disarming to update" in out
 
+
+# --- notices on the PR -------------------------------------------------------------
+
+
+def _notices(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.startswith("pr comment")]
+
+
+def test_a_conflicting_queued_pr_gets_one_notice(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="aaa")], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1
+    assert "<!-- pr-queue-notice conflicting aaa -->" in notices[0]
+    assert "adopt" in notices[0]
+
+
+def test_a_notice_already_on_the_pr_is_not_repeated(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.txt").write_text("<!-- pr-queue-notice conflicting aaa -->\n**Merge queue:** skipped\n")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="aaa")], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []
+
+
+def test_a_new_head_gets_a_fresh_notice(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.txt").write_text("<!-- pr-queue-notice conflicting aaa -->\n")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="bbb")], PR_QUEUE_NOTIFY="1")
+    assert len(_notices(calls)) == 1
+
+
+def test_an_unreviewed_pr_is_told_to_run_the_review(tmp_path: Path) -> None:
+    state = "NEUTRAL"
+    pr = _pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)])
+    calls, _ = _run(tmp_path, [pr], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "review.sh" in notices[0] and f"review={state}" in notices[0]
+
+
+def test_retries_exhausted_names_the_failing_checks(tmp_path: Path) -> None:
+    pr = _pr(9, labels=(LABEL, RETRIED), checks=[_check("smoke", "FAILURE")])
+    calls, _ = _run(tmp_path, [pr], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "smoke still failing" in notices[0] and "merge-retried" in notices[0]
+
+
+def test_a_changed_approval_is_told_to_renew(tmp_path: Path) -> None:
+    tl = _timeline(10, 20)  # one timeline for both ticks: the pin is keyed on the label time
+    # Tick 1: #3 holds the slot, so #1 is only pinned at aaa.
+    _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5), _pr(1, head="aaa")],
+         timelines={1: tl}, compares={"aaa": CHANGE_A})
+    # Tick 2: #1's content changed.
+    calls, _ = _run(tmp_path, [_pr(1, head="ccc")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A, "ccc": CHANGE_B}, PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "remove the `approved-to-merge` label, then add it" in notices[0]
+
+
+def test_transient_waits_post_no_notice(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []
+
+
+def test_an_unreadable_comment_list_posts_nothing(tmp_path: Path) -> None:
+    # Without the existing comments the dedupe cannot work: post nothing
+    # rather than risk a notice on every tick.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.fail").write_text("")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING")], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []

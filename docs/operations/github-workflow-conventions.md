@@ -651,6 +651,14 @@ the operator's machine is awake.
   keeps the slot even while it conflicts (arming another would leave two
   armed once the conflict is resolved); a hold longer than 90 minutes is
   logged, and clearing it is the maintainer's call.
+- **Notices on the PR.** When the queue skips a labelled PR for a reason
+  that will not clear by itself (a conflict, an approval gone stale, a
+  required check that concluded without passing, a check parked for
+  approval, failures that survived the one re-run), it posts one comment on
+  the PR saying why and what fixes it, so whoever looks next (the owner, or
+  an agent adopting it) does not need this machine's log. A hidden marker
+  keeps it to one notice per reason and head. Transient waits (a pending
+  check, a dependency still open) post nothing.
 - **Updates: never armed across an unchecked head.** When the head of the
   queue is `BEHIND`, the script updates it unarmed and holds its place; a
   later tick arms the updated head once its content still matches the
