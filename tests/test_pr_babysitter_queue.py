@@ -102,6 +102,7 @@ def _pr(
     body: str = "",
     head: str | None = None,
     review: str | None = "SUCCESS",
+    fork: bool = False,
 ) -> dict:
     rollup = list(checks) if checks is not None else [_check("test")]
     if review is not None:
@@ -119,6 +120,7 @@ def _pr(
         "statusCheckRollup": rollup,
         "body": body,
         "headRefOid": head or f"sha{number}",
+        "isCrossRepository": fork,
     }
 
 
@@ -140,6 +142,13 @@ def _timeline(labelled_min_ago: float | None = 10, pushed_min_ago: float | None 
     if labelled_min_ago is not None:
         events.append({"event": "labeled", "label": {"name": LABEL}, "created_at": _iso(labelled_min_ago)})
     return events
+
+
+def _empty_manifest(tmp_path: Path) -> Path:
+    path = tmp_path / "manifest.tsv"
+    if not path.exists():
+        path.write_text("# path<TAB>symbol_regex<TAB>why\n")
+    return path
 
 
 def _run(
@@ -195,6 +204,7 @@ def _run(
             "PR_BABYSITTER_REPO": "o/r",
             "PR_QUEUE_STATE_FILE": str(state_file),
             "PR_QUEUE_NOTIFY": "0",
+            "PR_QUEUE_SENSITIVITY_MANIFEST": str(_empty_manifest(tmp_path)),
             **env,
         },
         text=True,
@@ -521,7 +531,8 @@ def test_a_changed_binary_file_makes_the_approval_stale(tmp_path: Path) -> None:
 def test_the_fingerprint_is_read_at_the_captured_head(tmp_path: Path) -> None:
     # Never the PR's current ref, which can move between the list and the read.
     _run(tmp_path, [_pr(1, head="aaa")])
-    assert (tmp_path / "gh" / "compares.log").read_text().split() == ["repos/o/r/compare/master...aaa"]
+    reads = (tmp_path / "gh" / "compares.log").read_text().split()
+    assert reads and set(reads) == {"repos/o/r/compare/master...aaa"}
 
 
 def test_a_compare_that_may_be_truncated_approves_nothing(tmp_path: Path) -> None:
@@ -887,3 +898,52 @@ def test_a_script_armed_pr_that_becomes_governance_sensitive_is_disarmed(tmp_pat
 def test_operator_only_labels_are_configurable(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_pr(1, labels=(LABEL, "governance-sensitive"))], PR_QUEUE_OPERATOR_ONLY_LABELS="")
     assert calls == [_arm(1)]
+
+
+# --- sensitivity, checked by the queue itself ------------------------------------------
+
+
+def _manifest(tmp_path: Path, *rows: str) -> None:
+    (tmp_path / "manifest.tsv").write_text("# header\n" + "".join(r + "\n" for r in rows))
+
+
+def test_a_whole_file_sensitive_entry_is_never_armed_even_unlabelled(tmp_path: Path) -> None:
+    # CI's label is best-effort (a fork's token cannot apply it); the queue checks itself.
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa"), _pr(2, head="bbb")],
+                      timelines={1: _timeline(12), 2: _timeline(8)},
+                      compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
+    assert calls == [_arm(2, "bbb")]
+    assert "#1 touches a governance-sensitive surface (f)" in out
+
+
+def test_a_symbol_entry_matches_only_changed_lines(tmp_path: Path) -> None:
+    hit = _files(("f", "modified", "b1", "@@ -1 +1 @@\n-RISK_APPROVE_THRESHOLD = 0.3\n+RISK_APPROVE_THRESHOLD = 0.9"))
+    # The symbol only in an unchanged context line does not count, as in CI.
+    miss = _files(("f", "modified", "b2", "@@ -9 +9 @@\n ctx RISK_APPROVE_THRESHOLD\n-a\n+b"))
+    for sub, compare, expected in (("hit", hit, []), ("miss", miss, [_arm(1, "aaa")])):
+        d = tmp_path / sub
+        d.mkdir()
+        _manifest(d, "f\tRISK_APPROVE_THRESHOLD\trisk line")
+        calls, _ = _run(d, [_pr(1, head="aaa")], compares={"aaa": compare})
+        assert calls == expected, sub
+
+
+def test_a_sensitive_file_with_no_patch_fails_closed(tmp_path: Path) -> None:
+    _manifest(tmp_path, "f\tSOME_CONSTANT\twhy")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": _files(("f", "modified", "b1", None))})
+    assert calls == []
+    assert "no patch to check" in out
+
+
+def test_a_missing_manifest_fails_closed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST=str(tmp_path / "gone.tsv"))
+    assert calls == []
+    assert "manifest is missing" in out
+
+
+def test_a_fork_pr_is_never_armed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, fork=True), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == [_arm(2)]
+    assert "#1 is labelled a fork" in out or "a fork" in out
+

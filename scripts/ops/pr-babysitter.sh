@@ -85,8 +85,11 @@ REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
 # enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
 # merge gate as the control for exactly those diffs.
 OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
-operator_only() {  # <pr-json> -> the first operator-only label it carries
+operator_only() {  # <pr-json> -> why only the operator may merge it, if so
   local l
+  # A fork PR: the fleet's own PRs never come from forks, and CI cannot label
+  # one (its token is read-only there), so nothing else would flag it.
+  jq -e '.isCrossRepository == true' <<<"$1" >/dev/null && { echo "a fork"; return 0; }
   for l in $OPERATOR_ONLY_LABELS; do
     jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
   done
@@ -127,7 +130,7 @@ command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid) \
+  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # Shared jq vocabulary. A check has FAILED when a finished run concluded badly
@@ -225,6 +228,32 @@ unmet_required_checks() {
     [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
   done
   echo "${unmet# }"
+}
+
+# The label is best-effort (CI tolerates failing to apply it), so before
+# arming, the queue checks the diff itself against the same manifest CI uses
+# (scripts/dev/check_governance_sensitivity.sh's --diff rules), read from
+# GitHub's compare of base...<head>. It fails closed: no manifest, an
+# unreadable or possibly truncated compare, or a matched file with no patch to
+# inspect all count as sensitive.
+SENSITIVITY_MANIFEST="${PR_QUEUE_SENSITIVITY_MANIFEST-$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)/scripts/dev/governance_sensitivity_manifest.tsv}"
+sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when it is not
+  [ -n "$SENSITIVITY_MANIFEST" ] || return 1
+  [ -f "$SENSITIVITY_MANIFEST" ] || { echo "the sensitivity manifest is missing"; return 0; }
+  local cmp path symbol why file patch
+  cmp=$(gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null) \
+    && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
+    || { echo "its diff could not be checked"; return 0; }
+  while IFS=$'\t' read -r path symbol why; do
+    [ -n "$path" ] || continue
+    file=$(jq -c --arg p "$path" 'first(.files[] | select(.filename == $p or .previous_filename == $p)) // empty' <<<"$cmp")
+    [ -n "$file" ] || continue
+    [ "$symbol" = "-" ] && { echo "$path"; return 0; }
+    patch=$(jq -r '.patch // empty' <<<"$file")
+    [ -n "$patch" ] || { echo "$path (no patch to check)"; return 0; }
+    grep -E '^[+-][^+-]' <<<"$patch" | grep -Eq -- "$symbol" && { echo "$path"; return 0; }
+  done < <(grep -v '^#' "$SENSITIVITY_MANIFEST" | grep -v '^[[:space:]]*$')
+  return 1
 }
 
 latest_label_time() {
@@ -495,6 +524,12 @@ while read -r _ n head; do
         notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
         continue ;;
     esac
+  fi
+
+  if why=$(sensitive_path "$head"); then
+    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
+    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
   fi
 
   if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
