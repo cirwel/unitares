@@ -1834,6 +1834,12 @@ def _parse_knowledge_search_request(
         )
     created_after = _parse_search_timestamp("created_after", arguments.get("created_after"))
     created_before = _parse_search_timestamp("created_before", arguments.get("created_before"))
+    query_present = bool(arguments.get("query") or arguments.get("text"))
+    if not query_present and (created_after or created_before) and not arguments.get("sort_by"):
+        # A queryless read with a date window is "what is new since T": the
+        # listing is already newest first, and the authority nudge that a
+        # default listing gets would move an imported row out of time order.
+        sort_by = "created_at"
     if created_after and created_before and created_after >= created_before:
         raise _SearchParameterError(
             f"created_after ({created_after.isoformat()}) must be earlier than "
@@ -2171,17 +2177,13 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
     state.search_mode = "semantic"
 
 
-async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
-    request = state.request
-    base_limit = int(min(max(request.limit * 5, request.limit), 500))
-    candidate_limit = max(base_limit, state.rerank_pool_size) if state.rerank_on else base_limit
-    primary_operator = request.operator_forced or "AND"
-    fts_kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
+def _fts_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
     if request.sort_by == "created_at":
-        fts_kwargs["order_by"] = "created_at"
-        # The post-LIMIT filter below stays, but under time order it would
-        # leave a page of newer ineligible rows and nothing to return.
-        fts_kwargs["filters"] = {
+        kwargs["order_by"] = "created_at"
+        # The post-LIMIT filter stays, but under time order it would leave a
+        # page of newer ineligible rows and nothing to return.
+        kwargs["filters"] = {
             "agent_id": request.agent_id,
             "type": request.discovery_type,
             "severity": request.severity,
@@ -2189,6 +2191,20 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
             "exclude_archived": not request.include_archived,
             "exclude_cold": not request.include_cold,
         }
+    return kwargs
+
+
+def _fts_page_size(state: _KnowledgeSearchState) -> int:
+    request = state.request
+    base_limit = int(min(max(request.limit * 5, request.limit), 500))
+    return max(base_limit, state.rerank_pool_size) if state.rerank_on else base_limit
+
+
+async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    candidate_limit = _fts_page_size(state)
+    primary_operator = request.operator_forced or "AND"
+    fts_kwargs = _fts_kwargs(request)
     state.candidates = await state.graph.full_text_search(
         str(request.query_text),
         limit=candidate_limit,
@@ -2467,8 +2483,50 @@ async def _run_newest_first_text_search(
         await _retrieve_substring_candidates(state)
         state.search_mode = "substring_newest_first"
     await _filter_and_rerank_candidates(state)
+    if has_fts:
+        await _continue_newest_first_pages(state)
     state.operator_used = state.fts_operator_used or "N/A"
     state.fields_searched = ["summary", "details", "tags"]
+
+
+NEWEST_FIRST_EXTRA_PAGES = 4
+
+
+async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
+    """Read older pages while filters the SQL cannot express leave the page short.
+
+    Everything the database can filter already sits in the ordered query.
+    Writer-label exclusion cannot (a label is resolved from provenance or
+    agent metadata), so a run of newer matches from excluded writers can
+    fill a whole page. Keyset continuation reads the next older page from
+    the oldest row seen, a bounded number of times.
+    """
+    request = state.request
+    page_size = _fts_page_size(state)
+    page = state.candidates
+    pool = list(page)
+    for _ in range(NEWEST_FIRST_EXTRA_PAGES):
+        if len(state.results) >= request.limit or len(page) < page_size:
+            return
+        oldest = _document_created_at(page[-1])
+        if oldest is None:
+            return
+        kwargs = _fts_kwargs(request)
+        kwargs["created_before"] = min(
+            oldest, request.created_before or oldest
+        )
+        page = await state.graph.full_text_search(
+            str(request.query_text),
+            limit=page_size,
+            operator=state.fts_operator_used or request.operator_forced or "AND",
+            **kwargs,
+        )
+        if not page:
+            return
+        pool.extend(page)
+        state.candidates = pool
+        state.tag_filter_dropped = 0
+        await _filter_and_rerank_candidates(state)
 
 
 async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:

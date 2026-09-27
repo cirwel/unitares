@@ -248,6 +248,42 @@ class TestSearchHandlerNewestFirst:
         assert _ids(payload) == [NEW_WEAK.id]
 
     @pytest.mark.asyncio
+    async def test_a_run_of_excluded_writers_longer_than_a_page(self, seeded_db):
+        # Review finding (#2517, round 3): a label cannot be filtered in SQL,
+        # so more newer excluded rows than one page (limit * 5) used to
+        # exhaust the read. Keyset continuation reads the next older page.
+        for i in range(7):
+            node = _node(f"excluded-{i}", age=timedelta(seconds=i + 1), summary=f"coherence gate excluded {i}")
+            node.agent_id = "excluded-writer"
+            await seeded_db.kg_add_discovery(node)
+        payload = await _search(
+            seeded_db,
+            query="coherence gate",
+            limit=1,
+            sort_by="created_at",
+            exclude_agent_labels=["excluded-writer"],
+        )
+        assert _ids(payload) == [NEW_WEAK.id]
+
+    @pytest.mark.asyncio
+    async def test_queryless_window_is_time_ordered_despite_authority(self, seeded_db):
+        # Review finding (#2517, round 3): without an explicit sort_by the
+        # queryless listing got the authority nudge, which moves an imported
+        # row behind an older native one.
+        imported = _node(
+            "imported",
+            age=timedelta(seconds=1),
+            summary="imported memory note",
+            tags=["source-claude-memory"],
+        )
+        await seeded_db.kg_add_discovery(imported)
+        payload = await _search(
+            seeded_db, created_after=(NOW - timedelta(days=1)).isoformat(), limit=10
+        )
+        assert _ids(payload)[0] == imported.id
+        assert payload["sort_by"] == "created_at"
+
+    @pytest.mark.asyncio
     async def test_what_is_new_since_without_a_query(self, seeded_db):
         since = NOW - timedelta(days=1)
         payload = await _search(seeded_db, created_after=since.isoformat(), limit=10)
