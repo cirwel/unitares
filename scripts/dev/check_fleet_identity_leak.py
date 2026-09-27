@@ -48,8 +48,11 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import re
 import sys
+from collections import Counter
+from typing import NamedTuple
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -249,45 +252,53 @@ SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
 SERVED_PROSE_FILES = ("src/tool_descriptions.json",)
 SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 
-# Served surfaces that name residents today, each with the number of
-# references it holds. Same contract as KNOWN_COUPLINGS: reported on every run,
-# never silenced. The count is a ceiling, not a file-wide pass: one reference
-# more in a listed file is a NEW leak and fails, and a test fails when a file
-# holds fewer than its ceiling, so every fix lowers the number and the last one
-# deletes the entry. A ratchet that only turns one way.
-SERVED_KNOWN_COUPLINGS: dict[str, tuple[int, str]] = {
-    "dashboard/redesign/snapshot.js": (
-        15,
-        "a real capture of one deployment's fleet, bundled as the offline "
-        "fallback; replace with synthetic data once #2492 stops served pages "
-        "falling back to it",
-    ),
-    "dashboard/redesign/preview.html": (
-        5, "carries the same capture as snapshot.js in a literal FLEET array",
-    ),
-    "dashboard/redesign/PLAN.md": (
-        7, "design notes describing one deployment's own fleet",
-    ),
-    "dashboard/redesign/data.js": (
-        11,
-        "gates the Watcher/Sentinel/Vigil summary panels on those labels "
-        "(inRoster); the panel set should come from roster capabilities",
-    ),
-    "dashboard/redesign/sections/residents.js": (
-        5, "resident-specific panels keyed by label",
-    ),
-    "skills/discord-bridge/SKILL.md": (
-        15, "one operator's Discord bridge (separate repo), served to every agent",
-    ),
-    "skills/unitares-dashboard/SKILL.md": (
-        3, "describes the Sentinel adjudication panel and its route by resident name",
-    ),
-    "src/tool_descriptions.json": (
-        2,
-        "names Lumen in outcome_event's drawing outcome and an observe example; "
-        "#2490 rewrites this file, fix after it lands",
-    ),
-}
+# Served surfaces that name residents today. Same contract as KNOWN_COUPLINGS
+# (reported on every run, never silenced), but pinned tighter: each file lists
+# the exact occurrences it may hold, as (name, excerpt) where the excerpt is the
+# text around the name with whitespace collapsed. Anything else in a listed
+# file fails, so swapping a fixed reference for a new one is caught, not just
+# adding one. A test fails when a pinned occurrence is gone, so each fix
+# deletes its line and the last fix deletes the file's entry.
+SERVED_BASELINE_PATH = REPO_ROOT / "scripts/dev/fleet_identity_served_baseline.json"
+
+
+def _load_served_baseline() -> dict[str, dict]:
+    if not SERVED_BASELINE_PATH.is_file():
+        return {}
+    data = json.loads(SERVED_BASELINE_PATH.read_text())
+    return {k: v for k, v in data.items() if not k.startswith("_")}
+
+
+SERVED_KNOWN_COUPLINGS: dict[str, dict] = _load_served_baseline()
+_EXCERPT_RADIUS = 24
+
+# Keywords after which a '/' begins a regex literal rather than a division.
+_JS_REGEX_KEYWORDS = frozenset({
+    "return", "typeof", "instanceof", "in", "of", "new", "delete", "void",
+    "throw", "case", "do", "else", "yield", "await",
+})
+
+
+class Occurrence(NamedTuple):
+    """One served reference: the printed finding, and its pin key if it names a resident."""
+
+    message: str
+    name: str | None  # lowercased resident name; None for an operator-domain hit
+    excerpt: str
+
+    @property
+    def key(self) -> tuple[str, str] | None:
+        return None if self.name is None else (self.name, self.excerpt)
+
+
+def _excerpt(row: str, name: str) -> str:
+    """The text around a name on its line, whitespace collapsed: a stable pin."""
+    m = re.search(r"\b" + re.escape(name) + r"\b", row, re.I)
+    if not m:
+        return " ".join(row.split())[: 2 * _EXCERPT_RADIUS]
+    window = row[max(0, m.start() - _EXCERPT_RADIUS): m.end() + _EXCERPT_RADIUS]
+    return " ".join(window.split())
+
 
 _NAME_WORD = re.compile(
     r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
@@ -299,17 +310,59 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
     """Return (line, value) for each string literal in JavaScript source.
 
     A small scanner, not a parser. It knows '...', "...", `...`, // and /* */
-    comments, and descends into template interpolation: the dashboard builds
-    markup as `<div>${head("Watcher", ...)}</div>`, so the label literal lives
-    inside ${...}, and a scanner that took the template as one opaque string
-    missed every one of them. The template's own text (outside ${...}) is
-    returned as a literal too. Regex literals are not modelled: a quote inside
-    one opens a string. Single and double quoted strings cannot span a line in
-    JavaScript, so that state is dropped at the newline and a desync costs at
-    most one line.
+    comments, regex literals, and descends into template interpolation: the
+    dashboard builds markup as `<div>${head("Watcher", ...)}</div>`, so the
+    label literal lives inside ${...}, and a scanner that took the template as
+    one opaque string missed every one of them. The template's own text
+    (outside ${...}) is returned as a literal too.
+
+    A regex literal is skipped whole. Unmodelled, a quote inside one (`/["']/`)
+    opened a string that swallowed the next real literal on the line, so a
+    label after a regex went unseen. Whether `/` starts a regex or divides is
+    decided from the previous significant token, the usual heuristic; it errs
+    toward division, which at worst misses nothing (a division is not a quote).
+    Single and double quoted strings cannot span a line in JavaScript, so that
+    state is dropped at the newline and a desync costs at most one line.
     """
     out: list[tuple[int, str]] = []
     n = len(source)
+
+    def regex_can_start(i: int) -> bool:
+        """Whether a '/' at i begins a regex literal rather than a division."""
+        j = i - 1
+        while j >= 0 and source[j] in " \t\r\n":
+            j -= 1
+        if j < 0:
+            return True
+        prev = source[j]
+        if prev in "(,=:[!&|?{};+-*%<>~^":
+            return True
+        if prev.isalnum() or prev in "_$":
+            k = j
+            while k >= 0 and (source[k].isalnum() or source[k] in "_$"):
+                k -= 1
+            return source[k + 1:j + 1] in _JS_REGEX_KEYWORDS
+        return False
+
+    def skip_regex(i: int) -> int:
+        """From the opening '/', return the index just past the regex and its flags."""
+        j, in_class = i + 1, False
+        while j < n and source[j] != "\n":
+            c = source[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                j += 1
+                while j < n and (source[j].isalnum() or source[j] == "_"):
+                    j += 1
+                return j
+            j += 1
+        return j  # unterminated on this line: resume at the newline
 
     def scan(i: int, line: int, in_braces: bool) -> tuple[int, int]:
         """Scan code from i; inside ${...} stop after the matching '}'."""
@@ -327,6 +380,8 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
                 end = n if end == -1 else end + 2
                 line += source.count("\n", i, end)
                 i = end
+            elif ch == "/" and regex_can_start(i):
+                i = skip_regex(i)
             elif ch in "'\"":
                 start_line, j, buf = line, i + 1, []
                 while j < n and source[j] != ch and source[j] != "\n":
@@ -375,35 +430,40 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
     return out
 
 
-def _code_findings(rel: str, source: str, line_offset: int = 0) -> list[str]:
+def _code_findings(rel: str, source: str, line_offset: int = 0) -> list[Occurrence]:
     """Python's rule applied to JavaScript: a literal that IS a name, or holds the domain."""
-    findings: list[str] = []
+    rows = source.splitlines()
+    found: list[Occurrence] = []
     for lineno, value in js_string_literals(source):
         at = f"  {rel}:{lineno + line_offset}"
+        row = rows[lineno - 1] if 0 < lineno <= len(rows) else value
         domain = _operator_domain_in(value)
         if domain:
-            findings.append(f'{at}: hardcoded operator domain "{domain}" in a string literal')
+            found.append(Occurrence(
+                f'{at}: hardcoded operator domain "{domain}" in a string literal', None, ""))
         elif _identity_literal(value):
-            findings.append(
-                f'{at}: hardcoded fleet identity "{_identity_literal(value)}" in a string literal'
-            )
-    return findings
+            name = _identity_literal(value)
+            found.append(Occurrence(
+                f'{at}: hardcoded fleet identity "{name}" in a string literal',
+                name.lower(), _excerpt(row, name)))
+    return found
 
 
-def _prose_findings(rel: str, text: str, line_offset: int = 0) -> list[str]:
+def _prose_findings(rel: str, text: str, line_offset: int = 0) -> list[Occurrence]:
     """Delivered text has no comments: any resident name or the domain is a finding."""
-    findings: list[str] = []
+    found: list[Occurrence] = []
     for k, row in enumerate(text.splitlines(), start=1):
         at = f"  {rel}:{k + line_offset}"
         domain = _operator_domain_in(row)
         if domain:
-            findings.append(f'{at}: operator domain "{domain}" in served text')
+            found.append(Occurrence(f'{at}: operator domain "{domain}" in served text', None, ""))
         for name in dict.fromkeys(_NAME_WORD.findall(row)):
-            findings.append(f'{at}: fleet identity "{name}" in served text')
-    return findings
+            found.append(Occurrence(
+                f'{at}: fleet identity "{name}" in served text', name.lower(), _excerpt(row, name)))
+    return found
 
 
-def scan_served_file(path: Path) -> list[str]:
+def served_occurrences(path: Path) -> list[Occurrence]:
     """Scan one served, non-Python file by the rule for how it is delivered."""
     try:
         rel = path.relative_to(REPO_ROOT).as_posix()
@@ -414,16 +474,22 @@ def scan_served_file(path: Path) -> list[str]:
         return _code_findings(rel, text)
     if path.suffix != ".html":
         return _prose_findings(rel, text)
-    findings: list[str] = []
+    found: list[Occurrence] = []
     markup, last = [], 0
     for m in _SCRIPT_BLOCK.finditer(text):
         body_start = m.start(2)
-        findings += _code_findings(rel, m.group(2), text.count("\n", 0, body_start))
+        found += _code_findings(rel, m.group(2), text.count("\n", 0, body_start))
         # Keep the line count of the script body so markup line numbers stay true.
         markup.append(text[last:body_start] + "\n" * m.group(2).count("\n"))
         last = m.end(2)
     markup.append(text[last:])
-    return findings + _prose_findings(rel, "".join(markup))
+    found += _prose_findings(rel, "".join(markup))
+    return sorted(found, key=lambda o: int(o.message.strip().split(":")[1]))
+
+
+def scan_served_file(path: Path) -> list[str]:
+    """The printed findings for one served file."""
+    return [o.message for o in served_occurrences(path)]
 
 
 def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
@@ -442,19 +508,38 @@ def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
     return sorted(files)
 
 
-def triage_served(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
-    """Split one served file's hits into (failing, known-but-deferred).
+def _pinned(rel: str) -> Counter:
+    entry = SERVED_KNOWN_COUPLINGS.get(rel, {})
+    return Counter((name.lower(), excerpt) for name, excerpt in entry.get("occurrences", []))
 
-    A listed file defers at most its ceiling of name references. Past the
-    ceiling every name reference fails: the guard cannot tell which one is new,
-    and pointing at all of them is better than passing the one that is.
+
+def triage_served(rel: str, found: list[Occurrence]) -> tuple[list[str], list[str]]:
+    """Split one served file's occurrences into (failing, known-but-deferred).
+
+    An occurrence is deferred only if it matches one pinned for this file;
+    each pin covers one occurrence. The operator domain is never deferred.
     """
-    domain = [h for h in hits if "operator domain" in h]
-    names = [h for h in hits if "operator domain" not in h]
-    ceiling = SERVED_KNOWN_COUPLINGS.get(rel, (0, ""))[0]
-    if names and len(names) <= ceiling:
-        return domain, names
-    return domain + names, []
+    budget = _pinned(rel)
+    failing: list[str] = []
+    deferred: list[str] = []
+    for occ in found:
+        if occ.key is not None and budget[occ.key] > 0:
+            budget[occ.key] -= 1
+            deferred.append(occ.message)
+        elif occ.key is None:
+            failing.append(occ.message)
+        else:
+            failing.append(f"{occ.message}\n      unpinned: {list(occ.key)}")
+    return failing, deferred
+
+
+def stale_pins(rel: str, found: list[Occurrence]) -> list[tuple[str, str]]:
+    """Pinned occurrences for this file that are no longer there (fixed: delete them)."""
+    budget = _pinned(rel)
+    for occ in found:
+        if occ.key is not None and budget[occ.key] > 0:
+            budget[occ.key] -= 1
+    return sorted(k for k, left in budget.items() for _ in range(left))
 
 
 def main() -> int:
@@ -488,10 +573,10 @@ def main() -> int:
         for path in served_files():
             rel = path.relative_to(REPO_ROOT).as_posix()
             scanned += 1
-            hits = scan_served_file(path)
-            if not hits:
+            found = served_occurrences(path)
+            if not found:
                 continue
-            failing, deferred = triage_served(rel, hits)
+            failing, deferred = triage_served(rel, found)
             findings.extend(failing)
             served_known.extend(deferred)
 
@@ -513,8 +598,8 @@ def main() -> int:
             f"{len(by_file)} served file(s), not yet fixed"
         )
         for rel, count in sorted(by_file.items()):
-            ceiling, reason = SERVED_KNOWN_COUPLINGS[rel]
-            print(f"  {rel}: {count} of {ceiling}\n      reason deferred: {reason}")
+            reason = SERVED_KNOWN_COUPLINGS[rel]["reason"]
+            print(f"  {rel}: {count} pinned\n      reason deferred: {reason}")
         print()
 
     if not findings:

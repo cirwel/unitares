@@ -1,0 +1,295 @@
+{
+  "_doc": "Pinned served references to one deployment's residents, read by scripts/dev/check_fleet_identity_leak.py. Each occurrence is [name, excerpt]; excerpt is the text around the name on its line, whitespace collapsed. A fix deletes its line; never add one to quiet a NEW leak. See the SERVED_KNOWN_COUPLINGS comment in the guard.",
+  "dashboard/redesign/PLAN.md": {
+    "reason": "design notes describing one deployment's own fleet",
+    "occurrences": [
+      [
+        "sentinel",
+        "aring (operator watches Sentinel/Vigil/fleet/identity th"
+      ],
+      [
+        "vigil",
+        "erator watches Sentinel/Vigil/fleet/identity through"
+      ],
+      [
+        "watcher",
+        "✅ **Resident panels** — Watcher / Sentinel / Vigil / Ch"
+      ],
+      [
+        "sentinel",
+        "nt panels** — Watcher / Sentinel / Vigil / Chronicler /"
+      ],
+      [
+        "vigil",
+        "— Watcher / Sentinel / Vigil / Chronicler / System H"
+      ],
+      [
+        "chronicler",
+        "er / Sentinel / Vigil / Chronicler / System Health, consol"
+      ],
+      [
+        "chronicler",
+        "8. ✅ **Metrics** — Chronicler fleet/project/infra tim"
+      ]
+    ]
+  },
+  "dashboard/redesign/data.js": {
+    "reason": "gates the Watcher/Sentinel/Vigil summary panels on those labels (inRoster); the panel set should come from roster capabilities",
+    "occurrences": [
+      [
+        "watcher",
+        "if (w && inRoster(\"Watcher\")) out.watcher = { tota"
+      ],
+      [
+        "sentinel",
+        "if (sn && inRoster(\"Sentinel\")) out.sentinel = { tot"
+      ],
+      [
+        "vigil",
+        "& vg.stats && inRoster(\"Vigil\")) out.vigil = { cycles"
+      ],
+      [
+        "chronicler",
+        "out.chronicler = fromResidents(\"Chroni"
+      ],
+      [
+        "lumen",
+        "out.lumen = fromResidents(\"Lumen\""
+      ],
+      [
+        "watcher",
+        "[[\"watcher\", \"Watcher\"], [\"sentine"
+      ],
+      [
+        "watcher",
+        "[[\"watcher\", \"Watcher\"], [\"sentine"
+      ],
+      [
+        "sentinel",
+        "watcher\", \"Watcher\"], [\"sentinel\", \"Sentinel\"], [\"vigil\""
+      ],
+      [
+        "sentinel",
+        "watcher\", \"Watcher\"], [\"sentinel\", \"Sentinel\"], [\"vigil\""
+      ],
+      [
+        "vigil",
+        "ntinel\", \"Sentinel\"], [\"vigil\", \"Vigil\"]].forEach(([k"
+      ],
+      [
+        "vigil",
+        "ntinel\", \"Sentinel\"], [\"vigil\", \"Vigil\"]].forEach(([k"
+      ]
+    ]
+  },
+  "dashboard/redesign/preview.html": {
+    "reason": "carries the same capture as snapshot.js in a literal FLEET array",
+    "occurrences": [
+      [
+        "watcher",
+        "{ name:\"Watcher\", status:\"healthy\","
+      ],
+      [
+        "vigil",
+        "{ name:\"Vigil\", status:\"healthy\""
+      ],
+      [
+        "lumen",
+        "{ name:\"Lumen\", status:\"careful\""
+      ],
+      [
+        "sentinel",
+        "{ name:\"Sentinel\", status:\"healthy\","
+      ],
+      [
+        "chronicler",
+        "{ name:\"Chronicler\", status:\"silent\", co"
+      ]
+    ]
+  },
+  "dashboard/redesign/sections/residents.js": {
+    "reason": "resident-specific panels keyed by label",
+    "occurrences": [
+      [
+        "watcher",
+        "v class=\"panel\">${head(\"Watcher\", statusOf(r), \"diagnos"
+      ],
+      [
+        "sentinel",
+        "v class=\"panel\">${head(\"Sentinel\", statusOf(sn.resident"
+      ],
+      [
+        "vigil",
+        "${head(\"Vigil\", statusOf(v.resident |"
+      ],
+      [
+        "chronicler",
+        "${residentCard(\"Chronicler\", \"longitudinal · daily"
+      ],
+      [
+        "lumen",
+        "${residentCard(\"Lumen\", \"embodied · Raspberry"
+      ]
+    ]
+  },
+  "dashboard/redesign/snapshot.js": {
+    "reason": "a real capture of one deployment's fleet, bundled as the offline fallback; replace with synthetic data once #2492 stops served pages falling back to it",
+    "occurrences": [
+      [
+        "watcher",
+        "260416_907e3195\", name:\"Watcher\", status:\"healthy\","
+      ],
+      [
+        "vigil",
+        "260406_e55caaf1\", name:\"Vigil\", status:\"healthy\""
+      ],
+      [
+        "lumen",
+        "260428_69a1a4f7\", name:\"Lumen\", status:\"careful\""
+      ],
+      [
+        "sentinel",
+        "260407_f92dcea8\", name:\"Sentinel\", status:\"healthy\", c"
+      ],
+      [
+        "chronicler",
+        "260419_chron001\", name:\"Chronicler\", status:\"healthy\", coh"
+      ],
+      [
+        "lumen",
+        "60428_69a1a4f7\", label:\"Lumen\", status:\"active\", tier"
+      ],
+      [
+        "sentinel",
+        "60407_f92dcea8\", label:\"Sentinel\", status:\"active\", tier"
+      ],
+      [
+        "watcher",
+        "60416_907e3195\", label:\"Watcher\", status:\"active\", tier"
+      ],
+      [
+        "vigil",
+        "60406_e55caaf1\", label:\"Vigil\", status:\"active\", tier"
+      ],
+      [
+        "sentinel",
+        "severity:\"high\", agent:\"Sentinel\", ts:\"2026-06-19T20:29:"
+      ],
+      [
+        "sentinel",
+        "verity:\"medium\", agent:\"Sentinel\", ts:\"2026-06-19T20:18:"
+      ],
+      [
+        "sentinel",
+        "verity:\"medium\", agent:\"Sentinel\", ts:\"2026-06-19T19:44:"
+      ],
+      [
+        "sentinel",
+        "verity:\"medium\", agent:\"Sentinel\", ts:\"2026-06-19T19:20:"
+      ],
+      [
+        "sentinel",
+        "ass: null, agent_name: \"Sentinel\", fingerprint: \"snapsho"
+      ],
+      [
+        "sentinel",
+        "resource\", agent_name: \"Sentinel\", fingerprint: \"snapsho"
+      ]
+    ]
+  },
+  "skills/discord-bridge/SKILL.md": {
+    "reason": "one operator's Discord bridge (separate repo), served to every agent",
+    "occurrences": [
+      [
+        "lumen",
+        "events, agent presence, Lumen's state, and explicit o"
+      ],
+      [
+        "lumen",
+        "scord-bridge/src/bridge/lumen.py"
+      ],
+      [
+        "lumen",
+        "facilitation, Lumen sensors/art, and bounde"
+      ],
+      [
+        "sentinel",
+        "**Resident findings**: Sentinel and Doctor have dedicat"
+      ],
+      [
+        "lumen",
+        "4. **Lumen**: Optional physical st"
+      ],
+      [
+        "lumen",
+        "eviews/canaries go to `#lumen-iterations`; high-prior"
+      ],
+      [
+        "lumen",
+        "me agents, auto-approve Lumen"
+      ],
+      [
+        "sentinel",
+        "resident split adds `#sentinel` and `#doctor`; optiona"
+      ],
+      [
+        "lumen",
+        "| **LUMEN** | lumen-art, lumen-se"
+      ],
+      [
+        "lumen",
+        "| **LUMEN** | lumen-art, lumen-se"
+      ],
+      [
+        "lumen",
+        "`ANIMA_MCP_URL` | Anima/Lumen base URL. The Lumen pol"
+      ],
+      [
+        "sentinel",
+        "ing channels (default: `sentinel,doctor`; empty restores"
+      ],
+      [
+        "lumen",
+        "e mention used only for Lumen offline and recovery tr"
+      ],
+      [
+        "lumen",
+        "degrade the Lumen surfaces without taking"
+      ],
+      [
+        "lumen",
+        "n-only outage paging**: Lumen offline/recovery posts"
+      ]
+    ]
+  },
+  "skills/unitares-dashboard/SKILL.md": {
+    "reason": "describes the Sentinel adjudication panel and its route by resident name",
+    "occurrences": [
+      [
+        "sentinel",
+        "nitares/src/http_routes/sentinel.py"
+      ],
+      [
+        "sentinel",
+        "A.adjudicate()` POSTs a Sentinel verdict"
+      ],
+      [
+        "sentinel",
+        "`/v1/sentinel/adjudicate` with `X-Uni"
+      ]
+    ]
+  },
+  "src/tool_descriptions.json": {
+    "reason": "names Lumen in outcome_event's drawing outcome and an observe example; #2490 rewrites this file, fix after it lands",
+    "occurrences": [
+      [
+        "lumen",
+        ":\\n- drawing_completed: Lumen finished a drawing (sco"
+      ],
+      [
+        "lumen",
+        "nt\\\", target_agent_id=\\\"Lumen\\\")\\n observe(action=\\\""
+      ]
+    ]
+  }
+}
