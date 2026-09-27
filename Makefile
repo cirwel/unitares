@@ -1,5 +1,5 @@
 # Makefile for governance-mcp-v1
-.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs setup-model demo coordination-demo accountability-journey clean
+.PHONY: help test test-cache-quick test-quick test-smoke version version-check version-bump restart logs serve docs demo coordination-demo accountability-journey clean
 
 help: ## Show this help message
 	@echo "Available commands:"
@@ -80,11 +80,6 @@ install-hooks: ## Install git pre-commit hooks
 uninstall-hooks: ## Remove git pre-commit hooks
 	@rm -f .git/hooks/pre-commit
 	@echo "Pre-commit hook removed"
-
-# ── Setup ────────────────────────────────────────────────
-
-setup-model: ## Pick a local Ollama model for consult and dialectic reviews (writes .env, rebuilds the server)
-	@python3 scripts/install/choose_model.py
 
 # ── Demo ─────────────────────────────────────────────────
 

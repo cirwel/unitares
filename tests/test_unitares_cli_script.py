@@ -284,12 +284,19 @@ def test_metrics_after_onboard_shows_eisv(cli_env):
     assert "E=" in result.stdout and "I=" in result.stdout
 
 
-def test_update_returns_verdict(cli_env):
+def test_checkin_through_call_returns_a_verdict(cli_env):
+    # A check-in is a plain tool call: `update` now manages the install.
     _run(cli_env, "onboard", cli_env["UNITARES_AGENT"], "pytest")
-    result = _run(cli_env, "update", "pytest regression cli update", "0.2", "0.75")
-    assert "Verdict:" in result.stdout
-    # The parser should surface a real governance outcome, not a placeholder.
-    assert "Verdict: ?" not in result.stdout
+    result = _run(
+        cli_env,
+        "call",
+        "process_agent_update",
+        '{"response_text": "pytest regression cli check-in", "complexity": 0.2, "confidence": 0.75}',
+    )
+    body = json.loads(result.stdout)
+    payload = body.get("result") or body
+    assert body.get("success") is not False
+    assert any(key in json.dumps(payload) for key in ('"action"', '"verdict"', '"decision"'))
 
 
 def test_session_command_shows_config(cli_env, mcp_test_server):
@@ -714,40 +721,6 @@ def test_parse_onboard_detects_nested_success_false():
     assert "hint:" in result.stderr.lower()
 
 
-def test_parse_update_prefers_governance_action_over_metric_verdict():
-    body = {
-        "success": True,
-        "result": {
-            "action": "proceed",
-            "metrics": {"verdict": "safe"},
-            "identity_assurance": {"tier": "strong", "session_source": "uuid"},
-        },
-    }
-    result = _run_parser("parse_update", body)
-    assert result.returncode == 0
-    assert "Verdict: proceed" in result.stdout
-    assert "Identity: strong (uuid)" in result.stdout
-    # Update parser should stay within the update surface, not onboard output.
-    assert "Welcome" not in result.stdout
-
-
-def test_parse_update_unwraps_nested_result_payload():
-    body = {
-        "success": True,
-        "result": {
-            "success": True,
-            "result": {
-                "action": "continue",
-                "margin": 0.12,
-            },
-        },
-    }
-    result = _run_parser("parse_update", body)
-    assert result.returncode == 0
-    assert "Verdict: continue" in result.stdout
-    assert "Margin:  0.12" in result.stdout
-
-
 def test_parse_onboard_accepts_valid_response():
     """Happy path for the parser: success:true, expected fields present."""
     response = {
@@ -1134,3 +1107,119 @@ def test_parse_tools_reads_the_body_on_stdin_not_the_environment():
         "a single env var is capped at 128 KiB on Linux and the payload is larger"
     )
     assert "sys.stdin.read()" in body
+
+
+
+# --- install commands (Docker Compose installs) ----------------------------------
+#
+# Fake `launchctl` and `docker` on PATH stand in for the host, so these run the
+# real script on any machine, including one with a launchd install.
+
+def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "governance-mcp"):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "docker.log"
+    (bin_dir / "launchctl").write_text(f"#!/bin/sh\nexit {0 if launchd else 1}\n")
+    (bin_dir / "docker").write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> {log}\n"
+        f"[ \"$1 $2\" = \"compose version\" ] && exit {0 if compose else 1}\n"
+        f"case \"$*\" in *\"ps -a --services\"*) printf '%s\\n' '{services}' ;; esac\n"
+        "exit 0\n"
+    )
+    for f in bin_dir.iterdir():
+        f.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    return env, log
+
+
+def _cli(env, *args):
+    return subprocess.run([str(CLI), *args], env=env, capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("command", [["start"], ["stop"], ["logs"], ["model"], ["update", "--check"]])
+def test_install_commands_refuse_a_launchd_install(tmp_path, command):
+    if sys.platform != "darwin":
+        pytest.skip("the launchd guard applies on macOS only")
+    env, log = _fake_bin(tmp_path, launchd=True, compose=True)
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "launchd service" in result.stderr
+    assert not log.exists() or "up" not in log.read_text()
+
+
+@pytest.mark.parametrize("command", [["start"], ["update", "--check"]])
+def test_install_commands_need_docker_compose(tmp_path, command):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=False)
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "Docker Compose is not available" in result.stderr
+
+
+@pytest.mark.parametrize("command", [["stop"], ["logs"], ["update", "--check"]])
+def test_commands_on_a_running_stack_need_one_started_here(tmp_path, command):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=True, services="")
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "has been started from" in result.stderr
+
+
+def test_start_runs_compose_for_this_checkout(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = _cli(env, "start")
+    assert result.returncode == 0, result.stderr
+    assert f"compose --project-directory {CLI.resolve().parent.parent} up -d --wait" in log.read_text()
+
+
+def test_update_check_reports_without_changing_anything(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = _cli(env, "update", "--check", "--to", "v99.0.0")
+    assert result.returncode == 0, result.stderr
+    assert "Target:    v99.0.0" in result.stdout
+    calls = log.read_text()
+    assert " up " not in calls and " exec " not in calls
+
+
+def test_update_without_a_terminal_needs_yes(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = subprocess.run([str(CLI), "update", "--to", "v99.0.0"], env=env, capture_output=True,
+                            text=True, timeout=60, stdin=subprocess.DEVNULL)
+    # Refused before touching anything: by the terminal check, or first by the
+    # clean-tree check when this checkout has local edits.
+    assert result.returncode == 1
+    assert "re-run with --yes" in result.stderr or "local changes to tracked files" in result.stderr
+    assert " up " not in log.read_text()
+
+
+def test_update_rejects_unknown_options(tmp_path):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = _cli(env, "update", "--bogus")
+    assert result.returncode == 2
+
+
+def test_model_no_docker_needs_no_stack(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=True, compose=False)
+    env["OLLAMA_HOST_URL"] = "http://127.0.0.1:9"   # nothing listens: discovery fails cleanly
+    result = _cli(env, "model", "--no-docker", "--yes")
+    assert "launchd service" not in result.stderr
+    assert "No Ollama answered" in result.stdout
+
+
+def test_psql_shim_runs_inside_the_database_container(tmp_path):
+    # Build the shim the way `update` does and check what it hands to docker.
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_write_psql_shim()/,/^}}/p' "{CLI}")"
+_write_psql_shim "{shim_dir}"
+'''
+    subprocess.run(["bash", "-c", script], env=env, check=True, timeout=30)
+    sql = tmp_path / "070_x.sql"
+    sql.write_text("SELECT 1;\n")
+    subprocess.run([str(shim_dir / "psql"), "postgresql://u:p@localhost:5432/db", "-f", str(sql)],
+                   env=env, check=True, timeout=30)
+    call = log.read_text().strip().splitlines()[-1]
+    assert "exec -T postgres-age psql postgresql://u:p@localhost:5432/db -f -" in call
+    assert str(sql) not in call   # the host path never reaches the container

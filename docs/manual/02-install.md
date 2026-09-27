@@ -70,13 +70,14 @@ The quickest way is to run, from the checkout, once Ollama is installed and has
 a model pulled:
 
 ```bash
-make setup-model
+./scripts/unitares model
 ```
 
 It lists the models your Ollama has, writes your choice to `.env`, rebuilds the
 server, and checks that the server can reach the model. `--help` shows the
 non-interactive flags; `--no-docker` prints the two settings for a source
-install instead.
+install instead. To run it as plain `unitares`, link it onto your `PATH` once:
+`ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
 
 To do the same by hand, install Ollama on the Docker host, pull a model, and
 name both in `.env`:
@@ -101,6 +102,38 @@ alone keeps an image built before this step. If your `docker-compose.yml` has
 no `UNITARES_OLLAMA_BASE` line, the checkout predates this step. If it has one
 but `consult` reports a missing dependency, the image predates it; rebuild with
 `--build`.
+
+### Updating
+
+From the checkout, see whether a newer release is published, then move to it:
+
+```bash
+./scripts/unitares update --check
+./scripts/unitares update
+```
+
+`update` fetches the newest published release (or `--to <tag>`), starts the
+database, applies that release's migrations with
+`scripts/dev/apply_migrations.py` (run inside the database container, so no
+`psql` is needed on the host), rebuilds and restarts the stack, and reports deep
+health. It asks before changing anything; `--yes` skips the question. It
+refuses when tracked files in the checkout have local changes, and it manages
+only this checkout's Docker Compose stack. A checkout that is already on the
+target release only has its pending migrations checked and, on confirmation,
+applied.
+
+Releases before this command existed shipped a `scripts/unitares update` that
+posted a check-in instead. From one of those, move once by hand, then use
+`update` from then on:
+
+```bash
+git fetch --depth 1 origin tag vX.Y.Z && git checkout --detach vX.Y.Z
+docker compose up -d --build --wait
+./scripts/unitares update --to vX.Y.Z
+```
+
+The last line applies any migrations the release added to your existing
+database.
 
 ### Tool discovery (interface 1.13.0 and later)
 

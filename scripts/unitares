@@ -231,66 +231,6 @@ print("UUID:    " + str(r.get("uuid", "?")))
 '
 }
 
-parse_update() {
-    local body; body=$(cat)
-    BODY="$body" python3 -c '
-import json, os, sys
-try:
-    data = json.loads(os.environ["BODY"])
-except Exception as exc:
-    print("error: bad JSON from process_agent_update: " + str(exc), file=sys.stderr)
-    sys.exit(1)
-r = data.get("result") or {}
-
-def unwrap_update_payload(payload):
-    current = payload
-    for _ in range(2):
-        if not isinstance(current, dict):
-            return payload
-        nested = current.get("result")
-        has_update_fields = any(
-            key in current for key in ("action", "verdict", "decision", "status", "metrics", "mirror", "margin")
-        )
-        if isinstance(nested, dict) and not has_update_fields:
-            current = nested
-            continue
-        return current
-    return current
-
-r = unwrap_update_payload(r)
-if data.get("success") is False or not r or r.get("success") is False:
-    msg = data.get("error") or r.get("error") or "update failed"
-    print("error: " + str(msg), file=sys.stderr)
-    recovery = r.get("recovery") or {}
-    hint = recovery.get("hint") if isinstance(recovery, dict) else None
-    if hint:
-        print("hint: " + str(hint), file=sys.stderr)
-    sys.exit(1)
-decision = r.get("decision") if isinstance(r.get("decision"), dict) else {}
-metrics = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
-verdict = (
-    r.get("action")
-    or decision.get("action")
-    or r.get("verdict")
-    or metrics.get("verdict")
-    or r.get("status")
-    or "?"
-)
-print("Verdict: " + str(verdict))
-margin = r.get("margin")
-if margin is None:
-    margin = decision.get("margin")
-if margin is not None:
-    print("Margin:  " + str(margin))
-mirror = r.get("mirror") or []
-for line in mirror[:3]:
-    print("  - " + str(line))
-ia = r.get("identity_assurance") or {}
-if ia:
-    print("Identity: " + str(ia.get("tier", "?")) + " (" + str(ia.get("session_source", "?")) + ")")
-'
-}
-
 parse_metrics() {
     local body; body=$(cat)
     BODY="$body" python3 -c '
@@ -447,29 +387,6 @@ except Exception:
     _py_write_session "$sid" "$token" "$uuid" "$parent"
     printf '%s' "$body" | parse_onboard
     echo "Session: ${sid:-<none>}"
-}
-
-cmd_update() {
-    local text="${1:-Update}" complexity="${2:-0.5}" confidence="${3:-0.6}"
-    local args
-    args=$(TEXT="$text" COMPLEXITY="$complexity" CONFIDENCE="$confidence" python3 -c '
-import json, os, sys
-try:
-    complexity = float(os.environ.get("COMPLEXITY") or 0.5)
-    confidence = float(os.environ.get("CONFIDENCE") or 0.6)
-except ValueError as exc:
-    sys.stderr.write("error: complexity/confidence must be numeric: " + str(exc) + "\n")
-    sys.exit(2)
-print(json.dumps({
-    "response_text": os.environ.get("TEXT") or "",
-    "complexity": complexity,
-    "confidence": confidence,
-}))
-') || return 1
-    local body
-    body=$(_curl_post_tool "process_agent_update" "$args") || return 1
-    _check_body "$body" "process_agent_update" >/dev/null || return 1
-    printf '%s' "$body" | parse_update
 }
 
 cmd_metrics() {
@@ -1029,9 +946,229 @@ cmd_reset() {
     echo "Session reset. Next onboard will create a fresh identity for agent '${AGENT_ID}'."
 }
 
+# --- install operations (Docker Compose installs) -----------------------------
+#
+# These act on the checkout this script lives in. They manage a Docker Compose
+# install of UNITARES: the stack the README's one-line install starts. They
+# refuse on anything else, so a source or launchd install is never rebuilt,
+# checked out, or migrated by accident.
+
+_repo_root() {
+    local self
+    self=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")
+    dirname "$(dirname "$self")"
+}
+
+_compose() {
+    docker compose --project-directory "$(_repo_root)" "$@"
+}
+
+_env_value() {
+    # KEY from the checkout's .env, else the given default. Only simple
+    # KEY=VALUE lines are read; quotes around the value are dropped.
+    local key="$1" default="$2" file line value
+    file="$(_repo_root)/.env"
+    if [ -f "$file" ]; then
+        line=$(grep -E "^[[:space:]]*${key}=" "$file" | tail -n 1)
+        if [ -n "$line" ]; then
+            value="${line#*=}"
+            value="${value%\"}"; value="${value#\"}"
+            value="${value%\'}"; value="${value#\'}"
+            printf '%s' "$value"
+            return 0
+        fi
+    fi
+    printf '%s' "$default"
+}
+
+_require_compose_install() {
+    # $1: "existing" to also require this checkout's governance-mcp container.
+    local root
+    root="$(_repo_root)"
+    if [ "$(uname -s)" = "Darwin" ] && launchctl print "gui/$(id -u)/com.unitares.governance-mcp" >/dev/null 2>&1; then
+        echo "error: this machine runs UNITARES as a launchd service, not the Docker Compose stack." >&2
+        echo "       Use that deployment's own start/stop/update procedure." >&2
+        return 1
+    fi
+    if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+        echo "error: Docker Compose is not available; these commands manage a Docker Compose install." >&2
+        return 1
+    fi
+    if [ ! -f "$root/docker-compose.yml" ]; then
+        echo "error: no docker-compose.yml in $root" >&2
+        return 1
+    fi
+    if [ "${1:-}" = "existing" ] && ! _compose ps -a --services 2>/dev/null | grep -qx "governance-mcp"; then
+        echo "error: no UNITARES Docker Compose stack has been started from $root." >&2
+        echo "       Start one with: unitares start" >&2
+        return 1
+    fi
+}
+
+cmd_model() {
+    # --no-docker only prints settings for a source install: no stack needed.
+    case " $* " in
+        *" --no-docker "*) ;;
+        *) _require_compose_install || return 1 ;;
+    esac
+    python3 "$(_repo_root)/scripts/install/choose_model.py" "$@"
+}
+
+cmd_start() {
+    _require_compose_install || return 1
+    _compose up -d --wait "$@"
+}
+
+cmd_stop() {
+    _require_compose_install existing || return 1
+    _compose stop "$@"
+}
+
+cmd_logs() {
+    _require_compose_install existing || return 1
+    if [ $# -eq 0 ]; then
+        _compose logs -f --tail=100 governance-mcp
+    else
+        _compose logs -f --tail=100 "$@"
+    fi
+}
+
+_write_psql_shim() {
+    # A psql on PATH that runs inside this checkout's postgres-age container, so
+    # scripts/dev/apply_migrations.py (and the doctor parsers it imports) work
+    # without a psql client on the host. `-f FILE` is streamed over stdin: the
+    # host path does not exist inside the container.
+    local dir="$1" root
+    root="$(_repo_root)"
+    cat > "$dir/psql" <<SHIM
+#!/usr/bin/env bash
+args=(); input=""
+while [ \$# -gt 0 ]; do
+    if [ "\$1" = "-f" ] && [ \$# -ge 2 ]; then input="\$2"; args+=(-f -); shift 2
+    else args+=("\$1"); shift; fi
+done
+if [ -n "\$input" ]; then
+    exec docker compose --project-directory "$root" exec -T postgres-age psql "\${args[@]}" < "\$input"
+fi
+exec docker compose --project-directory "$root" exec -T postgres-age psql "\${args[@]}"
+SHIM
+    chmod +x "$dir/psql"
+}
+
+_migrations() {
+    # $1: --apply or empty (dry run). Runs the canonical migration executor
+    # against the stack's database through the container.
+    local root shim db_url
+    root="$(_repo_root)"
+    shim=$(mktemp -d)
+    _write_psql_shim "$shim"
+    db_url="postgresql://$(_env_value POSTGRES_USER postgres):$(_env_value POSTGRES_PASSWORD postgres)@localhost:5432/$(_env_value POSTGRES_DB governance)"
+    PATH="$shim:$PATH" python3 "$root/scripts/dev/apply_migrations.py" --db-url "$db_url" ${1:+"$1"}
+    local rc=$?
+    rm -rf "$shim"
+    return $rc
+}
+
+_published_version() {
+    local repo="${UNITARES_RELEASE_REPO:-cirwel/unitares}"
+    curl -fsSL --max-time "$TIMEOUT" "https://raw.githubusercontent.com/${repo}/master/PUBLISHED_VERSION" 2>/dev/null | tr -d '[:space:]'
+}
+
+_confirm() {
+    # Yes only on an explicit y/yes from a terminal; --yes skips the prompt.
+    local prompt="$1" answer
+    [ "${assume_yes:-0}" = "1" ] && return 0
+    if [ ! -t 0 ]; then
+        echo "error: not a terminal; re-run with --yes to proceed." >&2
+        return 1
+    fi
+    read -r -p "$prompt [y/N] " answer || return 1
+    case "$answer" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+cmd_update() {
+    local check_only=0 target="" assume_yes=0 arg
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --check) check_only=1 ;;
+            --yes|-y) assume_yes=1 ;;
+            --to) shift; target="${1:-}"
+                  [ -n "$target" ] || { echo "error: --to needs a tag or branch" >&2; return 2; } ;;
+            *) echo "error: unknown update option '$1' (--check, --to REF, --yes)" >&2; return 2 ;;
+        esac
+        shift
+    done
+    _require_compose_install existing || return 1
+
+    local root current
+    root="$(_repo_root)"
+    current=$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --short HEAD)
+    if [ -z "$target" ]; then
+        local published
+        published=$(_published_version)
+        if [ -z "$published" ]; then
+            echo "error: could not read the published version; pass --to <tag> to choose one." >&2
+            return 1
+        fi
+        target="v${published#v}"
+    fi
+    echo "Installed: $current"
+    echo "Target:    $target"
+
+    if [ "$current" = "$target" ]; then
+        echo "✓ Already on $target. Checking the database schema…"
+        _migrations || return 1
+        echo "  Apply any pending migrations with: unitares update --to $target --yes"
+        [ "$check_only" = "1" ] && return 0
+        _confirm "Apply pending migrations now?" || return 0
+        _migrations --apply
+        return $?
+    fi
+    [ "$check_only" = "1" ] && { echo "Run 'unitares update' to move to $target."; return 0; }
+
+    if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
+        echo "error: $root has local changes to tracked files; commit or discard them first." >&2
+        return 1
+    fi
+    _confirm "Move this install from $current to $target, rebuild, and apply its database migrations?" || { echo "Nothing changed."; return 0; }
+
+    echo "… Fetching $target"
+    git -C "$root" fetch --depth 1 origin "$target" || { echo "error: could not fetch $target" >&2; return 1; }
+    git -C "$root" checkout --quiet --detach FETCH_HEAD || return 1
+
+    echo "… Starting the database"
+    _compose up -d --build --wait postgres-age || { echo "error: the database did not start; still on the new code, roll back with: git -C $root checkout $current" >&2; return 1; }
+
+    echo "… Applying database migrations"
+    if ! _migrations --apply; then
+        echo "error: migrations did not complete. The code is at $target and the database is where the output above stops." >&2
+        echo "       Fix the reported problem and re-run 'unitares update --to $target', or roll the code back with: git -C $root checkout $current" >&2
+        return 1
+    fi
+
+    echo "… Rebuilding and starting the stack"
+    _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
+
+    local health
+    health=$(_curl_get "/health/deep" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","?"))' 2>/dev/null)
+    echo "✓ Updated $current → $target. Deep health: ${health:-unknown} (UNITARES_URL=$UNITARES_URL)"
+}
+
 cmd_help() {
     cat <<'EOF'
 UNITARES CLI — REST wrapper for the governance MCP server
+
+Install (Docker Compose install in this checkout):
+  update [--check] [--to REF] [--yes]
+                                    Move to the newest published release (or
+                                    REF), rebuild, apply its database
+                                    migrations, and report deep health.
+                                    --check only reports what would change
+  model [--model NAME] [--yes]      Pick the local Ollama model for consult
+                                    and dialectic reviews (writes .env,
+                                    rebuilds, checks the server reaches it)
+  start | stop                      Start or stop the stack
+  logs [service]                    Follow logs (default: governance-mcp)
 
 Commands:
   agent <id|label> [--json]         Drill into one agent: state, verdict,
@@ -1042,8 +1179,6 @@ Commands:
   onboard [name] [purpose] [force]  Onboard a fresh identity; cached uuid is
                                     declared as parent_agent_id unless "force"
                                     is passed as 3rd arg
-  update "text" [complexity] [confidence]
-                                    Post a governance check-in (defaults: 0.5 / 0.6)
   metrics                           Show EISV + summary
   health                            Server health (GET /health)
   tools                             List available tools (GET /v1/tools)
@@ -1069,7 +1204,8 @@ Environment:
 Examples:
   unitares diag
   unitares onboard "kenny-laptop" "interactive dev work"
-  unitares update "Fixed CLI sanitization bug" 0.4 0.9
+  unitares update --check
+  unitares call process_agent_update '{"response_text": "Fixed a bug", "complexity": 0.4, "confidence": 0.9}'
   unitares metrics
   unitares call list_agents '{}'
 EOF
@@ -1081,7 +1217,11 @@ case "${1:-help}" in
     status|st)   shift; cmd_status "$@" ;;
     agent|a)     shift; cmd_agent "$@" ;;
     onboard|o)   shift; cmd_onboard "$@" ;;
-    update|u)    shift; cmd_update "$@" ;;
+    update)      shift; cmd_update "$@" ;;
+    model)       shift; cmd_model "$@" ;;
+    start)       shift; cmd_start "$@" ;;
+    stop)        shift; cmd_stop "$@" ;;
+    logs)        shift; cmd_logs "$@" ;;
     metrics|m)   shift; cmd_metrics ;;
     health|h)    shift; cmd_health ;;
     tools|t)     shift; cmd_tools ;;
