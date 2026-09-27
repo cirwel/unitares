@@ -226,6 +226,7 @@ armed=$(q -c --arg b "$BASE" \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 disarmed=" "
+hold_order=0
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
@@ -239,11 +240,14 @@ while read -r pr; do
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
     reason="its head changed since the approval"
-  elif concluded=$(unmet_required_checks "$pr" | tr ' ' '\n' | grep -vE '=(MISSING|PENDING)$' | tr '\n' ' ') \
-       && [ -n "${concluded// /}" ]; then
-    # A required check that has concluded without success (NEUTRAL means
-    # unreviewed); MISSING/PENDING only mean it is being re-evaluated.
-    reason="${concluded% } no longer passes"
+  elif unmet=$(unmet_required_checks "$pr") && [ -n "$unmet" ]; then
+    # Anything but SUCCESS disarms: review is not a branch-protection check,
+    # so an armed PR would otherwise merge without it (NEUTRAL means
+    # unreviewed). MISSING/PENDING is usual for about a minute after a base
+    # update; the PR keeps its place, since the tick stops here and the next
+    # one re-arms it once the check passes.
+    reason="$unmet is not passing"
+    case " $unmet" in *=MISSING*|*=PENDING*) hold_order=1 ;; esac
   elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
@@ -261,6 +265,10 @@ while read -r pr; do
     fi
   fi
 done <<<"$armed"
+if [ "$hold_order" = "1" ]; then
+  log "a disarmed PR is waiting on a required check; nothing else armed this tick"
+  exit 0
+fi
 
 # --- 2. approvals ---------------------------------------------------------------
 # Runs every tick, before the slot check, so a PR labelled while another holds
@@ -426,8 +434,12 @@ while read -r _ n head; do
 
   unmet=$(unmet_required_checks "$pr")
   if [ -n "$unmet" ]; then
-    log "#$n waiting on $unmet (must pass before arming); skipped"
-    continue
+    case " $unmet" in
+      # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
+      # an unreviewed PR): wait rather than let a later PR jump the order.
+      *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
+      *) log "#$n: $unmet (must pass before arming); skipped"; continue ;;
+    esac
   fi
 
   log "#$n arming (head of queue)"

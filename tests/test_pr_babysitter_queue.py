@@ -699,14 +699,15 @@ def test_a_pr_whose_review_did_not_pass_is_not_armed(tmp_path: Path, state: str)
     assert calls == [_arm(2)]
 
 
-def test_a_pr_with_no_review_check_waits(tmp_path: Path) -> None:
-    calls, out = _run(tmp_path, [_pr(1, review=None)])
+def test_a_pr_with_no_review_check_yet_holds_the_order(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, review=None), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
     assert calls == []
     assert "#1 waiting on review=MISSING" in out
 
 
-def test_a_pending_review_waits(tmp_path: Path) -> None:
-    calls, out = _run(tmp_path, [_pr(1, review=None, checks=[_check("review", "", status="IN_PROGRESS")])])
+def test_a_pending_review_holds_the_order(tmp_path: Path) -> None:
+    pending = _pr(1, review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, out = _run(tmp_path, [pending, _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
     assert calls == []
     assert "review=PENDING" in out
 
@@ -721,15 +722,17 @@ def test_a_script_armed_pr_whose_review_stops_passing_is_disarmed(tmp_path: Path
     pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("test"), _check("review", state, run=5)])
     calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
-    assert f"review={state} no longer passes" in out
+    assert f"review={state} is not passing" in out
 
 
 @pytest.mark.parametrize("checks", [[_check("test")], [_check("test"), _check("review", "", status="IN_PROGRESS")]])
-def test_a_review_being_reevaluated_after_a_base_update_keeps_the_arm(tmp_path: Path, checks: list) -> None:
-    # For about a minute after GitHub updates the branch, review is missing or pending.
+def test_a_review_not_yet_passing_disarms_but_keeps_the_pr_first(tmp_path: Path, checks: list) -> None:
+    # For about a minute after GitHub updates the branch, review is missing or
+    # pending. Disarm (review is not branch-protected), but arm nothing else.
     pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=checks)
-    calls, _ = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
-    assert calls == []
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "nothing else armed this tick" in out
 
 
 def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path) -> None:
