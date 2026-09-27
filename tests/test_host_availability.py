@@ -124,3 +124,157 @@ def test_a_guess_never_overwrites_a_stated_reset_in_its_window():
                           {"reason": "auth", "stated_reset": None}, now=now + 1)
     entry = ha._state["codex:host-adapter"]
     assert entry["retry_after"] == now + 300 and entry["retry_after_source"] == "provider"
+
+
+# --- Redis copy: a restart remembers a provider at its limit ---------------
+
+fakeredis = pytest.importorskip("fakeredis")
+import asyncio  # noqa: E402
+import json  # noqa: E402
+
+import fakeredis.aioredis  # noqa: E402
+
+QUOTA = {"reason": "quota", "stated_reset": None}
+
+
+@pytest.fixture
+def redis(monkeypatch):
+    """A fake Redis in place of the live one (conftest cuts the live one off)."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    async def _fake():
+        return fake
+
+    monkeypatch.setattr(ha, "_get_redis", _fake)
+    return fake
+
+
+def _restart():
+    """What a gov restart does to this module: the process state is gone."""
+    ha._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_survives_a_restart(redis):
+    now = 1_000_000.0
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 3600},
+        detail="usage limit", now=now)
+    key = ha.REDIS_KEY_PREFIX + "codex:host-adapter"
+    assert 3590 <= await redis.ttl(key) <= 3600  # TTL = retry_after - now
+
+    _restart()
+    assert ha.cooldown("codex:host-adapter", now=now + 60) is None  # cache empty
+    assert await ha.load_from_redis(now=now + 60) == 1
+    restored = ha.cooldown("codex:host-adapter", now=now + 60)
+    assert restored == view  # same window, source, reason and failure count
+    assert ha.cooldown("codex:host-adapter", now=now + 3601) is None
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_keeps_counting_across_a_restart(redis):
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    _restart()
+    await ha.load_from_redis(now=now + 1)
+    # Inside the restored window a further guess changes nothing...
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now + 2)
+    assert ha._state["claude:host-adapter"]["retry_after"] == now + ha.BACKOFF_BASE_S
+    assert ha._state["claude:host-adapter"]["failures"] == 1
+    # ...and a provider-stated reset still wins over the restored guess.
+    await ha.record_unavailable_async(
+        "claude:host-adapter", {"reason": "quota", "stated_reset": now + 120}, now=now + 3)
+    _restart()
+    await ha.load_from_redis(now=now + 4)
+    entry = ha._state["claude:host-adapter"]
+    assert entry["retry_after"] == now + 120 and entry["retry_after_source"] == "provider"
+
+
+@pytest.mark.asyncio
+async def test_a_write_syncs_a_window_it_did_not_know_about(redis):
+    """Another process (or the run before a restart whose load lost the race
+    with the first call) holds a stated reset: a local guess must not replace
+    it in Redis."""
+    now = 1_000_000.0
+    await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 7200}, now=now)
+    _restart()  # no load: the cache has not seen it
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "auth", "stated_reset": None}, now=now + 5)
+    assert view["retry_after_source"] == "provider"
+    stored = json.loads(await redis.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
+    assert stored["retry_after"] == now + 7200
+
+
+@pytest.mark.asyncio
+async def test_a_stored_window_is_still_capped_at_twelve_hours(redis):
+    now = 1_000_000.0
+    await redis.set(ha.REDIS_KEY_PREFIX + "codex:host-adapter", json.dumps({
+        "reason": "quota", "retry_after": now + 7 * 86400, "retry_after_source": "provider",
+        "failures": 1, "detail": "", "recorded_at": now}))
+    await ha.load_from_redis(now=now)
+    assert ha._state["codex:host-adapter"]["retry_after"] == now + ha.STATED_RESET_CAP_S
+
+
+@pytest.mark.asyncio
+async def test_lapsed_and_foreign_copies_are_ignored(redis):
+    now = 1_000_000.0
+    await redis.set(ha.REDIS_KEY_PREFIX + "claude:host-adapter", json.dumps({
+        "reason": "quota", "retry_after": now - 1, "retry_after_source": "backoff",
+        "failures": 1}))
+    await redis.set(ha.REDIS_KEY_PREFIX + "codex:host-adapter", "not json")
+    await redis.set(ha.REDIS_KEY_PREFIX + "antigravity:host-adapter", json.dumps({
+        "retry_after": now + 60, "retry_after_source": "made-up"}))
+    assert await ha.load_from_redis(now=now) == 0
+    assert ha._state == {}
+
+
+@pytest.mark.asyncio
+async def test_clear_removes_the_copy_so_a_restart_does_not_resurrect_it(redis):
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    await ha.clear_async("claude:host-adapter")
+    assert await redis.get(ha.REDIS_KEY_PREFIX + "claude:host-adapter") is None
+    _restart()
+    assert await ha.load_from_redis(now=now + 1) == 0
+
+
+class _BrokenRedis:
+    async def get(self, *a, **k):
+        raise ConnectionError("redis down")
+
+    set = delete = mget = get
+
+    def scan_iter(self, *a, **k):
+        raise ConnectionError("redis down")
+
+
+class _HangingRedis:
+    async def get(self, *a, **k):
+        await asyncio.sleep(3600)
+
+    set = delete = mget = get
+
+    async def scan_iter(self, *a, **k):
+        await asyncio.sleep(3600)
+        yield ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client", [None, _BrokenRedis(), _HangingRedis()],
+                         ids=["absent", "raising", "hanging"])
+async def test_redis_down_means_in_process_behaviour(monkeypatch, client):
+    async def _redis():
+        return client
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    monkeypatch.setattr(ha, "REDIS_TIMEOUT_S", 0.05)
+    now = 1_000_000.0
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 600}, now=now)
+    assert view["retry_after_source"] == "provider"
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is not None
+    assert await ha.load_from_redis(now=now + 1) == 0
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is not None  # load kept it
+    await ha.clear_async("codex:host-adapter")
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is None

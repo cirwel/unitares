@@ -289,7 +289,7 @@ async def run_delegated_inference(
         if terminal_result:
             classified = host_availability.classify(str(adapter_result.get("error") or ""))
             if classified is not None:
-                provider_unavailable = host_availability.record_unavailable(
+                provider_unavailable = await host_availability.record_unavailable_async(
                     host_id, classified, detail=message,
                 )
         return InferenceOutcome.failed(
@@ -337,7 +337,7 @@ async def run_delegated_inference(
             possibly_running=possibly_running,
         )
 
-    host_availability.clear(host_id)
+    await host_availability.clear_async(host_id)
     response_text = str(adapter_result.get("text") or "")
     models_used = [
         str(value) for value in (adapter_provenance.get("models_used") or [])

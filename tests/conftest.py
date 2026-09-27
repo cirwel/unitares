@@ -870,11 +870,17 @@ def set_governance_config(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_host_availability_cooldowns():
+def _reset_host_availability_cooldowns(monkeypatch):
     """Provider cooldowns are process-global; one test's recorded usage limit
-    must not make a host unavailable in the next."""
+    must not make a host unavailable in the next. Their Redis copy is cut off
+    too: without this, a test recording a cooldown would write it into the
+    developer's live Redis, and the next gov restart would load it."""
     from src.mcp_handlers.support import host_availability
 
+    async def _no_redis():
+        return None
+
+    monkeypatch.setattr(host_availability, "_get_redis", _no_redis)
     host_availability._reset_for_tests()
     yield
     host_availability._reset_for_tests()
