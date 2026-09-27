@@ -68,9 +68,9 @@ row below:
 
 | Host state | Action | Quota spent |
 |---|---|---|
-| A previous probe's timed-out execution was still live at the cleanup pass (whether or not the stop succeeded) | If the host is still enabled, raise its finding to **high**; if the operator has since switched it off, treat it as the next row. No new probe either way. | 0 |
+| A previous probe's timed-out execution was still live at the cleanup pass (whether or not the stop succeeded) | If the stop failed, raise the host's finding to **high** whatever the host's state, because a process the probe cannot stop is the probe's own fault. If the stop succeeded, raise it to **high** only while the host is enabled; for a host the operator has switched off, go to the next row. No new probe either way. | 0 |
 | Not enabled by the operator (`UNITARES_HOST_ADAPTER_ENABLED` off, or the host listed in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. An enabled host whose CLI has gone missing is not skipped: it is probed, fails at preflight at no quota cost, and is reported. | 0 |
-| In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
+| In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`, with no probe. A `quota` cooldown raises no finding: it clears by itself, and consult routes around it meanwhile. An `auth` cooldown raises the host's `auth` finding (**high**) from the cooldown alone. Real traffic can keep a logged-out host cooling indefinitely, and nobody is told to log in unless this row reports it. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
 | Otherwise | Probe once. | one call |
 
@@ -116,7 +116,7 @@ its failure happened:
 | 1. gov dispatch | preflight, spawn rejected, shared `gov-dispatch` | any call gov attempted |
 | 2. CLI ran | `auth` (the CLI reports itself logged out), unclassified, timeout | a call whose CLI ran to completion (`dispatch_phase == "terminal"`), or an `auth` cooldown |
 | 3. provider answered | `quota` | a quota failure, or a `quota` cooldown |
-| 4. success | none | a successful probe, or passive evidence |
+| 4. success | none | a successful probe (passive evidence applies only to a host with no open record, so there is nothing for it to close) |
 
 An observation that reached stage N closes every record from a stage before
 N, because those stages evidently worked. It reproduces a record of its own
@@ -132,15 +132,15 @@ that it is not cooling. A few consequences:
 - A hung call found by the cleanup pass reproduces its timeout record, raised
   to high, noting whether the stop failed.
 - A shared `gov-dispatch` record replaces the member hosts' own records of
-  that same pre-CLI failure.
+  that same pre-CLI failure. It is reproduced by any run in which two or more
+  hosts show that failure, and it closes when fewer do. A single host still
+  failing then gets its own record, since the fault no longer looks shared.
 - A host the operator switches off has all its records closed, with reason
   `not_enabled`.
 
 A changed failure is covered the same way. A host that failed preflight
 yesterday and fails `auth` today closes the preflight record and opens an
-`auth` one. A shared `gov-dispatch` failure that is no longer shared closes
-when any member host gets past dispatch, and any host still failing at
-dispatch gets its own record.
+`auth` one. A shared `gov-dispatch` failure follows its own rule above.
 
 Recovery is noticed on the next daily run, so a record can stay open up to a
 day after a host recovers. That delay costs nothing more: the backoff already
