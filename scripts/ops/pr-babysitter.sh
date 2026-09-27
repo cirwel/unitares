@@ -69,7 +69,7 @@ REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
 BASE="${PR_QUEUE_BASE:-master}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
-BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
+BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 # Checks that must have passed on the head before it is armed, beyond the ones
@@ -452,6 +452,11 @@ while read -r _ n head; do
     if ! record_arm "$n"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
+    elif [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
+      # Update now rather than wait for GitHub's updater: on 2026-09-27 it
+      # acted for 1 of 16 queue arms, and each of the other 15 sat idle for
+      # the whole grace period. With one PR armed, there is nothing to race.
+      act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; the fallback will retry"
     fi
   else
     log "#$n arm failed; nothing else armed this tick"

@@ -91,7 +91,7 @@ def _pr(
     draft: bool = False,
     armed_min_ago: float | None = None,
     mergeable: str = "MERGEABLE",
-    state: str = "BEHIND",
+    state: str = "BLOCKED",
     base: str = "master",
     checks: list[dict] | None = None,
     body: str = "",
@@ -325,7 +325,7 @@ def test_failed_on_an_up_to_date_head_is_marked_then_rerun_once(tmp_path: Path) 
 def test_failed_on_a_behind_head_is_armed_for_a_fresh_run(tmp_path: Path) -> None:
     # Re-running the stale head is wasted: GitHub re-runs everything on update.
     calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
-    assert calls == [_arm(9)]
+    assert calls == [_arm(9), "pr update-branch 9 -R o/r"]
 
 
 def test_failed_while_its_run_is_still_going_waits(tmp_path: Path) -> None:
@@ -447,7 +447,7 @@ def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
 
 
 def test_behind_holder_is_left_to_github_inside_the_grace(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=5)
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=1)
     assert calls == []
 
 
@@ -696,7 +696,7 @@ def test_a_pr_whose_review_did_not_pass_is_not_armed(tmp_path: Path, state: str)
     # so without this an agent's label would merge an unreviewed PR.
     calls, _ = _run(tmp_path, [_pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)]), _pr(2)],
                       timelines={1: _timeline(12), 2: _timeline(8)})
-    assert calls == [_arm(2)]
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
 
 
 def test_a_pr_with_no_review_check_yet_holds_the_order(tmp_path: Path) -> None:
@@ -739,3 +739,22 @@ def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path
     pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "NEUTRAL")])
     calls, _ = _run(tmp_path, [pr, _pr(4)])
     assert calls == []
+
+
+
+def test_a_behind_pr_is_updated_as_soon_as_it_is_armed(tmp_path: Path) -> None:
+    # GitHub's updater acted for 1 of 16 queue arms on 2026-09-27; waiting for
+    # it cost a full grace period each time.
+    calls, _ = _run(tmp_path, [_pr(1, state="BEHIND")])
+    assert calls == [_arm(1), "pr update-branch 1 -R o/r"]
+
+
+def test_an_up_to_date_pr_is_only_armed(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, state="BLOCKED")])
+    assert calls == [_arm(1)]
+
+
+def test_a_failed_update_after_arming_is_left_to_the_fallback(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND")], fail=("update-branch",))
+    assert calls == [_arm(1), "pr update-branch 1 -R o/r"]
+    assert "the fallback will retry" in out
