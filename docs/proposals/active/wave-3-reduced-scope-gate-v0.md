@@ -707,13 +707,13 @@ measured by the pre-registered read-only report `scripts/ops/wave3_collision_rep
 durable tables, including a saga-versus-row status join, and by `dialectic_beam_resolve` records,
 because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no saga
 row. Python records every BEAM resolve call as an attempt before it and a response after it, so the
-records carry their own denominator (responses ÷ attempts, including no-saga responses); (b1) cannot
-fire while that fraction is below 99%. BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
+records carry their own denominator (responses ÷ attempts, including no-saga responses). BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
 outcomes are contention-benign by construction and need no emitter. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
 
 **A3 — the writer inventory is defined by rule.** A **writer** is every code path, in either
 runtime, that writes the `status`, `phase`, `reviewer_agent_id` or `awaiting_facilitation` columns of
-`core.dialectic_sessions`. That includes the Python sweeper's guarded writes; the BEAM resolve path
+`core.dialectic_sessions`, or changes its sweep eligibility (anything that moves `updated_at`,
+including protocol-message inserts). That includes the Python sweeper's guarded writes; the BEAM resolve path
 (`DialecticSaga.commit_session_row`); BEAM liveness (`DialecticLiveness.fail_stuck/2` →
 `DialecticSaga.resolve/1`, which fails a session after 4 h; 33 sessions carry `liveness_timeout`);
 `DialecticSaga.update_reviewer/2`, which writes the reviewer slot outside any saga; and the live
@@ -782,7 +782,8 @@ and no §1.2 option is chosen, so the design pass is not owed. If the pro-port t
 instead, the port only becomes **eligible**: the gate is met after step 5, when the design pass has
 run on the chosen §1.2 option and the gate has been signed again as amended. Nothing is built before
 then. If W_pre reaches its bound with neither outcome available (coverage below A8, an unexplained
-gap, an unadjudicated failed probe, or emitter coverage below 99%), the reading is **inconclusive**:
+gap, an unadjudicated failed probe, or any unmatched record under A12), the reading is
+**inconclusive**:
 the named defect is fixed, W_pre extends by the uncovered time, and if the fix changes the
 instrument (a new `instrument_version`), W_pre restarts from the first row at the new version. Hours against the §4
 projection were not tracked for either round and are reported as not measured.
@@ -790,3 +791,8 @@ projection were not tracked for either round and are reported as not measured.
 **A11 — consistency.** §9 inventories both paths; §2 and §4 cover path (1) only. The status note's
 "six … closed" counts §6.5's deferral, which is not an answer. "Three orderings" means two
 BEAM-first and one sweeper-first; A3 widens "writer" beyond them.
+
+**A12 — no zero from an incomplete record.** Every record stream a reading relies on carries its own
+denominator: resolve responses against attempts, `dialectic_guarded_write` rows against each cycle's
+`write_attempt_count`, and cycle rows against `cycle_seq` within each boot. Completeness is 100%: any
+unmatched unit makes the reading inconclusive (A10), never a zero.
