@@ -105,24 +105,42 @@ fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
 `sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
 re-alert backoff so a host that stays broken does not re-post daily.
-Recovery follows `doctor_findings.py`'s rule. At the end of each run, a
-record that this run did not reproduce is closed and its backoff dropped, so
-a later failure of the same kind alerts at once. What counts as reproducing a
-record depends on what the run observed for the host:
+Recovery follows `doctor_findings.py`'s rule: a record is closed, and its
+backoff dropped, once a run shows the failure is gone, so a later failure of
+the same kind alerts at once. What a run shows depends on how far the call got.
+A call passes through four stages, and each record belongs to the stage where
+its failure happened:
 
-| Observed this run | Records kept open | Records closed |
+| Stage | Failures recorded there | Observations that reach it |
 |---|---|---|
-| Probe succeeded, or passive evidence | none | all of the host's |
-| Probe failed with class C | C (re-posted under the backoff) | every other class |
-| Cooldown of class C | C: the cooldown is itself a fresh failure of that class | pre-CLI and unclassified, because a cooldown is recorded only from a call whose CLI ran to completion (`dispatch_phase == "terminal"`, which includes a CLI reporting itself logged out), so gov's dispatch path worked |
-| Hung call found live by the cleanup pass | the timeout record, raised to high (and noting a failed stop) | none |
-| Part of a shared `gov-dispatch` failure | the shared record | the host's own record of that same pre-CLI failure, which the shared one replaces |
-| Operator switched the host off | none | all, with reason `not_enabled` |
+| 1. gov dispatch | preflight, spawn rejected, shared `gov-dispatch` | any call gov attempted |
+| 2. CLI ran | `auth` (the CLI reports itself logged out), unclassified, timeout | a call whose CLI ran to completion (`dispatch_phase == "terminal"`), or an `auth` cooldown |
+| 3. provider answered | `quota` | a quota failure, or a `quota` cooldown |
+| 4. success | none | a successful probe, or passive evidence |
 
-This covers a changed failure: a host that failed preflight yesterday and
-fails `auth` today closes the preflight record and opens an `auth` one. It
-also covers a shared `gov-dispatch` failure that is no longer shared. That
-record closes, and any host still failing gets its own.
+An observation that reached stage N closes every record from a stage before
+N, because those stages evidently worked. It reproduces a record of its own
+class, which stays open and is re-posted under the backoff. It leaves the
+host's other records at stage N or later untouched. Those records are neither
+proven fixed nor re-observed, so the host is probed again on the next run
+that it is not cooling. A few consequences:
+
+- A quota cooldown closes an old `auth` record, since the provider answered,
+  so the host was logged in.
+- A preflight failure closes nothing else. A CLI that has gone missing says
+  nothing about whether an old `auth` fault was fixed.
+- A hung call found by the cleanup pass reproduces its timeout record, raised
+  to high, noting whether the stop failed.
+- A shared `gov-dispatch` record replaces the member hosts' own records of
+  that same pre-CLI failure.
+- A host the operator switches off has all its records closed, with reason
+  `not_enabled`.
+
+A changed failure is covered the same way. A host that failed preflight
+yesterday and fails `auth` today closes the preflight record and opens an
+`auth` one. A shared `gov-dispatch` failure that is no longer shared closes
+when any member host gets past dispatch, and any host still failing at
+dispatch gets its own record.
 
 Recovery is noticed on the next daily run, so a record can stay open up to a
 day after a host recovers. That delay costs nothing more: the backoff already
@@ -171,9 +189,10 @@ day. So after each successful probe, the probe reads that host's `last_ok`
 from `list_inference_hosts` and stores the exact value in its state file. It
 skips a host only when all four of these hold:
 
-- the host has no open record, so an open record is always retested by the
-  probe's own call rather than closed on another caller's success, which may
-  have used a different model or come before the fault;
+- the host has no open record, so an open record is retested by the
+  probe's own call (on the next run the host is not cooling) rather than
+  closed on another caller's success, which may have used a different model
+  or come before the fault;
 - `last_ok` is under 24 h old;
 - it differs from the stored value, meaning some other caller has succeeded
   since;
