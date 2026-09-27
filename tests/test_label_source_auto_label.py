@@ -232,13 +232,16 @@ async def test_a_lazily_minted_agent_avoids_the_structured_id_it_will_get(minted
     stem = "mcp_client_20260927"
     minted.db.find_agent_by_label = _held_by_another(stem)
 
+    # The second value stands in for a call after midnight: the entry must
+    # carry the id the rename avoided, not a fresh one.
     with patch(
         "src.mcp_handlers.support.naming_helpers.generate_structured_id",
-        return_value=f"{stem}_{agent_uuid[:8]}",
+        side_effect=[f"{stem}_{agent_uuid[:8]}", f"mcp_client_20260928_{agent_uuid[:8]}"],
     ):
         applied = await set_agent_label_resolved(agent_uuid, stem)
 
     assert applied == f"{stem}_{agent_uuid[:13]}"
+    assert minted.registry[agent_uuid].structured_id == f"{stem}_{agent_uuid[:8]}"
 
 
 @pytest.mark.asyncio

@@ -977,6 +977,7 @@ async def set_agent_label_resolved(
         # restarts log at INFO and rename silently. The rename still happens
  # (can't block onboard). "Pattern —
         # Substrate-Earned Identity".
+        structured: Optional[str] = None
         existing = await _find_agent_by_label(label)
         if existing and existing != agent_uuid:
             # The structured id is generated below when missing (a fresh mint
@@ -1125,7 +1126,10 @@ async def set_agent_label_resolved(
                             for m in mcp_server.agent_metadata.values()
                             if getattr(m, 'structured_id', None)
                         ]
-                        meta.structured_id = generate_structured_id(
+                        # Reuse the id the rename avoided, if one was
+                        # predicted: the generator reads the date, so a
+                        # second call can differ across midnight.
+                        meta.structured_id = structured or generate_structured_id(
                             context=context,
                             existing_ids=existing_ids,
                             client_hint=get_context_client_hint(),
