@@ -1517,9 +1517,29 @@ class KnowledgeGraphAGE:
             try:
                 async with db.transaction() as conn:
                     result = await db.graph_query(cypher, params, conn=conn)
-                    if not result or (isinstance(result[0], dict) and "error" in result[0]):
-                        # No AGE node — fall back to SQL for SQL-only orphans.
+                    if not result:
+                        # A genuinely empty result set: the Cypher MATCH found
+                        # no Discovery vertex with this id. That is the only
+                        # condition that means "no AGE node" — fall back to
+                        # SQL for SQL-only orphans.
                         return await self._sql_update_discovery(discovery_id, updates)
+                    if isinstance(result[0], dict) and "error" in result[0]:
+                        # The query ran and came back with a row, but that row
+                        # reports a failure — the query itself failed for some
+                        # reason OTHER than a missing node (e.g. a property
+                        # value exceeding AGE's ~128 KiB parameter limit).
+                        # Treating this the same as "no node" used to silently
+                        # redirect to the SQL fallback, which has a far higher
+                        # (1 GB) column limit and would "succeed" while
+                        # leaving the AGE node permanently out of sync with
+                        # Postgres and reporting True to the caller. Surface
+                        # the failure instead of reporting success.
+                        logger.error(
+                            f"AGE update query for discovery {discovery_id} "
+                            f"returned an error result (not a missing node): "
+                            f"{result[0].get('error')}"
+                        )
+                        return False
                     await self._sync_updated_discovery_row(conn, discovery_id, updates)
                     if "tags" in updates:
                         await self._sync_age_tag_edges(

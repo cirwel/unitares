@@ -686,6 +686,20 @@ def _compute_staleness(discovery) -> Optional[tuple[int, str]]:
     """``(days since the last write, warning)`` for an open entry past the
     staleness threshold, else ``None``.
 
+    A non-open entry (``status`` in ``CLOSURE_CLASS_ADMITTING_STATUSES`` —
+    every status except the two that reopen a row, ``open`` and ``disputed``:
+    ``resolved``, ``closed``, ``wont_fix``, ``superseded``, plus the lifecycle
+    retention states ``archived`` and ``cold`` a closed row is later tiered
+    into) never gets this warning, regardless of how long ago it was last
+    touched: closure is the reason a stale-looking timestamp is fine, and the
+    "...and is still open" wording below would otherwise contradict the
+    entry's own recorded status. Reuses ``CLOSURE_CLASS_ADMITTING_STATUSES``
+    (the same open/closed partition ``apply_closure_reopen_rule`` and
+    migration 071's check constraint key off, imported at module top) rather
+    than a second list that can drift from it. A missing/unknown ``status``
+    is treated as open (matching ``DiscoveryNode``'s own ``status`` default),
+    not silently reclassified as closed.
+
     Keyed on the last write (``updated_at`` when newer than the store time),
     not the first store. Before 2026-08-16 the checks keyed on store-time
     facts, so long-lived entries that are actively maintained — e.g. the
@@ -711,6 +725,9 @@ def _compute_staleness(discovery) -> Optional[tuple[int, str]]:
     entry is itself a recency signal, and content-hash timestamps are not worth
     the machinery.
     """
+
+    if getattr(discovery, "status", None) in CLOSURE_CLASS_ADMITTING_STATUSES:
+        return None
 
     def _parse_utc(value):
         ts = datetime.fromisoformat(value) if isinstance(value, str) else value

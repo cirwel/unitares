@@ -500,6 +500,51 @@ class TestUpdateDiscoverySQLFallback:
 
 
 # ===========================================================================
+# update_discovery — a Cypher error result is NOT a missing node
+# ===========================================================================
+#
+# Regression: any `graph_query` result whose first row was a dict carrying an
+# "error" key used to be treated identically to an empty result (no matching
+# Discovery vertex), silently redirecting to `_sql_update_discovery`. Postgres
+# JSONB's ~1 GB column limit is far higher than AGE's ~128 KiB parameter
+# limit, so a field too large for AGE would fail the Cypher update yet
+# "succeed" via the SQL fallback — returning True while the AGE node was left
+# permanently out of sync with Postgres.
+
+@pytest.mark.asyncio
+class TestUpdateDiscoveryErrorResultNotMissingNode:
+
+    async def test_error_result_does_not_fall_back_to_sql(self):
+        """A non-empty error-carrying result must not trigger the SQL fallback."""
+        db = _make_db(
+            graph_available=True,
+            graph_query_returns=[{"error": "value exceeds AGE property size limit"}],
+        )
+        db._conn.fetchval = AsyncMock(return_value="disc-age-001")
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-age-001", {"details": "x" * 200_000})
+
+        # The old behavior silently "succeeded" via SQL here; the fix must
+        # surface the failure instead of reporting success out of sync.
+        assert ok is False
+        db._conn.fetchval.assert_not_awaited()
+
+    async def test_genuinely_empty_result_still_falls_back_to_sql(self):
+        """An actually-empty result (no matching vertex) still uses the SQL
+        fallback — the fix narrows the error branch, it does not remove the
+        orphan-row fallback."""
+        db = _make_db(graph_available=True, graph_query_returns=[])
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-sql-001", {"status": "resolved"})
+
+        assert ok is True
+        db._conn.fetchval.assert_awaited_once()
+
+
+# ===========================================================================
 # update_discovery concurrent-update retry (AGE TM_Updated)
 # ===========================================================================
 
