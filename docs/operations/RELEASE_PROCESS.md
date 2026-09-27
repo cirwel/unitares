@@ -93,7 +93,9 @@ branch does not deploy the master-only public Pages workflow.
 6. Push the tag and create the GitHub release with user impact, compatibility,
    migrations, evidence changes, known limits, and rollback notes.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
-   images to GHCR with an SBOM and build-provenance attestation. A manual
+   images to GHCR with an SBOM and build-provenance attestation: the server
+   (`ghcr.io/cirwel/unitares`) and the Compose lease plane
+   (`ghcr.io/cirwel/unitares-lease-plane`), from the same tag. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A
@@ -101,23 +103,36 @@ branch does not deploy the master-only public Pages workflow.
    leave it version-tag-only and cut a patch release if it must become
    `latest`, rather than weakening promotion verification. Both publication
    paths publish only the version tag; neither changes `latest`. The former
-   `publish_latest` input is removed.
+   `publish_latest` input is removed. A new GHCR package starts private: after
+   the first release that publishes the lease plane, set that package's
+   visibility to public once, or promotion fails at `verify` because it reads
+   both images without credentials. A release cut from a maintenance branch
+   whose `publish-container.yml` predates the lease-plane image publishes no
+   lease plane and cannot be promoted by the workflow; backport the workflow to
+   that branch before tagging.
 8. Dispatch the **Promote Release** workflow with the tag
    (`gh workflow run promote-release.yml -f tag=vX.Y.Z`). Its `verify` job
    checks that the tag is the newest server tag and ahead of
    `PUBLISHED_VERSION`, that the release page is published, that the index
    carries `linux/amd64` and `linux/arm64` with an SPDX SBOM for each, and that
    build provenance verifies against `publish-container.yml` at that tag and
-   the tag's peeled source commit; it records the evidence in the run summary.
+   the tag's peeled source commit. It applies the same digest, platform, SBOM
+   and provenance checks to the lease-plane image at the same tag, and records
+   the evidence for both in the run summary.
    Approving the `release-promotion` environment runs `promote`, which re-reads
-   every mutable release pointer before moving `latest` to the verified digest
-   as described below. `pin` performs the same freshness check and re-verifies
-   the published release page plus source-bound provenance before pushing
-   `publish/vX.Y.Z` with `PUBLISHED_VERSION` and `version_manager.py --update`
-   applied; open its pull request from the command in the run summary and merge
-   it. Until that merges, public
-   installation examples continue to name the previous verified release. Finish
-   with clean closeout.
+   every mutable release pointer, including the lease-plane tag, before moving
+   the server's `latest` to the verified digest as described below. `pin`
+   performs the same freshness check and re-verifies the published release page
+   plus source-bound provenance for both images before pushing `publish/vX.Y.Z`
+   with `PUBLISHED_VERSION` and `version_manager.py --update` applied. That
+   update also moves the lease-plane `image:` tag in `docker-compose.yml`, so
+   Compose pulls the verified image on a release checkout; open the branch's
+   pull request from the command in the run summary and merge it. Until that
+   merges, public installation examples and the Compose lease-plane pin continue
+   to name the previous verified release. The lease plane is never tagged
+   `latest`: Compose names an exact release, the doctor fails a floating image
+   tag, and a second mutable pointer would need its own guard across the
+   approval wait. Finish with clean closeout.
 
 ## Promoting a verified container
 

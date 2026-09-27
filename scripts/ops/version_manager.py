@@ -104,6 +104,13 @@ PUBLISHED_VERSION_REFERENCES = [
         (r'Replace `@v([\d.]+)` with another server release tag',
          r'Replace `@v{version}` with another server release tag'),
     ]),
+    # Compose pulls this verified lease-plane image on a release checkout and
+    # builds from source when it cannot. Promote Release verifies the image
+    # before its pin job runs --update.
+    ("docker-compose.yml", [
+        (r'image: ghcr\.io/cirwel/unitares-lease-plane:v([\d.]+)',
+         r'image: ghcr.io/cirwel/unitares-lease-plane:v{version}'),
+    ]),
     ("docs/COMPATIBILITY.md", [
         (r'\| Published server/container \| `v([\d.]+)`',
          r'| Published server/container | `v{version}`'),
