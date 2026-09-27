@@ -10,6 +10,17 @@ diagnosis and operator recovery, not as the primary architecture reference.
 
 ## Quick Diagnostics
 
+> **Which install is this?** Commands below that use `launchctl`,
+> `~/Library/LaunchAgents/` or `data/logs/` are for a launchd source install
+> on macOS. Under the Docker Compose quickstart, the equivalents are:
+>
+> | Launchd source install | Docker Compose |
+> | --- | --- |
+> | `tail -f data/logs/mcp_server.log` | `docker compose logs -f governance-mcp` |
+> | `launchctl unload …` then `launchctl load …` | `docker compose restart governance-mcp` |
+> | `launchctl print gui/$(id -u)/com.unitares.governance-mcp` | `docker compose ps governance-mcp` |
+> | environment in the plist | `.env` for a variable `docker-compose.yml` passes through; any other variable goes in the `governance-mcp` `environment:` block. Then `docker compose up -d` |
+
 ### Check Server Status
 ```bash
 # Health check
@@ -213,7 +224,7 @@ If the agent is absent from the API response but `observe()` works, check whethe
 ```bash
 curl http://127.0.0.1:8767/health
 lsof -nP -iTCP:8767 -sTCP:LISTEN
-launchctl print gui/501/com.unitares.governance-mcp
+launchctl print gui/$(id -u)/com.unitares.governance-mcp
 ```
 
 Also verify the shell token matches the running service token. Launchd deployments may use the token from `~/Library/LaunchAgents/com.unitares.governance-mcp.plist`, not the repo-local `.env`.
