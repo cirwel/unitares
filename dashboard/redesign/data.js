@@ -90,14 +90,18 @@
     return j.result !== undefined ? j.result : j;
   }
 
-  // wrap an accessor so any failure degrades to snapshot, tagged.
+  // Wrap an accessor so any failure degrades to its fallback, tagged with what
+  // the fallback actually is: "snapshot" when the bundled snapshot backs it
+  // (offline/preview renders, see SNAPSHOT_FALLBACK below), otherwise
+  // "unavailable" — the producer did not answer, which is not the same claim
+  // as a snapshot that recorded nothing.
   async function withFallback(liveFn, snapFn) {
     try {
       const v = await liveFn();
       if (v == null) throw new Error("empty");
       return { source: "live", data: v };
     } catch {
-      return { source: "snapshot", data: snapFn() };
+      return { source: SNAPSHOT_FALLBACK ? "snapshot" : "unavailable", data: snapFn() };
     }
   }
 

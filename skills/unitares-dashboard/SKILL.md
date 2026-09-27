@@ -94,12 +94,12 @@ as the template for a new section.
 ## Data seam — live-or-snapshot (Item 2)
 
 Views never call `fetch` directly. They `await DATA.x()`, which returns
-`{ source: "live" | "snapshot", data }`. The accessor tries the live endpoint
+`{ source: "live" | "snapshot" | "unavailable", data }`. The accessor tries the live endpoint
 (`authFetch` for REST, `callTool` for `/v1/tools/call`) and, on any failure,
 returns its `snapFn` result tagged `snapshot`. The bundled `SNAPSHOT` backs
 that fallback only when there is no server to ask — the page opened from a
 file — or when a design preview passes `?snapshot=1` (`SNAPSHOT_FALLBACK` in
-`data.js`). On a page served by a UNITARES server, `S()` is `{}`: the bundle is
+`data.js`). On a page served by a UNITARES server, the `S` accessor returns `{}`: the bundle is
 a capture of one deployment's fleet, and a failed read there means this server
 blipped, so it must render "unavailable", never another deployment's
 residents, EISV or version (a fresh install showed the bundled fleet as its own
@@ -127,11 +127,12 @@ themselves when it is not. For headline cards where a stale snapshot under a
 "live" badge would mislead, prefer returning `null` per-field and rendering "—"
 (see `data.js::stats`).
 
-**Every `snapFn` must render as empty.** On a served page `S()` is always
-`{}`, so a fallback that dereferences a nested key (`S().x.y`) throws *out of*
+**Every `snapFn` must render as empty.** On a served page the `S` accessor
+always returns `{}`, and `withFallback` tags the result `unavailable`, not
+`snapshot`. A fallback that dereferences a nested key (`S().x.y`) throws *out of*
 `withFallback` on the first failed read and the pane never renders. Return the
 shape the view expects, empty — `() => (S().x || {}).y || []` —
-as `dialectic()`, `metricsCatalog()` and `activity()` do.
+as the dialectic, metrics-catalog and activity accessors in `data.js` do.
 `dashboard/tests/sections-unavailable.test.js` loads every section with all
 requests failing and fails if any rejects or shows bundled data; add new
 sections to its table.
@@ -263,7 +264,7 @@ The dashboard is buildless, so the gate is lint plus a cheap logic check:
 | `new Chart()` on every refresh tick | Flicker + leaks. Update datasets in place; rebuild only on theme change. |
 | Full `innerHTML` rebuild of a section with a live `<select>` | Clobbers operator's selection. First-render once, update in place. |
 | Calling `fetch` in a view | Bypasses the live-or-snapshot seam; the section stops rendering offline. |
-| A `snapFn` that dereferences `S().x.y` | Throws out of `withFallback` on every served page (`S()` is `{}` there). Guard every level; `tests/sections-unavailable.test.js` catches it. |
+| A `snapFn` that dereferences `S().x.y` | Throws out of `withFallback` on every served page (the `S` accessor returns `{}` there). Guard every level; `tests/sections-unavailable.test.js` catches it. |
 | Looking for an allowlist / restarting the server | No per-asset allowlist and no restart for the redesign (files are read per request). The only gates are the auth check on `snapshot.js` and the 404 for `auth/*.html`; the surviving `allowed_files` list serves only `/dashboard/phase.js`. |
 
 ## When NOT to use this skill

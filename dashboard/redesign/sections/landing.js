@@ -47,11 +47,9 @@
     return { part: p, coh, sub };
   }
 
-  // Not live and no snapshot in play (a served page whose server did not
-  // answer): say "unavailable", not "snapshot" — nothing bundled is shown.
   function badge(el, source) {
-    const label = source === "live" ? "live" : DATA.snapshotFallback ? "snapshot" : "unavailable";
-    el.className = "src-badge " + (label === "unavailable" ? "snapshot" : label);
+    const label = source === "live" || source === "snapshot" ? source : "unavailable";
+    el.className = "src-badge " + label;
     el.textContent = label;
   }
 
@@ -437,6 +435,8 @@
   function footnote(anyLive) {
     $("foot").innerHTML = anyLive
       ? "Redesign · served live · design system in <code>tokens.css</code> + <code>kit.css</code>."
+      : !DATA.snapshotFallback
+        ? "Server not answering — retrying. Nothing below is from a snapshot."
       : "Redesign reference · rendering bundled snapshot (open served same-origin for live data) · "
         + "design system in <code>tokens.css</code> + <code>kit.css</code>. Toggle theme to reskin via one token swap.";
   }

@@ -57,3 +57,34 @@ describe("sections on a served page whose server is not answering", () => {
     });
   }
 });
+
+describe("what a failed read is called", () => {
+  async function sourceOf(url) {
+    const dom = new JSDOM("<div></div>", { runScripts: "outside-only", url });
+    dom.window.fetch = async () => { throw new TypeError("Failed to fetch"); };
+    dom.window.SNAPSHOT = { dialectic: { sessions: [], counts: {} } };
+    dom.window.eval(dataSource);
+    return (await dom.window.DATA.dialectic()).source;
+  }
+
+  it("is unavailable on a served page — the producer did not answer", async () => {
+    expect(await sourceOf("https://gov.example/dashboard")).toBe("unavailable");
+  });
+
+  it("is snapshot only where the bundled snapshot backs it", async () => {
+    expect(await sourceOf("file:///tmp/app.html")).toBe("snapshot");
+    expect(await sourceOf("https://gov.example/dashboard?snapshot=1")).toBe("snapshot");
+  });
+
+  for (const [global, file, mountId] of [["Discoveries", "discoveries", "dsc-mount"], ["Dialectic", "dialectic", "dlc-mount"]]) {
+    it(`${global} says the server is not answering, not that nothing matched`, async () => {
+      const dom = boot(mountId);
+      dom.window.eval(read(`../redesign/sections/${file}.js`));
+      await dom.window[global].load();
+      const text = dom.window.document.getElementById(mountId).textContent;
+      expect(text).toContain("Server not answering");
+      expect(text).toContain("unavailable");
+      expect(text).not.toContain("No matches");
+    });
+  }
+});

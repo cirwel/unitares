@@ -482,7 +482,8 @@
     const r = await DATA.agents();
     MODEL = {
       list: r.data.list || [], summary: r.data.summary || {}, source: r.source,
-      nowMs: r.source === "live" ? Date.now() : Date.parse((window.SNAPSHOT && window.SNAPSHOT.capturedAt) || 0) || Date.now(),
+      // Only a real snapshot render is anchored to its capture time.
+      nowMs: r.source === "snapshot" ? Date.parse((window.SNAPSHOT && window.SNAPSHOT.capturedAt) || 0) || Date.now() : Date.now(),
       fetchedAt: Date.now(), // wall-clock read time — this pane does not auto-refresh
     };
     // Lease-anchored residents can have zero state rows BY DESIGN — their
