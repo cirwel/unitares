@@ -244,6 +244,15 @@ def embeddings_available() -> bool:
     return SENTENCE_TRANSFORMERS_AVAILABLE
 
 
+def embedding_model_requested() -> bool:
+    """True when the operator named a model, asking for semantic search.
+
+    Unset is the default install: without sentence-transformers, search uses
+    Postgres FTS by design. A named model that cannot load is a fault instead.
+    """
+    return bool(os.getenv("UNITARES_EMBEDDING_MODEL", "").strip())
+
+
 def get_active_table_name() -> str:
     """Return the PG table storing embeddings for the active model.
 

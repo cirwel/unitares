@@ -123,7 +123,7 @@
           <span class="fresh">separate evidence clocks · last ${nfmt(op.windowHours)}h · never agent runtime or EISV</span>
           <span class="spring"></span><span class="src-badge ${esc(op.source)}">${esc(op.source)}</span>
         </div>
-        <p style="font-size:var(--text-sm);color:var(--ink-2)">Codex usually produces zero or one agent-authored <span class="mono">sync_state</span> check-in during a turn. Stop can add one automatic, non-agent-authored turn summary, while onboarding can add synthetic initialization. Completed-tool receipts are activity evidence. A heartbeat says only that the hook parent PID was observed; that PID may be shared across chats and never marks an agent as running.</p>
+        <p style="font-size:var(--text-sm);color:var(--ink-2)">An agent usually produces zero or one agent-authored <span class="mono">sync_state</span> check-in during a turn. A host adapter's Stop hook can add one automatic, non-agent-authored turn summary, while onboarding can add synthetic initialization. Completed-tool receipts are activity evidence. A heartbeat says only that the hook parent PID was observed; that PID may be shared across chats and never marks an agent as running.</p>
       </div>
       <div class="grid" style="margin-bottom:var(--space-4)">
         ${stat("Observed slots", s.observed_slots == null ? s.processes : s.observed_slots, `${nfmt(s.agents)} identities`)}
