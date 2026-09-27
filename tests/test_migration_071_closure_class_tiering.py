@@ -291,3 +291,54 @@ async def test_the_schema_still_refuses_a_class_on_an_open_row(live_postgres_bac
                 )
     finally:
         await _delete(backend, discovery_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["postgres", "age_row"])
+async def test_adding_a_classified_node_stores_the_pair_and_a_reopening_readd_clears_it(
+    live_postgres_backend, monkeypatch, path
+):
+    """Both add paths write the pair the AGE vertex gets, so a classified node
+    round-trips through SQL. The upsert takes every column from the incoming
+    node, status included, so re-adding it as open clears the class instead of
+    tripping discoveries_closure_class_requires_closed."""
+    from datetime import datetime, timezone
+
+    from src.knowledge_graph import DiscoveryNode
+
+    backend = live_postgres_backend
+    await _require_071(backend)
+    discovery_id = f"071-add-{path}"
+    age_graph = _graphs(backend, monkeypatch)["age_sql_fallback"]
+
+    async def add(node):
+        if path == "postgres":
+            await backend.kg_add_discovery(node)
+            return
+        async with backend.transaction() as conn:
+            await age_graph._persist_discovery_row(
+                conn, node, created_at=datetime.now(timezone.utc), resolved_at=None
+            )
+
+    try:
+        await add(DiscoveryNode(
+            id=discovery_id, agent_id="agent-071", type="bug_found", summary="s",
+            status="resolved", closure_class="fix_verified", closure_evidence=EVIDENCE,
+        ))
+        assert await _row(backend, discovery_id) == {
+            "status": "resolved",
+            "closure_class": "fix_verified",
+            "closure_evidence": EVIDENCE,
+        }
+
+        await add(DiscoveryNode(
+            id=discovery_id, agent_id="agent-071", type="bug_found", summary="s",
+            status="open",
+        ))
+        assert await _row(backend, discovery_id) == {
+            "status": "open",
+            "closure_class": None,
+            "closure_evidence": None,
+        }
+    finally:
+        await _delete(backend, discovery_id)

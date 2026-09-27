@@ -47,7 +47,7 @@ class KnowledgeGraphMixin:
     async def kg_add_discovery(self, discovery) -> None:
         """Add a discovery to the knowledge graph."""
         from datetime import datetime as dt
-        from src.knowledge_graph import normalize_tags
+        from src.knowledge_graph import closure_evidence_to_json, normalize_tags
 
         if hasattr(discovery, 'tags') and discovery.tags:
             discovery.tags = normalize_tags(discovery.tags)
@@ -77,14 +77,17 @@ class KnowledgeGraphMixin:
                 INSERT INTO knowledge.discoveries (
                     id, agent_id, type, summary, details, tags, severity, status,
                     references_files, related_to, response_to_id, response_type,
-                    provenance, provenance_chain, created_at, epoch
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    provenance, provenance_chain, created_at, epoch,
+                    closure_class, closure_evidence
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     details = EXCLUDED.details,
                     tags = EXCLUDED.tags,
                     status = EXCLUDED.status,
                     provenance_chain = EXCLUDED.provenance_chain,
+                    closure_class = EXCLUDED.closure_class,
+                    closure_evidence = EXCLUDED.closure_evidence,
                     updated_at = now()
             """,
                 discovery.id,
@@ -103,6 +106,10 @@ class KnowledgeGraphMixin:
                 json.dumps(discovery.provenance_chain) if discovery.provenance_chain else None,
                 created_at,
                 GovernanceConfig.CURRENT_EPOCH,
+                # The pair a classified node carries, as the update paths
+                # store it; the upsert follows status, as above.
+                getattr(discovery, 'closure_class', None),
+                closure_evidence_to_json(getattr(discovery, 'closure_evidence', None)),
             )
 
     async def kg_query(

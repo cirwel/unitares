@@ -149,12 +149,14 @@ class KnowledgeGraphAGE:
                 id, agent_id, type, severity, status,
                 created_at, updated_at, resolved_at,
                 summary, details, tags, references_files, related_to,
-                response_to_id, response_type, provenance, epoch
+                response_to_id, response_type, provenance, epoch,
+                closure_class, closure_evidence
             ) VALUES (
                 $1, $2, $3, $4, $5,
                 $6, $7, $8,
                 $9, $10, $11, $12, $13,
-                $14, $15, $16, $17
+                $14, $15, $16, $17,
+                $18, $19
             )
             ON CONFLICT (id) DO UPDATE SET
                 agent_id = EXCLUDED.agent_id,
@@ -172,7 +174,9 @@ class KnowledgeGraphAGE:
                 response_to_id = EXCLUDED.response_to_id,
                 response_type = EXCLUDED.response_type,
                 provenance = EXCLUDED.provenance,
-                epoch = EXCLUDED.epoch
+                epoch = EXCLUDED.epoch,
+                closure_class = EXCLUDED.closure_class,
+                closure_evidence = EXCLUDED.closure_evidence
             """,
             discovery.id,
             discovery.agent_id,
@@ -191,6 +195,13 @@ class KnowledgeGraphAGE:
             response_type,
             json.dumps(discovery.provenance) if discovery.provenance else None,
             GovernanceConfig.CURRENT_EPOCH,
+            # The row carries the pair the AGE vertex gets, so a classified
+            # node round-trips (graph unavailable, or rebuilt from SQL). Like
+            # every other column, an upsert takes the incoming values, status
+            # included, so a re-add that reopens a row clears its class
+            # rather than tripping discoveries_closure_class_requires_closed.
+            discovery.closure_class,
+            closure_evidence_to_json(discovery.closure_evidence),
         )
 
         await self._sync_discovery_tags(conn, discovery.id, discovery.tags or [])
