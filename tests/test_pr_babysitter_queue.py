@@ -322,12 +322,6 @@ def test_failed_on_an_up_to_date_head_is_marked_then_rerun_once(tmp_path: Path) 
     ]
 
 
-def test_failed_on_a_behind_head_is_armed_for_a_fresh_run(tmp_path: Path) -> None:
-    # Re-running the stale head is wasted: GitHub re-runs everything on update.
-    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
-    assert calls == [_arm(9), "pr update-branch 9 -R o/r"]
-
-
 def test_failed_while_its_run_is_still_going_waits(tmp_path: Path) -> None:
     checks = [_check("smoke", "FAILURE", run=77), _check("shard", "", run=77, status="IN_PROGRESS")]
     calls, _ = _run(tmp_path, [_pr(9, state="BLOCKED", checks=checks)])
@@ -742,19 +736,53 @@ def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path
 
 
 
-def test_a_behind_pr_is_updated_as_soon_as_it_is_armed(tmp_path: Path) -> None:
-    # GitHub's updater acted for 1 of 16 queue arms on 2026-09-27; waiting for
-    # it cost a full grace period each time.
-    calls, _ = _run(tmp_path, [_pr(1, state="BEHIND")])
-    assert calls == [_arm(1), "pr update-branch 1 -R o/r"]
-
-
 def test_an_up_to_date_pr_is_only_armed(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_pr(1, state="BLOCKED")])
     assert calls == [_arm(1)]
 
 
-def test_a_failed_update_after_arming_is_left_to_the_fallback(tmp_path: Path) -> None:
-    calls, out = _run(tmp_path, [_pr(1, state="BEHIND")], fail=("update-branch",))
-    assert calls == [_arm(1), "pr update-branch 1 -R o/r"]
-    assert "the fallback will retry" in out
+# --- update before arming ---------------------------------------------------------
+
+
+def test_a_behind_head_of_queue_is_updated_unarmed_and_keeps_its_place(tmp_path: Path) -> None:
+    # Arming first would leave auto-merge on across a head nothing has checked.
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "#1 updating before arming" in out
+
+
+def test_failed_on_a_behind_head_is_updated_for_a_fresh_run(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
+    assert calls == ["pr update-branch 9 -R o/r"]
+
+
+def test_a_failed_update_is_retried_next_tick(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)}, fail=("update-branch",))
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "retried next tick" in out
+
+
+def test_update_then_revalidate_then_arm(tmp_path: Path) -> None:
+    tl = _timeline(10, 20)
+    # Tick 1: behind, so it is updated, not armed.
+    calls, _ = _run(tmp_path, [_pr(1, head="aaa", state="BEHIND")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    # Tick 2: the update moved the head; review is being re-evaluated. Hold.
+    calls, out = _run(tmp_path, [_pr(1, head="bbb", review=None)], timelines={1: tl},
+                      compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == []
+    assert "review=MISSING" in out
+    # Tick 3: the new head's content matches the approval and review passed.
+    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == [_arm(1, "bbb")]
+
+
+def test_a_script_armed_holder_left_behind_is_disarmed_before_updating(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=20, arms={3: 30})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+    assert "disarming to update" in out
+

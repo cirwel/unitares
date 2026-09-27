@@ -24,12 +24,15 @@
 #   3. If a PR is still armed (including one the maintainer armed by hand, which
 #      the script never disarms, even while it conflicts), it holds the slot.
 #      If it is BEHIND and neither the base nor its arming has moved for
-#      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted, so
-#      update that one branch. Then stop.
+#      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted: a PR
+#      this script armed is disarmed and updated (step 4 re-arms it), one
+#      armed by hand is only updated. Then stop.
 #   4. Otherwise walk the queue in the order the label was applied and arm the
 #      first PR that can go: its head still the one the approval covers, no
 #      open "merge after #N" dependency, MERGEABLE, no check needing approval.
-#      It is armed with --match-head-commit on that head.
+#      A BEHIND head of queue is updated first, unarmed, and armed on a later
+#      tick once the updated head re-validates. It is armed with
+#      --match-head-commit on that head.
 #      A PR whose checks failed on an up-to-date head gets its failed Actions
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
@@ -347,7 +350,14 @@ if [ -n "$holder" ]; then
       since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
       idle=$(minutes_since "$since")
       if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
-        log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+        if armed_by_script "$n" "$armed_at"; then
+          # Same rule as the queue: never stay armed across an unchecked head.
+          # Disarm, update; the queue re-arms it once the new head validates.
+          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; disarming to update"
+          act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
+        else
+          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+        fi
         act gh pr update-branch "$n" -R "$REPO" || true
       fi
     fi
@@ -442,6 +452,18 @@ while read -r _ n head; do
     esac
   fi
 
+  if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
+    # Update first, unarmed, and arm the updated head only once it has been
+    # re-validated (approval fingerprint, required checks) on a later tick. The
+    # PR keeps its place meanwhile: the tick stops here. Arming first and
+    # updating after would leave auto-merge on across a head nothing has
+    # checked, and `review` is not branch-protected. GitHub's own updater was
+    # no help anyway: it acted for 1 of 16 queue arms on 2026-09-27.
+    log "#$n updating before arming (head of queue)"
+    act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; retried next tick"
+    exit 0
+  fi
+
   log "#$n arming (head of queue)"
   # The repo deletes merged branches itself, so no --delete-branch: gh would
   # also try to delete a local branch in whatever directory this runs from.
@@ -452,11 +474,6 @@ while read -r _ n head; do
     if ! record_arm "$n"; then
       log "#$n armed, but the arm could not be recorded ($ARMS_FILE); disarming"
       act gh pr merge "$n" -R "$REPO" --disable-auto || log "#$n disarm failed too; disarm it by hand"
-    elif [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
-      # Update now rather than wait for GitHub's updater: on 2026-09-27 it
-      # acted for 1 of 16 queue arms, and each of the other 15 sat idle for
-      # the whole grace period. With one PR armed, there is nothing to race.
-      act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; the fallback will retry"
     fi
   else
     log "#$n arm failed; nothing else armed this tick"
