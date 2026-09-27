@@ -168,6 +168,15 @@ def test_remediation_for_secrets_wrong_mode(setup_mod):
     assert "chmod 600" in items[0].command
 
 
+def test_remediation_for_secrets_uses_the_path_the_doctor_checked(setup_mod):
+    # The doctor may have resolved the legacy file; chmod-ing the new default
+    # instead would leave the reported file unchanged.
+    payload = _doctor_payload(("secrets_file", "fail", "mode is 0o644 — must be 0600"))
+    payload["results"][0]["detail"] = "chmod 600 /home/u/.config/cirwel/secrets.env"
+    items = setup_mod.build_remediation(payload)
+    assert items[0].command == "chmod 600 /home/u/.config/cirwel/secrets.env"
+
+
 def test_remediation_skips_pass_results(setup_mod):
     payload = _doctor_payload(
         ("python_version", "pass", "Python 3.14"),

@@ -1526,18 +1526,32 @@ def _launchctl_loaded() -> set[str]:
     return out
 
 
+# Where an installed LaunchAgent's plist lives. A module attribute so tests can
+# point it at an empty or populated directory.
+LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
+
+
 def _launchd_deployment(loaded: set[str]) -> bool:
-    """Whether this host runs any UNITARES LaunchAgent at all.
+    """Whether this host is a UNITARES launchd deployment.
 
-    A Docker Compose, Linux or stdio install has none, and launchd checks on
-    such a host can only report the absence of a deployment shape it never
-    chose. Those checks SKIP there instead of warning.
+    True when any com.unitares.* label is loaded OR any com.unitares.* plist is
+    installed. The installed-plist half matters: a stopped server, a sole
+    unloaded LaunchAgent, or a failing ``launchctl list`` all produce an empty
+    loaded set, and those are exactly the states the launchd checks exist to
+    report. A Docker Compose, Linux or stdio install has neither, and launchd
+    checks on such a host can only report the absence of a deployment shape it
+    never chose, so they SKIP there instead of warning.
     """
-    return any(label.startswith(LAUNCHD_LABEL_PREFIX) for label in loaded)
+    if any(label.startswith(LAUNCHD_LABEL_PREFIX) for label in loaded):
+        return True
+    try:
+        return any(LAUNCH_AGENTS_DIR.glob(f"{LAUNCHD_LABEL_PREFIX}*.plist"))
+    except OSError:
+        return False
 
 
-_NO_LAUNCHD = ("no UNITARES LaunchAgent on this host (Docker Compose, Linux "
-               "and stdio installs do not use launchd)")
+_NO_LAUNCHD = ("no UNITARES LaunchAgent loaded or installed on this host "
+               "(Docker Compose, Linux and stdio installs do not use launchd)")
 
 
 def check_launchagent(loaded: set[str]) -> CheckResult:
@@ -1548,7 +1562,7 @@ def check_launchagent(loaded: set[str]) -> CheckResult:
     if not _launchd_deployment(loaded):
         return CheckResult(name, mode, Status.SKIP, _NO_LAUNCHD)
     return CheckResult(name, mode, Status.WARN,
-                       f"{label} not loaded while other UNITARES LaunchAgents are — "
+                       f"{label} not loaded on a launchd deployment — "
                        f"the launchd-managed server is down")
 
 

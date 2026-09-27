@@ -111,6 +111,11 @@ def build_remediation(doctor_payload: dict) -> list[PlanItem]:
         name = r["name"]
         if name == "schema_migrations":
             command = _build_migrations_command()
+        elif name == "secrets_file" and str(r.get("detail", "")).startswith("chmod "):
+            # The doctor names the file it actually checked (override, new
+            # default, or the legacy fallback); remediate that one, not a
+            # path re-derived here that may differ.
+            command = r["detail"]
         else:
             command = _REMEDIATIONS.get(
                 name,

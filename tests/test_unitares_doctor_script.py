@@ -464,7 +464,16 @@ def test_resident_agents_skips_when_no_resident_declared(doctor):
     assert doctor.RESIDENT_LAUNCHD_ENV in result.message
 
 
-def test_resident_agents_skips_without_launchd_deployment(doctor):
+@pytest.fixture
+def no_launch_agents(doctor, monkeypatch, tmp_path):
+    """A host with no installed LaunchAgent plists (Linux, Docker, stdio)."""
+    empty = tmp_path / "LaunchAgents"
+    empty.mkdir()
+    monkeypatch.setattr(doctor, "LAUNCH_AGENTS_DIR", empty)
+    return empty
+
+
+def test_resident_agents_skips_without_launchd_deployment(doctor, no_launch_agents):
     slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
 
     result = doctor.check_resident_agents(set(), slots)
@@ -475,7 +484,7 @@ def test_resident_agents_skips_without_launchd_deployment(doctor):
 # ---------- launchagent_loaded / pid_file on hosts without launchd ----------
 
 
-def test_launchagent_skips_on_host_without_launchd_deployment(doctor):
+def test_launchagent_skips_on_host_without_launchd_deployment(doctor, no_launch_agents):
     # Docker Compose, Linux (no launchctl -> empty set) and stdio installs.
     result = doctor.check_launchagent(set())
 
@@ -498,6 +507,29 @@ def test_check_pid_file_skips_missing_file_without_launchd(doctor, tmp_path):
     result = doctor.check_pid_file(tmp_path, launchd_host=False)
 
     assert result.status == doctor.Status.SKIP
+
+
+def test_launchagent_warns_when_installed_but_unloaded(doctor, no_launch_agents):
+    # A stopped server, a sole unloaded LaunchAgent, or a failing
+    # `launchctl list` all give an empty loaded set. An installed plist still
+    # marks the host as a launchd deployment, so the stopped server is
+    # reported rather than hidden behind a SKIP.
+    (no_launch_agents / f"{doctor.GOVERNANCE_LAUNCHD_LABEL}.plist").write_text("")
+
+    assert doctor._launchd_deployment(set()) is True
+    result = doctor.check_launchagent(set())
+
+    assert result.status == doctor.Status.WARN
+
+
+def test_launchd_deployment_false_with_nothing_loaded_or_installed(doctor, no_launch_agents):
+    assert doctor._launchd_deployment(set()) is False
+
+
+def test_launchd_deployment_tolerates_missing_agents_dir(doctor, monkeypatch, tmp_path):
+    monkeypatch.setattr(doctor, "LAUNCH_AGENTS_DIR", tmp_path / "absent")
+
+    assert doctor._launchd_deployment(set()) is False
 
 
 # ---------- secrets_file ----------
