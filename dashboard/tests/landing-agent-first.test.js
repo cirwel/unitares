@@ -109,6 +109,22 @@ describe("latest check-in", () => {
     expect(rows).toEqual(["ephemeral-x", "agent-r"]);
   });
 
+  // The ring records sub_action, so a low-risk check-in arrives as "approve"
+  // while its action is "proceed". The Overview speaks the server's verdict
+  // vocabulary (proceed / guide / pause), and its risk ticks sit at the
+  // default tier edges (config/governance_config.py: 0.45 guide, 0.70 pause).
+  it("labels a recorded approve as proceed, and ticks the real tier edges", async () => {
+    const { doc } = await boot({ agents: [A("x", 5, { action: "approve", risk: 0.1 }), A("y", 50, { action: "risk_pause", risk: 0.8 })] });
+    const pill = doc.getElementById("pulseVerdict");
+    expect(pill.textContent).toContain("proceed");
+    expect(pill.textContent).not.toContain("approve");
+    expect(pill.title).toBe("recorded as approve");
+    const verdicts = [...doc.querySelectorAll("#recent tbody tr")].map((tr) => tr.children[1].textContent);
+    expect(verdicts).toEqual(["proceed", "risk_pause"]);
+    const ticks = [...doc.querySelectorAll(".ticks span")].map((t) => [t.textContent, t.style.left]);
+    expect(ticks).toEqual([["guide", "45%"], ["pause", "70%"]]);
+  });
+
   it("applies a pushed check-in in place: top of the feed, counted, no refetch", async () => {
     const { dom, doc, card } = await boot({ agents: [A("a", 30), A("b", 60)] });
     const handled = dom.window.Landing.applyEvent({
