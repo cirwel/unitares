@@ -79,7 +79,19 @@ PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 # branch protection requires. `review` is not a required check on master, and
 # its NEUTRAL conclusion means "unreviewed", so without this an agent's label
 # on a PR whose review never ran would merge it.
-REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"  # set it empty to require none
+REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
+# PRs carrying any of these labels are never armed: the operator merges them
+# by hand. `governance-sensitive` is what CI applies to a PR touching an
+# enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
+# merge gate as the control for exactly those diffs.
+OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
+operator_only() {  # <pr-json> -> the first operator-only label it carries
+  local l
+  for l in $OPERATOR_ONLY_LABELS; do
+    jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
+  done
+  return 1
+}  # set it empty to require none
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
@@ -251,7 +263,9 @@ while read -r pr; do
   # Only arms this script made are ever disarmed; the maintainer's own arm,
   # labelled or not, is theirs to manage.
   armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
-  if ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
+  if held_by=$(operator_only "$pr"); then
+    reason="it is labelled $held_by, which only the operator merges"
+  elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
@@ -403,6 +417,12 @@ dependency_open() {
 while read -r _ n head; do
   [ -n "${n:-}" ] || continue
   pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
+
+  if held_by=$(operator_only "$pr"); then
+    log "#$n is labelled $held_by; the operator merges it by hand; skipped"
+    notify "$n" operator-only "$head" "not armed: this PR is labelled \`$held_by\`, so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
+  fi
 
   if dep=$(dependency_open "$pr"); then
     log "#$n waits on $dep (merge after); skipped"

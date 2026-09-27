@@ -864,3 +864,26 @@ def test_an_unreadable_comment_list_posts_nothing(tmp_path: Path) -> None:
     (d / "comments_1.fail").write_text("")
     calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING")], PR_QUEUE_NOTIFY="1")
     assert _notices(calls) == []
+
+
+# --- operator-only PRs --------------------------------------------------------------
+
+
+def test_a_governance_sensitive_pr_is_never_armed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, labels=(LABEL, "governance-sensitive")), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)}, PR_QUEUE_NOTIFY="1")
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
+    notices = _notices(calls)
+    assert len(notices) == 1 and "operator merges it by hand" in notices[0]
+
+
+def test_a_script_armed_pr_that_becomes_governance_sensitive_is_disarmed(tmp_path: Path) -> None:
+    pr = _pr(3, labels=(LABEL, "governance-sensitive"), armed_min_ago=20)
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "only the operator merges" in out
+
+
+def test_operator_only_labels_are_configurable(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, labels=(LABEL, "governance-sensitive"))], PR_QUEUE_OPERATOR_ONLY_LABELS="")
+    assert calls == [_arm(1)]
