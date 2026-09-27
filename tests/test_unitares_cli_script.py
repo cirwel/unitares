@@ -1427,3 +1427,23 @@ def test_migrations_never_run_when_the_writer_check_itself_fails(tmp_path):
     calls = log.read_text()
     assert " exec " not in calls
     assert "up -d --build --wait postgres-age" not in calls
+
+
+
+def test_backups_are_private_to_the_operator(tmp_path):
+    # Directories the backup creates are 0700 and the dump is 0600, even under
+    # a permissive umask.
+    backup_dir = tmp_path / "home" / ".unitares" / "backups"
+    script = f'''
+umask 022
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p;/^_migration_db_url()/,/^}}/p;/^_backup_db()/,/^}}/p' "{CLI}")"
+_compose() {{ echo "-- a dump"; }}
+UNITARES_BACKUP_DIR="{backup_dir}" _backup_db v1.0.0
+'''
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    dumps = list(backup_dir.glob("*.sql.gz"))
+    assert len(dumps) == 1
+    assert oct(dumps[0].stat().st_mode & 0o777) == "0o600"
+    assert oct(backup_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct(backup_dir.parent.stat().st_mode & 0o777) == "0o700"

@@ -1181,9 +1181,12 @@ _backup_db() {
     local label dir file
     label=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')
     dir="${UNITARES_BACKUP_DIR:-$HOME/.unitares/backups}"
-    mkdir -p "$dir" || return 1
+    # A full dump of governance records: private to this account whatever the
+    # umask. Directories this creates are 0700 and the dump is 0600.
+    ( umask 077; mkdir -p "$dir" ) || return 1
     file="$dir/unitares-$(date +%Y%m%d-%H%M%S)-before-${label}.sql.gz"
-    if _compose exec -T postgres-age pg_dump "$(_migration_db_url)" | gzip > "$file" && [ -s "$file" ]; then
+    if ( umask 077; _compose exec -T postgres-age pg_dump "$(_migration_db_url)" | gzip > "$file" ) \
+        && chmod 600 "$file" && [ -s "$file" ]; then
         BACKUP_FILE="$file"
         echo "✓ Database backed up to $file"
         return 0
