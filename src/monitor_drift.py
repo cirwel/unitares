@@ -58,7 +58,7 @@ def compute_drift_vector(
     Blends governance-computed drift with agent-reported drift. Mutates
     grounded_agent_state['ethical_drift'] with the final drift list.
 
-    Sets monitor._last_drift_vector, monitor._consecutive_high_drift.
+    Sets monitor._last_drift_vector.
 
     Returns (drift_vector, agent_drift_norm).
     """
@@ -132,13 +132,6 @@ def compute_drift_vector(
 
     # Store for later access and time-series logging
     monitor._last_drift_vector = drift_vector
-
-    # Track consecutive high-drift updates for auto-dialectic trigger
-    drift_dialectic_threshold = 0.7
-    if drift_vector.norm > drift_dialectic_threshold:
-        monitor._consecutive_high_drift = getattr(monitor, '_consecutive_high_drift', 0) + 1
-    else:
-        monitor._consecutive_high_drift = 0
 
     # Convert to list format for dynamics engine (all 4 components)
     drift_vector_list = drift_vector.to_list()
