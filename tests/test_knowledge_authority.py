@@ -249,3 +249,92 @@ async def test_promote_memory_rejects_memory_only_corroboration():
 
     assert result["success"] is False
     assert "cannot independently corroborate" in result["error"]
+
+
+# Channel messages (operator decision 2026-09-27): agent-to-agent notes on a
+# `channel-<topic>` lane get the imported-memory multiplier. Measured that day
+# on the relational table: 78 rows match, 61 of them open.
+
+
+def test_channel_message_is_the_tag_pair_or_the_summary_prefix():
+    from src.knowledge_authority import CHANNEL_MESSAGE
+
+    tag_pair = _discovery("m1", tags=["channel-resource-agent", "to-codex", "review"])
+    prefixed = _discovery("m2", summary="[channel:beam-verbs] ack", tags=["review"])
+    assert assess_authority(tag_pair).tier == CHANNEL_MESSAGE
+    assert assess_authority(prefixed).tier == CHANNEL_MESSAGE
+    assert assess_authority(tag_pair).to_dict()["ranking_multiplier"] == 0.55
+
+    # A `channel-` topic tag with no addressee is an ordinary finding:
+    # `channel-detection` is about how the server detects a client channel.
+    topic = _discovery("f1", tags=["identity", "channel-detection"])
+    addressed_only = _discovery("f2", tags=["to-codex", "coordination"])
+    assert assess_authority(topic).tier == NATIVE_FINDING
+    assert assess_authority(addressed_only).tier == NATIVE_FINDING
+
+
+def test_imported_memory_wins_over_channel_when_both_markers_are_present():
+    both = _discovery("m1", tags=["memory-sync", "channel-x", "to-claude"])
+    assert assess_authority(both).tier == IMPORTED_CONTEXT
+
+
+def test_channel_message_loses_close_contests_but_keeps_a_strong_match():
+    channel = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    native = _discovery("finding-1")
+    close, changed = rank_by_authority(
+        [channel, native], relevance_scores={"m1": 0.82, "finding-1": 0.55}
+    )
+    assert changed is True
+    assert [row.id for row in close] == ["finding-1", "m1"]
+    strong, changed = rank_by_authority(
+        [channel, native], relevance_scores={"m1": 0.95, "finding-1": 0.30}
+    )
+    assert changed is False
+    assert [row.id for row in strong] == ["m1", "finding-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_tag_filter_reads_that_lane_in_its_own_order():
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _authority_ranking_enabled,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    assert _authority_ranking_enabled(_parse_knowledge_search_request({"query": "x"}))
+    request = _parse_knowledge_search_request({
+        "query": "review", "limit": 2, "tags": ["channel-resource-agent"],
+    })
+    assert not _authority_ranking_enabled(request)
+
+    channel = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    native = _discovery("finding-1", tags=["channel-resource-agent"])
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.candidates = [channel, native]
+    state.semantic_scores = {"m1": 0.82, "finding-1": 0.55}
+    await _filter_and_rerank_candidates(state)
+    assert [row.id for row in state.results] == ["m1", "finding-1"]
+
+
+@pytest.mark.asyncio
+async def test_channel_results_disclose_the_authority_policy():
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _attach_search_diagnostics,
+        _parse_knowledge_search_request,
+    )
+
+    request = _parse_knowledge_search_request({"query": "review"})
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.results = [
+        _discovery("m1", tags=["channel-resource-agent", "to-claude"]),
+        _discovery("finding-1"),
+    ]
+    response: dict = {}
+    _attach_search_diagnostics(response, state)
+    assert response["authority_policy"]["result_tiers"] == {
+        "channel_message": 1,
+        "native_finding": 1,
+    }

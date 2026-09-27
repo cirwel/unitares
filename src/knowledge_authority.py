@@ -11,6 +11,13 @@ only strong match.  Its default multiplier merely prevents it from winning a
 close relevance contest against native knowledge.  A governed claim is not a
 truth oracle: it means the server recorded a promotion receipt with a source
 memory and non-memory evidence references.
+
+An agent-to-agent channel message is coordination traffic: a note addressed
+to another agent on a `channel-<topic>` lane, the convention cross-harness
+coordination used before the lease-plane message transport replaced it
+(#1960). Such notes stay open by default and outlive their conversation, so
+they get the imported-memory multiplier. They remain searchable and win when
+they are the only strong match.
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 IMPORTED_CONTEXT = "imported_context"
+CHANNEL_MESSAGE = "channel_message"
 NATIVE_FINDING = "native_finding"
 GOVERNED_CLAIM = "governed_claim"
 
@@ -28,6 +36,9 @@ PROMOTION_TAG = "authority-governed"
 
 AUTHORITY_MULTIPLIERS = {
     IMPORTED_CONTEXT: 0.55,
+    # Operator decision 2026-09-27: the same close-contest down-rank as
+    # imported memory; nothing is excluded.
+    CHANNEL_MESSAGE: 0.55,
     NATIVE_FINDING: 1.0,
     GOVERNED_CLAIM: 1.15,
 }
@@ -79,6 +90,32 @@ def has_imported_memory_marker(tags: Iterable[object] | None) -> bool:
     return any(is_imported_memory_tag(tag) for tag in (tags or ()))
 
 
+def is_channel_tag(tag: object) -> bool:
+    return str(tag or "").strip().lower().startswith("channel-")
+
+
+def has_channel_marker(tags: Iterable[object] | None) -> bool:
+    """Whether a tag filter names a channel lane (an explicit request to read it)."""
+    return any(is_channel_tag(tag) for tag in (tags or ()))
+
+
+def is_channel_message(document: Any) -> bool:
+    """Whether a discovery is agent-to-agent channel traffic.
+
+    The convention is a `channel-<topic>` tag together with a `to-<agent>`
+    tag, or the `[channel:<topic>]` summary prefix those notes carry. A
+    `channel-` tag alone is not enough: `channel-detection` is an ordinary
+    topic (how the server detects a client's channel), not a message lane.
+    """
+    summary = str(getattr(document, "summary", "") or "")
+    if summary.startswith("[channel:"):
+        return True
+    tags = [str(tag or "").strip().lower() for tag in (getattr(document, "tags", None) or ())]
+    return any(is_channel_tag(tag) for tag in tags) and any(
+        tag.startswith("to-") for tag in tags
+    )
+
+
 def _promotion_receipt(document: Any) -> Mapping[str, Any] | None:
     provenance = getattr(document, "provenance", None)
     if not isinstance(provenance, Mapping):
@@ -120,6 +157,13 @@ def assess_authority(document: Any) -> AuthorityAssessment:
             trust="unreviewed",
             basis="imported memory source tag",
             multiplier=AUTHORITY_MULTIPLIERS[IMPORTED_CONTEXT],
+        )
+    if is_channel_message(document):
+        return AuthorityAssessment(
+            tier=CHANNEL_MESSAGE,
+            trust="coordination",
+            basis="agent-to-agent channel message",
+            multiplier=AUTHORITY_MULTIPLIERS[CHANNEL_MESSAGE],
         )
     return AuthorityAssessment(
         tier=NATIVE_FINDING,
