@@ -5,7 +5,8 @@
 
     See scripts/ops/pr-babysitter.sh for what it does and, more importantly,
     what it deliberately does not do (no readying drafts, no conflict
-    resolution, no arming anything without the maintainer's `queue` label).
+    resolution, no arming anything without the maintainer's
+    `approved-to-merge` label).
     It keeps one queued PR armed at a time; GitHub updates and merges it.
 
     PATH must include the Homebrew bin dir: `gh` is /opt/homebrew/bin/gh and

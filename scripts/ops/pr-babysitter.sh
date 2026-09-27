@@ -2,46 +2,51 @@
 # pr-babysitter.sh — a label-driven merge queue for strict branch protection.
 #
 # master requires its checks to pass on a branch that is up to date with it
-# (`strict`), so every merge re-dirties every other open PR. With auto-merge
-# set, GitHub updates the branch itself and merges on green
-# (docs/operations/github-workflow-conventions.md §4) — but it does that for
-# EVERY armed PR at once. Arm fourteen and each merge re-runs CI on the other
-# thirteen, one of which wins: roughly N²/2 CI runs to land N PRs, all
-# competing for the same Actions concurrency, so each merge gets slower.
+# (`strict`), so every merge re-dirties every other open PR. GitHub's own merge
+# queue would handle this at the root, but it is unavailable on a user-owned
+# repo (verified 2026-08-02: the rulesets API 422s on the merge_queue rule
+# type), and conventions §4 records the CodeQL work it would need besides.
 #
-# This script keeps exactly one PR armed at a time:
-#   1. If any open, non-draft, conflict-free PR is already armed, it is in
-#      flight: do nothing (except the stale-base fallback below).
-#   2. Otherwise take the queue — open, non-draft, unarmed PRs carrying the
-#      `queue` label — lowest number first, and arm the first one that is
-#      MERGEABLE with no failing check. GitHub updates it, runs CI, merges it;
-#      the next tick arms the next.
+# With auto-merge set, GitHub updates an armed PR's branch itself when the base
+# moves, but not reliably and not for every armed PR at once: on 2026-09-27 it
+# updated one of two armed PRs 43 s and 101 s after master moved, and left the
+# other for this script's previous version to update minutes later. Arming
+# many PRs at once and updating them all (what this script used to do) re-runs
+# CI on every armed PR after each merge, roughly N²/2 runs to land N.
 #
-# The `queue` label is the approval. Arming says "this one is approved, land
-# it when green", which is the maintainer's merge decision; the label is that
-# same decision made ahead of time, so it is applied by the maintainer and
-# never by an agent (AGENTS.md / CLAUDE.md shared contract).
+# This script keeps exactly one PR armed at a time. Each tick:
+#   1. Tidy the slot. An armed PR carrying the approval label that has become
+#      CONFLICTING, or whose checks failed on its current head, is disarmed so
+#      it stops holding the slot; its label stays, so it returns to the queue.
+#   2. If a PR is still armed (including one the maintainer armed by hand), it
+#      holds the slot. If it is BEHIND and neither the base nor its arming has
+#      moved for PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not
+#      acted, so update that one branch. Then stop.
+#   3. Otherwise walk the queue in the order the label was applied and arm the
+#      first PR that can go: approval newer than its last pushed commit, no
+#      open "merge after #N" dependency, MERGEABLE, no check needing approval.
+#      A PR whose checks failed on an up-to-date head gets its failed Actions
+#      jobs re-run once (marked by the retried label); after that it is skipped
+#      until someone removes that label.
 #
-# Two gaps it also covers:
-#   - GitHub DISARMS auto-merge when a required check fails, even transiently,
-#     and the PR then strands silently. A queued PR with a failing check gets
-#     its failed Actions jobs re-run ONCE, marked with `queue-retried`; after
-#     that it is skipped until someone removes that label.
-#   - If the in-flight PR is still BEHIND after its base has sat still for
-#     PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's own updater has not acted and
-#     the queue would stall; update that one branch. The grace period is what
-#     keeps this from racing the native updater (§4).
+# The approval label is the maintainer's merge decision made ahead of time,
+# exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
+# shared contract). It approves the PR as it stood when the label went on: a
+# commit pushed afterwards makes it stale until the label is re-applied.
 #
 # Deliberately out of scope — these stay human or session judgment:
 #   - readying drafts (the draft→ready mark is the owning agent's gate),
 #   - resolving conflicts,
-#   - arming anything that does not carry the label.
+#   - arming anything that does not carry the label, or that targets a branch
+#     other than PR_QUEUE_BASE (a stacked PR runs no CI; arming it merges it).
 set -uo pipefail
 
 REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
-LABEL="${PR_QUEUE_LABEL:-queue}"
-RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-queue-retried}"
-BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-15}"
+BASE="${PR_QUEUE_BASE:-master}"
+LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
+RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
+BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
+STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 
 log() { echo "$(date -u +%FT%TZ) $*"; }
@@ -55,36 +60,88 @@ act() {
   fi
 }
 
+minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | floor'; }
+
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup) \
+  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
-# A check has failed when a finished run concluded badly (CheckRun) or a
-# status context reports failure/error (StatusContext).
-FAILED_CHECKS='[.statusCheckRollup[]?
-  | select((.conclusion // "") as $c | (.state // "") as $s
-           | ($c | test("^(FAILURE|TIMED_OUT|CANCELLED|ACTION_REQUIRED|STARTUP_FAILURE)$"))
-             or ($s | test("^(FAILURE|ERROR)$")))]'
+# Shared jq vocabulary. A check has FAILED when a finished run concluded badly
+# (CheckRun) or a status context reports failure (StatusContext); it is PENDING
+# while queued or running; ACTION_REQUIRED is a run parked for approval, which
+# a re-run cannot clear.
+JQ_DEFS='
+def labelled($l): any(.labels[]?; .name == $l);
+def failed: [.statusCheckRollup[]?
+  | select(((.conclusion // "") | test("^(FAILURE|TIMED_OUT|CANCELLED|STARTUP_FAILURE)$"))
+           or ((.state // "") | test("^(FAILURE|ERROR)$")))];
+def pending: [.statusCheckRollup[]?
+  | select(((.status // "") | test("^(QUEUED|IN_PROGRESS|PENDING|WAITING|REQUESTED)$"))
+           or ((.state // "") | test("^(PENDING|EXPECTED)$")))];
+def parked: [.statusCheckRollup[]? | select((.conclusion // "") == "ACTION_REQUIRED")];
+'
+# q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
+q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
 
-# --- 1. in flight --------------------------------------------------------------
-inflight=$(jq -c 'map(select(.isDraft == false
-                             and .autoMergeRequest != null
-                             and .mergeable != "CONFLICTING"))
-                  | sort_by(.number) | .[0] // empty' <<<"$prs") \
+# --- 1. tidy the slot -----------------------------------------------------------
+ours_armed=$(q -c --arg b "$BASE" --arg l "$LABEL" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
+              and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
-if [ -n "$inflight" ]; then
-  n=$(jq -r .number <<<"$inflight")
-  if [ "$(jq -r .mergeStateStatus <<<"$inflight")" = "BEHIND" ]; then
-    base=$(jq -r .baseRefName <<<"$inflight")
-    moved=$(gh api "repos/$REPO/commits/$base" --jq .commit.committer.date) || moved=""
+disarmed=" "
+while read -r pr; do
+  [ -n "$pr" ] || continue
+  n=$(jq -r .number <<<"$pr")
+  reason=""
+  if [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
+    reason="CONFLICTING"
+  elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
+       && [ "$(q 'failed | length' <<<"$pr")" -gt 0 ] \
+       && [ "$(q 'pending | length' <<<"$pr")" -eq 0 ]; then
+    reason="checks failed on its current head"
+  fi
+  if [ -n "$reason" ]; then
+    log "#$n armed but $reason; disarming so it stops holding the queue"
+    if act gh pr merge "$n" -R "$REPO" --disable-auto; then
+      disarmed="$disarmed$n "
+    else
+      log "#$n disarm failed; nothing else done this tick"
+      exit 0
+    fi
+  fi
+done <<<"$ours_armed"
+
+# --- 2. a PR holds the slot ---------------------------------------------------
+# Any armed, conflict-free PR on the base holds it, except one this tick just
+# disarmed. A hand-armed PR counts: a second armed PR is exactly the parallel
+# CI re-run the queue exists to prevent.
+holder=$(q -c --arg b "$BASE" --arg skip "$disarmed" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
+              and .mergeable != "CONFLICTING"
+              and (.number as $n | $skip | contains(" \($n) ") | not)))
+   | sort_by(.number) | .[0] // empty' <<<"$prs") \
+  || { log "could not read the open PRs; nothing done"; exit 1; }
+
+if [ -n "$holder" ]; then
+  n=$(jq -r .number <<<"$holder")
+  armed_at=$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$holder")
+  if [ -n "$armed_at" ]; then
+    held=$(minutes_since "$armed_at")
+    [ "$held" -ge "$STALL_WARN_MIN" ] \
+      && log "#$n has held the queue for ${held}m ($(jq -r .mergeStateStatus <<<"$holder")); needs a look"
+  fi
+  if [ "$(jq -r .mergeStateStatus <<<"$holder")" = "BEHIND" ]; then
+    moved=$(gh api "repos/$REPO/commits/$BASE" --jq .commit.committer.date) || moved=""
     if [ -n "$moved" ]; then
-      idle=$(jq -rn --arg d "$moved" '((now - ($d | fromdateiso8601)) / 60) | floor')
+      # Measure from whichever came later: the base moving, or the arming.
+      since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
+      idle=$(minutes_since "$since")
       if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
-        log "#$n armed and BEHIND with $base idle ${idle}m; native updater has not acted, updating"
+        log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
         act gh pr update-branch "$n" -R "$REPO" || true
       fi
     fi
@@ -92,52 +149,123 @@ if [ -n "$inflight" ]; then
   exit 0
 fi
 
-# --- 2. the queue --------------------------------------------------------------
-queue=$(jq -c --arg label "$LABEL" 'map(select(.isDraft == false
-                                               and .autoMergeRequest == null
-                                               and any(.labels[]?; .name == $label)))
-                                    | sort_by(.number) | .[]' <<<"$prs") \
+# --- 3. the queue ---------------------------------------------------------------
+# When did the approval label last go on, and when was the last commit that
+# was not a base-update merge (GitHub's updater, `gh pr update-branch`)?
+# Prints "<labelled-at> <last-pushed-commit-at>"; either may be "-".
+approval_times() {
+  # --paginate without --jq prints one JSON array per page; jq reads the stream.
+  gh api --paginate "repos/$REPO/issues/$1/timeline" 2>/dev/null | jq -r --arg l "$LABEL" '
+    .[] | if .event == "labeled" and .label.name == $l then "L \(.created_at)"
+          elif .event == "committed"
+               and ((.committer.name == "GitHub" and (.message | startswith("Merge branch ")))
+                    | not)
+            then "C \(.committer.date)"
+          else empty end'
+}
+
+queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
+              and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
+# Order by when the label went on, which is the order the maintainer approved.
+ordered=""
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
-  mergeable=$(jq -r .mergeable <<<"$pr")
+  times=$(approval_times "$n") || { log "#$n timeline unreadable; skipped"; continue; }
+  labelled_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
+  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    continue
+  fi
+  ordered+="$labelled_at $n"$'\n'
+done <<<"$queued"
 
-  if [ "$mergeable" != "MERGEABLE" ]; then
-    # UNKNOWN is GitHub still computing; CONFLICTING needs a person.
-    [ "$mergeable" = "CONFLICTING" ] && log "#$n queued but CONFLICTING; skipped"
+# "merge after #N" / "merge after owner/repo#N" in the body: wait until N merges.
+dependency_open() {
+  local pr="$1" dep repo num state
+  for dep in $(jq -r '.body // ""' <<<"$pr" \
+      | grep -oiE 'merge after ([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+' \
+      | sed -E 's/^[Mm][Ee][Rr][Gg][Ee] [Aa][Ff][Tt][Ee][Rr] //'); do
+    repo="${dep%#*}"; num="${dep##*#}"
+    [ -n "$repo" ] || repo="$REPO"
+    state=$(gh pr view "$num" -R "$repo" --json state --jq .state 2>/dev/null) || state="UNREADABLE"
+    if [ "$state" != "MERGED" ] && [ "$state" != "CLOSED" ]; then
+      echo "$repo#$num ($state)"
+      return 0
+    fi
+  done
+  return 1
+}
+
+while read -r _ n; do
+  [ -n "${n:-}" ] || continue
+  pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
+
+  if dep=$(dependency_open "$pr"); then
+    log "#$n waits on $dep (merge after); skipped"
     continue
   fi
 
-  failed=$(jq "$FAILED_CHECKS | length" <<<"$pr") \
-    || { log "#$n could not read its checks; skipped"; continue; }
-  if [ "$failed" -gt 0 ]; then
+  case "$(jq -r .mergeable <<<"$pr")" in
+    MERGEABLE) ;;
+    CONFLICTING) log "#$n queued but CONFLICTING; skipped"; continue ;;
+    # GitHub is still computing mergeability, typically right after a merge.
+    # Wait for it rather than letting a later PR jump the order.
+    *) exit 0 ;;
+  esac
+
+  if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
+    log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
+    continue
+  fi
+
+  failed=$(q 'failed | length' <<<"$pr")
+  if [ "$failed" -gt 0 ] && [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ]; then
+    # A BEHIND PR is armed anyway: GitHub re-runs everything on the fresh base.
+    if [ "$(q 'pending | length' <<<"$pr")" -gt 0 ]; then
+      continue  # its run is still going; failed jobs can be re-run once it ends
+    fi
     if jq -e --arg l "$RETRIED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null; then
-      log "#$n queued but $failed check(s) still failing after one retry; skipped"
+      log "#$n: $failed check(s) still failing after one retry; skipped until $RETRIED_LABEL is removed"
       continue
     fi
-    runs=$(jq -r "$FAILED_CHECKS"' | [.[] | (.detailsUrl // .targetUrl // "")
-                                         | capture("/actions/runs/(?<id>[0-9]+)") | .id]
-                                   | unique | .[]' <<<"$pr") \
+    runs=$(q -r 'failed | [.[] | (.detailsUrl // .targetUrl // "")
+                           | capture("/actions/runs/(?<id>[0-9]+)") | .id]
+                 | unique | .[]' <<<"$pr") \
       || { log "#$n could not read its failing checks; skipped"; continue; }
     if [ -z "$runs" ]; then
-      log "#$n queued but $failed failing check(s) are not Actions runs; skipped"
+      log "#$n: $failed failing check(s) are not Actions runs; skipped"
       continue
     fi
-    log "#$n queued with $failed failing check(s); re-running once: $(tr '\n' ' ' <<<"$runs")"
+    # Mark first: if the marker cannot be applied, re-running would repeat forever.
+    act gh pr edit "$n" -R "$REPO" --add-label "$RETRIED_LABEL" \
+      || { log "#$n could not apply $RETRIED_LABEL; not re-running"; continue; }
+    started=0
     for run in $runs; do
-      act gh run rerun "$run" --failed -R "$REPO" || true
+      act gh run rerun "$run" --failed -R "$REPO" && started=$((started + 1))
     done
-    act gh pr edit "$n" -R "$REPO" --add-label "$RETRIED_LABEL" || true
+    if [ "$started" -eq 0 ]; then
+      log "#$n: no re-run started; retry not spent"
+      act gh pr edit "$n" -R "$REPO" --remove-label "$RETRIED_LABEL" || true
+    else
+      log "#$n: $failed failing check(s); re-ran $started run(s) once"
+    fi
     continue
   fi
 
   log "#$n arming (head of queue)"
-  if act gh pr merge "$n" -R "$REPO" --auto --squash --delete-branch; then
-    exit 0
-  fi
-  log "#$n arm failed; trying the next queued PR"
-done <<<"$queue"
+  # The repo deletes merged branches itself, so no --delete-branch: gh would
+  # also try to delete a local branch in whatever directory this runs from.
+  act gh pr merge "$n" -R "$REPO" --auto --squash \
+    || log "#$n arm failed; nothing else armed this tick"
+  # Stop either way. After a failed call we cannot tell whether GitHub armed
+  # it, and the next tick reads the real state.
+  exit 0
+done < <(sort <<<"$ordered")
 
 exit 0
