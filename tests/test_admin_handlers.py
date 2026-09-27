@@ -633,11 +633,12 @@ class TestHealthCheck:
             assert "calibration" in data["operator_summary"]["failing_checks"]
 
     @pytest.mark.asyncio
-    async def test_health_check_overall_status_logic(self, mock_mcp_server, patch_context_agent_id):
+    async def test_health_check_overall_status_logic(self, mock_mcp_server, patch_context_agent_id, tmp_path):
         """Test the three-tier status logic: healthy, moderate, critical."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
@@ -679,12 +680,13 @@ class TestHealthCheck:
     async def test_health_check_reports_degraded_local_identity_continuity(
         self,
         mock_mcp_server,
-        patch_context_agent_id,
+        patch_context_agent_id, tmp_path,
     ):
         """Default health output should state when continuity is degraded-local."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
@@ -727,12 +729,13 @@ class TestHealthCheck:
     async def test_health_check_reports_redis_identity_continuity(
         self,
         mock_mcp_server,
-        patch_context_agent_id,
+        patch_context_agent_id, tmp_path,
     ):
         """Health output should explicitly report Redis-backed continuity when available."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
@@ -933,7 +936,7 @@ class TestHealthCheck:
             # KG check no longer calls get_knowledge_graph() (deadlocks in anyio context)
             # Just reports embeddings status — lifecycle warnings not propagated
             kg = data["checks"]["knowledge_graph"]
-            assert kg["status"] in ("healthy", "degraded")
+            assert kg["status"] in ("healthy", "degraded", "not_configured")
 
 
 # ============================================================================
@@ -945,18 +948,18 @@ class TestIssue165HealthCapabilitySplit:
 
     @pytest.mark.asyncio
     async def test_missing_embedder_is_named_in_the_operator_summary(
-        self, mock_mcp_server, patch_context_agent_id,
+        self, mock_mcp_server, patch_context_agent_id, monkeypatch,
     ):
-        """A missing embedder must reach degraded_checks and first_action.
+        """A requested embedder that is missing must reach degraded_checks and first_action.
 
-        Every other case in this file patches embeddings_available to True, so
-        the embedder_ok=False branch — the one the shipped container runs, since
-        requirements-docker.txt excludes sentence-transformers — had no coverage.
-        Without it the knowledge_graph check emitted status 'degraded', a value
-        the aggregation sets did not recognise, and the operator saw
+        Naming a model in UNITARES_EMBEDDING_MODEL asks for semantic search, so
+        a missing embedder is then a fault. (With no model named it is the
+        shipped container's default setup — see the not-configured case below.)
+        Before the aggregation recognised 'degraded', the operator saw
         overall_status 'moderate' with an empty degraded_checks and
         first_action 'No action needed.'
         """
+        monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "minilm")
         mock_audit = MagicMock()
         mock_audit.log_file = MagicMock()
         mock_audit.log_file.exists.return_value = True
@@ -1002,6 +1005,116 @@ class TestIssue165HealthCapabilitySplit:
             # rather than falling through to the "No action needed." default.
             assert summary["first_action"].startswith("Review the first degraded component:")
             assert data["status_breakdown"]["degraded"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_no_embedder_on_a_default_install_is_not_configured_not_degraded(
+        self, mock_mcp_server, patch_context_agent_id, monkeypatch, tmp_path,
+    ):
+        """The shipped container has no embedder and asks for none: search runs
+        on Postgres FTS. That is a setup state, so it is reported as
+        not_configured — named, counted, never healthy, and never a fault that
+        turns a working install's overall status away from healthy. The same
+        holds for an audit log no event has written yet."""
+        monkeypatch.delenv("UNITARES_EMBEDDING_MODEL", raising=False)
+        mock_audit = MagicMock()
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"  # absent, dir writable
+        mock_audit._jsonl_enabled = True
+
+        mock_db = AsyncMock()
+        mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
+        mock_db.init = AsyncMock()
+
+        mock_cal = MagicMock()
+        mock_cal.get_pending_updates.return_value = 0
+
+        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+             patch("src.calibration.calibration_checker", mock_cal), \
+             patch("src.telemetry.telemetry_collector", MagicMock()), \
+             patch("src.audit_log.audit_logger", mock_audit), \
+             patch("src.db.get_db", return_value=mock_db), \
+             patch("src.embeddings.embeddings_available", return_value=False), \
+             patch("src.knowledge_graph.backend_supports_semantic_search", return_value=True), \
+             patch("src.knowledge_graph.selected_backend_name", return_value="age"), \
+             patch("src.calibration_db.calibration_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.audit_db.audit_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.cache.is_redis_available", return_value=False), \
+             patch("src.services.runtime_queries._probe_lease_plane_boundary",
+                   new_callable=AsyncMock,
+                   return_value={"status": "unavailable", "note": "no bearer configured"}):
+
+            from src.services.runtime_queries import get_health_check_data
+            data = await get_health_check_data({"lite": False})
+
+        kg = data["checks"]["knowledge_graph"]
+        assert kg["status"] == "not_configured"
+        assert kg["semantic_search_reachable"] is False
+        assert "warning" not in kg
+        assert "full-text search" in kg["note"]
+
+        telemetry = data["checks"]["telemetry"]
+        assert telemetry["status"] == "no_data_yet"
+        assert telemetry["audit_log_exists"] is False
+
+        summary = data["operator_summary"]
+        assert "knowledge_graph" not in summary["degraded_checks"]
+        assert "telemetry" not in summary["degraded_checks"]
+        assert {"knowledge_graph", "telemetry"} <= set(summary["not_configured_checks"])
+        assert data["status_breakdown"]["not_configured"] >= 1
+        assert data["status_breakdown"]["no_data_yet"] >= 1
+        # Neutral checks do not move the overall status: with nothing degraded
+        # or failing among the rest, the install reads healthy.
+        assert summary["failing_checks"] == [], summary
+        assert summary["degraded_checks"] == [], summary
+        assert summary["overall_status"] == "healthy"
+        assert summary["first_action"] == "No action needed."
+
+    @pytest.mark.asyncio
+    async def test_unknown_backend_is_never_masked_as_not_configured(
+        self, mock_mcp_server, patch_context_agent_id, monkeypatch,
+    ):
+        """No embedder and none requested is neutral only on a backend that can
+        serve FTS. An unrecognised UNITARES_KNOWLEDGE_BACKEND makes every
+        search raise, so it stays degraded and says why."""
+        monkeypatch.delenv("UNITARES_EMBEDDING_MODEL", raising=False)
+        mock_audit = MagicMock()
+        mock_audit.log_file = MagicMock()
+        mock_audit.log_file.exists.return_value = True
+
+        mock_db = AsyncMock()
+        mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
+        mock_db.init = AsyncMock()
+
+        mock_cal = MagicMock()
+        mock_cal.get_pending_updates.return_value = 0
+
+        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+             patch("src.calibration.calibration_checker", mock_cal), \
+             patch("src.telemetry.telemetry_collector", MagicMock()), \
+             patch("src.audit_log.audit_logger", mock_audit), \
+             patch("src.db.get_db", return_value=mock_db), \
+             patch("src.embeddings.embeddings_available", return_value=False), \
+             patch("src.knowledge_graph.backend_supports_semantic_search", return_value=False), \
+             patch("src.knowledge_graph.selected_backend_name", return_value="bogus"), \
+             patch("src.calibration_db.calibration_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.audit_db.audit_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.cache.is_redis_available", return_value=False):
+
+            from src.services.runtime_queries import get_health_check_data
+            data = await get_health_check_data({"lite": False})
+
+        kg = data["checks"]["knowledge_graph"]
+        assert kg["status"] == "degraded"
+        assert "Unknown knowledge backend 'bogus'" in kg["warning"]
+        assert "knowledge_graph" in data["operator_summary"]["degraded_checks"]
+        assert "knowledge_graph" not in data["operator_summary"]["not_configured_checks"]
 
     @pytest.mark.asyncio
     async def test_embedder_up_but_backend_lacks_semantic_search(
@@ -2811,7 +2924,7 @@ class TestHealthCheckEdgeCases:
             from src.services.runtime_queries import get_health_check_data
             data = await get_health_check_data({})
             # KG check no longer calls get_knowledge_graph() — reports embeddings status only
-            assert data["checks"]["knowledge_graph"]["status"] in ("healthy", "degraded")
+            assert data["checks"]["knowledge_graph"]["status"] in ("healthy", "degraded", "not_configured")
 
     @pytest.mark.asyncio
     async def test_health_check_data_dir_error(self, mock_mcp_server, patch_context_agent_id):

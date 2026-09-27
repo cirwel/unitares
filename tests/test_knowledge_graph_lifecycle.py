@@ -331,3 +331,58 @@ async def test_archive_old_resolved_does_not_query_superseded():
     assert archived == []
     assert skipped == 0
     mock_graph.update_discovery.assert_not_awaited()
+
+
+# --- The status move writes through the backend alone ---
+
+
+@pytest.mark.asyncio
+async def test_batch_update_status_writes_each_row_once_through_the_backend():
+    """Both backends' update_discovery write knowledge.discoveries themselves
+    (the AGE one syncs the row in the node's transaction), so the lifecycle
+    makes no second write of the row."""
+    from unittest.mock import call
+
+    graph = make_mock_graph()
+    now = datetime(2026, 9, 27, 12, 0, 0)
+
+    await KnowledgeGraphLifecycle(graph=graph)._batch_update_status(
+        graph, ["d-1", "d-2"], "archived", now
+    )
+
+    expected = {"status": "archived", "updated_at": now.isoformat()}
+    assert graph.update_discovery.await_args_list == [
+        call("d-1", expected),
+        call("d-2", expected),
+    ]
+
+
+def test_every_src_import_in_the_lifecycle_module_resolves():
+    """An import inside a function fails only when that function runs, and
+    behind a broad except it fails silently. _batch_update_status imported
+    get_postgres_backend from src.db.postgres_backend, which never existed,
+    and logged the ImportError at debug level, so its "PG sync" never ran."""
+    import ast
+    import importlib
+
+    import src.knowledge_graph_lifecycle as lifecycle_module
+
+    tree = ast.parse(Path(lifecycle_module.__file__).read_text())
+    unresolved = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.ImportFrom)
+            and node.level == 0
+            and node.module
+            and node.module.split(".")[0] == "src"
+        ):
+            continue
+        module = importlib.import_module(node.module)
+        for alias in node.names:
+            if hasattr(module, alias.name):
+                continue
+            try:
+                importlib.import_module(f"{node.module}.{alias.name}")
+            except ModuleNotFoundError:
+                unresolved.append(f"line {node.lineno}: {node.module}.{alias.name}")
+    assert unresolved == []

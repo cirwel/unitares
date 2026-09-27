@@ -41,6 +41,13 @@ class TestLabelClaim:
     def test_own_uuid8_suffix_is_recognised(self):
         assert _resident_label_claim("Doctor_7dea7dcb", REAL_UUID) == "Doctor"
 
+    def test_the_longer_collision_suffixes_are_this_rows_rename(self):
+        """The rename falls back to uuid[:13], then the whole uuid, when the
+        uuid8 form would equal a label the server recorded."""
+        assert _resident_label_claim(f"Doctor_{REAL_UUID[:13]}", REAL_UUID) == "Doctor"
+        assert _resident_label_claim(f"Doctor_{REAL_UUID}", REAL_UUID) == "Doctor"
+        assert _resident_label_claim(f"Doctor_{GHOST_UUID[:13]}", REAL_UUID) is None
+
     def test_a_different_uuid_suffix_is_not_this_rows_rename(self):
         """⛔Only the row's OWN uuid8 counts — that is how the rename builds it."""
         assert _resident_label_claim("Doctor_7dea7dcb", GHOST_UUID) is None
