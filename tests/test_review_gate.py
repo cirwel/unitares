@@ -2144,10 +2144,9 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
     for path in ("src/oauth_provider.py", "src/mcp_handlers/identity/handlers.py",
                  "src/mcp_handlers/schemas/identity.py",
                  "src/services/mcp_transport_service.py", "src/mcp_listen_config.py",
-                 "src/mcp_server.py", "src/dashboard_auth.py",
+                 "src/dashboard_auth.py",
                  "src/mcp_handlers/identity_bootstrap.py", "src/services/http_tool_service.py",
                  "src/agent_identity_auth.py", "src/effect_grant.py",
-                 "src/mcp_handlers/updates/phases.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2417,8 +2416,7 @@ def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
                  "elixir/agent_orchestrator/lib/agent_orchestrator/http_auth.ex",
                  "elixir/lease_plane/lib/unitares_lease_plane/identity_binding.ex",
                  "elixir/wave3a_handlers/lib/wave3a_handlers/http_router.ex",
-                 "src/mcp_handlers/middleware/__init__.py",
-                 "src/mcp_handlers/decorators.py", "src/mcp_handlers/stakes_table.py"):
+                 "src/mcp_handlers/middleware/__init__.py"):
         assert rg.sensitive_paths([path], globs) == [path], path
     assert rg.sensitive_paths(["elixir/agent_orchestrator/lib/agent_orchestrator/agent_runner.ex"],
                               globs) == []
@@ -2656,3 +2654,13 @@ def test_dispose_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp
     args = SimpleNamespace(emit=False, file=str(rebuttal), base="origin/master")
     assert rg.cmd_dispose(args) == rg.NEEDS_SECOND_FAMILY
     assert "have: openai" in capsys.readouterr().out
+
+
+
+def test_the_large_mixed_files_are_deliberately_off_the_list():
+    """Operator decision 2026-09-27: the core gates only, to keep the cost
+    down. These hold an access decision among much else; _boundary names them."""
+    globs = rg.second_family_paths()
+    for path in ("src/mcp_server.py", "src/mcp_handlers/updates/phases.py",
+                 "src/mcp_handlers/decorators.py", "src/mcp_handlers/stakes_table.py"):
+        assert rg.sensitive_paths([path], globs) == [], path
