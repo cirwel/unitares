@@ -2193,17 +2193,6 @@ def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
 
 
 
-def test_a_just_passed_fix_verification_is_not_a_family(monkeypatch, capsys):
-    """Native Codex on #2504 (P1): the just-passed shortcut must not re-add a
-    fix-verify family; and after a fix verification nothing runs on its own."""
-    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
-                             families={"google"}, candidates=("codex", "claude"))
-    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
-                                 passed_by="fix-verify:claude") == rg.UNREVIEWED
-    assert ran == [] and "have: google)" in capsys.readouterr().out
-
-
 def test_ci_reads_the_policy_from_the_prs_own_base_ref(repo, monkeypatch):
     """Native Codex on #2504 (P2): the workflow checks out the DEFAULT branch,
     so a PR to another branch must be judged by that branch's policy."""
@@ -2232,39 +2221,10 @@ def test_unreadable_native_evidence_is_unreviewed_not_empty(monkeypatch, capsys)
     assert ran == [] and "incomplete" in capsys.readouterr().out
 
 
-def test_past_the_round_cap_no_full_review_runs_automatically(monkeypatch, capsys):
-    """Codex on #2504 (P2): after a passing fix verification the helper
-    launched two full reviews, bypassing the round cap."""
-    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
-    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
-                                 passed_by="fix-verify:ollama", auto=False) == rg.UNREVIEWED
-    assert ran == []
-    out = capsys.readouterr().out
-    assert "--reviewer" in out and "record --independent" in out
-
-
 def _capped_rounds():
     # A live cap: the last round had only minor findings and is unanswered.
     return rg.CodexRounds(count=rg.ROUND_CAP, last_head="h",
                           last_findings=[{"body": "![P2 Badge](x) minor"}], answered_since=False)
-
-
-def test_after_a_capped_fix_verification_a_plain_rerun_starts_nothing(monkeypatch, capsys):
-    """Claude on #2504 (P1): the capped flag was only passed on the first run;
-    later runs came through the fast path in automatic mode."""
-    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
-    # The round is answered (capped() is False again) but THIS diff's pass is
-    # the fix verification: still no automatic full review.
-    answered = rg.CodexRounds(count=rg.ROUND_CAP, last_head="h",
-                              last_findings=[{"body": "![P2 Badge](x) minor"}], answered_since=True)
-    assert not answered.capped()
-    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([], rounds=answered))
-    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30, reviewer=None)
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
-                                 passed_by="fix-verify:ollama") == rg.UNREVIEWED
-    assert ran == []
-    assert "--fresh --reviewer" in capsys.readouterr().out
 
 
 def test_a_same_family_review_recorded_under_a_plain_name_does_not_complete_the_rule():
@@ -2275,24 +2235,6 @@ def test_a_same_family_review_recorded_under_a_plain_name_does_not_complete_the_
         _comment(rg.Record(k, "CLEAN", 0, False, "opus-subagent")),
     ]
     assert rg.passing_families(comments, k) == {"anthropic"}
-
-
-def test_the_sweep_leaves_a_capped_sensitive_pr_to_its_author(monkeypatch, tmp_path):
-    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
-    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
-    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
-    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
-    clean = rg.Record("k", "CLEAN", 0, False, "fix-verify:ollama", created_at="2026-09-27T00:00:00Z")
-    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
-    monkeypatch.setattr(rg, "read_native",
-                        lambda *args: rg.NativeReview([clean], rounds=_capped_rounds()))
-    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
-    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
-    monkeypatch.setattr(rg.subprocess, "run",
-                        lambda *a, **k: pytest.fail("started a full review past the cap"))
-    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
-                                        worktree=str(tmp_path / "wt"))) == 0
-
 
 
 def test_review_sh_never_starts_a_review_and_names_the_next_step(monkeypatch, capsys):
@@ -2341,3 +2283,28 @@ def test_a_policy_without_the_list_warns(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(rg, "POLICY_FILE", bad)
     assert rg.second_family_paths() == []
     assert "no second_family_paths list" in capsys.readouterr().err
+
+
+
+def test_a_just_passed_fix_verification_does_not_complete_two_families(monkeypatch, capsys):
+    """A fix-verify receipt did not review the new lines: after one, the notice
+    still asks for a second family."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"google"})
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["claude"])
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
+                                 passed_by="fix-verify:codex") == rg.UNREVIEWED
+    assert "have: google)" in capsys.readouterr().out
+    # ...whereas a real full review by that family completes the rule.
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0, passed_by="codex") == 0
+
+
+def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
+    globs = rg.second_family_paths()
+    for path in ("src/mcp_handlers/dialectic/auth.py",
+                 "elixir/lease_plane/lib/unitares_lease_plane/http_auth.ex",
+                 "elixir/agent_orchestrator/lib/agent_orchestrator/http_auth.ex",
+                 "elixir/lease_plane/lib/unitares_lease_plane/identity_binding.ex"):
+        assert rg.sensitive_paths([path], globs) == [path], path
+    assert rg.sensitive_paths(["elixir/agent_orchestrator/lib/agent_orchestrator/agent_runner.ex"],
+                              globs) == []

@@ -12,7 +12,8 @@
 #
 # Semantics, record format and the CI half: scripts/dev/review_gate.py.
 # Exit 0: completed/disposed. Exit 1: findings need author action.
-# Exit 2: unavailable/incomplete review; report an explicit unreviewed handoff.
+# Exit 2: unavailable/incomplete review, or a security-sensitive diff that still
+# needs a second model family; report an explicit unreviewed handoff.
 
 set -euo pipefail
 

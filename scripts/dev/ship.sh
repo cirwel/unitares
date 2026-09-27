@@ -462,7 +462,7 @@ case "$DELIVERY" in
             else
                 review_rc=$?
                 if [[ "$review_rc" == "2" ]]; then
-                    echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
+                    echo "[ship] WARNING: delivered but UNREVIEWED — see the review output above (reviewers unavailable, or a security-sensitive diff still needs a second model family)."
                     echo "[ship] report the blocker and next action explicitly; keep the PR draft."
                     exit 2
                 fi
