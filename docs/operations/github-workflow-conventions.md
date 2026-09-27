@@ -611,7 +611,8 @@ the operator's machine is awake.
 - **The slot.** Any armed PR holds it, including one armed by hand. A labelled
   armed PR that turns `CONFLICTING`, whose checks failed on its current head,
   or that has a check parked for approval, is disarmed so it stops holding
-  the queue; its label stays. A PR armed by hand is never disarmed by the
+  the queue; its label stays. Removing the label withdraws the approval: a PR
+  the script armed is disarmed at the next tick once the label is gone. A PR armed by hand is never disarmed by the
   script, so it keeps the slot even while it conflicts (arming another would
   leave two armed once the conflict is resolved); a hold longer than 90
   minutes is logged, and clearing it is the maintainer's call.

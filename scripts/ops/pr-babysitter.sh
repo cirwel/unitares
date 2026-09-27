@@ -185,9 +185,23 @@ latest_label_time() {
 }
 
 # --- 1. tidy the slot -----------------------------------------------------------
-ours_armed=$(q -c --arg b "$BASE" --arg l "$LABEL" \
-  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
-              and labelled($l))) | .[]' <<<"$prs") \
+# Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
+# script's when GitHub's arming time matches a recorded one; one the maintainer
+# re-armed by hand later carries a later time and is left alone.
+ARMS_FILE="$STATE_FILE.arms"
+record_arm() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$ARMS_FILE")" && echo "$1 $(date -u +%FT%TZ)" >>"$ARMS_FILE"
+}
+armed_by_script() {  # <pr> <enabledAt>
+  local at
+  [ -f "$ARMS_FILE" ] && [ -n "$2" ] || return 1
+  at=$(awk -v n="$1" '$1 == n { t = $2 } END { if (t) print t }' "$ARMS_FILE") && [ -n "$at" ] || return 1
+  jq -en --arg a "$at" --arg b "$2" '(($a | fromdateiso8601) - ($b | fromdateiso8601)) | (if . < 0 then -. else . end) <= 120' >/dev/null
+}
+
+armed=$(q -c --arg b "$BASE" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null)) | .[]' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 disarmed=" "
@@ -195,7 +209,12 @@ while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   reason=""
-  if [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
+  if ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
+    # Unlabelled: the maintainer's own arm, unless this script armed it and the
+    # label has since been removed, which withdraws the approval.
+    armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
+    reason="its $LABEL label was removed"
+  elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
     reason="its head changed since the approval"
@@ -215,7 +234,7 @@ while read -r pr; do
       exit 0
     fi
   fi
-done <<<"$ours_armed"
+done <<<"$armed"
 
 # --- 2. approvals ---------------------------------------------------------------
 # Runs every tick, before the slot check, so a PR labelled while another holds
@@ -384,8 +403,11 @@ while read -r _ n head; do
   # also try to delete a local branch in whatever directory this runs from.
   # --match-head-commit: arm only the head the approval covers, so a push that
   # lands between this tick's read and the call is refused, not merged.
-  act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head" \
-    || log "#$n arm failed; nothing else armed this tick"
+  if act gh pr merge "$n" -R "$REPO" --auto --squash --match-head-commit "$head"; then
+    record_arm "$n" || log "#$n armed, but the arm could not be recorded"
+  else
+    log "#$n arm failed; nothing else armed this tick"
+  fi
   # Stop either way. After a failed call we cannot tell whether GitHub armed
   # it, and the next tick reads the real state.
   exit 0

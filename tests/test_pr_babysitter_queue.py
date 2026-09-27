@@ -631,3 +631,27 @@ def test_gh_list_failure_does_nothing(tmp_path: Path) -> None:
     )
     assert result.returncode == 1
     assert (d / "calls.log").read_text() == ""
+
+
+# --- withdrawn approval -------------------------------------------------------
+
+
+def test_removing_the_label_from_a_pr_the_script_armed_disarms_it(tmp_path: Path) -> None:
+    first, _ = _run(tmp_path, [_pr(3, head="aaa")])
+    assert first == [_arm(3, "aaa")]
+    calls, out = _run(tmp_path, [_pr(3, labels=(), head="aaa", armed_min_ago=0.2, state="BLOCKED"), _pr(4)])
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "#3 armed but its approved-to-merge label was removed" in out
+
+
+def test_a_pr_the_maintainer_rearmed_by_hand_later_is_left_alone(tmp_path: Path) -> None:
+    arms = tmp_path / "state" / "approvals.arms"
+    arms.parent.mkdir(parents=True)
+    arms.write_text("3 2020-01-01T00:00:00Z\n")  # the script's arm, long ago
+    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, state="BLOCKED"), _pr(4)])
+    assert calls == []  # holds the slot as a hand-armed PR
+
+
+def test_a_dry_run_records_no_arm(tmp_path: Path) -> None:
+    _run(tmp_path, [_pr(3)], PR_QUEUE_DRY_RUN="1")
+    assert not (tmp_path / "state" / "approvals.arms").exists()
