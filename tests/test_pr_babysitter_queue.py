@@ -96,7 +96,11 @@ def _pr(
     checks: list[dict] | None = None,
     body: str = "",
     head: str | None = None,
+    review: str | None = "SUCCESS",
 ) -> dict:
+    rollup = list(checks) if checks is not None else [_check("test")]
+    if review is not None:
+        rollup.append(_check("review", review, run=900))
     return {
         "number": number,
         "isDraft": draft,
@@ -107,7 +111,7 @@ def _pr(
         ),
         "baseRefName": base,
         "labels": [{"name": label} for label in labels],
-        "statusCheckRollup": checks if checks is not None else [_check("test")],
+        "statusCheckRollup": rollup,
         "body": body,
         "headRefOid": head or f"sha{number}",
     }
@@ -680,3 +684,33 @@ def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1, head="aaa")])
     assert calls == [_arm(1, "aaa"), "pr merge 1 -R o/r --disable-auto"]
     assert "could not be recorded" in out
+
+
+
+# --- the review gate ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE", "ACTION_REQUIRED"])
+def test_a_pr_whose_review_did_not_pass_is_not_armed(tmp_path: Path, state: str) -> None:
+    # NEUTRAL is the review gate's "unreviewed"; review is not a required check,
+    # so without this an agent's label would merge an unreviewed PR.
+    calls, _ = _run(tmp_path, [_pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)]), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == [_arm(2)]
+
+
+def test_a_pr_with_no_review_check_waits(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, review=None)])
+    assert calls == []
+    assert "#1 waiting on review=MISSING" in out
+
+
+def test_a_pending_review_waits(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, review=None, checks=[_check("review", "", status="IN_PROGRESS")])])
+    assert calls == []
+    assert "review=PENDING" in out
+
+
+def test_required_checks_are_configurable(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1)]

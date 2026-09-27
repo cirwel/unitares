@@ -72,6 +72,11 @@ RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
+# Checks that must have passed on the head before it is armed, beyond the ones
+# branch protection requires. `review` is not a required check on master, and
+# its NEUTRAL conclusion means "unreviewed", so without this an agent's label
+# on a PR whose review never ran would merge it.
+REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"  # set it empty to require none
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
@@ -396,6 +401,19 @@ while read -r _ n head; do
     else
       log "#$n: $failed failing check(s); re-ran $started run(s) once"
     fi
+    continue
+  fi
+
+  unmet=""
+  for check in $REQUIRED_CHECKS; do
+    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
+             | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
+             | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
+               else map(select(. != "SUCCESS")) | .[0] end' <<<"$pr")
+    [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
+  done
+  if [ -n "$unmet" ]; then
+    log "#$n waiting on$unmet (must pass before arming); skipped"
     continue
   fi
 
