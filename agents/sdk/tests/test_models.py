@@ -242,6 +242,40 @@ def test_inference_host_preserves_unreachability():
     assert legacy.hosts[0].accepts_host_id_from == []
 
 
+def test_inference_hosts_result_keeps_extension_status():
+    """A default install's listing says the adapter lane is an extension it
+    lacks; the typed result must carry that, not drop it as an extra."""
+    r = InferenceHostsResult.model_validate({
+        "success": True,
+        "schema": "unitares.inference_hosts.v0",
+        "count": 1,
+        "hosts": [{
+            "host_id": "claude:host-adapter",
+            "configured": False,
+            "available": False,
+            "accepts_host_id_from": ["delegate_inference"],
+            "extension": "agent_orchestrator",
+        }],
+        "extensions": {
+            "agent_orchestrator": {
+                "configured": False,
+                "host_ids": ["claude:host-adapter"],
+                "serves": ["delegate_inference"],
+                "note": "Operator extension, off on a default install.",
+            },
+        },
+    })
+    assert r.hosts[0].extension == "agent_orchestrator"
+    assert r.extensions["agent_orchestrator"]["configured"] is False
+
+    legacy = InferenceHostsResult.model_validate({
+        "success": True,
+        "hosts": [{"host_id": "ollama:local"}],
+    })
+    assert legacy.hosts[0].extension is None
+    assert legacy.extensions is None
+
+
 def test_inference_host_result():
     r = InferenceHostResult.model_validate({
         "success": True,

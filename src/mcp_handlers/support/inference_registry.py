@@ -5,7 +5,9 @@ via ``call_model``) plus the strong-heterogeneous subscription-CLI hosts (Codex,
 Claude, Antigravity) served ASYNCHRONOUSLY via the agent-orchestrator
 (``host_adapter.py``).
 It does not store credentials; availability is probed live (socket / resolved CLI /
-opt-in flag). The strong hosts are gated by ``UNITARES_HOST_ADAPTER_ENABLED``.
+opt-in flag). The strong hosts are an operator extension (the agent
+orchestrator, not started by the default install), gated by
+``UNITARES_HOST_ADAPTER_ENABLED`` and the orchestrator bearer.
 
 **Availability is not callability.** ``available`` answers "could this adapter
 run if something invoked it". ``accepts_host_id_from`` answers the question an
@@ -42,7 +44,13 @@ from urllib.parse import urlparse
 from src.local_inference_env import default_local_model, ollama_base_url
 
 from . import host_availability
-from .host_adapter import host_adapter_available, host_adapter_enabled
+from .host_adapter import (
+    HOST_ADAPTER_EXTENSION,
+    HOST_ADAPTER_EXTENSION_NOTE,
+    host_adapter_available,
+    host_adapter_ids,
+    host_adapter_lane_configured,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +97,9 @@ class InferenceHost:
     # Set while the provider is cooling down after a quota or auth failure
     # (host_availability): why, and when the next call re-checks it.
     cooldown: dict[str, Any] | None = None
+    # The optional service this host needs beyond the default install, or None
+    # for hosts the default install can reach (see inference_extensions()).
+    extension: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -181,7 +192,8 @@ def _base_hosts() -> list[InferenceHost]:
             display_name="Codex host adapter",
             provider_kind="codex_host_adapter",
             transport="host_adapter",
-            configured=host_adapter_enabled(),
+            configured=host_adapter_lane_configured(),
+            extension=HOST_ADAPTER_EXTENSION,
             available=host_adapter_available("codex:host-adapter"),
             cooldown=host_availability.cooldown("codex:host-adapter"),
             privacy_class="operator_authorized_external",
@@ -214,7 +226,8 @@ def _base_hosts() -> list[InferenceHost]:
             display_name="Claude host adapter",
             provider_kind="claude_host_adapter",
             transport="host_adapter",
-            configured=host_adapter_enabled(),
+            configured=host_adapter_lane_configured(),
+            extension=HOST_ADAPTER_EXTENSION,
             available=host_adapter_available("claude:host-adapter"),
             cooldown=host_availability.cooldown("claude:host-adapter"),
             privacy_class="operator_authorized_external",
@@ -240,7 +253,8 @@ def _base_hosts() -> list[InferenceHost]:
             display_name="Antigravity host adapter",
             provider_kind="antigravity_host_adapter",
             transport="host_adapter",
-            configured=host_adapter_enabled(),
+            configured=host_adapter_lane_configured(),
+            extension=HOST_ADAPTER_EXTENSION,
             available=host_adapter_available("antigravity:host-adapter"),
             cooldown=host_availability.cooldown("antigravity:host-adapter"),
             privacy_class="operator_authorized_external",
@@ -264,6 +278,23 @@ def _base_hosts() -> list[InferenceHost]:
             ),
         ),
     ]
+
+
+def inference_extensions() -> dict[str, Any]:
+    """Optional services some hosts need, and whether this server has them.
+
+    Listed beside the hosts so an agent on a default install reads in one
+    field why the subscription-CLI adapters are unavailable, instead of
+    inferring it from three records that all say ``available: false``.
+    """
+    return {
+        HOST_ADAPTER_EXTENSION: {
+            "configured": host_adapter_lane_configured(),
+            "host_ids": list(host_adapter_ids()),
+            "serves": ["delegate_inference", "consult(effort='thorough')"],
+            "note": HOST_ADAPTER_EXTENSION_NOTE,
+        },
+    }
 
 
 def list_inference_hosts(
