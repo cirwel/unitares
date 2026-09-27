@@ -1079,9 +1079,11 @@ class KnowledgeGraphAGE:
         limit: int = 100,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
         """
-        Query discoveries with filters.
+        Query discoveries with filters, newest first.
 
         Args:
             agent_id: Filter by agent
@@ -1092,13 +1094,17 @@ class KnowledgeGraphAGE:
             limit: Maximum results
             exclude_archived: Drop archived rows when no explicit status filter
             exclude_cold: Drop cold-storage rows when no explicit status filter
+            created_after / created_before: exclusive bounds on created_at
         """
         db = await self._get_db()
 
         # Tags live canonically on knowledge.discoveries. TAGGED relationships
         # are a repairable graph projection and must not decide user-visible
-        # inclusion while they may lag an update or backfill.
-        if tags:
+        # inclusion while they may lag an update or backfill. A date window
+        # reads SQL too: the vertex's `timestamp` is a string property, and
+        # comparing it in Cypher would be a lexical compare across whatever
+        # offsets the writers used.
+        if tags or created_after or created_before:
             return await self._query_sql_fallback(
                 db,
                 agent_id=agent_id,
@@ -1109,6 +1115,8 @@ class KnowledgeGraphAGE:
                 limit=limit,
                 exclude_archived=exclude_archived,
                 exclude_cold=exclude_cold,
+                created_after=created_after,
+                created_before=created_before,
             )
 
         # Check if graph is available
@@ -1228,6 +1236,8 @@ class KnowledgeGraphAGE:
         limit: int = 100,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
         """Read discoveries straight from knowledge.discoveries (source of truth).
 
@@ -1237,6 +1247,16 @@ class KnowledgeGraphAGE:
         still finds it). This mirrors the SQL fallback those read paths already
         use so query()/search stop looking write-only.
         """
+        # The date bounds ride only when set, so an unwindowed read makes the
+        # same call it always did.
+        window = {
+            key: value
+            for key, value in (
+                ("created_after", created_after),
+                ("created_before", created_before),
+            )
+            if value is not None
+        }
         try:
             rows = await db.kg_query(
                 agent_id=agent_id,
@@ -1247,6 +1267,7 @@ class KnowledgeGraphAGE:
                 limit=limit,
                 exclude_archived=exclude_archived and not status,
                 exclude_cold=exclude_cold and not status,
+                **window,
             )
         except Exception as exc:
             logger.warning(f"SQL fallback query failed: {exc}")
@@ -2369,6 +2390,9 @@ class KnowledgeGraphAGE:
         limit: int = 20,
         operator: str = "AND",
         tags: Optional[List[str]] = None,
+        order_by: str = "rank",
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector (ts_rank_cd ranking).
 
@@ -2380,7 +2404,10 @@ class KnowledgeGraphAGE:
         pass operator="OR".
         """
         db = await self._get_db()
-        rows = await db.kg_full_text_search(query, limit, operator=operator, tags=tags)
+        rows = await db.kg_full_text_search(
+            query, limit, operator=operator, tags=tags, order_by=order_by,
+            created_after=created_after, created_before=created_before,
+        )
         # Hydrate via get_discovery so edge/response metadata is consistent
         # with what the rest of AGE returns. Row count is small (<= limit).
         results: List[DiscoveryNode] = []

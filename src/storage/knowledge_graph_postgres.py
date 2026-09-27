@@ -82,8 +82,10 @@ class KnowledgeGraphPostgres:
         limit: int = 50,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
-        """Query discoveries with filters."""
+        """Query discoveries with filters, newest first."""
         db = await self._get_db()
         # If exclude_archived and no explicit status filter, filter to non-archived
         effective_status = status
@@ -98,6 +100,8 @@ class KnowledgeGraphPostgres:
             limit=limit,
             exclude_archived=exclude_archived and not status,
             exclude_cold=exclude_cold and not status,
+            created_after=created_after,
+            created_before=created_before,
         )
         # Post-hoc filter as fallback since kg_query may not support negated status.
         # Cold storage is opt-in (include_cold), mirroring archived exclusion.
@@ -111,6 +115,9 @@ class KnowledgeGraphPostgres:
     async def full_text_search(
         self, query: str, limit: int = 20, operator: str = "AND",
         tags: Optional[List[str]] = None,
+        order_by: str = "rank",
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector. Defaults to AND (#165).
 
@@ -125,7 +132,10 @@ class KnowledgeGraphPostgres:
         already read it defensively (`getattr(disc, 'relevance', 0)`).
         """
         db = await self._get_db()
-        rows = await db.kg_full_text_search(query, limit, operator=operator, tags=tags)
+        rows = await db.kg_full_text_search(
+            query, limit, operator=operator, tags=tags, order_by=order_by,
+            created_after=created_after, created_before=created_before,
+        )
         discoveries = []
         for row in rows:
             node = self._dict_to_discovery(row)
