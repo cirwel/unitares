@@ -634,7 +634,8 @@ precisely because it is not one.
 
 The council round was held on 2026-09-27 and adopted as §10 (A10 splits this section). The §4
 authorisation names "its design pass and council review" alongside this document; the design pass
-is defined on §1.2's chosen option and runs at §7 step 5. This gate is not met until it has.
+is defined on §1.2's chosen option and runs at §7 step 5, on the pro-port branch only; a no-port
+reading completes the gate at step 4 without it (A10).
 
 ---
 
@@ -787,6 +788,6 @@ and the inventory test fails on any writer that does not; BEAM liveness only wri
 outcomes are benign by construction. Each stream carries its own denominator (responses against
 attempts, the sweeper's per-write records against each cycle's `write_attempt_count`, cycle rows
 against `cycle_seq` within a boot). Every failed emission is counted in-process and reported on the
-next cycle row. Completeness is 100%: any unmatched unit or reported emission failure makes the
-reading inconclusive (A10), never a zero. The stated residual: a process that dies between a failed
-emission and its next cycle row leaves only a boot change, which A5 already counts as a gap.
+next cycle row, and appended (fsynced) to a local file outside the audit database before the process
+continues, so a failure survives the process. Completeness is 100%: any unmatched unit or recorded
+emission failure makes the reading inconclusive (A10), never a zero.
