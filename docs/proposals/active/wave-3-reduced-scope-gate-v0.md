@@ -640,7 +640,9 @@ What the signature does:
 
 - It ratifies this document **as the reduced-scope gate** that the 2026-08-22 go-decision (§4)
   required: the scope in §1, the disconfirmers in §2, the prerequisites in §3, the exit criteria
-  in §4, the stop signs in §5, the seven §6 rulings as recorded, and the §7 sequence.
+  in §4, the stop signs in §5, the six settled §6 dispositions as recorded (the rulings in
+  §6.1, §6.2, §6.3, §6.6 and §6.7, and §6.5's deferral), and the §7 sequence. ⛔§6.4 is not
+  among them: it is still owed, and the signature does not decide it.
 - From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
   before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
   first, then the signature) is the precedent.
