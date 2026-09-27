@@ -130,14 +130,14 @@ judging the finding correct (roadmap Invariant 4, the reasoning
 A call that times out may still be running under the orchestrator, and a CLI
 stuck on a prompt would otherwise leave one more child each day. The probe
 stores the `orchestrator_execution_id` of every timed-out call in its state
-file. On the next run, before anything else for that host, it reads the
-orchestrator's `GET /v1/executions/<id>` snapshot, which does not block. If
+file. The next run's cleanup pass reads the orchestrator's
+`GET /v1/executions/<id>` snapshot for each stored id, which does not block. If
 that execution is still live, the probe stops it with
 `DELETE /v1/executions/<id>`, which the orchestrator documents as stopping
 exactly that execution. That id is the probe's own spawn, so no other
-caller's work is touched. The probe then raises the host's finding to
-**high** with the age of the hung call, and does not probe that host again
-that run. A hung call therefore lasts at most a day and never accumulates.
+caller's work is touched. If the host is still enabled, the probe then
+raises its finding to **high** with the age of the hung call, and does not
+probe that host again that run. A hung call therefore lasts at most a day and never accumulates.
 If the stop fails, the finding says so and the id stays in the state file for
 the next run. So each host has at most one probe child alive
 at a time, however long the hang lasts. By
