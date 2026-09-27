@@ -2103,6 +2103,7 @@ def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", 
     monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: list(candidates))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    monkeypatch.setattr(rg, "current_record", lambda *a: None)
     ran = []
     monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, p: ran.append(p) or 0)
     return ran
@@ -2348,3 +2349,28 @@ def test_the_second_family_gets_only_the_remaining_budget(monkeypatch):
     budgets.clear()
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
     assert budgets == []
+
+
+
+def test_unreadable_native_evidence_is_unreviewed_not_empty(monkeypatch, capsys):
+    """Native Codex on #2504 (P2): a failed native read was treated as no
+    records, which could hide an open native FINDINGS review."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
+    def boom(*a):
+        raise SystemExit("reviews endpoint unavailable")
+    monkeypatch.setattr(rg, "read_native", boom)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
+    assert ran == [] and "incomplete" in capsys.readouterr().out
+
+
+def test_findings_posted_during_the_second_review_are_returned(monkeypatch, capsys):
+    """Native Codex on #2504 (P2): a cloud review posting FINDINGS while the
+    second reviewer ran was never re-read, so review.sh reported success."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                       families={"google"}, candidates=("claude",))
+    late = rg.Record("k", "FINDINGS", 1, False, "codex-native", "url", "1. Late finding")
+    monkeypatch.setattr(rg, "current_record", lambda *a: late)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 1
+    assert "Late finding" in capsys.readouterr().out

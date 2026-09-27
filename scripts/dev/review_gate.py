@@ -1558,8 +1558,11 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     comments = pr_comments(repo, pr)
     try:
         native = read_native(repo, pr, key, head, comments).records
-    except SystemExit:
-        native = []
+    except SystemExit as exc:
+        # As every other cmd_review path: incomplete evidence could hide an
+        # open native FINDINGS review, so it is UNREVIEWED, never "no records".
+        print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
+        return UNREVIEWED
     families = passing_families(comments, key, native)
     # The review that just passed may not be readable yet (API read lag after
     # its own post): count its family from what we already know, so the same
@@ -1601,6 +1604,16 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         result = completed_review_exit(repo, pr, key, head, result)
         if result != 0:
             return result  # findings (or a moved diff) go back to the author first
+        # A cloud review can post findings while this reviewer runs: return
+        # them, as the initial-review path does, instead of reporting success.
+        try:
+            latest = current_record(repo, pr, key, head, pr_comments(repo, pr))
+        except SystemExit as exc:
+            print(f"[review] UNREVIEWED: completion evidence is incomplete: {exc}; retry review.sh")
+            return UNREVIEWED
+        if latest and latest.verdict == "FINDINGS" and not latest.disposed:
+            print(f"[review] {latest.status()[1]}\n{latest.url}\n{latest.text}")
+            return 1
         families.add(reviewer_family(provider))
         if len(families) >= 2:
             return 0
