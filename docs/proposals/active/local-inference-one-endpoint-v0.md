@@ -80,9 +80,38 @@ The key is named indirectly, as the orchestrated reviewer's `external` backend
 already does (`UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV`), so a process that must
 not carry the value (see 2.6) can be told which variable to read. Ollama,
 vLLM, LM Studio, llama.cpp's server, OpenRouter, OpenAI and the Hugging Face
-router all accept this shape. The existing names stay as aliases with the
-precedence and disagreement warning `local_inference_env.py` already applies to
-`UNITARES_OLLAMA_BASE_URL`. An existing install keeps working with no edits, except that one which relies
+router all accept this shape.
+
+### 2.1.1 Old names expire
+
+Old names are handled by one rule, so they cannot pile up across releases:
+
+- **A name that never shipped gets no alias.** Renaming anything not yet in a
+  published release is free. `UNITARES_OLLAMA_BASE` exists only on `master`
+  (#2495) and is renamed outright if step 1 lands before the next release;
+  otherwise it joins the table below.
+- **A shipped name gets an alias only through one table**, in
+  `local_inference_env.py`, with three columns: old name, new name, and the
+  release that removes it (the release after next). Code reads only the new
+  names; the resolver consults the table once. v2.22.1 shipped two:
+  `UNITARES_LLM_MODEL` and `UNITARES_OLLAMA_BASE_URL`.
+- **CI enforces the date.** A test fails once `VERSION` reaches an entry's
+  removal release, so the release cut removes the alias or a reviewed diff
+  moves its date. No alias outlives its date silently.
+- **Quiet while it lives.** Setting only an old name logs nothing per call.
+  The existing one-time warning fires only when an old and a new name are both
+  set and disagree. The doctor prints one INFO line per old name in use, with
+  the new name and the removal release, and the flag catalog lists it as
+  "alias of X until vN".
+
+This matters most at the spawn boundary. The governance server, the
+orchestrator service and the reviewer child can run different releases on one
+host, and federated operators upgrade on their own schedules. While an alias is
+in the table, the dispatcher forwards both the new and the old name (2.6), so
+an older child still reads its model and a newer one reads the new name. A
+hard rename would break any pairing that straddles it.
+
+An existing install keeps working with no edits, except that one which relies
 on the implicit model must name it before step 4 (section 4).
 
 ### 2.2 One client
@@ -155,7 +184,8 @@ The reviewer's `local` backend and the local resident runner use
 The orchestrated reviewer is started through a governed spawn whose
 environment becomes an audited effect record, so
 `orchestrator_dispatch.py` forwards configuration but never credential
-values. The same rule applies here: the dispatcher forwards
+values. The same rule applies here, and while the old names are in the alias
+table (2.1.1) each is forwarded beside its new name. The dispatcher forwards
 `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
 (the variable's name), and the key's value must be provisioned in the
 orchestrator service's own environment, which the child inherits. With the
@@ -185,8 +215,8 @@ release note says what to set first. One rule orders them: no step may let a req
 `privacy='local'` reach an endpoint the server has not classified as local.
 
 1. **Settings, with the privacy check.** In one pull request:
-   - `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` with their aliases in
-     `local_inference_env.py`;
+   - `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` in `local_inference_env.py`,
+     with the alias table, its expiry test and the doctor INFO line (2.1.1);
    - the endpoint classification and the `privacy='local'` refusal from 2.3,
      applied to every path that reads the setting, because this is the first
      step in which the base URL can name a machine the operator does not run;
@@ -275,9 +305,12 @@ in CI or a recorded manual run.
 1. **Names.** The operator left this to the proposal. Decided:
    `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
    become the documented names, and `UNITARES_OLLAMA_BASE`,
-   `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` stay as aliases. A name
-   containing `OLLAMA` tells an installer with another server that the setting
-   is not for them; the aliases keep every existing install working.
+   `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` stay as aliases under
+   the expiry rule in 2.1.1. A name containing `OLLAMA` tells an installer with
+   another server that the setting is not for them. Asked whether aliases would
+   build up, the operator chose "best for federation": expiring aliases rather
+   than a hard rename, because operators and the processes on one host upgrade
+   independently.
 2. **Default model: none.** "We don't know what outside users use." The
    implicit `gemma4:latest` goes, in its own step (section 4, step 4) after a release
    with a doctor warning, so deployments that relied on it can name a model
