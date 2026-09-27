@@ -111,8 +111,8 @@ the test run one.
   This check replaces the legacy commit status; old heads may still show
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
-- Findings: fix and push (the new diff is reviewed, up to the
-  [round cap](#round-cap)), or post rebuttals with
+- Findings: fix and push (the new diff is reviewed; the
+  [round cap](#round-cap) is currently switched off), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -215,7 +215,14 @@ fallback validation.
 
 #### Round cap
 
-A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
+> **Switched off since 2026-09-27 (operator decision).** `ROUND_CAP_ENABLED`
+> in `review_gate.py` is `False`: every round gets a full review however many
+> came before, and the `review` check shows only the count ("review round 4").
+> The rest of this section describes the mechanism as it works when the
+> switch is set back to `True`. It is kept, and its tests still run, so it can
+> be switched back on without being rebuilt.
+
+When enabled, a PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
 round is one completed native Codex run, counted by the distinct commits
 Codex names. Codex can post a result three ways: a submitted review, a clean
 comment, or a completed activity row. All three count. These don't count: a
@@ -362,9 +369,10 @@ operator's), the environment-independent path is a PR comment:
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
-   The [round cap](#round-cap) applies here too. After three rounds with only
-   P2s open, do not post `@codex review` again: hand the remaining findings
-   off for disposition the same way. A P1 fix still gets its request.
+   When the [round cap](#round-cap) is switched on, it applies here too: after
+   three rounds with only P2s open, do not post `@codex review` again; hand
+   the remaining findings off for disposition the same way. A P1 fix still
+   gets its request. The cap is currently switched off.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -632,7 +640,7 @@ this entirely).
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
+| Review round 3 done, only P2s open | Fix and request another round; the [round cap](#round-cap) is switched off |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
