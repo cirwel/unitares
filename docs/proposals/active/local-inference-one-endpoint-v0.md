@@ -28,10 +28,9 @@ reviewer's `local` backend (`agents/dialectic_reviewer/reviewer.py`) and the
 local resident runner (`agents/local_resident/runner.py`).
 
 Out of scope: the Watcher resident (`agents/watcher/agent.py`) reads its own
-`WATCHER_OLLAMA_URL` and pins its own model on purpose, because its finding
-calibration was measured against that model. It keeps its settings. Moving it
-onto the shared endpoint is a separate decision that needs its own
-recalibration, so "every local-model path" below means the server and the
+`WATCHER_OLLAMA_URL` and `WATCHER_MODEL`, and a deployment pins the model it
+has self-tested Watcher with. It keeps its settings. Moving it onto the shared
+endpoint is a separate decision that needs its own self-test, so "every local-model path" below means the server and the
 processes the server starts, plus the local resident runner. Its `external` backend
 (`host_backends.py`) already talks to any OpenAI-compatible endpoint, configured
 by `UNITARES_DIALECTIC_EXTERNAL_BASE_URL`, `_MODEL` and `_API_KEY_ENV`. That
