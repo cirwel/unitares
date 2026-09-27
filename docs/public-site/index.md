@@ -11,7 +11,7 @@ process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
 **Current public releases:** [server v3.0.0](https://github.com/cirwel/unitares/releases/tag/v3.0.0)
-· [Python SDK 0.3.0](https://pypi.org/project/unitares-sdk/0.3.0/)
+· [Python SDK 0.4.0](https://pypi.org/project/unitares-sdk/0.4.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
 
@@ -57,7 +57,7 @@ make demo
 Install the resident-agent SDK from PyPI:
 
 ```bash
-python -m pip install unitares-sdk==0.3.0
+python -m pip install unitares-sdk==0.4.0
 ```
 
 Or inspect the signed multi-architecture server image:
