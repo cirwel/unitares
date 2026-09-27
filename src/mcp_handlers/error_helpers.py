@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
 from src.logging_utils import get_logger
 from .identity_bootstrap import SET_DISPLAY_NAME_CALL
+from .support.coerce import coerce_bool
 from .utils import error_response
 
 logger = get_logger(__name__)
@@ -382,6 +383,21 @@ def _knowledge_write_author(call: Any, arguments: Dict[str, Any]) -> Any:
         return None
 
 
+def _store_batch_size(call: Any, arguments: Dict[str, Any]) -> Optional[int]:
+    """How many items a timed-out batch store sent, else None for one row.
+
+    knowledge(action='store') stores a batch whenever ``discoveries`` is
+    present, the test its handler dispatches on. 0 stands for a batch whose
+    size the arguments do not give.
+    """
+    if call.tool != "knowledge" or call.action != "store":
+        return None
+    discoveries = arguments.get("discoveries")
+    if discoveries is None:
+        return None
+    return len(discoveries) if isinstance(discoveries, list) else 0
+
+
 def _knowledge_store_recovery(
     call: Any,
     arguments: Dict[str, Any],
@@ -398,6 +414,12 @@ def _knowledge_store_recovery(
     whatever its status. The window runs from the call's start to settled_by;
     the row a store or note writes is stamped when the handler builds it,
     before the timeout.
+
+    A batch store (``discoveries``) writes its items one at a time, each
+    committed on its own, so a timed-out batch can have saved some items and
+    not others. Its recovery has the caller match each item to a row and send
+    only the unmatched ones again: resending the whole batch would store
+    every item that landed a second time.
     """
     author = _knowledge_write_author(call, arguments)
     writer = _call_literal(author.agent_id, "") if author is not None else ""
@@ -416,20 +438,33 @@ def _knowledge_store_recovery(
     )
     check = _render_call("knowledge", lookup)
     limit = _WINDOW_LOOKUP_LIMIT
+    batch_size = _store_batch_size(call, arguments)
+    batch = batch_size is not None
+    # The summary a row of this call's would carry.
+    match = "an item's summary" if batch else "your summary"
     yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
+    matching = (
+        "Match each item you sent to its own row in it by summary (a long one "
+        "is stored cut short; two items with the same summary need two rows)"
+    )
 
     if writer and author.kind == "bound":
         listed = f"every row your bound identity '{writer}' created"
         attribution = (
             "Rows under your identity come from calls bound to it, so a row "
-            "with your summary is your write: this call's, unless you sent the "
+            f"with {match} is your write: this call's, unless you sent the "
             "same summary in another call in the window. The exception is a "
             "call that reaches the handler unbound and passes your id as "
             "agent_id on a low or medium write, which no ownership check stops."
         )
-        found_step = (
-            f"2. If a row in it has {yours}, it was saved. Do not store it again"
-        )
+        if batch:
+            found_step = (
+                f"2. {matching}. An item with a row was saved. Do not send it again"
+            )
+        else:
+            found_step = (
+                f"2. If a row in it has {yours}, it was saved. Do not store it again"
+            )
     else:
         if writer:
             listed = f"every row writer '{writer}' created"
@@ -437,7 +472,7 @@ def _knowledge_store_recovery(
                 author.kind, "another caller can write under it"
             )
             attribution = (
-                f"That id is not yours alone: {reason}. A row with your summary "
+                f"That id is not yours alone: {reason}. A row with {match} "
                 "shows a write under it landed, possibly another caller's, so "
                 "only its absence is proof."
             )
@@ -446,39 +481,96 @@ def _knowledge_store_recovery(
             attribution = (
                 "The id this call would be recorded under could not be "
                 "resolved, so the list is not filtered by writer: a row with "
-                "your summary may be another writer's, and only its absence is "
+                f"{match} may be another writer's, and only its absence is "
                 "proof."
             )
-        found_step = (
-            f"2. If a row in it has {yours}, a write like yours landed in the "
-            "window but may be another caller's. Do not store it again unless "
-            "you know that row is not yours"
+        if batch:
+            found_step = (
+                f"2. {matching}. A row shows a write like that item landed in "
+                "the window but may be another caller's. Do not send that item "
+                "again unless you know that row is not yours"
+            )
+        else:
+            found_step = (
+                f"2. If a row in it has {yours}, a write like yours landed in the "
+                "window but may be another caller's. Do not store it again unless "
+                "you know that row is not yours"
+            )
+
+    listing = (
+        f"{check} lists {listed} between call_started_at and settled_by, "
+        "newest first and whatever its status: it filters on writer and "
+        f"creation time, not relevance. {attribution}"
+    )
+    rows = "rows" if batch else "row"
+    paging_step = (
+        f"4. If count is {limit}, older rows in the window, where this "
+        f"call's {rows} would be, may be missing: read again with "
+        "created_before set to the created_at of the oldest row listed, "
+        f"until a read returns fewer than {limit}"
+    )
+    if batch:
+        sent = f"a batch of {batch_size} items" if batch_size else "a batch"
+        action = (
+            f"Do not send this batch again. It was {sent}, and the store "
+            "commits each item on its own, so some items may be saved and "
+            "others not. Every store adds a new row, so resending the whole "
+            "batch leaves a second finding for every item that landed. "
+            f"{listing} Compare each item you sent, by its summary, against "
+            "those rows and send only the items with no row again. An item "
+            "with no row is proven unsaved only when the list was read after "
+            f"settled_by and its count is below {limit}."
+        )
+        resend_step = (
+            "3. On a read after settled_by whose count is below "
+            f"{limit}, an item with no row was not saved: send only those "
+            "items again, in one store or a batch of just them. Never resend "
+            "the whole batch"
+        )
+    else:
+        action = (
+            "Do not store this again yet. It may already be saved, and every "
+            "store adds a new row, so a second call leaves two findings. "
+            f"{listing} A list with no row carrying your summary proves nothing "
+            "was saved, but only when it was read after settled_by and its "
+            f"count is below {limit}."
+        )
+        resend_step = (
+            "3. If no row has your summary on a read after settled_by and count "
+            f"is below {limit}, nothing was saved: store it again"
         )
 
     return {
-        "action": (
-            "Do not store this again yet. It may already be saved, and every "
-            "store adds a new row, so a second call leaves two findings. "
-            f"{check} lists {listed} between call_started_at and settled_by, "
-            "newest first and whatever its status: it filters on writer and "
-            f"creation time, not relevance. {attribution} A list with no row "
-            "carrying your summary proves nothing was saved, but only when it "
-            f"was read after settled_by and its count is below {limit}."
-        ),
+        "action": action,
         "check_before_retry": check,
         "check_arguments": lookup,
         "workflow": [
             f"1. Call {check}; search needs no bound identity",
             found_step,
-            "3. If no row has your summary on a read after settled_by and count "
-            f"is below {limit}, nothing was saved: store it again",
-            f"4. If count is {limit}, older rows in the window, where this "
-            "call's row would be, may be missing: read again with "
-            "created_before set to the created_at of the oldest row listed, "
-            f"until a read returns fewer than {limit}",
+            resend_step,
+            paging_step,
         ],
         "related_tools": ["knowledge", "health_check"],
     }
+
+
+def _asks_for_new_identity(call: Any, arguments: Dict[str, Any]) -> bool:
+    """Whether an identity-minting call asked for a new identity, not a resume.
+
+    Each flag is read the way the handler reads it. onboard (and its aliases)
+    coerces force_new (default false) and resume (default true); resume=false
+    skips the resume and mints a new identity even when client_session_id
+    names a binding. identity reads force_new as sent. Its resume never
+    replaces a binding the session holds: dispatch resolves that binding
+    before the handler, which reuses it whatever resume says, and the
+    identity schema fills an omitted resume with false, so resume=false is
+    the ordinary identity read.
+    """
+    if call.tool == "identity":
+        return bool(arguments.get("force_new"))
+    if coerce_bool(arguments.get("force_new"), default=False):
+        return True
+    return not coerce_bool(arguments.get("resume"), default=True)
 
 
 def _unknown_outcome_recovery(
@@ -500,9 +592,12 @@ def _unknown_outcome_recovery(
 
     if getattr(call, "mints_identity", False):
         session_id = _call_literal(arguments.get("client_session_id"), "")
-        if session_id and not arguments.get("force_new"):
+        if session_id and not _asks_for_new_identity(call, arguments):
             # A named binding is resumed, not replaced; reading it settles
-            # whether anything needs repeating.
+            # whether anything needs repeating. A call that asked for a new
+            # identity takes the minting recovery below: this read finding
+            # the old agent_uuid would call a fork that may never have
+            # happened settled.
             check = f"identity(client_session_id='{session_id}')"
             return {
                 "action": (

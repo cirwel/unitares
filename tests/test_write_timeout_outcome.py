@@ -401,6 +401,126 @@ def test_the_lookup_arguments_survive_the_knowledge_schema():
             assert key in KnowledgeParams.ACTION_FIELDS["search"], key
 
 
+def _batch(size: int) -> list[dict]:
+    return [
+        {"discovery_type": "note", "summary": f"item {index}"} for index in range(size)
+    ]
+
+
+def test_a_single_store_timeout_speaks_of_one_row():
+    payload = _store_lookup_payload({"action": "store", "summary": "s"}, bound=BOUND_UUID)
+
+    recovery = _assert_window_lookup(payload, BOUND_UUID)
+    assert "batch" not in json.dumps(recovery)
+    assert recovery["action"].startswith("Do not store this again yet")
+    assert recovery["workflow"][2].endswith("nothing was saved: store it again")
+
+
+@pytest.mark.parametrize(
+    ("bound", "shared"),
+    [(BOUND_UUID, False), (None, True)],
+    ids=["bound", "anonymous"],
+)
+def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, shared):
+    """A batch commits item by item, so a timed-out batch can be half saved.
+    Resending it whole stores every item that landed twice; the recovery lists
+    the same window and has the caller resend only the unmatched items."""
+    payload = _store_lookup_payload(
+        {"action": "store", "discoveries": _batch(3)}, bound=bound
+    )
+
+    writer = payload["recovery"]["check_arguments"].get("agent_id_filter")
+    recovery = _assert_window_lookup(payload, bound or writer)
+    action = recovery["action"]
+    assert action.startswith("Do not send this batch again. It was a batch of 3 items")
+    assert "commits each item on its own" in action
+    assert "resending the whole batch leaves a second finding" in action
+    assert "send only the items with no row again" in action
+    match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
+    assert match_step.startswith("2. Match each item you sent to its own row")
+    assert "two items with the same summary need two rows" in match_step
+    assert ("may be another caller's" in match_step) is shared
+    assert "after settled_by" in resend_step
+    assert "send only those items again" in resend_step
+    assert resend_step.endswith("Never resend the whole batch")
+    text = json.dumps(recovery)
+    assert "store it again" not in text and "store this again" not in text, (
+        "one-row wording would have the caller resend the whole batch"
+    )
+
+
+def test_a_batch_whose_size_the_arguments_do_not_give_is_still_a_batch():
+    payload = _store_lookup_payload(
+        {"action": "store", "discoveries": "not a list"}, bound=BOUND_UUID
+    )
+
+    action = _assert_window_lookup(payload, BOUND_UUID)["action"]
+    assert action.startswith("Do not send this batch again. It was a batch, and")
+
+
+@pytest.mark.parametrize(
+    ("tool", "action", "arguments", "expected"),
+    [
+        ("knowledge", "store", {"discoveries": _batch(2)}, 2),
+        ("knowledge", "store", {"discoveries": []}, 0),
+        ("knowledge", "store", {"summary": "s"}, None),
+        ("knowledge", "store", {"discoveries": None}, None),
+        # Only the store handler takes a batch.
+        ("knowledge", "note", {"discoveries": _batch(2)}, None),
+        ("leave_note", None, {"discoveries": _batch(2)}, None),
+    ],
+)
+def test_store_batch_size_follows_the_handlers_batch_test(tool, action, arguments, expected):
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _store_batch_size
+
+    call = CallOperation(operation="write", tool=tool, action=action)
+    assert _store_batch_size(call, arguments) == expected
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_times_out_between_items_is_half_saved():
+    """The real batch handler body: item 0 commits, item 1 outlasts the
+    timeout. The reply must not have the caller resend item 0."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    body = kg_handlers.handle_store_knowledge_graph.__wrapped__
+
+    async def _store(arguments):
+        return await body(arguments)
+
+    handler = mcp_tool("store_knowledge_graph", timeout=0.2, register=False)(_store)
+    saved: list[str] = []
+
+    class _BatchGraph:
+        async def find_similar(self, discovery, limit=3):
+            return []
+
+        async def add_discovery(self, discovery):
+            if saved:
+                await asyncio.sleep(5)
+            saved.append(discovery.summary)
+
+    graph = _BatchGraph()
+    with patch(
+        "src.mcp_handlers.utils.check_agent_can_operate", return_value=None
+    ), patch(
+        "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+        new_callable=AsyncMock,
+    ):
+        payload = _payload(
+            await _run_patched(
+                handler, graph, {"action": "store", "discoveries": _batch(2)}
+            )
+        )
+
+    assert saved == ["item 0"], "premise: the first item committed, the second did not"
+    assert payload["outcome"] == "unknown"
+    recovery = payload["recovery"]
+    assert "a batch of 2 items" in recovery["action"]
+    assert recovery["workflow"][2].endswith("Never resend the whole batch")
+
+
 def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
     """Another writer can move updated_at after this call starts; only the
     caller's own fields show that this call's write landed."""
@@ -506,6 +626,96 @@ def test_a_fresh_or_unproven_onboard_is_told_a_repeat_creates_another(arguments)
     assert recovery["check_before_retry"] is None
     assert "every further call creates another" in recovery["action"]
     assert "do not retry in a loop" in recovery["action"]
+
+
+def _identity_recovery(tool: str, arguments: dict) -> dict:
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    return _unknown_outcome_recovery(
+        CallOperation(operation="read", tool=tool, mints_identity=True),
+        arguments,
+    )
+
+
+def _is_binding_read(recovery: dict) -> bool:
+    return recovery["check_before_retry"] == "identity(client_session_id='sess-1')"
+
+
+def _is_onboard_minting(recovery: dict) -> bool:
+    return (
+        recovery["check_before_retry"] is None
+        and "every further call creates another" in recovery["action"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "mints"),
+    [
+        # onboard reads resume with coerce_bool(default=True): false skips the
+        # resume and mints a new identity beside the named binding.
+        ({"resume": False}, True),
+        ({"resume": "false"}, True),
+        ({"resume": "0"}, True),
+        ({}, False),
+        ({"resume": True}, False),
+        ({"resume": "true"}, False),
+        ({"force_new": True}, True),
+        ({"force_new": "true"}, True),
+        ({"force_new": "false"}, False),
+        ({"force_new": True, "resume": True}, True),
+    ],
+)
+def test_an_onboard_that_asked_for_a_new_identity_is_not_sent_to_the_old_binding(
+    extra, mints
+):
+    """A read of the named binding would find the old agent_uuid and call the
+    fork settled whether or not it happened."""
+    recovery = _identity_recovery("onboard", {"client_session_id": "sess-1", **extra})
+
+    assert _is_onboard_minting(recovery) is mints
+    assert _is_binding_read(recovery) is not mints
+
+
+@pytest.mark.parametrize(
+    ("raw", "mints"),
+    [
+        ({"client_session_id": "sess-1", "resume": "false"}, True),
+        ({"client_session_id": "sess-1", "resume": False}, True),
+        ({"client_session_id": "sess-1"}, False),
+    ],
+)
+def test_onboard_classification_holds_on_the_validated_arguments(raw, mints):
+    """Dispatch validates before the handler, so a timed-out call carries the
+    schema's output: resume filled with true when omitted, strings coerced."""
+    from src.mcp_handlers.schemas.identity import OnboardParams
+
+    validated = OnboardParams.model_validate(raw).model_dump()
+    assert _is_onboard_minting(_identity_recovery("onboard", validated)) is mints
+
+
+@pytest.mark.parametrize("extra", [{}, {"resume": False}, {"resume": "false"}])
+def test_identity_resume_false_is_the_ordinary_read_of_the_binding(extra):
+    """identity reuses the binding dispatch resolved whatever resume says, and
+    its schema fills an omitted resume with false: resume=false there is the
+    ordinary read, not a request for a new identity."""
+    from src.mcp_handlers.schemas.identity import IdentityParams
+
+    arguments = {"client_session_id": "sess-1", **extra}
+    validated = IdentityParams.model_validate(arguments).model_dump()
+    assert validated["resume"] is False, "premise: the schema's default"
+
+    for sent in (arguments, validated):
+        assert _is_binding_read(_identity_recovery("identity", sent))
+
+
+def test_identity_force_new_takes_the_identity_minting_recovery():
+    recovery = _identity_recovery(
+        "identity", {"client_session_id": "sess-1", "force_new": True}
+    )
+
+    assert not _is_binding_read(recovery)
+    assert "identity creates one when no binding is proven" in recovery["action"]
 
 
 @pytest.mark.parametrize(
