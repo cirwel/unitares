@@ -789,5 +789,6 @@ outcomes are benign by construction. Each stream carries its own denominator (re
 attempts, the sweeper's per-write records against each cycle's `write_attempt_count`, cycle rows
 against `cycle_seq` within a boot). Every failed emission is counted in-process and reported on the
 next cycle row, and appended (fsynced) to a local file outside the audit database before the process
-continues, so a failure survives the process. Completeness is 100%: any unmatched unit or recorded
-emission failure makes the reading inconclusive (A10), never a zero.
+continues, so a failure survives the process; the A2 report must read that file for every
+deployment in W_pre, and a missing or unreadable file is itself inconclusive. Completeness is 100%:
+any unmatched unit or recorded emission failure makes the reading inconclusive (A10), never a zero.
