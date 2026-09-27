@@ -353,6 +353,7 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
         from src.dialectic_db import update_session_phase_async as pg_update_phase
         from src.dialectic_db import resolve_session_async as pg_resolve_session
         from .beam_resolve_client import beam_resolve, beam_update_phase
+        from src.dialectic_session_writes import session_write_via
         if session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED) and defer_terminal:
             # Caller owns the terminal write once it has a resolution; skip the
             # PG sync entirely (not even a phase write — the phase IS terminal
@@ -388,11 +389,12 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
             )
             written = beam_done is not None
             if beam_done is None:
-                written = bool(await pg_resolve_session(
-                    session_id=session.session_id,
-                    resolution=resolution_dict,
-                    status=status,
-                ))
+                with session_write_via("python_fallback", site="save_session_terminal"):
+                    written = bool(await pg_resolve_session(
+                        session_id=session.session_id,
+                        resolution=resolution_dict,
+                        status=status,
+                    ))
             discard_receipt_unless_written(session.resolution, written=written, had_receipt=had_receipt)
         else:
             round_ = getattr(session, "synthesis_round", None)
@@ -400,7 +402,8 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
                 session.session_id, session.phase.value, round_
             )
             if beam_ph is None:
-                await pg_update_phase(session.session_id, session.phase.value, round_)
+                with session_write_via("python_fallback", site="save_session_phase"):
+                    await pg_update_phase(session.session_id, session.phase.value, round_)
         logger.debug(f"Session {session.session_id} synced to PostgreSQL (phase={session.phase.value})")
     except Exception as e:
         if terminal_minted and session.resolution is not None:

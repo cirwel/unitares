@@ -6,10 +6,24 @@ Provides storage for dialectic sessions with PostgreSQL.
 
 import json
 import asyncio
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 
 from src.logging_utils import get_logger
+from src.dialectic_session_writes import (
+    KIND_CREATE,
+    KIND_FACILITATION,
+    KIND_MESSAGE,
+    KIND_PHASE,
+    KIND_REOPEN,
+    KIND_RESOLVE,
+    KIND_REVIEWER,
+    KIND_STATUS,
+    note_session_read,
+    record_session_write,
+    written_outcome,
+)
 from src.dialectic_protocol import DialecticPhase
 from src.db.acquire_compat import compatible_acquire
 
@@ -123,6 +137,7 @@ class DialecticDB:
 
     async def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get session by ID with all messages."""
+        read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
         async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
@@ -153,6 +168,8 @@ class DialecticDB:
             """, session_id)
 
             session["messages"] = [dict(msg) for msg in msg_rows]
+            # The state a later write in this task acts on (its decision time).
+            note_session_read(session_id, read_at)
             return session
 
     async def get_session_by_agent(self, agent_id: str, active_only: bool = True) -> Optional[Dict[str, Any]]:
@@ -174,6 +191,7 @@ class DialecticDB:
 
     async def get_all_sessions_by_agent(self, agent_id: str) -> List[Dict[str, Any]]:
         """Get all active sessions where agent is paused agent or reviewer."""
+        read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -188,6 +206,7 @@ class DialecticDB:
                 session = await self.get_session(row["session_id"])
                 if session:
                     sessions.append(session)
+            note_session_read([x.get("session_id") for x in sessions], read_at)
             return sessions
 
     async def update_session_phase(
@@ -266,13 +285,59 @@ class DialecticDB:
     # `reopen_session` is the only sanctioned path out of a terminal state.
     TERMINAL_WRITE_GUARD = ("resolved", "failed")
 
-    async def update_session_reviewer(self, session_id: str, reviewer_agent_id: str) -> bool:
+    # The follow-up read every guarded writer below makes after a refused
+    # UPDATE. It reads the winner's status (always) and the reason it recorded
+    # (when it wrote a resolution), on the same connection, immediately after
+    # the refusal, so the attribution cannot race a later reopen.
+    _REFUSAL_WINNER_SQL = (
+        "SELECT status, resolution_json->>'reason' AS reason "
+        "FROM core.dialectic_sessions WHERE session_id = $1"
+    )
+
+    @staticmethod
+    def _record_winner(winner: Optional[Dict[str, Any]], existing) -> None:
+        """Report who refused a guarded write, without changing the refusal.
+
+        ``winner`` is an optional caller-supplied dict. When given, it is
+        filled with ``winner_status`` and ``winner_reason`` (both None for a
+        missing row) and ``row_missing``. The helpers' boolean return is
+        unchanged: this is observability for the caller, not a new outcome
+        (Wave 3 gate council 2026-09-27, finding B3 -- the status was read and
+        only logged). Never raises.
+        """
+        if winner is None:
+            return
+        try:
+            if existing is None:
+                winner.update(winner_status=None, winner_reason=None, row_missing=True)
+                return
+            reason = None
+            try:
+                reason = existing["reason"]
+            except (KeyError, IndexError, TypeError):
+                reason = None
+            winner.update(
+                winner_status=existing["status"],
+                winner_reason=reason,
+                row_missing=False,
+            )
+        except Exception:  # pragma: no cover - attribution must never fail a write path
+            return
+
+    async def update_session_reviewer(
+        self,
+        session_id: str,
+        reviewer_agent_id: str,
+        *,
+        winner: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Assign reviewer to session.
 
         Refuses terminal sessions: the sweeper picks a replacement reviewer
         across several DB round-trips, and the session can resolve (e.g. via
         the BEAM saga) inside that window. Without the guard the write lands
-        on a resolved row. Returns False when refused or missing.
+        on a resolved row. Returns False when refused or missing; pass
+        ``winner={}`` to learn which (see `_record_winner`).
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
@@ -284,10 +349,8 @@ class DialecticDB:
             """, reviewer_agent_id, session_id)
             if "UPDATE 1" in result:
                 return True
-            existing = await conn.fetchrow(
-                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
-                session_id,
-            )
+            existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
+            self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"update_session_reviewer: {session_id[:16]}... not found")
             else:
@@ -297,7 +360,13 @@ class DialecticDB:
                 )
             return False
 
-    async def update_session_status(self, session_id: str, status: str) -> bool:
+    async def update_session_status(
+        self,
+        session_id: str,
+        status: str,
+        *,
+        winner: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Update session status (e.g., to 'failed' for auto-resolve).
 
         Same cross-process defense as ``resolve_session``: a bare
@@ -311,7 +380,8 @@ class DialecticDB:
         outcome, not this caller's — the sweeper must not narrate a reap it
         did not perform (BEAM liveness also writes 'failed', with its own
         resolution payload). Callers that want idempotent-replay semantics
-        use ``resolve_session``.
+        use ``resolve_session``. Pass ``winner={}`` to learn who refused the
+        write (see `_record_winner`); the return value is unchanged.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
@@ -323,10 +393,8 @@ class DialecticDB:
             """, status, session_id)
             if "UPDATE 1" in result:
                 return True
-            existing = await conn.fetchrow(
-                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
-                session_id,
-            )
+            existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
+            self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"update_session_status: {session_id[:16]}... not found")
             elif existing["status"] == status:
@@ -341,7 +409,12 @@ class DialecticDB:
                 )
             return False
 
-    async def mark_awaiting_facilitation(self, session_id: str) -> bool:
+    async def mark_awaiting_facilitation(
+        self,
+        session_id: str,
+        *,
+        winner: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """Record a standing facilitation request on a LIVE session.
 
         Deliberately separate from `update_session_awaiting_facilitation`,
@@ -368,6 +441,9 @@ class DialecticDB:
         being rescued by a machine. The handler path writes the flag through
         `update_session_awaiting_facilitation`, which does bump — it is a
         caller-driven transition on a live session, not a sweep observation.
+
+        Pass ``winner={}`` to learn who refused the write (see
+        `_record_winner`); the return value is unchanged.
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
@@ -379,10 +455,8 @@ class DialecticDB:
             """, session_id)
             if "UPDATE 1" in result:
                 return True
-            existing = await conn.fetchrow(
-                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
-                session_id,
-            )
+            existing = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
+            self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"mark_awaiting_facilitation: {session_id[:16]}... not found")
             else:
@@ -479,8 +553,10 @@ class DialecticDB:
         ⛔Fail-open is correct for a **write gate** and wrong for an
         **instrument**: a probe that reports "no saga" when it could not look
         manufactures exactly the clean zero the measurement-authority rule
-        forbids. `probe_inflight_saga` below is the honest form; this stays
-        boolean because its caller is deciding whether to skip a session.
+        forbids. `probe_inflight_saga` below is the honest form, and the
+        sweeper's post-write instrument uses `probe_saga_since`, which also
+        matches sagas that already committed; this stays boolean because its
+        caller is deciding whether to skip a session.
         """
         return await self.probe_inflight_saga(session_id) is True
 
@@ -511,6 +587,67 @@ class DialecticDB:
         except Exception as e:
             logger.debug(f"has_inflight_saga check failed for {session_id[:16]}...: {e}")
             return None
+
+    async def probe_saga_since(
+        self,
+        session_id: str,
+        since: Optional[datetime],
+    ) -> Optional[Dict[str, Any]]:
+        """Time-correlated saga probe for measurement (instrument v2).
+
+        Returns the newest saga on ``session_id`` that was created at or after
+        ``since`` in ANY state -- ``pg_committed`` and ``reverted`` included --
+        or that is still non-terminal whenever it was created. Returns ``{}``
+        when the query ran and found none, and **None** when it could not be
+        answered (the same three-state contract as `probe_inflight_saga`).
+
+        Why not a state match: sagas go from ``created_at`` to
+        ``pg_committed_at`` in p50 6.5 ms / p99 84 ms (Wave 3 gate council
+        2026-09-27, finding B1), so a saga that starts after the sweeper's
+        early check and commits before this probe is invisible to any check
+        that looks for non-terminal states. Creation time is what places a
+        saga inside the interval being measured; its state only says how far
+        it got. ``since=None`` degrades to the non-terminal match alone.
+
+        Read-only. Never raises.
+        """
+        try:
+            await self._ensure_pool()
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT saga_id, state, created_at, pg_committed_at, reverted_at
+                    FROM coordination.session_resolution_sagas
+                    WHERE session_id = $1
+                      AND (
+                            state IN ('reserved', 'paused_agent_applied',
+                                      'both_agents_applied', 'reverting')
+                         OR ($2::timestamptz IS NOT NULL AND created_at >= $2::timestamptz)
+                      )
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    session_id,
+                    since,
+                )
+                return dict(row) if row is not None else {}
+        except Exception as e:
+            logger.debug(f"probe_saga_since failed for {session_id[:16]}...: {e}")
+            return None
+
+    async def get_session_terminal_state(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Read a row's ``status`` and ``resolution_json->>'reason'``.
+
+        For attribution only (who made a session terminal, and what reason it
+        recorded). Returns None when the row is missing. Raises on a failed
+        read so a caller can tell "no reason recorded" from "could not read".
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(self._REFUSAL_WINNER_SQL, session_id)
+            if row is None:
+                return None
+            return {"status": row["status"], "reason": row["reason"]}
 
     async def add_message(
         self,
@@ -636,16 +773,20 @@ class DialecticDB:
             else "created_at DESC"
         )
         async with self._pool.acquire() as conn:
+            read_at = datetime.now(timezone.utc)
             rows = await conn.fetch(f"""
                 SELECT * FROM core.dialectic_sessions
                 WHERE status NOT IN ('resolved', 'failed', 'timeout', 'abandoned')
                 ORDER BY {order_by}
                 LIMIT $1
             """, limit)
-            return [dict(row) for row in rows]
+            out = [dict(row) for row in rows]
+            note_session_read([r.get("session_id") for r in out], read_at)
+            return out
 
     async def get_sessions_awaiting_reviewer(self) -> List[Dict[str, Any]]:
         """Get sessions that need a reviewer assigned."""
+        read_at = datetime.now(timezone.utc)
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             rows = await conn.fetch("""
@@ -654,7 +795,9 @@ class DialecticDB:
                 AND (reviewer_agent_id IS NULL OR reviewer_agent_id = '')
                 ORDER BY created_at ASC
             """)
-            return [dict(row) for row in rows]
+            out = [dict(row) for row in rows]
+            note_session_read([r.get("session_id") for r in out], read_at)
+            return out
 
     async def get_stats(self) -> Dict[str, Any]:
         """Get operational database statistics.
@@ -828,9 +971,28 @@ async def get_dialectic_db() -> DialecticDB:
 
 
 # Convenience wrappers - call methods directly on singleton
+# Every write helper below records an attempt/response pair
+# (`dialectic_session_write`, see src/dialectic_session_writes.py) so the Wave 3
+# collision report can see every Python-initiated session write, including the
+# ones that leave no other trace. The record is taken here, at the chokepoint,
+# so no call site can forget it.
+
+
+def _winner_fields(winner: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not winner:
+        return {}
+    return {"winner_status": winner.get("winner_status"),
+            "winner_reason": winner.get("winner_reason")}
+
+
 async def create_session_async(**kwargs) -> Dict[str, Any]:
-    db = await get_dialectic_db()
-    return await db.create_session(**kwargs)
+    async with record_session_write(
+        kind=KIND_CREATE, session_id=kwargs.get("session_id"),
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.create_session(**kwargs)
+        rec.respond(outcome=written_outcome(result))
+        return result
 
 
 async def get_session_async(session_id: str) -> Optional[Dict[str, Any]]:
@@ -863,51 +1025,134 @@ async def probe_inflight_saga_async(session_id: str) -> Optional[bool]:
     return await db.probe_inflight_saga(session_id)
 
 
+async def probe_saga_since_async(
+    session_id: str, since: Optional[datetime]
+) -> Optional[Dict[str, Any]]:
+    db = await get_dialectic_db()
+    return await db.probe_saga_since(session_id, since)
+
+
+async def get_session_terminal_state_async(session_id: str) -> Optional[Dict[str, Any]]:
+    db = await get_dialectic_db()
+    return await db.get_session_terminal_state(session_id)
+
+
 async def has_recently_reviewed_async(reviewer_id: str, paused_agent_id: str, hours: int = 24) -> bool:
     db = await get_dialectic_db()
     return await db.has_recently_reviewed(reviewer_id, paused_agent_id, hours)
 
 
 async def add_message_async(**kwargs) -> int:
-    db = await get_dialectic_db()
-    return await db.add_message(**kwargs)
+    # A message insert also bumps the session's updated_at -- the sweeper's
+    # staleness clock -- so it is a session write by the Wave 3 rule and is
+    # recorded like the others. The attempt's timestamp is its causal time.
+    async with record_session_write(
+        kind=KIND_MESSAGE, session_id=kwargs.get("session_id"),
+        requested=kwargs.get("message_type"),
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.add_message(**kwargs)
+        rec.respond(outcome="written" if result else "not_written")
+        return result
 
 
 async def update_session_phase_async(
     session_id: str, phase: str, synthesis_round: Optional[int] = None
 ) -> bool:
-    db = await get_dialectic_db()
-    return await db.update_session_phase(session_id, phase, synthesis_round)
+    async with record_session_write(
+        kind=KIND_PHASE, session_id=session_id, requested=phase,
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.update_session_phase(session_id, phase, synthesis_round)
+        rec.respond(outcome=written_outcome(result))
+        return result
 
 
 async def reopen_session_async(session_id: str, phase: str) -> bool:
-    db = await get_dialectic_db()
-    return await db.reopen_session(session_id, phase)
+    async with record_session_write(
+        kind=KIND_REOPEN, session_id=session_id, requested=phase,
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.reopen_session(session_id, phase)
+        rec.respond(outcome=written_outcome(result))
+        return result
 
 
-async def update_session_reviewer_async(session_id: str, reviewer_agent_id: str) -> bool:
-    db = await get_dialectic_db()
-    return await db.update_session_reviewer(session_id, reviewer_agent_id)
+async def update_session_reviewer_async(
+    session_id: str,
+    reviewer_agent_id: str,
+    *,
+    winner: Optional[Dict[str, Any]] = None,
+) -> bool:
+    async with record_session_write(
+        kind=KIND_REVIEWER, session_id=session_id, requested=reviewer_agent_id,
+    ) as rec:
+        db = await get_dialectic_db()
+        if winner is None:
+            result = await db.update_session_reviewer(session_id, reviewer_agent_id)
+        else:
+            result = await db.update_session_reviewer(
+                session_id, reviewer_agent_id, winner=winner
+            )
+        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
+        return result
 
 
-async def update_session_status_async(session_id: str, status: str) -> bool:
-    db = await get_dialectic_db()
-    return await db.update_session_status(session_id, status)
+async def update_session_status_async(
+    session_id: str,
+    status: str,
+    *,
+    winner: Optional[Dict[str, Any]] = None,
+) -> bool:
+    async with record_session_write(
+        kind=KIND_STATUS, session_id=session_id, requested=status,
+    ) as rec:
+        db = await get_dialectic_db()
+        if winner is None:
+            result = await db.update_session_status(session_id, status)
+        else:
+            result = await db.update_session_status(session_id, status, winner=winner)
+        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
+        return result
 
 
-async def mark_awaiting_facilitation_async(session_id: str) -> bool:
-    db = await get_dialectic_db()
-    return await db.mark_awaiting_facilitation(session_id)
+async def mark_awaiting_facilitation_async(
+    session_id: str,
+    *,
+    winner: Optional[Dict[str, Any]] = None,
+) -> bool:
+    async with record_session_write(
+        kind=KIND_FACILITATION, session_id=session_id, requested=True,
+    ) as rec:
+        db = await get_dialectic_db()
+        if winner is None:
+            result = await db.mark_awaiting_facilitation(session_id)
+        else:
+            result = await db.mark_awaiting_facilitation(session_id, winner=winner)
+        rec.respond(outcome=written_outcome(result), **_winner_fields(winner))
+        return result
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:
-    db = await get_dialectic_db()
-    return await db.update_session_awaiting_facilitation(session_id, awaiting)
+    async with record_session_write(
+        kind=KIND_FACILITATION, session_id=session_id, requested=bool(awaiting),
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.update_session_awaiting_facilitation(session_id, awaiting)
+        rec.respond(outcome=written_outcome(result))
+        return result
 
 
 async def resolve_session_async(session_id: str, resolution: Dict[str, Any], status: str = "resolved") -> bool:
-    db = await get_dialectic_db()
-    return await db.resolve_session(session_id, resolution, status)
+    async with record_session_write(
+        kind=KIND_RESOLVE, session_id=session_id, requested=status,
+    ) as rec:
+        db = await get_dialectic_db()
+        result = await db.resolve_session(session_id, resolution, status)
+        rec.respond(outcome=written_outcome(result),
+                    reason=(resolution or {}).get("reason")
+                    if isinstance(resolution, dict) else None)
+        return result
 
 
 async def get_active_sessions_async(
