@@ -18,6 +18,9 @@ set -o pipefail
 
 # --- config ------------------------------------------------------------------
 
+# Whether the operator named a URL; install commands otherwise read the port
+# from this checkout's .env (GOVERNANCE_HOST_PORT).
+_url_given="${UNITARES_URL:+1}"
 _raw_url="${UNITARES_URL:-http://localhost:8767}"
 # Strip trailing slash, then any trailing /mcp (common mistake when pasting
 # the streamable-http URL into UNITARES_URL).
@@ -1069,6 +1072,29 @@ _migrations() {
     return $rc
 }
 
+_stack_url() {
+    # The server this checkout's stack serves: UNITARES_URL when given,
+    # otherwise localhost on the .env GOVERNANCE_HOST_PORT (default 8767).
+    if [ -n "${_url_given:-}" ]; then
+        printf '%s' "$UNITARES_URL"
+    else
+        printf 'http://localhost:%s' "$(_env_value GOVERNANCE_HOST_PORT 8767)"
+    fi
+}
+
+_deep_health_status() {
+    # Deep health's overall status, retried while the server warms up. The body
+    # is read on any HTTP status: a critical stack answers 503 with it.
+    local url="$1" status="" attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+        status=$(curl -s --max-time "$TIMEOUT" "${_base_headers[@]}" "$url/health/deep" 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' 2>/dev/null)
+        case "$status" in healthy|moderate|critical) break ;; esac
+        sleep 3
+    done
+    printf '%s' "$status"
+}
+
 _published_version() {
     local repo="${UNITARES_RELEASE_REPO:-cirwel/unitares}"
     curl -fsSL --max-time "$TIMEOUT" "https://raw.githubusercontent.com/${repo}/master/PUBLISHED_VERSION" 2>/dev/null | tr -d '[:space:]'
@@ -1149,9 +1175,10 @@ cmd_update() {
     echo "… Rebuilding and starting the stack"
     _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
 
-    local health
-    health=$(_curl_get "/health/deep" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status","?"))' 2>/dev/null)
-    echo "✓ Updated $current → $target. Deep health: ${health:-unknown} (UNITARES_URL=$UNITARES_URL)"
+    local url health
+    url=$(_stack_url)
+    health=$(_deep_health_status "$url")
+    echo "✓ Updated $current → $target. Deep health: ${health:-no answer} ($url/health/deep)"
 }
 
 cmd_help() {
