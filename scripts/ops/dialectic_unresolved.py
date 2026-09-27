@@ -211,8 +211,10 @@ ORDER BY u.created_at DESC
 # supersede an objection. Keyed on the verdict (`agrees` on the reviewer's
 # synthesis), not on `status`, which is protocol state. A self-review
 # (reviewer = paused agent) is excluded: it can never answer anyone's objection.
+# Probe traffic is excluded by the same label rule as QUERY: a canary accepting
+# the same PR, or citing an organic session, must not hide an organic objection.
 SUPERSEDER_QUERY = """
-SELECT s.session_id, s.created_at,
+SELECT s.session_id, s.created_at, v.timestamp AS accepted_at,
        COALESCE(NULLIF(s.topic, ''), s.reason, '') AS subject,
        concat_ws(E'\\n', s.topic, s.reason,
                  (SELECT string_agg(concat_ws(' ', t.root_cause, t.reasoning), E'\\n')
@@ -220,8 +222,9 @@ SELECT s.session_id, s.created_at,
                   WHERE t.session_id = s.session_id
                     AND t.message_type = 'thesis')) AS text
 FROM core.dialectic_sessions s
+LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id
 JOIN LATERAL (
-    SELECT dm.agrees
+    SELECT dm.agrees, dm.timestamp
     FROM core.dialectic_messages dm
     WHERE dm.session_id = s.session_id
       AND dm.message_type = 'synthesis'
@@ -230,6 +233,8 @@ JOIN LATERAL (
     LIMIT 1
 ) v ON v.agrees IS TRUE
 WHERE s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id
+  AND COALESCE(pa.label, '') !~* '(probe|canary)'
+  AND COALESCE(pa.label, '') !~ '^RP[0-9]'
   AND s.created_at >= now() - interval '1 day' * %(window_days)s
 """
 
@@ -241,8 +246,8 @@ WHERE s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id
 # canary probe's "(#1387 positive control)" matched a design review that cited
 # the #1387 clock, hiding a review nothing had answered.
 _PR_REF = re.compile(
-    r"github\.com/[\w.-]+/(?P<url_repo>[\w.-]+)/pull/(?P<url_n>\d+)"
-    r"|[\w.-]+/(?P<slug_repo>[\w.-]+)(?:#|\s+PRs?\s+#)(?P<slug_n>\d+)"
+    r"github\.com/(?P<url_repo>[\w.-]+/[\w.-]+)/pull/(?P<url_n>\d+)"
+    r"|(?P<slug_repo>[\w.-]+/[\w.-]+)(?:#|\s+PRs?\s+#)(?P<slug_n>\d+)"
     r"|\bPRs?\s+#(?P<word_n>\d+)",
     re.IGNORECASE,
 )
@@ -252,8 +257,9 @@ _HEX_RUN = re.compile(r"(?<![0-9a-f])[0-9a-f]{8,16}(?![0-9a-f])")
 
 @dataclass(frozen=True)
 class PrRef:
-    """A subject PR. ``repo`` is None unless the text named it unambiguously
-    (a URL or ``owner/repo``). The word before "PR" is not trusted: it is a
+    """A subject PR. ``repo`` is ``owner/repo`` when the text named it
+    unambiguously (a URL or ``owner/repo``), else None; a fork's #42 is not
+    upstream's #42. The word before "PR" is not trusted: it is a
     repo in "fermata PR #59" and an adjective in "the current PR #2348", and
     no stoplist separates the two."""
 
@@ -287,23 +293,30 @@ def find_supersessions(
     """Map each superseded review's id to the later accepted session that
     superseded it, and the signal that matched. Pure.
 
-    A session never supersedes itself or anything created after it.
+    A session never supersedes itself, anything created after it, or an
+    objection raised after its own acceptance.
     """
     out: Dict[str, Dict[str, Any]] = {}
     epoch = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
     # Oldest first, so the reported superseder is the EARLIEST later acceptance.
     by_age = sorted(superseders, key=lambda s: _as_utc(s.get("created_at")) or epoch)
     prepared = [
-        (s, _as_utc(s.get("created_at")), set(_HEX_RUN.findall((s.get("text") or "").lower())),
+        (s, _as_utc(s.get("created_at")), _as_utc(s.get("accepted_at")),
+         set(_HEX_RUN.findall((s.get("text") or "").lower())),
          subject_pr(s.get("subject") or ""))
         for s in by_age
     ]
     for r in rows:
         sid = r["session_id"]
         created = _as_utc(r.get("created_at"))
+        # The objection being hidden is the standing one; an acceptance that
+        # predates it cannot have answered it.
+        objection = _as_utc(r.get("standing_since")) or created
         own_pr = subject_pr(r.get("topic") or "")
-        for s, s_created, cited, s_pr in prepared:
-            if s["session_id"] == sid or created is None or s_created is None or s_created <= created:
+        for s, s_created, s_accepted, cited, s_pr in prepared:
+            if (s["session_id"] == sid or created is None or s_created is None
+                    or s_accepted is None or s_created <= created
+                    or objection is None or s_accepted <= objection):
                 continue
             if any(sid.startswith(h) for h in cited):
                 out[sid] = {"session_id": s["session_id"], "signal": "cites_session_id"}

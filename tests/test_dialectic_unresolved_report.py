@@ -619,9 +619,10 @@ def test_seen_at_without_an_offset_is_refused(ledger, monkeypatch, capsys):
 # actually matched it on the live database.
 
 
-def _accepted(session_id, created, subject="", text=None):
+def _accepted(session_id, created, subject="", text=None, accepted=None):
     return dict(session_id=session_id, created_at=created, subject=subject,
-                text=subject if text is None else text)
+                text=subject if text is None else text,
+                accepted_at=accepted or created + dt.timedelta(minutes=30))
 
 
 D = dt.datetime
@@ -630,12 +631,13 @@ D = dt.datetime
 class TestSubjectPr:
     @pytest.mark.parametrize("text, number, repo", [
         ("Code-review PR https://github.com/cirwel/unitares/pull/2025 at commit 530d36c3",
-         2025, "unitares"),
+         2025, "cirwel/unitares"),
         ("Independent code review requested for cirwel/unitares PR #2348 (commit c8e0243e)",
-         2348, "unitares"),
-        ("PR cirwel/unitares#2128 — Watcher detector reported a truncated prompt", 2128, "unitares"),
+         2348, "cirwel/unitares"),
+        ("PR cirwel/unitares#2128 — Watcher detector reported a truncated prompt", 2128,
+         "cirwel/unitares"),
         ("Design choice (plugin PR cirwel/unitares-governance-plugin#146, finding ...)",
-         146, "unitares-governance-plugin"),
+         146, "cirwel/unitares-governance-plugin"),
         # The word before "PR" is never trusted as a repo: an adjective here...
         ("Review the current PR #2348 diff for correctness", 2348, None),
         # ...and a repo here, with nothing to tell the two apart.
@@ -658,8 +660,10 @@ class TestSubjectPr:
         assert report.subject_pr(text) is None
 
     def test_only_two_explicit_repos_can_disagree(self):
-        plugin = report.PrRef(146, "unitares-governance-plugin")
-        assert not plugin.same_as(report.PrRef(146, "unitares"))
+        plugin = report.PrRef(146, "cirwel/unitares-governance-plugin")
+        assert not plugin.same_as(report.PrRef(146, "cirwel/unitares"))
+        # A fork's #42 is not upstream's #42 (review round 1 on #2511).
+        assert not report.PrRef(42, "alice/unitares").same_as(report.PrRef(42, "bob/unitares"))
         assert plugin.same_as(report.PrRef(146))
         assert not plugin.same_as(report.PrRef(147))
 
@@ -693,7 +697,7 @@ class TestFindSupersessions:
         found = report.find_supersessions(rows, later)
         assert set(found) == {"8da00e5b5d39e337", "0dc43b1d11e07bbb"}
         assert found["8da00e5b5d39e337"] == {
-            "session_id": "9cd71f4ad5933832", "signal": "same_subject_pr", "pr": "unitares#2025"}
+            "session_id": "9cd71f4ad5933832", "signal": "same_subject_pr", "pr": "cirwel/unitares#2025"}
 
     def test_an_earlier_acceptance_supersedes_nothing(self):
         rows = [_row(session_id="bbbb000011112222", created_at=D(2026, 9, 2),
@@ -728,6 +732,17 @@ class TestFindSupersessions:
         later = [_accepted("ecdd3c52affdc1f5", D(2026, 8, 16, 9),
                            "Scheduled canary probe: verifying the review surface (#1387 positive control).")]
         assert report.find_supersessions(rows, later) == {}
+
+    def test_an_acceptance_older_than_the_objection_does_not_hide_it(self):
+        """Review round 1 on #2511: A opened, B opened and accepted, then A's
+        reviewer rejected. B's acceptance cannot have answered that."""
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 1, 1),
+                     standing_since=D(2026, 9, 1, 5), topic="Review PR #3000")]
+        later = [_accepted("bbbb000011112222", D(2026, 9, 1, 2), "Review PR #3000",
+                           accepted=D(2026, 9, 1, 3))]
+        assert report.find_supersessions(rows, later) == {}
+        later[0]["accepted_at"] = D(2026, 9, 1, 6)
+        assert set(report.find_supersessions(rows, later)) == {"aaaa000011112222"}
 
     def test_a_commit_sha_is_not_a_session_citation(self):
         rows = [_row(session_id="5db1710cf8bca186", created_at=D(2026, 8, 29), topic="x")]
@@ -768,7 +783,7 @@ class TestSupersessionInTheListing:
         report.main(["--all"])
         out = capsys.readouterr().out
         assert "8da00e5b5d39e337" in out
-        assert "SUPERSEDED by accepted review 9cd71f4ad5933832 (same subject PR unitares#2025)" in out
+        assert "SUPERSEDED by accepted review 9cd71f4ad5933832 (same subject PR cirwel/unitares#2025)" in out
 
     def test_a_failed_supersession_read_hides_nothing(self, ledger, monkeypatch, capsys):
         self._two(monkeypatch)
@@ -792,3 +807,12 @@ class TestSupersederQueryShape:
 
     def test_a_self_review_can_never_supersede(self):
         assert "s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id" in report.SUPERSEDER_QUERY
+
+    def test_probes_cannot_supersede_organic_reviews(self):
+        """Same frozen rule as QUERY (review round 1 on #2511)."""
+        q = report.SUPERSEDER_QUERY
+        assert "LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id" in q
+        assert "(probe|canary)" in q and "^RP[0-9]" in q
+
+    def test_the_acceptance_time_is_read(self):
+        assert "v.timestamp AS accepted_at" in report.SUPERSEDER_QUERY
