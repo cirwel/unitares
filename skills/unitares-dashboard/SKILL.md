@@ -148,16 +148,20 @@ again. Badge freshness in the view with
 ```js
 async riskTrend(days) {
   return withFallback(
-    async () => { /* three /v1/metrics/series reads */
-                  return risk.length ? { windowDays: d, risk, pause, guide } : null; },
-    () => S().riskTrend,   // snapshot fallback
+    async () => { const j = await authFetch("/v1/governance/trend?days=" + d);
+                  // A successful empty series is live ("no risk readings yet"),
+                  // not an outage: only a failed or malformed response is null.
+                  if (!j || !j.success || !Array.isArray(j.risk)) return null;
+                  return { windowDays: j.window_days, risk: j.risk, pause: j.pause, guide: j.guide }; },
+    () => S().riskTrend || { windowDays: d, risk: [], pause: [], guide: [] },   // empty shape
   );
 }
 ```
 
-Returning `null` from `liveFn` triggers the snapshot fallback. Accessors must
-decide whether an empty array/object is valid live data and map it to `null`
-themselves when it is not. For headline cards where a stale snapshot under a
+Returning `null` from `liveFn` triggers the fallback. Accessors must decide
+whether an empty array/object is valid live data, and map it to `null` only
+when it is not: a producer that ran and found nothing is live data, an outage
+is not. For headline cards where a stale snapshot under a
 "live" badge would mislead, prefer returning `null` per-field and rendering "—"
 (see `data.js::stats`).
 
