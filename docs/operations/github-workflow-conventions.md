@@ -757,7 +757,7 @@ this entirely).
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
+| Operator wants one PR to land outside the queue | `gh pr merge --auto <n>`, operator only (it holds the queue's slot until it lands; agents queue with the label instead) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
