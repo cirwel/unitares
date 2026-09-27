@@ -252,7 +252,8 @@ class TestSearchHandlerNewestFirst:
         # Review finding (#2517, round 3): a label cannot be filtered in SQL,
         # so more newer excluded rows than one page (limit * 5) used to
         # exhaust the read. Keyset continuation reads the next older page.
-        for i in range(7):
+        # 30 > the old 5 + 4 * 5 fixed budget (review round 4 on #2517).
+        for i in range(30):
             node = _node(f"excluded-{i}", age=timedelta(seconds=i + 1), summary=f"coherence gate excluded {i}")
             node.agent_id = "excluded-writer"
             await seeded_db.kg_add_discovery(node)
@@ -264,6 +265,21 @@ class TestSearchHandlerNewestFirst:
             exclude_agent_labels=["excluded-writer"],
         )
         assert _ids(payload) == [NEW_WEAK.id]
+
+    @pytest.mark.asyncio
+    async def test_queryless_listing_skips_excluded_writers_before_the_limit(self, seeded_db):
+        # Review round 4 on #2517: the queryless read fetched exactly `limit`
+        # rows and then dropped excluded writers, so limit=1 came back empty.
+        node = _node("excluded-q", age=timedelta(seconds=1), summary="dashboard note by excluded")
+        node.agent_id = "excluded-writer"
+        await seeded_db.kg_add_discovery(node)
+        payload = await _search(
+            seeded_db,
+            created_after=(NOW - timedelta(days=1)).isoformat(),
+            limit=1,
+            exclude_agent_labels=["excluded-writer"],
+        )
+        assert _ids(payload) == [NEWEST_UNRELATED.id]
 
     @pytest.mark.asyncio
     async def test_queryless_window_is_time_ordered_despite_authority(self, seeded_db):

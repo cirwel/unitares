@@ -2489,7 +2489,10 @@ async def _run_newest_first_text_search(
     state.fields_searched = ["summary", "details", "tags"]
 
 
-NEWEST_FIRST_EXTRA_PAGES = 4
+# Rows newest-first continuation may read in total, the same ceiling as one
+# full-text candidate page. Pages double, so a long run of excluded writers
+# is crossed in a few queries rather than cut off after a fixed page count.
+NEWEST_FIRST_SCAN_CEILING = 500
 
 
 async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
@@ -2499,15 +2502,17 @@ async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
     Writer-label exclusion cannot (a label is resolved from provenance or
     agent metadata), so a run of newer matches from excluded writers can
     fill a whole page. Keyset continuation reads the next older page from
-    the oldest row seen, a bounded number of times.
+    the oldest row seen, doubling the page each time, until the limit fills,
+    the matches run out, or NEWEST_FIRST_SCAN_CEILING rows have been read.
     """
     request = state.request
     page_size = _fts_page_size(state)
     page = state.candidates
     pool = list(page)
-    for _ in range(NEWEST_FIRST_EXTRA_PAGES):
+    while len(pool) < NEWEST_FIRST_SCAN_CEILING:
         if len(state.results) >= request.limit or len(page) < page_size:
             return
+        page_size = min(page_size * 2, NEWEST_FIRST_SCAN_CEILING - len(pool))
         oldest = _document_created_at(page[-1])
         if oldest is None:
             return
@@ -2531,17 +2536,23 @@ async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
 
 async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
     request = state.request
+    # Writer-label exclusion runs after this read; fetching exactly `limit`
+    # rows let an excluded writer's row take a slot and leave the page short.
+    fetch_limit = min(request.limit * 5, 500) if request.exclude_labels else request.limit
     state.results = await state.graph.query(
         agent_id=request.agent_id,
         tags=request.tags,
         type=request.discovery_type,
         severity=request.severity,
         status=request.status,
-        limit=request.limit,
+        limit=fetch_limit,
         exclude_archived=not request.status and not request.include_archived,
         exclude_cold=not request.status and not request.include_cold,
         **_window_kwargs(request),
     )
+    state.results = [
+        document for document in state.results if not _label_excluded(document, request)
+    ]
     state.search_mode = "indexed_filters"
     state.fields_searched = [
         name
