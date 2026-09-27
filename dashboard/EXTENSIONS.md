@@ -61,7 +61,7 @@ your-dashboard-ext/
 | `title` | no | Heading rendered above the mount. |
 | `global` | yes | The `window` name your script assigns, e.g. `window.Queue`. Must be new: a name already on `window` (a core section's, another entry's) is rejected. |
 | `script` | yes | Path inside the directory. |
-| `mount` | no | The id of the `<div>` your section renders into. Defaults to `<id>-mount`. Must not already exist in the page. |
+| `mount` | no | The id of the `<div>` your section renders into: a letter, then letters, digits, `_` or `-`. Defaults to `<id>-mount`. Must not already exist in the page; an invalid or taken id skips the entry. |
 | `auto` | no | `true` puts the tab on the live refresh (the 10s poll while the event stream is down, the event doorbell while it is up). Leave it off for anything that reads a daily or expensive aggregate. |
 
 The loader skips an entry whose `id` or `global` is malformed, whose script

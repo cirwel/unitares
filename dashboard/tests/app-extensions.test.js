@@ -86,6 +86,8 @@ describe("dashboard extensions", () => {
         { id: "core-global", global: "Landing", script: "core.js" },
         { id: "late-throw", global: "LateThrow", script: "late.js" },
         { id: "core-mount", global: "CoreMount", script: "cm.js", mount: "stats" },
+        { id: "bad-mount", global: "BadMount", script: "bm.js", mount: "bad mount" },
+        { id: "camel", global: "Camel", script: "camel.js", mount: "Camel_Mount" },
       ],
     };
     const dom = boot(manifest, {
@@ -98,11 +100,15 @@ describe("dashboard extensions", () => {
       "core.js": "",
       "late.js": "window.LateThrow = { load() {} }; throw new Error('init failed');",
       "cm.js": "window.CoreMount = { load() {} };",
+      "bm.js": "window.BadMount = { load() {} };",
+      "camel.js": "window.Camel = { load() {} };",
     });
     dom.window.console.warn = () => {};
     await flush();
     const ext = [...dom.window.document.querySelectorAll("#nav a.ext")].map((a) => a.dataset.section);
-    expect(ext).toEqual(["ok"]);
+    expect(ext).toEqual(["ok", "camel"]);
+    // A valid custom mount is honoured as written, not replaced by a default.
+    expect(dom.window.document.getElementById("Camel_Mount")).not.toBeNull();
     expect(dom.window.Evil).toBeUndefined();
   });
 

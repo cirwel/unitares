@@ -355,6 +355,7 @@ if (window.GovSocket) window.GovSocket.make(onWsEvent, onWsStatus);
 const EXT = {};
 const EXT_ID = /^[a-z][a-z0-9-]*$/;
 const EXT_GLOBAL = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const EXT_MOUNT = /^[A-Za-z][A-Za-z0-9_-]*$/;
 // Evaluates `code` and throws if it threw. An inline <script> reports its
 // evaluation error to window "error" synchronously during appendChild, not to
 // the caller, so a script that assigned its global and THEN failed would
@@ -383,7 +384,10 @@ async function loadExtensions() {
     if (!sec || !EXT_ID.test(sec.id || "") || !EXT_GLOBAL.test(sec.global || "") || !sec.script) continue;
     // Never shadow a core section: an extension adds panes, it does not replace them.
     if (nav.querySelector(`a[data-section="${sec.id}"]`)) continue;
-    const mountId = EXT_ID.test(sec.mount || "") ? sec.mount : sec.id + "-mount";
+    // A mount the manifest names is the one the script will query, so an
+    // invalid one rejects the entry rather than being swapped for a default.
+    if (sec.mount != null && !EXT_MOUNT.test(String(sec.mount))) { console.warn("[dashboard ext]", sec.id, "invalid mount id:", sec.mount); continue; }
+    const mountId = sec.mount || sec.id + "-mount";
     // The global must be NEW: one already on window belongs to a core section
     // or an earlier entry, and accepting it would let this entry register on
     // someone else's loader (and render into the wrong mount).
