@@ -2105,7 +2105,7 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
-    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "antigravity"))]
+    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     posted = []
@@ -2140,13 +2140,17 @@ def test_no_second_review_when_not_needed(monkeypatch):
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 1) == 1
 
 
-def test_no_other_family_available_is_unreviewed(monkeypatch, capsys):
-    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
-                             families={"anthropic"}, candidates=("claude",))
-    args = SimpleNamespace(base="origin/master", branch="claude/x", budget=30)
+def test_the_notice_lists_only_eligible_other_family_providers(monkeypatch, capsys):
+    """Claude on #2504 (P3): the real candidate filter, with an assertion that
+    fails if a same-family, cooling or exhausted provider is offered."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families={"anthropic"},
+                       candidates=("claude", "codex", "antigravity"))
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: "quota" if p == "antigravity" else None)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
-    assert "record --independent" in capsys.readouterr().out
-
+    out = capsys.readouterr().out
+    assert "--reviewer codex" in out
+    assert "--reviewer claude" not in out and "--reviewer antigravity" not in out
 
 
 def test_a_fix_verification_receipt_is_not_a_family():
@@ -2440,3 +2444,23 @@ def test_a_failed_comment_read_is_unreviewed_not_findings(monkeypatch):
     monkeypatch.setattr(rg, "pr_comments", boom)
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
+
+
+
+def test_a_disposed_antigravity_review_counts_by_its_models_family():
+    """Claude on #2504 (P1): the disposition dropped the model, so a disposed
+    agy review never counted; it now borrows the original review's model."""
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "CLEAN", 0, False, "codex")),
+        _comment(rg.Record(k, "FINDINGS", 2, False, "antigravity", model="gemini-3.1-pro-high")),
+        _comment(rg.Record(k, "FINDINGS", 2, True, "antigravity"), text="1. fixed in a\n2. rebutted: b"),
+    ]
+    assert rg.passing_families(comments, k) == {"openai", "google"}
+
+
+def test_the_ci_message_asks_for_two_families_when_none_passed():
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], set())
+    assert concl == "action_required" and "two model families" in desc
+    concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"})
+    assert "a second model family" in desc

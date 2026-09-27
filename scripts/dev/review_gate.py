@@ -777,7 +777,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
-    originals = {(r.reviewer, r.findings) for _, r in trusted
+    # (reviewer, findings) -> the original review's model (for agy records).
+    originals = {(r.reviewer, r.findings): r.model for _, r in trusted
                  if r and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
     # A native Codex review is a GitHub review, not a comment: its disposition
     # cites the review by URL (as latest_matching matches it), with its count.
@@ -800,6 +801,10 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
                 rec.verdict == "FINDINGS" and rec.disposed
                 and dispositions_complete(body, rec.findings)
                 and answers_a_review):
+            if rec.disposed and not rec.model:
+                # A disposition written without the model (older, or --emit)
+                # counts by the model of the review it answers.
+                rec.model = originals.get((rec.reviewer, rec.findings), "") or ""
             families.add(record_family(rec))
     for rec in native:
         if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
@@ -815,9 +820,10 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
         return conclusion, desc
     have = ", ".join(sorted(families)) or "none"
     more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
+    missing = "two model families" if not families else "a second model family"
     return ("action_required",
-            f"security-sensitive path {sensitive[0]}{more}: needs a passing review "
-            f"from a second model family (have: {have}); run review.sh again")
+            f"security-sensitive path {sensitive[0]}{more}: needs passing full reviews "
+            f"from {missing} (have: {have}); run review.sh again")
 
 
 def disabled_providers() -> dict[str, str]:
@@ -1575,10 +1581,13 @@ def cmd_review(args) -> int:
                         rec = None
                     if rec:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
+                        # Only a native record is credited here (its family is
+                        # unambiguous); any other joined record was read from
+                        # the PR, so passing_families weighs it by its own model.
                         return second_family_pass(
                             args, repo, pr, key, head,
                             finish_record(repo, pr, key, head, rec, pr_comments(repo, pr)),
-                            passed_by=rec.reviewer)
+                            passed_by=rec.reviewer if rec.reviewer == "codex-native" else None)
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 result = review_with_fallback(args, pr, key, reviewer)
                 # A cloud review can finish while the local fallback runs.
@@ -1940,7 +1949,7 @@ def cmd_dispose(args) -> int:
     if not dispositions_complete(text, prior.findings):
         raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
                          f"{prior.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
-    rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer)
+    rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer, model=prior.model)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
     return 0
