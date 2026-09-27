@@ -23,11 +23,11 @@ log = logging.getLogger(__name__)
 #
 # The five doctor producers (doctor_findings, deploy_drift_doctor,
 # lumen_checkin_doctor, bridge_liveness_watchdog, dogfood_friction) each wrote a
-# bare slug into ``audit.events.agent_id``. Slug rows are unadjudicatable:
-# ``http_sentinel_adjudicate`` resolves the producer through
-# ``_finding_producer_uuid`` and returns 422 rather than book an outcome against
-# the wrong resident. So every doctor finding was a refutable claim that could
-# never become an anchor -- 272 of them in 30 days.
+# bare slug into ``audit.events.agent_id``. A slug row cannot be attributed to a
+# governed producer, so an outcome about that finding cannot be booked against
+# the right trajectory (the operator adjudication endpoint that first exposed
+# this, removed 2026-09-27, refused such rows with a 422). 272 of them in 30
+# days.
 #
 # ONE identity for all five, not five. The doctors are one layer
 # (diagnose -> bounded-heal -> verify -> escalate), so a shared trajectory is

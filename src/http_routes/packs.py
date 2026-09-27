@@ -2,8 +2,8 @@
 
 The core server mounts only routes any install can use. Some routes exist
 because a deployment runs something specific: the reference residents that
-ship under ``agents/`` (their summaries, finding backlog and the operator
-adjudication queue), or a local automation census. An install that runs none
+ship under ``agents/`` (their summaries and finding backlog), or a local
+automation census. An install that runs none
 of those would otherwise carry endpoints that answer for things it does not
 have. Those routes live here, grouped into packs, and are mounted only when
 ``UNITARES_ROUTE_PACKS`` names the pack (comma-separated). Unset, which is the
@@ -26,10 +26,7 @@ from starlette.routing import Route
 
 from src.http_routes.overview import http_automations
 from src.http_routes.sentinel import (
-    http_sentinel_adjudicate,
-    http_sentinel_adjudication_queue,
     http_sentinel_backlog,
-    http_sentinel_model_adjudicate,
     http_sentinel_summary,
 )
 from src.http_routes.vigil import http_vigil_summary
@@ -41,16 +38,12 @@ ENV_VAR = "UNITARES_ROUTE_PACKS"
 def pack_routes() -> dict[str, list[Route]]:
     """Every pack and the routes it mounts."""
     return {
-        # The reference residents' read surfaces and the operator adjudication
-        # queue for the monitoring resident's findings. Consumers are this
-        # deployment's own tooling: scripts/ops/model_adjudicator.py, the
-        # monitoring resident's backlog calls, and a dashboard extension.
+        # The reference residents' read surfaces. Consumers are this
+        # deployment's own tooling: the monitoring resident's backlog calls and
+        # a dashboard extension.
         "reference-residents": [
             Route("/v1/sentinel/backlog", http_sentinel_backlog, methods=["GET"]),
             Route("/v1/sentinel/summary", http_sentinel_summary, methods=["GET"]),
-            Route("/v1/sentinel/adjudication-queue", http_sentinel_adjudication_queue, methods=["GET"]),
-            Route("/v1/sentinel/adjudicate", http_sentinel_adjudicate, methods=["POST"]),
-            Route("/v1/sentinel/model-adjudicate", http_sentinel_model_adjudicate, methods=["POST"]),
             Route("/v1/watcher/summary", http_watcher_summary, methods=["GET"]),
             Route("/v1/vigil/summary", http_vigil_summary, methods=["GET"]),
         ],

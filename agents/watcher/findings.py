@@ -291,9 +291,9 @@ def persist_findings(new_findings: list[Finding]) -> list[Finding]:
 def _watcher_agent_id() -> str:
     """Watcher's governance UUID for finding attribution, or the legacy slug.
 
-    Why this exists: ``audit.events.agent_id`` is what
-    ``http_sentinel_adjudicate`` resolves through ``_finding_producer_uuid`` to
-    decide **whose** EISV an adjudicated outcome is booked against. Measured
+    Why this exists: ``audit.events.agent_id`` is what decides **whose** EISV
+    an outcome about the finding is booked against (the operator adjudication
+    endpoint that first depended on it was removed 2026-09-27). Measured
     2026-08-20 over 30d, ``watcher_finding`` wrote the bare slug on 17 of 17
     rows while ``watcher_resolution_finding`` — the same agent, a different
     function — wrote a real UUID on 7 of 7. Slug rows are unadjudicatable: the
