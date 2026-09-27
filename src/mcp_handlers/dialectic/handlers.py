@@ -1420,15 +1420,13 @@ class AutomatedTrigger(str):
     meant ``circuit_breaker``, "loop" meant ``loop_detection``. Both live
     ``loop_detection`` rows were agents writing "loop" in a review request
     (56bead4ed32ab6a5, "self-governance loop"; 755fe9368bb1c920, a PR
-    review), and the sustained-drift trigger's reason matched
-    "auto-triggered" first, so the one real ``drift_detection`` source was
-    recorded as ``circuit_breaker``. Taking the value from an argument
+    review). Taking the value from an argument
     instead would not help: the params middleware passes unknown keys
     through, so any caller could claim to be an automated trigger.
 
     JSON cannot produce an instance of this class, so a value that arrives
     through the MCP tool is never one. An in-process trigger passes
-    ``trigger_source=AutomatedTrigger("drift_detection")``; every other
+    ``trigger_source=AutomatedTrigger("circuit_breaker")``; every other
     request is recorded ``manual``, meaning only that a caller asked through
     the tool. ``manual`` partitions nothing further: probe and organic
     traffic both carry it, and they are separated by agent label

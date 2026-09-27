@@ -4,7 +4,7 @@ It used to be guessed from substrings of the free-text reason. Both live
 ``loop_detection`` rows were agents that wrote "loop" in an ordinary review
 request (56bead4ed32ab6a5, 755fe9368bb1c920), and the sustained-drift
 trigger's reason matched "auto-triggered" first, so the one real
-``drift_detection`` source was stored as ``circuit_breaker``.
+``drift_detection`` source would have been stored as ``circuit_breaker``.
 """
 
 from types import SimpleNamespace
@@ -101,38 +101,26 @@ class TestAutomatedTriggersNameThemselves:
         assert forwarded is trigger
         assert _recorded_trigger_source(llm.await_args.args[0]) == "circuit_breaker"
 
+
+class TestNoDriftTriggeredReview:
     @pytest.mark.asyncio
-    async def test_sustained_drift_is_recorded_as_drift_detection(self):
-        """Labels only. The trigger itself is unreachable in production: its
-        ``from ..dialectic import is_agent_in_active_session`` has failed
-        since the 2026-03-09 package reorg (131b83a08), and the ImportError is
-        swallowed at debug level. Reviving an automatic review trigger is a
-        policy decision, so this test supplies the missing name (create=True)
-        rather than the fix."""
+    async def test_sustained_high_drift_opens_no_review(self):
+        """Removed 2026-09-27, unreachable since the 2026-03-09 reorg. Even
+        with the import it used restored, drift must not open a review."""
         from src.mcp_handlers.updates import phases
 
         monitor = SimpleNamespace(
-            _consecutive_high_drift=3,
-            _last_drift_vector=SimpleNamespace(norm=0.9),
+            _consecutive_high_drift=99,
+            _last_drift_vector=SimpleNamespace(norm=0.99),
             state=SimpleNamespace(),
         )
         ctx = SimpleNamespace(
-            agent_id="agent-drifting",
-            monitor=monitor,
-            metrics_dict={},
-            result={},
-            arguments={},
-            coherence=0.5,
-            risk_score=0.0,
-            previous_void_active=False,
+            agent_id="agent-drifting", monitor=monitor, metrics_dict={}, result={},
+            arguments={}, coherence=0.5, risk_score=0.0, previous_void_active=False,
         )
         request = AsyncMock(return_value=[])
         with patch("src.mcp_handlers.dialectic.is_agent_in_active_session",
                    new=AsyncMock(return_value=False), create=True), \
              patch(f"{DIALECTIC}.handle_request_dialectic_review", request):
             await phases._post_update_cirs_and_drift(ctx)
-
-        request.assert_awaited_once()
-        supplied = request.await_args.args[0]["trigger_source"]
-        assert isinstance(supplied, AutomatedTrigger)
-        assert _recorded_trigger_source(request.await_args.args[0]) == "drift_detection"
+        request.assert_not_awaited()
