@@ -504,7 +504,7 @@ with the agent's current EISV snapshot. This enables correlation analysis:
 do EISV verdicts and phi values predict real outcomes?
 
 VALID OUTCOME TYPES:
-- drawing_completed: Lumen finished a drawing (score = satisfaction)
+- drawing_completed: an agent finished a drawing (score = satisfaction)
 - drawing_abandoned: Drawing was abandoned before completion
 - test_passed: A test or validation passed
 - test_failed: A test or validation failed
@@ -1204,11 +1204,11 @@ ACTIONS:
 - telemetry: System-wide telemetry rollup (skip rates, calibration, suspicious patterns)
 - audit_events: Query audit.events by event_type + time window (issue #422 grace-window evaluations)
 - outcome_evidence: Query audit.outcome_events corroboration grades, claim-only task_completed rows, low-corroboration agents, and verified/unverified PR/commit/test claim fields
-- bridge: Query Discord bridge delivery receipts, suppressions, failures, operator commands, and unacked high/critical alerts
+- bridge: Query notification-bridge delivery receipts, suppressions, failures, operator commands, and unacked high/critical alerts
 
 ~~~text
 EXAMPLES:
-  observe(action="agent", target_agent_id="Lumen")
+  observe(action="agent", target_agent_id="my-agent")
   observe(action="audit_events", event_type="continuity_token_deprecated_accept", since="14d")
   observe(action="outcome_evidence", diagnostic="claim_only_task_completed", since="7d")
   observe(action="bridge", since="24h")
