@@ -133,9 +133,12 @@ not a router: nothing chooses between providers by cost or load.
 
 - The `ollama:local` registry record keeps its `host_id` (it is part of the
   `call_model` contract) but reports the configured endpoint's kind, model and
-  privacy class. Availability becomes `GET {base}/models` with the existing
-  0.5 s budget and 5 s cache, which every OpenAI-compatible server answers,
-  instead of a socket probe on the Ollama port.
+  privacy class. Availability becomes `GET {base}/models`, which every
+  OpenAI-compatible server answers, instead of a socket probe on the Ollama
+  port. The existing 0.5 s budget suits a `local` endpoint only; an `external`
+  one also pays for DNS, TLS and the model list, so it gets 3 s. Both are
+  overridable with `UNITARES_MODEL_PROBE_TIMEOUT_S`. The 5 s cache and the
+  rule that the probe runs off the event loop stay.
 - The doctor gains a check that the endpoint answers and lists the configured
   model.
 - `unitares model` (`cmd_model` in `scripts/unitares`, backed by
@@ -219,7 +222,14 @@ release note says what to set first. One rule orders them: no step may let a req
 4. **No implicit model.** Remove the `gemma4:latest` fallback (decision 7.2),
    one release after step 1, whose doctor check warns when no model is named.
    After it, an install that names no model has consult and the local reviewer
-   off, as the install manual already describes. The release notes say that
+   off, as the install manual already describes. Removing the fallback alone
+   does not do that, so the same step adds an explicit not-configured state:
+   the registry reports the local host `configured: false` with the reason; the
+   shared client refuses before any request with a named
+   `MODEL_NOT_CONFIGURED` error; the in-process reviewer abstains with that
+   reason instead of calling; the dispatcher does not spawn an orchestrated
+   reviewer whose backend is `local` without a model; and the reviewer and
+   resident processes check for a model at start and report the same reason. The release notes say that
    deployments which relied on the implicit model must set `UNITARES_MODEL`
    (or the older `UNITARES_LLM_MODEL`) first, and that includes the original
    operator's deployment, which names none today. Agent processes that read
