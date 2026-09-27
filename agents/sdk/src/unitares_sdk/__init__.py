@@ -2,6 +2,7 @@
 
 from unitares_sdk.errors import (
     GovernanceConnectionError,
+    GovernanceToolRefused,
     GovernanceError,
     GovernanceTimeoutError,
     IdentityDriftError,
@@ -57,6 +58,7 @@ __all__ = [
     "IdentityGuidanceReturned",
     "ResidentRegistrationRefused",
     "GovernanceConnectionError",
+    "GovernanceToolRefused",
     "GovernanceTimeoutError",
     "IdentityDriftError",
     "VerdictError",

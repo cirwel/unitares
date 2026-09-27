@@ -154,6 +154,7 @@ class TestParseIsoZ:
 
 
 from agents.watcher.calibration import (
+    PATTERN_RULE_VERSIONS,
     PRECISION_REASONS_TRUE_NEGATIVE,
     BucketStats,
     precision_by_pattern_and_class,
@@ -294,10 +295,72 @@ class TestPrecisionByPatternAndClass:
         assert bucket.weighted_confirmed == pytest.approx(1.0, rel=0.05)
 
 
+class TestRuleVersions:
+    """A resolution grades the rule that produced the finding. For a listed
+    pattern, only rows stamped with its current rule revision count: other
+    rows measure a rule this checkout no longer runs."""
+
+    NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    VERSIONS = {"P1": 2}
+
+    def _fp(self, version, pattern="P1"):
+        row = _row(pattern=pattern, file="/a/src/x.py", status="dismissed", reason="fp",
+                   ts="2026-09-26T00:00:00Z", dismissed_at="2026-09-26T12:00:00Z")
+        if version is not None:
+            row["rule_version"] = version
+        return row
+
+    def _dismissed(self, rows):
+        result = precision_by_pattern_and_class(
+            rows, now=self.NOW, min_weighted_n=0.1, rule_versions=self.VERSIONS)
+        return {k: v.weighted_dismissed for k, v in result.items()}
+
+    def test_only_the_current_revision_counts(self):
+        one = self._dismissed([self._fp(2)])[("P1", "app")]
+        rows = [self._fp(None), self._fp(0), self._fp(1), self._fp(2), self._fp(3)]
+        assert self._dismissed(rows)[("P1", "app")] == pytest.approx(one)
+
+    def test_listed_pattern_without_current_rows_has_no_bucket(self):
+        assert self._dismissed([self._fp(None), self._fp(1)]) == {}
+
+    def test_unlisted_pattern_keeps_every_row(self):
+        rows = [self._fp(None, pattern="P2"), self._fp(7, pattern="P2")]
+        one = self._dismissed([rows[0]])[("P2", "app")]
+        assert self._dismissed(rows)[("P2", "app")] == pytest.approx(2 * one)
+
+    def test_p006_triage_of_the_earlier_rule_no_longer_demotes(self):
+        """The 2026-09-23/24 triage dismissed 25 P006 app findings of the
+        rule before #2424/#2447; those rows carry no rule_version. Under the
+        default table they leave no measured bucket, so the demotion
+        callsite (which needs a ci_lower) cannot fire."""
+        rows = [
+            _row(pattern="P006", file=f"/wt/tree-{i}/src/mod_{i}.py", status="dismissed",
+                 reason="fp", ts="2026-09-23T20:00:00Z",
+                 dismissed_at="2026-09-24T20:00:00Z")
+            for i in range(25)
+        ]
+        result = precision_by_pattern_and_class(rows, now=self.NOW)
+        assert ("P006", "app") not in result
+
+
 def test_precision_reasons_constant_shape():
     """Document the canonical taxonomy. Precision math counts as TN ONLY
     the reasons that mean 'this finding was a false positive'."""
     assert PRECISION_REASONS_TRUE_NEGATIVE == frozenset({"fp"})
+
+
+def test_new_findings_carry_their_rule_version():
+    """Stamped at creation, so a row records the rule that produced it."""
+    from agents.watcher.findings import Finding
+
+    def make(pattern):
+        return Finding(pattern=pattern, file="/a/src/x.py", line=1, hint="h",
+                       severity="medium", detected_at="2026-09-27T00:00:00Z",
+                       model_used="m")
+
+    assert PATTERN_RULE_VERSIONS["P006"] >= 1
+    assert make("P006").rule_version == PATTERN_RULE_VERSIONS["P006"]
+    assert make("P999").rule_version == 0
 
 
 from agents.watcher.calibration import probe_rate_for_n, should_probe

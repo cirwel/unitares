@@ -65,11 +65,17 @@ class Layout:
     def source(self, content: str) -> None:
         (self.repo / "src" / "thing.py").write_text(content)
 
-    def run(self, *args: str, **env: str) -> subprocess.CompletedProcess:
+    def run(self, *args: str, stdin=subprocess.DEVNULL,
+            **env: str | None) -> subprocess.CompletedProcess:
+        """Runs without a terminal, as CI and agent shells do, with a named
+        verifier so a stamp is accepted; pass SKILL_ATTESTATION_VERIFIER=None
+        to unset it and stdin= a terminal to run as a person would."""
+        merged = {**os.environ, "SKILL_FRESHNESS_FLOOR_DAYS": "30",
+                  "SKILL_ATTESTATION_VERIFIER": "test", **env}
         return subprocess.run(
             [sys.executable, str(CHECKER), str(self.repo), str(self.projects), *args],
-            capture_output=True, text=True,
-            env={**os.environ, "SKILL_FRESHNESS_FLOOR_DAYS": "30", **env},
+            capture_output=True, text=True, stdin=stdin,
+            env={key: value for key, value in merged.items() if value is not None},
         )
 
 
@@ -95,6 +101,8 @@ def test_a_source_whose_content_changed_is_stale_and_named(layout: Layout):
     assert "STALE" in result.stdout
     assert "unitares/src/thing.py changed since" in result.stdout
     assert "--stamp demo" in result.stdout
+    # The hint an agent copies names the verifier, or its stamp is refused.
+    assert 'SKILL_ATTESTATION_VERIFIER="' in result.stdout
 
 
 def test_stale_names_every_drifting_source_not_only_the_first(layout: Layout):
@@ -161,6 +169,113 @@ def test_stamp_writes_a_new_attestation_and_never_touches_skill_md(layout: Layou
     assert record["verified_date"] == _day(0)
     assert record["source_digests"] == {"unitares/src/thing.py": _digest("x = 2\n")}
     assert layout.run().returncode == 0
+
+
+# Who re-checked the skill. Agents on the operator's machine commit under the
+# operator's git identity, so a git user.name fallback without a terminal
+# recorded agent stamps as the operator's own re-check.
+
+def _git_user(layout: Layout, name: str) -> None:
+    """A repository whose git user.name the old fallback would have recorded."""
+    subprocess.run(["git", "init", "-q", str(layout.repo)], check=True)
+    subprocess.run(["git", "-C", str(layout.repo), "config", "user.name", name], check=True)
+
+
+def _stamp_at_a_terminal(layout: Layout, **env: str | None) -> subprocess.CompletedProcess:
+    pty = pytest.importorskip("pty")
+    leader, follower = pty.openpty()
+    try:
+        return layout.run("--stamp", "demo", stdin=follower, **env)
+    finally:
+        os.close(follower)
+        os.close(leader)
+
+
+def test_a_stamp_records_the_verifier_the_variable_names(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    result = layout.run("--stamp", "demo",
+                        SKILL_ATTESTATION_VERIFIER="  Agent (re-checked demo claims)  ")
+    assert result.returncode == 0, result.stdout + result.stderr
+    [path] = _attestations(layout)
+    assert json.loads(path.read_text())["verifier"] == "Agent (re-checked demo claims)"
+
+
+@pytest.mark.parametrize("unset", [None, "", "   "])
+def test_a_stamp_without_a_verifier_or_a_terminal_is_refused(layout: Layout, unset):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    before = layout.skill_file.read_bytes()
+
+    result = layout.run("--stamp", "demo", SKILL_ATTESTATION_VERIFIER=unset)
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert _attestations(layout) == []
+    assert not (layout.repo / "skills" / ".attestations").exists()
+    assert layout.skill_file.read_bytes() == before
+    assert "REFUSED" in result.stderr
+    assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr      # how to set it
+    assert "--stamp demo" in result.stderr                      # the command to re-run
+    assert "Operator Name" not in result.stdout + result.stderr
+
+
+def test_a_refused_stamp_writes_no_skill_of_several(layout: Layout):
+    # Refused before any skill is touched, so a partial run leaves nothing
+    # half-attested with the wrong name.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    result = layout.run("--stamp", "demo", "absent-skill", SKILL_ATTESTATION_VERIFIER=None)
+    assert result.returncode == 2
+    assert not (layout.repo / "skills" / ".attestations").exists()
+    assert "--stamp demo absent-skill" in result.stderr
+
+
+def test_a_person_at_a_terminal_falls_back_to_the_git_user(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER=None)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "verifier: Operator Name (git user.name" in result.stdout
+    [first] = _attestations(layout)
+    assert json.loads(first.read_text())["verifier"] == "Operator Name"
+
+    # At a terminal too, the variable names the verifier when set.
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER="Someone else")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "git user.name" not in result.stdout
+    newest = _attestations(layout)[-1]
+    assert json.loads(newest.read_text())["verifier"] == "Someone else"
+
+
+def test_a_terminal_stamp_with_no_git_user_is_refused(layout: Layout, tmp_path: Path):
+    # Before this, the record said `"verifier": "unknown"`, naming nobody.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    subprocess.run(["git", "init", "-q", str(layout.repo)], check=True)
+    no_config = tmp_path / "empty-gitconfig"
+    no_config.write_text("")
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER=None,
+                                  GIT_CONFIG_GLOBAL=str(no_config), GIT_CONFIG_NOSYSTEM="1")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (layout.repo / "skills" / ".attestations").exists()
+    assert "git user.name is not set" in result.stderr
+    assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr
+
+
+def test_only_the_stamp_needs_a_verifier(layout: Layout):
+    # The check CI runs, and the release-cut prune, record no verifier and
+    # run without a terminal, so the refusal must not reach them.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    layout.run("--stamp", "demo")
+    check = layout.run(SKILL_ATTESTATION_VERIFIER=None)
+    assert check.returncode == 0, check.stdout + check.stderr
+    prune = layout.run("--prune", "3", SKILL_ATTESTATION_VERIFIER=None)
+    assert prune.returncode == 0, prune.stdout + prune.stderr
 
 
 def test_two_stamps_write_two_distinct_files(layout: Layout):

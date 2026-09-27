@@ -150,7 +150,7 @@ New tool: `skills(name?: string, since_version?: string)` → returns:
 
 Three flag-style options on the request:
 - `name=<skill-name>` returns single skill
-- `since_version=<date>` returns only skills updated since (cheap re-poll)
+- `since_version=<date>` returns full bodies for skills whose `last_verified` is strictly after the date. It is a convenience fetch, not a cache protocol: it reports no removals (no tombstones), and dates have day precision, so a skill edited on the same day as the cached `registry_version` is not returned. Cache invalidation is described in §7.
 - absent: returns an index, every skill's metadata without `content` (`content_omitted: true`). Until 2026-09-25 it returned the full bundle, 100 KB for seven skills. The plugin adapter (`_fetch_skills.py`) always fetches by `name`, so it is unaffected; other MCP clients could and did call it bare (an evaluation agent received all seven bodies, 93,821 chars, `docs/evaluations/accountability-journey/capture-stage-2168-unitares-arm.md`). A caller that wants every body passes `since_version` with an early date.
 
 ### 4.2. Canonical content location
@@ -237,10 +237,10 @@ The tool-description audit is **not blocking S15-a** but is the highest-leverage
 Three layers:
 
 1. **Per-skill version** = ISO date string from `last_verified:` field. Bumps when content edits land.
-2. **Registry version** = max of all per-skill versions. Bumps on any edit.
-3. **Registry hash** = sha256 of canonical-ordered registry. Used by adapters to detect tampering / unexpected drift.
+2. **Registry version** = max of all per-skill versions. Moves when a skill is added or re-verified on a later day; it does NOT move on a removal or on a same-day edit.
+3. **Registry hash** = sha256 of canonical-ordered (name, `content_hash`) pairs over every served skill. `content_hash` covers the markdown body only, so the registry hash moves on an add, a removal or a body edit, but not on a frontmatter-only change or on a re-verification that moves `last_verified`/`stale`.
 
-Cache invalidation is "if `registry_version` ≠ cached, re-fetch." Adapters call `skills(since_version=<cached>)`; server returns only deltas (typically empty).
+Cache invalidation reconciles the index. Neither top-level field is complete on its own, and the bare index is cheap (metadata only, no bodies), so a client that caches skills re-reads `skills()` on each poll and compares per skill: drop any cached skill the index no longer lists (first removal: `discord-bridge`, 2026-09-27); re-fetch with `skills(name=...)` any skill whose `content_hash` differs; and take `last_verified`, `version`, `stale` and the other metadata from the index itself. `registry_hash` may be used only to skip body re-fetches when it is unchanged, never to skip the metadata comparison. The shipped adapter, the plugin's `_fetch_skills.py`, fetches single skills by `name` with a TTL cache, so it re-reads each skill it uses and is unaffected. The `since_version` parameter description in `SkillsParams` still says "cache invalidation" and is left for the next interface-contract release, because a parameter description is inside the hashed schema.
 
 **Staleness signal** flows from `source_files`. If any file in `source_files` has commits after `last_verified`, the skill is potentially stale. This is computed by the server on read, not stored. Cheap (`git log --since` is O(log n)).
 

@@ -189,7 +189,7 @@ def test_runner_only_calls_real_governance_client_methods():
     sync_state-vs-checkin drift that mocked wiring tests cannot.)"""
     client_mod = pytest.importorskip("unitares_sdk.client")
     gc = client_mod.GovernanceClient
-    for method in ("connect", "onboard", "call_tool", "checkin", "disconnect"):
+    for method in ("connect", "onboard", "identity", "call_tool", "checkin", "disconnect"):
         assert hasattr(gc, method), f"GovernanceClient is missing {method!r} — runner would crash live"
 
 
