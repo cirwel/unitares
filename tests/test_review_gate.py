@@ -2494,6 +2494,25 @@ def test_cmd_review_exits_3_on_a_sensitive_diff_with_one_family(monkeypatch, cap
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
+    # No real lock: git is faked, so the lock path would land in the cwd.
+    class _Held:
+        held = True
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(rg, "review_lock", lambda key: _Held())
     rc = rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False, base="origin/master"))
     assert rc == rg.NEEDS_SECOND_FAMILY
     assert "--fresh --reviewer codex" in capsys.readouterr().out
+
+
+
+def test_a_malformed_agy_model_is_never_written_into_a_marker(monkeypatch):
+    """Claude on #2504 (P3): REVIEW_AGY_MODEL="x reviewer=codex" re-parsed as
+    reviewer=codex, and a ">" dropped the record."""
+    assert rg.marker_model("gemini-3.1-pro-high") == "gemini-3.1-pro-high"
+    assert rg.marker_model("x reviewer=codex") == ""
+    assert rg.marker_model("a>b") == ""
+    rec = rg.Record("k" * 64, "CLEAN", 0, False, "antigravity",
+                    model=rg.marker_model("x reviewer=codex"))
+    back = rg.parse_record(rg.render_marker(rec))
+    assert back.reviewer == "antigravity" and rg.record_family(back) is None

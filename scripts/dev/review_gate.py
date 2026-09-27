@@ -593,6 +593,13 @@ def agy_model_name() -> str:
     return os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
 
 
+def marker_model(model: str) -> str:
+    """The model as it may be written into a record marker, or "" (counts as
+    no family). Same shape rule as reviewer names: whitespace or ">" would
+    let the value inject attributes (\"x reviewer=codex\") or end the marker."""
+    return model if model and REVIEWER_NAME_RE.fullmatch(model) else ""
+
+
 def agy_model_args() -> list[str]:
     model = os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
     return [] if model == "default" else ["--model", model]
@@ -1890,7 +1897,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
         rec = Record(key, verdict, n, False, reviewer,
-                     model=agy_model_name() if reviewer == "antigravity" else "")
+                     model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
