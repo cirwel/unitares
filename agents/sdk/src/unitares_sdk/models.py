@@ -145,6 +145,11 @@ class InferenceHost(_GovModel):
     # pick a host — and drop it toward "looks usable", which is the wrong way to
     # fail. Server-side source: mcp_handlers/support/inference_registry.py.
     accepts_host_id_from: list[str] = Field(default_factory=list)
+    # The optional service this host needs beyond the default install (the
+    # subscription-CLI adapters say "agent_orchestrator"), or None. Declared
+    # for the same reason as accepts_host_id_from: dropped, an extension host
+    # reads like a default-install host.
+    extension: str | None = None
 
 
 class InferenceProvenance(_GovModel):
@@ -192,6 +197,10 @@ class InferenceHostsResult(_GovModel):
     # gate. _GovModel is extra="ignore", so an undeclared field vanishes —
     # and vanishes toward "no gate", which is the wrong way to fail.
     invocation: dict | None = None
+    # Optional services keyed by name (for example "agent_orchestrator"), each
+    # with configured, host_ids, serves and note: whether this server has the
+    # extension that some listed hosts need.
+    extensions: dict | None = None
     error: str | None = None
 
 

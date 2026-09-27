@@ -410,6 +410,30 @@ def test_matching_attestations_do_not_block(pair):
     assert regressions(src, dst) == []
 
 
+def test_a_skill_removed_from_canonical_takes_its_attestations_with_it(pair):
+    # Canonical dropped the skill (SKILL.md and its records). Every mirror
+    # record is then "newer than any canonical record" because there are none;
+    # before this rule the sync refused the removal. Canonical decides which
+    # skills exist, so rsync --delete removing them is the sync's job.
+    src, dst = pair
+    _skill(src, "kept", date="2026-09-01", body="same")
+    _skill(dst, "kept", date="2026-09-01", body="same")
+    _skill(dst, "gone", date="2026-09-17", body="moved to its own repository")
+    _attest(dst, "gone", "20260917T000000000000Z-bdefd427.json")
+    assert regressions(src, dst) == []
+
+
+def test_a_kept_skill_with_no_canonical_records_still_guards_its_mirror_records(pair):
+    # The removal rule keys on SKILL.md, not on the attestation dir: a skill
+    # canonical still serves keeps the full check even with no records there.
+    src, dst = pair
+    _skill(src, "a", date="2026-09-01", body="same")
+    _skill(dst, "a", date="2026-09-01", body="same")
+    _attest(dst, "a", "20260924T101010123456Z-bbbbbbbb.json")
+    [reason] = regressions(src, dst)
+    assert "20260924T101010123456Z-bbbbbbbb.json" in reason
+
+
 def _record(root: Path, skill: str, name: str, *, skill_md: Path, digests: dict) -> None:
     import hashlib
     import json

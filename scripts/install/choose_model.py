@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Name the model UNITARES uses for consult and the in-process dialectic reviewer.
 
-Run from a Docker Compose install (``make setup-model``). It asks the local
+Run from a Docker Compose install (``unitares model``). It asks the local
 Ollama which models are pulled, lets you pick one, writes the two settings to
 ``.env`` and rebuilds the server, then checks that the server can reach the
 model. Without a model, consult answers "Standard advisory consultation is
@@ -250,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
         print("  On Linux, Ollama listens only on 127.0.0.1 by default. Set OLLAMA_HOST=0.0.0.0 for the Ollama service,")
         print("  allow port 11434 from the Docker bridge, and do not expose it beyond this machine (Ollama has no authentication).")
     else:
-        print("  Check that Ollama is running on this machine, then run: make setup-model")
+        print("  Check that Ollama is running on this machine, then run: unitares model")
     return 1
 
 
