@@ -1541,9 +1541,12 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     review lock (every caller holds it)."""
     if result != 0:
         return result
-    changed = changed_paths(getattr(args, "base", "origin/master"), "HEAD")
+    base = getattr(args, "base", "origin/master")
+    changed = changed_paths(base, "HEAD")
     # Locally an unreadable list skips the helper; CI still enforces the rule.
-    sensitive = sensitive_paths(changed) if changed else []
+    # The base ref's policy, as CI uses: a PR editing the policy must not make
+    # the local helper disagree with the check it is trying to satisfy.
+    sensitive = sensitive_paths(changed, base_policy_paths(base)) if changed else []
     if not sensitive:
         return result
     comments = pr_comments(repo, pr)

@@ -2029,6 +2029,7 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
                  "src/mcp_server.py", "src/dashboard_auth.py",
                  "src/mcp_handlers/identity_bootstrap.py", "src/services/http_tool_service.py",
                  "src/agent_identity_auth.py", "src/effect_grant.py",
+                 "src/mcp_handlers/updates/phases.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2093,6 +2094,7 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
 
 def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity")):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: changed)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: rg.second_family_paths())
     monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     monkeypatch.setattr(rg, "passing_families", lambda *a: set(families))
@@ -2287,3 +2289,18 @@ def test_ci_reads_the_policy_from_the_prs_own_base_ref(repo, monkeypatch):
     monkeypatch.setattr(rg, "second_family_paths",
                         lambda text=None: ["fallback"] if text is None else ["parsed"])
     assert rg.base_policy_paths("HEAD~1") == ["fallback"]
+
+
+
+def test_the_local_helper_uses_the_base_refs_policy(monkeypatch):
+    """Native Codex on #2504 (P2): a PR that edits the policy must not make
+    review.sh stop after one family while CI (base policy) wants two."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    seen = []
+    monkeypatch.setattr(rg, "base_policy_paths",
+                        lambda base: seen.append(base) or ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "second_family_paths", lambda text=None: [])  # the PR head's copy
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert seen == ["origin/master"] and ran == ["codex"]
