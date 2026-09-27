@@ -626,8 +626,12 @@ the operator's machine is awake.
   it when you mark your PR ready, on the same validation (CI green, `review`
   passing), and never on another agent's PR; the operator vetoes by removing
   it. The gate exists for coordination, which the queue does more reliably
-  than hand-merging (operator decision, 2026-09-27). It approves the PR as it
-  stood: the
+  than hand-merging (operator decision, 2026-09-27). The exception is a PR
+  labelled `governance-sensitive` (CI applies it to PRs touching enforcement
+  constants; see `docs/dev/GOVERNANCE_SENSITIVITY.md`): the queue never arms
+  it, and the operator merges it by hand, because the threat model names the
+  human merge gate as the control for exactly those diffs. It approves the
+  PR as it stood: the
   script pins the head and a fingerprint of what it changes when it first
   sees the label (GitHub's compare of `master...<that SHA>`: per file the
   added and removed lines, or the blob SHA where there is no patch, as for a
