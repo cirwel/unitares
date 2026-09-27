@@ -135,11 +135,11 @@ def record_unavailable(
         else:
             retry_after = now + min(BACKOFF_CAP_S, BACKOFF_BASE_S * 2 ** (failures - 1))
             source = "backoff"
-        # Inside one window a guess never shortens a running cooldown, but the
-        # provider's own statement always wins over a guess (it knows; we
-        # backed off blind), so a stated reset is taken even when earlier.
-        if (still_cooling and source == "backoff"
-                and previous["retry_after"] > retry_after):
+        # Inside a running window a guess changes nothing: it must neither
+        # shorten the cooldown nor overwrite a reset the provider stated. Only
+        # the provider's own statement moves it (it knows; we back off blind),
+        # so a stated reset is taken even when it is earlier.
+        if still_cooling and source == "backoff":
             retry_after, source = previous["retry_after"], previous["retry_after_source"]
         _state[host_id] = {
             "reason": classified.get("reason"),

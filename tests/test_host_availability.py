@@ -111,3 +111,16 @@ def test_a_stated_reset_overrides_a_running_guess_even_when_sooner():
     ha.record_unavailable("codex:host-adapter", {"reason": "auth", "stated_reset": None},
                           now=now - 10)
     assert ha._state["codex:host-adapter"]["retry_after"] == first
+
+
+
+def test_a_guess_never_overwrites_a_stated_reset_in_its_window():
+    """Review of #2486 (antigravity, round 4): an auth failure with no reset
+    time, arriving while a stated reset runs, replaced it with a later guess."""
+    now = 1_000_000.0
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 300}, now=now)
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "auth", "stated_reset": None}, now=now + 1)
+    entry = ha._state["codex:host-adapter"]
+    assert entry["retry_after"] == now + 300 and entry["retry_after_source"] == "provider"
