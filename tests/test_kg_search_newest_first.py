@@ -267,6 +267,45 @@ class TestSearchHandlerNewestFirst:
         assert _ids(payload) == [NEW_WEAK.id]
 
     @pytest.mark.asyncio
+    async def test_continuation_does_not_skip_rows_sharing_a_timestamp(self, seeded_db):
+        # Review on #2517: an exclusive created_at bound skipped unread rows
+        # at the page boundary's timestamp. The cursor is (created_at, id).
+        stamp = (NOW - timedelta(seconds=1)).isoformat()
+        for i in range(6):
+            node = _node(f"z-excluded-{i}", age=timedelta(0), summary=f"coherence gate tied {i}")
+            node.id, node.timestamp, node.agent_id = f"{stamp}-z{i}", stamp, "excluded-writer"
+            await seeded_db.kg_add_discovery(node)
+        eligible = _node("a-eligible", age=timedelta(0), summary="coherence gate tied eligible")
+        eligible.id, eligible.timestamp = f"{stamp}-a", stamp
+        await seeded_db.kg_add_discovery(eligible)
+        payload = await _search(
+            seeded_db,
+            query="coherence gate",
+            limit=1,
+            sort_by="created_at",
+            exclude_agent_labels=["excluded-writer"],
+        )
+        assert _ids(payload) == [eligible.id]
+
+    @pytest.mark.asyncio
+    async def test_continued_rows_count_as_fts_anchored(self, seeded_db):
+        # Review on #2517: rows from a continuation page were missing from
+        # fts_anchor_ids, so a real lexical hit could read as unanchored.
+        for i in range(8):
+            node = _node(f"excl-{i}", age=timedelta(seconds=i + 1), summary=f"coherence gate excluded {i}")
+            node.agent_id = "excluded-writer"
+            await seeded_db.kg_add_discovery(node)
+        request = _parse_knowledge_search_request({
+            "query": "coherence gate", "limit": 1, "sort_by": "created_at",
+            "exclude_agent_labels": ["excluded-writer"],
+        })
+        state = handlers._KnowledgeSearchState(request=request, graph=_pg_graph(seeded_db))
+        with patch.object(handlers, "_resolve_agent_display", MagicMock(side_effect=_display_by_agent)):
+            await handlers._run_text_search(state)
+        assert [d.id for d in state.results] == [NEW_WEAK.id]
+        assert NEW_WEAK.id in state.fts_anchor_ids
+
+    @pytest.mark.asyncio
     async def test_queryless_listing_skips_excluded_writers_before_the_limit(self, seeded_db):
         # Review round 4 on #2517: the queryless read fetched exactly `limit`
         # rows and then dropped excluded writers, so limit=1 came back empty.
@@ -358,7 +397,12 @@ class TestUnifiedSchemaCarriesRecencyParams:
         # order.
         from src.mcp_handlers.schemas.knowledge import SearchKnowledgeGraphParams
 
-        assert SearchKnowledgeGraphParams(query="x").sort_by == "relevance"
+        # Unset, which the handler reads as relevance. A materialized
+        # "relevance" default would also defeat the queryless-window time
+        # order after validation (review on #2517).
+        assert SearchKnowledgeGraphParams(query="x").sort_by is None
+        dumped = SearchKnowledgeGraphParams(created_after="2026-09-26").model_dump(exclude_none=True)
+        assert "sort_by" not in dumped
 
 
 # ---------------------------------------------------------------------------

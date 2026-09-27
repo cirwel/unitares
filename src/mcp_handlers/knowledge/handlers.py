@@ -2517,9 +2517,7 @@ async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
         if oldest is None:
             return
         kwargs = _fts_kwargs(request)
-        kwargs["created_before"] = min(
-            oldest, request.created_before or oldest
-        )
+        kwargs["before"] = (oldest, page[-1].id)
         page = await state.graph.full_text_search(
             str(request.query_text),
             limit=page_size,
@@ -2528,6 +2526,8 @@ async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
         )
         if not page:
             return
+        if state.fts_anchor_ids is not None:
+            state.fts_anchor_ids.update(document.id for document in page)
         pool.extend(page)
         state.candidates = pool
         state.tag_filter_dropped = 0

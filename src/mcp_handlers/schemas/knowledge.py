@@ -129,8 +129,10 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
     # Declared here for years and read by no handler, with a default of
     # created_at that would have flipped every search to time order the day it
     # was wired. `score` and `related_count` never had an implementation.
-    sort_by: Literal["relevance", "created_at"] = Field(
-        default="relevance",
+    # None means relevance; an unset default (not "relevance") so validation
+    # does not turn an omitted order into an explicit one.
+    sort_by: Optional[Literal["relevance", "created_at"]] = Field(
+        default=None,
         description=(
             "relevance (default) or created_at: the query's full-text matches, "
             "newest first"

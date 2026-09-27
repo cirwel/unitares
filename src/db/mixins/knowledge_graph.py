@@ -209,6 +209,7 @@ class KnowledgeGraphMixin:
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
         filters: Optional[Dict[str, Any]] = None,
+        before: Optional[tuple] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using PostgreSQL tsvector.
 
@@ -268,9 +269,18 @@ class KnowledgeGraphMixin:
                 clauses.append("AND status IS DISTINCT FROM 'archived'")
             if filters.get("exclude_cold"):
                 clauses.append("AND status IS DISTINCT FROM 'cold'")
+        if before is not None:
+            # Keyset cursor for newest-first continuation: (created_at, id) of
+            # the oldest row already read. The pair, not created_at alone, so
+            # rows sharing that timestamp are not skipped.
+            params.append(before[0])
+            params.append(before[1])
+            clauses.append(f"AND (created_at, id) < (${len(params) - 1}, ${len(params)})")
         filter_clause = " ".join(clauses)
         order_clause = (
-            "created_at DESC" if order_by == "created_at" else "rank DESC, created_at DESC"
+            "created_at DESC, id DESC"
+            if order_by == "created_at"
+            else "rank DESC, created_at DESC"
         )
         params.append(limit)
         async with self.acquire() as conn:

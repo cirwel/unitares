@@ -187,7 +187,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # search_shared_memory declare sort_by ("relevance" | "created_at"),
 # created_after and created_before for action=search. search_knowledge_graph
 # already declared them, but no handler read them; its sort_by default moves
-# from created_at to relevance and its never-implemented "score" and
+# from created_at to unset (read as relevance) and its never-implemented "score" and
 # "related_count" values are refused. A compatible addition: the default
 # order is unchanged. To stay inside the progressive-surface ratchet,
 # search_shared_memory advertises shorter briefs for nine existing search

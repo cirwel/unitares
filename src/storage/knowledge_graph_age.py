@@ -2505,6 +2505,7 @@ class KnowledgeGraphAGE:
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
         filters: Optional[Dict[str, Any]] = None,
+        before: Optional[tuple] = None,
     ) -> List[DiscoveryNode]:
         """Full-text search using PostgreSQL tsvector (ts_rank_cd ranking).
 
@@ -2519,7 +2520,7 @@ class KnowledgeGraphAGE:
         rows = await db.kg_full_text_search(
             query, limit, operator=operator, tags=tags, order_by=order_by,
             created_after=created_after, created_before=created_before,
-            filters=filters,
+            filters=filters, before=before,
         )
         # Hydrate via get_discovery so edge/response metadata is consistent
         # with what the rest of AGE returns. Row count is small (<= limit).

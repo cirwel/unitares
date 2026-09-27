@@ -255,7 +255,7 @@ The two identifiers serve different jobs:
   `knowledge` and `search_shared_memory` declare `sort_by` (`relevance` or
   `created_at`), `created_after` and `created_before` for search, which
   `search_knowledge_graph` declared without any handler reading them; its
-  `sort_by` default moves from `created_at` to `relevance`, and its
+  `sort_by` default moves from `created_at` to unset (read as `relevance`), and its
   never-implemented `score` and `related_count` values are refused. The
   default order is unchanged. `search_shared_memory` advertises shorter briefs
   for nine existing search parameters to stay inside the progressive-surface

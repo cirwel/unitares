@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "b88a051f969f0418138e707e88ba5997367f17f1da63adb0aebb806b9f770b2d",
+  "surface_sha256": "00531d331a6f349102fb1d95f657f3b4e774afcc629023c2086c9076720569e4",
   "capabilities": [
     {
       "name": "start_session",
@@ -290,7 +290,7 @@
       "name": "search_knowledge_graph",
       "implementation": "search_knowledge_graph",
       "kind": "canonical_tool",
-      "input_schema_sha256": "6edab4607bcb44a9d433f1858290e71c2c83324f29bc89fa74b4cb41d51712b8",
+      "input_schema_sha256": "373e6e6fed90f1f9b1af7acf0d1fefc90164bb0b00deae9b93462b3960e272ca",
       "transport_names": {
         "mcp_streamable_http": "search_knowledge_graph",
         "rest_v1_tools": "search_knowledge_graph",
