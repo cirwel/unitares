@@ -373,3 +373,17 @@ async def test_the_link_survives_a_real_server_restart(tmp_path):
         await link.close()
         server.kill()
         await asyncio.to_thread(server.wait)
+
+
+def test_sdk_wrapped_transport_failures_are_retryable_and_refusals_are_not():
+    """Review round 2 on #2508: the real client wraps a socket failure as
+    GovernanceConnectionError, and a success=false answer as its subclass
+    GovernanceToolRefused. Only the answer is final."""
+    errors = pytest.importorskip("unitares_sdk.errors")
+
+    assert r._is_transport_loss(errors.GovernanceConnectionError("All connection attempts failed"))
+    assert r._is_transport_loss(errors.GovernanceTimeoutError("dialectic timed out after 30s"))
+    assert r._is_transport_loss(errors.GovernanceUnavailableError("503", retry_after_seconds=1))
+    assert r._is_transport_loss(r.GovernanceLinkLost("ended"))
+    assert not r._is_transport_loss(errors.GovernanceToolRefused("Tool dialectic failed: no"))
+    assert not r._is_transport_loss(ValueError("a bug, not an outage"))

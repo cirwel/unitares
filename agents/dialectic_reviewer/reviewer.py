@@ -936,22 +936,28 @@ class _GovernanceLink:
 def _is_transport_loss(exc: BaseException) -> bool:
     """True only for errors that say the call may never have arrived.
 
-    The SDK raises one class, GovernanceConnectionError, both for a transport
-    failure and for a tool that answered ``success: false``, so that class is
-    treated as an answer. A connection the link lost, a timeout and a 503 are
-    unambiguous; so is a bare ConnectionError or OSError from below the SDK.
+    A tool that answered ``success: false`` raises GovernanceToolRefused: an
+    answer, never retried. Every other SDK connection error, a connection the
+    link lost, a timeout and a 503 mean the filing may not have landed.
     """
     if isinstance(exc, (GovernanceLinkLost, TimeoutError, asyncio.TimeoutError,
                         ConnectionError, OSError)):
         return True
     try:
         from unitares_sdk.errors import (  # type: ignore
+            GovernanceConnectionError,
             GovernanceTimeoutError,
+            GovernanceToolRefused,
             GovernanceUnavailableError,
         )
     except ImportError:
         return False
-    return isinstance(exc, (GovernanceTimeoutError, GovernanceUnavailableError))
+    if isinstance(exc, GovernanceToolRefused):
+        return False
+    return isinstance(
+        exc,
+        (GovernanceConnectionError, GovernanceTimeoutError, GovernanceUnavailableError),
+    )
 
 
 async def continue_after_disagreement(
