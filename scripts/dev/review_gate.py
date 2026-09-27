@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -88,6 +89,9 @@ DEFAULT_BASE = "origin/master"
 DEFAULT_BUDGET_S = 2400  # pipeline skill: clean codex completions ran 1-21 min
 PROVIDER_COOLDOWN_S = 3600
 UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
+#: A review passed, but a security-sensitive diff still needs a second model
+#: family (review_policy.json). Not an outage: the next step is the author's.
+NEEDS_SECOND_FAMILY = 3
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
@@ -124,6 +128,9 @@ fixed before merge (wrong behaviour, data loss, security), [P2] or [P3] for
 the rest. An unlabelled finding is treated as [P1].
 
 The repository's house rules are in AGENTS.md; a violation of one is a finding.
+
+Before the VERDICT line, always say what you examined and what you verified,
+even when you find nothing: a verdict with no reasoning is not recorded.
 
 End with exactly one line and nothing after it:
 VERDICT: CLEAN
@@ -213,6 +220,9 @@ class Record:
     url: str = ""
     text: str = ""
     created_at: str = ""
+    # The model an Antigravity review ran (agy can run Gemini, Claude or
+    # GPT-OSS models), so its family is the model's, not the provider's.
+    model: str = ""
 
     def status(self) -> tuple[str, str]:
         if self.verdict == "CLEAN":
@@ -225,8 +235,9 @@ class Record:
 
 
 def render_marker(r: Record) -> str:
+    model = f" model={r.model}" if r.model else ""
     return (f"<!-- {MARKER} key={r.key} verdict={r.verdict} findings={r.findings} "
-            f"disposed={int(r.disposed)} reviewer={r.reviewer} -->")
+            f"disposed={int(r.disposed)} reviewer={r.reviewer}{model} -->")
 
 
 def parse_record(body: str) -> Record | None:
@@ -241,6 +252,7 @@ def parse_record(body: str) -> Record | None:
             findings=int(attrs.get("findings", "0")),
             disposed=attrs.get("disposed") == "1",
             reviewer=attrs.get("reviewer", "unknown"),
+            model=attrs.get("model", ""),
         )
     except (KeyError, ValueError):
         return None
@@ -578,6 +590,19 @@ _AGY_CONFIG_NAMES = {"agents.md", "gemini.md", "claude.md"}
 _AGY_CONFIG_DIRS = {".agents", ".agent", ".gemini"}
 
 
+def agy_model_name() -> str:
+    """The model an agy review runs: REVIEW_AGY_MODEL, else the default;
+    "default" means agy's own default, which is a Gemini model."""
+    return os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
+
+
+def marker_model(model: str) -> str:
+    """The model as it may be written into a record marker, or "" (counts as
+    no family). Same shape rule as reviewer names: whitespace or ">" would
+    let the value inject attributes (\"x reviewer=codex\") or end the marker."""
+    return model if model and REVIEWER_NAME_RE.fullmatch(model) else ""
+
+
 def agy_model_args() -> list[str]:
     model = os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
     return [] if model == "default" else ["--model", model]
@@ -644,10 +669,181 @@ finding and say what input or state makes it go wrong. Do not report style
 preferences. If the material is not enough to judge something, say so
 rather than assuming it is fine.
 
+Before the VERDICT line, always say what you examined and what you verified,
+even when you find nothing: a verdict with no reasoning is not recorded.
+
 End with exactly one line and nothing after it:
 VERDICT: CLEAN
 or
 VERDICT: FINDINGS(<number of findings>)"""
+
+
+POLICY_FILE = Path(__file__).resolve().with_name("review_policy.json")
+
+
+def second_family_paths(text: str | None = None) -> list[str]:
+    """Globs whose diffs need passing reviews from two model families.
+
+    ``text`` is the policy as merged on a PR's base ref (CI); otherwise the
+    file beside this script. A missing file means no such paths. An
+    unreadable one also means none, and warns: failing closed would block
+    every PR on a bad hand edit."""
+    try:
+        raw = json.loads(text if text is not None else POLICY_FILE.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        print(f"[review] WARNING: {POLICY_FILE.name} unreadable ({exc}); "
+              "no second-family requirement applied", file=sys.stderr)
+        return []
+    globs = raw.get("second_family_paths") if isinstance(raw, dict) else None
+    if not isinstance(globs, list):
+        print(f"[review] WARNING: {POLICY_FILE.name} has no second_family_paths list; "
+              "no second-family requirement applied", file=sys.stderr)
+        return []
+    return [g for g in globs if isinstance(g, str)]
+
+
+def base_policy_paths(base: str) -> list[str]:
+    """The policy as merged on ``base`` (a fetched, trusted ref), never the PR
+    head. A base without one (a branch older than the policy) falls back to
+    the default branch's copy, then to the file beside this script: in CI that
+    is the trusted default-branch checkout, while locally it may be the PR's
+    own copy, which is why the default ref is tried first."""
+    for ref in (base, "origin/master", "origin/main"):
+        try:
+            proc = _launch(["git", "show", f"{ref}:scripts/dev/{POLICY_FILE.name}"],
+                           capture_output=True, text=True)
+        except Exception:  # noqa: BLE001 - try the next source
+            continue
+        if proc.returncode == 0:
+            return second_family_paths(proc.stdout)
+    return second_family_paths()
+
+
+def sensitive_paths(paths: list[str], globs: list[str] | None = None) -> list[str]:
+    globs = second_family_paths() if globs is None else globs
+    return [p for p in paths if any(fnmatch.fnmatchcase(p, g) for g in globs)]
+
+
+def changed_paths(base: str, head: str) -> list[str] | None:
+    """Paths the diff touches, from git's own list (never diff text), or None
+    when git could not produce the list. Read as bytes and decoded with
+    surrogateescape: a filename that is not valid UTF-8 must neither crash the
+    read nor hide a sensitive path beside it (diff_key supports such names)."""
+    try:
+        proc = _launch(["git", "diff", "--name-only", "-z", "--no-renames", f"{base}...{head}"],
+                       capture_output=True)
+    except Exception:  # noqa: BLE001 - reported as unknown, never as "nothing changed"
+        return None
+    if proc.returncode != 0 or not isinstance(proc.stdout, bytes):
+        return None
+    return [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p]
+
+
+_FAMILY_TOKENS = {
+    "openai": {"codex", "openai", "gpt", "chatgpt"},
+    "anthropic": {"claude", "anthropic", "opus", "sonnet", "haiku"},
+    # gemma: Google's open model, what a free local verifier runs.
+    "google": {"antigravity", "agy", "gemini", "gemma", "google"},
+}
+
+
+def record_family(rec: Record) -> str | None:
+    """A record's model family. An Antigravity record counts by the model it
+    ran (a record without one predates model recording and counts as none);
+    everything else by its reviewer name."""
+    tokens = set(re.split(r"[^a-z]+", (rec.reviewer or "").lower()))
+    if tokens & {"antigravity", "agy"}:
+        # agy runs Gemini, Claude or GPT-OSS models: the model decides, and a
+        # record without it counts as none, whatever else the name says.
+        return model_family(rec.model)
+    return reviewer_family(rec.reviewer)
+
+
+def model_family(model: str) -> str | None:
+    if (model or "").strip().lower() == "default":
+        return "google"  # agy's own default model is Gemini
+    return reviewer_family(model) if model else None
+
+
+def provider_family(provider: str) -> str | None:
+    """A provider's family as it would run here now (agy by its configured model)."""
+    return model_family(agy_model_name()) if provider == "antigravity" else reviewer_family(provider)
+
+
+def reviewer_family(reviewer: str) -> str | None:
+    """The model family behind a record's reviewer name, or None when the name
+    does not say. Matched on whole tokens of the name (split on anything that
+    is not a letter), so "strategy-review" is not Google and "gpt-5-reviewer"
+    is OpenAI. An unrecognised name (a recorded "council") counts as NO
+    family: counting it as its own would let two reviews from one family
+    satisfy the two-family rule. Record such a review under a name that
+    carries its family (e.g. "gemini-council", "gpt-5-reviewer")."""
+    tokens = set(re.split(r"[^a-z]+", (reviewer or "").lower()))
+    found = [family for family, names in _FAMILY_TOKENS.items() if tokens & names]
+    # A name that says two families ("claude-then-gpt") says none.
+    return found[0] if len(found) == 1 else None
+
+
+def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
+    """Families with a passing FULL review of this diff: CLEAN, or FINDINGS
+    whose dispositions are complete. Same trust rules as latest_matching.
+    A fix-verification receipt (``fix-verify:<model>``, past the round cap)
+    says it did not review the new lines, so it never counts as a family."""
+    families = set()
+    trusted = [(c, parse_record(c.get("body", ""))) for c in comments
+               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+    # A disposition's reviewer field is not verified (dispose --emit takes it
+    # as given), so a disposed FINDINGS credits a family only when the review
+    # it answers, the same reviewer's open FINDINGS on this diff, is on record.
+    # (reviewer, findings) -> the original review's model (for agy records).
+    originals = {(r.reviewer, r.findings): r.model for _, r in trusted
+                 if r and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+    # A native Codex review is a GitHub review, not a comment: its disposition
+    # cites the review by URL (as latest_matching matches it), with its count.
+    native_findings = {r.url: r.findings for r in native
+                       if r.key == key and r.verdict == "FINDINGS" and r.url}
+    for c, rec in trusted:
+        if rec is None or rec.key != key or rec.reviewer.startswith("fix-verify:"):
+            continue
+        body = c.get("body", "")
+        answers_a_review = (rec.reviewer, rec.findings) in originals
+        if not answers_a_review and rec.reviewer == "codex-native":
+            rec.text = body
+            cited = _cited_native_review(rec)
+            # _cited_native_review already requires the cited count to match
+            # the disposition's. A cited review no longer in view (a base-only
+            # merge moved the head; native evidence is head-bound) still
+            # counts, as latest_matching keeps it disposed.
+            answers_a_review = bool(cited) and native_findings.get(cited, rec.findings) == rec.findings
+        if rec.verdict == "CLEAN" or (
+                rec.verdict == "FINDINGS" and rec.disposed
+                and dispositions_complete(body, rec.findings)
+                and answers_a_review):
+            if rec.disposed and not rec.model:
+                # A disposition written without the model (older, or --emit)
+                # counts by the model of the review it answers.
+                rec.model = originals.get((rec.reviewer, rec.findings), "") or ""
+            families.add(record_family(rec))
+    for rec in native:
+        if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
+            families.add(record_family(rec))
+    families.discard(None)
+    return families
+
+
+def second_family_check(conclusion: str, desc: str, sensitive: list[str],
+                        families: set[str]) -> tuple[str, str]:
+    """Hold a passing check on a sensitive diff until two families passed."""
+    if conclusion != "success" or not sensitive or len(families) >= 2:
+        return conclusion, desc
+    have = ", ".join(sorted(families)) or "none"
+    more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
+    missing = "two model families" if not families else "a second model family"
+    return ("action_required",
+            f"security-sensitive path {sensitive[0]}{more}: needs passing full reviews "
+            f"from {missing} (have: {have}); run review.sh again")
 
 
 def disabled_providers() -> dict[str, str]:
@@ -766,6 +962,24 @@ def dispositions_complete(text: str, n: int) -> bool:
     """
     numbered = {int(m) for m in re.findall(r"^\s*#?(\d+)[.):]\s+\S", text or "", re.M)}
     return n > 0 and all(k in numbered for k in range(1, n + 1))
+
+
+#: A verdict counts only with this much reasoning before it (non-whitespace
+#: characters). Operator-visible judgement call, 2026-09-27: Antigravity twice
+#: returned a bare "VERDICT: CLEAN" (PR #2486 round 1 after reading ~97K tokens;
+#: an independent review of the same diff then found two P2s), and a verdict
+#: nobody can check is not a review. 120 (about 25 words) is a floor for
+#: "said what it looked at"; 200 was tried first and rejected a terse but
+#: genuine ~40-word CLEAN, so the floor stays low: it exists to catch an
+#: empty verdict, not to grade a short one.
+REVIEW_MIN_REASONING_CHARS = 120
+
+
+def has_reasoning(text: str) -> bool:
+    """True when the text before the final VERDICT line says something."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    body = "".join("".join(ln.split()) for ln in lines[:-1])
+    return len(body) >= REVIEW_MIN_REASONING_CHARS
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
@@ -970,7 +1184,7 @@ def _antigravity_text(stdout: str) -> str:
 #: of them 3x hit it again each time (agy re-reasons), hence one try only.
 #: File mode (#2476) makes agy reach for grep/find more often: its own review
 #: of #2476 was denied three times in a row, so denials get a third resume.
-AGY_RESUME_LIMITS = {"denied": 3, "truncated": 1}
+AGY_RESUME_LIMITS = {"denied": 3, "truncated": 1, "bare": 1}
 AGY_RESUME_PROMPTS = {
     "denied": (
         "A tool call was denied. This review session cannot run commands, and file "
@@ -983,6 +1197,11 @@ AGY_RESUME_PROMPTS = {
         "Your previous answer was cut off by the output limit before it was delivered "
         "in full. Send your complete final review again from the beginning: every "
         "finding, then the VERDICT line. Do not investigate further; write it out."
+    ),
+    "bare": (
+        "Your reply was only the VERDICT line, which cannot be checked. Write the "
+        "review: which files and behaviours you examined, what you verified in each, "
+        "and every finding with file:line, then the VERDICT line."
     ),
 }
 #: A resume needs at least this much budget left to be worth starting.
@@ -1012,9 +1231,12 @@ def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
             return "truncated", cid
         return None, None
     denied = data.get("denied_actions")
-    if not str(data.get("response") or "").strip() and (
+    response = str(data.get("response") or "")
+    if not response.strip() and (
             _AGY_DENIED_MARK in stderr or (isinstance(denied, list) and denied)):
         return "denied", cid
+    if parse_verdict(response) is not None and not has_reasoning(response):
+        return "bare", cid
     return None, None
 
 
@@ -1061,6 +1283,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
 
     log = out_dir / "reviewer.log"
     isolated = reviewer == "antigravity"
+    separate = reviewer in ("antigravity", "claude")
     workspace = tempfile.TemporaryDirectory(prefix="review-agy-") if isolated else None
     if workspace and any((d / m).exists() for d in Path(workspace.name).resolve().parents
                          for m in (".git", ".agents")):
@@ -1083,13 +1306,16 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
 
     def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
-        # antigravity: stdout is the JSON answer, kept apart from stderr.
-        out = open(last, "w") if isolated else fh
+        # antigravity (JSON) and claude (text): stdout is the answer, kept apart
+        # from stderr, so CLI diagnostics never read as the review or count
+        # toward its reasoning (PR #2500, native Codex review). Codex writes its
+        # answer to `last` itself (--output-last-message).
+        out = open(last, "w") if separate else fh
         try:
             # stdin=DEVNULL: codex blocks reading an open non-TTY stdin.
             try:
                 proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
-                                        stderr=fh if isolated else subprocess.STDOUT,
+                                        stderr=fh if separate else subprocess.STDOUT,
                                         cwd=agy_cwd,
                                         env=agy_env(agy_home) if isolated else None,
                                         start_new_session=True)
@@ -1143,6 +1369,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         failure = {
             "truncated": "output limit not recovered",
             "denied": "no answer after a denied command",
+            "bare": "verdict without reasoning",
         }[stall] + f" after {resumes.get(stall, 0)} resume(s)"
     if failure is not None:
         if failure.startswith("could not start"):
@@ -1283,7 +1510,11 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
         # when the clean reaction arrives late and preserves diff equivalence.
         recorded = any(c.get("author_association") in TRUSTED_ASSOCIATIONS
                        and (r := parse_record(c.get("body", "")))
-                       and r.key == key and r.verdict == "CLEAN" for c in comments)
+                       and r.key == key and r.verdict == "CLEAN"
+                       # Another family's CLEAN is not this receipt: on a
+                       # sensitive diff the codex-native one must still post,
+                       # or CI never re-runs and holds a two-family PR.
+                       and r.reviewer == "codex-native" for c in comments)
         if not recorded:
             post_record(pr, Record(key, "CLEAN", 0, False, "codex-native"),
                         f"CLEAN — native review joined: {rec.url}", rec.text)
@@ -1370,13 +1601,23 @@ def cmd_review(args) -> int:
                     print(existing.text)
                     if existing.verdict == "FAILED":
                         return UNREVIEWED
-                    return finish_record(repo, pr, key, head, existing, comments)
+                    return second_family_pass(
+                        args, repo, pr, key, head,
+                        finish_record(repo, pr, key, head, existing, comments))
+                        # No passed_by: this record was read back from the PR,
+                        # so passing_families already weighs it (with its checks).
                 # The cap binds the local fallback too: it spends the same quota.
                 # An explicit --reviewer is the author choosing to spend a round.
                 if not args.reviewer:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
-                        return capped_review(args, repo, pr, key, head, rounds)
+                        # Past the cap no full review runs automatically,
+                        # sensitive or not: report what is missing and let
+                        # the author spend a round (--reviewer) or record one.
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            capped_review(args, repo, pr, key, head, rounds),
+                            auto=False)
                 args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -1391,7 +1632,13 @@ def cmd_review(args) -> int:
                         rec = None
                     if rec:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
-                        return finish_record(repo, pr, key, head, rec, pr_comments(repo, pr))
+                        # Only a native record is credited here (its family is
+                        # unambiguous); any other joined record was read from
+                        # the PR, so passing_families weighs it by its own model.
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            finish_record(repo, pr, key, head, rec, pr_comments(repo, pr)),
+                            passed_by=rec.reviewer if rec.reviewer == "codex-native" else None)
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 result = review_with_fallback(args, pr, key, reviewer)
                 # A cloud review can finish while the local fallback runs.
@@ -1405,7 +1652,9 @@ def cmd_review(args) -> int:
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     print(f"[review] {latest.status()[1]}\n{latest.url}\n{latest.text}")
                     return 1
-                return completed_review_exit(repo, pr, key, head, result)
+                return second_family_pass(
+                    args, repo, pr, key, head,
+                    completed_review_exit(repo, pr, key, head, result))
         if not joined:
             print("[review] joining the review already running for this diff…", flush=True)
             joined = True
@@ -1414,6 +1663,79 @@ def cmd_review(args) -> int:
                   "Run scripts/dev/review.sh again before marking ready.")
             return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
+def second_family_candidates(branch: str, families: set[str], comments: list[dict],
+                             key: str, failed: set[str] = frozenset()) -> list[str]:
+    """Providers that could supply a missing family now: usable, of a family
+    that has not passed, not cooling down, not exhausted on this diff."""
+    exhausted = set(failed) | {p for p in KNOWN_PROVIDERS
+                               if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
+    return [p for p in reviewer_candidates(branch)
+            if provider_family(p) not in families and provider_family(p) is not None
+            and p not in exhausted and not provider_cooldown(p)]
+
+
+def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
+                       passed_by: str | None = None, auto: bool = True,
+                       passed_family: str | None = None) -> int:
+    """After a passing review of a security-sensitive diff, say plainly when a
+    second model family is still missing, and which reviews would supply it.
+
+    It never starts a review itself. An automatic second run collided with the
+    round cap, fresh runs and the sweep in round after round of PR #2504's
+    review; the rule's enforcement is the CI check, and choosing the second
+    reviewer is the author's. Returns NEEDS_SECOND_FAMILY while the family is
+    missing, including when the changed paths cannot be read (CI treats that
+    as sensitive too), so a foreground review.sh never reads as done while CI
+    would still block. ``auto`` is accepted for the callers' sake and no
+    longer changes anything.
+    """
+    if result != 0:
+        return result
+    base = getattr(args, "base", "origin/master")
+    changed = changed_paths(base, "HEAD")
+    # The base ref's policy, as CI uses it; and like CI, an unreadable list is
+    # treated as sensitive rather than as "nothing changed".
+    sensitive = (sensitive_paths(changed, base_policy_paths(base)) if changed is not None
+                 else ["(changed paths unreadable)"])
+    if not sensitive:
+        return result
+    try:
+        comments = pr_comments(repo, pr)
+        native = read_native(repo, pr, key, head, comments).records
+    except SystemExit as exc:
+        # Incomplete evidence could hide an open native FINDINGS review.
+        print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
+        return UNREVIEWED
+    families = passing_families(comments, key, native)
+    # The review that just passed may not be readable yet (API read lag after
+    # its own post): count its family from what is already known. A fix-verify
+    # receipt did not review the new lines (see passing_families).
+    passed_by = passed_by or getattr(args, "completed_by", None)
+    if passed_by and not passed_by.startswith("fix-verify:") and provider_family(passed_by):
+        families.add(provider_family(passed_by))
+    if passed_family:
+        # A record or disposition this command just posted, credited by its
+        # own model-aware family (record_family), not by a provider name.
+        families.add(passed_family)
+    if len(families) >= 2:
+        return result
+    candidates = second_family_candidates(
+        getattr(args, "branch", "") or "", families, comments, key,
+        set(getattr(args, "failed_providers", set()) or set()))
+    have = ", ".join(sorted(families)) or "none"
+    if candidates:
+        runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
+        next_step = f"run one of: {runs}"
+    else:
+        next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
+                     "on this diff)")
+    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs passing full "
+          f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
+          "Or record an independent review under a name that carries its model family "
+          "(e.g. gemini-…, gpt-…) with ./scripts/dev/review.sh record --independent.")
+    return NEEDS_SECOND_FAMILY
 
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
@@ -1583,6 +1905,9 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         attempt.budget = max(1, remaining // (len(available) - i))
         result = _review_locked(attempt, pr, key, provider)
         if result != UNREVIEWED:
+            # second_family_pass needs to know this without re-reading the
+            # comment it just posted (GitHub reads can lag a fresh write).
+            args.completed_by = provider
             return result
         print(f"[review] {provider} did not complete; checking remaining reviewers", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
@@ -1610,6 +1935,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
+    if parsed is not None and not has_reasoning(text):
+        # Not a review: fall back to the next reviewer instead of recording it.
+        parsed, note = None, "verdict without reasoning"
     if parsed is None:
         remember_unavailable(reviewer, text, note)
         rec = Record(key, "FAILED", 0, False, reviewer)
@@ -1617,7 +1945,8 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
-        rec = Record(key, verdict, n, False, reviewer)
+        rec = Record(key, verdict, n, False, reviewer,
+                     model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
@@ -1649,6 +1978,10 @@ def cmd_record(args) -> int:
     if parsed is None:
         raise SystemExit("review_gate: the review text needs a final "
                          "'VERDICT: CLEAN' or 'VERDICT: FINDINGS(n)' line")
+    if not has_reasoning(text):
+        raise SystemExit("review_gate: the review text needs its reasoning before the "
+                         "VERDICT line (what was examined and verified); a bare verdict "
+                         "is not a review")
     verdict, n = parsed
     if not REVIEWER_NAME_RE.fullmatch(args.reviewer_name):
         raise SystemExit("review_gate: --reviewer-name must match [A-Za-z0-9_.:@/+-]+ "
@@ -1665,13 +1998,23 @@ def cmd_record(args) -> int:
     rec = Record(key, verdict, n, False, args.reviewer_name)
     post_record(pr, rec, heading, text)
     print(f"[review] recorded: {rec.status()[1]}")
-    return 0
+    return _after_manual_record(args, repo, pr, key, branch, rec)
+
+
+def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: Record) -> int:
+    """record and dispose finish like a review run: a passing result on a
+    security-sensitive diff still needs a second model family (exit 3)."""
+    if rec.status()[0] != "success":
+        return 0  # findings recorded for later disposition: nothing passed yet
+    args.branch = branch
+    return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
+                              passed_family=record_family(rec))
 
 
 def cmd_dispose(args) -> int:
     if getattr(args, "emit", False):
         return _dispose_emit(args)
-    pr, repo, key, _ = _resolve(args)
+    pr, repo, key, branch = _resolve(args)
     prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
         raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
@@ -1679,10 +2022,10 @@ def cmd_dispose(args) -> int:
     if not dispositions_complete(text, prior.findings):
         raise SystemExit(f"review_gate: dispositions need a numbered entry for each of the "
                          f"{prior.findings} finding(s) — `1. <fixed in …|rebutted: why>` …")
-    rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer)
+    rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer, model=prior.model)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
-    return 0
+    return _after_manual_record(args, repo, pr, key, branch, rec)
 
 
 def _dispose_emit(args) -> int:
@@ -1784,6 +2127,8 @@ def cmd_sweep(args) -> int:
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             continue  # cannot decide which findings remain open from partial evidence
+        # A sensitive diff with one family's pass is left to its author: the
+        # review check says what is missing, and no review starts on its own.
         if rec is not None and not (rec.verdict == "FAILED" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
@@ -1808,8 +2153,14 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        return subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                               "--pr", str(n), "review"], cwd=wt).returncode
+        rc = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                             "--pr", str(n), "review"], cwd=wt).returncode
+        if rc == NEEDS_SECOND_FAMILY:
+            # The review passed; the second family is the author's call. Not a
+            # job failure (launchd would flag it for the operator).
+            print(f"[sweep] PR #{n}: reviewed; a second model family is left to its author")
+            return 0
+        return rc
     print(f"[sweep] {candidates} review candidate(s)" if candidates else
           "[sweep] no reviews to start")
     return 0
@@ -1893,6 +2244,16 @@ def cmd_ci(args) -> int:
     else:
         url = rec.url
     conclusion, desc = review_check(rec)
+    changed = changed_paths(f"origin/{base_ref}", head)
+    # A diff whose paths cannot be read is treated as sensitive: this is the
+    # gate, and "could not tell" must not pass with a single family.
+    # The policy as merged on this PR's own base ref: the workflow checks out
+    # the DEFAULT branch, which differs for a PR that targets another branch.
+    globs = base_policy_paths(f"origin/{base_ref}")
+    sensitive = (sensitive_paths(changed, globs) if changed is not None
+                 else ["(changed paths unreadable)"])
+    conclusion, desc = second_family_check(
+        conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
     desc += round_note(snapshot.rounds)
     print(f"PR #{pr} head {head[:12]} key {key[:12]}: {conclusion} — {desc}")
     if conclusion == "neutral":

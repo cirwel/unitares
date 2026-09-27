@@ -93,6 +93,10 @@ ROUTE_REGISTRARS = (
     "src.http_api",
     "src.mcp_handlers.wave3a_probe",
     "src.mcp_handlers.wave3a_admin",
+    # Opt-in route packs (UNITARES_ROUTE_PACKS). Read even though the shipped
+    # default mounts none: a deployment that enables a pack exposes these
+    # routes, so each must be gated like the rest.
+    "src.http_routes.packs",
 )
 
 

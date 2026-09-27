@@ -55,22 +55,41 @@ callers. A blank explicit filter is rejected, and surrounding whitespace is
 trimmed. Search also supports `include_provenance`;
 request `response_mode="full"` when you need the full result fields. The search
 alias omits controls for other actions, such as closure evidence and synthesis;
-use the corresponding `knowledge` action for those tasks.
-`closure_class` and `closure_evidence` are declared only on
-`knowledge(action="update")`: `update_finding`'s schema omits them, so a direct
-MCP call drops them before the handler runs.
-Date filters (`created_after` / `created_before`) are not supported by this
-search action. A supplied-but-blank query is rejected so a caller mistake cannot turn
+use `update_finding` or the corresponding `knowledge` action for those tasks.
+A supplied-but-blank query is rejected so a caller mistake cannot turn
 into an accidental broad scan. Omit `include_details` to let the server expand a
 small result set (up to 3 hits) automatically; pass `include_details=false` when
 summaries only are intentional.
+
+### Newest first, and "what is new since T"
+
+Relevance order can bury an entry written this morning under older, better
+matches. Two controls answer "what is new":
+
+- `sort_by="created_at"` returns the query's full-text matches newest first.
+  The database orders the match set, so a fresh entry comes first however
+  weakly it ranks. It cannot be combined with `search_mode="semantic"` or
+  `"hybrid"`, or with `semantic=true`: similarity has no match boundary to
+  order within. An entry that shares no query terms (after stemming) is not a
+  match, and a multi-term query needs every term unless the AND search found
+  nothing, in which case it falls back to OR.
+- `created_after` / `created_before` take ISO 8601 timestamps (UTC when no
+  offset is given; `"2026-09-26"` is midnight UTC) and are exclusive. They work
+  with any order and any search mode. With no query, `created_after` alone is
+  the "what is new since T" read, newest first:
+  `search_shared_memory(created_after="2026-09-26T00:00:00Z")`.
+
+An unparseable or inverted window is refused, not ignored. The response echoes
+`sort_by` and the window when they differ from the default. The default order
+is still relevance.
 
 Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
 relevance contests against native findings and evidence-linked governed claims.
 This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
 to preserve raw backend order, or filter by a source-memory tag to inspect that
-lane directly.
+lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
+window) apply no authority reorder: time order is what they asked for.
 
 ## Quick Contribution
 
@@ -218,20 +237,31 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
 - **When you resolve something, update its status and add
   `resolution_notes`.** Omitted fields are preserved; do not resend stale
   content just to close the row. When the new status is a closing one
-  (`resolved`, `closed`, `wont_fix`, `superseded`), name the standard you
-  closed by in `resolution_notes`: `fix_verified`, `unobserved`,
-  `not_reproducible`, `obsolete` or `duplicate`, with its evidence (`deployed`
-  and `observed` for `fix_verified`, `window` and `instrument_check` for
-  `unobserved`). On `knowledge(action="update")` the `closure_class`
-  parameter (a string) and `closure_evidence` (an object with those keys) take
-  the same values and are validated, but neither storage backend writes them
-  yet, so the row keeps `closure_class` NULL and the response says so in
-  `closure_class_note`; `resolution_notes` is stored. A closure that declares
-  no class is accepted and answered with `closure_class: null` and a
-  `closure_class_note`. On another agent's high or critical finding,
-  `resolution_notes` is accepted only in the same call as a cross-agent
-  closing status (`resolved`, `closed` or `wont_fix`).
-- **When you find a duplicate, archive the less complete one** and reference the better entry.
+  (`resolved`, `closed`, `wont_fix`, `superseded`), declare the standard you
+  closed by with `closure_class`, a string: `fix_verified`, `unobserved`,
+  `not_reproducible`, `obsolete` or `duplicate`. Its evidence goes in
+  `closure_evidence`, an object: `deployed` and `observed` for
+  `fix_verified`, `window` and `instrument_check` for `unobserved`. Keep each
+  evidence value to a short statement or a pointer (a commit, a build_sha, a
+  query): evidence over 8 KiB as stored JSON is refused, and long material
+  such as a log excerpt belongs in `resolution_notes`. Both are
+  parameters of `update_finding` and `knowledge(action="update")`, are
+  validated, and are stored. The response's `closure_class` is the value read
+  back from the record. `knowledge(action="details")` returns the class and
+  its evidence. Search results name the class in `full` and `compact` mode
+  (the `knowledge` router defaults to `full`); `search_shared_memory` defaults
+  to the `lean` digest, which leaves it out, so pass `response_mode="compact"`
+  or `"full"` there to see it. The class stays with the
+  finding when the lifecycle archives it or moves it to cold, and an update
+  that reopens it (`open` or `disputed`) clears both. Sent without a status, a
+  class classifies a finding that is already closed, and is refused on an
+  open one. A closure that declares no class is accepted and answered with
+  `closure_class: null` and a `closure_class_note` naming the call that adds
+  one. On another agent's high or critical finding, `resolution_notes` and
+  `closure_class` are accepted only in the same call as a cross-agent closing
+  status (`resolved`, `closed` or `wont_fix`).
+- **When you find a duplicate, archive the less complete one** and reference the better entry
+  (`closure_class="duplicate"` records why).
 - **When a finding is outdated, archive it** with a note about what superseded it.
 - **Periodically audit stale open entries** with `knowledge(action="audit")`
   (read-only), and run `knowledge(action="cleanup")` (dry-run by default) to

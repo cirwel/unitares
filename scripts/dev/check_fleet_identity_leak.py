@@ -112,7 +112,9 @@ NOT_IDENTITIES: dict[str, str] = {
 KNOWN_COUPLINGS: dict[str, str] = {
     "src/http_routes/vigil.py":
         "resident-specific route module that dispatches on label.lower() == "
-        '"vigil"; a deployment without that resident gets a dead endpoint',
+        '"vigil"; mounted only with the reference-residents route pack '
+        "(src/http_routes/packs.py), so an install without it carries no "
+        "endpoint, but the name dispatch itself remains",
 }
 
 # Match only when the literal IS a name, not when it merely contains one.
@@ -283,10 +285,6 @@ SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "dashboard/redesign/PLAN.md": (
         ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
         "design notes describing one deployment's own fleet",
-    ),
-    "skills/discord-bridge/SKILL.md": (
-        ("Lumen",) * 8 + ("lumen",) * 3 + ("Sentinel",) * 1 + ("sentinel",) * 2 + ("LUMEN",) * 1,
-        "one operator's Discord bridge (separate repo), served to every agent",
     ),
     "src/tool_descriptions.json": (
         ("Lumen",) * 2,

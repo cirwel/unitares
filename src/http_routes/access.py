@@ -680,13 +680,15 @@ def _record_unbound_resolution(
     *,
     caller_sent_session_id: bool,
 ) -> None:
-    """Keep why the resolver bound nothing, for the REST strict gate.
+    """Keep why the resolver bound nothing, for the REST strict gate and the
+    unbound metrics read.
 
     The prebind returns only "no binding", but the refusal a required call
     then gets depends on the cause: a session miss, a hijack-guard rejection,
     a substrate resident over HTTP, or a server-side failure (see
-    identity_bootstrap.unbound_call_refusal). The MCP middleware reads the
-    same resolver result directly.
+    identity_bootstrap.unbound_call_refusal), and so does the recovery an
+    unbound read offers (core.unbound_metrics_payload). The MCP identity
+    step records the same shape for its own resolver result.
 
     ``caller_sent_session_id`` comes from
     identity_bootstrap.caller_sent_usable_session_id, the one rule the MCP
@@ -694,17 +696,18 @@ def _record_unbound_resolution(
     counts as not sent whether it is judged before or after the derivation
     drops it.
     """
-    from src.mcp_handlers.context import set_http_prebind_resolution
+    from src.mcp_handlers.context import set_unbound_resolution
+    from src.mcp_handlers.identity_bootstrap import unbound_resolution_record
 
-    record = {
-        key: resolved[key]
-        for key in ("error", "reason", "message", "resume_failed", "created")
-        if isinstance(resolved, dict) and key in resolved
-    }
-    if arguments.get("continuity_token") and not token_agent_uuid:
-        record["token_failed_verification"] = True
-    record["caller_sent_session_id"] = caller_sent_session_id
-    set_http_prebind_resolution(record)
+    set_unbound_resolution(
+        unbound_resolution_record(
+            resolved,
+            token_failed_verification=bool(
+                arguments.get("continuity_token") and not token_agent_uuid
+            ),
+            caller_sent_session_id=caller_sent_session_id,
+        )
+    )
 
 
 async def _resolve_http_session_binding(
@@ -861,10 +864,11 @@ async def _resolve_http_bound_agent(
     signals,
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
-    from src.mcp_handlers.context import set_http_prebind_resolution
+    from src.mcp_handlers.context import set_unbound_resolution
+    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     # Each prebind, nested ones included, starts with no resolver result.
-    set_http_prebind_resolution(None)
+    set_unbound_resolution(None)
     if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
 
@@ -876,11 +880,27 @@ async def _resolve_http_bound_agent(
     if operator_agent_id:
         return operator_agent_id
 
-    cached_agent_id, consult = await _consult_http_sticky_binding(
-        arguments, signals
-    )
-    if cached_agent_id:
-        return cached_agent_id
+    # A pre_onboard read is answered only on proof the caller sent in this
+    # request (the gate in _resolve_http_session_binding, the REST form of
+    # the /mcp/ #945 short-circuit). A sticky binding is the server's
+    # inference: the transport key is the bare IP:UA fingerprint on REST. It
+    # was consulted first and answered a read whose body carried a null or
+    # empty client_session_id and no session header (the only REST read that
+    # stays cacheable, because the transport injects an id into a body with
+    # no client_session_id key) with the state of whichever agent last
+    # resolved on that fingerprint. A read that carries proof is not
+    # cacheable, so skipping the consult changes nothing for it, and the
+    # session binding below writes no sticky entry for a pre_onboard read.
+    # Writes are unchanged: their sticky binding is server_inferred, which
+    # the strict write gate refuses unless the agent is substrate-earned.
+    if get_call_identity_requirement(tool_name, arguments) == "pre_onboard":
+        consult = None
+    else:
+        cached_agent_id, consult = await _consult_http_sticky_binding(
+            arguments, signals
+        )
+        if cached_agent_id:
+            return cached_agent_id
 
     return await _resolve_http_session_binding(
         tool_name, arguments, signals, consult

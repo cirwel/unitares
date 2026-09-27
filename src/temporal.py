@@ -141,8 +141,12 @@ async def build_temporal_context(
         # on last_session_end from phase 2, so cannot join the gather batch.
         if last_session_end:
             try:
+                # A datetime, not .isoformat(): created_at is TIMESTAMPTZ and
+                # asyncpg refuses a str for it, so the ISO form raised a
+                # DataError here that the except below logged at debug and
+                # this signal never fired.
                 discoveries = await db.kg_query(
-                    created_after=last_session_end.isoformat(),
+                    created_after=_ensure_utc(last_session_end),
                     limit=50,
                 )
                 if discoveries:

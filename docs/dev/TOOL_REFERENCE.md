@@ -98,7 +98,7 @@ Name/model fields are cosmetic/contextual. The returned uuid is your identity an
 
 Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= skips that gate and can instead infer a co-located binding — pass client_session_id to get your own back. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
 
-Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. Use identity(name='...') to set a cosmetic display label.
+Use identity(client_session_id='...') to see the identity currently bound to your session; an argument-less call cannot answer that question, because it mints before it reads. identity(client_session_id='...', name='...') sets a cosmetic display label.
 
 To re-bind to a UUID you already own, pass both agent_uuid and a matching continuity_token: identity(agent_uuid='...', continuity_token='...', resume=true) — the token is what proves the UUID is yours. A bare identity(agent_uuid='...', resume=true) is an unsigned claim on a UUID, so under strict identity mode it reads as hijack-shaped and won't bind.
 
@@ -317,7 +317,7 @@ EISV FIELD CONTRACT:
 - **Older names:** `check_status`, `metrics`, `my_status`, `state`, `status`
 - **Related:** `process_agent_update`, `observe(action='agent')`, `export(action='history')`
 
-Read one agent's current governance state: it runs no cycle and mints no identity, so a client_session_id resolving to no agent gets an explicit 'unbound' payload rather than a fresh agent. A binding the server merely inferred still returns that agent's real numbers, marked identity_assurance.caller_proven=false and possibly a co-located sibling's, so pass start_session's client_session_id, or an explicit agent_id, to be sure the reading is yours. Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Read one agent's current governance state: it runs no cycle and mints no identity. It reads your own state only on proof sent with the call (start_session's client_session_id, an X-Session-ID header or a verified continuity_token), never a binding the server inferred; without it, or when it names no agent, the payload is an explicit 'unbound' one rather than a fresh agent. agent_id is not declared on /mcp/, which drops it, and it proves nothing about who is asking. Over REST, directly or through use_tool, it names the agent to read. Through use_tool on /mcp/ it does so unless you are bound as a different agent, which is refused (identity_mismatch); to read another agent while bound, use observe(action='agent', target_agent_id=...). Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
 
 Alias: status()
 
@@ -366,7 +366,7 @@ ERROR RECOVERY:
 
 ~~~text
 EXAMPLE REQUEST:
-{"agent_id": "test_agent_001"}
+{"client_session_id": "agent-5e728ecb..."}
 ~~~
 
 ~~~text
@@ -386,8 +386,8 @@ EXAMPLE RESPONSE:
 ~~~
 
 DEPENDENCIES:
-- Optional: agent_id (auto-injected from session if bound)
-- Optional: client_session_id (for session continuity across calls)
+- Optional: client_session_id (the proof that makes this read yours)
+- Optional: agent_id (a UUID naming the agent to read over REST, or through use_tool on /mcp/ unless you are bound as a different agent; a direct /mcp/ call drops it)
 - Workflow: Call after process_agent_update to check current state
 
 EISV FIELD CONTRACT:
@@ -1261,7 +1261,7 @@ Ask an advisory model, and list the hosts that serve one
 - **Timeout:** 5s
 - **Related:** `describe_inference_host`, `consult`, `call_model`, `delegate_inference`
 
-List registered inference hosts with live readiness. Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude and Codex adapters to delegate_inference. Listing works before onboarding; inference calls need a bound identity. Use describe_inference_host for one known id.
+List registered inference hosts with live readiness. Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude, Codex and Antigravity adapters to delegate_inference. Those adapters are an operator extension (the agent orchestrator) that a default install does not run; the extensions field says whether this server has it. Listing works before onboarding; inference calls need a bound identity. Use describe_inference_host for one known id.
 
 ### `describe_inference_host`
 
@@ -1280,7 +1280,7 @@ Return the registry record for one inference host named by host_id, including re
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. effort='thorough' asks a strong model from a different family than the caller's when the caller's family can be detected (Claude, Codex or Antigravity, whichever the operator has available); an undetected caller may get any of them. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
+Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
 ### `call_model`
 
@@ -1293,13 +1293,13 @@ Run one synchronous advisory completion on the local Ollama lane or the Hugging 
 
 ### `delegate_inference`
 
-- **Tier** common · **operation** read · **stability** beta
+- **Tier** advanced · **operation** read · **stability** beta
 - **Identity:** `required`
 - **Timeout:** 480s
 - **Depends on:** `list_inference_hosts`
 - **Related:** `consult`, `describe_inference_host`, `dialectic`
 
-Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 
@@ -1734,7 +1734,7 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. UNITARES_DIALECTIC_REVIEWER_HOST picks the orchestrated reviewer backend (local, codex, claude, antigravity, or external, alias gemini); a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
+Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
