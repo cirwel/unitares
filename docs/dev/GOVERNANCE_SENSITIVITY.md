@@ -8,8 +8,10 @@ the deployed enforcement posture more than any amount of runtime gaming
 would. This file makes that list explicit instead of tacit.
 
 **No instance of a governance-weakening diff is known; the claim is
-structural.** The human merge gate remains the real control. What this
-inventory adds is conspicuousness: a PR touching any entry gets a
+structural.** The human merge gate remains the real control: the merge queue,
+which lands other PRs on their owning agent's `approved-to-merge` label, never
+arms a PR labelled `governance-sensitive`, so the operator merges it by hand.
+What this inventory adds is conspicuousness: a PR touching any entry gets a
 `governance-sensitive` label and one advisory comment asking the author to
 state the expected effect on pause/verdict rates. The check never blocks —
 a gate that fights the maintainer gets routed around, which reproduces the
