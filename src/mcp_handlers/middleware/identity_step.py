@@ -544,8 +544,11 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # Per-request hygiene for the sticky invalid-token flag (#1351): the
     # contextvar default only covers a fresh context; a long-lived dispatch
     # task must not leak one request's invalid-token fact into the next.
-    from ..context import clear_continuity_token_invalid
+    from ..context import clear_continuity_token_invalid, set_unbound_resolution
     clear_continuity_token_invalid()
+    # Same hygiene for why resolution bound nothing: the unbound metrics read
+    # keys its recovery on it (core.unbound_read_cause).
+    set_unbound_resolution(None)
 
     # Unified session key derivation via SessionSignals + derive_session_key()
     from ..context import get_session_signals
@@ -569,12 +572,31 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     from src.mcp_handlers.decorators import get_call_identity_requirement
     call_identity_requirement = get_call_identity_requirement(name, arguments)
 
-    # --- Sticky transport binding: early return if cached ---
-    consult = await consult_sticky_binding(
-        signals,
-        arguments,
-        has_explicit_uuid=bool(arguments and arguments.get("agent_uuid")),
+    # A pre_onboard read other than the identity-lifecycle tools. It is
+    # answered only on proof the caller sent in this request (#945 §1 below).
+    is_pre_onboard_read = (
+        call_identity_requirement == "pre_onboard"
+        and canonical_name not in _IDENTITY_LIFECYCLE_TOOLS
     )
+
+    # --- Sticky transport binding: early return if cached ---
+    # Never for a pre_onboard read. A sticky binding is the server's
+    # inference: its key is the IP:UA fingerprint plus, on /mcp/, a
+    # client-sent Mcp-Session-Id, which Claude Code subagents share with
+    # their parent connection (over UDS it is the bare fingerprint). Consulted
+    # ahead of the #945 short-circuit, it answered a proof-less read with the
+    # state of whichever agent last resolved on that connection. A read that
+    # carries proof is not cacheable, so skipping the consult changes nothing
+    # for it; the raw key is still computed, so a proof-bearing read that
+    # resolves writes the binding back as before.
+    if is_pre_onboard_read:
+        consult = StickyConsult(_transport_cache_key(signals), None, False)
+    else:
+        consult = await consult_sticky_binding(
+            signals,
+            arguments,
+            has_explicit_uuid=bool(arguments and arguments.get("agent_uuid")),
+        )
     transport_key = consult.transport_key
     ctx._transport_key = transport_key
 
@@ -827,12 +849,20 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # sticky transport cache at the tail of this function, so a pure read by an
     # unbound caller still PRODUCED a cacheable identity as a side effect.
     # Guarding-first instead: when the call resolves to pre_onboard, is not an
-    # identity-lifecycle tool, and the caller supplied no proof (continuity
-    # token / client_session_id / agent_uuid / UUID X-Agent-Id / X-Session-ID),
+    # identity-lifecycle tool, and the caller supplied no proof (a verified
+    # continuity token, a client_session_id, or an X-Session-ID header),
     # skip resolution entirely and leave the request unbound. Reads that DO
     # carry proof still resume-resolve — reading an existing identity is
     # legitimate, not "producing" one — preserving the
     # test_read_only_*_session_miss contract.
+    #
+    # An agent_uuid argument and a UUID X-Agent-Id header are not read proof.
+    # Each names an agent without proving who is calling, and the derivation
+    # ignores both, so a read carrying only one of them resolved on the
+    # transport's own signals (the onboard pin, or a connection-scoped
+    # Mcp-Session-Id) and served that binding's state, not the named agent's.
+    # The REST gate never counted them. The argument reaches a metrics read
+    # only through use_tool: the /mcp/ schema of those tools drops it.
     #
     # X-Session-ID is transmitted by the caller in this request, and
     # derive_session_key already keyed the call on it (step 4) and marked it
@@ -855,42 +885,35 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     _has_identity_proof = bool(
         _token_agent_uuid
         or (arguments and arguments.get("client_session_id"))
-        or (arguments and arguments.get("agent_uuid"))
-        or (
-            x_agent_id_header
-            and len(x_agent_id_header) == 36
-            and x_agent_id_header.count("-") == 4
-        )
         or _header_session_proof
     )
-    if not _has_identity_proof and canonical_name not in _IDENTITY_LIFECYCLE_TOOLS:
-        if call_identity_requirement == "pre_onboard":
-            logger.info(
-                "[DISPATCH] pre_onboard read %s with no proof — short-circuiting "
-                "identity resolution (no resolve, no mint, no sticky cache)",
-                name,
-            )
-            from ..context import set_session_context
-            client_hint = arguments.get("client_hint") if arguments else None
-            context_token = set_session_context(
-                session_key=session_key,
-                client_session_id=client_session_id,
-                agent_id=None,
-                client_hint=client_hint,
-                identity_result=None,
-            )
-            ctx.session_key = session_key
-            ctx.client_session_id = client_session_id
-            ctx.bound_agent_id = None
-            ctx.context_token = context_token
-            ctx.client_hint = client_hint
-            ctx.identity_result = None
-            _attach_middleware_identity(
-                arguments,
-                session_key=session_key,
-                identity_result=None,
-            )
-            return name, arguments, ctx
+    if not _has_identity_proof and is_pre_onboard_read:
+        logger.info(
+            "[DISPATCH] pre_onboard read %s with no proof — short-circuiting "
+            "identity resolution (no resolve, no mint, no sticky cache)",
+            name,
+        )
+        from ..context import set_session_context
+        client_hint = arguments.get("client_hint") if arguments else None
+        context_token = set_session_context(
+            session_key=session_key,
+            client_session_id=client_session_id,
+            agent_id=None,
+            client_hint=client_hint,
+            identity_result=None,
+        )
+        ctx.session_key = session_key
+        ctx.client_session_id = client_session_id
+        ctx.bound_agent_id = None
+        ctx.context_token = context_token
+        ctx.client_hint = client_hint
+        ctx.identity_result = None
+        _attach_middleware_identity(
+            arguments,
+            session_key=session_key,
+            identity_result=None,
+        )
+        return name, arguments, ctx
 
     bound_agent_id = None
     identity_result = None
@@ -1133,6 +1156,32 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     except Exception as e:
         resolution_exception = e
         logger.debug(f"Could not resolve session identity: {e}")
+
+    if not bound_agent_id:
+        # Why resolution bound nothing, in the shape the REST prebind records
+        # for its own resolver result. A pre_onboard read continues unbound
+        # below, and its handler keys the recovery it offers on this record
+        # (core.unbound_read_cause), so a session lookup that raised or a
+        # hijack-guard rejection is not reported as an id that names no
+        # identity. A resolver exception records no error: a server failure.
+        from src.mcp_handlers.identity_bootstrap import (
+            caller_sent_usable_session_id,
+            unbound_resolution_record,
+        )
+        from ..context import set_unbound_resolution
+
+        set_unbound_resolution(
+            unbound_resolution_record(
+                None if resolution_exception is not None else identity_result,
+                token_failed_verification=bool(
+                    arguments
+                    and arguments.get("continuity_token")
+                    and not _token_agent_uuid
+                ),
+                caller_sent_session_id=caller_sent_usable_session_id(arguments),
+                resolution_raised=resolution_exception is not None,
+            )
+        )
 
     # The strict gate is a success invariant, not an error-shape allowlist: a
     # required call may continue only when resolution produced a usable binding.
