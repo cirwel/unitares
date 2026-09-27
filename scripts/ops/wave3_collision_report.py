@@ -455,8 +455,15 @@ def competing_writes(
             # only duplicate it less precisely.
             continue
         outcome = response.get("outcome")
-        if outcome not in ("written", "not_written", "already_terminal"):
-            continue  # errored or interrupted: its effect is unknown, not a write
+        # Outcomes whose effect is unknown: the write may or may not have
+        # landed (a BEAM request that timed out after the server committed, a
+        # DB call that raised after taking effect, a cancellation, a BEAM phase
+        # OK that also covers a terminal no-op). They are placed by their
+        # bracket and can only ever be AMBIGUOUS, never harm and never clean.
+        uncertain = outcome in ("no_response", "error", "interrupted",
+                                "accepted_effect_unknown", "unknown")
+        if outcome not in ("written", "not_written", "already_terminal") and not uncertain:
+            continue  # a known no-op: nothing landed
         effect = response["ts"]
         if effect is None:
             continue
@@ -483,7 +490,12 @@ def competing_writes(
             # row already terminal -- the case where a sweeper commit can have
             # contradicted it.
             "landed": outcome == "written",
-            "lost": outcome in ("not_written", "already_terminal"),
+            # Lost to a terminal guard: refused (not_written) by a guarded
+            # writer, or answered already_terminal. A duplicate create is also
+            # not_written, but nothing defeated it.
+            "lost": (outcome == "already_terminal"
+                     or (outcome == "not_written" and kind != "create")),
+            "uncertain": uncertain,
             "value": response.get("requested"),
             "value_kind": ("status" if kind in TERMINAL_KINDS else kind),
             "reviewer_agent_id": (response.get("requested")
@@ -650,6 +662,16 @@ def classify_write(
             ) and c.get("landed") and not same:
                 evidence["ambiguous"].append(
                     {**_placed(c), "effect_lo": _iso(lo), "effect_hi": _iso(hi)})
+                continue
+            # A write whose effect is unknown is ambiguous wherever it could
+            # matter: its bracket meets the read-to-bound interval.
+            if c.get("uncertain"):
+                start = decision_read or commit
+                if lo is not None and hi is not None and lo <= commit + correlation \
+                        and hi >= start and not same:
+                    evidence["ambiguous"].append(
+                        {**_placed(c), "effect_lo": _iso(lo), "effect_hi": _iso(hi),
+                         "effect_unknown": True})
                 continue
             # (b) stale decision: the competing write took effect between the
             # sweeper's read and its commit.
@@ -1171,6 +1193,19 @@ def analyze(
     """
     correlation = dt.timedelta(hours=correlation_hours)
     rows_by_session = {s["session_id"]: s for s in sessions}
+    requested_since = since
+    # The window cannot start before the instrument did: before the first
+    # periodic v2 row nothing was recorded, so a clean zero there would be
+    # manufactured. Clamp the effective start to that row.
+    first_v2 = min(
+        (_ts(c.get("ts")) for c in cycles
+         if _payload(c).get("instrument_version") == INSTRUMENT_VERSION
+         and _payload(c).get("trigger_source") == "periodic"
+         and _ts(c.get("ts")) is not None and since <= _ts(c.get("ts")) < until),
+        default=None,
+    )
+    if first_v2 is not None and first_v2 > since:
+        since = first_v2
 
     def _in(t):
         return t is not None and since <= t < until
@@ -1266,6 +1301,7 @@ def analyze(
 
     return {
         "window": {"since": _iso(since), "until": _iso(until),
+                   "requested_since": _iso(requested_since),
                    "correlation_hours": correlation_hours,
                    "silence_minutes": silence_minutes},
         "reading": comp_check["reading"],
@@ -1307,6 +1343,9 @@ def render_text(report: Dict[str, Any]) -> str:
     q = ">=" if lower else ""
     lines = [
         f"Wave 3 collision report  {w['since']} .. {w['until']}",
+        *([f"  (requested --since {w['requested_since']}; the window starts at the first "
+           "periodic v2 row, because nothing before it was recorded)"]
+          if w.get("requested_since") != w["since"] else []),
         f"  correlation bound {w['correlation_hours']}h, silence bound {w['silence_minutes']} min",
         "",
     ]

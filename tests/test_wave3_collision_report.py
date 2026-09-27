@@ -127,7 +127,9 @@ def run(writes, *, sessions=(), messages=(), sagas=(), events=(), cycles=None,
         mine = [w["payload"] for w in writes if w["payload"].get("cycle_id") == "c1"]
         n = {o: sum(1 for w in mine if w["outcome"] == o)
              for o in ("succeeded", "refused", "error")}
-        cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=len(mine),
+        # Before the writes: the window starts at the first periodic v2 row.
+        cycles = [cycle(SINCE + dt.timedelta(minutes=1), 1, cycle_id="c1",
+                        attempts=len(mine),
                         succeeded=n["succeeded"], refused=n["refused"], errors=n["error"],
                         clean=n["succeeded"])]
     return report.analyze(
@@ -311,6 +313,18 @@ class TestContention:
                                           requested="synthesis")))
         assert w["class"] != "ambiguous"
 
+    def test_an_uncertain_competing_outcome_is_ambiguous_not_clean(self):
+        for outcome in ("no_response", "error", "interrupted", "accepted_effect_unknown"):
+            w = only(run([write()], events=session_write(
+                at(1), at(1.1), kind="phase", via="beam", requested="synthesis",
+                outcome=outcome)))
+            assert w["class"] == "ambiguous", outcome
+
+    def test_a_duplicate_create_is_not_a_defeated_write(self):
+        w = only(run([write()], events=session_write(
+            at(-0.5), at(0.5), kind="create", outcome="not_written")))
+        assert w["class"] != "harm"
+
     def test_refused_without_a_recorded_winner_is_unattributed(self):
         w = only(run([write(outcome="refused", winner_status=None)]))
         assert w["class"] == "contention_unattributed"
@@ -360,7 +374,7 @@ class TestCompleteness:
         assert result["reading"] == "INCONCLUSIVE"
 
     def test_guarded_rows_must_equal_the_cycle_count(self):
-        result = run([write()], cycles=[cycle(at(0.5), 1, cycle_id="c1", attempts=2)])
+        result = run([write()], cycles=[cycle(at(-0.5), 1, cycle_id="c1", attempts=2)])
         assert result["reading"] == "INCONCLUSIVE"
         mismatch = result["completeness"]["cycles_whose_rows_do_not_match"][0]
         assert (mismatch["write_attempt_count"], mismatch["guarded_write_rows"]) == (2, 1)
@@ -368,7 +382,7 @@ class TestCompleteness:
 
     def test_a_guarded_row_without_its_cycle_row_is_inconclusive(self):
         result = run([write(cycle_id="lost")],
-                     cycles=[cycle(at(0.5), 1, cycle_id="c1", attempts=0)])
+                     cycles=[cycle(at(-0.5), 1, cycle_id="c1", attempts=0)])
         assert result["completeness"]["guarded_write_rows_without_a_cycle"]
         assert result["reading"] == "INCONCLUSIVE"
 
@@ -453,10 +467,20 @@ class TestCompleteness:
 
     def test_an_unbalanced_cycle_row_is_inconclusive(self):
         """A missing probe must not become a clean zero."""
-        cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=1, succeeded=1, clean=0)]
+        cycles = [cycle(at(-0.5), 1, cycle_id="c1", attempts=1, succeeded=1, clean=0)]
         result = run([write()], cycles=cycles)
         assert result["completeness"]["unbalanced_cycle_rows"]
         assert result["reading"] == "INCONCLUSIVE"
+
+    def test_the_window_starts_at_the_first_periodic_v2_row(self):
+        """Writes before the instrument started are not in the reading."""
+        cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=0)]
+        result = run([write(commit_at=at(-30), read_at=at(-31), cycle_id="old")],
+                     cycles=cycles)
+        assert result["window"]["since"] == at(0.5).isoformat()
+        assert result["window"]["requested_since"] == SINCE.isoformat()
+        assert result["guarded_writes"] == 0
+        assert "requested --since" in report.render_text(result)
 
     def test_no_instrument_rows_is_not_started_not_complete(self):
         result = run([], cycles=[])

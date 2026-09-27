@@ -192,7 +192,10 @@ async def beam_update_phase(
             return None
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
-            rec.respond(outcome="written", http_status=status)
+            # BEAM's update_phase answers :ok for a row that is already
+            # terminal as well as for one it updated (zero rows written), so an
+            # OK here does not prove the phase changed: its effect is unknown.
+            rec.respond(outcome="accepted_effect_unknown", http_status=status)
             return body
         logger.warning(f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
         rec.respond(outcome="not_written", http_status=status,

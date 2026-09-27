@@ -283,7 +283,9 @@ class TestBeamClient:
         attempt, response = _pair(captured)
         assert (attempt["kind"], attempt["via"], attempt["requested"]) == (kind, "beam",
                                                                            requested)
-        assert response["outcome"] == "written"
+        # BEAM's update_phase answers OK for a terminal no-op too.
+        expected = "accepted_effect_unknown" if kind == "phase" else "written"
+        assert response["outcome"] == expected
 
     @pytest.mark.asyncio
     async def test_no_request_means_no_record(self, monkeypatch, captured):
