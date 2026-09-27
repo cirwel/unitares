@@ -465,3 +465,27 @@ async def test_a_duplicate_beam_create_is_not_written(monkeypatch, captured):
         assert await brc.beam_create_session("s1", "p") == body
     _attempt, response = _pair(captured)
     assert response["outcome"] == "not_written"
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_audit_sink_does_not_block_the_session_write(monkeypatch, fake_db):
+    """The attempt record is awaited before the write; a stall there is bounded
+    and counted as a failed emit, and the write still runs."""
+    monkeypatch.setattr(sw, "EMIT_TIMEOUT_S", 0.05)
+    sw.take_emit_failures()
+
+    async def stall(entry):
+        await asyncio.Event().wait()
+
+    with patch("src.audit_db.append_audit_event_async", side_effect=stall):
+        assert await asyncio.wait_for(
+            dialectic_db.update_session_phase_async("s1", "antithesis"), timeout=5) is True
+    fake_db.update_session_phase.assert_awaited_once()
+    assert sw.take_emit_failures() == 2
+
+
+def test_the_first_cycle_row_creates_the_ledger(tmp_path, monkeypatch):
+    ledger = tmp_path / "sub" / "ledger.jsonl"
+    monkeypatch.setenv(sw.EMIT_FAILURE_LEDGER_ENV, str(ledger))
+    sw.ensure_emit_failure_ledger()
+    assert ledger.exists() and ledger.read_text() == ""

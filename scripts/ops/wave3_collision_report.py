@@ -460,8 +460,23 @@ def competing_writes(
         # DB call that raised after taking effect, a cancellation, a BEAM phase
         # OK that also covers a terminal no-op). They are placed by their
         # bracket and can only ever be AMBIGUOUS, never harm and never clean.
+        kind = response.get("kind")
+        # A not_written is a loss to the terminal guard only when that is
+        # PROVEN: the refusing row's status (winner_status, existing_status)
+        # is terminal. A BEAM non-OK answer (404/409/422/503) wrote nothing
+        # and involved no guard the sweeper tripped, and a duplicate create
+        # was not defeated by anything. A Python refusal with no winner on
+        # record (a phase or reopen write) cannot be told from a guard loss,
+        # so its effect is treated as unknown.
+        refused_by = response.get("winner_status") or response.get("existing_status")
+        proven_guard_loss = outcome == "not_written" and refused_by in TERMINAL_STATUSES
+        if outcome == "not_written" and not proven_guard_loss:
+            if response.get("via") == "beam" or kind == "create":
+                continue
+            outcome = "not_written_unattributed"
         uncertain = outcome in ("no_response", "error", "interrupted",
-                                "accepted_effect_unknown", "unknown")
+                                "accepted_effect_unknown", "unknown",
+                                "not_written_unattributed")
         if outcome not in ("written", "not_written", "already_terminal") and not uncertain:
             continue  # a known no-op: nothing landed
         effect = response["ts"]
@@ -474,7 +489,6 @@ def competing_writes(
         started = (attempt or {}).get("ts") or effect
         cause = (_ts((attempt or {}).get("decision_ts"))
                  or _latest_message_at_or_before(session_messages, started) or started)
-        kind = response.get("kind")
         # The effect's exact time is known only to the database; Python
         # brackets it between the attempt and the response. The DB-clock
         # commit time (`effect_ts` on the response) is used when present.
@@ -493,8 +507,7 @@ def competing_writes(
             # Lost to a terminal guard: refused (not_written) by a guarded
             # writer, or answered already_terminal. A duplicate create is also
             # not_written, but nothing defeated it.
-            "lost": (outcome == "already_terminal"
-                     or (outcome == "not_written" and kind != "create")),
+            "lost": outcome == "already_terminal" or proven_guard_loss,
             "uncertain": uncertain,
             "value": response.get("requested"),
             "value_kind": ("status" if kind in TERMINAL_KINDS else kind),
@@ -900,8 +913,9 @@ def uncovered_intervals(
     ledger_lines: Sequence[Dict[str, Any]],
     since: dt.datetime,
     until: dt.datetime,
+    silence: Optional[dt.timedelta] = None,
 ) -> Dict[str, Any]:
-    """Intervals the instrument did not cover, because one of its emits failed.
+    """Intervals the instrument did not cover: an emit failed, or it was silent.
 
     A recorded emit failure -- a cycle row's ``emit_failures_since_last_cycle``
     or a line in the durable ledger -- marks the interval from the last cycle
@@ -935,6 +949,20 @@ def uncovered_intervals(
     for t, p in rows:
         if int(p.get("emit_failures_since_last_cycle") or 0):
             intervals.append((_before(t), t))
+    # Heartbeat silences: wherever consecutive periodic rows (across boots)
+    # are further apart than the silence bound, or the last periodic row is
+    # further from the window end than it, the producer was not observed
+    # running. Those intervals are uncovered too: their exposure is excluded,
+    # so an exact zero is never reported for time the sweeper did not run.
+    periodic = [t for t, p in rows if p.get("trigger_source") == "periodic"]
+    silence_intervals: List[Interval] = []
+    if silence is not None and periodic:
+        for a, b in zip(periodic, periodic[1:]):
+            if b - a > silence:
+                silence_intervals.append((a, b))
+        if until - periodic[-1] > silence:
+            silence_intervals.append((periodic[-1], until))
+    intervals.extend(silence_intervals)
     unplaceable = []
     for ln in ledger_lines:
         t = _ts(ln.get("ts"))
@@ -942,7 +970,7 @@ def uncovered_intervals(
             unplaceable.append(ln)
         else:
             intervals.append((_before(t), _after(t)))
-    failure_intervals = _merge(intervals)
+    failure_intervals = _merge([i for i in intervals if i not in silence_intervals])
 
     # cycle_seq gaps, per boot, and whether a recorded failure explains them.
     by_boot: Dict[str, List[tuple]] = defaultdict(list)
@@ -965,7 +993,8 @@ def uncovered_intervals(
                 else:
                     unexplained_gaps.append(gap)
     merged = _merge(intervals)
-    return {"intervals": merged, "explained_seq_gaps": explained_gaps,
+    return {"intervals": merged, "silences": [(_iso(a), _iso(b)) for a, b in silence_intervals],
+            "explained_seq_gaps": explained_gaps,
             "unexplained_seq_gaps": unexplained_gaps, "unplaceable_ledger_lines": unplaceable}
 
 
@@ -980,6 +1009,7 @@ def completeness(
     until: dt.datetime,
     ledger: Optional[Dict[str, Any]] = None,
     ambiguous_writes: int = 0,
+    silence: Optional[dt.timedelta] = None,
 ) -> Dict[str, Any]:
     """The A12 completeness check. Any unmatched unit => INCONCLUSIVE.
 
@@ -1016,7 +1046,7 @@ def completeness(
     ledger_lines = [ln for ln in ledger.get("lines", [])
                     if _ts(ln.get("ts")) is None or _in(_ts(ln.get("ts")))]
     unc = uncovered_intervals(cycles=cycles, ledger_lines=ledger_lines,
-                              since=since, until=until)
+                              since=since, until=until, silence=silence)
     uncovered = unc["intervals"]
     explained = []
 
@@ -1108,7 +1138,11 @@ def completeness(
                 unnamed.append(item)
 
     # (e)
-    ledger_unreadable = 1 if ledger.get("status") == "unreadable" else 0
+    # Absent is not "no failures": the report may be reading another host's or
+    # checkout's data dir. The server creates the ledger (empty) on its first
+    # cycle row, so a verified empty ledger is present; absent means the
+    # report cannot rule out unrecorded failures.
+    ledger_unreadable = 1 if ledger.get("status") in ("unreadable", "absent", "not_read") else 0
     unplaceable = unc["unplaceable_ledger_lines"]
 
     unmatched = (len(unmatched_a) + len(orphan_rows) + len(unmatched_b)
@@ -1237,7 +1271,7 @@ def analyze(
         cycles=window_cycles,
         ledger_lines=[ln for ln in ledger.get("lines", [])
                       if _ts(ln.get("ts")) is None or _in(_ts(ln.get("ts")))],
-        since=since, until=until,
+        since=since, until=until, silence=dt.timedelta(minutes=silence_minutes),
     )["intervals"]
 
     classified = []
@@ -1276,6 +1310,7 @@ def analyze(
         session_write_events=competing_events, guarded_writes=writes, cycles=cycles,
         heartbeat_report=hb, window_sagas=window_sagas, since=since, until=until,
         ledger=ledger, ambiguous_writes=counts["ambiguous"],
+        silence=dt.timedelta(minutes=silence_minutes),
     )
     comp_check.pop("_uncovered", None)
     # Coverage again, with the uncovered intervals taken out of the covered time.
@@ -1426,11 +1461,11 @@ def render_text(report: Dict[str, Any]) -> str:
     lines.append(f"  emit-failure ledger ({led['status']}, {led['path']}): "
                  f"{len(led['lines_in_window'])} line(s) in window")
     if led["status"] == "absent":
-        lines.append("    (no ledger file: none created yet -- it appears on the first "
-                     "failure. If the server runs from another checkout, pass "
-                     "--emit-failure-ledger.)")
-    if led["status"] == "unreadable":
-        lines.append("    UNMATCHED the ledger could not be read")
+        lines.append("    UNMATCHED no ledger file at this path. The server creates it on its "
+                     "first v2 cycle row, so this is not the server's data dir: pass "
+                     "--emit-failure-ledger with the deployment's path.")
+    if led["status"] in ("unreadable", "not_read"):
+        lines.append(f"    UNMATCHED the ledger could not be read ({led['status']})")
     for ln in led["unplaceable_lines"]:
         lines.append(f"    UNMATCHED unplaceable ledger line {ln}")
     xc = comp["saga_crosscheck"]
@@ -1541,8 +1576,10 @@ def fetch(dsn: str, since: dt.datetime, until: dt.datetime,
 def read_emit_failure_ledger(path: Optional[str]) -> Dict[str, Any]:
     """Read the instrument's durable emit-failure ledger (JSON lines).
 
-    ``absent`` (no file yet: it is created on the first failure) is not a
-    failure; ``unreadable`` is, and counts as an unmatched unit.
+    The server creates the file (empty) on its first v2 cycle row, so
+    ``absent`` means this is not the server's data directory, and, like
+    ``unreadable``, counts as an unmatched unit: failures recorded elsewhere
+    cannot be ruled out.
     """
     if not path:
         here = os.path.dirname(os.path.abspath(__file__))

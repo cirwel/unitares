@@ -130,6 +130,43 @@ def emit_failure_ledger_path() -> str:
     return os.path.join(repo_root, "data", "dialectic", "instrument_emit_failures.jsonl")
 
 
+_LEDGER_ENSURED: Optional[str] = None
+
+# Bound on one instrument audit append. The audit path can stall (a locked
+# table, an exhausted pool); an attempt record is awaited BEFORE the session
+# write it describes, so an unbounded stall there would block the write
+# itself. A stalled append is a failed emit: counted and put on the ledger.
+EMIT_TIMEOUT_S = 2.0
+
+
+def ensure_emit_failure_ledger() -> None:
+    """Create the ledger file (empty) if it does not exist. Never raises.
+
+    Called by the first cycle row of each process. A present, empty ledger is
+    the positive statement "no instrument emit has failed here"; the collision
+    report treats an ABSENT ledger as unverified (it may be reading another
+    host's or checkout's data directory).
+    """
+    global _LEDGER_ENSURED
+    try:
+        path = emit_failure_ledger_path()
+        if _LEDGER_ENSURED == path and os.path.exists(path):
+            return
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8"):
+            pass
+        _LEDGER_ENSURED = path
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.warning("instrument emit-failure ledger could not be created: %s", exc)
+
+
+async def bounded_append(entry: Dict[str, Any]) -> Any:
+    """`append_audit_event_async` with `EMIT_TIMEOUT_S`; a stall raises TimeoutError."""
+    from src.audit_db import append_audit_event_async
+
+    return await asyncio.wait_for(append_audit_event_async(entry), timeout=EMIT_TIMEOUT_S)
+
+
 def _append_ledger_line(line: Dict[str, Any]) -> None:
     """Append one line and fsync it before returning. Never raises."""
     try:
@@ -241,9 +278,7 @@ def _json_safe(value: Any) -> Any:
 
 async def _emit(details: Dict[str, Any]) -> None:
     try:
-        from src.audit_db import append_audit_event_async
-
-        persisted = await append_audit_event_async({
+        persisted = await bounded_append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": SESSION_WRITE,
             "agent_id": None,

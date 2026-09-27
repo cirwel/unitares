@@ -94,13 +94,12 @@ async def _instrument_append(entry: Dict[str, Any]) -> None:
     failures, and both are counted (`record_emit_failure`) so the next cycle
     row reports them in ``emit_failures_since_last_cycle``.
     """
-    from src.audit_db import append_audit_event_async
-
     details = entry.get("details") or {}
     where = dict(event_type=entry.get("event_type"), session_id=entry.get("session_id"),
                  cycle_seq=details.get("cycle_seq"))
     try:
-        persisted = await append_audit_event_async(entry)
+        # Bounded: a stalled audit sink is a failed emit, not a hung caller.
+        persisted = await _session_writes.bounded_append(entry)
     except Exception:
         _session_writes.record_emit_failure(**where)
         raise
@@ -729,6 +728,9 @@ async def emit_sweep_cycle(
     """
     cycle_seq = next(_CYCLE_SEQ)
     _session_writes.LAST_CYCLE_SEQ = cycle_seq
+    # A present (possibly empty) ledger is how the report knows it is reading
+    # this server's failures, not an absent file on another host.
+    _session_writes.ensure_emit_failure_ledger()
     emit_failures = _session_writes.take_emit_failures()
     try:
         await _instrument_append({

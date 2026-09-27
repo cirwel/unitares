@@ -120,8 +120,22 @@ def cycle(ts, seq, *, boot="boot-a", source="periodic", error=None, cycle_id=Non
     }}
 
 
+def heartbeat_fill(boot="boot-fill"):
+    """Balanced zero-write periodic rows every 10 min across the whole window,
+    so no fixture write falls in a heartbeat silence (which would exclude it)."""
+    rows, t, seq = [], SINCE, 1
+    while t < UNTIL:
+        rows.append(cycle(t, seq, boot=boot))
+        t += dt.timedelta(minutes=10)
+        seq += 1
+    return rows
+
+
+VERIFIED_EMPTY_LEDGER = {"path": "ledger.jsonl", "status": "read", "lines": []}
+
+
 def run(writes, *, sessions=(), messages=(), sagas=(), events=(), cycles=None,
-        window_sagas=(), correlation_hours=6.0):
+        window_sagas=(), correlation_hours=6.0, fill=True, ledger=VERIFIED_EMPTY_LEDGER):
     if cycles is None:
         # A matching periodic v2 cycle row, so the reading can be complete.
         mine = [w["payload"] for w in writes if w["payload"].get("cycle_id") == "c1"]
@@ -132,12 +146,14 @@ def run(writes, *, sessions=(), messages=(), sagas=(), events=(), cycles=None,
                         attempts=len(mine),
                         succeeded=n["succeeded"], refused=n["refused"], errors=n["error"],
                         clean=n["succeeded"])]
+    if fill:
+        cycles = list(cycles) + heartbeat_fill()
     return report.analyze(
         writes=list(writes), cycles=list(cycles), competing_events=list(events),
         sessions=list(sessions) or [session_row()], messages=list(messages),
         sagas=list(sagas), mismatches=[], inferred_python_terminal=[],
         since=SINCE, until=UNTIL, window_sagas=list(window_sagas),
-        correlation_hours=correlation_hours,
+        correlation_hours=correlation_hours, emit_failure_ledger=ledger,
     )
 
 
@@ -160,7 +176,7 @@ class TestHarmA_Contradicted:
         """Both intended `failed`: no adverse consequence."""
         w = only(run([write()], events=session_write(
             at(-0.5), at(0.5), kind="resolve", via="python_fallback", requested="failed",
-            outcome="not_written", decision_ts=at(-0.5))))
+            outcome="not_written", existing_status="failed", decision_ts=at(-0.5))))
         assert w["class"] == "contention_benign"
 
     def test_a_straddling_saga_is_harm_unless_it_is_liveness(self):
@@ -168,11 +184,24 @@ class TestHarmA_Contradicted:
         liveness = saga(at(-0.5), at(0.5), reason="liveness_timeout")
         assert only(run([write()], sagas=[liveness]))["class"] == "contention_benign"
 
+    def test_a_beam_non_ok_answer_is_not_a_defeated_write(self):
+        """404/409/503 wrote nothing and tripped no guard the sweeper set."""
+        w = only(run([write()], events=session_write(
+            at(-0.5), at(0.5), kind="resolve", via="beam", requested="resolved",
+            outcome="not_written", http_status=503)))
+        assert w["class"] == "uncontended"
+
+    def test_a_python_refusal_without_a_recorded_winner_is_ambiguous(self):
+        w = only(run([write()], events=session_write(
+            at(-0.5), at(0.5), kind="phase", via="python_fallback", requested="synthesis",
+            outcome="not_written")))
+        assert w["class"] == "ambiguous"
+
     def test_the_decision_time_is_the_cause(self):
         """A write decided before the commit but attempted after it straddles."""
         w = only(run([write(read_at=at(-10))], events=session_write(
-            at(1), at(2), kind="reviewer", via="beam", requested="rev-9",
-            outcome="not_written", decision_ts=at(-0.2))))
+            at(1), at(2), kind="reviewer", via="python_fallback", requested="rev-9",
+            outcome="not_written", winner_status="failed", decision_ts=at(-0.2))))
         assert w["class"] == "harm"
 
     def test_outside_the_correlation_bound_is_not_harm(self):
@@ -419,7 +448,7 @@ class TestCompleteness:
                         emit_failures=1),
                   cycle(at(10), 3, cycle_id="c2", attempts=1, succeeded=1, clean=1)]
         result = run([write(), write("s2", commit_at=at(9.5), read_at=at(9), cycle_id="c2")],
-                     sessions=[session_row(), session_row("s2")], cycles=cycles)
+                     sessions=[session_row(), session_row("s2")], cycles=cycles, fill=False)
         comp = result["completeness"]
         assert comp["uncovered_intervals"][0]["from"] == at(-10).isoformat()
         assert comp["uncovered_intervals"][0]["to"] == at(0.5).isoformat()
@@ -451,10 +480,13 @@ class TestCompleteness:
                                     "lines": [{"ts": None, "raw": "{tor"}]})
         assert result["reading"] == "INCONCLUSIVE"
 
-    def test_an_unreadable_ledger_is_inconclusive_but_an_absent_one_is_not(self):
+    def test_an_unreadable_or_absent_ledger_is_inconclusive(self):
         assert self._with_ledger({"path": "x", "status": "unreadable",
                                   "lines": []})["reading"] == "INCONCLUSIVE"
+        # Absent is unverified: the report may be reading the wrong data dir.
         assert self._with_ledger({"path": "x", "status": "absent",
+                                  "lines": []})["reading"] == "INCONCLUSIVE"
+        assert self._with_ledger({"path": "x", "status": "read",
                                   "lines": []})["reading"] == "COMPLETE"
 
     def test_the_ledger_reader(self, tmp_path):
@@ -476,7 +508,7 @@ class TestCompleteness:
         """Writes before the instrument started are not in the reading."""
         cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=0)]
         result = run([write(commit_at=at(-30), read_at=at(-31), cycle_id="old")],
-                     cycles=cycles)
+                     cycles=cycles, fill=False)
         assert result["window"]["since"] == at(0.5).isoformat()
         assert result["window"]["requested_since"] == SINCE.isoformat()
         assert result["guarded_writes"] == 0
@@ -484,11 +516,20 @@ class TestCompleteness:
 
     def test_a_saga_before_the_instrument_started_is_not_owed(self):
         early = {"saga_id": "sg-old", "payload_reason": None, "created_at": at(-30)}
-        result = run([], cycles=[cycle(at(0), 1)], window_sagas=[early])
+        result = run([], cycles=[cycle(at(0), 1)], window_sagas=[early], fill=False)
         assert result["reading"] == "COMPLETE"
 
+    def test_a_heartbeat_silence_is_uncovered_and_its_writes_excluded(self):
+        """The producer was not seen running: no exact zero for that time."""
+        cycles = [cycle(at(-60), 1), cycle(at(-50), 2), cycle(at(60), 3)]
+        result = run([write()], cycles=cycles, fill=False)
+        assert result["writes_excluded_as_uncovered"], "the write fell in the silence"
+        assert result["guarded_writes"] == 0
+        assert any(u["from"] == at(-50).isoformat()
+                   for u in result["completeness"]["uncovered_intervals"])
+
     def test_no_instrument_rows_is_not_started_not_complete(self):
-        result = run([], cycles=[])
+        result = run([], cycles=[], fill=False)
         assert result["reading"] == "NOT_STARTED"
         assert result["counts_are_lower_bounds"] is True
 
@@ -525,7 +566,7 @@ class TestAmbiguous:
     def test_a_same_value_bracketing_write_is_benign_not_ambiguous(self):
         w = only(run([write()], events=session_write(
             at(-0.2), at(0.2), kind="status", via="python", requested="failed",
-            outcome="not_written")))
+            outcome="not_written", winner_status="failed")))
         assert w["class"] == "contention_benign"
 
     def test_a_db_clock_effect_time_removes_the_ambiguity(self):
