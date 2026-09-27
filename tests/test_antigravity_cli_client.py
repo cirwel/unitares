@@ -233,3 +233,24 @@ def test_a_caller_prompt_starting_with_a_slash_is_not_the_first_thing_agy_sees(t
 def test_a_denied_file_read_counts_as_a_denial():
     err = 'a tool required the "read_file" permission that headless mode cannot prompt for'
     assert client.stall({"status": "SUCCESS", "response": ""}, err) == "denied"
+
+
+
+def test_a_nonzero_exit_keeps_agys_own_error_for_classification(tmp_path):
+    """Review of #2486 (P2): "exited 1" alone can never be classified, so an
+    agy usage limit or logout never started a cooldown."""
+    from src.mcp_handlers.support import host_availability
+
+    limited = {"stdout": {"status": "ERROR", "error": "RESOURCE_EXHAUSTED: quota exceeded"},
+               "exit": 1}
+    script, _ = _fake_agy(tmp_path, [limited])
+    _, result = _run(script)
+    assert result["error"].startswith("Antigravity CLI exited 1: RESOURCE_EXHAUSTED")
+    assert host_availability.classify(result["error"])["reason"] == "quota"
+
+    logged_out = {"stdout": {"status": "ERROR"}, "exit": 1,
+                  "stderr": "error: You are not logged into Antigravity.\n"}
+    (tmp_path / "b").mkdir()
+    script2, _ = _fake_agy(tmp_path / "b", [logged_out])
+    _, result2 = _run(script2)
+    assert host_availability.classify(result2["error"])["reason"] == "auth"

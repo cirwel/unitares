@@ -54,6 +54,54 @@ UNITARES_DEMO_PORT=18767 make demo
 UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
 ```
 
+### Choose a model (optional)
+
+UNITARES bundles no model. Naming one turns on two things: `consult` answers
+from it, and a `request_review` that no peer has claimed can be taken by the
+in-process local reviewer, which drafts the antithesis and a proposed
+synthesis. Without a reachable model, `consult` answers "Standard advisory
+consultation is unavailable" (`MODEL_PROVIDER_UNAVAILABLE`), and
+`request_review` records the thesis and leaves the review
+waiting for a peer or the operator. That also happens with a model when the
+thesis is about the review system itself (recusal), when the model runs past
+the review time budget, or when its synthesis does not approve.
+
+The quickest way is to run, from the checkout, once Ollama is installed and has
+a model pulled:
+
+```bash
+make setup-model
+```
+
+It lists the models your Ollama has, writes your choice to `.env`, rebuilds the
+server, and checks that the server can reach the model. `--help` shows the
+non-interactive flags; `--no-docker` prints the two settings for a source
+install instead.
+
+To do the same by hand, install Ollama on the Docker host, pull a model, and
+name both in `.env`:
+
+```bash
+ollama pull gemma4:latest
+cat >> .env <<'EOF'
+UNITARES_OLLAMA_BASE=http://host.docker.internal:11434
+UNITARES_LLM_MODEL=gemma4:latest
+EOF
+docker compose up -d --build governance-mcp
+```
+
+`UNITARES_OLLAMA_BASE` is the Ollama root URL, without `/v1`; the older name
+`UNITARES_OLLAMA_BASE_URL` is still read when it is unset. On Docker Desktop the
+container reaches the host's Ollama as is. On Linux, Ollama listens only on
+127.0.0.1 by default: set `OLLAMA_HOST=0.0.0.0` for the Ollama service and allow
+port 11434 from the Docker bridge, without exposing it beyond the machine,
+because Ollama has no authentication. `--build` matters on an existing
+install: the model client is installed when the image is built, and `up -d`
+alone keeps an image built before this step. If your `docker-compose.yml` has
+no `UNITARES_OLLAMA_BASE` line, the checkout predates this step. If it has one
+but `consult` reports a missing dependency, the image predates it; rebuild with
+`--build`.
+
 ### Tool discovery (interface 1.13.0 and later)
 
 The current source negotiates one complete catalog, including installed plugin

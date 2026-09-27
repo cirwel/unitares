@@ -14,6 +14,7 @@ from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
+from . import host_availability
 from .host_adapter import (
     codex_answer_region_located,
     host_adapter_disabled_hosts,
@@ -204,6 +205,23 @@ async def run_delegated_inference(
             },
         )
 
+    cooling = host_availability.cooldown(host_id)
+    if cooling is not None:
+        return InferenceOutcome.failed(
+            f"Inference host '{host_id}' is cooling down after a {cooling['reason']} "
+            f"failure until {cooling['retry_after']}",
+            code="INFERENCE_HOST_UNAVAILABLE",
+            category="system_error",
+            details={"host": host, "provider_unavailable": cooling},
+            recovery={
+                "action": (
+                    f"Choose another host, or retry after {cooling['retry_after']}; "
+                    "the next call after that re-checks the provider"
+                ),
+                "related_tools": ["list_inference_hosts"],
+            },
+        )
+
     if not host.get("configured") or not host.get("available"):
         return InferenceOutcome.failed(
             f"Inference host '{host_id}' is not available",
@@ -265,6 +283,15 @@ async def run_delegated_inference(
             if still_running
             else str(adapter_result.get("error") or "Host adapter returned a nonzero exit")
         )
+        # Only a call the provider actually answered can say the provider is
+        # out: a spawn rejection is our own orchestrator, not the account.
+        provider_unavailable = None
+        if terminal_result:
+            classified = host_availability.classify(str(adapter_result.get("error") or ""))
+            if classified is not None:
+                provider_unavailable = host_availability.record_unavailable(
+                    host_id, classified, detail=message,
+                )
         return InferenceOutcome.failed(
             message,
             code=(
@@ -289,6 +316,11 @@ async def run_delegated_inference(
                 "inference_provenance": adapter_provenance,
                 "execution_started": execution_started,
                 "possibly_running": possibly_running,
+                **(
+                    {"provider_unavailable": provider_unavailable}
+                    if provider_unavailable
+                    else {}
+                ),
                 **_raw_excerpt_details(adapter_result),
             },
             recovery={
@@ -305,6 +337,7 @@ async def run_delegated_inference(
             possibly_running=possibly_running,
         )
 
+    host_availability.clear(host_id)
     response_text = str(adapter_result.get("text") or "")
     models_used = [
         str(value) for value in (adapter_provenance.get("models_used") or [])

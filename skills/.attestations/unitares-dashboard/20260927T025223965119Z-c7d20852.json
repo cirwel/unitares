@@ -1,0 +1,38 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-dashboard",
+  "verified_at": "2026-09-27T02:52:23Z",
+  "verified_date": "2026-09-27",
+  "verifier": "Kenny Wang",
+  "source_digests": {
+    "unitares/dashboard/EXTENSIONS.md": "9ffa2ccb43c52f45",
+    "unitares/dashboard/package.json": "ebf9c825a86eeccd",
+    "unitares/dashboard/redesign/app.html": "bbee3156c8ce5b17",
+    "unitares/dashboard/redesign/data.js": "a4ada8279a56d000",
+    "unitares/dashboard/redesign/sections/discoveries.js": "987622e5448645e7",
+    "unitares/dashboard/redesign/sections/eisv.js": "91e5cf78ab13eeef",
+    "unitares/dashboard/redesign/sections/landing.js": "985bd20b587f7876",
+    "unitares/dashboard/redesign/sections/risk.js": "85800fae908ab7ee",
+    "unitares/dashboard/redesign/sections/security.js": "a9ebbfd8c2186a21",
+    "unitares/dashboard/redesign/snapshot.js": "04711c1d083f3426",
+    "unitares/dashboard/redesign/tokens.css": "ffad3d92c1033924",
+    "unitares/dashboard/redesign/ws.js": "27bf5088dc4db8a3",
+    "unitares/dashboard/tests/app-extensions.test.js": "fc12265fcbcc1053",
+    "unitares/dashboard/tests/risk-history.test.js": "72af300588d53898",
+    "unitares/src/dashboard_auth.py": "bb47591c1956df8a",
+    "unitares/src/http_api.py": "fba7f84f48a4f9c1",
+    "unitares/src/http_routes/dashboard.py": "d7d6c3a1d9ee7044"
+  },
+  "skill_digest": "bc39da175324afc5",
+  "superseded_digests": {
+    "unitares/dashboard/EXTENSIONS.md": [
+      "10f99b19dfce2d99"
+    ],
+    "unitares/dashboard/redesign/app.html": [
+      "9440c0c60d148ba0"
+    ],
+    "unitares/dashboard/tests/app-extensions.test.js": [
+      "528178475ce268c6"
+    ]
+  }
+}

@@ -269,7 +269,11 @@ def run(environ: dict[str, str], stream: Any = sys.stdout) -> int:
     }
     error = None
     if code != 0:
-        error = f"Antigravity CLI exited {code}"
+        # agy's own words (a usage limit, "not logged into Antigravity") are
+        # what host_availability classifies; "exited 1" alone never would be.
+        said = str(data.get("error") or "").strip() or next(
+            (line.strip() for line in reversed(err.splitlines()) if line.strip()), "")
+        error = f"Antigravity CLI exited {code}" + (f": {said[:300]}" if said else "")
     elif kind == "denied":
         error = f"no answer after a denied command after {resumes.get(kind, 0)} resume(s)"
     elif kind == "truncated":
