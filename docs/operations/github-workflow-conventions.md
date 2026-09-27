@@ -55,8 +55,10 @@ create a feature branch first.
 ### 2. Delivery — draft PR for everything
 
 Every session lands its work as a **draft PR**, regardless of agent and
-regardless of whether the change is runtime code or docs/tests. The operator
-is the merge gate.
+regardless of whether the change is runtime code or docs/tests. The merge
+queue (section 4) is the merge gate: the owning agent enters a PR into it with
+the `approved-to-merge` label once validation passed, and the operator can
+veto by removing the label.
 
 - If the operator asks an agent to ship, finish, deliver, open a PR, or
   otherwise complete a delivery workflow, the agent may assume branch -> commit
@@ -562,15 +564,14 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Use `gh pr merge --auto <n>` instead of watching, or queue it.** The repo has
-"always suggest updating pull request branches" enabled, and with auto-merge
-set GitHub updates the branch itself when the base moves and merges as soon as
-checks pass. This does **not** weaken the human merge gate: `--auto` is a
-deliberate per-PR act, and it says "this one is approved, land it when green" —
-you are giving up the waiting, not the decision. Draft PRs cannot take
-`--auto`, so mark ready first; that mark is the gate. To approve several PRs at
-once, label them `approved-to-merge` instead (the queue, below); arming one by
-hand while the queue runs makes it the queue's in-flight PR until it lands.
+**Queue it instead of watching.** When your PR is ready (CI green, `review`
+check passing), mark it ready and apply `approved-to-merge` in the same step.
+The queue below arms it in turn, GitHub updates the branch when the base moves
+(the repo has "always suggest updating pull request branches" enabled), and it
+merges as soon as the required checks pass. Do not arm with `gh pr merge
+--auto` yourself: a PR armed outside the queue holds the queue's slot until it
+lands, and two armed PRs are the cascade below. Arming by hand stays the
+operator's tool. Draft PRs cannot be queued, so mark ready first.
 
 **What GitHub's updater actually does.** On 2026-09-27 it updated armed #2524
 43 s after #2518 merged and 101 s after #2507 merged, with no script involved
@@ -604,8 +605,12 @@ not speed: one merge per CI cycle is still the ceiling under `strict`, and a
 hand-merging maintainer who is watching reaches it too. It runs only while
 the operator's machine is awake.
 
-- **The label is the merge decision made ahead of time**, so like arming it
-  is the maintainer's, never an agent's. It approves the PR as it stood: the
+- **The label is the merge decision, and the owning agent makes it.** Apply
+  it when you mark your PR ready, on the same validation (CI green, `review`
+  passing), and never on another agent's PR; the operator vetoes by removing
+  it. The gate exists for coordination, which the queue does more reliably
+  than hand-merging (operator decision, 2026-09-27). It approves the PR as it
+  stood: the
   script pins the head and a fingerprint of what it changes when it first
   sees the label (GitHub's compare of `master...<that SHA>`: per file the
   added and removed lines, or the blob SHA where there is no patch, as for a
@@ -753,7 +758,7 @@ this entirely).
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
-| Maintainer approving several READY PRs at once | label them `approved-to-merge`; the queue arms one at a time (section 4) |
+| Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
