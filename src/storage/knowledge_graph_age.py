@@ -1524,16 +1524,15 @@ class KnowledgeGraphAGE:
                         # SQL for SQL-only orphans.
                         return await self._sql_update_discovery(discovery_id, updates)
                     if isinstance(result[0], dict) and "error" in result[0]:
-                        # The query ran and came back with a row, but that row
-                        # reports a failure — the query itself failed for some
-                        # reason OTHER than a missing node (e.g. a property
-                        # value exceeding AGE's ~128 KiB parameter limit).
-                        # Treating this the same as "no node" used to silently
-                        # redirect to the SQL fallback, which has a far higher
-                        # (1 GB) column limit and would "succeed" while
-                        # leaving the AGE node permanently out of sync with
-                        # Postgres and reporting True to the caller. Surface
-                        # the failure instead of reporting success.
+                        # A row that reports an error is a failed query, not a
+                        # missing node, so it is a failure here rather than a
+                        # redirect to the SQL fallback, which would write SQL
+                        # and leave the AGE node behind. Defensive: no current
+                        # graph_query path returns such a row. An oversized
+                        # parameter (over _MAX_PARAM_LENGTH, 128 KiB) raises in
+                        # _sanitize_cypher_param, the transaction rolls back,
+                        # and the except below returns False. This keeps the
+                        # orphan fallback keyed on an empty result alone.
                         logger.error(
                             f"AGE update query for discovery {discovery_id} "
                             f"returned an error result (not a missing node): "

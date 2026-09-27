@@ -1241,10 +1241,15 @@ class TestUpdateDiscovery:
 
     @pytest.mark.asyncio
     async def test_returns_false_on_error_result(self):
-        """Should return False when AGE returns error AND SQL row is missing.
+        """An error row is a failed query, not a missing node: False, with no
+        SQL fallback.
 
-        After PR #223, an AGE error result triggers SQL fallback for
-        SQL-only orphans. False is returned only when SQL also has no row.
+        PR #223 routed an error row to the SQL-only orphan fallback, modelling
+        a missing node as {"error": "not found"}. A missing node comes back as
+        an empty result (test_returns_false_on_empty_result below still takes
+        the fallback), and no graph_query path returns an error row, so the
+        branch is defensive; a failed query must not write SQL and leave the
+        AGE node behind.
         """
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query.return_value = [{"error": "not found"}]
@@ -1252,8 +1257,7 @@ class TestUpdateDiscovery:
 
         result = await kg.update_discovery("disc-001", {"status": "resolved"})
         assert result is False
-        mock_db._mock_conn.fetchval.assert_awaited_once()
-        # Through acquire(): the real ExecutorPool has no fetchval (#218).
+        mock_db._mock_conn.fetchval.assert_not_awaited()
         mock_db._pool.fetchval.assert_not_awaited()
 
     @pytest.mark.asyncio
