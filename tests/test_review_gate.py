@@ -2374,3 +2374,34 @@ def test_findings_posted_during_the_second_review_are_returned(monkeypatch, caps
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 1
     assert "Late finding" in capsys.readouterr().out
+
+
+def test_past_the_round_cap_no_full_review_runs_automatically(monkeypatch, capsys):
+    """Codex on #2504 (P2): after a passing fix verification the helper
+    launched two full reviews, bypassing the round cap."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
+                                 passed_by="fix-verify:ollama", auto=False) == rg.UNREVIEWED
+    assert ran == []
+    out = capsys.readouterr().out
+    assert "--reviewer" in out and "record --independent" in out
+
+
+def test_the_sweep_skips_a_sensitive_pr_no_one_can_review_now(monkeypatch, tmp_path):
+    """Codex on #2504 (P2): with no eligible second family the sweep kept
+    choosing the same PR, whose review could only return UNREVIEWED."""
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", created_at="2026-09-27T00:00:00Z")
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda *a, **k: pytest.fail("spent the sweep slot on a PR no one can review"))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
+                                        worktree=str(tmp_path / "wt"))) == 0

@@ -1486,11 +1486,13 @@ def cmd_review(args) -> int:
                 if not args.reviewer:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
-                        # A fix-verify receipt is not a full review, so a
-                        # sensitive diff still gets two full families here.
+                        # Past the cap no full review runs automatically,
+                        # sensitive or not: report what is missing and let
+                        # the author spend a round (--reviewer) or record one.
                         return second_family_pass(
                             args, repo, pr, key, head,
-                            capped_review(args, repo, pr, key, head, rounds))
+                            capped_review(args, repo, pr, key, head, rounds),
+                            auto=False)
                 args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -1535,12 +1537,23 @@ def cmd_review(args) -> int:
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+def second_family_candidates(branch: str, families: set[str], comments: list[dict],
+                             key: str, failed: set[str] = frozenset()) -> list[str]:
+    """Providers that could supply a missing family now: usable, of a family
+    that has not passed, not cooling down, not exhausted on this diff."""
+    exhausted = set(failed) | {p for p in KNOWN_PROVIDERS
+                               if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
+    return [p for p in reviewer_candidates(branch)
+            if reviewer_family(p) not in families
+            and p not in exhausted and not provider_cooldown(p)]
+
+
 #: A second-family attempt needs at least this much of the shared budget.
 SECOND_FAMILY_MIN_S = 120
 
 
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
-                       passed_by: str | None = None) -> int:
+                       passed_by: str | None = None, auto: bool = True) -> int:
     """After a passing review of a security-sensitive diff, add a review from
     a second model family when only one has passed, so the CI check can go
     green without the author having to know the rule. Runs inside the diff's
@@ -1573,15 +1586,20 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         families.add(reviewer_family(passed_by))
     if len(families) >= 2:
         return result
+    if not auto:
+        print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing full "
+              f"reviews from two model families (have: {', '.join(sorted(families)) or 'none'}). "
+              "The review round cap is reached, so none runs automatically: spend a round with "
+              "review.sh --reviewer <provider>, or record an independent review with "
+              "review.sh record --independent.")
+        return UNREVIEWED
     # Same availability rules as review_with_fallback: no provider in a quota
-    # or auth cooldown, none that exhausted its retries on this diff.
-    # Derived here, not only from args: the existing-record fast path in
-    # cmd_review reaches this helper before it computes failed_providers.
-    failed = set(getattr(args, "failed_providers", set()) or set()) | {
-        p for p in KNOWN_PROVIDERS if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
-    candidates = [p for p in reviewer_candidates(getattr(args, "branch", "") or "")
-                  if reviewer_family(p) not in families
-                  and p not in failed and not provider_cooldown(p)]
+    # or auth cooldown, none that exhausted its retries on this diff (derived
+    # from the record here: the existing-record fast path reaches this helper
+    # before cmd_review computes failed_providers).
+    candidates = second_family_candidates(
+        getattr(args, "branch", "") or "", families, comments, key,
+        set(getattr(args, "failed_providers", set()) or set()))
     deadline = getattr(args, "review_deadline", None)
     for provider in candidates:
         if reviewer_family(provider) in families:
@@ -2006,6 +2024,13 @@ def cmd_sweep(args) -> int:
             and bool(sensitive_paths(changed, base_policy_paths(f"origin/{base}")))
             and len(passing_families(comments, key, native)) < 2
         )
+        if needs_second and not second_family_candidates(
+                p["headRefName"], passing_families(comments, key, native), comments, key):
+            # Selecting it would spend the sweep's one slot on a child that can
+            # only return UNREVIEWED, every run, starving the PRs behind it.
+            print(f"[sweep] PR #{n}: security-sensitive diff needs a second model family; "
+                  "no eligible reviewer now (disabled, cooling down or exhausted)")
+            continue
         if needs_second:
             print(f"[sweep] PR #{n}: security-sensitive diff has one model family; "
                   "starting the second")
