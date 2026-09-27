@@ -25,10 +25,10 @@ Three report sections (all read-only):
           an open issue — candidates to file as real GitHub issues.
 
 Cleanup (`--apply`, dry-run by default): cools ONLY the section-3a cold
-candidates (open note/insight → `cold`, still queryable, reversible) via the
-sanctioned `KnowledgeGraphLifecycle._batch_update_status` primitive, which keeps
-the active backend and canonical PG table aligned. Never deletes (matches the
-lifecycle's "archive forever" philosophy); never touches actionable rows.
+candidates (open note/insight → `cold`, still queryable, reversible) with one
+guarded UPDATE on the canonical relational table (see `apply_cooling`). Never
+deletes (matches the lifecycle's "archive forever" philosophy); never touches
+actionable rows.
 
 Usage:
     python3 scripts/dev/kg_report.py                 # report only
@@ -194,8 +194,8 @@ def gather(cold_age_days: int) -> dict:
 
 
 def apply_cooling(cold_candidates: list, dry_run: bool, limit: int | None = None) -> dict:
-    """Transition the cold candidates open -> cold via the sanctioned dual-store
-    primitive. Candidate selection already happened (pure SQL); this only mutates.
+    """Transition the cold candidates open -> cold on the canonical table.
+    Candidate selection already happened (pure SQL); this only mutates.
 
     `limit` bounds how many are cooled in one run (oldest first — candidates are
     created_at-ordered), so a scheduled job drains the tail gradually instead of
@@ -208,14 +208,12 @@ def apply_cooling(cold_candidates: list, dry_run: bool, limit: int | None = None
                 "eligible": len(cold_candidates)}
 
     # Cool via a direct UPDATE on the canonical relational table. The relational
-    # store is canonical (AGE is a LIVE advisory mirror that reconciles); this is
-    # exactly the PG-alignment step the in-server lifecycle primitive performs.
+    # store is canonical (AGE is a LIVE advisory mirror that reconciles). The
+    # in-server lifecycle instead writes through the active backend's
+    # update_discovery, which updates this table itself.
     # We deliberately do NOT import the app's KnowledgeGraphLifecycle here: it is
-    # heavy (needs the full server env) and its graph.update_discovery currently
-    # raises `AttributeError: 'ExecutorPool' object has no attribute 'fetchval'`
-    # (knowledge_graph_postgres.py — stale db._pool.fetchval vs the post-#218
-    # ExecutorPool contract). A dependency-light UPDATE is the robust path for a
-    # scheduled job. `status='open'` guard keeps it idempotent.
+    # heavy (needs the full server env), and a dependency-light UPDATE is the
+    # robust path for a scheduled job. `status='open'` guard keeps it idempotent.
     conn = connect()
     try:
         cur = conn.cursor()

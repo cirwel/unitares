@@ -387,6 +387,11 @@
     renderInspector();
   }
 
+  // Whether Fleet readings has a row that opens a trajectory. It lists only
+  // configured residents, so an install with none has nothing to click, and
+  // the prompt must not point at a grid that is not there.
+  const pickable = () => (MODEL.residents || []).some((r) => r && r.id && r.eisv && r.eisv.E != null);
+
   function renderTrajectory() {
     const mount = $("#eisv-trajectory");
     if (!mount) return;
@@ -395,7 +400,9 @@
         <span class="spring"></span><span class="fresh">${sub}</span>${trajSource ? sourceBadge(trajSource) : ""}</div>`;
     const note = (txt) => `<p style="color:var(--muted);font-size:var(--text-sm);margin:0">${txt}</p>`;
     let inner;
-    if (!selectedId) inner = headHTML("click a resident above") + note("Select a resident in the heatmap to see its own EISV observation history.");
+    if (!selectedId) inner = pickable()
+      ? headHTML("click a row above") + note("Select a row in Fleet readings to see that agent's own EISV observation history.")
+      : headHTML("no agent selected") + note("Fleet readings lists the residents this deployment configures, and there are none, so there is no row to pick here. The Risk tab's picker opens the check-in history of any recently active agent.");
     else if (trajLoading) inner = headHTML("loading…") + note("Loading trajectory…");
     else if (!trajPoints.length) inner = headHTML("no history") + note("No observation history available" + (trajSource === "snapshot" ? " offline." : "."));
     else inner = headHTML(trajPoints.length + " state observations · " + esc(trajectorySources())) +
@@ -522,6 +529,8 @@
     // are untouched.
     const hm = document.getElementById("eisv-heatmap");
     if (hm) { hm.innerHTML = heatmapHTML(MODEL.residents); applySelectionHighlight(); }
+    // The idle prompt depends on whether that grid has rows; keep it in step.
+    if (!selectedId) renderTrajectory();
     const badge = document.querySelector("#eisv-mount .src-badge");
     if (badge) { badge.className = "src-badge " + MODEL.source; badge.textContent = MODEL.source; }
     if (inspector && !inspector.loading) renderInspector();
