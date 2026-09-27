@@ -158,17 +158,20 @@ def record_unavailable(
         # Inside a running window a guess changes nothing: it must neither
         # shorten the cooldown nor overwrite a reset the provider stated. Only
         # the provider's own statement moves it (it knows; we back off blind),
-        # so a stated reset is taken even when it is earlier.
-        recorded_at = now
+        # so a stated reset is taken even when it is earlier. A kept window
+        # keeps its reason and detail too: "cooling after an auth failure
+        # until the quota resets" would name the wrong cause.
+        reason, detail, recorded_at = classified.get("reason"), detail[:200], now
         if still_cooling and source == "backoff":
             retry_after, source = previous["retry_after"], previous["retry_after_source"]
+            reason, detail = previous["reason"], previous["detail"]
             recorded_at = previous.get("recorded_at", now)
         _state[host_id] = {
-            "reason": classified.get("reason"),
+            "reason": reason,
             "retry_after": retry_after,
             "retry_after_source": source,
             "failures": failures,
-            "detail": detail[:200],
+            "detail": detail,
             "recorded_at": recorded_at,
         }
         return _public(host_id, _state[host_id])

@@ -124,6 +124,8 @@ def test_a_guess_never_overwrites_a_stated_reset_in_its_window():
                           {"reason": "auth", "stated_reset": None}, now=now + 1)
     entry = ha._state["codex:host-adapter"]
     assert entry["retry_after"] == now + 300 and entry["retry_after_source"] == "provider"
+    # The kept window keeps its cause: the auth guess did not set it.
+    assert entry["reason"] == "quota"
 
 
 # --- Redis copy: a restart remembers a provider at its limit ---------------
@@ -216,6 +218,7 @@ async def test_a_write_syncs_a_window_it_did_not_know_about(redis):
     view = await ha.record_unavailable_async(
         "codex:host-adapter", {"reason": "auth", "stated_reset": None}, now=now + 5)
     assert view["retry_after_source"] == "provider"
+    assert view["reason"] == "quota"
     stored = json.loads(await redis.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
     assert stored["retry_after"] == now + 7200
 
