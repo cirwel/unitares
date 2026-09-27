@@ -1270,7 +1270,9 @@ class VigilAgent(GovernanceAgent):
             summary=checkin_text,
             complexity=complexity,
             confidence=confidence,
-            response_mode="compact",
+            # on_checkin logs E/I/S/V and persists coherence. Compact replies
+            # intentionally omit the canonical metrics needed by that consumer.
+            response_mode="full",
             notes=note_tuples,
         )
 

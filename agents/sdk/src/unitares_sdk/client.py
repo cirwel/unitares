@@ -12,6 +12,7 @@ from typing import Any
 
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.types import PaginatedRequestParams
 
 from unitares_sdk._checkin_fields import resolve_checkin_fields
 from unitares_sdk._metrics_fields import resolve_metrics_fields
@@ -174,6 +175,7 @@ class GovernanceClient:
 
         # MCP transport state
         self._session: ClientSession | None = None
+        self._advertised_tools: set[str] = set()
         self._http_client: Any | None = None  # _httpx.AsyncClient
         self._cm_stack: list = []
 
@@ -284,7 +286,27 @@ class GovernanceClient:
         # Bound the handshake: an anyio-stream hang inside initialize() is not
         # covered by httpx's timeout, so without this it blocks until the
         # caller's outer cycle timeout cancels the whole cycle.
-        await asyncio.wait_for(self._session.initialize(), self.connect_timeout)
+        with anyio.fail_after(self.connect_timeout):
+            await self._session.initialize()
+            await self._discover_tools()
+
+    async def _discover_tools(self) -> None:
+        """Cache the transport catalog so omitted tools use its gateway.
+
+        MCP validates results against the advertised catalog. Calling an
+        omitted capability directly works on UNITARES but loses that validation
+        and emits a warning on every call. Older/full-catalog servers without
+        use_tool keep direct dispatch.
+        """
+        names: set[str] = set()
+        cursor = None
+        while True:
+            page = await self._session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+            names.update(tool.name for tool in page.tools)
+            cursor = getattr(page, "next_cursor", getattr(page, "nextCursor", None))
+            if not cursor:
+                break
+        self._advertised_tools = names
 
     async def disconnect(self) -> None:
         """Close MCP transport.
@@ -307,6 +329,7 @@ class GovernanceClient:
                 pass
         self._cm_stack.clear()
         self._session = None
+        self._advertised_tools.clear()
         if self._http_client:
             try:
                 with anyio.CancelScope(shield=True):
@@ -337,12 +360,19 @@ class GovernanceClient:
 
         effective_timeout = timeout or self.timeout
         injected_args = self._inject_session(tool_name, arguments)
+        wire_name, wire_args = tool_name, injected_args
+        if "use_tool" in self._advertised_tools and tool_name not in self._advertised_tools:
+            wire_name = "use_tool"
+            wire_args = self._inject_session("use_tool", {
+                "tool_name": tool_name,
+                "arguments": injected_args,
+            })
         last_error: Exception | None = None
 
         for attempt in range(2):
             try:
                 with anyio.fail_after(effective_timeout):
-                    result = await self._session.call_tool(tool_name, injected_args)
+                    result = await self._session.call_tool(wire_name, wire_args)
                 raw = self._parse_mcp_result(result)
                 # Wave 3 §3.2: the cutover proxy / fail-fast writer surfaces a
                 # typed-unavailable payload. Honor retry_after_seconds with one
@@ -618,6 +648,7 @@ class GovernanceClient:
         if fields["risk"] is not None:
             result_data.setdefault("risk", fields["risk"])
         metrics = fields["metrics"]
+        result_data["metrics"] = metrics
 
         # RFC §7.13: emit substrate observation to lease_plane.surface_leases
         # alongside the existing process_agent_update path. Failure does NOT

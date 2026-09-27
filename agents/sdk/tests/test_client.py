@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import ListToolsResult
 import pytest_asyncio
 
 from unitares_sdk.client import GovernanceClient
@@ -916,6 +917,7 @@ class TestTransportYieldArity:
         entered_session_cm = AsyncMock()
         session_mock = AsyncMock()
         session_mock.initialize = AsyncMock()
+        session_mock.list_tools.return_value = ListToolsResult(tools=[])
         entered_session_cm.__aenter__ = AsyncMock(return_value=session_mock)
         entered_session_cm.__aexit__ = AsyncMock(return_value=None)
 

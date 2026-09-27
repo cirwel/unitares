@@ -206,3 +206,23 @@ def test_legacy_badged_coherence_dict_resolves_to_its_value():
     assert result.verdict == "proceed"
     assert result.coherence == 0.49
     assert result.risk == 0.05
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["async", "rest"])
+async def test_full_metrics_survive_in_the_typed_result(transport):
+    metrics = {"E": 0.7, "I": 0.8, "S": 0.2, "V": -0.1, "coherence": 0.48}
+    env = build_experience_envelope(
+        "sync_state", "process_agent_update",
+        {"success": True, "decision": {"action": "proceed"}, "metrics": metrics},
+        {"response_mode": "full"},
+    )
+    if transport == "async":
+        client = GovernanceClient()
+        client.call_tool = AsyncMock(return_value=env)
+        result = await client.checkin("test work", response_mode="full")
+    else:
+        client = SyncGovernanceClient(transport="rest")
+        client.call_tool = lambda *args, **kwargs: env
+        result = client.checkin("test work", response_mode="full")
+    assert result.metrics == metrics
