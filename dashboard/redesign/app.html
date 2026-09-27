@@ -113,12 +113,6 @@
     <a href="#activity" data-section="activity">Activity</a>
     <a href="#eisv" data-section="eisv">EISV</a>
     <a href="#risk" data-section="risk">Risk</a>
-    <a href="#telemetry-health" data-section="telemetry-health">Telemetry</a>
-    <a href="#metrics" data-section="metrics">Metrics</a>
-    <a href="#residents" data-section="residents">Residents</a>
-    <a href="#automations" data-section="automations">Automations</a>
-    <a href="#adjudication" data-section="adjudication">Adjudication</a>
-    <a href="#enforcement" data-section="enforcement">Enforcement</a>
     <a href="#security" data-section="security">Security</a>
   </nav>
 
@@ -182,30 +176,6 @@
     <section class="section" data-pane="risk" hidden>
       <div id="risk-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
     </section>
-    <section class="section" data-pane="telemetry-health" hidden>
-      <div id="telemetry-health-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
-    </section>
-    <section class="section" data-pane="metrics" hidden>
-      <h2 class="section-title">Metrics</h2>
-      <div id="met-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
-    </section>
-    <section class="section" data-pane="residents" hidden>
-      <h2 class="section-title">Residents</h2>
-      <div id="res-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
-    </section>
-
-    <section class="section" data-pane="automations" hidden>
-      <h2 class="section-title">Automations</h2>
-      <div id="auto-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
-    </section>
-
-    <section class="section" data-pane="adjudication" hidden>
-      <div id="adj-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div><div class="skeleton" style="width:80%"></div></div></div>
-    </section>
-
-    <section class="section" data-pane="enforcement" hidden>
-      <div id="enforcement-mount"><div class="loading-skeleton"><div class="skeleton" style="width:35%"></div><div class="skeleton" style="width:88%"></div><div class="skeleton" style="width:72%"></div></div></div>
-    </section>
 
     <section class="section" data-pane="security" hidden>
       <h2 class="section-title">Passkeys & sessions</h2>
@@ -226,12 +196,6 @@
 <script src="./sections/activity.js"></script>
 <script src="./sections/eisv.js"></script>
 <script src="./sections/risk.js"></script>
-<script src="./sections/telemetry-health.js"></script>
-<script src="./sections/metrics.js"></script>
-<script src="./sections/residents.js"></script>
-<script src="./sections/automations.js"></script>
-<script src="./sections/adjudication.js"></script>
-<script src="./sections/enforcement.js"></script>
 <script src="./sections/security.js"></script>
 <script>
 // theme toggle
@@ -247,9 +211,8 @@ themeBtn.onclick = () => {
   document.documentElement.setAttribute("data-theme", ink ? "paper" : "ink");
   syncThemeLabel();
   if (window.EISV && window.EISV.retheme) window.EISV.retheme();
-  if (window.TelemetryHealth && window.TelemetryHealth.retheme) window.TelemetryHealth.retheme();
-  if (window.Metrics && window.Metrics.retheme) window.Metrics.retheme();
   if (window.Risk && window.Risk.retheme) window.Risk.retheme();
+  Object.values(EXT).forEach((x) => { const g = window[x.global]; if (g && g.retheme) g.retheme(); });
 };
 
 // section switch
@@ -285,13 +248,9 @@ function lazyLoad(id) {
   if (id === "activity" && window.Activity) { loaded[id] = true; window.Activity.load(); }
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
   if (id === "risk" && window.Risk) { loaded[id] = true; window.Risk.load(); }
-  if (id === "telemetry-health" && window.TelemetryHealth) { loaded[id] = true; window.TelemetryHealth.load(); }
-  if (id === "metrics" && window.Metrics) { loaded[id] = true; window.Metrics.load(); }
-  if (id === "residents" && window.Residents) { loaded[id] = true; window.Residents.load(); }
-  if (id === "automations" && window.Automations) { loaded[id] = true; window.Automations.load(); }
-  if (id === "adjudication" && window.Adjudication) { loaded[id] = true; window.Adjudication.load(); }
-  if (id === "enforcement" && window.Enforcement) { loaded[id] = true; window.Enforcement.load(); }
   if (id === "security" && window.Security) { loaded[id] = true; window.Security.load(); }
+  const ext = EXT[id];
+  if (ext && window[ext.global]) { loaded[id] = true; window[ext.global].load(); }
 }
 
 // ── auto-refresh: keep the monitor views live ──────────────────────────────
@@ -301,27 +260,16 @@ function lazyLoad(id) {
 let activeSection = "overview";
 const REFRESH_MS = 10000;       // light monitor refresh
 const RUNTIME_REFRESH_MS = 30000; // audit-backed continuity while WS is open
-const STATS_REFRESH_MS = 30000; // heavy headline batch (7 tools) — gentler cadence
+const STATS_REFRESH_MS = 30000; // headline batch (4 sources) — gentler cadence
 const RELOAD = {
   overview: () => window.Landing && window.Landing.refresh(),
   activity: () => window.Activity && window.Activity.load(),
-  residents: () => window.Residents && window.Residents.load(),
   eisv: () => window.EISV && window.EISV.load(),
-  // Telemetry is NOT auto-refreshed either, for the same reason and a measured
-  // cost. /v1/eisv/telemetry-health scans a 30-DAY cohort — its timeline buckets
-  // by DAY (31 entries) and every field is a multi-day aggregate, so a 10s tick
-  // cannot show anything new. It is cached 30s, which on a 10s tick means every
-  // third tick pays the recompute: measured 2026-08-28, 2.6ms on a cache hit and
-  // 1.64s on a miss. That is a 1.6s database scan every 30 seconds for as long
-  // as the tab is open, buying zero fresh data. Loads on nav, manual refresh.
-  //
-  // Automations, Metrics and Risk are NOT auto-refreshed: Automations is a
-  // filter/search registry whose census snapshot changes rarely, and Metrics
-  // and Risk both read Chronicler's DAILY scrape — a 10s tick is pointless and
-  // would rebuild the picker (closing an open dropdown) for no fresh data.
-  // Risk's per-agent panel is a whole-lifespan decimation, which a 10s tick
-  // cannot meaningfully move either. All three load on nav and have a manual
-  // refresh.
+  // Risk is NOT auto-refreshed: it reads Chronicler's DAILY scrape, so a 10s
+  // tick is pointless and would rebuild the resident picker (closing an open
+  // dropdown) for no fresh data, and its per-agent panel is a whole-lifespan
+  // decimation a tick cannot meaningfully move. Loads on nav, manual refresh.
+  // Extensions add themselves here only when their manifest says `auto`.
 };
 const livePill = document.getElementById("livePill");
 const liveText = document.getElementById("liveText");
@@ -396,17 +344,79 @@ function onWsEvent(msg) {
 function onWsStatus(s) { wsStatus = s; updateLivePill(); }
 if (window.GovSocket) window.GovSocket.make(onWsEvent, onWsStatus);
 
+// ── operator extensions ──────────────────────────────────────────────────────
+// The sections above are the product: each reads state every install has. A
+// deployment's own panels (a label queue, a census of its scheduled jobs, a
+// research instrument) live OUTSIDE this repo, in the directory named by
+// UNITARES_DASHBOARD_EXT_DIR, and are described by its manifest.json — see
+// dashboard/EXTENSIONS.md. Unset (the default), extManifest() is null and the
+// dashboard renders exactly as shipped, so an outside operator inherits none of
+// another deployment's customisations. Extension code runs with the page's own
+// privileges: it is the operator's code, served only to an authenticated caller.
+const EXT = {};
+const EXT_ID = /^[a-z][a-z0-9-]*$/;
+const EXT_GLOBAL = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+function injectScript(code) {
+  const el = document.createElement("script");
+  el.textContent = code;
+  document.body.appendChild(el);
+}
+async function loadExtensions() {
+  const manifest = await DATA.extManifest();
+  if (!manifest) return;
+  const main = document.getElementById("main");
+  for (const src of manifest.scripts || []) {
+    try { injectScript(await DATA.extScript(src)); } catch (e) { console.warn("[dashboard ext]", src, e); }
+  }
+  for (const sec of manifest.sections) {
+    if (!sec || !EXT_ID.test(sec.id || "") || !EXT_GLOBAL.test(sec.global || "") || !sec.script) continue;
+    // Never shadow a core section: an extension adds panes, it does not replace them.
+    if (nav.querySelector(`a[data-section="${sec.id}"]`)) continue;
+    const mountId = EXT_ID.test(sec.mount || "") ? sec.mount : sec.id + "-mount";
+    try { injectScript(await DATA.extScript(sec.script)); } catch (e) { console.warn("[dashboard ext]", sec.script, e); continue; }
+    const link = document.createElement("a");
+    link.href = "#" + sec.id;
+    link.dataset.section = sec.id;
+    link.className = "ext";
+    link.textContent = sec.label || sec.id;
+    nav.appendChild(link);
+    const pane = document.createElement("section");
+    pane.className = "section";
+    pane.dataset.pane = sec.id;
+    pane.hidden = true;
+    if (sec.title) {
+      const h = document.createElement("h2");
+      h.className = "section-title";
+      h.textContent = sec.title;
+      pane.appendChild(h);
+    }
+    const mount = document.createElement("div");
+    mount.id = mountId;
+    pane.appendChild(mount);
+    main.appendChild(pane);
+    EXT[sec.id] = sec;
+    if (sec.auto) RELOAD[sec.id] = () => window[sec.global] && window[sec.global].load();
+  }
+}
+
 // boot
 window.Landing.render();
 updateLivePill();
 // (hashchange routing is handled by the activateSection listener above, which
 // supersedes the earlier nav-click-reuse approach — in-page links like the
-// Overview Automations card and back/forward both route through it.)
+// Overview cards and back/forward both route through it.)
 
-(function openFromHash() {
+function openFromHash() {
   const id = (location.hash || "").replace("#", "");
   if (id) activateSection(id, false);
-})();
+}
+openFromHash();
+// A deep link to an extension pane (#my-panel) cannot resolve until its
+// manifest has loaded, so route once more after extensions register.
+loadExtensions().then(() => {
+  const id = (location.hash || "").replace("#", "");
+  if (EXT[id]) activateSection(id, false);
+});
 </script>
 </body>
 </html>

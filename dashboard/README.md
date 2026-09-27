@@ -1,6 +1,6 @@
 # Unitares Governance Dashboard
 
-**Last updated:** June 2026
+**Last updated:** September 2026
 
 The operator dashboard is **`dashboard/redesign/`**, served buildless at `/` and
 `/dashboard`. See [`redesign/PLAN.md`](redesign/PLAN.md) for its design system,
@@ -15,13 +15,23 @@ sections, and data layer.
 - `package.json` / `eslint.config.mjs` — ESLint over the redesign + `phase.js`
   (the dashboard CI job). The dashboard is buildless; there is no bundle step.
 
+## Core tabs and extensions
+
+The shipped tabs are the ones any install can read: Overview, Agents,
+Discoveries, Dialectic, Activity, EISV, Risk and Security. A deployment adds
+its own tabs as extensions, kept outside this repo and served from
+`UNITARES_DASHBOARD_EXT_DIR`; see [`EXTENSIONS.md`](EXTENSIONS.md). The
+Residents, Automations, Adjudication, Telemetry, Metrics and Enforcement tabs
+left the core on 2026-09-26 for this reason: each described one deployment's
+instruments. Their server endpoints are unchanged.
+
 ## The classic dashboard was retired
 
 The original dashboard — a ~17k-line static `index.html` + `dashboard.js` +
 per-panel modules + `styles.css` — was the operator UI until the redesign cut
 over on **2026-06-19**. It was removed once the redesign reached parity
-(resident panels consolidated into the **Residents** section; Chronicler's
-time-series became the **Metrics** section).
+(resident panels consolidated into a **Residents** section and Chronicler's
+time-series into a **Metrics** section; both became extensions on 2026-09-26).
 
 **Recovering a classic file.** It lives in git history. The last commit that
 contains the classic dashboard is `7c6037b` (master, pre-retirement):

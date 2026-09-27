@@ -4,9 +4,11 @@ description: >
   Use when adding, editing, or reviewing sections on the unitares dashboard
   (dashboard/redesign/). Captures the redesign's conventions: the section-module
   pattern (window.X = { load }), the live-or-snapshot data seam, theme-aware
-  charts via design tokens, and the app.html wiring (nav / pane / lazyLoad /
-  RELOAD / retheme). A repo-specific reference — not general dashboard advice.
-last_verified: "2026-09-24"
+  charts via design tokens, the app.html wiring (nav / pane / lazyLoad /
+  RELOAD / retheme), and the core-vs-extension boundary (deployment-specific
+  tabs live outside the repo, served from UNITARES_DASHBOARD_EXT_DIR). A
+  repo-specific reference — not general dashboard advice.
+last_verified: "2026-09-26"
 freshness_days: 30
 source_files:
   - unitares/dashboard/redesign/app.html
@@ -15,19 +17,16 @@ source_files:
   - unitares/dashboard/redesign/snapshot.js
   - unitares/dashboard/redesign/tokens.css
   - unitares/dashboard/redesign/sections/eisv.js
-  - unitares/dashboard/redesign/sections/metrics.js
   - unitares/dashboard/redesign/sections/landing.js
   - unitares/dashboard/redesign/sections/discoveries.js
-  - unitares/dashboard/redesign/sections/telemetry-health.js
   - unitares/dashboard/redesign/sections/risk.js
-  - unitares/dashboard/redesign/sections/adjudication.js
   - unitares/dashboard/redesign/sections/security.js
   - unitares/dashboard/package.json
-  - unitares/dashboard/tests/telemetry-health.test.js
+  - unitares/dashboard/EXTENSIONS.md
+  - unitares/dashboard/tests/risk-history.test.js
+  - unitares/dashboard/tests/app-extensions.test.js
   - unitares/src/http_api.py
   - unitares/src/http_routes/dashboard.py
-  - unitares/src/http_routes/sentinel.py
-  - unitares/src/http_routes/telemetry.py
   - unitares/src/dashboard_auth.py
 ---
 
@@ -57,6 +56,31 @@ an mtime version query to prevent stale browser bundles.
 A "section" is one nav tab. Each is a self-contained module that renders into
 its own mount and is wired in `app.html`.
 
+## Core or extension? Decide first
+
+The shipped tabs are Overview, Agents, Discoveries, Dialectic, Activity, EISV,
+Risk and Security. A new tab belongs in core only if **any install** can read
+it: it renders on an empty roster, names no resident, and describes product
+state rather than one deployment's instruments. Otherwise it is an
+**extension**: it lives outside this repo, in the directory named by
+`UNITARES_DASHBOARD_EXT_DIR`, and `app.html` loads it from that directory's
+`manifest.json` at `/dashboard/ext/`. The contract is `dashboard/EXTENSIONS.md`.
+
+The Residents, Automations, Adjudication, Telemetry, Metrics and Enforcement
+tabs moved out on 2026-09-26 on exactly this test. Their server endpoints stay;
+only the views left. The same test trimmed the Overview to five cards (Fleet
+Coherence, Agents, Discoveries, Dialectic, System Health). Adding a card back
+is the same decision.
+
+An extension follows the section pattern below unchanged. It skips the
+checklist's `app.html` rows, because the manifest supplies nav, pane, mount,
+`auto` and the script, and `app.html` calls `retheme()` on every registered
+extension. Its accessors go in a manifest `scripts` file built on `DATA.seam`
+(`authFetch`, `callTool`, `withFallback`), and its fallbacks are empty shapes,
+never a bundled capture. The `/dashboard/ext/` route is 404 when the variable is
+unset and 401 to an unauthenticated caller; `DATA.extManifest()` treats both as
+"no extensions" and never redirects to sign-in.
+
 ## The section-module pattern
 
 A section is an IIFE that attaches `window.<Name> = { load }` (add `retheme`
@@ -64,10 +88,9 @@ if it draws charts; add `applyEvent` / `notifyNew` if it's a live surface — se
 **Live-surface hooks** below). `load()` renders into its mount on first call and
 updates **in place** on subsequent calls (so a refresh doesn't flicker or reset
 form state). Worked references: `sections/eisv.js` (charts, retheme,
-`applyEvent`) and `sections/metrics.js` (charts + a picker that preserves its
-selection across `load()` — exercised by its manual ↻, since Metrics is not on
-the auto-refresh tick). `sections/telemetry-health.js` and `sections/risk.js`
-are the newest sections and follow the same conventions.
+`applyEvent`) and `sections/risk.js` (charts + a resident picker that preserves
+its selection across `load()` — exercised by its manual ↻, since Risk is not on
+the auto-refresh tick).
 
 One exception to know about: `sections/landing.js` (the Overview) does not
 export `load`. It exports `{ render, refresh, refreshStats, applyEvent,
@@ -75,7 +98,7 @@ tickSilence }`, is booted by `window.Landing.render()` at the end of
 `app.html`, and `RELOAD.overview` calls its `refresh` method. Do not copy it
 as the template for a new section.
 
-## Integration checklist (all in `dashboard/redesign/`)
+## Integration checklist for a core section (all in `dashboard/redesign/`)
 
 | # | Do | File |
 |---|----|----|
@@ -112,11 +135,11 @@ again. Badge freshness in the view with
 `<span class="src-badge ${source}">${source}</span>`.
 
 ```js
-async metricsCatalog() {
+async riskTrend(days) {
   return withFallback(
-    async () => { const j = await authFetch("/v1/metrics/catalog");
-                  return j && Array.isArray(j.metrics) ? j.metrics : null; },
-    () => (S().metrics || {}).catalog ?? null,   // snapshot fallback
+    async () => { /* three /v1/metrics/series reads */
+                  return risk.length ? { windowDays: d, risk, pause, guide } : null; },
+    () => S().riskTrend,   // snapshot fallback
   );
 }
 ```
@@ -167,7 +190,7 @@ option shape from `sections/eisv.js::baseOptions`.
 **No date adapter.** `app.html` loads `chart.umd` from CDN **without**
 `chartjs-adapter-date-fns`, so `type: "time"` scales will not work. Use a
 **category** x-axis with pre-formatted labels (e.g. `MM-DD`) — see
-`sections/metrics.js::fmtLabel`.
+`sections/risk.js::fmtDay`.
 
 ## Auto-refresh discipline (Item 8)
 
@@ -176,17 +199,17 @@ input/select/textarea is focused. It is driven two ways: a ~10s polling tick
 that fires **only while the `/ws/eisv` stream is not open**, and, with the
 stream open, the debounced (~1.5s) WS doorbell in `onWsEvent`. It also runs
 immediately on tab re-focus. Add a section to `RELOAD` only if a refetch can
-show new data: daily-scrape or expensive-aggregate views (Metrics, Risk,
-Telemetry, Automations) stay off it, load on nav, and offer a manual ↻ — the
-comments on the `RELOAD` map in `app.html` record the measured cost that
-decided each one. A live surface must be in `RELOAD` for its `applyEvent` to
+show new data: daily-scrape or expensive-aggregate views (Risk; among the
+extensions, Metrics, Telemetry and Automations) stay off it, load on nav, and
+offer a manual ↻ — the comment on the `RELOAD` map in `app.html` records why.
+An extension joins `RELOAD` only when its manifest entry sets `auto`. A live surface must be in `RELOAD` for its `applyEvent` to
 run at all, because `onWsEvent` returns early for non-auto sections.
 
 So `load()` must: update charts/data **in place** (don't `new Chart()` every
 tick), and not rebuild a `<select>`/`<input>` the operator is using. The
 refresh path already skips while an input is focused, so repopulating a closed
 dropdown on refresh is safe — but preserve the current selection.
-`sections/metrics.js` shows the first-render-then-update pattern.
+`sections/risk.js` shows the first-render-then-update pattern.
 
 ## Live-surface hooks (WS diff-push) — #1164
 
@@ -213,13 +236,11 @@ badge). The WS plumbing lives in `ws.js`.
 
 ## Mostly read-only — explicit authenticated write surfaces
 
-The redesign sends the read bearer token everywhere; most sections are
-read-only. Two areas intentionally mutate state:
+The redesign sends the read bearer token everywhere; core sections are
+read-only except one area. (The Sentinel adjudication write,
+`POST /v1/sentinel/adjudicate` with `X-Unitares-Csrf: 1`, is still served, but
+its view is now an extension.)
 
-- **Adjudication**: `DATA.adjudicate()` POSTs a Sentinel verdict
-  (`confirmed`, `dismissed` with a reason, or `abstain`) to
-  `/v1/sentinel/adjudicate` with `X-Unitares-Csrf: 1`; it may use a passkey
-  dashboard session or the `X-Unitares-Operator` credential.
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the
   passkey session plus CSRF. Revoking a passkey needs the same, and revoking
@@ -246,11 +267,14 @@ The dashboard is buildless, so the gate is lint plus a cheap logic check:
 1. `cd dashboard && npm run lint` — must be 0 errors (warnings allowed).
 2. Headless logic drive: add a vitest case under `dashboard/tests/` and run
    `cd dashboard && npm test`. Harness shape (see
-   `tests/telemetry-health.test.js`): `new JSDOM('<div id="NAME-mount"></div>',
+   `tests/risk-history.test.js`): `new JSDOM('<div id="NAME-mount"></div>',
    { runScripts: "outside-only" })`, stub `dom.window.DATA` and
    `dom.window.Chart`, `dom.window.eval(sectionSource)`, then
    `await dom.window.NAME.load()`; assert the mount populated and the chart
    constructor ran, and assert `app.html` contains `window.NAME.retheme()`.
+   An extension's specs live with the extension and evaluate core
+   `redesign/data.js` before its own scripts; the loader's own contract is
+   `tests/app-extensions.test.js`.
 3. Same-origin smoke: open `/#NAME` against a running server; confirm the
    `src-badge` reads `live` and the section renders on real data.
 4. Toggle ink/paper — charts must re-theme (proves `retheme` is wired).
@@ -266,6 +290,7 @@ The dashboard is buildless, so the gate is lint plus a cheap logic check:
 | Calling `fetch` in a view | Bypasses the live-or-snapshot seam; the section stops rendering offline. |
 | A `snapFn` that dereferences `S().x.y` | Throws out of `withFallback` on every served page (the `S` accessor returns `{}` there). Guard every level; `tests/sections-unavailable.test.js` catches it. |
 | Looking for an allowlist / restarting the server | No per-asset allowlist and no restart for the redesign (files are read per request). The only gates are the auth check on `snapshot.js` and the 404 for `auth/*.html`; the surviving `allowed_files` list serves only `/dashboard/phase.js`. |
+| A deployment-specific tab in core | An outside operator inherits it. Resident names, one machine's job census, a research instrument: ship it as an extension. |
 
 ## When NOT to use this skill
 

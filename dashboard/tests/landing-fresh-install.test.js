@@ -8,7 +8,8 @@ import { JSDOM } from "jsdom";
 // stack after three Hermes sessions: "0 of 0 residents awaiting first
 // check-in", "Agents 0 / 3", "Calibration miscalibrated" while the server said
 // "unassessed", and a red "stale" Automations card. None of those describe the
-// install; each now says what the server actually reported.
+// install. The Calibration and Automations cards have since left the Overview
+// (2026-09-26); the cards that remain say what the server actually reported.
 
 const landingSource = readFileSync(
   new URL("../redesign/sections/landing.js", import.meta.url),
@@ -25,18 +26,10 @@ const RESIDENT = {
 const FRESH_STATS = {
   agentsActive: 3, agentsLive: 0, agentsPresenceUnknown: 3,
   agentsPresenceUnavailable: 0, agentsTotal: 3,
-  stuck: 0, stuckHard: 0, stuckSoft: 0, stuckList: [], degraded: 0,
-  calibration: 0, calibrated: false, calibrationStatus: "unassessed",
-  calibrationSignal: "unknown",
-};
-// A fresh stack's census has never run: the server answers with a null
-// snapshot age (src/http_routes/overview.py, missing-snapshot branch).
-const FRESH_AUTOMATIONS = {
-  summary: { total: 0, by_kind: {}, needs_attention: [] },
-  ungated: 0, unclassified: 0, stale: true, snapshot_age_seconds: null,
+  degraded: 0,
 };
 
-async function render({ residents = [], stats = {}, automations = FRESH_AUTOMATIONS } = {}) {
+async function render({ residents = [], stats = {} } = {}) {
   const dom = new JSDOM(`
     <div id="resSrc"></div><div id="residents"></div><div id="attn"></div>
     <div id="stats"></div><div id="serverStat"></div>
@@ -50,7 +43,6 @@ async function render({ residents = [], stats = {}, automations = FRESH_AUTOMATI
     health: async () => ({ source: "live", data: { version: "t", uptime: "1h", db: "ok" } }),
     residents: async () => ({ source: "live", data: residents }),
     stats: async () => ({ source: "live", data: Object.assign({}, FRESH_STATS, stats) }),
-    automationsSummary: async () => ({ source: "live", data: automations }),
   };
   dom.window.eval(landingSource);
   await dom.window.Landing.render();
@@ -86,24 +78,6 @@ describe("landing on a fresh install", () => {
     expect(attn.textContent).toContain("awaiting first check-in");
   });
 
-  it("names an unassessed calibration neutrally instead of calling it miscalibrated", async () => {
-    const { card } = await render();
-    const c = card("Calibration");
-    expect(c.num).toBe("unassessed");
-    expect(c.sub).toBe("no calibration data yet");
-    expect(c.cls).not.toContain("down");
-    expect(c.cls).not.toContain("up");
-  });
-
-  it("keeps a real miscalibrated verdict red", async () => {
-    const { card } = await render({
-      stats: { calibration: 0.78, calibrated: false, calibrationStatus: "miscalibrated", calibrationSignal: "stale" },
-    });
-    const c = card("Calibration");
-    expect(c.num).toBe("miscalibrated");
-    expect(c.cls).toContain("down");
-  });
-
   it("headlines registry-active agents when no presence is knowable, not zero", async () => {
     const { card } = await render();
     const c = card("Agents");
@@ -127,62 +101,6 @@ describe("landing on a fresh install", () => {
     expect(c.sub).toBe("live binding/lease · 30d window · 2 presence unknown");
   });
 
-  it("says no census yet, neutrally, when no census has ever run", async () => {
-    const { card } = await render();
-    const c = card("Automations");
-    expect(c.sub).toBe("no census yet");
-    expect(c.sub).not.toContain("none registered");
-    expect(c.cls).not.toContain("down");
-    expect(c.cls).not.toContain("up");
-  });
-
-  it("says none registered only when a completed census found nothing", async () => {
-    const { card } = await render({
-      automations: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: false, snapshot_age_seconds: 120 },
-    });
-    const c = card("Automations");
-    expect(c.num).toBe("0");
-    expect(c.sub).toBe("none registered");
-    expect(c.cls).not.toContain("down");
-    expect(c.cls).not.toContain("up");
-  });
-
-  it("does not call the offline fallback object an empty census", async () => {
-    // data.js's automationsSummary fallback: a zero-total object with no
-    // snapshot age. It proves nothing about the fleet.
-    const { card } = await render({
-      automations: { summary: { total: 0, by_source: {}, by_kind: {}, needs_attention: [], warnings: [] }, ungated: 0, stale: true },
-    });
-    const c = card("Automations");
-    expect(c.sub).not.toContain("none registered");
-    expect(c.sub).not.toContain("no census yet");
-    expect(c.sub).toContain("attention");
-  });
-
-  it("keeps a stale empty census visibly stale", async () => {
-    const { card } = await render({
-      automations: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: true, snapshot_age_seconds: 200000 },
-    });
-    const c = card("Automations");
-    expect(c.sub).not.toContain("none registered");
-    expect(c.sub).toContain("stale");
-    expect(c.cls).toContain("down");
-  });
-
-  it("keeps the counters when the census did not answer", async () => {
-    const { card } = await render({ automations: null });
-    const c = card("Automations");
-    expect(c.sub).toContain("attention");
-  });
-
-  it("keeps warning when registered automations need attention", async () => {
-    const { card } = await render({
-      automations: { summary: { total: 5, by_kind: {}, needs_attention: [{}] }, ungated: 0, unclassified: 0, stale: false },
-    });
-    const c = card("Automations");
-    expect(c.sub).toContain("1 attention");
-    expect(c.cls).toContain("down");
-  });
 });
 
 // System Health's detail line is built in data.js from /health/deep's
