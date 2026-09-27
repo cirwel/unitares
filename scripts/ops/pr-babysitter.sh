@@ -350,7 +350,7 @@ while read -r pr; do
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
     log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
-    notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, renew it: remove the label, then add it."
+    notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
@@ -362,7 +362,7 @@ while read -r pr; do
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
       log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
-      notify "$n" unpinned "$head" "skipped: the \`$LABEL\` label went on at $labelled_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was approved. Renew it: remove the label, then add it."
+      notify "$n" unpinned "$head" "skipped: the \`$LABEL\` label went on at $labelled_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was approved. It needs renewing: remove the label, then add it (AGENTS.md says who may)."
       continue
     fi
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
@@ -373,7 +373,7 @@ while read -r pr; do
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
         log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
-        notify "$n" changed "$head" "skipped: the change differs from what was approved at \`${pinned_sha:0:8}\` (more than a base update). Once validation passes on \`${head:0:8}\`, renew the approval: remove the \`$LABEL\` label, then add it."
+        notify "$n" changed "$head" "skipped: the change differs from what was approved at \`${pinned_sha:0:8}\` (more than a base update). Once validation passes on \`${head:0:8}\`, the approval needs renewing: remove the \`$LABEL\` label, then add it (AGENTS.md says who may)."
         continue
       fi
       pin "$n" "$head" "$labelled_at" "$fp" || true
@@ -462,7 +462,7 @@ while read -r _ n head; do
     MERGEABLE) ;;
     CONFLICTING)
       log "#$n queued but CONFLICTING; skipped"
-      notify "$n" conflicting "$head" "skipped: this PR conflicts with master. The owning agent merges master in and renews the label (remove, then add). After 12 hours with no word from the owner, any agent may adopt it (docs/operations/github-workflow-conventions.md, *adoption*)."
+      notify "$n" conflicting "$head" "skipped: this PR conflicts with master. Once master is merged in and validation passes again, the approval needs renewing (remove the \`$LABEL\` label, then add it), by whoever the delivery contract (AGENTS.md) says may apply it."
       continue ;;
     # GitHub is still computing mergeability, typically right after a merge.
     # Wait for it rather than letting a later PR jump the order.

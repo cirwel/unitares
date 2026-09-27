@@ -816,7 +816,7 @@ def test_a_conflicting_queued_pr_gets_one_notice(tmp_path: Path) -> None:
     notices = _notices(calls)
     assert len(notices) == 1
     assert "<!-- pr-queue-notice conflicting aaa -->" in notices[0]
-    assert "adopt" in notices[0]
+    assert "remove the `approved-to-merge` label, then add it" in notices[0]
 
 
 def test_a_notice_already_on_the_pr_is_not_repeated(tmp_path: Path) -> None:
