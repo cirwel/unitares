@@ -32,7 +32,6 @@ source_files:
   - unitares/skills/governance-fundamentals/SKILL.md
   - unitares/skills/knowledge-graph/SKILL.md
   - unitares/skills/dialectic-reasoning/SKILL.md
-  - unitares/skills/discord-bridge/SKILL.md
   - unitares/skills/unitares-dashboard/SKILL.md
 ---
 
@@ -143,7 +142,6 @@ The old monolithic skill was split into focused skills:
 - `skills/governance-fundamentals/SKILL.md` for EISV, basins, coherence, and verdicts
 - `skills/knowledge-graph/SKILL.md` for knowledge graph search and contribution
 - `skills/dialectic-reasoning/SKILL.md` for thesis/antithesis/synthesis workflows and filing an outside verdict (`consult`)
-- `skills/discord-bridge/SKILL.md` for the Discord governance bridge
 - `skills/unitares-dashboard/SKILL.md` for the buildless operator dashboard
 
 If you need the full mental model, start here. If you know the task shape,
