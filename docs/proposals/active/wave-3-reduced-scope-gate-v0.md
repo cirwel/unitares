@@ -1,8 +1,9 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9). ⛔Ratified is
-not met: the §8 council round is still unheld, the §7 window has not started, and §6.4 is still
-owed. The signature authorises nothing to be built.
+not met: the §8 council round is still unheld and the §7 window has not started. The signature
+authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
+artifacts are still owed.)
 
 ⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
@@ -645,6 +646,10 @@ What the signature does:
   among them: it is still owed, and the signature does not decide it. ⛔Nor does it choose
   the scope or the design: §1.1's path-(1)-only reduction is a proposal §6.5 deferred, and
   §1.2's option is open until §7 step 5.
+- ⛔**It does not set the numeric standards.** Every threshold this document labels a proposed
+  prior stays proposed: the §2 disconfirmer priors, the ≥30-day window in §7 step 3, and the (b3)
+  boundary budget, which cannot be numeric until §1.2 is settled. The operator sets each one
+  before the window is read against it; a standard chosen after the data is in is not a gate.
 - From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
   before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
   first, then the signature) is the precedent.
@@ -657,5 +662,6 @@ What it does not do:
   review have run, and neither has.
 - It does not start the §7 window. The window starts at the recorded deploy of the complete
   instrument, and that slot is still empty.
-- It does not answer §6.4, and it does not lift or re-read the (D) halt on the original scope.
+- It does not answer §6.4 (non-gating for this scope, still owed), and it does not lift or
+  re-read the (D) halt on the original scope.
 
