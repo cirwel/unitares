@@ -484,8 +484,16 @@ async def test_a_stalled_audit_sink_does_not_block_the_session_write(monkeypatch
     assert sw.take_emit_failures() == 2
 
 
-def test_the_first_cycle_row_creates_the_ledger(tmp_path, monkeypatch):
+def test_the_first_cycle_row_registers_this_boot_on_the_ledger(tmp_path, monkeypatch):
+    import json as _json
+
     ledger = tmp_path / "sub" / "ledger.jsonl"
     monkeypatch.setenv(sw.EMIT_FAILURE_LEDGER_ENV, str(ledger))
-    sw.ensure_emit_failure_ledger()
-    assert ledger.exists() and ledger.read_text() == ""
+    monkeypatch.setattr(sw, "_LEDGER_ENSURED", None)
+    sw.ensure_emit_failure_ledger("abc123")
+    sw.ensure_emit_failure_ledger("abc123")  # once per process
+    lines = [_json.loads(x) for x in ledger.read_text().splitlines()]
+    assert len(lines) == 1
+    assert lines[0]["record"] == "boot"
+    assert lines[0]["process_boot_id"] == sw.PROCESS_BOOT_ID
+    assert lines[0]["code_commit"] == "abc123" and lines[0]["host"]

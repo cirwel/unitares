@@ -131,7 +131,14 @@ def heartbeat_fill(boot="boot-fill"):
     return rows
 
 
-VERIFIED_EMPTY_LEDGER = {"path": "ledger.jsonl", "status": "read", "lines": []}
+def boot_lines(*boots):
+    return [{"record": "boot", "ts": SINCE.isoformat(), "process_boot_id": b}
+            for b in boots]
+
+
+# A ledger every fixture boot registered on, with no failure lines.
+VERIFIED_EMPTY_LEDGER = {"path": "ledger.jsonl", "status": "read",
+                         "lines": boot_lines("boot-a", "boot-b", "boot-fill")}
 
 
 def run(writes, *, sessions=(), messages=(), sagas=(), events=(), cycles=None,
@@ -421,15 +428,16 @@ class TestCompleteness:
         assert result["reading"] == "INCONCLUSIVE"
 
     def test_a_seq_gap_explained_by_its_ledger_line_is_uncovered_not_inconclusive(self):
-        ledger = {"path": "x", "status": "read", "lines": [
-            {"ts": at(5).isoformat(), "event_type": "dialectic_sweep_cycle",
-             "process_boot_id": "boot-a", "cycle_seq": 2}]}
+        ledger = {"path": "x", "status": "read", "lines": boot_lines("boot-a") + [
+            {"record": "failure", "ts": at(5).isoformat(),
+             "event_type": "dialectic_sweep_cycle", "process_boot_id": "boot-a",
+             "cycle_seq": 2}]}
         result = report.analyze(
             writes=[], cycles=[cycle(at(0), 1), cycle(at(10), 3)], competing_events=[],
             sessions=[], messages=[], sagas=[], mismatches=[], inferred_python_terminal=[],
             since=SINCE, until=UNTIL, emit_failure_ledger=ledger)
         assert result["completeness"]["explained_seq_gaps"][0]["missing_cycle_seq"] == [2]
-        assert result["reading"] == "COMPLETE"
+        assert result["reading"] == "COMPLETE_OVER_COVERED_TIME"
 
     def test_an_unnamed_committed_saga_is_inconclusive_but_liveness_is_not(self):
         live = {"saga_id": "live", "payload_reason": "liveness_timeout"}
@@ -454,9 +462,11 @@ class TestCompleteness:
         assert comp["uncovered_intervals"][0]["to"] == at(0.5).isoformat()
         assert [w["session_id"] for w in result["writes_excluded_as_uncovered"]] == ["s1"]
         assert [w["session_id"] for w in result["writes"]] == ["s2"]
-        assert result["reading"] == "COMPLETE"
+        assert result["reading"] == "COMPLETE_OVER_COVERED_TIME"
+        assert "COMPLETE OVER COVERED TIME ONLY" in report.render_text(result)
 
     def _with_ledger(self, ledger):
+        ledger = {**ledger, "lines": list(ledger["lines"]) + boot_lines("boot-a")}
         return report.analyze(
             writes=[], cycles=[cycle(at(0), 1)], competing_events=[], sessions=[],
             messages=[], sagas=[], mismatches=[], inferred_python_terminal=[],
@@ -472,7 +482,7 @@ class TestCompleteness:
         interval = result["completeness"]["uncovered_intervals"][0]
         assert interval["from"] == at(0).isoformat(), "the last cycle row before it"
         assert interval["to"] == UNTIL.isoformat(), "no cycle row after it: to the window end"
-        assert result["reading"] == "COMPLETE"
+        assert result["reading"] == "COMPLETE_OVER_COVERED_TIME"
         assert result["heartbeat"]["uncovered_minutes"] > 0
 
     def test_a_corrupt_ledger_line_cannot_be_placed_and_is_inconclusive(self):
@@ -487,7 +497,7 @@ class TestCompleteness:
         assert self._with_ledger({"path": "x", "status": "absent",
                                   "lines": []})["reading"] == "INCONCLUSIVE"
         assert self._with_ledger({"path": "x", "status": "read",
-                                  "lines": []})["reading"] == "COMPLETE"
+                                  "lines": []})["reading"] == "COMPLETE_OVER_COVERED_TIME"
 
     def test_the_ledger_reader(self, tmp_path):
         path = tmp_path / "ledger.jsonl"
@@ -517,7 +527,7 @@ class TestCompleteness:
     def test_a_saga_before_the_instrument_started_is_not_owed(self):
         early = {"saga_id": "sg-old", "payload_reason": None, "created_at": at(-30)}
         result = run([], cycles=[cycle(at(0), 1)], window_sagas=[early], fill=False)
-        assert result["reading"] == "COMPLETE"
+        assert result["reading"] == "COMPLETE_OVER_COVERED_TIME"
 
     def test_a_heartbeat_silence_is_uncovered_and_its_writes_excluded(self):
         """The producer was not seen running: no exact zero for that time."""
@@ -527,6 +537,15 @@ class TestCompleteness:
         assert result["guarded_writes"] == 0
         assert any(u["from"] == at(-50).isoformat()
                    for u in result["completeness"]["uncovered_intervals"])
+
+    def test_a_ledger_that_never_registered_the_observed_boot_is_unverified(self):
+        """Another host's, another checkout's, or a stale file: its silence
+        proves nothing about these processes."""
+        stale = {"path": "x", "status": "read", "lines": boot_lines("some-other-boot")}
+        result = run([], ledger=stale)
+        assert "boot-fill" in result["completeness"]["emit_failure_ledger"][
+            "boots_not_registered"]
+        assert result["reading"] == "INCONCLUSIVE"
 
     def test_no_instrument_rows_is_not_started_not_complete(self):
         result = run([], cycles=[], fill=False)

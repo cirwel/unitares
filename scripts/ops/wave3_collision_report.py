@@ -71,10 +71,20 @@ claiming to observe them. Its commits appear as saga rows
 (c) ``cycle_seq`` is continuous within each boot;
 (d) every committed saga that is not BEAM liveness's is named by a
     session-write response's ``saga_id``;
-(e) the durable emit-failure ledger could be read and each line placed;
+(e) the durable emit-failure ledger could be read, each failure line
+    placed, and every process boot whose cycle rows are read registered on it
+    (its ``record="boot"`` line) -- otherwise it is not those processes'
+    ledger and its silence proves nothing;
 (f) no write is AMBIGUOUS.
 
-*Uncovered intervals.* A recorded emit failure -- a cycle row's
+Readings: ``COMPLETE`` (every unit matched, no uncovered time),
+``COMPLETE_OVER_COVERED_TIME`` (every unit matched; the counts speak for the
+covered minutes the report states, not for the whole window),
+``INCONCLUSIVE`` (an unmatched unit; counts are lower bounds), and
+``NOT_STARTED``.
+
+*Uncovered intervals.* A heartbeat silence (periodic rows further apart than
+``--silence-minutes``, or the tail after the last one) or a recorded emit failure -- a cycle row's
 ``emit_failures_since_last_cycle``, or a line in the durable ledger
 (``data/dialectic/instrument_emit_failures.jsonl``, appended and fsynced on
 each failure so it survives a crash) -- marks the interval from the last cycle
@@ -1043,8 +1053,19 @@ def completeness(
         return t is not None and since <= t < until
 
     ledger = ledger or {"path": None, "status": "not_read", "lines": []}
-    ledger_lines = [ln for ln in ledger.get("lines", [])
-                    if _ts(ln.get("ts")) is None or _in(_ts(ln.get("ts")))]
+    all_lines = ledger.get("lines", [])
+    ledger_lines = [ln for ln in all_lines if ln.get("record") != "boot"
+                    and (_ts(ln.get("ts")) is None or _in(_ts(ln.get("ts"))))]
+    # Provenance: every process whose cycle rows are read must have registered
+    # on this ledger (its `record="boot"` line). A boot the ledger does not
+    # know means the ledger is not that process's -- another host, another
+    # checkout, a stale local file -- and its silence proves nothing.
+    ledger_boots = {ln.get("process_boot_id") for ln in all_lines if ln.get("record") == "boot"}
+    observed_boots = sorted({_payload(c).get("process_boot_id") for c in cycles
+                             if _payload(c).get("process_boot_id")
+                             and _in(_ts(c.get("ts")))})
+    unverified_boots = ([b for b in observed_boots if b not in ledger_boots]
+                        if ledger.get("status") == "read" else [])
     unc = uncovered_intervals(cycles=cycles, ledger_lines=ledger_lines,
                               since=since, until=until, silence=silence)
     uncovered = unc["intervals"]
@@ -1148,11 +1169,18 @@ def completeness(
     unmatched = (len(unmatched_a) + len(orphan_rows) + len(unmatched_b)
                  + sum(len(g["missing_cycle_seq"]) for g in unmatched_c)
                  + len(unnamed) + ledger_unreadable + len(unplaceable) + ambiguous_writes
-                 + len(unbalanced))
+                 + len(unbalanced) + len(unverified_boots))
     if heartbeat_report.get("first_periodic_v2_row") is None:
         reading = "NOT_STARTED"
+    elif unmatched:
+        reading = "INCONCLUSIVE"
+    elif uncovered:
+        # Complete over the COVERED exposure only: the uncovered intervals
+        # are excluded, and the counts speak for the covered time, which the
+        # report states, not for the whole requested window.
+        reading = "COMPLETE_OVER_COVERED_TIME"
     else:
-        reading = "COMPLETE" if unmatched == 0 else "INCONCLUSIVE"
+        reading = "COMPLETE"
     return {
         "reading": reading,
         "unmatched_units": unmatched,
@@ -1170,6 +1198,7 @@ def completeness(
         "unbalanced_cycle_rows": unbalanced,
         "emit_failure_ledger": {"path": ledger.get("path"), "status": ledger.get("status"),
                                 "lines_in_window": ledger_lines,
+                                "boots_not_registered": unverified_boots,
                                 "unplaceable_lines": unplaceable},
         "saga_crosscheck": {
             "committed_python_routed_sagas": len(python_routed),
@@ -1269,8 +1298,8 @@ def analyze(
     window_cycles = [c for c in cycles if _in(_ts(c.get("ts")))]
     uncovered = uncovered_intervals(
         cycles=window_cycles,
-        ledger_lines=[ln for ln in ledger.get("lines", [])
-                      if _ts(ln.get("ts")) is None or _in(_ts(ln.get("ts")))],
+        ledger_lines=[ln for ln in ledger.get("lines", []) if ln.get("record") != "boot"
+                      and (_ts(ln.get("ts")) is None or _in(_ts(ln.get("ts"))))],
         since=since, until=until, silence=dt.timedelta(minutes=silence_minutes),
     )["intervals"]
 
@@ -1325,8 +1354,9 @@ def analyze(
     span = until - since
     hb["periodic_coverage_excluding_uncovered"] = (
         (covered / span) if periodic and span.total_seconds() > 0 else None)
-    hb["uncovered_minutes"] = round(
-        sum(((b - a) for a, b in uncovered), dt.timedelta(0)).total_seconds() / 60, 1)
+    uncovered_td = sum(((b - a) for a, b in uncovered), dt.timedelta(0))
+    hb["uncovered_minutes"] = round(uncovered_td.total_seconds() / 60, 1)
+    hb["covered_minutes"] = round(max(dt.timedelta(0), span - uncovered_td).total_seconds() / 60, 1)
 
     pairs = pair_session_writes(competing_events)
     already_terminal = [
@@ -1344,7 +1374,8 @@ def analyze(
                    "correlation_hours": correlation_hours,
                    "silence_minutes": silence_minutes},
         "reading": comp_check["reading"],
-        "counts_are_lower_bounds": comp_check["reading"] != "COMPLETE",
+        "counts_are_lower_bounds": comp_check["reading"] not in (
+            "COMPLETE", "COMPLETE_OVER_COVERED_TIME"),
         "completeness": comp_check,
         "guarded_writes": len(classified),
         "writes_excluded_as_uncovered": excluded_uncovered,
@@ -1398,8 +1429,16 @@ def render_text(report: Dict[str, Any]) -> str:
             f"READING: INCONCLUSIVE -- {comp['unmatched_units']} unmatched unit(s). "
             "The counts below are lower bounds, NOT a reading; no zero here may be cited."
         )
+    elif report["reading"] == "COMPLETE_OVER_COVERED_TIME":
+        cov_min = report["heartbeat"].get("covered_minutes")
+        lines.append(
+            "READING: COMPLETE OVER COVERED TIME ONLY -- every unit matched, but "
+            f"{report['heartbeat']['uncovered_minutes']} min of the window are uncovered "
+            f"(listed below) and excluded. The counts speak for {cov_min} covered min, "
+            "not for the whole window."
+        )
     else:
-        lines.append("READING: COMPLETE -- every unit matched.")
+        lines.append("READING: COMPLETE -- every unit matched, no uncovered time.")
     lines.append("")
     lines.append(f"Guarded sweeper writes: {q}{report['guarded_writes']}")
     for k in CLASSES:
@@ -1466,6 +1505,9 @@ def render_text(report: Dict[str, Any]) -> str:
                      "--emit-failure-ledger with the deployment's path.")
     if led["status"] in ("unreadable", "not_read"):
         lines.append(f"    UNMATCHED the ledger could not be read ({led['status']})")
+    for b in led.get("boots_not_registered", []):
+        lines.append(f"    UNMATCHED process boot {b} never registered on this ledger: it is "
+                     "not that process's ledger (another host, checkout, or a stale file)")
     for ln in led["unplaceable_lines"]:
         lines.append(f"    UNMATCHED unplaceable ledger line {ln}")
     xc = comp["saga_crosscheck"]

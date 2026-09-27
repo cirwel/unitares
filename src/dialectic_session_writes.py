@@ -139,25 +139,42 @@ _LEDGER_ENSURED: Optional[str] = None
 EMIT_TIMEOUT_S = 2.0
 
 
-def ensure_emit_failure_ledger() -> None:
-    """Create the ledger file (empty) if it does not exist. Never raises.
+def ensure_emit_failure_ledger(code_commit: Optional[str] = None) -> None:
+    """Register this process on the ledger once: a ``record="boot"`` line.
 
-    Called by the first cycle row of each process. A present, empty ledger is
-    the positive statement "no instrument emit has failed here"; the collision
-    report treats an ABSENT ledger as unverified (it may be reading another
-    host's or checkout's data directory).
+    Called by each process's first cycle row. The boot line is the ledger's
+    provenance: it names this ``process_boot_id``, the host and the commit, so
+    the collision report can check that the ledger it read belongs to the
+    processes whose cycle rows it is reading. A ledger with no boot line for
+    an observed boot -- absent, another host's, another checkout's, or left
+    over from an earlier local process -- is unverified, and the report's
+    reading is inconclusive. Never raises.
     """
     global _LEDGER_ENSURED
     try:
         path = emit_failure_ledger_path()
         if _LEDGER_ENSURED == path and os.path.exists(path):
             return
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8"):
-            pass
+        import socket
+
+        _write_ledger_line(path, {
+            "record": "boot",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "process_boot_id": PROCESS_BOOT_ID,
+            "host": socket.gethostname(),
+            "code_commit": code_commit,
+        })
         _LEDGER_ENSURED = path
     except Exception as exc:  # pragma: no cover - best-effort
-        logger.warning("instrument emit-failure ledger could not be created: %s", exc)
+        logger.warning("instrument emit-failure ledger could not be registered: %s", exc)
+
+
+def _write_ledger_line(path: str, line: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 async def bounded_append(entry: Dict[str, Any]) -> Any:
@@ -170,12 +187,7 @@ async def bounded_append(entry: Dict[str, Any]) -> Any:
 def _append_ledger_line(line: Dict[str, Any]) -> None:
     """Append one line and fsync it before returning. Never raises."""
     try:
-        path = emit_failure_ledger_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(line, default=str) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
+        _write_ledger_line(emit_failure_ledger_path(), line)
     except Exception as exc:  # pragma: no cover - the ledger is the last resort
         logger.warning("instrument emit-failure ledger write failed: %s", exc)
 
@@ -195,6 +207,7 @@ def record_emit_failure(
     global _EMIT_FAILURES
     _EMIT_FAILURES += 1
     _append_ledger_line({
+        "record": "failure",
         "ts": datetime.now(timezone.utc).isoformat(),
         "event_type": event_type,
         "session_id": session_id,

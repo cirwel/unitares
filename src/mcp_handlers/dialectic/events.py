@@ -730,7 +730,7 @@ async def emit_sweep_cycle(
     _session_writes.LAST_CYCLE_SEQ = cycle_seq
     # A present (possibly empty) ledger is how the report knows it is reading
     # this server's failures, not an absent file on another host.
-    _session_writes.ensure_emit_failure_ledger()
+    _session_writes.ensure_emit_failure_ledger(CODE_COMMIT)
     emit_failures = _session_writes.take_emit_failures()
     try:
         await _instrument_append({
