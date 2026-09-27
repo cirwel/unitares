@@ -647,8 +647,9 @@ What the signature does:
   the scope or the design: §1.1's path-(1)-only reduction is a proposal §6.5 deferred, and
   §1.2's option is open until §7 step 5.
 - ⛔**It does not set the numeric standards.** Every threshold this document labels a proposed
-  prior stays proposed: the §2 disconfirmer priors, the ≥30-day window in §7 step 3, and the (b3)
-  boundary budget, which cannot be numeric until §1.2 is settled. The operator sets each one
+  prior stays proposed: the §2 disconfirmer priors, the §4 exit criteria's numbers (R1's
+  ≥30-day production window, which §7 step 3 repeats, and R4's boundary-cost threshold), and the
+  (b3) boundary budget; R4 and (b3) cannot be numeric until §1.2 is settled. The operator sets each one
   before the window is read against it; a standard chosen after the data is in is not a gate.
 - From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
   before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
