@@ -158,8 +158,11 @@ surface in a one-line diff with a plausible performance rationale. **No instance
 this is known and nothing here implies intent; the claim is structural.** The
 control today is the human merge gate for exactly these PRs: since 2026-09-27
 the merge queue lands most PRs on their owning agent's `approved-to-merge`
-label, but it never arms one labelled `governance-sensitive`, which the
-operator merges by hand. Around it sit CI gates aimed elsewhere (`unitares_doctor.py` for
+label, but it never arms one that is governance-sensitive, which the
+operator merges by hand. It does not rely on CI's `governance-sensitive`
+label alone, which is best-effort (a fork's read-only token cannot apply it):
+before arming, it matches the diff against the same manifest itself and
+fails closed, and it never arms a PR from a fork. Around it sit CI gates aimed elsewhere (`unitares_doctor.py` for
 migration drift, `check-repo-scope.sh` for scope leakage). The latter is precedent
 rather than coverage: it exists because agent-authored config once stripped an
 accountability artifact past `.gitignore`, and its own rationale concluded that

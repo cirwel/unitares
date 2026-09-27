@@ -10,7 +10,9 @@ would. This file makes that list explicit instead of tacit.
 **No instance of a governance-weakening diff is known; the claim is
 structural.** The human merge gate remains the real control: the merge queue,
 which lands other PRs on their owning agent's `approved-to-merge` label, never
-arms a PR labelled `governance-sensitive`, so the operator merges it by hand.
+arms a governance-sensitive PR, so the operator merges it by hand. It checks
+the diff against this manifest itself rather than trusting the label alone,
+which CI applies best-effort, and it never arms a PR from a fork.
 What this inventory adds is conspicuousness: a PR touching any entry gets a
 `governance-sensitive` label and one advisory comment asking the author to
 state the expected effect on pause/verdict rates. The check never blocks —
