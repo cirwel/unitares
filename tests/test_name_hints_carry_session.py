@@ -94,6 +94,21 @@ def test_recovery_patterns_name_the_session(factory):
     assert "client_session_id" in text
 
 
+def test_no_recovery_pattern_calls_identity_without_arguments():
+    """Every step, not only the ones the factories above reach: an
+    argument-less identity() mints before it reads, so it never reports the
+    caller's own binding."""
+    from src.mcp_handlers.error_helpers import RECOVERY_PATTERNS
+
+    offending = {
+        name: step
+        for name, pattern in RECOVERY_PATTERNS.items()
+        for step in pattern.get("workflow", [])
+        if "identity()" in step
+    }
+    assert offending == {}
+
+
 def test_naming_guidance_names_the_session():
     from src.mcp_handlers.support.naming_helpers import format_naming_guidance
 

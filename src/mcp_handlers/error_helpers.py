@@ -63,7 +63,7 @@ RECOVERY_PATTERNS = {
         "action": "You can only modify your own resources",
         "related_tools": ["identity", "agent"],
         "workflow": [
-            "1. Call identity() to verify your bound identity",
+            "1. Call identity(client_session_id='...') to verify your bound identity",
             "2. Ensure the resource belongs to your agent_uuid",
             "3. You cannot modify resources owned by other agents"
         ]
@@ -137,7 +137,7 @@ RECOVERY_PATTERNS = {
         "action": "Provide active session continuity metadata or re-onboard explicitly",
         "related_tools": ["identity", "onboard"],
         "workflow": [
-            "1. Call identity() to inspect the current binding",
+            "1. Call identity(client_session_id='...') to inspect the current binding",
             "2. Include continuity_token for a proof-owned UUID rebind when available",
             "3. For a fresh process, call onboard(force_new=true) and use parent_agent_id for lineage"
         ]
@@ -146,7 +146,7 @@ RECOVERY_PATTERNS = {
         "action": "Verify your session identity matches",
         "related_tools": ["identity", "admin"],
         "workflow": [
-            "1. Call identity() to check your resolved identity",
+            "1. Call identity(client_session_id='...') to check your resolved identity",
             "2. Ensure client_session_id or continuity_token matches your active session",
             "3. If mismatch persists, call onboard(force_new=true) and declare parent_agent_id when inheriting work",
             "4. Retry your request with the resolved binding"
@@ -174,7 +174,7 @@ RECOVERY_PATTERNS = {
         "action": "Verify you have required permissions",
         "related_tools": ["identity", "get_governance_metrics"],
         "workflow": [
-            "1. Call identity() to verify your identity",
+            "1. Call identity(client_session_id='...') to verify your identity",
             "2. Check if operation requires specific permissions",
             "3. Some operations require registered agent (call onboard() first)",
             "4. Retry after verifying permissions"

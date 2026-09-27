@@ -263,21 +263,17 @@ async def test_p3_a_rest_write_still_uses_the_sticky_binding():
 async def test_mcp_drops_agent_id_on_a_direct_read(monkeypatch, read):
     """Neither metrics tool declares agent_id on /mcp/, so FastMCP drops it.
 
-    A proof-less call proves nothing either way here: lacking proof, the
-    identity middleware short-circuits to unbound before the call ever
-    reaches the tool, so ``_assert_unbound`` would pass regardless of
-    whether ``agent_id`` was actually dropped (review finding 3 -- a test
-    that cannot fail). Carry real proof (``client_session_id``) so the call
-    resolves and reaches the registered FastMCP tool's own schema, and
-    smuggle ``agent_id`` in alongside it: if the schema really drops it, the
-    proven caller still reads its OWN state, not the named other agent's,
-    and carries no inferred-binding mark -- the same shape as
-    ``test_a_proven_self_read_carries_no_mark``. Before this fix the
-    assertion below was ``_assert_unbound(seen)``, which this arrangement
-    would also have satisfied vacuously had proof been absent; it is
-    present here specifically so a regression that let ``agent_id`` reach
-    the handler (serving OTHER_UUID's state, or an inferred-binding mark)
-    would fail it.
+    The call carries real proof (``client_session_id``) and smuggles
+    ``agent_id`` in alongside it: with the argument dropped, the proven
+    caller reads its OWN state with no inferred-binding mark, the same shape
+    as ``test_a_proven_self_read_carries_no_mark``. If ``agent_id`` reached
+    the handler, the call would read the named agent or be refused as a
+    mismatch, and ``metrics_for`` would not be the caller's own uuid.
+
+    An earlier proof-less version of this test also failed when agent_id
+    was kept (the handler serves an explicit agent_id even to an unbound
+    caller, as the use_tool test below shows); the proven form states the
+    dependence more directly.
     """
     seen = await rt.mcp_call(
         monkeypatch, "direct", read, rt.signals(),
