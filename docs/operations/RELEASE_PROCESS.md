@@ -98,7 +98,11 @@ branch does not deploy the master-only public Pages workflow.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
    images to GHCR with an SBOM and build-provenance attestation: the server
    (`ghcr.io/cirwel/unitares`) and the Compose lease plane
-   (`ghcr.io/cirwel/unitares-lease-plane`), from the same tag. A manual
+   (`ghcr.io/cirwel/unitares-lease-plane`), from the same tag. The
+   `Lease Plane Image` workflow builds that image for both platforms, without
+   pushing, on every change to the lease plane, the SDK it copies, or this
+   publishing workflow, so an emulated arm64 build that breaks fails on its
+   pull request rather than at release. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A
