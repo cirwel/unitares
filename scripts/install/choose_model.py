@@ -27,15 +27,15 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_KEY = "UNITARES_OLLAMA_BASE"
 MODEL_KEY = "UNITARES_LLM_MODEL"
 ALIAS_KEY = "UNITARES_OLLAMA_BASE_URL"
-# How this script reaches Ollama (it runs on the host) and how the server does
-# (it runs in the container, where localhost is the container itself).
+# How this script reaches Ollama by default (it runs on the host). The server,
+# in the container, reaches the same endpoint through container_base().
 HOST_OLLAMA = "http://localhost:11434"
-CONTAINER_OLLAMA = "http://host.docker.internal:11434"
 PREFERRED_MODEL = "gemma4:latest"
 
 
@@ -51,6 +51,24 @@ def list_ollama_models(base: str, timeout: float = 3.0) -> list[str] | None:
         return None
     names = [m.get("name") for m in models if isinstance(m, dict) and isinstance(m.get("name"), str)]
     return sorted(set(names))
+
+
+def container_base(host_url: str) -> str:
+    """The same Ollama as the server in the container sees it.
+
+    Inside the container, localhost is the container itself, so a host-local
+    address becomes host.docker.internal on the same scheme and port. Any other
+    host is already reachable by name and is kept as given. A trailing ``/`` or
+    ``/v1`` is dropped: the setting is the root URL.
+    """
+    url = host_url.strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[: -len("/v1")].rstrip("/")
+    parts = urlsplit(url)
+    if parts.hostname in ("localhost", "127.0.0.1", "::1"):
+        port = f":{parts.port}" if parts.port else ""
+        parts = parts._replace(netloc=f"host.docker.internal{port}")
+    return urlunsplit(parts)
 
 
 def default_choice(models: list[str]) -> str:
@@ -180,9 +198,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {MODEL_KEY}={model}")
         return 0
 
+    server_base = container_base(args.ollama)
     before = env_file.read_text() if env_file.exists() else ""
-    env_file.write_text(update_env_text(before, {BASE_KEY: CONTAINER_OLLAMA, MODEL_KEY: model}))
-    print(f"✓ Wrote {BASE_KEY}={CONTAINER_OLLAMA} and {MODEL_KEY}={model} to {env_file}")
+    env_file.write_text(update_env_text(before, {BASE_KEY: server_base, MODEL_KEY: model}))
+    print(f"✓ Wrote {BASE_KEY}={server_base} and {MODEL_KEY}={model} to {env_file}")
     alias = read_env_value(before, ALIAS_KEY)
     if alias:
         print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}. {BASE_KEY} takes precedence; remove the other line to avoid confusion.")
@@ -205,7 +224,7 @@ def main(argv: list[str] | None = None) -> int:
     if server_reaches_model(env_file.parent):
         print(f"✓ The server reaches {model}. consult and dialectic reviews will use it.")
         return 0
-    print(f"✗ The server cannot reach Ollama at {CONTAINER_OLLAMA}.")
+    print(f"✗ The server cannot reach Ollama at {server_base}.")
     if sys.platform.startswith("linux"):
         print("  On Linux, Ollama listens only on 127.0.0.1 by default. Set OLLAMA_HOST=0.0.0.0 for the Ollama service,")
         print("  allow port 11434 from the Docker bridge, and do not expose it beyond this machine (Ollama has no authentication).")

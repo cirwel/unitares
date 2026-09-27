@@ -189,3 +189,25 @@ def test_ctrl_d_at_the_rebuild_prompt_does_not_rebuild(tmp_path: Path, stubs, mo
     _tty(monkeypatch, [""])  # model prompt answered; the rebuild prompt gets end of input
     assert cm.main(["--env-file", str(tmp_path / ".env")]) == 0
     assert calls == []
+
+
+# --- the endpoint the server is given -----------------------------------------
+
+@pytest.mark.parametrize(
+    ("host_url", "expected"),
+    [
+        ("http://localhost:11434", "http://host.docker.internal:11434"),
+        ("http://127.0.0.1:11500/", "http://host.docker.internal:11500"),
+        ("http://localhost:11434/v1", "http://host.docker.internal:11434"),
+        ("http://gpu-box.lan:11434", "http://gpu-box.lan:11434"),
+        ("https://ollama.example.org", "https://ollama.example.org"),
+    ],
+)
+def test_container_base_keeps_the_endpoint_and_translates_only_localhost(host_url, expected):
+    assert cm.container_base(host_url) == expected
+
+
+def test_a_custom_endpoint_is_what_the_server_is_given(tmp_path: Path, stubs):
+    env = tmp_path / ".env"
+    assert cm.main(["--ollama", "http://gpu-box.lan:11500", "--yes", "--no-rebuild", "--env-file", str(env)]) == 0
+    assert "UNITARES_OLLAMA_BASE=http://gpu-box.lan:11500" in env.read_text()
