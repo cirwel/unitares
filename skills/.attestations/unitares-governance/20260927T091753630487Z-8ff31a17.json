@@ -1,12 +1,11 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-27T08:11:13Z",
+  "verified_at": "2026-09-27T09:17:53Z",
   "verified_date": "2026-09-27",
   "verifier": "Kenny Wang",
   "source_digests": {
     "unitares/skills/dialectic-reasoning/SKILL.md": "683eefd8f32b8544",
-    "unitares/skills/discord-bridge/SKILL.md": "b1bf0f1276d8756a",
     "unitares/skills/governance-fundamentals/SKILL.md": "5aec85ceeac4aa52",
     "unitares/skills/governance-lifecycle/SKILL.md": "5e5064f0854ddced",
     "unitares/skills/knowledge-graph/SKILL.md": "a3c04f8ec51a38aa",
@@ -26,7 +25,7 @@
     "unitares/src/schema_brief.py": "401bbce563c30439",
     "unitares/src/tool_modes.py": "cce173b777ca01c3"
   },
-  "skill_digest": "dbf97610a267ec53",
+  "skill_digest": "193bd68c958cb3b7",
   "superseded_digests": {
     "unitares/skills/unitares-dashboard/SKILL.md": [
       "68a5cdee01768925"

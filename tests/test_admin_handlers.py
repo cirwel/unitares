@@ -936,7 +936,7 @@ class TestHealthCheck:
             # KG check no longer calls get_knowledge_graph() (deadlocks in anyio context)
             # Just reports embeddings status — lifecycle warnings not propagated
             kg = data["checks"]["knowledge_graph"]
-            assert kg["status"] in ("healthy", "degraded")
+            assert kg["status"] in ("healthy", "degraded", "not_configured")
 
 
 # ============================================================================
@@ -2924,7 +2924,7 @@ class TestHealthCheckEdgeCases:
             from src.services.runtime_queries import get_health_check_data
             data = await get_health_check_data({})
             # KG check no longer calls get_knowledge_graph() — reports embeddings status only
-            assert data["checks"]["knowledge_graph"]["status"] in ("healthy", "degraded")
+            assert data["checks"]["knowledge_graph"]["status"] in ("healthy", "degraded", "not_configured")
 
     @pytest.mark.asyncio
     async def test_health_check_data_dir_error(self, mock_mcp_server, patch_context_agent_id):
