@@ -2091,6 +2091,7 @@ def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", 
     monkeypatch.setattr(rg, "passing_families", lambda *a: set(families))
     monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: list(candidates))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
     ran = []
     monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, p: ran.append(p) or 0)
     return ran
@@ -2122,3 +2123,40 @@ def test_no_other_family_available_is_unreviewed(monkeypatch, capsys):
     args = SimpleNamespace(base="origin/master", branch="claude/x", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
     assert ran == [] and "record --independent" in capsys.readouterr().out
+
+
+
+def test_a_fix_verification_receipt_is_not_a_family():
+    """Native Codex on #2504 (P1): past the round cap a fix-verify CLEAN says
+    it did not review the new lines; it must not complete two families."""
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity")),
+        _comment(rg.Record(k, "CLEAN", 0, False, "fix-verify:claude")),
+    ]
+    assert rg.passing_families(comments, k) == {"google"}
+
+
+def test_the_second_review_skips_cooling_or_exhausted_providers(monkeypatch):
+    """Native Codex on #2504 (P2): a Codex cooldown plus an Antigravity first
+    pass must go to Claude, not retry Codex and stall."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "antigravity", "claude"))
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: "quota" if p == "codex" else None)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert ran == ["claude"]
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    args.failed_providers = {"codex"}
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0 and ran == ["claude"]
+
+
+def test_the_second_review_tries_the_next_family_when_one_does_not_complete(monkeypatch):
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    monkeypatch.setattr(rg, "_review_locked",
+                        lambda a, pr, key, p: ran.append(p) or (rg.UNREVIEWED if p == "codex" else 0))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert ran == ["codex", "claude"]

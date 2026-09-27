@@ -700,15 +700,17 @@ def reviewer_family(reviewer: str) -> str:
 
 
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
-    """Families with a passing review of this diff: CLEAN, or FINDINGS whose
-    dispositions are complete. Same trust rules as latest_matching."""
+    """Families with a passing FULL review of this diff: CLEAN, or FINDINGS
+    whose dispositions are complete. Same trust rules as latest_matching.
+    A fix-verification receipt (``fix-verify:<model>``, past the round cap)
+    says it did not review the new lines, so it never counts as a family."""
     families = set()
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
             continue
         body = c.get("body", "")
         rec = parse_record(body)
-        if rec is None or rec.key != key:
+        if rec is None or rec.key != key or rec.reviewer.startswith("fix-verify:"):
             continue
         if rec.verdict == "CLEAN" or (
                 rec.verdict == "FINDINGS" and rec.disposed
@@ -1522,19 +1524,25 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     families = passing_families(comments, key, native)
     if len(families) >= 2:
         return result
+    # Same availability rules as review_with_fallback: no provider in a quota
+    # or auth cooldown, none that exhausted its retries on this diff.
+    failed = getattr(args, "failed_providers", set()) or set()
     candidates = [p for p in reviewer_candidates(getattr(args, "branch", "") or "")
-                  if reviewer_family(p) not in families]
+                  if reviewer_family(p) not in families
+                  and p not in failed and not provider_cooldown(p)]
     have = ", ".join(sorted(families)) or "none"
-    if not candidates:
-        print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs a passing "
-              f"review from a second model family (have: {have}); no other reviewer is "
-              "available. Record an independent one with review.sh record --independent.")
-        return UNREVIEWED
-    print(f"[review] {sensitive[0]} is security-sensitive: second review by "
-          f"{candidates[0]} (have: {have})", flush=True)
-    attempt = argparse.Namespace(**vars(args))
-    return completed_review_exit(repo, pr, key, head,
-                                 _review_locked(attempt, pr, key, candidates[0]))
+    for provider in candidates:
+        print(f"[review] {sensitive[0]} is security-sensitive: second review by "
+              f"{provider} (have: {have})", flush=True)
+        attempt = argparse.Namespace(**vars(args))
+        result = _review_locked(attempt, pr, key, provider)
+        if result != UNREVIEWED:
+            return completed_review_exit(repo, pr, key, head, result)
+        print(f"[review] {provider} did not complete; trying the next family", flush=True)
+    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs a passing "
+          f"review from a second model family (have: {have}); no other reviewer is "
+          "available. Record an independent one with review.sh record --independent.")
+    return UNREVIEWED
 
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
