@@ -48,6 +48,7 @@ if [ "$1" = "api" ]; then
       exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
+      [ -f "$d/timeline_$n.fail" ] && exit 1
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
       exit 0 ;;
     */commits/*) cat "$d/base_date"; exit 0 ;;
@@ -141,6 +142,7 @@ def _run(
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
     compares: dict[str, dict | None] | None = None,
+    timeline_fails: tuple[int, ...] = (),
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -156,6 +158,10 @@ def _run(
     timelines = timelines or {}
     for pr in prs:
         (d / f"timeline_{pr['number']}.json").write_text(json.dumps(timelines.get(pr["number"], _timeline())))
+    for stale in d.glob("timeline_*.fail"):
+        stale.unlink()
+    for number in timeline_fails:
+        (d / f"timeline_{number}.fail").write_text("")
     for sha, payload in (compares or {}).items():
         target = d / f"compare_{sha}.json"
         # None: GitHub will not return it (unknown SHA, API error).
@@ -461,8 +467,9 @@ def _files(*entries: tuple) -> dict:
 
 
 CHANGE_A = _files(("f", "modified", "blob1", "@@ -1,3 +1,3 @@ def g():\n ctx\n-old\n+new"))
-# The same change after a clean base update: new blob id and line numbers.
-CHANGE_A_REBASED = _files(("f", "modified", "blob9", "@@ -40,3 +40,3 @@ def g():\n ctx\n-old\n+new"))
+# The same change after a clean base update: new blob id, line numbers, and a
+# context line that master changed nearby.
+CHANGE_A_REBASED = _files(("f", "modified", "blob9", "@@ -40,3 +40,3 @@ def h():\n ctx2\n-old\n+new"))
 CHANGE_B = _files(("f", "modified", "blob2", "@@ -1,3 +1,4 @@ def g():\n ctx\n-old\n+new\n+sneaky"))
 BINARY_A = _files(("logo.png", "modified", "blobA", None))
 BINARY_B = _files(("logo.png", "modified", "blobB", None))
@@ -509,7 +516,7 @@ def test_a_compare_that_may_be_truncated_approves_nothing(tmp_path: Path) -> Non
     assert "cannot record what was approved" in out
 
 
-def _armed_then_moved(tmp_path: Path, second: dict | None):
+def _armed_then_moved(tmp_path: Path, second: dict | None, timeline_fails: tuple[int, ...] = ()):
     # Tick 1 arms #3 at aaa; tick 2 sees it still armed, head now bbb.
     tl = _timeline(10, 20)
     first_calls, _ = _run(tmp_path, [_pr(3, head="aaa")], timelines={3: tl}, compares={"aaa": CHANGE_A})
@@ -519,6 +526,7 @@ def _armed_then_moved(tmp_path: Path, second: dict | None):
         [_pr(3, head="bbb", armed_min_ago=3, state="BLOCKED"), _pr(4)],
         timelines={3: tl, 4: _timeline(8, 20)},
         compares={"aaa": CHANGE_A, "bbb": second},
+        timeline_fails=timeline_fails,
     )
 
 
@@ -536,6 +544,11 @@ def test_a_base_update_to_an_armed_pr_keeps_it_armed(tmp_path: Path) -> None:
 
 def test_an_armed_pr_whose_new_head_cannot_be_read_is_disarmed(tmp_path: Path) -> None:
     calls, _ = _armed_then_moved(tmp_path, None)
+    assert calls[0] == "pr merge 3 -R o/r --disable-auto"
+
+
+def test_an_unreadable_timeline_disarms_rather_than_trusting_a_moved_head(tmp_path: Path) -> None:
+    calls, _ = _armed_then_moved(tmp_path, CHANGE_B, timeline_fails=(3,))
     assert calls[0] == "pr merge 3 -R o/r --disable-auto"
 
 

@@ -575,8 +575,8 @@ the operator's machine is awake.
   is the maintainer's, never an agent's. It approves the PR as it stood: the
   script pins the head and a fingerprint of what it changes when it first
   sees the label (GitHub's compare of `master...<that SHA>`: per file the
-  patch without hunk headers, or the blob SHA where there is no patch, as for
-  a binary file). A later head stays covered only while the fingerprint is
+  added and removed lines, or the blob SHA where there is no patch, as for a
+  binary file). A later head stays covered only while the fingerprint is
   unchanged, which a clean base update preserves; commit metadata is
   author-controlled and proves nothing. It arms with `--match-head-commit` on
   that head. A push after the label makes the approval stale, and the PR is

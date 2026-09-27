@@ -131,9 +131,9 @@ approval_times() {
 # What an approval covers. First sight of a label records the PR's head and a
 # fingerprint of what it changes against the base, read from GitHub's compare
 # of base...<that exact head SHA> (never the PR's current ref, which can move
-# mid-tick). Per file: name, status, previous name, and the patch with its
-# hunk headers dropped, so a clean base update leaves the fingerprint
-# unchanged; a file with no patch (binary, or too large) contributes its blob
+# mid-tick). Per file: name, status, previous name, and only the patch's added
+# and removed lines (no hunk headers, no context, both of which a clean base
+# update can shift), so a clean base update leaves the fingerprint unchanged; a file with no patch (binary, or too large) contributes its blob
 # SHA instead. A later head stays covered only while the fingerprint matches:
 # commit metadata (committer name, message, even a web-flow signature) is
 # author-controlled or API-mintable, so it cannot prove a commit was only a
@@ -155,7 +155,7 @@ fingerprint() {
   gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null | jq -er '
     if (.files | length) >= 300 then error("too many files") else . end
     | [.files[] | {f: .filename, s: .status, prev: .previous_filename,
-                   p: (if .patch then (.patch | split("\n") | map(select(startswith("@@") | not)) | join("\n"))
+                   p: (if .patch then (.patch | split("\n") | map(select(startswith("+") or startswith("-"))) | join("\n"))
                        else .sha end)}]
     | tojson' 2>/dev/null | shasum -a 256 | cut -c1-64
 }
@@ -166,7 +166,8 @@ fingerprint() {
 # merge. With no pin (armed by hand, or state lost) it is left alone.
 still_approved() {  # <pr> <head>
   local at line sha fp now
-  at=$(latest_label_time "$1") && [ -n "$at" ] || return 0
+  at=$(latest_label_time "$1") || return 1
+  [ -n "$at" ] || return 0
   line=$(pinned "$1" "$at") || return 1
   [ -n "$line" ] || return 0
   read -r sha fp <<<"$line"
@@ -175,7 +176,13 @@ still_approved() {  # <pr> <head>
   pin "$1" "$2" "$at" "$fp" || true
 }
 
-latest_label_time() { approval_times "$1" | grep '^L ' | cut -d' ' -f2 | sort | tail -1; }
+# Prints the latest label time, or nothing when there is no label event;
+# fails (2) when the timeline cannot be read, which is not the same thing.
+latest_label_time() {
+  local t
+  t=$(approval_times "$1") || return 2
+  { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
+}
 
 # --- 1. tidy the slot -----------------------------------------------------------
 ours_armed=$(q -c --arg b "$BASE" --arg l "$LABEL" \
