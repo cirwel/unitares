@@ -1259,3 +1259,20 @@ def test_model_help_needs_no_stack(tmp_path, flag):
     assert result.returncode == 0
     assert "--no-docker" in result.stdout
     assert "launchd service" not in result.stderr
+
+
+
+def test_settings_prefer_an_exported_value_over_dot_env(tmp_path):
+    # Compose resolves an exported variable before .env; the CLI must agree,
+    # or migrations use the wrong password and the health probe the wrong port.
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p' "{CLI}")"
+_env_value GOVERNANCE_HOST_PORT 8767
+'''
+    env = os.environ.copy()
+    env["GOVERNANCE_HOST_PORT"] = "18767"
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout == "18767"
+    env.pop("GOVERNANCE_HOST_PORT")
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout == "8767"   # no export, no .env in a clean checkout: the default

@@ -123,17 +123,19 @@ target release only has its pending migrations checked and, on confirmation,
 applied.
 
 Releases before this command existed shipped a `scripts/unitares update` that
-posted a check-in instead. From one of those, move once by hand, then use
-`update` from then on:
+posted a check-in instead. From one of those, move the code once by hand and
+let the new `update` do the rest:
 
 ```bash
-git fetch --depth 1 origin tag vX.Y.Z && git checkout --detach vX.Y.Z
-docker compose up -d --build --wait
+git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
+git checkout --detach vX.Y.Z
+docker compose up -d --wait postgres-age
 ./scripts/unitares update --to vX.Y.Z
 ```
 
-The last line applies any migrations the release added to your existing
-database.
+The database starts first so the new server never runs against the old
+schema; `update` then applies the release's migrations and rebuilds, restarts
+and health-checks the stack.
 
 ### Tool discovery (interface 1.13.0 and later)
 
