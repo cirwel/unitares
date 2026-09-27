@@ -65,7 +65,8 @@ your-dashboard-ext/
 | `auto` | no | `true` puts the tab on the live refresh (the 10s poll while the event stream is down, the event doorbell while it is up). Leave it off for anything that reads a daily or expensive aggregate. |
 
 The loader skips an entry whose `id` or `global` is malformed, whose script
-fails to load, or whose `id` matches a core tab. Skipping is silent to the
+fails to load or throws, whose script does not define `global` with a
+`load()` function, or whose `id` matches a core tab. Skipping is silent to the
 viewer and logged to the console, so test the manifest itself (see below).
 
 ## Writing a section

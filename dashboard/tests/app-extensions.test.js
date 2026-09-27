@@ -73,16 +73,25 @@ describe("dashboard extensions", () => {
     expect(dom.window.document.getElementById("queue-mount").textContent).toBe("deep");
   });
 
-  it("never shadows a core section and skips malformed or unloadable entries", async () => {
+  it("never shadows a core section and skips malformed, unloadable or broken entries", async () => {
     const manifest = {
       sections: [
         { id: "agents", global: "Evil", script: "evil.js" },
         { id: "Bad Id", global: "X", script: "x.js" },
         { id: "gone", global: "Gone", script: "missing.js" },
+        { id: "throws", global: "Throws", script: "throws.js" },
+        { id: "noload", global: "NoLoad", script: "noload.js" },
         { id: "ok", global: "Ok", script: "ok.js" },
       ],
     };
-    const dom = boot(manifest, { "evil.js": "window.Evil = 1;", "x.js": "", "ok.js": "window.Ok = { load() {} };" });
+    const dom = boot(manifest, {
+      "evil.js": "window.Evil = 1;",
+      "x.js": "",
+      "throws.js": "throw new Error('boom'); window.Throws = { load() {} };",
+      "noload.js": "window.NoLoad = {};",
+      "ok.js": "window.Ok = { load() {} };",
+    });
+    dom.window.console.warn = () => {};
     await flush();
     const ext = [...dom.window.document.querySelectorAll("#nav a.ext")].map((a) => a.dataset.section);
     expect(ext).toEqual(["ok"]);

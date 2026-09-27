@@ -374,6 +374,11 @@ async function loadExtensions() {
     if (nav.querySelector(`a[data-section="${sec.id}"]`)) continue;
     const mountId = EXT_ID.test(sec.mount || "") ? sec.mount : sec.id + "-mount";
     try { injectScript(await DATA.extScript(sec.script)); } catch (e) { console.warn("[dashboard ext]", sec.script, e); continue; }
+    // An injected <script> that throws while evaluating does not reject the
+    // try above, so check the entry point it was supposed to define: no
+    // callable load() means no tab, rather than a blank pane.
+    const g = window[sec.global];
+    if (!g || typeof g.load !== "function") { console.warn("[dashboard ext]", sec.script, "did not define", sec.global + ".load"); continue; }
     const link = document.createElement("a");
     link.href = "#" + sec.id;
     link.dataset.section = sec.id;
