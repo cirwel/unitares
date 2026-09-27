@@ -706,10 +706,12 @@ def changed_paths(base: str, head: str) -> list[str] | None:
     return [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p]
 
 
-def reviewer_family(reviewer: str) -> str:
-    """The model family behind a record's reviewer name. A recorded reviewer
-    (``record --reviewer-name``) counts by its name unless the name says
-    which family it is."""
+def reviewer_family(reviewer: str) -> str | None:
+    """The model family behind a record's reviewer name, or None when the name
+    does not say. An unrecognised name (a recorded "council", "opus-subagent")
+    counts as NO family: counting it as its own would let two reviews from one
+    family satisfy the two-family rule. Record such a review under a name that
+    carries its family (e.g. "gemini-council", "gpt-5-reviewer")."""
     name = (reviewer or "").lower()
     if any(m in name for m in ("codex", "openai", "gpt", "chatgpt")):
         return "openai"
@@ -717,7 +719,7 @@ def reviewer_family(reviewer: str) -> str:
         return "anthropic"
     if any(m in name for m in ("antigravity", "agy", "gemini", "google")):
         return "google"
-    return name or "unknown"
+    return None
 
 
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
@@ -740,6 +742,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     for rec in native:
         if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
             families.add(reviewer_family(rec.reviewer))
+    families.discard(None)
     return families
 
 
@@ -1570,7 +1573,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         return result
     comments = pr_comments(repo, pr)
     try:
-        native = read_native(repo, pr, key, head, comments).records
+        snapshot = read_native(repo, pr, key, head, comments)
+        native = snapshot.records
     except SystemExit as exc:
         # As every other cmd_review path: incomplete evidence could hide an
         # open native FINDINGS review, so it is UNREVIEWED, never "no records".
@@ -1582,15 +1586,25 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     # family is never run twice as the "second" one.
     passed_by = passed_by or getattr(args, "completed_by", None)
     # A fix-verify receipt did not review the new lines (see passing_families).
-    if passed_by and not passed_by.startswith("fix-verify:"):
+    if passed_by and not passed_by.startswith("fix-verify:") and reviewer_family(passed_by):
         families.add(reviewer_family(passed_by))
     if len(families) >= 2:
         return result
-    if not auto:
+    explicit = getattr(args, "reviewer", None)
+    # Checked here on every path, not left to callers: after a capped fix
+    # verification, later runs arrive through the existing-record fast path
+    # (and the sweep), and must not start full reviews on their own either.
+    # Two ways a run is past the cap: the cap is live, or this diff's pass IS
+    # a fix verification (capped() turns False once a round is answered,
+    # because a NEW push is new work; the same diff is not).
+    fix_verified = (passed_by or "").startswith("fix-verify:")
+    capped = (snapshot.rounds or CodexRounds()).capped() or fix_verified
+    if not auto or (capped and not explicit):
         print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing full "
               f"reviews from two model families (have: {', '.join(sorted(families)) or 'none'}). "
               "The review round cap is reached, so none runs automatically: spend a round with "
-              "review.sh --reviewer <provider>, or record an independent review with "
+              "review.sh --fresh --reviewer <provider>, or record an independent review under a "
+              "name that carries its model family (e.g. gemini-…, gpt-…) with "
               "review.sh record --independent.")
         return UNREVIEWED
     # Same availability rules as review_with_fallback: no provider in a quota
@@ -1600,6 +1614,9 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     candidates = second_family_candidates(
         getattr(args, "branch", "") or "", families, comments, key,
         set(getattr(args, "failed_providers", set()) or set()))
+    if explicit and capped:
+        # The author spent a round on one provider, not on every family.
+        candidates = [p for p in candidates if p == explicit]
     deadline = getattr(args, "review_deadline", None)
     for provider in candidates:
         if reviewer_family(provider) in families:
@@ -2010,7 +2027,8 @@ def cmd_sweep(args) -> int:
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
         try:
-            native = read_native(repo, n, key, head, comments).records
+            sweep_snapshot = read_native(repo, n, key, head, comments)
+            native = sweep_snapshot.records
             rec = latest_matching(comments, key, native)
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
@@ -2024,6 +2042,13 @@ def cmd_sweep(args) -> int:
             and bool(sensitive_paths(changed, base_policy_paths(f"origin/{base}")))
             and len(passing_families(comments, key, native)) < 2
         )
+        if needs_second and ((sweep_snapshot.rounds or CodexRounds()).capped()
+                             or rec.reviewer.startswith("fix-verify:")):
+            # Past the cap no full review starts on its own (see
+            # second_family_pass); the author decides.
+            print(f"[sweep] PR #{n}: security-sensitive diff needs a second model family, "
+                  "but the review round cap is reached; author decides")
+            continue
         if needs_second and not second_family_candidates(
                 p["headRefName"], passing_families(comments, key, native), comments, key):
             # Selecting it would spend the sweep's one slot on a child that can

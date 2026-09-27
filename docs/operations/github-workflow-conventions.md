@@ -292,7 +292,8 @@ path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth,
 reviewer's backends, and the review gate itself) needs a passing review from
 **two different model families** before the `review` check goes green: OpenAI
 (Codex, native or local), Anthropic (Claude) or Google (Antigravity), with a
-recorded reviewer counted by its name. A passing review is `CLEAN`, or
+recorded reviewer counted only when its name carries its family (`gemini-…`,
+`gpt-…`, `claude-…`; an unrecognised name such as `council` counts as none). A passing review is `CLEAN`, or
 `FINDINGS` with every disposition recorded; open findings still block as
 before. `review.sh` adds the second review itself when a sensitive diff has
 only one family's pass, choosing a reviewer from a family that has not passed
@@ -300,7 +301,9 @@ yet, and reports UNREVIEWED when no such reviewer is available (record an
 independent one with `review.sh record --independent`). Past the review round cap
 no full review runs automatically, sensitive or not: a fix verification is not a
 full review, so the gate stays UNREVIEWED until the author spends a round with
-`review.sh --reviewer <provider>` or records an independent review. CI reads the policy
+`review.sh --fresh --reviewer <provider>` (only that provider runs) or records an
+independent review. That holds on every path, including a re-run and the
+scheduled sweep, once the diff's pass is a fix verification. CI reads the policy
 as merged on the PR's base ref, never from the PR head, so a PR cannot remove
 itself from the list; the policy file and the review workflow are on it. Why: on PR #2486 the first reviewer
 returned a bare CLEAN and a second family then found two P2 defects; the

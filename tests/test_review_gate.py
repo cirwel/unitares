@@ -2020,7 +2020,10 @@ def test_reviewer_family_mapping():
     assert rg.reviewer_family("codex") == rg.reviewer_family("codex-native") == "openai"
     assert rg.reviewer_family("claude") == rg.reviewer_family("claude-subagent") == "anthropic"
     assert rg.reviewer_family("antigravity") == rg.reviewer_family("gemini-council") == "google"
-    assert rg.reviewer_family("council") == "council"  # a recorded reviewer counts by name
+    # An unrecognised name is NO family: a second same-family review recorded as
+    # "council" must not satisfy the two-family rule.
+    assert rg.reviewer_family("council") is None
+    assert rg.reviewer_family("opus-subagent") is None
 
 
 def test_the_shipped_policy_covers_the_sensitive_surfaces():
@@ -2235,27 +2238,26 @@ def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
 
 
 
-def test_a_just_passed_fix_verification_is_not_a_family(monkeypatch):
-    """Native Codex on #2504 (P1): the just-passed shortcut re-added the
-    fix-verify family that passing_families excludes."""
+def test_a_just_passed_fix_verification_is_not_a_family(monkeypatch, capsys):
+    """Native Codex on #2504 (P1): the just-passed shortcut must not re-add a
+    fix-verify family; and after a fix verification nothing runs on its own."""
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
                              families={"google"}, candidates=("codex", "claude"))
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
-                                 passed_by="fix-verify:claude") == 0
-    assert ran == ["codex"]  # still needs a real second family
+                                 passed_by="fix-verify:claude") == rg.UNREVIEWED
+    assert ran == [] and "have: google)" in capsys.readouterr().out
 
 
-
-def test_after_a_fix_verify_receipt_two_full_families_are_still_run(monkeypatch):
-    """Native Codex on #2504 (P2): with only a fix-verify pass there is no full
-    family yet, so one more review is not enough."""
+def test_after_a_fix_verify_receipt_an_explicit_round_runs_only_that_provider(monkeypatch):
+    """Native Codex on #2504 (P2) then Claude (P1): a fix-verify pass is no
+    family, and past it only the author's explicit choice runs."""
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
                              families=set(), candidates=("codex", "antigravity", "claude"))
-    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30, reviewer="codex")
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
-                                 passed_by="fix-verify:claude") == 0
-    assert ran == ["codex", "antigravity"]
+                                 passed_by="fix-verify:claude") == rg.UNREVIEWED
+    assert ran == ["codex"]  # one family now; the second is the author's next choice
 
 
 def test_exhausted_providers_are_read_from_the_record_on_every_path(monkeypatch):
@@ -2403,5 +2405,65 @@ def test_the_sweep_skips_a_sensitive_pr_no_one_can_review_now(monkeypatch, tmp_p
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: [])
     monkeypatch.setattr(rg.subprocess, "run",
                         lambda *a, **k: pytest.fail("spent the sweep slot on a PR no one can review"))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
+                                        worktree=str(tmp_path / "wt"))) == 0
+
+
+
+def _capped_rounds():
+    # A live cap: the last round had only minor findings and is unanswered.
+    return rg.CodexRounds(count=rg.ROUND_CAP, last_head="h",
+                          last_findings=[{"body": "![P2 Badge](x) minor"}], answered_since=False)
+
+
+def test_after_a_capped_fix_verification_a_plain_rerun_starts_nothing(monkeypatch, capsys):
+    """Claude on #2504 (P1): the capped flag was only passed on the first run;
+    later runs came through the fast path in automatic mode."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
+    # The round is answered (capped() is False again) but THIS diff's pass is
+    # the fix verification: still no automatic full review.
+    answered = rg.CodexRounds(count=rg.ROUND_CAP, last_head="h",
+                              last_findings=[{"body": "![P2 Badge](x) minor"}], answered_since=True)
+    assert not answered.capped()
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([], rounds=answered))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30, reviewer=None)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
+                                 passed_by="fix-verify:ollama") == rg.UNREVIEWED
+    assert ran == []
+    assert "--fresh --reviewer" in capsys.readouterr().out
+
+
+def test_an_explicit_round_past_the_cap_runs_only_the_named_provider(monkeypatch):
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set(),
+                             candidates=("codex", "antigravity", "claude"))
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([], rounds=_capped_rounds()))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30, reviewer="claude")
+    rg.second_family_pass(args, "o/r", 1, "k", "h", 0)
+    assert ran == ["claude"]
+
+
+def test_a_same_family_review_recorded_under_a_plain_name_does_not_complete_the_rule():
+    """Claude on #2504 (P2)."""
+    k = "k" * 64
+    comments = [
+        _comment(rg.Record(k, "CLEAN", 0, False, "claude")),
+        _comment(rg.Record(k, "CLEAN", 0, False, "opus-subagent")),
+    ]
+    assert rg.passing_families(comments, k) == {"anthropic"}
+
+
+def test_the_sweep_leaves_a_capped_sensitive_pr_to_its_author(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    clean = rg.Record("k", "CLEAN", 0, False, "fix-verify:ollama", created_at="2026-09-27T00:00:00Z")
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native",
+                        lambda *args: rg.NativeReview([clean], rounds=_capped_rounds()))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda *a, **k: pytest.fail("started a full review past the cap"))
     assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
                                         worktree=str(tmp_path / "wt"))) == 0
