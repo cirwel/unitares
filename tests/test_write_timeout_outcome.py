@@ -888,3 +888,99 @@ def test_an_alias_lookup_failure_is_logged_and_leaves_the_call_unclassified(
         and "resolve_call_operation failed" in record.getMessage()
         for record in caplog.records
     )
+
+
+# --- Review round on the store lookup: what the author resolution must match --
+
+
+def _label_owner_server(label="Label-Y", uuid="0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"):
+    from types import SimpleNamespace
+
+    server = MagicMock()
+    server.agent_metadata = {
+        uuid: SimpleNamespace(
+            label=label, public_agent_id=None, structured_id=None,
+            display_name=label, status="active",
+        )
+    }
+    return server, uuid
+
+
+def test_a_high_severity_note_keeps_the_writer_the_note_handler_records():
+    """A note always takes the low-friction writer, whatever severity it
+    carries: an explicit agent_id stays as sent. Resolving it through the
+    store's registered-agent policy would filter on a different agent and hide
+    the row the note wrote."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    server, uuid = _label_owner_server()
+    arguments = {"action": "note", "summary": "s", "severity": "high", "agent_id": "Label-Y"}
+    with patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+        written, error, _ = kg_handlers._resolve_low_friction_writer(dict(arguments))
+        author = kg_handlers.resolve_knowledge_write_author(arguments, store=False)
+
+    assert error is None and written == "Label-Y"
+    assert author is not None and author.agent_id == written
+    assert author.agent_id != uuid
+
+
+def test_author_resolution_leaves_the_callers_arguments_as_sent():
+    """The low-friction writer policy writes the pseudonym it picks into the
+    arguments it is given; the recovery must run it on a copy."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    arguments = {"action": "store", "summary": "s", "client_session_id": "sess-abc"}
+    sent = dict(arguments)
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+        author = kg_handlers.resolve_knowledge_write_author(arguments, store=True)
+
+    assert author is not None and author.agent_id.startswith("anonkg_")
+    assert arguments == sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search_mode", ["semantic", "hybrid"])
+async def test_a_windowed_semantic_read_failure_degrades_instead_of_failing_the_search(search_mode):
+    """A windowed AGE query() raises on a failed SQL read so the timeout check
+    cannot read an error as an empty window. Semantic search's in-memory
+    fallback only ranks candidates, so it degrades to none; the search still
+    succeeds on its full-text results."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock
+
+    from src.knowledge_graph import DiscoveryNode
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+    db = MagicMock()
+    db.kg_query = AsyncMock(side_effect=RuntimeError("connection reset"))
+    db.graph_available = AsyncMock(return_value=True)
+    graph = KnowledgeGraphAGE()
+    graph._get_db = AsyncMock(return_value=db)
+    graph._pgvector_available = AsyncMock(return_value=False)
+    node = DiscoveryNode(
+        id="2026-09-27T00:00:00+00:00", agent_id="a", type="note",
+        summary="coherence gate note", details="", tags=[], severity="low",
+    )
+    graph.full_text_search = AsyncMock(return_value=[node])
+    emb = MagicMock()
+    emb.embed = AsyncMock(return_value=[0.1, 0.2])
+    after = datetime.now(timezone.utc) - timedelta(days=30)
+
+    with patch("src.embeddings.embeddings_available", return_value=True), \
+         patch("src.embeddings.get_embeddings_service", AsyncMock(return_value=emb)):
+        assert await graph.semantic_search("coherence gate", created_after=after) == []
+        with patch.object(kg_handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
+             patch.object(kg_handlers, "_broadcast_knowledge_read", AsyncMock()), \
+             patch.object(kg_handlers, "_resolve_agent_display",
+                          MagicMock(side_effect=lambda a: {"display_name": a})):
+            result = await kg_handlers.handle_search_knowledge_graph({
+                "action": "search", "query": "coherence gate",
+                "search_mode": search_mode, "created_after": after.isoformat(),
+            })
+
+    payload = json.loads(result[0].text)
+    assert payload.get("success") is True, payload.get("error")
+    assert payload.get("count") == 1

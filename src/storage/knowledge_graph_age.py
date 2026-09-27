@@ -2749,14 +2749,22 @@ class KnowledgeGraphAGE:
         # Fallback: In-memory semantic search
         logger.debug("Using in-memory semantic search")
         
-        # Get candidate discoveries
-        candidates = await self.query(
-            agent_id=agent_id,
-            tags=tags,
-            limit=limit * 5,
-            created_after=created_after,
-            created_before=created_before,
-        )
+        # Get candidate discoveries. A windowed query() raises when its SQL
+        # read fails (so a timed-out write's check cannot read an error as an
+        # empty window); here that read only feeds a best-effort ranking, so a
+        # failure degrades to no semantic candidates and a hybrid search keeps
+        # its full-text results, as before.
+        try:
+            candidates = await self.query(
+                agent_id=agent_id,
+                tags=tags,
+                limit=limit * 5,
+                created_after=created_after,
+                created_before=created_before,
+            )
+        except Exception as e:
+            logger.warning(f"In-memory semantic candidates unavailable: {e}")
+            return []
 
         if not candidates:
             return []
