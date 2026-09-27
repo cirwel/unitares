@@ -1739,6 +1739,7 @@ Open and advance governed, on-record peer review sessions. get and list serve un
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `antithesis` | required | 10s | `submit_antithesis` |
+| `consult` | required | 10s | — |
 | `get` | pre_onboard | 10s | `get_dialectic_session`, `request_exploration_session` |
 | `list` (default) | pre_onboard | 15s | `list_dialectic_sessions` |
 | `quick` | required | 10s | — |
