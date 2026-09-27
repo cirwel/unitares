@@ -12,8 +12,9 @@
 #
 # Semantics, record format and the CI half: scripts/dev/review_gate.py.
 # Exit 0: completed/disposed. Exit 1: findings need author action.
-# Exit 2: unavailable/incomplete review, or a security-sensitive diff that still
-# needs a second model family; report an explicit unreviewed handoff.
+# Exit 2: unavailable/incomplete review; report an explicit unreviewed handoff.
+# Exit 3: a review passed, but a security-sensitive diff still needs a second
+#         model family; run one of the --fresh --reviewer commands it prints.
 
 set -euo pipefail
 
@@ -42,6 +43,7 @@ if [[ "$BACKGROUND" == true ]]; then
     nohup python3 scripts/dev/review_gate.py "${CMD[@]}" >"$log" 2>&1 </dev/null &
     echo "[review] running in background (pid $!) — log: $log"
     echo "[review] the record posts to the PR; the \`review\` check turns green when it is clean"
+    echo "[review] (a security-sensitive diff needs clean reviews from two model families; run review.sh in the foreground to see what is missing)"
     exit 0
 fi
 

@@ -303,7 +303,8 @@ ref, never from the PR head, so a PR cannot remove itself from the list; if
 the changed paths cannot be read, it requires the second family.
 
 `review.sh` never starts the second review itself. When a sensitive diff has
-only one family's pass it exits UNREVIEWED and prints the next step: the exact
+only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)
+and prints the next step: the exact
 `review.sh --fresh --reviewer <provider>` commands for providers that are
 eligible now (not disabled, cooling down or exhausted on this diff), or that
 none is, with `review.sh record --independent` as the alternative. The author

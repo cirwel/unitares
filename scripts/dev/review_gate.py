@@ -89,6 +89,9 @@ DEFAULT_BASE = "origin/master"
 DEFAULT_BUDGET_S = 2400  # pipeline skill: clean codex completions ran 1-21 min
 PROVIDER_COOLDOWN_S = 3600
 UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
+#: A review passed, but a security-sensitive diff still needs a second model
+#: family (review_policy.json). Not an outage: the next step is the author's.
+NEEDS_SECOND_FAMILY = 3
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
@@ -738,16 +741,21 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     A fix-verification receipt (``fix-verify:<model>``, past the round cap)
     says it did not review the new lines, so it never counts as a family."""
     families = set()
-    for c in comments:
-        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
-            continue
-        body = c.get("body", "")
-        rec = parse_record(body)
+    trusted = [(c, parse_record(c.get("body", ""))) for c in comments
+               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+    # A disposition's reviewer field is not verified (dispose --emit takes it
+    # as given), so a disposed FINDINGS credits a family only when the review
+    # it answers, the same reviewer's open FINDINGS on this diff, is on record.
+    originals = {(r.reviewer, r.findings) for _, r in trusted
+                 if r and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+    for c, rec in trusted:
         if rec is None or rec.key != key or rec.reviewer.startswith("fix-verify:"):
             continue
+        body = c.get("body", "")
         if rec.verdict == "CLEAN" or (
                 rec.verdict == "FINDINGS" and rec.disposed
-                and dispositions_complete(body, rec.findings)):
+                and dispositions_complete(body, rec.findings)
+                and (rec.reviewer, rec.findings) in originals):
             families.add(reviewer_family(rec.reviewer))
     for rec in native:
         if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
@@ -1401,7 +1409,11 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
         # when the clean reaction arrives late and preserves diff equivalence.
         recorded = any(c.get("author_association") in TRUSTED_ASSOCIATIONS
                        and (r := parse_record(c.get("body", "")))
-                       and r.key == key and r.verdict == "CLEAN" for c in comments)
+                       and r.key == key and r.verdict == "CLEAN"
+                       # Another family's CLEAN is not this receipt: on a
+                       # sensitive diff the codex-native one must still post,
+                       # or CI never re-runs and holds a two-family PR.
+                       and r.reviewer == "codex-native" for c in comments)
         if not recorded:
             post_record(pr, Record(key, "CLEAN", 0, False, "codex-native"),
                         f"CLEAN — native review joined: {rec.url}", rec.text)
@@ -1567,17 +1579,20 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     It never starts a review itself. An automatic second run collided with the
     round cap, fresh runs and the sweep in round after round of PR #2504's
     review; the rule's enforcement is the CI check, and choosing the second
-    reviewer is the author's. Returns UNREVIEWED while the family is missing,
-    so a foreground review.sh cannot read as done while CI would still block.
-    ``auto`` is accepted for the callers' sake and no longer changes anything.
+    reviewer is the author's. Returns NEEDS_SECOND_FAMILY while the family is
+    missing, including when the changed paths cannot be read (CI treats that
+    as sensitive too), so a foreground review.sh never reads as done while CI
+    would still block. ``auto`` is accepted for the callers' sake and no
+    longer changes anything.
     """
     if result != 0:
         return result
     base = getattr(args, "base", "origin/master")
     changed = changed_paths(base, "HEAD")
-    # Locally an unreadable list skips the notice; CI still enforces the rule.
-    # The base ref's policy, as CI uses it.
-    sensitive = sensitive_paths(changed, base_policy_paths(base)) if changed else []
+    # The base ref's policy, as CI uses it; and like CI, an unreadable list is
+    # treated as sensitive rather than as "nothing changed".
+    sensitive = (sensitive_paths(changed, base_policy_paths(base)) if changed is not None
+                 else ["(changed paths unreadable)"])
     if not sensitive:
         return result
     comments = pr_comments(repo, pr)
@@ -1610,7 +1625,7 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
           f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
           "(e.g. gemini-…, gpt-…) with review.sh record --independent.")
-    return UNREVIEWED
+    return NEEDS_SECOND_FAMILY
 
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
@@ -2010,8 +2025,14 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        return subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                               "--pr", str(n), "review"], cwd=wt).returncode
+        rc = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                             "--pr", str(n), "review"], cwd=wt).returncode
+        if rc == NEEDS_SECOND_FAMILY:
+            # The review passed; the second family is the author's call. Not a
+            # job failure (launchd would flag it for the operator).
+            print(f"[sweep] PR #{n}: reviewed; a second model family is left to its author")
+            return 0
+        return rc
     print(f"[sweep] {candidates} review candidate(s)" if candidates else
           "[sweep] no reviews to start")
     return 0
