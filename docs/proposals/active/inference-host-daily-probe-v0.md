@@ -97,13 +97,15 @@ The probe reads the failure class that `delegate_inference` already returns:
 | Success | none; log latency, tokens, model | |
 | Failure classified `quota` | none | `delegate_inference` records the cooldown itself, until the provider's stated reset or, when none is stated, on a backoff from 30 min doubling to 6 h. The limit resets, and failover covers it meanwhile. |
 | Failure classified `auth` | **high** | `delegate_inference` puts an auth failure into a cooldown too, on the 30 min to 6 h backoff, so a login that gets fixed is noticed within hours. Unlike a quota limit, though, a logged-out CLI does not recover on its own: the operator has to log in. |
-| Unclassified failure (malformed envelope, nonzero exit, spawn rejected, orchestrator down) | **medium** | The case nothing else records. |
+| Pre-CLI failure (preflight, spawn rejected, orchestrator down) | **medium** | Gov never reached the CLI. It is shared across hosts when two or more show it (below). |
+| Unclassified failure after the CLI ran (malformed envelope, nonzero exit) | **medium** | The case nothing else records. |
 | Timeout (`possibly_running`) | **high**, noted as possibly still running | A probe asks for one word, so a timeout means the host hangs. The severity stays high on later runs too, so a host that keeps hanging is re-posted only under the backoff. See *Hung calls* below. |
 
 Findings go through `agents/common/findings.post_finding`, the same
 fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
-`sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
+`sha(host_id, stage, failure_class)`, with the stage from the recovery table
+below, so records of one class at different stages stay distinct, and take `doctor_findings.py`'s doubling
 re-alert backoff so a host that stays broken does not re-post daily.
 Recovery follows `doctor_findings.py`'s rule: a record is closed, and its
 backoff dropped, once a run shows the failure is gone, so a later failure of
@@ -117,7 +119,7 @@ its failure happened:
 | 2. CLI started | timeout (the CLI never finished) | any call that got past dispatch |
 | 3. CLI finished | `auth` (the CLI reports itself logged out), unclassified | a call whose CLI ran to completion (`dispatch_phase == "terminal"`), or an `auth` cooldown |
 | 4. provider answered | `quota` | a quota failure, or a `quota` cooldown |
-| 5. success | none | a successful probe (passive evidence applies only to a host with no open record, so there is nothing for it to close) |
+| 5. success | none | a successful probe, which closes all of the host's records. Passive evidence never appears in this table: it only skips hosts with no open record. |
 
 An observation that reached stage N closes every record from a stage before
 N, because those stages evidently worked. It reproduces a record of its own
