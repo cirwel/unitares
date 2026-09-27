@@ -82,6 +82,15 @@
              /PATH/TO/UNITARES/config/resident_progress.example.json. -->
         <key>UNITARES_RESIDENT_PROGRESS_MANIFEST</key>
         <string></string>
+        <!-- Extra metrics catalog (JSON). Registers the metric names a
+             deployment-specific scraper writes, on top of the product
+             catalog, so POST /v1/metrics accepts them and
+             /v1/metrics/catalog lists them. Empty (the default) registers
+             none. Set it only if you run the reference Chronicler; see
+             docs/operations/resident-roster.md.
+             Example: /PATH/TO/UNITARES/agents/chronicler/metrics_catalog.json -->
+        <key>UNITARES_METRICS_CATALOG_EXTRA</key>
+        <string></string>
         <key>UNITARES_BIND_ALL_INTERFACES</key>
         <string>1</string>
         <!-- Host/Origin allowlist (DNS-rebinding protection, on by default).
