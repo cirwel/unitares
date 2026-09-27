@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.logging_utils import get_logger
@@ -119,12 +120,18 @@ class KnowledgeGraphMixin:
         type: Optional[str] = None,
         severity: Optional[str] = None,
         status: Optional[str] = None,
-        created_after: Optional[str] = None,
+        created_after: Optional[datetime] = None,
         limit: int = 50,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_before: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        """Query discoveries with filters."""
+        """Query discoveries with filters, newest first.
+
+        ``created_after`` / ``created_before`` are exclusive bounds on
+        ``created_at`` and must be timezone-aware datetimes: the column is
+        TIMESTAMPTZ and asyncpg will not coerce an ISO string.
+        """
         async with self.acquire() as conn:
             conditions = []
             params = []
@@ -154,6 +161,10 @@ class KnowledgeGraphMixin:
             if created_after:
                 conditions.append(f"created_at > ${param_idx}")
                 params.append(created_after)
+                param_idx += 1
+            if created_before:
+                conditions.append(f"created_at < ${param_idx}")
+                params.append(created_before)
                 param_idx += 1
             if exclude_archived and not status:
                 conditions.append("status IS DISTINCT FROM 'archived'")
@@ -194,6 +205,9 @@ class KnowledgeGraphMixin:
         limit: int = 20,
         operator: str = "AND",
         tags: Optional[List[str]] = None,
+        order_by: str = "rank",
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using PostgreSQL tsvector.
 
@@ -217,20 +231,38 @@ class KnowledgeGraphMixin:
         ts_query = _apply_operator(query, operator=operator)
         # The tag predicate has to sit inside the ranked query: filtering the
         # top-N afterwards drops every tagged row that ranked below N.
+        #
+        # order_by="created_at" keeps the tsquery as the membership test and
+        # orders the matches newest first. It has to be done here, not by
+        # re-sorting a rank-ordered page: a match written a minute ago that
+        # ranks below the page limit would never reach the caller. The date
+        # window sits inside the query for the same reason as the tag clause.
+        if order_by not in ("rank", "created_at"):
+            raise ValueError(f"order_by must be 'rank' or 'created_at', not {order_by!r}")
         params: List[Any] = [ts_query]
-        tag_clause = ""
+        clauses = []
         if tags:
             from src.knowledge_graph import normalize_tags
             params.append(normalize_tags(tags))
-            tag_clause = f"AND tags && ${len(params)}"
+            clauses.append(f"AND tags && ${len(params)}")
+        if created_after:
+            params.append(created_after)
+            clauses.append(f"AND created_at > ${len(params)}")
+        if created_before:
+            params.append(created_before)
+            clauses.append(f"AND created_at < ${len(params)}")
+        filter_clause = " ".join(clauses)
+        order_clause = (
+            "created_at DESC" if order_by == "created_at" else "rank DESC, created_at DESC"
+        )
         params.append(limit)
         async with self.acquire() as conn:
             rows = await conn.fetch(f"""
                 SELECT *, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1), 32) as rank
                 FROM knowledge.discoveries
                 WHERE search_vector @@ websearch_to_tsquery('english', $1)
-                  {tag_clause}
-                ORDER BY rank DESC, created_at DESC
+                  {filter_clause}
+                ORDER BY {order_clause}
                 LIMIT ${len(params)}
             """, *params)
 
