@@ -39,8 +39,12 @@ only, while a probe spends quota and writes an energy record through
 touching a detector that already works, the same reasoning
 `doctor_findings.py` itself gives for staying out of `deploy_drift_doctor.py`.
 
-The probe goes through gov's REST tool call (`delegate_inference` on 8767 with
-the operator bearer), not straight to each CLI. The path that failed on
+The probe goes through gov's REST tool call (`delegate_inference` on 8767), not
+straight to each CLI. Authorization and attribution are separate. The operator
+bearer authorizes the REST call, as it does for the other ops scripts. Each
+call also carries the `client_session_id` of the probe's own identity (see
+*Governance side effects*), so the call is attributed to the probe and not to
+the operator or a resident. The path that failed on
 2026-09-25 and 2026-08-29 was gov to the orchestrator to the CLI. A direct CLI
 call would pass while that path was broken. `model_adjudicator.py` already
 calls the `claude` CLI directly every 6 h, and a successful run of it says
@@ -66,8 +70,12 @@ row below:
 | Otherwise | Probe once. | one call |
 
 The probe prompt is `Reply with exactly: OK`, with `timeout_s=120` and no
-retry. Hosts are probed one after another, never in parallel, so a shared
-orchestrator problem produces one clear failure rather than three at once.
+retry. Hosts are probed one after another, never in parallel. If a probe fails
+before any CLI ran (`dispatch_phase` is `preflight` or `spawn_rejected`), the
+fault is gov's orchestrator, which every host shares. The run then stops,
+posts a single finding with fingerprint `sha("orchestrator", failure_class)`
+instead of one per host, and probes no further host that day. Probing the
+rest would only spend quota to repeat the same failure.
 
 ### What counts as a failure, and what it reports
 
@@ -79,13 +87,32 @@ The probe reads the failure class that `delegate_inference` already returns:
 | Failure classified `quota` | none | `delegate_inference` records the cooldown itself; the limit resets and failover covers it. |
 | Failure classified `auth` | **high** | A logged-out CLI does not recover on its own; the operator has to log in. |
 | Unclassified failure (malformed envelope, nonzero exit, spawn rejected, orchestrator down) | **medium** | The case nothing else records. |
-| Timeout (`possibly_running`) | **medium**, noted as possibly still running | Never retried, so it cannot pile up children. |
+| Timeout (`possibly_running`) | **medium**, noted as possibly still running | See *Hung calls* below. |
 
 Findings go through `agents/common/findings.post_finding`, the same
 fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
 `sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
-re-alert backoff so a host that stays broken does not re-post daily. By
+re-alert backoff so a host that stays broken does not re-post daily.
+Recovery follows `doctor_findings.py` too. When a host that has an open
+finding succeeds, whether through a probe or through passive evidence, the
+local record for that finding is closed and its backoff is dropped, so a
+later failure of the same class alerts at once. That closure is local state
+only. It emits no `outcome_event`, because a probe passing is not an operator
+judging the finding correct (roadmap Invariant 4, the reasoning
+`doctor_findings.py` records at the same step).
+
+### Hung calls
+
+A call that times out may still be running under the orchestrator, and a CLI
+stuck on a prompt would otherwise leave one more child each day. The probe
+stores the `orchestrator_execution_id` of every timed-out call in its state
+file. On the next run it asks the orchestrator whether that execution is still
+live. If it is, the probe does not start another call to that host. Instead
+it raises the host's finding to **high** with the age of the stuck execution,
+leaving termination to the operator, since killing orchestrator children is
+outside a diagnose-only script. So each host has at most one probe child alive
+at a time, however long the hang lasts. By
 existing routing, a finding goes to `#residents`, and a high one also goes to
 `#alerts`.
 
@@ -101,8 +128,15 @@ days the check should cost nothing for the busy hosts. The build adds one
 small piece to the Redis layer from the cooldown PR: `clear_async`, which
 already runs on every successful call, also sets
 `unitares:host_last_ok:<host_id>` to the current time with a 48 h TTL.
-`list_inference_hosts` shows it as `last_ok`. The probe skips any host whose
-`last_ok` is under 24 h old.
+`list_inference_hosts` shows it as `last_ok`.
+
+The probe's own successes set `last_ok` as well, and they must not count as
+passive evidence. If they did, a probe at 04:15:05 would make the next day's
+04:15:00 run skip the host, and idle hosts would be probed only every other
+day. The probe therefore keeps, in its state file, when each of its own probes
+of that host finished. It skips a host only when `last_ok` is under 24 h old
+**and** later than that time, meaning some other caller has succeeded since
+the last probe. An idle host is probed every day. A busy host costs nothing.
 
 ### Cost per day
 
