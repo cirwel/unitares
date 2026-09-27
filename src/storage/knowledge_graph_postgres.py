@@ -7,7 +7,13 @@ This provides unified storage with the main database and better FTS than AGE.
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from src.knowledge_graph import DiscoveryNode, ResponseTo
+from src.knowledge_graph import (
+    DiscoveryNode,
+    ResponseTo,
+    apply_closure_reopen_rule,
+    closure_evidence_from_stored,
+    closure_evidence_to_json,
+)
 from src.logging_utils import get_logger
 from src.storage.kg_write_budget import DEFAULT_STORES_PER_HOUR, check_store_budget
 
@@ -169,10 +175,12 @@ class KnowledgeGraphPostgres:
         """Update discovery fields.
 
         Supports updating: status, resolved_at, updated_at, tags, severity, type,
-        summary, and details.
+        summary, details, closure_class and closure_evidence. An update that
+        reopens the row (status open or disputed) clears the closure pair.
         """
         from src.knowledge_graph import normalize_tags
         db = await self._get_db()
+        updates = apply_closure_reopen_rule(updates)
 
         # Build dynamic UPDATE query
         set_clauses = []
@@ -191,6 +199,14 @@ class KnowledgeGraphPostgres:
                 tag_list = value if isinstance(value, list) else [value]
                 set_clauses.append(f"tags = ${param_idx}")
                 params.append(normalize_tags(tag_list))
+                param_idx += 1
+            elif key == "closure_class":
+                set_clauses.append(f"closure_class = ${param_idx}")
+                params.append(value)
+                param_idx += 1
+            elif key == "closure_evidence":
+                set_clauses.append(f"closure_evidence = ${param_idx}")
+                params.append(closure_evidence_to_json(value))
                 param_idx += 1
 
         if not set_clauses:
@@ -415,4 +431,6 @@ class KnowledgeGraphPostgres:
             updated_at=d.get('updated_at'),
             provenance=d.get('provenance'),
             provenance_chain=d.get('provenance_chain'),
+            closure_class=d.get('closure_class'),
+            closure_evidence=closure_evidence_from_stored(d.get('closure_evidence')),
         )

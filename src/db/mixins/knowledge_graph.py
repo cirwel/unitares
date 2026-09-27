@@ -47,7 +47,7 @@ class KnowledgeGraphMixin:
     async def kg_add_discovery(self, discovery) -> None:
         """Add a discovery to the knowledge graph."""
         from datetime import datetime as dt
-        from src.knowledge_graph import normalize_tags
+        from src.knowledge_graph import closure_evidence_to_json, normalize_tags
 
         if hasattr(discovery, 'tags') and discovery.tags:
             discovery.tags = normalize_tags(discovery.tags)
@@ -77,14 +77,17 @@ class KnowledgeGraphMixin:
                 INSERT INTO knowledge.discoveries (
                     id, agent_id, type, summary, details, tags, severity, status,
                     references_files, related_to, response_to_id, response_type,
-                    provenance, provenance_chain, created_at, epoch
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    provenance, provenance_chain, created_at, epoch,
+                    closure_class, closure_evidence
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     details = EXCLUDED.details,
                     tags = EXCLUDED.tags,
                     status = EXCLUDED.status,
                     provenance_chain = EXCLUDED.provenance_chain,
+                    closure_class = EXCLUDED.closure_class,
+                    closure_evidence = EXCLUDED.closure_evidence,
                     updated_at = now()
             """,
                 discovery.id,
@@ -103,6 +106,10 @@ class KnowledgeGraphMixin:
                 json.dumps(discovery.provenance_chain) if discovery.provenance_chain else None,
                 created_at,
                 GovernanceConfig.CURRENT_EPOCH,
+                # The pair a classified node carries, as the update paths
+                # store it; the upsert follows status, as above.
+                getattr(discovery, 'closure_class', None),
+                closure_evidence_to_json(getattr(discovery, 'closure_evidence', None)),
             )
 
     async def kg_query(
@@ -514,18 +521,31 @@ class KnowledgeGraphMixin:
         status: str,
         resolved_at: Optional[str] = None,
     ) -> bool:
-        """Update discovery status."""
+        """Update discovery status.
+
+        A reopening status (open, disputed) clears closure_class and
+        closure_evidence, as every other update path does
+        (apply_closure_reopen_rule); otherwise the reopen would violate
+        discoveries_closure_class_requires_closed on a classified row.
+        """
+        from src.knowledge_graph import CLOSURE_CLASS_CLEARING_STATUSES
+
+        clear_pair = (
+            ", closure_class = NULL, closure_evidence = NULL"
+            if status in CLOSURE_CLASS_CLEARING_STATUSES
+            else ""
+        )
         async with self.acquire() as conn:
             if resolved_at:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, resolved_at = $2, updated_at = now()
+                    SET status = $1, resolved_at = $2, updated_at = now(){clear_pair}
                     WHERE id = $3
                 """, status, resolved_at, discovery_id)
             else:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, updated_at = now()
+                    SET status = $1, updated_at = now(){clear_pair}
                     WHERE id = $2
                 """, status, discovery_id)
             return "UPDATE 1" in result
@@ -542,6 +562,9 @@ class KnowledgeGraphMixin:
             d['provenance'] = json.loads(d['provenance'])
         if d.get('provenance_chain') and isinstance(d['provenance_chain'], str):
             d['provenance_chain'] = json.loads(d['provenance_chain'])
+        if d.get('closure_evidence') and isinstance(d['closure_evidence'], str):
+            from src.knowledge_graph import closure_evidence_from_stored
+            d['closure_evidence'] = closure_evidence_from_stored(d['closure_evidence'])
         d.pop('search_vector', None)
         # 'rank' is deliberately NOT popped. Only kg_full_text_search's SQL
         # emits it (no other caller's SELECT produces the column), and both

@@ -311,3 +311,23 @@ def test_agent_feed_and_checkin_counts_ignore_an_empty_roster(residentless):
     assert sorted(r["agent_id"] for r in feed["agents"]) == ["a", "b"]
     totals = client.get("/api/activity").json()["totals"]
     assert totals == {"proceed": 1, "guide": 1, "pause": 0}
+
+
+# --- route packs (2026-09-27) -------------------------------------------------
+# The reference residents' summary / backlog / adjudication routes are mounted
+# only by the opt-in `reference-residents` route pack. Declaring no residents is
+# the default install, and it must carry none of those endpoints — independent
+# of the roster, which does not mount a pack either way.
+
+def test_default_install_mounts_no_resident_routes(residentless, monkeypatch):
+    from starlette.applications import Starlette
+    from src.http_api import register_http_routes
+
+    monkeypatch.delenv("UNITARES_ROUTE_PACKS", raising=False)
+    app = Starlette()
+    register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0.0,
+                         server_version="t", has_streamable_http=False)
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert not [p for p in paths if p.startswith(("/v1/sentinel/", "/v1/watcher/", "/v1/vigil/"))]
+    assert "/api/automations" not in paths
+    assert "/v1/residents" in paths  # the roster endpoint is core, and answers empty
