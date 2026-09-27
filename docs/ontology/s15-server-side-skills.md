@@ -237,10 +237,10 @@ The tool-description audit is **not blocking S15-a** but is the highest-leverage
 Three layers:
 
 1. **Per-skill version** = ISO date string from `last_verified:` field. Bumps when content edits land.
-2. **Registry version** = max of all per-skill versions. Bumps on any edit.
-3. **Registry hash** = sha256 of canonical-ordered registry. Used by adapters to detect tampering / unexpected drift.
+2. **Registry version** = max of all per-skill versions. Moves when a skill is added or re-verified; it does NOT move when a skill is removed.
+3. **Registry hash** = sha256 of canonical-ordered (name, content_hash) pairs over every served skill. Moves on any add, edit or removal.
 
-Cache invalidation is "if `registry_version` ≠ cached, re-fetch." Adapters call `skills(since_version=<cached>)`; server returns only deltas (typically empty).
+Cache invalidation keys on `registry_hash`. If it differs from the cached value, re-read the bare index (`skills()`), drop cached skills no longer listed, and re-fetch changed ones by `name` or with `skills(since_version=<cached registry_version>)`. `since_version` alone is a delta of additions and re-verifications; it carries no tombstones, so a client that compared only `registry_version` would keep a removed skill forever (first removal: `discord-bridge`, 2026-09-27). The shipped adapter, the plugin's `_fetch_skills.py`, fetches single skills by `name` with a TTL cache, so it is unaffected. The `since_version` parameter description in `SkillsParams` still says "cache invalidation" and is left for the next interface-contract release, because a parameter description is inside the hashed schema.
 
 **Staleness signal** flows from `source_files`. If any file in `source_files` has commits after `last_verified`, the skill is potentially stale. This is computed by the server on read, not stored. Cheap (`git log --since` is O(log n)).
 
