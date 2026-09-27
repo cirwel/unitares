@@ -672,6 +672,15 @@ def _has_orchestrated_reviewer_budget(session_data: Dict[str, Any], reviewer_id:
         agent_id = message.get("agent_id") if isinstance(message, dict) else getattr(message, "agent_id", None)
         if agent_id != reviewer_id:
             continue
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        if phase in NON_PROTOCOL_PHASES:
+            # A consult the reviewer files carries an external_consult stamp;
+            # it must not reclassify the reviewer's own assignment.
+            continue
         metrics = message.get("observed_metrics") if isinstance(message, dict) else getattr(message, "observed_metrics", None)
         if not isinstance(metrics, dict):
             continue

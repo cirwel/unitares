@@ -241,8 +241,8 @@ class DialecticParams(AgentIdentityMixin):
     issue_description: Optional[str] = Field(None, description="Issue description (action=request/quick)")
     position: Optional[str] = Field(None, description="Current position or proposed decision (for action=quick)")
     decision: Optional[Literal["proceed", "defer", "escalate", "block", "unknown"]] = Field(None, description="Decision label (for action=quick)")
-    root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis)")
-    proposed_conditions: Optional[List[str]] = Field(None, description="Conditions for resumption (for action=thesis/synthesis)")
+    root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis/consult)")
+    proposed_conditions: Optional[List[str]] = Field(None, description="Conditions for resumption (for action=thesis/synthesis/consult)")
     reasoning: Optional[str] = Field(None, description="Explanation/reasoning")
     use_brief_as_thesis: Optional[bool] = Field(
         None,

@@ -202,3 +202,15 @@ def test_synthesis_keeps_its_existing_agrees_coercion():
     from src.mcp_handlers.schemas.dialectic import DialecticParams
 
     DialecticParams.model_validate({"action": "synthesis", "session_id": "s", "agrees": 1})
+
+
+def test_a_reviewer_consult_does_not_reclassify_its_assignment():
+    """Review on #2540: the reviewer's own consult carries an external_consult
+    stamp, and the wait classifier must skip it."""
+    session_data = {"transcript": [
+        {"phase": "antithesis", "agent_id": "agent-reviewer",
+         "observed_metrics": {"reviewer_backend": {"reviewer_kind": "orchestrated"}}},
+        {"phase": "consult", "agent_id": "agent-reviewer",
+         "observed_metrics": {"reviewer_backend": {"reviewer_kind": "external_consult"}}},
+    ]}
+    assert h._has_orchestrated_reviewer_budget(session_data, "agent-reviewer") is True
