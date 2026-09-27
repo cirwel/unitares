@@ -112,8 +112,9 @@ success, a changed failure (a host that failed preflight yesterday and fails
 `auth` today closes the preflight record and opens an `auth` one), and a
 shared `gov-dispatch` failure that is no longer shared (its record closes, and
 any host still failing gets its own). A host in a cooldown is partly assessed. A cooldown is recorded only from a
-call the provider answered (`dispatch_phase == "terminal"`), so it proves
-gov's dispatch path and the CLI both worked. The host's pre-CLI and
+call whose CLI ran to completion (`dispatch_phase == "terminal"`). That
+includes a CLI that ran and reported itself logged out. So it proves gov's
+dispatch path worked and the CLI started. The host's pre-CLI and
 unclassified records therefore close, while a record of the same class as the
 cooldown (an `auth` record under an `auth` cooldown) stays open. A
 host the operator has switched off has its records closed with the reason
@@ -163,18 +164,24 @@ passive evidence. If they did, a probe at 04:15:05 would make the next day's
 04:15:00 run skip the host, and idle hosts would be probed only every other
 day. So after each successful probe, the probe reads that host's `last_ok`
 from `list_inference_hosts` and stores the exact value in its state file. It
-skips a host only when all three of these hold:
+skips a host only when all four of these hold:
 
+- the host has no open record, since closing a record needs a probe from
+  after it opened;
 - `last_ok` is under 24 h old;
 - it differs from the stored value, meaning some other caller has succeeded
   since;
 - it is later than the host's `last_failed`.
 
-`last_failed` is written the same way, on every failed call that reached a
-CLI, whether classified or not. Without the third condition, a success in
+`last_failed` is written the same way, on every failed `delegate_inference`
+call except the two refusals where gov never tried the host: a host in a
+cooldown, and a host the operator has switched off. That includes preflight
+and spawn failures, so an orchestrator that breaks in the afternoon is not
+hidden by a morning success. Without the third condition, a success in
 the morning would hide an afternoon failure whose short cooldown had lapsed
-by the next run. A host with an open record is always probed, because closing
-a record needs evidence from after it opened. This works because
+by the next run. `last_ok` is written only by gov's own success path, inside
+the call. A timed-out call has already returned its failure, so if the
+orchestrator finishes it later, no `last_ok` is written. This works because
 `delegated_inference` awaits `clear_async` before it returns its response
 (it does today), so `last_ok` is already written when the probe reads it. The
 build keeps `last_ok` inside that awaited call, and a test asserts it: if the
@@ -243,7 +250,7 @@ nothing.
 ## Build plan once approved
 
 1. `last_ok` write-through in `host_availability.clear_async` and
-   `last_failed` on every failed call that reached a CLI, both 48 h TTL, plus
+   `last_failed` on every failed call gov actually attempted, both 48 h TTL, plus
    both fields in `list_inference_hosts`. Tests cover the TTL and Redis being
    down.
 2. `scripts/ops/inference_host_probe.py` with injectable I/O, as in
