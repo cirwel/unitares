@@ -228,7 +228,7 @@ The two identifiers serve different jobs:
   `outcome_evidence`, and `agent_ids` names the `anomalies` and `aggregate`
   scope; `dialectic`'s `issue_description` names `action=quick`. Nothing is
   removed, retyped or renamed; the input digests of
-  `update_finding`, `knowledge`, `store_finding`, `observe`, `dialectic` and
+  `update_finding`, `knowledge`, `observe`, `dialectic` and
   `request_review`, and the surface digest, move).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,

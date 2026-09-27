@@ -230,7 +230,7 @@ class DialecticParams(AgentIdentityMixin):
     include_transcript: Optional[bool] = Field(None, description="Include full transcript (for action=list, default false)")
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
     # Write action fields
-    issue_description: Optional[str] = Field(None, description="Issue description (for action=request/quick)")
+    issue_description: Optional[str] = Field(None, description="Issue description (action=request/quick)")
     position: Optional[str] = Field(None, description="Current position or proposed decision (for action=quick)")
     decision: Optional[Literal["proceed", "defer", "escalate", "block", "unknown"]] = Field(None, description="Decision label (for action=quick)")
     root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis)")

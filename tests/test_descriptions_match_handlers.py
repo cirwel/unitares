@@ -59,8 +59,8 @@ def test_store_defaults_discovery_type_and_the_description_says_so():
 
     description = KnowledgeParams.model_fields["discovery_type"].description
     brief = KnowledgeParams.model_fields["discovery_type"].json_schema_extra["brief"]
-    assert "Required" not in description
-    assert "store defaults it to note" in description and "defaults to note" in brief
+    assert "Required" not in description and "required" not in brief.lower()
+    assert "store defaults it to note" in description
 
     request = _parse_single_store_request(
         {"summary": "a finding"}, "a-1", None, False

@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "8eb75c9678d5586056c6f57c5613d06818d0e20c7318661aa63ebb7bc0861767",
+  "surface_sha256": "ad436bafb4e3eb2276683662d0bb9496aa7c93030d6c8364f7aaddd341ab73be",
   "capabilities": [
     {
       "name": "start_session",
@@ -70,7 +70,7 @@
       "name": "store_finding",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "b6bf20b39a8f8e5dd2d4b56468099eeac1db9310f249d5cefe10ec99210e1b2c",
+      "input_schema_sha256": "f375f0899691d3040aa6ed4a14e2ed88c98e430e3da6e3bc91ee85bf44d5a601",
       "transport_names": {
         "mcp_streamable_http": "store_finding",
         "rest_v1_tools": "store_finding",
@@ -103,7 +103,7 @@
       "name": "request_review",
       "implementation": "dialectic",
       "kind": "workflow_alias",
-      "input_schema_sha256": "673953ecad4a170ee8e2052a4f254c9ace9c45bdce979513c948504754992091",
+      "input_schema_sha256": "7126bb7bf56f2e8099b660483fdaf1098816f9bc6019188286830226851c1d33",
       "transport_names": {
         "mcp_streamable_http": "request_review",
         "rest_v1_tools": "request_review",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "d59dc050efe80563a027ca08b3ad72248b6b39daae604ea0e99064112784ae74",
+      "input_schema_sha256": "b6406602b5279b0e6dc33d3a58074ce5f536946f5773b1b1533f03df1fda5650",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",
@@ -499,7 +499,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "8ed1dba7dcfa042fb905de23ef1a09383755258141d7f829a1cae8086a7b8463",
+      "input_schema_sha256": "19bd41713c63a3aa8b0af95624cf2c711ceaba936f91f0110d4c0b93bfbbdc19",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",

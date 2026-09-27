@@ -3531,8 +3531,9 @@ def _closure_class_call(discovery_id: str, status: Optional[str]) -> str:
     contract 1.20.0). The status this update set is repeated for the reason
     _resolution_notes_call gives: a non-owner of a high or critical finding may
     set a class only together with a cross-agent closing status. For anyone
-    else the repeated status is a no-op, except that repeating 'resolved'
-    re-stamps resolved_at.
+    else the repeated status is a no-op: resolved_at is stamped only on the
+    transition into resolved or on a resolved row that has none, so repeating
+    'resolved' leaves an existing stamp alone.
     """
     status_argument = f", status='{status}'" if status else ""
     return (

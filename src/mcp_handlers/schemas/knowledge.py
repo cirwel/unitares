@@ -497,12 +497,12 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
         # The list IS the description here, so the authored brief keeps it and
         # spends its savings on the framing instead. An authored brief is a
-        # deliberate choice and is not held to BRIEF_BUDGET.
+        # deliberate choice and is not held to BRIEF_BUDGET. The default stays
+        # in the full text (describe_tool): the brief never said the type is
+        # required, the schema does not require it, and the progressive
+        # surface has no bytes to spare.
         json_schema_extra={
-            "brief": (
-                "action=store; defaults to note; one of "
-                + ", ".join(get_args(DiscoveryType)) + "."
-            ),
+            "brief": "action=store; one of " + ", ".join(get_args(DiscoveryType)) + ".",
         },
     )
     response_to: Optional[dict] = Field(None, description="Typed response link {discovery_id, response_type} for threaded store/note writes")

@@ -162,8 +162,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # discovery_type says an omitted type keeps the stored one. closure_class says
 # a class may also be set alone on a finding that is already closed, and
 # closure_evidence states its 8 KiB bound. Nothing is removed, retyped or
-# renamed; the input digests of update_finding, knowledge, store_finding,
-# observe, dialectic and request_review, and the surface digest, move.
+# renamed; the input digests of update_finding, knowledge, observe,
+# dialectic and request_review, and the surface digest, move.
 INTERFACE_CONTRACT_VERSION = "1.20.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
