@@ -666,9 +666,10 @@ the operator's machine is awake.
   on across a head nothing had re-checked, while `review` is not
   branch-protected. GitHub's own updater is not relied on: in the queue's
   first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
-  falls `BEHIND` later and GitHub has not updated it within 3 minutes, the
-  script disarms it, updates it, and re-arms it by the same rule; a PR armed
-  by hand is only updated. Only the one head-of-queue or armed PR is ever
+  falls `BEHIND` later, the script disarms it at once, updates it, and
+  re-arms it by the same rule (no grace: GitHub's updater can move the head
+  within a minute). A PR armed by hand is only updated, and only if GitHub
+  has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take

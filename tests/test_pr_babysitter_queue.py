@@ -947,3 +947,15 @@ def test_a_fork_pr_is_never_armed(tmp_path: Path) -> None:
     assert calls == [_arm(2)]
     assert "#1 is labelled a fork" in out or "a fork" in out
 
+
+
+def test_a_script_armed_pr_is_disarmed_the_moment_it_is_seen_behind(tmp_path: Path) -> None:
+    # No grace: GitHub's updater can move the head within a minute, and the
+    # arm must not outlive the head it validated.
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=0, arms={3: 30})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+
+
+def test_a_hand_armed_pr_just_behind_is_left_inside_the_grace(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=30, state="BEHIND")], base_idle_min=0)
+    assert calls == []

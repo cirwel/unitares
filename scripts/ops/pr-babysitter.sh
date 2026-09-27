@@ -404,21 +404,24 @@ if [ -n "$holder" ]; then
       && log "#$n has held the queue for ${held}m ($(jq -r .mergeStateStatus <<<"$holder")); needs a look"
   fi
   if [ "$(jq -r .mergeStateStatus <<<"$holder")" = "BEHIND" ]; then
-    moved=$(gh api "repos/$REPO/commits/$BASE" --jq .commit.committer.date) || moved=""
-    if [ -n "$moved" ]; then
-      # Measure from whichever came later: the base moving, or the arming.
-      since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
-      idle=$(minutes_since "$since")
-      if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
-        if armed_by_script "$n" "$armed_at"; then
-          # Same rule as the queue: never stay armed across an unchecked head.
-          # Disarm, update; the queue re-arms it once the new head validates.
-          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; disarming to update"
-          act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
-        else
+    if armed_by_script "$n" "$armed_at"; then
+      # No grace for the script's own arm: GitHub's updater can move the head
+      # within a minute, and the arm must not outlive the head it validated.
+      # Disarm now and update; the queue re-arms it once the new head passes.
+      log "#$n armed and BEHIND; disarming to update"
+      act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
+      act gh pr update-branch "$n" -R "$REPO" || true
+    else
+      # A hand-armed PR is the operator's: only update it, after the grace.
+      moved=$(gh api "repos/$REPO/commits/$BASE" --jq .commit.committer.date) || moved=""
+      if [ -n "$moved" ]; then
+        # Measure from whichever came later: the base moving, or the arming.
+        since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
+        idle=$(minutes_since "$since")
+        if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
           log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+          act gh pr update-branch "$n" -R "$REPO" || true
         fi
-        act gh pr update-branch "$n" -R "$REPO" || true
       fi
     fi
   fi
