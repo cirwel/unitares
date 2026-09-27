@@ -4,7 +4,7 @@ MCP Tool Decorators - Auto-registration and utilities
 Reduces boilerplate and enables auto-discovery of tools.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Any, Callable, Optional, Sequence
 from functools import wraps
 import asyncio
@@ -13,6 +13,7 @@ import time
 from mcp.types import TextContent
 
 from src.logging_utils import get_logger
+from src.tool_call_sets import call_set
 from .utils import error_response
 
 logger = get_logger(__name__)
@@ -309,7 +310,7 @@ def mcp_tool(
                 # already executing. Only a call known to change nothing may
                 # be told to try again.
                 call = resolve_call_operation(tool_name, arguments)
-                if call.operation != "read":
+                if not call.retry_safe:
                     from .error_helpers import unknown_outcome_timeout_error
 
                     return [unknown_outcome_timeout_error(
@@ -564,6 +565,11 @@ def get_call_stakes_requirement(tool_name: str, arguments) -> str:
 
 _OPERATION_RANK = {"read": 0, "write": 1, "admin": 2}
 
+# Calls that can create an agent identity. A timeout on one is never answered
+# with plain retry advice: a repeat creates another identity. Matched on the
+# resolved call, so start_session and the other onboard aliases are members.
+_IDENTITY_MINTING_CALLS = call_set("timeout.identity_minting", tools={"onboard", "identity"})
+
 
 @dataclass(frozen=True)
 class CallOperation:
@@ -576,11 +582,21 @@ class CallOperation:
     tool: the name an agent calls: ``knowledge`` for the handler behind
         ``knowledge(action='update')``.
     action: the router action, when the call has one.
+    mints_identity: the call can create an agent identity: onboard and its
+        aliases on every call, identity when no binding is proven. The catalog
+        lists both as ``read``; their annotations say neither is read-only or
+        idempotent, and a repeat can create another identity.
     """
 
     operation: Optional[str]
     tool: str
     action: Optional[str] = None
+    mints_identity: bool = False
+
+    @property
+    def retry_safe(self) -> bool:
+        """Whether a timeout may be answered with plain retry advice."""
+        return self.operation == "read" and not self.mints_identity
 
 
 def resolve_call_operation(tool_name: str, arguments) -> CallOperation:
@@ -602,7 +618,10 @@ def resolve_call_operation(tool_name: str, arguments) -> CallOperation:
     5. Anything else is unknown: ``operation`` None.
     """
     try:
-        return _resolve_call_operation(tool_name, arguments)
+        call = _resolve_call_operation(tool_name, arguments)
+        if _IDENTITY_MINTING_CALLS.matches(tool_name, arguments):
+            call = replace(call, mints_identity=True)
+        return call
     except Exception:
         logger.warning(
             "resolve_call_operation failed for %r; treating the call as unclassified",

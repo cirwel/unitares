@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 import time
 from dataclasses import replace
@@ -146,6 +147,7 @@ def _assert_unknown_outcome_for_update(payload: dict) -> None:
     assert payload["operation"] == "write"
     assert "may have been saved" in payload["error"]
     assert "call_started_at" in payload
+    _assert_settled_by_bounds_a_running_statement(payload)
     recovery = payload["recovery"]
     check = f"knowledge(action='details', discovery_id='{DISCOVERY_ID}')"
     assert recovery["check_before_retry"] == check
@@ -153,6 +155,16 @@ def _assert_unknown_outcome_for_update(payload: dict) -> None:
     assert "updated_at" in recovery["action"]
     assert "try again" not in recovery["action"].lower()
     assert recovery["action"].startswith("Do not send this update again yet")
+
+
+def _assert_settled_by_bounds_a_running_statement(payload: dict) -> None:
+    """settled_by is the reply time plus the pool's command timeout."""
+    from src.db.postgres_backend import COMMAND_TIMEOUT_SECONDS
+
+    settled = datetime.fromisoformat(payload["settled_by"])
+    replied = datetime.fromisoformat(payload["server_time"])
+    margin = (settled - replied).total_seconds()
+    assert COMMAND_TIMEOUT_SECONDS - 1 <= margin <= COMMAND_TIMEOUT_SECONDS + 1
 
 
 @pytest.mark.asyncio
@@ -290,6 +302,84 @@ def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
     assert "your resolution_notes at the end of details" in steps
     assert "pagination.total_length" in steps
     assert "another writer changed it" in steps
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        ("knowledge", "update"),
+        ("knowledge", "store"),
+        ("leave_note", None),
+        ("process_agent_update", None),
+    ],
+)
+def test_no_recovery_resends_before_the_running_statement_has_settled(call):
+    """A statement still running at the timeout can commit for up to the pool's
+    command timeout; a resend before then can land beside it."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    tool, action = call
+    recovery = _unknown_outcome_recovery(
+        CallOperation(operation="write", tool=tool, action=action),
+        {"discovery_id": DISCOVERY_ID},
+    )
+    resend_steps = [
+        step
+        for step in recovery["workflow"]
+        if re.search(r"(?<!not )(send|store) (the update|your update|the call|it) again", step)
+    ]
+    assert resend_steps, "premise: the workflow says when to send again"
+    for step in resend_steps:
+        assert "after settled_by" in step, step
+    assert "few seconds" not in json.dumps(recovery)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["onboard", "identity"])
+async def test_identity_minting_timeout_never_gets_the_retry_reply(tool_name):
+    """The catalog labels onboard and identity read, but both can create an
+    identity, and a repeat creates another."""
+    @mcp_tool(tool_name, timeout=0.05, register=False)
+    async def _slow(arguments):
+        await asyncio.sleep(5)
+
+    with patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
+        payload = _payload(await _slow({"force_new": True}))
+
+    assert payload["outcome"] == "unknown"
+    assert payload["operation"] == "read", "the catalog label is reported as it is"
+    assert READ_RECOVERY not in json.dumps(payload)
+    assert "creat" in payload["recovery"]["action"]
+    assert "start_session" in payload["recovery"]["related_tools"]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("onboard", {"force_new": True}),
+        ("start_session", {"force_new": True}),
+        ("identity", {}),
+    ],
+)
+def test_identity_minting_calls_are_not_retry_safe(tool_name, arguments):
+    call = resolve_call_operation(tool_name, arguments)
+    assert call.mints_identity is True
+    assert call.retry_safe is False
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("get_discovery_details", {}),
+        ("knowledge", {"action": "search"}),
+        ("health_check", {}),
+    ],
+)
+def test_reads_that_mint_nothing_stay_retry_safe(tool_name, arguments):
+    call = resolve_call_operation(tool_name, arguments)
+    assert call.mints_identity is False
+    assert call.retry_safe is True
 
 
 @pytest.mark.asyncio

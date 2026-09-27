@@ -43,6 +43,11 @@ logger = get_logger(__name__)
 # patch.
 POOL_CLOSE_TIMEOUT_SECONDS = 10.0
 
+# asyncpg's per-statement command timeout for the pool. It also bounds how long
+# a statement still running when a tool times out can take to finish, which the
+# timeout reply of a write reports as its settled_by time (error_helpers).
+COMMAND_TIMEOUT_SECONDS = 30
+
 
 def _hash_db_url(db_url: str) -> str:
     """Short non-reversible tag for the connection target. Hashes the full
@@ -299,7 +304,7 @@ class PostgresBackend(
                         self._db_url,
                         min_size=self._min_conn,
                         max_size=self._max_conn,
-                        command_timeout=30,
+                        command_timeout=COMMAND_TIMEOUT_SECONDS,
                         max_inactive_connection_lifetime=300,  # Close idle connections after 5 minutes
                         max_queries=50000,  # Recycle connections after 50k queries
                     ),

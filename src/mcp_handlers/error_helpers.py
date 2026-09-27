@@ -328,9 +328,52 @@ def _call_literal(value: Any, placeholder: str) -> str:
 
 
 def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Recovery for a timed-out call that may have written: read, then decide."""
+    """Recovery for a timed-out call that may have written: read, then decide.
+
+    No step resends before settled_by, when a statement still running at the
+    timeout has finished, so a retry cannot race the write it would repeat.
+    """
     tool = call.tool
     action = call.action
+
+    if getattr(call, "mints_identity", False):
+        if tool == "identity":
+            return {
+                "action": (
+                    "This call may have created an identity: identity creates one "
+                    "when no binding is proven. With a client_session_id from "
+                    "start_session, calling identity(client_session_id=...) reads "
+                    "that binding. Without one, calling again can create another "
+                    "identity."
+                ),
+                "check_before_retry": (
+                    "identity(client_session_id='<your client_session_id>')"
+                ),
+                "workflow": [
+                    "1. If you have a client_session_id from start_session, call "
+                    "identity(client_session_id=...) to read your binding",
+                    "2. If you have none, call start_session(force_new=true) once "
+                    "instead of calling identity again",
+                    "3. If timeouts repeat, call health_check",
+                ],
+                "related_tools": ["identity", "start_session", "health_check"],
+            }
+        return {
+            "action": (
+                "This call may already have created an identity. The "
+                "client_session_id it would have returned never reached you, so no "
+                "read can find it, and every further call creates another. Call "
+                "start_session(force_new=true) once more if you need an identity; "
+                "do not retry in a loop."
+            ),
+            "check_before_retry": None,
+            "workflow": [
+                "1. Call start_session(force_new=true) once more if you need an "
+                "identity; one the timed-out call created stays unused",
+                "2. If that also times out, call health_check before trying again",
+            ],
+            "related_tools": ["start_session", "health_check"],
+        }
 
     if tool == "knowledge" and action == "update":
         discovery_id = _call_literal(arguments.get("discovery_id"), "<discovery_id>")
@@ -345,22 +388,22 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
                 "An updated_at earlier than call_started_at means nothing has "
                 "been written since this call began; a later one means the row "
                 "was written, by this call or another, so look for your own "
-                "fields before deciding."
+                "fields. Do not conclude it was not saved before settled_by."
             ),
             "check_before_retry": check,
             "workflow": [
                 f"1. Call {check}",
                 "2. If updated_at is earlier than call_started_at, nothing has "
-                "been written since this call began. Read again a few seconds "
-                "later; if it is still earlier, send the update again",
+                "been written since this call began. Read again after "
+                "settled_by; if it is still earlier, send the update again",
                 "3. If updated_at is at or after call_started_at, look for what "
                 "you sent: the status you set, and your resolution_notes at the "
                 "end of details (read the tail with offset near "
                 "pagination.total_length). If they are there, the update was "
                 "saved. Do not send it again",
                 "4. If the row changed but your fields are still missing on a "
-                "second read a few seconds later, another writer changed it: "
-                "send your update again",
+                "read after settled_by, another writer changed it: send your "
+                "update again",
             ],
             "related_tools": ["knowledge", "health_check"],
         }
@@ -375,15 +418,16 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
                 "Do not store this again yet. It may already be saved, and every "
                 "store adds a new row, so a second call leaves two findings. "
                 f"Search for it first with {check}: a result with your summary "
-                "created at or after call_started_at means it was saved."
+                "created at or after call_started_at means it was saved. Do not "
+                "conclude it was not saved before settled_by."
             ),
             "check_before_retry": check,
             "workflow": [
                 f"1. Call {check}; search needs no bound identity",
                 "2. If a result with your summary was created at or after "
                 "call_started_at, it was saved. Do not store it again",
-                "3. If none appears when you search again a few seconds later, "
-                "nothing was saved: store it again",
+                "3. If none appears in a search after settled_by, nothing was "
+                "saved: store it again",
             ],
             "related_tools": ["knowledge", "search_shared_memory", "health_check"],
         }
@@ -393,8 +437,8 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
     return {
         "action": (
             f"Do not call {call_shape} again yet: it may already have taken "
-            "effect. Read the state it changes with a read-only tool first and "
-            "call it again only if the change is missing. "
+            "effect. Read the state it changes with a read-only tool, and call it "
+            "again only if the change is still missing after settled_by. "
             f"describe_tool(tool_name='{tool}') lists the related tools."
         ),
         "check_before_retry": f"describe_tool(tool_name='{tool}')",
@@ -402,8 +446,10 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
             "1. Read the state this call changes with a read-only tool; "
             "describe_tool lists the related tools",
             "2. If the change is there, the call succeeded. Do not send it again",
-            "3. If it is missing, send the call again. If timeouts repeat, "
-            "call health_check",
+            "3. If it is still missing on a read after settled_by, send the call "
+            "again. A statement still running at the timeout has finished by "
+            "then; work the tool handed to a background task can land later. If "
+            "timeouts repeat, call health_check",
         ],
         "related_tools": list(dict.fromkeys(related)),
     }
@@ -424,11 +470,20 @@ def unknown_outcome_timeout_error(
     ExecutorPool loop lands after the await is cancelled. So the reply says the
     change may have been saved, names the read that settles it, and gives no
     bare retry. ``call`` is the decorators.CallOperation for the interrupted
-    call. error_code and
-    error_category stay TIMEOUT / system_error, the values every timeout
-    already carried.
+    call.
+
+    ``settled_by`` is this reply's time plus the pool's per-statement command
+    timeout: a statement still running now has finished by then, so a read
+    after it cannot be racing this call's write. error_code and error_category
+    stay TIMEOUT / system_error, the values every timeout already carried.
     """
+    import time
     from datetime import datetime, timezone
+
+    from src.db.postgres_backend import COMMAND_TIMEOUT_SECONDS
+
+    def _iso(seconds: float) -> str:
+        return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
 
     return error_response(
         f"Tool '{tool_name}' timed out after {timeout} seconds. The outcome is "
@@ -439,7 +494,8 @@ def unknown_outcome_timeout_error(
         details={
             "outcome": "unknown",
             "operation": call.operation,
-            "call_started_at": datetime.fromtimestamp(started_at, timezone.utc).isoformat(),
+            "call_started_at": _iso(started_at),
+            "settled_by": _iso(time.time() + COMMAND_TIMEOUT_SECONDS),
         },
         recovery=_unknown_outcome_recovery(call, arguments),
     )
