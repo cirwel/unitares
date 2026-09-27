@@ -293,7 +293,8 @@ adapter and Antigravity client, the dialectic reviewer's backends, and the
 review gate itself; `_boundary` in the file says what is deliberately left
 off) needs a passing full review from **two different model families** before
 the `review` check goes green: OpenAI (Codex, native or local), Anthropic
-(Claude) or Google (Antigravity). A recorded reviewer counts only when its name
+(Claude) or Google. An Antigravity review counts by the model it ran, which
+its record carries (`agy` can run Gemini, Claude or GPT-OSS models). A recorded reviewer counts only when its name
 carries its family as a word (`gemini-council`, `gpt-5-reviewer`, `claude-…`);
 an unrecognised name such as `council` counts as none. A passing review is
 `CLEAN`, or `FINDINGS` with every disposition recorded; a fix-verification

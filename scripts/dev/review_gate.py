@@ -217,6 +217,9 @@ class Record:
     url: str = ""
     text: str = ""
     created_at: str = ""
+    # The model an Antigravity review ran (agy can run Gemini, Claude or
+    # GPT-OSS models), so its family is the model's, not the provider's.
+    model: str = ""
 
     def status(self) -> tuple[str, str]:
         if self.verdict == "CLEAN":
@@ -229,8 +232,9 @@ class Record:
 
 
 def render_marker(r: Record) -> str:
+    model = f" model={r.model}" if r.model else ""
     return (f"<!-- {MARKER} key={r.key} verdict={r.verdict} findings={r.findings} "
-            f"disposed={int(r.disposed)} reviewer={r.reviewer} -->")
+            f"disposed={int(r.disposed)} reviewer={r.reviewer}{model} -->")
 
 
 def parse_record(body: str) -> Record | None:
@@ -245,6 +249,7 @@ def parse_record(body: str) -> Record | None:
             findings=int(attrs.get("findings", "0")),
             disposed=attrs.get("disposed") == "1",
             reviewer=attrs.get("reviewer", "unknown"),
+            model=attrs.get("model", ""),
         )
     except (KeyError, ValueError):
         return None
@@ -582,6 +587,12 @@ _AGY_CONFIG_NAMES = {"agents.md", "gemini.md", "claude.md"}
 _AGY_CONFIG_DIRS = {".agents", ".agent", ".gemini"}
 
 
+def agy_model_name() -> str:
+    """The model an agy review runs: REVIEW_AGY_MODEL, else the default;
+    "default" means agy's own default, which is a Gemini model."""
+    return os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
+
+
 def agy_model_args() -> list[str]:
     model = os.environ.get("REVIEW_AGY_MODEL", "").strip() or AGY_DEFAULT_MODEL
     return [] if model == "default" else ["--model", model]
@@ -720,6 +731,26 @@ _FAMILY_TOKENS = {
 }
 
 
+def record_family(rec: Record) -> str | None:
+    """A record's model family. An Antigravity record counts by the model it
+    ran (a record without one predates model recording and counts as none);
+    everything else by its reviewer name."""
+    if rec.reviewer == "antigravity":
+        return model_family(rec.model)
+    return reviewer_family(rec.reviewer)
+
+
+def model_family(model: str) -> str | None:
+    if (model or "").strip().lower() == "default":
+        return "google"  # agy's own default model is Gemini
+    return reviewer_family(model) if model else None
+
+
+def provider_family(provider: str) -> str | None:
+    """A provider's family as it would run here now (agy by its configured model)."""
+    return model_family(agy_model_name()) if provider == "antigravity" else reviewer_family(provider)
+
+
 def reviewer_family(reviewer: str) -> str | None:
     """The model family behind a record's reviewer name, or None when the name
     does not say. Matched on whole tokens of the name (split on anything that
@@ -760,15 +791,19 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         if not answers_a_review and rec.reviewer == "codex-native":
             rec.text = body
             cited = _cited_native_review(rec)
-            answers_a_review = bool(cited) and native_findings.get(cited) == rec.findings
+            # _cited_native_review already requires the cited count to match
+            # the disposition's. A cited review no longer in view (a base-only
+            # merge moved the head; native evidence is head-bound) still
+            # counts, as latest_matching keeps it disposed.
+            answers_a_review = bool(cited) and native_findings.get(cited, rec.findings) == rec.findings
         if rec.verdict == "CLEAN" or (
                 rec.verdict == "FINDINGS" and rec.disposed
                 and dispositions_complete(body, rec.findings)
                 and answers_a_review):
-            families.add(reviewer_family(rec.reviewer))
+            families.add(record_family(rec))
     for rec in native:
         if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
-            families.add(reviewer_family(rec.reviewer))
+            families.add(record_family(rec))
     families.discard(None)
     return families
 
@@ -1577,7 +1612,7 @@ def second_family_candidates(branch: str, families: set[str], comments: list[dic
     exhausted = set(failed) | {p for p in KNOWN_PROVIDERS
                                if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
     return [p for p in reviewer_candidates(branch)
-            if reviewer_family(p) not in families
+            if provider_family(p) not in families and provider_family(p) is not None
             and p not in exhausted and not provider_cooldown(p)]
 
 
@@ -1605,8 +1640,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
                  else ["(changed paths unreadable)"])
     if not sensitive:
         return result
-    comments = pr_comments(repo, pr)
     try:
+        comments = pr_comments(repo, pr)
         native = read_native(repo, pr, key, head, comments).records
     except SystemExit as exc:
         # Incomplete evidence could hide an open native FINDINGS review.
@@ -1617,8 +1652,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     # its own post): count its family from what is already known. A fix-verify
     # receipt did not review the new lines (see passing_families).
     passed_by = passed_by or getattr(args, "completed_by", None)
-    if passed_by and not passed_by.startswith("fix-verify:") and reviewer_family(passed_by):
-        families.add(reviewer_family(passed_by))
+    if passed_by and not passed_by.startswith("fix-verify:") and provider_family(passed_by):
+        families.add(provider_family(passed_by))
     if len(families) >= 2:
         return result
     candidates = second_family_candidates(
@@ -1842,7 +1877,8 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     else:
         verdict, n = parsed
         provider_state_path(reviewer).unlink(missing_ok=True)
-        rec = Record(key, verdict, n, False, reviewer)
+        rec = Record(key, verdict, n, False, reviewer,
+                     model=agy_model_name() if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
