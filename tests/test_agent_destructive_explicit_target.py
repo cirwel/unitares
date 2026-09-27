@@ -386,3 +386,19 @@ def test_each_declared_requirement_is_refused_when_missing(action, name):
         assert payload.get("success") is False, payload
         assert name in payload.get("error", ""), payload
         assert bound.archived() == [] and bound.deleted() == []
+
+
+def test_the_router_examples_name_archive_targets_by_uuid():
+    """action_router returns these examples when a caller omits the action,
+    so an archive or delete example must not show a label or legacy key that
+    the handler now refuses (TARGET_AGENT_UUID_REQUIRED)."""
+    import re
+
+    from src.mcp_handlers import consolidated
+
+    source = open(consolidated.__file__).read()
+    for example in re.findall(r"agent\(action='(?:archive|delete)'[^\n]*", source):
+        target = re.search(r"agent_id='([^']*)'", example)
+        assert target, example
+        value = target.group(1)
+        assert value.startswith("<") or re.fullmatch(r"[0-9a-f-]{36}", value), example
