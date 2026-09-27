@@ -90,6 +90,7 @@ from src.knowledge_authority import (
 )
 from src.mcp_handlers.knowledge.limits import (
     MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_SUMMARY_LEN,
+    MAX_UPDATED_DETAILS_LEN,
 )
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -3426,6 +3427,70 @@ def _apply_update_text_fields(
         )
 
 
+def _refuse_oversized_details(
+    request: _KnowledgeUpdateRequest, updates: dict[str, Any]
+) -> None:
+    """Refuse an update whose details value is over MAX_UPDATED_DETAILS_LEN.
+
+    Measured on the value storage would write, so the stored details (earlier
+    notes included) or the details this call sends count along with the new
+    notes block. On AGE a value over the Cypher parameter limit fails the
+    whole update and reads back as "Discovery not found"; refusing here
+    names the real cause and changes nothing.
+    """
+    details = updates.get("details")
+    if details is None or len(details) <= MAX_UPDATED_DETAILS_LEN:
+        return
+
+    size = len(details)
+    limit = f"the limit is {MAX_UPDATED_DETAILS_LEN:,}. Nothing was changed."
+    elsewhere = (
+        "Put long material such as logs in the repository, a PR or a new "
+        "finding that responds to this one (response_to={'discovery_id': "
+        f"'{request.discovery_id}', 'response_type': 'elaboration'}}) and "
+        "point to it."
+    )
+    if request.resolution_note is None:
+        message = f"details is {size:,} characters; {limit}"
+        action = (
+            f"Send details of at most {MAX_UPDATED_DETAILS_LEN:,} characters. "
+            f"{elsewhere}"
+        )
+    else:
+        message = (
+            "details with these resolution_notes appended would be "
+            f"{size:,} characters; {limit}"
+        )
+        room = MAX_UPDATED_DETAILS_LEN - (size - len(request.resolution_note))
+        if room > 0:
+            action = (
+                f"Shorten resolution_notes to at most {room:,} characters: "
+                "what closed the finding, with pointers (a commit, a PR, a "
+                f"finding id) to the rest. {elsewhere}"
+            )
+        else:
+            held_by = (
+                "The details this call sends leave"
+                if request.details is not None
+                else "This finding's stored details leave"
+            )
+            action = (
+                f"{held_by} no room for a notes block. Send the update "
+                "without resolution_notes and record the notes as a new "
+                "finding that responds to this one (response_to="
+                f"{{'discovery_id': '{request.discovery_id}', "
+                "'response_type': 'elaboration'})."
+            )
+    raise _UpdateResponseError(
+        error_response(
+            message,
+            error_code="INVALID_PARAM",
+            error_category="validation_error",
+            recovery={"action": action, "related_tools": ["knowledge"]},
+        )
+    )
+
+
 def _apply_update_metadata_fields(
     request: _KnowledgeUpdateRequest, updates: dict[str, Any]
 ) -> None:
@@ -3835,6 +3900,7 @@ def _build_discovery_updates(
         updates["closure_evidence"] = None
 
     _apply_update_text_fields(request, discovery, updates)
+    _refuse_oversized_details(request, updates)
     _apply_update_metadata_fields(request, updates)
     return updates, normalized_status
 
