@@ -214,6 +214,23 @@ class TestExchangeAuthorizationCode:
         assert await provider.load_authorization_code(client, entry.code) is None
 
     @pytest.mark.asyncio
+    async def test_a_code_loaded_twice_is_redeemed_once(self, provider):
+        """Two token requests with the same code can both pass the read-only
+        load before either exchanges it; only one may get tokens."""
+        from mcp.server.auth.provider import TokenError
+
+        client = _client()
+        entry = await self._issue_code(provider, client)
+        again = await provider.load_authorization_code(client, entry.code)
+        assert again is not None
+        first = await provider.exchange_authorization_code(client, entry)
+        assert first.access_token.startswith("at_")
+        with pytest.raises(TokenError) as refused:
+            await provider.exchange_authorization_code(client, again)
+        assert refused.value.error == "invalid_grant"
+        assert len(provider._access_tokens) == 1
+
+    @pytest.mark.asyncio
     async def test_empty_scopes_default_to_mcp_tools(self, provider):
         client = _client()
         entry = await self._issue_code(provider, client, scopes=[])
