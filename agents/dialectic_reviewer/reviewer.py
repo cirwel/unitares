@@ -173,6 +173,12 @@ def _provenance_for_message(provenance: dict[str, Any], *, degraded: bool) -> di
         if provenance.get(key) is not None
     }
     stored["degraded"] = bool(degraded)
+    # The server files this dict as-is (an orchestrated reviewer's stamp is
+    # passed through, not rebuilt), so a kind left off here is never added:
+    # every one of 120 orchestrated antitheses to 2026-09-26 carried none, and
+    # a count of reviewer_kind='orchestrated' read zero while this process
+    # wrote them all. The kinds are _REVIEWER_KINDS in the dialectic handlers.
+    stored["reviewer_kind"] = "orchestrated"
     return stored
 
 
