@@ -309,9 +309,11 @@ class TestSearchHandlerNewestFirst:
     async def test_queryless_listing_skips_excluded_writers_before_the_limit(self, seeded_db):
         # Review round 4 on #2517: the queryless read fetched exactly `limit`
         # rows and then dropped excluded writers, so limit=1 came back empty.
-        node = _node("excluded-q", age=timedelta(seconds=1), summary="dashboard note by excluded")
-        node.agent_id = "excluded-writer"
-        await seeded_db.kg_add_discovery(node)
+        # More excluded rows than a limit * 5 over-fetch (review on #2517).
+        for i in range(12):
+            node = _node(f"excluded-q{i}", age=timedelta(milliseconds=500 * (i + 1)), summary=f"dashboard note {i}")
+            node.agent_id = "excluded-writer"
+            await seeded_db.kg_add_discovery(node)
         payload = await _search(
             seeded_db,
             created_after=(NOW - timedelta(days=1)).isoformat(),

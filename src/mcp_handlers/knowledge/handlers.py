@@ -2536,23 +2536,40 @@ async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
 
 async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
     request = state.request
-    # Writer-label exclusion runs after this read; fetching exactly `limit`
-    # rows let an excluded writer's row take a slot and leave the page short.
-    fetch_limit = min(request.limit * 5, 500) if request.exclude_labels else request.limit
-    state.results = await state.graph.query(
-        agent_id=request.agent_id,
-        tags=request.tags,
-        type=request.discovery_type,
-        severity=request.severity,
-        status=request.status,
-        limit=fetch_limit,
-        exclude_archived=not request.status and not request.include_archived,
-        exclude_cold=not request.status and not request.include_cold,
-        **_window_kwargs(request),
-    )
-    state.results = [
-        document for document in state.results if not _label_excluded(document, request)
-    ]
+
+    async def _read(limit: int) -> list[Any]:
+        return await state.graph.query(
+            agent_id=request.agent_id,
+            tags=request.tags,
+            type=request.discovery_type,
+            severity=request.severity,
+            status=request.status,
+            limit=limit,
+            exclude_archived=not request.status and not request.include_archived,
+            exclude_cold=not request.status and not request.include_cold,
+            **_window_kwargs(request),
+        )
+
+    if not request.exclude_labels:
+        state.results = await _read(request.limit)
+    else:
+        # Writer-label exclusion cannot run in the query, so reading exactly
+        # `limit` rows let excluded writers take the page. Re-read with a
+        # doubling limit until the visible page fills, the rows run out, or
+        # the same row ceiling newest-first continuation uses is reached.
+        fetch_limit = min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+        while True:
+            rows = await _read(fetch_limit)
+            state.results = [
+                document for document in rows if not _label_excluded(document, request)
+            ]
+            if (
+                len(state.results) >= request.limit
+                or len(rows) < fetch_limit
+                or fetch_limit >= NEWEST_FIRST_SCAN_CEILING
+            ):
+                break
+            fetch_limit = min(fetch_limit * 2, NEWEST_FIRST_SCAN_CEILING)
     state.search_mode = "indexed_filters"
     state.fields_searched = [
         name
