@@ -284,12 +284,19 @@ def test_metrics_after_onboard_shows_eisv(cli_env):
     assert "E=" in result.stdout and "I=" in result.stdout
 
 
-def test_update_returns_verdict(cli_env):
+def test_checkin_through_call_returns_a_verdict(cli_env):
+    # A check-in is a plain tool call: `update` now manages the install.
     _run(cli_env, "onboard", cli_env["UNITARES_AGENT"], "pytest")
-    result = _run(cli_env, "update", "pytest regression cli update", "0.2", "0.75")
-    assert "Verdict:" in result.stdout
-    # The parser should surface a real governance outcome, not a placeholder.
-    assert "Verdict: ?" not in result.stdout
+    result = _run(
+        cli_env,
+        "call",
+        "process_agent_update",
+        '{"response_text": "pytest regression cli check-in", "complexity": 0.2, "confidence": 0.75}',
+    )
+    body = json.loads(result.stdout)
+    payload = body.get("result") or body
+    assert body.get("success") is not False
+    assert any(key in json.dumps(payload) for key in ('"action"', '"verdict"', '"decision"'))
 
 
 def test_session_command_shows_config(cli_env, mcp_test_server):
@@ -714,40 +721,6 @@ def test_parse_onboard_detects_nested_success_false():
     assert "hint:" in result.stderr.lower()
 
 
-def test_parse_update_prefers_governance_action_over_metric_verdict():
-    body = {
-        "success": True,
-        "result": {
-            "action": "proceed",
-            "metrics": {"verdict": "safe"},
-            "identity_assurance": {"tier": "strong", "session_source": "uuid"},
-        },
-    }
-    result = _run_parser("parse_update", body)
-    assert result.returncode == 0
-    assert "Verdict: proceed" in result.stdout
-    assert "Identity: strong (uuid)" in result.stdout
-    # Update parser should stay within the update surface, not onboard output.
-    assert "Welcome" not in result.stdout
-
-
-def test_parse_update_unwraps_nested_result_payload():
-    body = {
-        "success": True,
-        "result": {
-            "success": True,
-            "result": {
-                "action": "continue",
-                "margin": 0.12,
-            },
-        },
-    }
-    result = _run_parser("parse_update", body)
-    assert result.returncode == 0
-    assert "Verdict: continue" in result.stdout
-    assert "Margin:  0.12" in result.stdout
-
-
 def test_parse_onboard_accepts_valid_response():
     """Happy path for the parser: success:true, expected fields present."""
     response = {
@@ -1134,3 +1107,343 @@ def test_parse_tools_reads_the_body_on_stdin_not_the_environment():
         "a single env var is capped at 128 KiB on Linux and the payload is larger"
     )
     assert "sys.stdin.read()" in body
+
+
+
+# --- install commands (Docker Compose installs) ----------------------------------
+#
+# Fake `launchctl` and `docker` on PATH stand in for the host, so these run the
+# real script on any machine, including one with a launchd install.
+
+def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "governance-mcp", stop_fails: bool = False, ps_fails: bool = False):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "docker.log"
+    (bin_dir / "launchctl").write_text(f"#!/bin/sh\nexit {0 if launchd else 1}\n")
+    (bin_dir / "docker").write_text(
+        "#!/bin/sh\n"
+        f"echo \"$*\" >> {log}\n"
+        f"[ \"$1 $2\" = \"compose version\" ] && exit {0 if compose else 1}\n"
+        f"case \"$*\" in *\"ps -a --services\"*) printf '%s\\n' '{services}' ;; esac\n"
+        f"case \"$*\" in *\" stop \"*) exit {1 if stop_fails else 0} ;; esac\n"
+        f"case \"$*\" in *\"ps --status running\"*) exit {1 if ps_fails else 0} ;; esac\n"
+        "exit 0\n"
+    )
+    for f in bin_dir.iterdir():
+        f.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    return env, log
+
+
+def _local_remote(tmp_path, env):
+    """A bare repo with release tag v1.0.0, used as the update remote, so the
+    update tests never reach the network."""
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    subprocess.run([*git, "-C", str(work), "commit", "-q", "--allow-empty", "-m", "release"], check=True)
+    subprocess.run([*git, "-C", str(work), "tag", "-a", "v1.0.0", "-m", "v1.0.0"], check=True)
+    subprocess.run(["git", "-C", str(work), "push", "-q", str(remote), "HEAD:refs/heads/main", "--tags"], check=True)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    return env
+
+
+def _cli(env, *args):
+    return subprocess.run([str(CLI), *args], env=env, capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("command", [["start"], ["stop"], ["logs"], ["model"], ["update", "--check"]])
+def test_install_commands_refuse_a_launchd_install(tmp_path, command):
+    if sys.platform != "darwin":
+        pytest.skip("the launchd guard applies on macOS only")
+    env, log = _fake_bin(tmp_path, launchd=True, compose=True)
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "launchd service" in result.stderr
+    assert not log.exists() or "up" not in log.read_text()
+
+
+@pytest.mark.parametrize("command", [["start"], ["update", "--check"]])
+def test_install_commands_need_docker_compose(tmp_path, command):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=False)
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "Docker Compose is not available" in result.stderr
+
+
+@pytest.mark.parametrize("command", [["stop"], ["logs"], ["update", "--check"]])
+def test_commands_on_a_running_stack_need_one_started_here(tmp_path, command):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=True, services="")
+    result = _cli(env, *command)
+    assert result.returncode == 1
+    assert "has been started from" in result.stderr
+
+
+def test_start_runs_compose_for_this_checkout(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = _cli(env, "start")
+    assert result.returncode == 0, result.stderr
+    assert f"compose --project-directory {CLI.resolve().parent.parent} up -d --wait" in log.read_text()
+
+
+def test_update_check_reports_without_changing_anything(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env = _local_remote(tmp_path, env)
+    result = _cli(env, "update", "--check", "--to", "v1.0.0")
+    assert result.returncode == 0, result.stderr
+    assert "Target:    v1.0.0" in result.stdout
+    assert "Run 'unitares update' to move to v1.0.0" in result.stdout
+    calls = log.read_text()
+    assert " up " not in calls and " exec " not in calls
+
+
+def test_update_names_a_target_the_remote_does_not_have(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env = _local_remote(tmp_path, env)
+    result = _cli(env, "update", "--check", "--to", "v99.0.0")
+    assert result.returncode == 1
+    assert "no tag or branch named v99.0.0" in result.stderr
+
+
+def test_update_without_a_terminal_needs_yes(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env = _local_remote(tmp_path, env)
+    result = subprocess.run([str(CLI), "update", "--to", "v1.0.0"], env=env, capture_output=True,
+                            text=True, timeout=60, stdin=subprocess.DEVNULL)
+    # Refused before touching anything: by the terminal check, or first by the
+    # clean-tree check when this checkout has local edits.
+    assert result.returncode == 1
+    assert "re-run with --yes" in result.stderr or "local changes to tracked files" in result.stderr
+    assert " up " not in log.read_text()
+
+
+def test_update_rejects_unknown_options(tmp_path):
+    env, _ = _fake_bin(tmp_path, launchd=False, compose=True)
+    result = _cli(env, "update", "--bogus")
+    assert result.returncode == 2
+
+
+def test_model_no_docker_needs_no_stack(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=True, compose=False)
+    env["OLLAMA_HOST_URL"] = "http://127.0.0.1:9"   # nothing listens: discovery fails cleanly
+    result = _cli(env, "model", "--no-docker", "--yes")
+    assert "launchd service" not in result.stderr
+    assert "No Ollama answered" in result.stdout
+
+
+def test_psql_shim_runs_inside_the_database_container(tmp_path):
+    # Build the shim the way `update` does and check what it hands to docker.
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_write_psql_shim()/,/^}}/p' "{CLI}")"
+_write_psql_shim "{shim_dir}"
+'''
+    subprocess.run(["bash", "-c", script], env=env, check=True, timeout=30)
+    sql = tmp_path / "070_x.sql"
+    sql.write_text("SELECT 1;\n")
+    subprocess.run([str(shim_dir / "psql"), "postgresql://u:p@localhost:5432/db", "-f", str(sql)],
+                   env=env, check=True, timeout=30)
+    call = log.read_text().strip().splitlines()[-1]
+    assert "exec -T postgres-age psql postgresql://u:p@localhost:5432/db -f -" in call
+    assert str(sql) not in call   # the host path never reaches the container
+
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_model_help_needs_no_stack(tmp_path, flag):
+    env, _ = _fake_bin(tmp_path, launchd=True, compose=False)
+    result = _cli(env, "model", flag)
+    assert result.returncode == 0
+    assert "--no-docker" in result.stdout
+    assert "launchd service" not in result.stderr
+
+
+
+def test_settings_prefer_an_exported_value_over_dot_env(tmp_path):
+    # Compose resolves an exported variable before .env; the CLI must agree,
+    # or migrations use the wrong password and the health probe the wrong port.
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p' "{CLI}")"
+_env_value GOVERNANCE_HOST_PORT 8767
+'''
+    env = os.environ.copy()
+    env["GOVERNANCE_HOST_PORT"] = "18767"
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout == "18767"
+    env.pop("GOVERNANCE_HOST_PORT")
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout == "8767"   # no export, no .env in a clean checkout: the default
+
+
+def _checkout_on_release(tmp_path):
+    """A throwaway checkout holding a copy of the CLI, on annotated tag v1.0.0,
+    with a bare remote that has the same tag: the already-on-target case."""
+    repo = tmp_path / "install"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "unitares").write_text(CLI.read_text())
+    (repo / "scripts" / "unitares").chmod(0o755)
+    (repo / "docker-compose.yml").write_text("services: {}\n")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo)]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "release"], check=True)
+    subprocess.run([*git, "tag", "-a", "v1.0.0", "-m", "v1.0.0"], check=True)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    return repo, remote
+
+
+def test_check_on_the_target_release_starts_nothing(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--check", "--to", "v1.0.0"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "Already on v1.0.0" in result.stdout
+    assert "database is not running" in result.stdout
+    assert " up " not in log.read_text()
+
+
+def test_local_edits_block_migrations_even_on_the_target_release(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    (repo / "docker-compose.yml").write_text("services: {edited: {}}\n")   # a tracked local edit
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "local changes to tracked files" in result.stderr
+    assert " up " not in log.read_text() and " exec " not in log.read_text()
+
+
+
+def test_untracked_migration_files_block_the_update(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    stray = repo / "db" / "postgres" / "migrations"
+    stray.mkdir(parents=True)
+    (stray / "999_local_experiment.sql").write_text("DROP TABLE everything;\n")
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "999_local_experiment.sql" in result.stderr
+    assert " up " not in log.read_text() and " exec " not in log.read_text()
+
+
+def test_on_the_target_release_nothing_starts_before_confirmation(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0"],
+                            env=env, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+    assert result.returncode == 1
+    assert "re-run with --yes" in result.stderr
+    assert " up " not in log.read_text()
+
+
+def test_migration_uri_encodes_credentials(tmp_path):
+    script = f'''
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p;/^_migration_db_url()/,/^}}/p' "{CLI}")"
+_migration_db_url
+'''
+    env = os.environ.copy()
+    env.update(POSTGRES_USER="gov user", POSTGRES_PASSWORD="p@ss/w#rd%", POSTGRES_DB="governance")
+    out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "postgresql://gov%20user:p%40ss%2Fw%23rd%25@localhost:5432/governance"
+
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "marker"),
+    [("healthy", 0, "✓"), ("moderate", 0, "✓"), ("critical", 1, "✗"), ("", 1, "✗")],
+)
+def test_update_fails_unless_deep_health_is_acceptable(status, code, marker):
+    # _report_health decides update's final exit status from deep health.
+    script = f'''
+eval "$(sed -n '/^_report_health()/,/^}}/p' "{CLI}")"
+_stack_url() {{ printf 'http://stub'; }}
+_deep_health_status() {{ printf '%s' "{status}"; }}
+_report_health "Updated a → b."
+'''
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert out.returncode == code
+    assert marker in out.stdout + out.stderr
+
+
+
+def test_an_unreachable_remote_is_not_reported_as_a_missing_release(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env["UNITARES_UPDATE_REMOTE"] = str(tmp_path / "no-such-remote.git")
+    result = _cli(env, "update", "--check", "--to", "v1.0.0")
+    assert result.returncode == 1
+    assert "could not reach" in result.stderr
+    assert "has no tag or branch" not in result.stderr
+
+
+def test_no_variable_runs_into_a_non_ascii_character():
+    # bash reads the bytes of a following non-ASCII character (e.g. "…") as part
+    # of the variable name, and under `set -u` the script dies. Update's rollback
+    # did exactly this on "$current…" until the name was braced.
+    import re
+    offenders = [
+        (CLI.read_text().count("\n", 0, m.start()) + 1, m.group(0))
+        for m in re.finditer(r"\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])", CLI.read_text())
+    ]
+    assert offenders == [], f"brace these as ${{name}}: {offenders}"
+
+
+
+def test_migrations_never_run_when_the_writers_did_not_stop(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True, stop_fails=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "could not confirm governance-mcp and lease-plane stopped" in result.stderr
+    calls = log.read_text()
+    assert " exec " not in calls                    # no migration, no backup
+    assert "up -d --build --wait postgres-age" not in calls
+
+
+
+def test_migrations_never_run_when_the_writer_check_itself_fails(tmp_path):
+    # The stop succeeds, but the status query errors: that proves nothing, so
+    # nothing may migrate.
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True, ps_fails=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "could not confirm governance-mcp and lease-plane stopped" in result.stderr
+    calls = log.read_text()
+    assert " exec " not in calls
+    assert "up -d --build --wait postgres-age" not in calls
+
+
+
+def test_backups_are_private_to_the_operator(tmp_path):
+    # Directories the backup creates are 0700 and the dump is 0600, even under
+    # a permissive umask.
+    backup_dir = tmp_path / "home" / ".unitares" / "backups"
+    script = f'''
+umask 022
+eval "$(sed -n '/^_repo_root()/,/^}}/p;/^_env_value()/,/^}}/p;/^_migration_db_url()/,/^}}/p;/^_backup_db()/,/^}}/p' "{CLI}")"
+_compose() {{ echo "-- a dump"; }}
+UNITARES_BACKUP_DIR="{backup_dir}" _backup_db v1.0.0
+'''
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    dumps = list(backup_dir.glob("*.sql.gz"))
+    assert len(dumps) == 1
+    assert oct(dumps[0].stat().st_mode & 0o777) == "0o600"
+    assert oct(backup_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct(backup_dir.parent.stat().st_mode & 0o777) == "0o700"

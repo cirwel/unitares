@@ -33,6 +33,7 @@ on:
       - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
       - 'scripts/ci/check_mcp_tool_surface.py'
+      - 'scripts/ci/plugin_file_lease_proof.py'
       - '.github/workflows/docker-quickstart.yml'
   pull_request:
     branches: [ master, main ]
@@ -47,6 +48,7 @@ on:
       - 'scripts/demo/coordination_demo.py'
       - 'scripts/demo/quick_demo.py'
       - 'scripts/ci/check_mcp_tool_surface.py'
+      - 'scripts/ci/plugin_file_lease_proof.py'
       - '.github/workflows/docker-quickstart.yml'
 
 permissions:
@@ -78,6 +80,37 @@ jobs:
 
       - name: Run the two-agent coordination proof
         run: make coordination-demo
+
+      # The companion plugin's real edit hooks against this stack's real lease
+      # plane. The plugin's own tests stop at a fake HTTP server, so without
+      # this step nothing shows its PreToolUse lease acquire, the held_by_other
+      # refusal, and the PostToolUse release working end to end.
+      #
+      # Pinned to one plugin commit, not a branch, so the proof is reproducible
+      # and a plugin merge cannot turn this job red on an unrelated PR. To bump:
+      #   gh api repos/cirwel/unitares-governance-plugin/commits/master -q .sha
+      # then replace `ref` below. A plugin change does not trigger this job.
+      - name: Check out the governance plugin at a pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: cirwel/unitares-governance-plugin
+          ref: f7210faa09ebb6ffa8a938c529e9c18cf0d983dd
+          path: _plugin
+          persist-credentials: false
+
+      - name: Prove plugin file leases against the live lease plane
+        env:
+          LEASE_PLANE_BASE_URL: http://127.0.0.1:8788
+          # The Compose default bearer, passed explicitly because the pinned
+          # plugin commit has no loopback fallback for it. Once the pin includes
+          # cirwel/unitares-governance-plugin#165, this line can be dropped.
+          LEASE_PLANE_BEARER_TOKEN: unitares-local-lease-plane
+          # Read no host secrets file; the proof sees only the values above.
+          UNITARES_SECRETS_ENV: /dev/null
+        run: >-
+          python3 scripts/ci/plugin_file_lease_proof.py
+          --plugin-dir _plugin
+          --work-dir "$RUNNER_TEMP/plugin-lease-proof"
 
       # The dashboard's System Health card reads /health/deep. A check that
       # errors on a fresh install (e.g. an import missing from the image)
