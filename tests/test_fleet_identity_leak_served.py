@@ -128,40 +128,86 @@ def test_served_files_cover_every_served_surface():
     assert not any("/.attestations/" in r for r in rels)
 
 
-def test_known_coupling_defers_up_to_its_ceiling_only():
-    rel = "dashboard/redesign/data.js"
-    ceiling = guard.SERVED_KNOWN_COUPLINGS[rel][0]
-    at_ceiling = [f'  {rel}:{k}: hardcoded fleet identity "Lumen" in a string literal' for k in range(ceiling)]
-    assert guard.triage_served(rel, at_ceiling) == ([], at_ceiling)
-    # One more reference in an already-listed file is a NEW leak, not a pass.
-    over = at_ceiling + [f'  {rel}:9999: hardcoded fleet identity "Lumen" in a string literal']
-    assert guard.triage_served(rel, over) == (over, [])
+def _occ(tmp_path, name, src):
+    return guard.served_occurrences(_write(tmp_path, name, src))
 
 
-def test_domain_is_never_deferred_by_a_ceiling():
-    rel = next(iter(guard.SERVED_KNOWN_COUPLINGS))
-    name_hit = f'  {rel}:1: fleet identity "Lumen" in served text'
-    domain_hit = f'  {rel}:2: operator domain "cirwel.org" in served text'
-    failing, deferred = guard.triage_served(rel, [name_hit, domain_hit])
-    assert failing == [domain_hit] and deferred == [name_hit]
-    assert guard.triage_served("skills/new/SKILL.md", [name_hit]) == ([name_hit], [])
+def test_pinned_occurrence_is_deferred(tmp_path, monkeypatch):
+    found = _occ(tmp_path, "a.js", 'if (inRoster("Watcher")) show();\n')
+    monkeypatch.setitem(guard.SERVED_KNOWN_COUPLINGS, "a.js",
+                        {"reason": "r", "occurrences": [list(found[0].key)]})
+    assert guard.triage_served("a.js", found) == ([], [found[0].message])
 
 
-def test_every_ceiling_is_exact():
-    # Ceilings only ratchet down: a fix must lower the number, and the last fix
-    # deletes the entry. A ceiling above the real count would silently admit
-    # new references up to the slack.
-    for rel, (ceiling, _reason) in guard.SERVED_KNOWN_COUPLINGS.items():
+def test_swapping_a_pinned_reference_for_a_new_one_fails(tmp_path, monkeypatch):
+    # Review finding: a count ceiling passed a file that fixed one reference and
+    # added a different one. Pins compare the occurrence, not the tally.
+    before = _occ(tmp_path, "a.js", 'if (inRoster("Watcher")) show();\n')
+    monkeypatch.setitem(guard.SERVED_KNOWN_COUPLINGS, "a.js",
+                        {"reason": "r", "occurrences": [list(before[0].key)]})
+    after = _occ(tmp_path, "a.js", 'if (inRoster("Sentinel")) show();\n')
+    failing, deferred = guard.triage_served("a.js", after)
+    assert len(failing) == 1 and "unpinned" in failing[0] and deferred == []
+    assert guard.stale_pins("a.js", after) == [before[0].key]
+
+
+def test_duplicating_a_pinned_reference_fails(tmp_path, monkeypatch):
+    one = _occ(tmp_path, "a.js", 'x("Lumen");\n')
+    monkeypatch.setitem(guard.SERVED_KNOWN_COUPLINGS, "a.js",
+                        {"reason": "r", "occurrences": [list(one[0].key)]})
+    two = _occ(tmp_path, "a.js", 'x("Lumen");\nx("Lumen");\n')
+    failing, deferred = guard.triage_served("a.js", two)
+    assert len(failing) == 1 and len(deferred) == 1
+
+
+def test_domain_is_never_deferred(tmp_path, monkeypatch):
+    found = _occ(tmp_path, "a.md", "Lumen lives at gov.cirwel.org\n")
+    monkeypatch.setitem(guard.SERVED_KNOWN_COUPLINGS, "a.md",
+                        {"reason": "r", "occurrences": [list(o.key) for o in found if o.key]})
+    failing, deferred = guard.triage_served("a.md", found)
+    assert len(failing) == 1 and "operator domain" in failing[0] and len(deferred) == 1
+    unlisted_failing, unlisted_deferred = guard.triage_served("unlisted.md", found)
+    assert len(unlisted_failing) == 2 and unlisted_deferred == []
+
+
+def test_every_pin_is_still_present():
+    # Pins only go away: a fix deletes its line, and the last fix the entry.
+    for rel, entry in guard.SERVED_KNOWN_COUPLINGS.items():
         path = REPO / rel
-        assert path.is_file(), f"{rel} is listed in SERVED_KNOWN_COUPLINGS but does not exist"
-        names = [h for h in guard.scan_served_file(path) if "operator domain" not in h]
-        assert names, f"{rel} no longer names a resident; delete its entry"
-        assert len(names) == ceiling, f"{rel}: {len(names)} references, ceiling {ceiling}; set it to {len(names)}"
+        assert path.is_file(), f"{rel} is pinned but does not exist"
+        assert entry.get("reason"), f"{rel} has no reason"
+        stale = guard.stale_pins(rel, guard.served_occurrences(path))
+        assert stale == [], f"{rel}: fixed, delete these pins: {stale}"
+
+
+# --- Regex literals ------------------------------------------------------------
+
+
+def test_quote_inside_regex_does_not_hide_the_next_literal(tmp_path):
+    # Review finding: /["']/ opened a string that swallowed "Lumen".
+    names = [h.split('"')[1] for h in guard.scan_served_file(
+        _write(tmp_path, "r.js", 'const q = /["\']/; const label = "Lumen";\n'))]
+    assert names == ["Lumen"]
+
+
+def test_regex_after_keyword_and_division_are_told_apart(tmp_path):
+    src = (
+        'function f(s) { return /"/.test(s) ? "Vigil" : a / b / "x".length; }\n'
+        'const r = s.replace(/[\'"]/g, ""), k = "Sentinel";\n'
+    )
+    names = [h.split('"')[1] for h in guard.scan_served_file(_write(tmp_path, "d.js", src))]
+    assert names == ["Vigil", "Sentinel"]
+
+
+def test_regex_class_may_hold_a_slash(tmp_path):
+    names = [h.split('"')[1] for h in guard.scan_served_file(
+        _write(tmp_path, "c.js", 'const p = /[/"]+/; const n = "Watcher";\n'))]
+    assert names == ["Watcher"]
 
 
 def test_served_tree_has_no_new_leak():
     failing = []
     for path in guard.served_files():
         rel = path.relative_to(REPO).as_posix()
-        failing += guard.triage_served(rel, guard.scan_served_file(path))[0]
+        failing += guard.triage_served(rel, guard.served_occurrences(path))[0]
     assert failing == []
