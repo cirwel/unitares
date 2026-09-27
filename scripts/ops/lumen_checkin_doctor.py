@@ -86,9 +86,22 @@ LUMEN_UUID = os.environ.get(
 LUMEN_IDENTITY_ID = int(os.environ.get("LUMEN_IDENTITY_ID", "2522"))
 GOV_URL = os.environ.get("UNITARES_GOVERNANCE_HTTP_URL", "http://127.0.0.1:8767")
 ANIMA_URL = os.environ.get("ANIMA_HTTP_URL", "http://lumen:8766")
-SECRETS_FILE = os.path.expanduser(
-    os.environ.get("UNITARES_SECRETS_ENV", "~/.config/cirwel/secrets.env")
-)
+
+
+def _resolve_secrets_file() -> str:
+    """UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+    pre-2026-09 ~/.config/cirwel path when only that one exists."""
+    override = os.environ.get("UNITARES_SECRETS_ENV", "").strip()
+    if override:
+        return os.path.expanduser(override)
+    default = os.path.expanduser("~/.config/unitares/secrets.env")
+    legacy = os.path.expanduser("~/.config/cirwel/secrets.env")
+    if not os.path.exists(default) and os.path.exists(legacy):
+        return legacy
+    return default
+
+
+SECRETS_FILE = _resolve_secrets_file()
 STATE_FILE = os.path.expanduser(
     os.environ.get("LUMEN_DOCTOR_STATE", "~/.unitares/lumen-doctor.state.json")
 )
