@@ -1249,3 +1249,13 @@ _write_psql_shim "{shim_dir}"
     call = log.read_text().strip().splitlines()[-1]
     assert "exec -T postgres-age psql postgresql://u:p@localhost:5432/db -f -" in call
     assert str(sql) not in call   # the host path never reaches the container
+
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_model_help_needs_no_stack(tmp_path, flag):
+    env, _ = _fake_bin(tmp_path, launchd=True, compose=False)
+    result = _cli(env, "model", flag)
+    assert result.returncode == 0
+    assert "--no-docker" in result.stdout
+    assert "launchd service" not in result.stderr

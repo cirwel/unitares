@@ -1009,9 +1009,10 @@ _require_compose_install() {
 }
 
 cmd_model() {
-    # --no-docker only prints settings for a source install: no stack needed.
+    # --no-docker only prints settings for a source install, and --help only
+    # prints usage: neither needs a stack.
     case " $* " in
-        *" --no-docker "*) ;;
+        *" --no-docker "*|*" --help "*|*" -h "*) ;;
         *) _require_compose_install || return 1 ;;
     esac
     python3 "$(_repo_root)/scripts/install/choose_model.py" "$@"
