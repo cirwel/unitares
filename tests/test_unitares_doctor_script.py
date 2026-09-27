@@ -473,12 +473,15 @@ def no_launch_agents(doctor, monkeypatch, tmp_path):
     return empty
 
 
-def test_resident_agents_skips_without_launchd_deployment(doctor, no_launch_agents):
+def test_resident_agents_warns_when_every_declared_slot_is_gone(doctor, no_launch_agents):
+    # Declared, yet nothing loaded or installed (all unloaded, or plists
+    # deleted): the declaration is the evidence, so this warns, never SKIPs.
     slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
 
     result = doctor.check_resident_agents(set(), slots)
 
-    assert result.status == doctor.Status.SKIP
+    assert result.status == doctor.Status.WARN
+    assert "alpha" in result.message and "charlie" in result.message
 
 
 # ---------- launchagent_loaded / pid_file on hosts without launchd ----------

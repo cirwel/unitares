@@ -1598,8 +1598,9 @@ def check_resident_agents(
         return CheckResult(name, mode, Status.SKIP,
                            f"no resident LaunchAgents declared "
                            f"({RESIDENT_LAUNCHD_ENV} unset)")
-    if not _launchd_deployment(loaded):
-        return CheckResult(name, mode, Status.SKIP, _NO_LAUNCHD)
+    # A declared slot is itself the evidence that these LaunchAgents are
+    # expected, so no "is this a launchd host" test gates it: every resident
+    # down or deleted must reach the missing-slot warning, not a SKIP.
     missing: list[str] = []
     resolved: list[str] = []
     for slot_name, labels in slots:
