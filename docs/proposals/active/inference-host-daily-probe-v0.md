@@ -283,7 +283,14 @@ nothing.
    leave the stop to the operator.
 6. **Passive evidence (`last_ok`):** build it with the probe as proposed, or
    probe every enabled host every day, which is simpler but always costs about
-   3 calls.
+   3 calls. The trade-off is what counts as success. Passive evidence trusts
+   gov's own judgement, a validated terminal envelope with non-empty text,
+   because gov cannot tell whether a real caller's answer makes sense. A host
+   whose CLI returns an error message as a normal answer would keep writing
+   `last_ok` under real traffic, and the probe's stricter `OK` check would
+   never run. Probing daily regardless closes that gap at the cost of the
+   calls. A middle option is to skip on passive evidence at most N days in a
+   row.
 
 ## Build plan once approved
 
