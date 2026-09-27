@@ -1383,3 +1383,15 @@ def test_an_unreachable_remote_is_not_reported_as_a_missing_release(tmp_path):
     assert result.returncode == 1
     assert "could not reach" in result.stderr
     assert "has no tag or branch" not in result.stderr
+
+
+def test_no_variable_runs_into_a_non_ascii_character():
+    # bash reads the bytes of a following non-ASCII character (e.g. "…") as part
+    # of the variable name, and under `set -u` the script dies. Update's rollback
+    # did exactly this on "$current…" until the name was braced.
+    import re
+    offenders = [
+        (CLI.read_text().count("\n", 0, m.start()) + 1, m.group(0))
+        for m in re.finditer(r"\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])", CLI.read_text())
+    ]
+    assert offenders == [], f"brace these as ${{name}}: {offenders}"
