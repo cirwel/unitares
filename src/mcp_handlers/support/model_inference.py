@@ -25,6 +25,7 @@ from .inference_registry import (
     default_local_model,
     get_inference_host,
     host_for_routed_provider,
+    inference_extensions,
     list_inference_hosts,
     ollama_base_url,
     sha256_text as _sha256_text,
@@ -197,6 +198,7 @@ async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[Tex
         "schema": "unitares.inference_hosts.v0",
         "hosts": hosts,
         "count": len(hosts),
+        "extensions": inference_extensions(),
         "invocation": _invocation_gate(),
     }, agent_id=arguments.get("agent_id"), arguments=arguments)
 
