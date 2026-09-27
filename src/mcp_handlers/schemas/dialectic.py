@@ -207,6 +207,12 @@ class DialecticParams(AgentIdentityMixin):
                 "conditions", "judgment_formed", "root_cause",
                 "observed_metrics", "reviewer_provenance",
         ),
+        # An outside verdict filed beside the review, with no authority: it
+        # needs no reviewer slot and never advances a phase.
+        "consult": (
+                "session_id", "reasoning", "reviewer_provenance", "agrees",
+                "proposed_conditions", "conditions", "concerns", "root_cause",
+        ),
         "reassign": (
                 "session_id", "new_reviewer_id", "reason",
         ),
@@ -217,12 +223,13 @@ class DialecticParams(AgentIdentityMixin):
     # a call with no issue_description ('reason' is accepted in its place).
     ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "quick": ("issue_description",),
+        "consult": ("session_id", "reasoning", "reviewer_provenance"),
     }
     # default mirrors action_router's default_action="list" — the schema
     # validated BEFORE the router and a required field here made
     # dialectic({}) error despite the router's fallback (PR #611 council
     # live battery, probe 3g).
-    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "reassign"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, reassign")
+    action: Literal["get", "list", "quick", "request", "thesis", "antithesis", "synthesis", "consult", "reassign"] = Field("list", description="Operation: get, list, quick, request, thesis, antithesis, synthesis, consult (file an outside verdict as a record with no authority; needs no reviewer slot), reassign")
     session_id: Optional[str] = Field(None, description="Dialectic session ID")
     agent_id: Optional[str] = Field(None, description="Filter by agent (for action=get or list)")
     status: Optional[str] = Field(None, description="Filter by phase (for action=list)")

@@ -524,8 +524,15 @@ class DialecticDB:
         concerns: List[str] = None,
         agrees: bool = None,
         signature: str = None,
+        touch_session: bool = True,
     ) -> int:
-        """Add a message to a session."""
+        """Add a message to a session.
+
+        ``touch_session=False`` records the message without refreshing the
+        session's ``updated_at``, which the inactivity sweeper reads as
+        protocol activity. A consult is a record, not a move, and must not be
+        able to hold a stalled session open.
+        """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
@@ -548,9 +555,10 @@ class DialecticDB:
                 signature,
             )
 
-            await conn.execute("""
-                UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-            """, session_id)
+            if touch_session:
+                await conn.execute("""
+                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+                """, session_id)
 
             return row["message_id"] if row else 0
 

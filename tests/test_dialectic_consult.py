@@ -1,0 +1,147 @@
+"""dialectic(action='consult'): an outside verdict filed as a record with no authority.
+
+The route documented for an outside consult was an antithesis stamped
+reviewer_kind='external_consult'. That needs the reviewer slot, which the
+orchestrated reviewer takes within about a minute, so 0 of 136 sessions ever
+carried one. A consult needs no slot, and the properties pinned here are the
+ones that make it safe to allow anyone: it is never a verdict, never a phase
+move, and never activity on the session's liveness clock.
+"""
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from src.dialectic_protocol import DialecticMessage, DialecticPhase, DialecticSession
+from src.mcp_handlers.dialectic import handlers as h
+from tests.helpers import parse_result
+
+DIALECTIC = "src.mcp_handlers.dialectic.handlers"
+PROVENANCE = {"backend": "codex-cli", "model_used": "gpt-x", "consult_source": "pipeline review"}
+
+
+def _session(phase=DialecticPhase.SYNTHESIS):
+    session = DialecticSession(paused_agent_id="agent-paused", reviewer_agent_id="agent-reviewer")
+    session.phase = phase
+    return session
+
+
+async def _consult(session, caller="agent-outside", **arguments):
+    add_message = AsyncMock(return_value=77)
+    h.ACTIVE_SESSIONS[session.session_id] = session
+    try:
+        with patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
+                   new=AsyncMock(return_value=(caller, None))), \
+             patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_add_message", add_message), \
+             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+            result = await h.handle_submit_consult({"session_id": session.session_id, **arguments})
+    finally:
+        h.ACTIVE_SESSIONS.pop(session.session_id, None)
+    return parse_result(result), add_message
+
+
+@pytest.mark.asyncio
+async def test_a_third_party_files_a_consult_without_the_reviewer_slot():
+    session = _session()
+    data, add_message = await _consult(
+        session, reasoning="The migration drops a column still read by the sweeper.",
+        agrees=False, proposed_conditions=["keep the column one release"],
+        reviewer_provenance=PROVENANCE,
+    )
+
+    assert data["success"] is True
+    assert data["filer_role"] == "third_party"
+    kwargs = add_message.await_args.kwargs
+    assert kwargs["message_type"] == "consult"
+    assert kwargs["agrees"] is None, "a consult must never write the verdict column"
+    assert kwargs["touch_session"] is False, "a consult must not hold a session open"
+    stamp = kwargs["observed_metrics"]["reviewer_backend"]
+    assert stamp["reviewer_kind"] == "external_consult"
+    assert stamp["backend"] == "codex-cli"
+    assert kwargs["observed_metrics"]["consult"] == {
+        "position": "disagrees",
+        "filer_role": "third_party",
+        "session_phase_at_filing": "synthesis",
+    }
+    # Nothing about the review moved.
+    assert session.phase == DialecticPhase.SYNTHESIS
+    assert session.reviewer_agent_id == "agent-reviewer"
+
+
+@pytest.mark.asyncio
+async def test_the_kind_is_forced_whatever_the_caller_claims():
+    data, add_message = await _consult(
+        _session(), reasoning="r",
+        reviewer_provenance={**PROVENANCE, "reviewer_kind": "orchestrated"},
+    )
+    assert data["success"] is True
+    stamp = add_message.await_args.kwargs["observed_metrics"]["reviewer_backend"]
+    assert stamp["reviewer_kind"] == "external_consult"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments, missing", [
+    ({"reviewer_provenance": PROVENANCE}, "reasoning"),
+    ({"reasoning": "r"}, "reviewer_provenance"),
+    ({"reasoning": "r", "reviewer_provenance": {}}, "reviewer_provenance"),
+])
+async def test_reasoning_and_provenance_are_required(arguments, missing):
+    data, add_message = await _consult(_session(), **arguments)
+    assert data["success"] is False
+    assert missing in data["error"]
+    add_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_closed_session_still_takes_a_consult():
+    """Stranded objections are where an outside view is most useful."""
+    data, _ = await _consult(_session(DialecticPhase.FAILED), reasoning="r",
+                             reviewer_provenance=PROVENANCE)
+    assert data["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_the_paused_agent_may_file_one_and_is_labelled():
+    data, _ = await _consult(_session(), caller="agent-paused", reasoning="council seat 2",
+                             reviewer_provenance=PROVENANCE)
+    assert data["filer_role"] == "paused_agent"
+
+
+@pytest.mark.asyncio
+async def test_consults_per_session_are_bounded():
+    session = _session()
+    for _ in range(h.MAX_CONSULTS_PER_SESSION):
+        session.transcript.append(DialecticMessage(
+            phase="consult", agent_id="x", timestamp="2026-09-27T00:00:00+00:00", reasoning="r"))
+    data, add_message = await _consult(session, reasoning="r", reviewer_provenance=PROVENANCE)
+    assert data["success"] is False
+    assert data.get("error_code") == "CONSULT_LIMIT"
+    add_message.assert_not_awaited()
+
+
+def test_a_consult_does_not_reset_the_protocol_clock():
+    session = _session()
+    session.transcript.append(DialecticMessage(
+        phase="synthesis", agent_id="agent-reviewer",
+        timestamp="2026-09-27T01:00:00+00:00", agrees=False))
+    session.transcript.append(DialecticMessage(
+        phase="consult", agent_id="agent-outside",
+        timestamp="2026-09-27T05:00:00+00:00", reasoning="r"))
+    assert session.get_last_update_timestamp().isoformat() == "2026-09-27T01:00:00+00:00"
+    age_with = h._last_activity_age_s({"transcript": [m.to_dict() for m in session.transcript]})
+    age_without = h._last_activity_age_s({"transcript": [session.transcript[0].to_dict()]})
+    assert age_with is not None and age_without is not None
+    assert abs(age_with - age_without) < 5
+
+
+def test_a_consult_is_not_a_verdict_the_guard_reads():
+    """A reviewer rejection still stands after an approving consult."""
+    session = _session()
+    session.transcript.append(DialecticMessage(
+        phase="synthesis", agent_id="agent-reviewer",
+        timestamp="2026-09-27T01:00:00+00:00", agrees=False))
+    session.transcript.append(DialecticMessage(
+        phase="consult", agent_id="agent-outside",
+        timestamp="2026-09-27T02:00:00+00:00", reasoning="looks fine", agrees=None))
+    assert session._reviewer_objection_stands() is True

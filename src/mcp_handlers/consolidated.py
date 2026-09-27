@@ -93,6 +93,7 @@ from .dialectic.handlers import (
     handle_submit_thesis,
     handle_submit_antithesis,
     handle_submit_synthesis,
+    handle_submit_consult,
     handle_reassign_reviewer,
 )
 
@@ -397,6 +398,7 @@ handle_dialectic = action_router(
         "thesis": handle_submit_thesis,
         "antithesis": handle_submit_antithesis,
         "synthesis": handle_submit_synthesis,
+        "consult": handle_submit_consult,
         "reassign": handle_reassign_reviewer,
     },
     # This router wait_for is the outer ceiling, so it must clear the slowest
@@ -418,5 +420,6 @@ handle_dialectic = action_router(
         "dialectic(action='request', issue_description='Agent stuck in loop')",
         "dialectic(action='thesis', session_id='abc123', root_cause='...', proposed_conditions=[...])",
         "dialectic(action='synthesis', session_id='abc123', agrees=True, reasoning='...', proposed_conditions=[...])",
+        "dialectic(action='consult', session_id='abc123', reasoning='...', agrees=False, reviewer_provenance={'backend': 'codex-cli', 'consult_source': '...'})",
     ],
 )

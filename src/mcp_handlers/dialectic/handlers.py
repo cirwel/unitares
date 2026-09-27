@@ -19,6 +19,7 @@ from .wait_assessment import assess_wait, suggests_facilitation
 # Import type definitions
 
 from src.dialectic_protocol import (
+    NON_PROTOCOL_PHASES,
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
@@ -630,6 +631,13 @@ def _last_activity_age_s(session_data: Dict[str, Any]) -> Optional[float]:
     transcript = session_data.get("transcript") or session_data.get("messages") or []
     newest = None
     for message in transcript:
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        if phase in NON_PROTOCOL_PHASES:
+            continue  # a consult is not activity on the review
         stamp = (
             message.get("timestamp")
             if isinstance(message, dict)
@@ -2245,6 +2253,165 @@ def _merge_caller_reviewer_provenance(
             degraded=bool(reviewer_provenance.get("degraded")),
         )
     return merged
+
+
+CONSULT_PHASE = "consult"
+# Bounds transcript growth from one session's outside filings. A consult does
+# not touch the liveness clock, so this is about size, not about holding a
+# session open.
+MAX_CONSULTS_PER_SESSION = 8
+
+
+def _consult_list(value: Any) -> List[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+# register=False: reached through dialectic(action='consult') only.
+@mcp_tool("submit_consult", timeout=10.0, register=False)
+async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """File an outside verdict on a review as a record with no authority.
+
+    The documented way to file a review produced outside this server was an
+    antithesis carrying ``reviewer_provenance={"reviewer_kind":
+    "external_consult", ...}``. An antithesis needs the reviewer slot, and the
+    orchestrated reviewer takes it within about a minute of the request, with
+    takeover reserved to an operator. So an agent holding an outside model's
+    verdict had nowhere to put it, and ``external_consult`` counted zero rows.
+
+    A consult needs no slot. Any bound agent, including the paused agent or
+    the assigned reviewer, may file one on any session, open or closed. It is
+    stored as a ``consult`` transcript entry stamped
+    ``reviewer_kind='external_consult'``, with the filer's role and the phase
+    at filing. It has no authority: it never advances a phase, never counts as
+    a verdict (``agrees`` stays NULL; the position it states lives in
+    ``observed_metrics.consult.position``), and never refreshes the session's
+    liveness clock.
+    """
+    try:
+        session_id = arguments.get("session_id")
+        if not session_id:
+            return [error_response(
+                "session_id is required",
+                recovery=missing_session_id_recovery(),
+            )]
+
+        agent_id, agent_error = await _resolve_dialectic_agent_id(
+            arguments, enforce_session_ownership=True, require_bound_caller=True,
+        )
+        if agent_error:
+            return agent_error
+
+        session = await load_session(session_id)
+        if session:
+            ACTIVE_SESSIONS[session_id] = session
+        else:
+            session = ACTIVE_SESSIONS.get(session_id)
+            if not session:
+                return [error_response(
+                    f"Session '{session_id}' not found",
+                    recovery=session_not_found_recovery(),
+                )]
+
+        reasoning = str(arguments.get("reasoning") or "").strip()
+        if not reasoning:
+            return [error_response(
+                "reasoning is required: a consult files the outside reviewer's argument",
+                error_code="MISSING_PARAM",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        provenance = arguments.get("reviewer_provenance")
+        if not isinstance(provenance, dict) or not provenance:
+            return [error_response(
+                "reviewer_provenance is required: name where the verdict came from "
+                "(backend, model_used, consult_source)",
+                error_code="MISSING_PARAM",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+
+        filed = sum(1 for m in session.transcript if getattr(m, "phase", None) == CONSULT_PHASE)
+        if filed >= MAX_CONSULTS_PER_SESSION:
+            return [error_response(
+                f"This session already holds {filed} consults, the most one session keeps.",
+                error_code="CONSULT_LIMIT",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+
+        position = None
+        if arguments.get("agrees") is not None:
+            position = "agrees" if coerce_bool(arguments.get("agrees"), default=False) else "disagrees"
+        if agent_id == session.paused_agent_id:
+            filer_role = "paused_agent"
+        elif agent_id == session.reviewer_agent_id:
+            filer_role = "reviewer"
+        else:
+            filer_role = "third_party"
+        observed_metrics = {
+            # The kind is forced: whatever the caller wrote, this route files
+            # an outside verdict, and a record of one must say so.
+            "reviewer_backend": _reviewer_provenance_stamp(
+                provenance,
+                kind="external_consult",
+                degraded=bool(provenance.get("degraded")),
+            ),
+            "consult": {
+                "position": position,
+                "filer_role": filer_role,
+                "session_phase_at_filing": session.phase.value,
+            },
+        }
+        proposed_conditions = _consult_list(
+            arguments.get("proposed_conditions") or arguments.get("conditions")
+        )
+        concerns = _consult_list(arguments.get("concerns"))
+        root_cause = arguments.get("root_cause")
+
+        message_id = await pg_add_message(
+            session_id=session_id,
+            agent_id=agent_id,
+            message_type=CONSULT_PHASE,
+            root_cause=root_cause,
+            proposed_conditions=proposed_conditions or None,
+            reasoning=reasoning,
+            observed_metrics=observed_metrics,
+            concerns=concerns or None,
+            agrees=None,
+            touch_session=False,
+        )
+        session.transcript.append(DialecticMessage(
+            phase=CONSULT_PHASE,
+            agent_id=agent_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            root_cause=root_cause,
+            observed_metrics=observed_metrics,
+            proposed_conditions=proposed_conditions or None,
+            reasoning=reasoning,
+            agrees=None,
+            concerns=concerns or None,
+        ))
+
+        return success_response({
+            "success": True,
+            "session_id": session_id,
+            "message_id": message_id,
+            "recorded_as": CONSULT_PHASE,
+            "reviewer_kind": "external_consult",
+            "filer_role": filer_role,
+            "position": position,
+            "authority": (
+                "none: a consult is a record beside the review. It does not "
+                "advance the phase, count as a verdict, or refresh the "
+                "session's liveness clock."
+            ),
+        })
+    except Exception as e:
+        return [error_response(f"Error submitting consult: {str(e)}")]
 
 
 def _synthetic_review_approves(

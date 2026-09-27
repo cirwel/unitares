@@ -312,7 +312,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `knowledge()` — Full knowledge graph CRUD, search, synthesis, and audit router
 - `agent()` — Agent lifecycle router (list, get, update, archive, resume, delete)
 - `calibration()` — Check or update calibration data
-- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `reassign`). Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
+- `dialectic()` — Structured review router (`get`, `list`, `quick`, `request`, `thesis`, `antithesis`, `synthesis`, `consult`, `reassign`); `consult` files an outside verdict as a record with no authority and needs no reviewer slot. Advertised in the complete catalog: `request_review` pins `action="request"`, so without the router an older restricted-profile server could open a review while exposing none of the actions that finish one
 - `export()` — Export session history
 
 ### Specialized

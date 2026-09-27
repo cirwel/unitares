@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (54 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (55 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -191,6 +191,7 @@ runs (`from→to`, filled only when the destination is absent).
 | Action | Delegate | Remaps |
 |---|---|---|
 | `antithesis` | `src/mcp_handlers/dialectic/handlers.py handle_submit_antithesis` | — |
+| `consult` | `src/mcp_handlers/dialectic/handlers.py handle_submit_consult` | — |
 | `get` | `src/mcp_handlers/dialectic/handlers.py handle_get_dialectic_session` | — |
 | `list` | `src/mcp_handlers/dialectic/handlers.py handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py handle_quick_dialectic` | — |

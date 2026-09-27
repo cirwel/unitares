@@ -976,6 +976,28 @@ class TestAddMessage:
         conn.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_a_record_that_is_not_a_move_leaves_updated_at_alone(self, db):
+        """touch_session=False (a consult) inserts without refreshing the
+        session's updated_at, which the inactivity sweeper reads as activity."""
+        instance, pool, conn = db
+
+        class DictRecord(dict):
+            def __getitem__(self, key):
+                return dict.__getitem__(self, key)
+
+        conn.fetchrow = AsyncMock(return_value=DictRecord({"message_id": 9}))
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        result = await instance.add_message(
+            session_id="sess-001", agent_id="agent-X", message_type="consult",
+            reasoning="outside view", touch_session=False,
+        )
+
+        assert result == 9
+        conn.fetchrow.assert_awaited_once()
+        conn.execute.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_add_message_minimal_args(self, db):
         """add_message with only required args, optional are None."""
         instance, pool, conn = db

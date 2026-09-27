@@ -142,7 +142,7 @@ The old monolithic skill was split into focused skills:
 - `skills/governance-lifecycle/SKILL.md` for onboarding, check-ins, and recovery
 - `skills/governance-fundamentals/SKILL.md` for EISV, basins, coherence, and verdicts
 - `skills/knowledge-graph/SKILL.md` for knowledge graph search and contribution
-- `skills/dialectic-reasoning/SKILL.md` for thesis/antithesis/synthesis workflows
+- `skills/dialectic-reasoning/SKILL.md` for thesis/antithesis/synthesis workflows and filing an outside verdict (`consult`)
 - `skills/discord-bridge/SKILL.md` for the Discord governance bridge
 - `skills/unitares-dashboard/SKILL.md` for the buildless operator dashboard
 

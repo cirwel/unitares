@@ -183,7 +183,17 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # client_session_id in the call that sets a display name. No parameter is
 # added, removed, retyped or renamed, and no input digest or the surface
 # digest moves.
-INTERFACE_CONTRACT_VERSION = "1.21.0"
+# 1.22.0 (2026-09-27): dialectic gains action="consult", which files an
+# outside verdict on any session as a transcript record with no authority:
+# it needs no reviewer slot, never advances a phase, never counts as a
+# verdict, and never refreshes the session's liveness clock. The documented
+# route for an outside consult (an antithesis with
+# reviewer_kind='external_consult') needed the reviewer slot, which the
+# orchestrated reviewer takes within about a minute, so it had never been
+# used. The action enum and descriptions grow; nothing is removed, retyped or
+# renamed. The input digests of dialectic and request_review, and the
+# surface digest, move.
+INTERFACE_CONTRACT_VERSION = "1.22.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
