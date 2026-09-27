@@ -2319,7 +2319,9 @@ def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
     for path in ("src/mcp_handlers/dialectic/auth.py",
                  "elixir/lease_plane/lib/unitares_lease_plane/http_auth.ex",
                  "elixir/agent_orchestrator/lib/agent_orchestrator/http_auth.ex",
-                 "elixir/lease_plane/lib/unitares_lease_plane/identity_binding.ex"):
+                 "elixir/lease_plane/lib/unitares_lease_plane/identity_binding.ex",
+                 "elixir/wave3a_handlers/lib/wave3a_handlers/http_router.ex",
+                 "src/mcp_handlers/middleware/__init__.py"):
         assert rg.sensitive_paths([path], globs) == [path], path
     assert rg.sensitive_paths(["elixir/agent_orchestrator/lib/agent_orchestrator/agent_runner.ex"],
                               globs) == []
@@ -2464,3 +2466,34 @@ def test_the_ci_message_asks_for_two_families_when_none_passed():
     assert concl == "action_required" and "two model families" in desc
     concl, desc = rg.second_family_check("success", "clean", ["src/oauth_provider.py"], {"google"})
     assert "a second model family" in desc
+
+
+
+def test_agy_named_records_and_two_family_names():
+    """Claude on #2504 (P3): any agy/antigravity name counts by its model, and
+    a name that says two families says none."""
+    k = "k" * 64
+    rec = lambda name, model="": rg.Record(k, "CLEAN", 0, False, name, model=model)
+    assert rg.record_family(rec("agy")) is None
+    assert rg.record_family(rec("antigravity-review", "claude-sonnet-4-6")) == "anthropic"
+    assert rg.reviewer_family("claude-then-gpt") is None
+    assert rg.reviewer_family("ollama:gemma4:latest") == "google"  # a free local family
+
+
+def test_cmd_review_exits_3_on_a_sensitive_diff_with_one_family(monkeypatch, capsys):
+    """Claude on #2504 (P3): end to end, not only the helper, so dropping a
+    second_family_pass wrapper in cmd_review fails a test."""
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/x"))
+    monkeypatch.setattr(rg, "native_enabled", lambda: False)
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    clean = rg.Record("k", "CLEAN", 0, False, "claude", "url", "reviewed: the gate and its tests")
+    comments = [_comment(clean)]
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, r: r)
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
+    rc = rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False, base="origin/master"))
+    assert rc == rg.NEEDS_SECOND_FAMILY
+    assert "--fresh --reviewer codex" in capsys.readouterr().out

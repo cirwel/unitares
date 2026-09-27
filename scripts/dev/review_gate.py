@@ -727,7 +727,8 @@ def changed_paths(base: str, head: str) -> list[str] | None:
 _FAMILY_TOKENS = {
     "openai": {"codex", "openai", "gpt", "chatgpt"},
     "anthropic": {"claude", "anthropic", "opus", "sonnet", "haiku"},
-    "google": {"antigravity", "agy", "gemini", "google"},
+    # gemma: Google's open model, what a free local verifier runs.
+    "google": {"antigravity", "agy", "gemini", "gemma", "google"},
 }
 
 
@@ -735,7 +736,10 @@ def record_family(rec: Record) -> str | None:
     """A record's model family. An Antigravity record counts by the model it
     ran (a record without one predates model recording and counts as none);
     everything else by its reviewer name."""
-    if rec.reviewer == "antigravity":
+    tokens = set(re.split(r"[^a-z]+", (rec.reviewer or "").lower()))
+    if tokens & {"antigravity", "agy"}:
+        # agy runs Gemini, Claude or GPT-OSS models: the model decides, and a
+        # record without it counts as none, whatever else the name says.
         return model_family(rec.model)
     return reviewer_family(rec.reviewer)
 
@@ -760,10 +764,9 @@ def reviewer_family(reviewer: str) -> str | None:
     satisfy the two-family rule. Record such a review under a name that
     carries its family (e.g. "gemini-council", "gpt-5-reviewer")."""
     tokens = set(re.split(r"[^a-z]+", (reviewer or "").lower()))
-    for family, names in _FAMILY_TOKENS.items():
-        if tokens & names:
-            return family
-    return None
+    found = [family for family, names in _FAMILY_TOKENS.items() if tokens & names]
+    # A name that says two families ("claude-then-gpt") says none.
+    return found[0] if len(found) == 1 else None
 
 
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
