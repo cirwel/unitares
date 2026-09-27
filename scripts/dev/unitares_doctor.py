@@ -3288,6 +3288,15 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
     its own intent to post.
     """
     declared: set[str] = set()
+    for events in finding_producer_files(repo_root).values():
+        declared.update(events)
+    return declared
+
+
+def finding_producer_files(repo_root: Path) -> dict[str, set[str]]:
+    """Each source file that declares a finding producer, relative to
+    repo_root, with the event types it declares."""
+    files: dict[str, set[str]] = {}
     for sub in ("agents", "scripts"):
         base = repo_root / sub
         if not base.is_dir():
@@ -3301,13 +3310,100 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
             if any(x in rel for x in _PRODUCER_SCAN_EXCLUDE):
                 continue
             try:
-                declared.update(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
+                found = set(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
             except OSError:
                 continue
-    return declared
+            if found:
+                files[rel] = found
+    return files
 
 
-def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
+def _producer_label_stems(events: set[str]) -> set[str]:
+    """The label stem each declared event names: its first word.
+
+    ``sentinel_alarm_finding`` -> ``sentinel``, ``deploy_drift_finding`` ->
+    ``deploy``. A producer's LaunchAgent is labelled for what it runs, and a
+    runtime outside the scanned Python trees (a BEAM port launched by a shell
+    script) is only recognisable by that label.
+    """
+    stems = set()
+    for event in events:
+        head = event.removesuffix("_finding").split("_", 1)[0]
+        if head:
+            stems.add(head.replace("_", "-"))
+    return stems
+
+
+def _label_runs_producer(label: str, stems: set[str]) -> bool:
+    """Exact match only: ``com.unitares.<stem>``, or ``<stem>-beam`` for the
+    BEAM port of that producer. A prefix match is too loose: a maintenance
+    job named for the same resident (``<stem>-hygiene``) emits no findings.
+    Producers launched from a Python file are caught by ProgramArguments."""
+    if not label.startswith("com.unitares.") or label == GOVERNANCE_LAUNCHD_LABEL:
+        return False
+    slug = label[len("com.unitares."):]
+    return any(slug in (s, f"{s}-beam") for s in stems)
+
+
+def _producer_agents_present(
+    producer_files: set[str],
+    agents_dir: Path | None = None,
+    events: set[str] = frozenset(),
+    loaded: set[str] = frozenset(),
+) -> bool:
+    """Whether a LaunchAgent on this host runs one of the declared producers.
+
+    Evidence is specific on purpose. A UNITARES agent counts when:
+
+    - its label is exactly a declared event's stem, or that stem's BEAM port
+      (``com.unitares.sentinel-beam`` for ``sentinel_finding``), loaded or
+      installed, which is the only handle on a producer runtime outside the
+      scanned Python trees; or
+    - its installed plist's ProgramArguments name a file that declares a
+      finding producer, or, for a resident package under ``agents/``, any file
+      in that package (its own entry point).
+
+    ``scripts/ops/`` is one flat directory of unrelated jobs, so sharing it
+    proves nothing: a backup job there says nothing about producers and must
+    not turn a fresh install's empty history into a warning.
+    """
+    import plistlib
+
+    stems = _producer_label_stems(set(events))
+    if any(_label_runs_producer(label, stems) for label in loaded):
+        return True
+    directory = agents_dir if agents_dir is not None else (
+        Path.home() / "Library" / "LaunchAgents")
+    producer_dirs = {Path(rel).parent.as_posix() for rel in producer_files
+                     if rel.startswith("agents/")}
+    try:
+        plists = list(directory.glob("com.unitares.*.plist"))
+    except OSError:
+        return False
+    for plist in plists:
+        if _label_runs_producer(plist.name.removesuffix(".plist"), stems):
+            return True
+        try:
+            with plist.open("rb") as fh:
+                args = plistlib.load(fh).get("ProgramArguments") or []
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        for arg in args:
+            if not isinstance(arg, str):
+                continue
+            posix = arg.replace("\\", "/")
+            if any(posix == rel or posix.endswith("/" + rel) for rel in producer_files):
+                return True
+            parent = Path(posix).parent.as_posix()
+            if any(d and (parent == d or parent.endswith("/" + d))
+                   for d in producer_dirs):
+                return True
+    return False
+
+
+def check_producer_never_reported(
+    db_url: str, repo_root: Path, producers_expected: bool | None = None,
+) -> CheckResult:
     """WARN when source declares a finding producer that has NEVER posted once.
 
     ``finding_producer_live`` is self-relative: it judges a producer against its
@@ -3340,6 +3436,25 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
 
     seen = {r[0] for r in rows if r and r[0]}
+    if not seen and producers_expected is None:
+        producers_expected = _producer_agents_present(
+            set(finding_producer_files(repo_root)), events=declared,
+            loaded=_launchctl_loaded())
+    if not seen and not producers_expected:
+        # No finding has ever been posted AND nothing on this host runs a
+        # producer: a fresh install, not a fleet of never-born producers. The
+        # declarations scanned above live in the reference residents (agents/)
+        # and one operator's control plane (scripts/ops/), which such an
+        # install does not run, so "which of these never fired" would only
+        # list somebody else's fleet. With producer agents present, an empty
+        # history is exactly the all-broken case this check exists for, and
+        # it falls through to the warning.
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no finding has ever been posted on this database and no installed "
+            f"LaunchAgent runs a declared producer; the {len(declared)} declared "
+            f"producer(s) are reference residents and operator scripts",
+        )
     never = sorted(declared - seen)
     if not never:
         return CheckResult(

@@ -118,27 +118,47 @@ audit of the README's claims are queued for the next refresh:
 
 ## Dashboard views
 
-<p align="center">
-  <img src="assets/dashboard-overview.png" width="80%" alt="Overview — resident fleet, headline metrics, trust tiers, live Pulse feed"/>
-</p>
-<p align="center"><em>Overview — resident-fleet status, headline metrics (fleet coherence, agents, discoveries, system health, calibration, anomalies), trust-tier distribution, and the live Pulse check-in feed</em></p>
+> **These screenshots predate the dashboard redesign of 2026-09-27.** They were
+> captured in June 2026 from the maintainer's own deployment and show the
+> dashboard as it was then. They are kept as a record of that deployment, not
+> as a picture of the current product. What changed (#2492, #2494, #2502):
+>
+> - The Overview now leads with agents. Its cards are Agents (checked in
+>   within the hour), Check-ins (last hour by verdict), Dialectic, Discoveries
+>   and System Health, followed by a Latest check-in panel and a feed over any
+>   agent. The resident strip appears only when a deployment configures
+>   residents.
+> - The Fleet Coherence, Trust Tiers, Calibration, Anomalies, Automations and
+>   Agent attention cards are gone from the Overview.
+> - The core tabs are Overview, Agents, Discoveries, Dialectic, Activity, EISV,
+>   Risk and Security. Deployment-specific tabs (Residents, Automations,
+>   Adjudication, Telemetry, Metrics, Enforcement) moved out of the core; a
+>   deployment adds its own through the extension directory described in
+>   [`dashboard/EXTENSIONS.md`](../dashboard/EXTENSIONS.md).
+> - The Agents table filters by lifecycle rather than by trust tier; rows
+>   still carry a tier badge when an agent has earned one.
 
 <p align="center">
-  <img src="assets/dashboard-agents.png" width="80%" alt="Agents — per-instance verdict, coherence, risk, updates, recency"/>
+  <img src="assets/dashboard-overview.png" width="80%" alt="Overview as of June 2026, before the 2026-09-27 redesign: resident fleet, headline metrics, trust tiers, Pulse feed"/>
 </p>
-<p align="center"><em>Agents — every governed process-instance with verdict, coherence, risk, update count, and recency; searchable and filterable by trust tier</em></p>
+<p align="center"><em>Overview, June 2026 (pre-redesign): resident-fleet status, the headline metrics of that time (fleet coherence, agents, discoveries, system health, calibration, anomalies), trust-tier distribution, and the Pulse check-in feed. The current Overview is agent-first; see the note above.</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-eisv.png" width="80%" alt="EISV — live fleet trajectory charts"/>
+  <img src="assets/dashboard-agents.png" width="80%" alt="Agents as of June 2026: per-instance verdict, coherence, risk, updates, recency"/>
 </p>
-<p align="center"><em>Live fleet trajectory over time — the four EISV scores (Energy · Integrity · Entropy · Valence) plus the coherence input</em></p>
+<p align="center"><em>Agents, June 2026: every governed process-instance with verdict, coherence, risk, update count, and recency; searchable, and at the time filterable by trust tier (now filterable by lifecycle)</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-discoveries.png" width="80%" alt="Discoveries — shared knowledge graph"/>
+  <img src="assets/dashboard-eisv.png" width="80%" alt="EISV as of June 2026: live fleet trajectory charts"/>
 </p>
-<p align="center"><em>Discoveries — the shared knowledge graph: findings, corrections, and supersessions, filterable by type and time</em></p>
+<p align="center"><em>EISV, June 2026: live fleet trajectory over time, the four EISV scores (Energy · Integrity · Entropy · Valence) plus the coherence input</em></p>
 
 <p align="center">
-  <img src="assets/dashboard-activity.png" width="80%" alt="Activity — filterable event log across all agents"/>
+  <img src="assets/dashboard-discoveries.png" width="80%" alt="Discoveries as of June 2026: shared knowledge graph"/>
 </p>
-<p align="center"><em>Activity — filterable event log across all agents: check-ins, verdicts, and discoveries</em></p>
+<p align="center"><em>Discoveries, June 2026: the shared knowledge graph, with findings, corrections, and supersessions, filterable by type and time</em></p>
+
+<p align="center">
+  <img src="assets/dashboard-activity.png" width="80%" alt="Activity as of June 2026: filterable event log across all agents"/>
+</p>
+<p align="center"><em>Activity, June 2026: filterable event log across all agents, covering check-ins, verdicts, and discoveries</em></p>

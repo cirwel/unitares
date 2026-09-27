@@ -70,5 +70,6 @@ not part of any install path. The tagline it prints is a constant at the top of
 | `dashboard-discoveries.png` | Discoveries — shared knowledge graph | Production snapshot |
 | `dashboard-activity.png` | Activity — filterable event log | Production snapshot |
 
-The dashboard captures date from June 2026 and show the dashboard of that time;
-they are evidence of what ran, not brand surfaces.
+The dashboard captures date from June 2026 and show the dashboard of that time,
+before the 2026-09-27 agent-first redesign; they are evidence of what ran, not
+brand surfaces.
