@@ -3169,6 +3169,15 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
     its own intent to post.
     """
     declared: set[str] = set()
+    for events in finding_producer_files(repo_root).values():
+        declared.update(events)
+    return declared
+
+
+def finding_producer_files(repo_root: Path) -> dict[str, set[str]]:
+    """Each source file that declares a finding producer, relative to
+    repo_root, with the event types it declares."""
+    files: dict[str, set[str]] = {}
     for sub in ("agents", "scripts"):
         base = repo_root / sub
         if not base.is_dir():
@@ -3182,36 +3191,57 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
             if any(x in rel for x in _PRODUCER_SCAN_EXCLUDE):
                 continue
             try:
-                declared.update(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
+                found = set(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
             except OSError:
                 continue
-    return declared
+            if found:
+                files[rel] = found
+    return files
 
 
-def _producer_agents_present(loaded: set[str], agents_dir: Path | None = None) -> bool:
-    """Whether this host shows any sign of running finding producers.
+def _producer_agents_present(
+    producer_files: set[str], agents_dir: Path | None = None,
+) -> bool:
+    """Whether an installed LaunchAgent runs one of the declared producers.
 
-    Producers run as UNITARES LaunchAgents other than the governance server
-    itself (the reference residents, the operator's scheduled doctors). Any
-    such label loaded, or any such plist installed, is evidence that producers
-    are expected here, so an empty finding history is then a failure to
-    diagnose, not a fresh install.
+    Evidence is specific on purpose: an installed ``com.unitares.*`` plist
+    whose ProgramArguments name a file that declares a finding producer, or,
+    for a resident package under ``agents/``, any file in that package (its own
+    entry point). ``scripts/ops/`` is one flat directory of unrelated jobs, so
+    sharing it proves nothing: a backup job there says nothing about producers
+    and must not turn a fresh install's empty history into a warning.
     """
-    prefix = "com.unitares."
-    if any(label.startswith(prefix) and label != GOVERNANCE_LAUNCHD_LABEL
-           for label in loaded):
-        return True
+    import plistlib
+
     directory = agents_dir if agents_dir is not None else (
         Path.home() / "Library" / "LaunchAgents")
+    producer_dirs = {Path(rel).parent.as_posix() for rel in producer_files
+                     if rel.startswith("agents/")}
     try:
-        return any(p.name != f"{GOVERNANCE_LAUNCHD_LABEL}.plist"
-                   for p in directory.glob(f"{prefix}*.plist"))
+        plists = list(directory.glob("com.unitares.*.plist"))
     except OSError:
         return False
+    for plist in plists:
+        try:
+            with plist.open("rb") as fh:
+                args = plistlib.load(fh).get("ProgramArguments") or []
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        for arg in args:
+            if not isinstance(arg, str):
+                continue
+            posix = arg.replace("\\", "/")
+            if any(posix == rel or posix.endswith("/" + rel) for rel in producer_files):
+                return True
+            parent = Path(posix).parent.as_posix()
+            if any(d and (parent == d or parent.endswith("/" + d))
+                   for d in producer_dirs):
+                return True
+    return False
 
 
 def check_producer_never_reported(
-    db_url: str, repo_root: Path, producers_expected: bool = True,
+    db_url: str, repo_root: Path, producers_expected: bool | None = None,
 ) -> CheckResult:
     """WARN when source declares a finding producer that has NEVER posted once.
 
@@ -3245,6 +3275,9 @@ def check_producer_never_reported(
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
 
     seen = {r[0] for r in rows if r and r[0]}
+    if not seen and producers_expected is None:
+        producers_expected = _producer_agents_present(
+            set(finding_producer_files(repo_root)))
     if not seen and not producers_expected:
         # No finding has ever been posted AND nothing on this host runs a
         # producer: a fresh install, not a fleet of never-born producers. The
@@ -3256,8 +3289,8 @@ def check_producer_never_reported(
         # it falls through to the warning.
         return CheckResult(
             name, mode, Status.SKIP,
-            f"no finding has ever been posted on this database and no producer "
-            f"LaunchAgent runs on this host; the {len(declared)} declared "
+            f"no finding has ever been posted on this database and no installed "
+            f"LaunchAgent runs a declared producer; the {len(declared)} declared "
             f"producer(s) are reference residents and operator scripts",
         )
     never = sorted(declared - seen)
@@ -3865,9 +3898,7 @@ def build_checks(
         # Companion to the above: that one catches DIED, this one catches
         # NEVER-BORN. Neither sees the other's case.
         Check("producer_never_reported", "operator",
-              lambda: check_producer_never_reported(
-                  db_url, repo_root,
-                  producers_expected=_producer_agents_present(loaded()))),
+              lambda: check_producer_never_reported(db_url, repo_root)),
         # Third of the family. Those two ask whether findings are BEING MADE;
         # this one asks whether any of them can be CONSUMED. A producer that is
         # alive and loud satisfies both of the above while contributing nothing

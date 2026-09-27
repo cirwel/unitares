@@ -1564,19 +1564,42 @@ def test_producer_never_reported_warns_when_every_producer_is_never_born(
     assert "sentinel_finding" in result.message
 
 
-def test_producer_agents_present_reads_labels_and_plists(doctor, tmp_path):
+def _write_agent_plist(directory, label, args):
+    import plistlib
+    with (directory / f"{label}.plist").open("wb") as fh:
+        plistlib.dump({"Label": label, "ProgramArguments": args}, fh)
+
+
+def test_producer_agents_present_matches_only_plists_that_run_a_producer(doctor, tmp_path):
     agents = tmp_path / "LaunchAgents"
     agents.mkdir()
-    gov = doctor.GOVERNANCE_LAUNCHD_LABEL
-    # Governance alone is not a producer.
-    assert not doctor._producer_agents_present({gov}, agents)
-    (agents / f"{gov}.plist").write_text("")
-    assert not doctor._producer_agents_present(set(), agents)
-    # Any other UNITARES agent, loaded or installed, is.
-    assert doctor._producer_agents_present({"com.unitares.some-resident"}, agents)
-    (agents / "com.unitares.some-resident.plist").write_text("")
-    assert doctor._producer_agents_present(set(), agents)
-    assert not doctor._producer_agents_present(set(), tmp_path / "absent")
+    producers = {"agents/sentinel/agent.py", "scripts/ops/doctor_findings.py"}
+    # Governance and an unrelated UNITARES job (backups) are not producers.
+    _write_agent_plist(agents, doctor.GOVERNANCE_LAUNCHD_LABEL,
+                       ["/usr/bin/python3", "/opt/u/src/mcp_server.py"])
+    _write_agent_plist(agents, "com.unitares.governance-backup",
+                       ["/bin/bash", "/opt/u/scripts/ops/backup_governance.sh"])
+    assert not doctor._producer_agents_present(producers, agents)
+    # A plist that runs a declaring file is.
+    _write_agent_plist(agents, "com.unitares.doctor-findings",
+                       ["/usr/bin/python3", "/opt/u/scripts/ops/doctor_findings.py"])
+    assert doctor._producer_agents_present(producers, agents)
+
+
+def test_producer_agents_present_matches_a_residents_own_directory(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.some-resident",
+                       ["/usr/bin/python3", "/opt/u/agents/sentinel/run.py"])
+    assert doctor._producer_agents_present({"agents/sentinel/agent.py"}, agents)
+
+
+def test_producer_agents_present_tolerates_missing_dir_and_bad_plists(doctor, tmp_path):
+    assert not doctor._producer_agents_present({"agents/x/a.py"}, tmp_path / "absent")
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    (agents / "com.unitares.broken.plist").write_text("not a plist")
+    assert not doctor._producer_agents_present({"agents/x/a.py"}, agents)
 
 
 # --- constraint_drift -------------------------------------------------------

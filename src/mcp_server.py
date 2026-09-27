@@ -396,8 +396,10 @@ async def main():
             "startup read it (e.g. in ~/.env.mcp); dynamic registration is still OPEN. "
             "Set it in the server's process environment (the plist on a launchd "
             "install, a shell export, or the governance-mcp environment block "
-            "in docker-compose.yml; .env alone does not reach the container) "
-            "and restart.",
+            "in docker-compose.yml; .env alone does not reach the container), "
+            "then restart the launchd job, or recreate the container with "
+            "`docker compose up -d` (`docker compose restart` keeps the old "
+            "environment).",
             file=sys.stderr, flush=True,
         )
 
