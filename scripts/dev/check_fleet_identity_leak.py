@@ -439,10 +439,6 @@ SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
         ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
         "design notes describing one deployment's own fleet",
     ),
-    "skills/discord-bridge/SKILL.md": (
-        ("Lumen",) * 8 + ("lumen",) * 3 + ("Sentinel",) * 1 + ("sentinel",) * 2 + ("LUMEN",) * 1,
-        "one operator's Discord bridge (separate repo), served to every agent",
-    ),
     "src/tool_descriptions.json": (
         ("Lumen",) * 2,
         "names Lumen in outcome_event's drawing outcome and an observe example; "

@@ -33,7 +33,11 @@ from .delegated_inference import (
     DelegatedInferenceRequest,
     run_delegated_inference,
 )
-from .host_adapter import host_adapter_available, host_adapter_disabled_hosts
+from .host_adapter import (
+    host_adapter_available,
+    host_adapter_disabled_hosts,
+    host_adapter_lane_configured,
+)
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
 from .model_inference import (
@@ -378,6 +382,8 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
     sent = failure.execution_started or failure.details.get("dispatch_phase") is None
     if route and sent:
         safe["route"] = route
+    if failure.details.get("reason") == "extension_not_configured":
+        safe["reason"] = "extension_not_configured"
     return safe
 
 
@@ -743,7 +749,16 @@ def _success(
     return ConsultationOutcome(data=data, provenance=provenance)
 
 
+_THOROUGH_NOT_CONFIGURED_RECOVERY = (
+    "This server does not run the agent orchestrator extension that serves "
+    "effort='thorough'. Use effort='standard', or pass allow_degraded=true to "
+    "accept a standard local answer."
+)
+
+
 def _recovery_for_upstream(failure: InferenceFailure, *, lane: str) -> str:
+    if failure.details.get("reason") == "extension_not_configured":
+        return _THOROUGH_NOT_CONFIGURED_RECOVERY
     if failure.possibly_running:
         return (
             "The thorough execution may still be running; reconcile the execution "
@@ -819,6 +834,8 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 recovery_action=(
                     "Choose privacy='cloud_allowed', or permit a standard local "
                     "result with allow_degraded=true."
+                    if host_adapter_lane_configured()
+                    else _THOROUGH_NOT_CONFIGURED_RECOVERY
                 ),
                 delivery=None,
                 failure_details={"reason": "thorough_route_requires_external_processing"},
