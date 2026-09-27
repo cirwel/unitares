@@ -64,7 +64,9 @@ describe("overview with no snapshot bundle", () => {
     const dom = bootWithoutSnapshot();
     await dom.window.Landing.render();
     // The regression was zero cards while residents/pulse painted.
-    expect(dom.window.document.querySelectorAll(".card").length).toBeGreaterThan(5);
+    // Five cards since the 2026-09-26 prune: Fleet Coherence, Agents,
+    // Discoveries, Dialectic, System Health.
+    expect(dom.window.document.querySelectorAll(".card").length).toBe(5);
   });
 
   it("renders the resident strip and pulse too, not one at the cost of the other", async () => {
@@ -85,6 +87,8 @@ describe("overview with no snapshot bundle", () => {
   });
 
   it("has a snapshot accessor that cannot throw", () => {
-    expect(dataSource).toMatch(/const S = \(\) => window\.SNAPSHOT \|\| \{\}/);
+    // Gated to offline/preview renders (see data.js), and still `|| {}` so a
+    // missing bundle can never make a fallback throw.
+    expect(dataSource).toMatch(/const S = \(\) => \(SNAPSHOT_FALLBACK && window\.SNAPSHOT\) \|\| \{\}/);
   });
 });

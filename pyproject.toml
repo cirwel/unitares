@@ -57,6 +57,11 @@ full = [
     # Passkey ceremonies for the browser dashboard. Imported lazily so the
     # core (non-HTTP) install remains minimal.
     "webauthn>=2.8.0,<4.0.0",
+    # OpenAI-compatible client for consult and the in-process dialectic
+    # reviewer; it reaches local Ollama's /v1 endpoint by default, and a paid
+    # provider is only ever an operator opt-in. Both modules guard the import.
+    # Floor 1.55.3: earlier releases pass `proxies=` to httpx 0.28's Client.
+    "openai>=1.55.3,<3.0.0",
 ]
 # Semantic search for the knowledge graph. Separate from `full` because
 # sentence-transformers requires torch, whose Linux wheel metadata pulls

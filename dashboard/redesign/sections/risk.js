@@ -21,8 +21,8 @@
  * A produced pause verdict is NOT a delivered enforcement action. Gap-
  * suppression downgrades pauses to proceed at any >150s inter-check-in gap —
  * ordinary resident cadence — so the pause series is a count of verdicts
- * produced, never of interventions delivered. The Enforcement section carries
- * the full produced-vs-delivered meter; this one links to it rather than
+ * produced, never of interventions delivered. The produced-vs-delivered
+ * meter is GET /v1/enforcement/divergence; this section names it rather than
  * quietly implying the stronger reading.
  *
  * `risk` here is DECISION risk — the scalar paired with the governance
@@ -279,9 +279,8 @@
           ? c.pause + " in this window."
           : "None in this window."}
         These are verdicts the policy <em>produced</em>; whether any was
-        delivered is a separate question the
-        <a href="#enforcement" data-section="enforcement">Enforcement</a>
-        section answers.${c.unknown
+        delivered is a separate question, answered by
+        <code>/v1/enforcement/divergence</code>.${c.unknown
           ? ` ${c.unknown} row${c.unknown === 1 ? "" : "s"} predate the action-write and record none — shown unmarked rather than assumed clean.`
           : ""}
       </p>`;
@@ -320,9 +319,8 @@
           <strong>Produced, not delivered.</strong> Gap-suppression downgrades a
           pause to proceed at any &gt;150s inter-check-in gap — ordinary resident
           cadence — so these are verdicts the policy produced, never a count of
-          interventions that landed. The
-          <a href="#enforcement" data-section="enforcement">Enforcement</a>
-          section carries the produced-vs-delivered meter.
+          interventions that landed. The produced-vs-delivered meter is
+          <code>/v1/enforcement/divergence</code>.
         </p>
       </div>
       <div class="panel" style="margin-top:var(--space-4)">

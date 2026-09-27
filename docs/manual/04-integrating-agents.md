@@ -62,7 +62,8 @@ to keep it); other state-changing tools retain it. `raw_governance_hint` names
 where to read more. That is `response_mode="full"` on `sync_state`,
 `search_shared_memory` and `record_result`, and `verbosity="full"` on
 `check_working_state`. `record_result` has no read by outcome id. For an
-outcome recorded with a `prediction_id`, repeating the identical call with
+outcome recorded with a `prediction_id`, repeating the identical call under the
+same identity (pass `client_session_id`) with
 `response_mode="full"` returns the stored outcome in full
 (`idempotent_replay: true`) and records no second outcome while the binding is
 retained; a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`.

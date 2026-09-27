@@ -88,6 +88,7 @@ from src.http_routes.dashboard import (
     http_phase,
     http_dashboard_static,
     http_dashboard_redesign,
+    http_dashboard_ext,
     http_dashboard_classic_redirect,
 )
 from src.http_routes.telemetry import (
@@ -301,6 +302,9 @@ def register_http_routes(
     # static allowlist (which would 403 it). Additive and reversible.
     app.routes.append(Route("/dashboard/redesign", http_dashboard_redesign, methods=["GET"]))
     app.routes.append(Route("/dashboard/redesign/{file:path}", http_dashboard_redesign, methods=["GET"]))
+    # Operator extensions (UNITARES_DASHBOARD_EXT_DIR); 404 when unset. Must also
+    # precede /dashboard/{file}, whose single-segment allowlist would 403 it.
+    app.routes.append(Route("/dashboard/ext/{file:path}", http_dashboard_ext, methods=["GET"]))
     # CUTOVER (2026-06-19): /dashboard (and /) serve the redesign. The classic
     # dashboard was retired (see dashboard/README.md; recover from git history).
     # The static {file} route remains only to serve phase.js for the /phase view;
