@@ -132,16 +132,28 @@ detection of an Ollama endpoint until the evaluation in 5.1 shows the
 
 `privacy='local'` means "this data does not leave machines the operator runs".
 Today it is enforced as "the route was Ollama". Under this proposal the
-server classifies the configured endpoint:
+server classifies the configured endpoint from the URL alone, never from a DNS
+answer:
 
-- `local` when the host's address is in the server's existing trusted-network
-  list (`_TRUSTED_NETWORKS` in `src/http_routes/access.py`: loopback,
-  100.64.0.0/10, and the RFC 1918 ranges), is an RFC 4193 private address, is
-  `host.docker.internal`, or is a name listed in `UNITARES_MODEL_LOCAL_HOSTS`;
-- `external` otherwise.
+- **An IP literal** is `local` when it is in the server's existing
+  trusted-network list (`_TRUSTED_NETWORKS` in `src/http_routes/access.py`:
+  loopback, 100.64.0.0/10 and the RFC 1918 ranges) or is an RFC 4193 private
+  address, and `external` otherwise.
+- **A hostname** is `local` only when it is `localhost`,
+  `host.docker.internal`, or a name the operator lists in
+  `UNITARES_MODEL_LOCAL_HOSTS`. Every other hostname is `external`, even one
+  that currently resolves to a private address.
 
-Reusing that list keeps one definition of "local" in the server: the dashboard
-and WebSocket access checks already trust the same ranges. Tailscale is not
+Classifying from DNS would leave a check-then-use race: a name with several or
+changing answers could be classified from one private answer and then connect
+to a public one, so a `privacy='local'` prompt would leave the operator's
+machines while the server reported otherwise. Listing a name is the operator's
+explicit statement that it stays on their network, and it is the only way a
+hostname becomes `local`. The failure mode is therefore a refusal that names
+the setting to change, never a silent send.
+
+Reusing that address list keeps one definition of "local" in the server: the
+dashboard and WebSocket access checks already trust the same ranges. Tailscale is not
 part of UNITARES setup; 100.64.0.0/10 is in the list because an address there
 is normally a tailnet peer the operator runs.
 
@@ -227,6 +239,15 @@ release note says what to set first. One rule orders them: no step may let a req
      `{base}/models` instead of Ollama's `/api/tags`, writes the new names, and
      keeps its Ollama-only steps (pull hints, the `host.docker.internal`
      rewrite) behind Ollama detection, with its tests;
+   - Ollama detection itself (one cached `GET {root}/api/version` with the
+     local probe budget), and the in-process reviewer's native `/api/chat`
+     attempt made only when it succeeds. Without this, a non-Ollama endpoint
+     set in this step would make every structured review wait out the native
+     route's 60 s timeout before falling back;
+   - the macOS LaunchAgent template
+     (`scripts/ops/com.unitares.governance-mcp.plist`, which today carries
+     only `UNITARES_LLM_MODEL`) and its install instructions, with the two new
+     settings;
    - the doctor check, and the manual and `.env.example` text.
 
    No client changes and no key setting yet: every client still sends a fixed
@@ -243,8 +264,9 @@ release note says what to set first. One rule orders them: no step may let a req
    for the orchestrator's own environment. Move
    all six constructions onto the client (the four in the server, the
    reviewer's `local` backend and the local resident runner), forward the key's
-   name to the orchestrated reviewer as 2.6 describes, and keep `/api/chat`
-   behind Ollama detection. Only now does the manual describe authenticated
+   name to the orchestrated reviewer as 2.6 describes, add the key-name entry
+   to the LaunchAgent template, and keep `/api/chat` behind the step-1 Ollama
+   detection. Only now does the manual describe authenticated
    endpoints.
 3. **Discovery and fallback.** The `/models` availability probe for the
    registry, sending the key as step 2 does, and the fallback endpoint with the Hugging Face default and its
