@@ -38,11 +38,14 @@ competing write           cause                          effect
 saga (BEAM resolve)       ``created_at``                 ``pg_committed_at``, else
                                                          ``reverted_at``, else
                                                          ``updated_at``
-Python-initiated session  the attempt's ``decision_ts``  the response's ``ts``
-write (BEAM request or    (when the writer read the
-Python write, any kind)   session); if none, the latest
-                          protocol message before the
-                          attempt, else the attempt
+Python write (Python      the attempt's ``decision_ts``  the response's ``effect_ts``:
+fallback, Python-only     (when the writer read the      the database clock read
+path, message insert)     session); if none, the latest  by the write statement
+                          protocol message before the    itself (``RETURNING
+                          attempt, else the attempt      clock_timestamp()``)
+BEAM write over HTTP      as above                       unknown to Python: the
+(resolve, phase,                                         interval from the attempt
+reviewer, create)                                        to the response ``ts``
 protocol message          its ``timestamp``              its ``timestamp``
 system message (not the   --                             its ``timestamp``;
 sweeper's)                                               ordering (b) only
@@ -50,7 +53,10 @@ sweeper's)                                               ordering (b) only
 
 A Python-initiated session write is a ``dialectic_session_write`` response
 whose ``outcome`` is ``written`` (or ``already_terminal`` for a BEAM resolve),
-from any ``via`` but ``sweeper``. The competing-writer set is the checked-in
+from any ``via`` but ``sweeper``. The sweeper's own commit is its guarded-write
+row's ``effect_ts`` (database clock), else its ``commit_ts``. Only a write known
+by an interval can be AMBIGUOUS: a landed BEAM write whose interval contains
+the sweeper's commit or decision read, or any write whose outcome is unknown. The competing-writer set is the checked-in
 inventory (``wave3_writer_inventory.py``, enforced by a static test), and
 every message insert bumps the sweeper's staleness clock, so messages are
 competing writes too; the report prints each inventory writer with the
@@ -64,7 +70,9 @@ claiming to observe them. Its commits appear as saga rows
 
 *Completeness (A12)*, over the window, unit by unit:
 
-(a) every ``dialectic_session_write`` attempt has its response (per kind);
+(a) every ``dialectic_session_write`` attempt has its response (per kind),
+    every response its attempt, and every landed Python write its
+    database-clock ``effect_ts`` (only a BEAM-over-HTTP write may lack one);
 (b) each cycle's ``dialectic_guarded_write`` rows equal its
     ``write_attempt_count``, keyed by ``process_boot_id`` + ``cycle_seq``, and
     every guarded-write row belongs to a cycle row;
