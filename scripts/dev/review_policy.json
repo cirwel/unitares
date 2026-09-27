@@ -5,6 +5,8 @@
     "src/http_routes/access.py",
     "src/services/mcp_transport_service.py",
     "src/mcp_listen_config.py",
+    "src/mcp_server.py",
+    "src/dashboard_auth.py",
     "src/mcp_handlers/identity/*",
     "src/mcp_handlers/middleware/identity_step.py",
     "src/mcp_handlers/support/agent_auth.py",

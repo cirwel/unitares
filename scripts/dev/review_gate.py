@@ -1469,7 +1469,11 @@ def cmd_review(args) -> int:
                 if not args.reviewer:
                     rounds = pr_rounds(repo, pr, key, head, comments)
                     if rounds.capped():
-                        return capped_review(args, repo, pr, key, head, rounds)
+                        # A fix-verify receipt is not a full review, so a
+                        # sensitive diff still gets two full families here.
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            capped_review(args, repo, pr, key, head, rounds))
                 args.failed_providers = {p for p in KNOWN_PROVIDERS
                                          if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
                 if native and not args.reviewer and not args.fresh:
@@ -1544,22 +1548,35 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         return result
     # Same availability rules as review_with_fallback: no provider in a quota
     # or auth cooldown, none that exhausted its retries on this diff.
-    failed = getattr(args, "failed_providers", set()) or set()
+    # Derived here, not only from args: the existing-record fast path in
+    # cmd_review reaches this helper before it computes failed_providers.
+    failed = set(getattr(args, "failed_providers", set()) or set()) | {
+        p for p in KNOWN_PROVIDERS if failed_runs(comments, key, p) >= SWEEP_MAX_FAILED}
     candidates = [p for p in reviewer_candidates(getattr(args, "branch", "") or "")
                   if reviewer_family(p) not in families
                   and p not in failed and not provider_cooldown(p)]
-    have = ", ".join(sorted(families)) or "none"
     for provider in candidates:
-        print(f"[review] {sensitive[0]} is security-sensitive: second review by "
-              f"{provider} (have: {have})", flush=True)
+        if reviewer_family(provider) in families:
+            continue
+        print(f"[review] {sensitive[0]} is security-sensitive: review by {provider} "
+              f"(full-review families so far: {', '.join(sorted(families)) or 'none'})",
+              flush=True)
         attempt = argparse.Namespace(**vars(args))
         result = _review_locked(attempt, pr, key, provider)
-        if result != UNREVIEWED:
-            return completed_review_exit(repo, pr, key, head, result)
-        print(f"[review] {provider} did not complete; trying the next family", flush=True)
-    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs a passing "
-          f"review from a second model family (have: {have}); no other reviewer is "
-          "available. Record an independent one with review.sh record --independent.")
+        if result == UNREVIEWED:
+            print(f"[review] {provider} did not complete; trying the next family", flush=True)
+            continue
+        result = completed_review_exit(repo, pr, key, head, result)
+        if result != 0:
+            return result  # findings (or a moved diff) go back to the author first
+        families.add(reviewer_family(provider))
+        if len(families) >= 2:
+            return 0
+        # A fix-verify receipt left no full family: one more is still needed.
+    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing "
+          f"full reviews from two model families (have: "
+          f"{', '.join(sorted(families)) or 'none'}); no other reviewer is available. "
+          "Record an independent one with review.sh record --independent.")
     return UNREVIEWED
 
 

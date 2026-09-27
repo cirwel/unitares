@@ -2026,6 +2026,7 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
     for path in ("src/oauth_provider.py", "src/mcp_handlers/identity/handlers.py",
                  "src/mcp_handlers/schemas/identity.py",
                  "src/services/mcp_transport_service.py", "src/mcp_listen_config.py",
+                 "src/mcp_server.py", "src/dashboard_auth.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2234,3 +2235,35 @@ def test_a_just_passed_fix_verification_is_not_a_family(monkeypatch):
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
                                  passed_by="fix-verify:claude") == 0
     assert ran == ["codex"]  # still needs a real second family
+
+
+
+def test_after_a_fix_verify_receipt_two_full_families_are_still_run(monkeypatch):
+    """Native Codex on #2504 (P2): with only a fix-verify pass there is no full
+    family yet, so one more review is not enough."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families=set(), candidates=("codex", "antigravity", "claude"))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
+                                 passed_by="fix-verify:claude") == 0
+    assert ran == ["codex", "antigravity"]
+
+
+def test_exhausted_providers_are_read_from_the_record_on_every_path(monkeypatch):
+    """Native Codex on #2504 (P2): the existing-record fast path reached the
+    helper before failed_providers was computed, so it retried an exhausted one."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    monkeypatch.setattr(rg, "failed_runs", lambda comments, key, p: 9 if p == "codex" else 0)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)  # no failed_providers
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert ran == ["claude"]
+
+
+def test_findings_from_the_second_family_go_back_to_the_author(monkeypatch):
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or 1)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 1
+    assert ran == ["codex"]
