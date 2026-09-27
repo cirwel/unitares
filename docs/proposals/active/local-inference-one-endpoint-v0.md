@@ -1,7 +1,8 @@
 # One local model endpoint (v0)
 
-Status: Proposed, design-only. Nothing here is authorized to build until the
-operator decides the three open questions in section 7.
+Status: Proposed, design-only. The operator's decisions on the three open
+questions are recorded in section 7 (2026-09-27). Merging this document does
+not by itself authorize the build.
 
 Date: 2026-09-27
 
@@ -72,7 +73,7 @@ The local lane becomes one OpenAI-compatible endpoint:
 | Setting | Meaning | Default |
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL including `/v1` | derived from `UNITARES_OLLAMA_BASE` if set, else `http://localhost:11434/v1` |
-| `UNITARES_MODEL` | Model id the endpoint serves | `UNITARES_LLM_MODEL` if set, else `gemma4:latest` (see 7.2) |
+| `UNITARES_MODEL` | Model id the endpoint serves | `UNITARES_LLM_MODEL` if set, else none (see 7.2) |
 | `UNITARES_MODEL_API_KEY_ENV` | Name of the variable that holds the endpoint's key, if it needs one | `UNITARES_MODEL_API_KEY` |
 
 The key is named indirectly, as the orchestrated reviewer's `external` backend
@@ -81,7 +82,8 @@ not carry the value (see 2.6) can be told which variable to read. Ollama,
 vLLM, LM Studio, llama.cpp's server, OpenRouter, OpenAI and the Hugging Face
 router all accept this shape. The existing names stay as aliases with the
 precedence and disagreement warning `local_inference_env.py` already applies to
-`UNITARES_OLLAMA_BASE_URL`. An existing install keeps working with no edits.
+`UNITARES_OLLAMA_BASE_URL`. An existing install keeps working with no edits, except that one which relies
+on the implicit model must name it before step 4 (section 4).
 
 ### 2.2 One client
 
@@ -103,9 +105,16 @@ detection of an Ollama endpoint until the evaluation in 5.1 shows the
 Today it is enforced as "the route was Ollama". Under this proposal the
 server classifies the configured endpoint:
 
-- `local` when the host is loopback, an RFC 1918 or RFC 4193 private address,
-  `host.docker.internal`, or a name listed in `UNITARES_MODEL_LOCAL_HOSTS`;
+- `local` when the host's address is in the server's existing trusted-network
+  list (`_TRUSTED_NETWORKS` in `src/http_routes/access.py`: loopback,
+  100.64.0.0/10, and the RFC 1918 ranges), is an RFC 4193 private address, is
+  `host.docker.internal`, or is a name listed in `UNITARES_MODEL_LOCAL_HOSTS`;
 - `external` otherwise.
+
+Reusing that list keeps one definition of "local" in the server: the dashboard
+and WebSocket access checks already trust the same ranges. Tailscale is not
+part of UNITARES setup; 100.64.0.0/10 is in the list because an address there
+is normally a tailnet peer the operator runs.
 
 `UNITARES_MODEL_PRIVACY=local|external` overrides the classification for an
 operator whose own server sits on a public address. A `privacy='local'` request
@@ -167,8 +176,9 @@ settings when its own are unset.
 
 ## 4. Staging
 
-Each step is its own pull request and preserves behavior for an install that
-changes no setting. One rule orders them: no step may let a request with
+Each step is its own pull request. Steps 1 to 3 preserve behavior for an
+install that changes no setting; step 4 is the one deliberate change, and its
+release note says what to set first. One rule orders them: no step may let a request with
 `privacy='local'` reach an endpoint the server has not classified as local.
 
 1. **Settings, with the privacy check.** In one pull request:
@@ -206,7 +216,16 @@ changes no setting. One rule orders them: no step may let a request with
 3. **Discovery and fallback.** The `/models` availability probe for the
    registry, sending the key as step 2 does, and the fallback endpoint with the Hugging Face default and its
    Compose mappings.
-4. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy` and describe
+4. **No implicit model.** Remove the `gemma4:latest` fallback (decision 7.2),
+   one release after step 1, whose doctor check warns when no model is named.
+   After it, an install that names no model has consult and the local reviewer
+   off, as the install manual already describes. The release notes say that
+   deployments which relied on the implicit model must set `UNITARES_MODEL`
+   (or the older `UNITARES_LLM_MODEL`) first, and that includes the original
+   operator's deployment, which names none today. Agent processes that read
+   the same resolver (the orchestrated reviewer's `local` backend, the local
+   resident runner) follow the same rule.
+5. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy` and describe
    `provider` as primary or fallback. This moves input-schema digests, so it
    waits for the next batched interface-contract release (see
    `interface-contract-release-batching-v0.md`, PR #2515, if accepted).
@@ -241,13 +260,18 @@ in CI or a recorded manual run.
   70 s (`model_inference.py`). That mismatch
   predates this proposal and is not fixed by it; step 2 should not make it worse.
 
-## 7. Decisions for the operator
+## 7. Decisions (operator, 2026-09-27)
 
-1. **Names.** Introduce `UNITARES_MODEL_*` as the documented names with the
-   current ones as aliases (proposed), or keep `UNITARES_OLLAMA_BASE` canonical
-   and add only an API-key setting.
-2. **Default model.** Keep `gemma4:latest` when nothing is named (proposed,
-   preserves behavior), or default to no model so consult and reviews stay off
-   until the installer names one, which is what the manual already describes.
-3. **Local address list.** Whether Tailscale's 100.64.0.0/10 counts as local by
-   default.
+1. **Names.** The operator left this to the proposal. Decided:
+   `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
+   become the documented names, and `UNITARES_OLLAMA_BASE`,
+   `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` stay as aliases. A name
+   containing `OLLAMA` tells an installer with another server that the setting
+   is not for them; the aliases keep every existing install working.
+2. **Default model: none.** "We don't know what outside users use." The
+   implicit `gemma4:latest` goes, in its own step (section 4, step 4) after a release
+   with a doctor warning, so deployments that relied on it can name a model
+   first.
+3. **Local addresses.** Tailscale is not part of UNITARES setup. The endpoint
+   check reuses the server's existing trusted-network list, which already
+   includes 100.64.0.0/10, rather than defining "local" a second way (2.3).
