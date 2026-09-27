@@ -429,3 +429,26 @@ def test_the_default_ledger_lives_under_data_dialectic(monkeypatch):
     monkeypatch.delenv(sw.EMIT_FAILURE_LEDGER_ENV, raising=False)
     assert sw.emit_failure_ledger_path().endswith(
         "data/dialectic/instrument_emit_failures.jsonl")
+
+
+
+class TestNoOpsAreNotWrites:
+    @pytest.mark.asyncio
+    async def test_an_idempotent_resolve_is_a_no_op(self, captured, fake_db):
+        async def idempotent(session_id, resolution, status, detail=None):
+            detail.update(written=False, existing_status="resolved")
+            return True
+
+        fake_db.resolve_session = AsyncMock(side_effect=idempotent)
+        assert await dialectic_db.resolve_session_async("s1", {}, "resolved") is True
+        _attempt, response = _pair(captured)
+        assert response["outcome"] == "no_op"
+        assert response["existing_status"] == "resolved"
+
+    @pytest.mark.asyncio
+    async def test_a_duplicate_create_is_not_written(self, captured, fake_db):
+        fake_db.create_session = AsyncMock(
+            return_value={"session_id": "s1", "created": False, "error": "already_exists"})
+        await dialectic_db.create_session_async(session_id="s1")
+        _attempt, response = _pair(captured)
+        assert response["outcome"] == "not_written"

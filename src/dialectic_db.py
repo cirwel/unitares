@@ -485,7 +485,9 @@ class DialecticDB:
         self,
         session_id: str,
         resolution: Dict[str, Any],
-        status: str = "resolved"
+        status: str = "resolved",
+        *,
+        detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Mark session as resolved or failed with resolution data.
 
@@ -501,6 +503,11 @@ class DialecticDB:
                     is already in the *requested* terminal state (idempotent).
           * False — the session is missing, or is already in a *different*
                     terminal state (conflict; the existing resolution is kept).
+
+        ``detail``, when given, is filled with ``written`` (whether THIS call
+        mutated the row) and, when it did not, the ``existing_status``: an
+        idempotent True wrote nothing, and an instrument must not record it as
+        a write. The return value is unchanged.
         """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
@@ -514,12 +521,17 @@ class DialecticDB:
             """, status, phase, json.dumps(resolution), session_id)
             if row is not None:
                 logger.info(f"Resolved session {session_id[:16]}... with status {status}")
+                if detail is not None:
+                    detail["written"] = True
                 return True
             # No row written: inspect why (idempotent replay vs conflict vs missing).
             existing = await conn.fetchrow(
                 "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
                 session_id,
             )
+            if detail is not None:
+                detail["written"] = False
+                detail["existing_status"] = existing["status"] if existing else None
             if existing is None:
                 logger.warning(f"resolve_session: {session_id[:16]}... not found")
                 return False
@@ -991,7 +1003,10 @@ async def create_session_async(**kwargs) -> Dict[str, Any]:
     ) as rec:
         db = await get_dialectic_db()
         result = await db.create_session(**kwargs)
-        rec.respond(outcome=written_outcome(result))
+        # A duplicate id answers a truthy dict with created=False: no write.
+        created = result.get("created") if isinstance(result, dict) else None
+        rec.respond(outcome=("not_written" if created is False
+                             else written_outcome(result)))
         return result
 
 
@@ -1148,8 +1163,14 @@ async def resolve_session_async(session_id: str, resolution: Dict[str, Any], sta
         kind=KIND_RESOLVE, session_id=session_id, requested=status,
     ) as rec:
         db = await get_dialectic_db()
-        result = await db.resolve_session(session_id, resolution, status)
-        rec.respond(outcome=written_outcome(result),
+        detail: Dict[str, Any] = {}
+        result = await db.resolve_session(session_id, resolution, status, detail=detail)
+        # An idempotent True (already in the requested state) wrote nothing.
+        if detail.get("written") is False:
+            outcome = "no_op" if result else "not_written"
+        else:
+            outcome = written_outcome(result)
+        rec.respond(outcome=outcome, existing_status=detail.get("existing_status"),
                     reason=(resolution or {}).get("reason")
                     if isinstance(resolution, dict) else None)
         return result

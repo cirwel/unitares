@@ -124,9 +124,12 @@ def run(writes, *, sessions=(), messages=(), sagas=(), events=(), cycles=None,
         window_sagas=(), correlation_hours=6.0):
     if cycles is None:
         # A matching periodic v2 cycle row, so the reading can be complete.
-        cycles = [cycle(at(0.5), 1, cycle_id="c1",
-                        attempts=sum(1 for w in writes
-                                     if w["payload"].get("cycle_id") == "c1"))]
+        mine = [w["payload"] for w in writes if w["payload"].get("cycle_id") == "c1"]
+        n = {o: sum(1 for w in mine if w["outcome"] == o)
+             for o in ("succeeded", "refused", "error")}
+        cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=len(mine),
+                        succeeded=n["succeeded"], refused=n["refused"], errors=n["error"],
+                        clean=n["succeeded"])]
     return report.analyze(
         writes=list(writes), cycles=list(cycles), competing_events=list(events),
         sessions=list(sessions) or [session_row()], messages=list(messages),
@@ -287,6 +290,11 @@ class TestContention:
                             winner_status="failed")]))
         assert w["class"] == "contention_divergent"
 
+    def test_a_non_terminal_winner_read_is_unattributed(self):
+        """The refusal read raced a reopen: it does not name the winner."""
+        w = only(run([write(outcome="refused", winner_status="active")]))
+        assert w["class"] == "contention_unattributed"
+
     def test_refused_without_a_recorded_winner_is_unattributed(self):
         w = only(run([write(outcome="refused", winner_status=None)]))
         assert w["class"] == "contention_unattributed"
@@ -377,8 +385,9 @@ class TestCompleteness:
         """Not permanently inconclusive: the interval from the previous cycle row
         to the reporting one is UNCOVERED, and the writes inside it are excluded."""
         cycles = [cycle(at(-10), 1, cycle_id="c0"),
-                  cycle(at(0.5), 2, cycle_id="c1", attempts=1, emit_failures=1),
-                  cycle(at(10), 3, cycle_id="c2", attempts=1)]
+                  cycle(at(0.5), 2, cycle_id="c1", attempts=1, succeeded=1, clean=1,
+                        emit_failures=1),
+                  cycle(at(10), 3, cycle_id="c2", attempts=1, succeeded=1, clean=1)]
         result = run([write(), write("s2", commit_at=at(9.5), read_at=at(9), cycle_id="c2")],
                      sessions=[session_row(), session_row("s2")], cycles=cycles)
         comp = result["completeness"]
@@ -425,6 +434,13 @@ class TestCompleteness:
         read = report.read_emit_failure_ledger(str(path))
         assert read["status"] == "read" and len(read["lines"]) == 2
         assert read["lines"][1]["ts"] is None
+
+    def test_an_unbalanced_cycle_row_is_inconclusive(self):
+        """A missing probe must not become a clean zero."""
+        cycles = [cycle(at(0.5), 1, cycle_id="c1", attempts=1, succeeded=1, clean=0)]
+        result = run([write()], cycles=cycles)
+        assert result["completeness"]["unbalanced_cycle_rows"]
+        assert result["reading"] == "INCONCLUSIVE"
 
     def test_no_instrument_rows_is_not_started_not_complete(self):
         result = run([], cycles=[])

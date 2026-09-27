@@ -607,7 +607,10 @@ def classify_write(
         klass = "unknown_outcome"
     elif outcome == "refused":
         winner = write.get("winner_status")
-        if winner is None:
+        # Only a terminal row refuses a guarded write. A non-terminal winner
+        # means the row changed again between the refused UPDATE and the
+        # follow-up read (a reopen, say), so the read does not name the winner.
+        if winner is None or winner not in TERMINAL_STATUSES:
             klass = "contention_unattributed"
         elif winner == intended:
             klass = "contention_benign"
@@ -958,7 +961,10 @@ def completeness(
         the window is named by a session-write response;
     (e) the durable emit-failure ledger was readable, and each of its lines
         could be placed in time;
-    (f) no classified write is AMBIGUOUS.
+    (f) no classified write is AMBIGUOUS;
+    (g) every v2 cycle row balances (attempted = succeeded + refused + error;
+        succeeded = clean + detected + probe_failed) -- a row missing a field
+        counts as not balancing.
 
     With no v2 periodic cycle row in the window the reading is
     ``NOT_STARTED``: the instrument did not run, and zero unmatched units over
@@ -1042,6 +1048,18 @@ def completeness(
     # (c)
     unmatched_c = unc["unexplained_seq_gaps"]
 
+    # (g) Every row must balance: a row that does not is an instrument defect,
+    # and a missing probe must never read as a clean zero.
+    unbalanced = []
+    for c in cycles:
+        p = _payload(c)
+        t = _ts(c.get("ts"))
+        if _in(t) and p.get("process_boot_id") and _balanced(p) is not True:
+            item = {"process_boot_id": p.get("process_boot_id"),
+                    "cycle_seq": p.get("cycle_seq"), "ts": _iso(t)}
+            if _counted(t, item):
+                unbalanced.append(item)
+
     # (d) committed Python-routed sagas no response names.
     named = {str(pr["response"].get("saga_id")) for pr in pairs.values()
              if pr["response"] is not None and pr["response"].get("saga_id")}
@@ -1059,7 +1077,8 @@ def completeness(
 
     unmatched = (len(unmatched_a) + len(orphan_rows) + len(unmatched_b)
                  + sum(len(g["missing_cycle_seq"]) for g in unmatched_c)
-                 + len(unnamed) + ledger_unreadable + len(unplaceable) + ambiguous_writes)
+                 + len(unnamed) + ledger_unreadable + len(unplaceable) + ambiguous_writes
+                 + len(unbalanced))
     if heartbeat_report.get("first_periodic_v2_row") is None:
         reading = "NOT_STARTED"
     else:
@@ -1078,6 +1097,7 @@ def completeness(
         "guarded_write_rows_without_a_cycle": orphan_rows,
         "cycle_seq_gaps": unmatched_c,
         "ambiguous_writes": ambiguous_writes,
+        "unbalanced_cycle_rows": unbalanced,
         "emit_failure_ledger": {"path": ledger.get("path"), "status": ledger.get("status"),
                                 "lines_in_window": ledger_lines,
                                 "unplaceable_lines": unplaceable},
@@ -1342,6 +1362,9 @@ def render_text(report: Dict[str, Any]) -> str:
                      f"missing {u['missing_cycle_seq']}")
     lines.append(f"  ambiguous writes (cannot be ordered against the commit): "
                  f"{comp['ambiguous_writes']}")
+    lines.append(f"  cycle rows that do not balance: {len(comp['unbalanced_cycle_rows'])}")
+    for u in comp["unbalanced_cycle_rows"]:
+        lines.append(f"    UNMATCHED {u}")
     led = comp["emit_failure_ledger"]
     lines.append(f"  emit-failure ledger ({led['status']}, {led['path']}): "
                  f"{len(led['lines_in_window'])} line(s) in window")

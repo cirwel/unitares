@@ -11,7 +11,7 @@ import asyncio
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
+from unittest.mock import ANY, patch, MagicMock, AsyncMock, PropertyMock
 
 # Ensure project root is on sys.path
 project_root = Path(__file__).parent.parent
@@ -1486,7 +1486,8 @@ class TestConvenienceWrappers:
 
         result = await resolve_session_async("s1", {"outcome": "ok"}, status="resolved")
 
-        mock_singleton.resolve_session.assert_awaited_once_with("s1", {"outcome": "ok"}, "resolved")
+        mock_singleton.resolve_session.assert_awaited_once_with(
+            "s1", {"outcome": "ok"}, "resolved", detail=ANY)
         assert result is True
 
     @pytest.mark.asyncio
