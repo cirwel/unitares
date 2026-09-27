@@ -11,6 +11,7 @@ from src.mcp_compat import get_tool_input_schema
 from ..utils import success_response, error_response
 from ..decorators import mcp_tool
 from ..support.coerce import coerce_bool
+from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
 from . import tool_catalog
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -676,7 +677,7 @@ async def handle_list_tools(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "2. Save uuid and client_session_id from the response",
                 "3. Pass client_session_id on later check-ins and writes",
                 "4. Use parent_agent_id only for a real handoff from a finished predecessor",
-                "5. Use identity(name='...') only to set a cosmetic label"
+                f"5. Use {SET_DISPLAY_NAME_CALL} only to set a cosmetic label"
             ],
             "categories_to_explore": [
                 "🚀 Identity & Onboarding - Start here!",

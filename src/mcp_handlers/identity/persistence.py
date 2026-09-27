@@ -520,6 +520,75 @@ async def _find_agent_by_label(label: str) -> Optional[str]:
         return None
 
 
+def _recorded_auto_labels(
+    agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
+) -> set:
+    """Every name the server derived for this agent, which a claim must not become.
+
+    ``label_source_for`` reads a label as ``auto`` when it equals any of
+    these, so a collision rename that happened to reproduce one would report
+    a claimed name as server-assigned:
+
+    - ``auto_label``, kept in two places. The mint writes it once to
+      ``core.identities.metadata`` and to the in-memory entry; a knowledge
+      write's ``Agent_<uuid8>`` name sets it in memory only. A claim can clear
+      the in-memory copy (``drop_stale_display_name``) while the persisted one
+      stands, and the cold-start loader restores the persisted one, so both
+      are read here.
+    - ``structured_id`` and ``public_agent_id``. The structured id is
+      ``{interface}_{model}_{date}_{uuid8}``, the same ``<stem>_<uuid8>``
+      shape as a collision rename, so claiming its date-stamped stem while
+      another agent holds it would otherwise reproduce it. (An agent minted
+      before v2.5.0 gets its structured id only after the label is chosen;
+      that case is not covered.)
+    """
+    recorded: set = set()
+    keys = ("auto_label", "structured_id", "public_agent_id")
+    if isinstance(identity_metadata, dict):
+        for key in keys:
+            value = identity_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
+    try:
+        meta_map = getattr(mcp_server, "agent_metadata", None)
+        meta = meta_map.get(agent_uuid) if meta_map else None
+        for key in keys:
+            value = getattr(meta, key, None) if meta is not None else None
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
+    except Exception:
+        pass
+    return recorded
+
+
+async def _collision_label(
+    label: str, agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
+) -> str:
+    """The label a claim becomes when another agent already holds ``label``.
+
+    Ordinarily ``{label}_{uuid8}``. That is also how the server builds the
+    labels it assigns (the mint's ``<stem>_<uuid8>``, a knowledge write's
+    ``Agent_<uuid8>``), so a claim of the bare stem -- ``claude_code-opus``
+    while another agent holds it -- would become this agent's own
+    ``claude_code-opus_<uuid8>``, byte-identical to the label the server
+    recorded for it, and ``label_source_for`` would read ``auto`` for a name
+    the caller claimed. In that case the suffix is the first two groups of
+    the uuid instead. It ends in ``-`` and four hex digits, and every
+    recorded label ends in eight hex digits, so it cannot equal one. If
+    another agent holds even that, the whole uuid is used.
+    """
+    candidate = f"{label}_{agent_uuid[:8]}"
+    recorded = _recorded_auto_labels(agent_uuid, identity_metadata)
+    if candidate.strip() not in recorded:
+        return candidate
+    longer = f"{label}_{agent_uuid[:13]}"
+    if longer.strip() not in recorded:
+        holder = await _find_agent_by_label(longer)
+        if not holder or holder == agent_uuid:
+            return longer
+    return f"{label}_{agent_uuid}"
+
+
 def _broadcaster():
     """Lazy accessor for the shared broadcaster. Returns None when broadcaster
     isn't importable (e.g., unit tests without a live server). Kept as a
@@ -749,11 +818,69 @@ async def ensure_agent_persisted(
 # LABEL MANAGEMENT
 # =============================================================================
 
+def drop_stale_display_name(meta, label: str) -> None:
+    """Make a newly set label the name every reader displays.
+
+    ``display_name`` is not an AgentMetadata field and is never persisted.
+    Its one writer is the ``Agent_<uuid8>`` name a knowledge write gives an
+    agent with no meaningful label
+    (knowledge/handlers._check_display_name_required), which sets
+    display_name, label and auto_label together, in memory. Readers prefer
+    display_name to label (support/agent_auth.compute_agent_signature, the
+    knowledge display payload, services/runtime_queries), so after that
+    auto-name a claim that updated only the label went on displaying
+    ``Agent_<uuid8>``, and label_source went on reading ``auto`` because the
+    displayed name still equalled auto_label. Clearing it leaves the agent
+    as one that was never auto-named: the claimed label is displayed and
+    label_source reads ``claimed``. The cold-start loader never restores
+    display_name, so a restart already had this effect.
+
+    Any non-``None`` ``display_name`` here means "auto-named" -- it has
+    exactly one writer, above -- so its call site (``set_agent_label_resolved``,
+    after the collision-rename already picked the label actually applied)
+    always represents a real claim and must always clear it. The ``label``
+    parameter used to gate that: skip clearing when ``display_name`` already
+    equalled the incoming ``label``. That is reachable, not just theoretical
+    -- a collision rename appends this agent's OWN uuid8
+    (``f"{label}_{agent_uuid[:8]}"``), which is exactly how the auto-name was
+    built, so claiming a taken name can resolve to a string identical to the
+    stale auto-name (e.g. claim ``"Agent"``, collide, land on
+    ``"Agent_<uuid8>"`` -- the same string ``_check_display_name_required``
+    already wrote). The old guard read that coincidence as "nothing to
+    clear" and left ``label_source`` reading ``auto`` for a name the caller
+    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27). A
+    collision rename no longer lands on that string (``_collision_label``
+    takes a longer suffix when ``{label}_{uuid8}`` equals a recorded auto
+    label), but a claim of the exact string ``Agent_<uuid8>`` still does, so
+    the clear stays unconditional.
+
+    ``auto_label`` is cleared in the same branch, for the same reason.
+    ``label_source_for`` (services/identity_payloads.py) reads ``auto``
+    whenever the displayed label still equals ``auto_label``, and the
+    knowledge write that sets this in-memory ``display_name`` sets
+    ``auto_label`` in the exact same call (knowledge/handlers.
+    _check_display_name_required) -- they are one event's two fields, not
+    two independent facts. Clearing only ``display_name`` left
+    ``compute_agent_signature``'s fallback (``display_name or label``) read
+    the just-applied ``label`` instead, which in the same collision
+    coincidence above still equals the stale ``auto_label`` --
+    ``label_source`` kept reading ``auto`` even after the ``display_name``
+    fix. A mint-time ``auto_label`` (persisted to ``core.identities.metadata``,
+    "written once ... and never updated" -- agent_metadata_model.py) is never
+    reachable here: it does not set ``display_name``, so this function is a
+    no-op for it and it is untouched, exactly as documented.
+    """
+    if getattr(meta, "display_name", None) is not None:
+        meta.display_name = None
+        meta.auto_label = None
+
+
 async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str] = None) -> bool:
     """Set display name for an agent. ``True`` iff the write succeeded.
 
     ⛔The label written may DIFFER from the one requested: a collision with
-    another active agent renames this one to ``{label}_{uuid8}``. A bool cannot
+    another active agent renames this one, ordinarily to ``{label}_{uuid8}``
+    and sometimes to a longer uuid suffix (``_collision_label``). A bool cannot
     express that, and callers that read "success" as "I got the name I asked
     for" reported the requested label back to the agent while the database
     held the renamed one. Use ``set_agent_label_resolved`` when the answer
@@ -804,7 +931,9 @@ async def set_agent_label_resolved(
         # Substrate-Earned Identity".
         existing = await _find_agent_by_label(label)
         if existing and existing != agent_uuid:
-            new_label = f"{label}_{agent_uuid[:8]}"
+            # {label}_{uuid8}, unless that reproduces a label the server
+            # recorded for this agent (then a longer suffix).
+            new_label = await _collision_label(label, agent_uuid, existing_metadata)
             existing_is_resident = await db.agent_has_tag(existing, "persistent")
 
             # Resolve new agent's declared lineage. existing_metadata above
@@ -906,6 +1035,7 @@ async def set_agent_label_resolved(
                 if agent_uuid in mcp_server.agent_metadata:
                     meta = mcp_server.agent_metadata[agent_uuid]
                     meta.label = label
+                    drop_stale_display_name(meta, label)
 
                     # Generate structured_id if missing (migration for pre-v2.5.0 agents)
                     if not getattr(meta, 'structured_id', None):

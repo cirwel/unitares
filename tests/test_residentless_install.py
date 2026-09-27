@@ -238,6 +238,45 @@ class TestTheGuardCoversWhatShips:
         assert not missing, f"shipped but unguarded: {sorted(missing)}"
 
 
+class TestTheDoctorExpectsNoResidents:
+    """The install doctor ships with no resident roster either.
+
+    Until 2026-09-27 ``scripts/dev/unitares_doctor.py`` carried a hardcoded
+    table of one operator's resident LaunchAgents and warned that they were
+    "not loaded" on every other install. Which residents a host runs is now
+    declared (``UNITARES_DOCTOR_RESIDENT_LAUNCHD``); with nothing declared the
+    check has nothing to expect.
+    """
+
+    @pytest.fixture
+    def doctor(self, monkeypatch):
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        name = "unitares_doctor_residentless"
+        script = Path(__file__).resolve().parents[1] / "scripts/dev/unitares_doctor.py"
+        spec = importlib.util.spec_from_file_location(name, script)
+        mod = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, mod)  # dataclasses resolve via sys.modules
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_resident_launchagent_is_declared_by_default(self, doctor, monkeypatch):
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        assert doctor.resident_launchd_slots() == ()
+
+    def test_a_launchd_host_with_no_roster_expects_no_residents(self, doctor, monkeypatch):
+        # Even on a real launchd deployment, an undeclared roster is SKIP, not
+        # a warning about somebody else's residents.
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        result = doctor.check_resident_agents({doctor.GOVERNANCE_LAUNCHD_LABEL})
+
+        assert result.status == doctor.Status.SKIP
+
+
 # --- the agent-first Overview (2026-09-27) ------------------------------------
 # The dashboard's Overview now leads with agents and hides its resident block
 # when the roster is empty (dashboard/tests/landing-agent-first.test.js). What
@@ -292,3 +331,39 @@ def test_default_install_mounts_no_resident_routes(residentless, monkeypatch):
     assert not [p for p in paths if p.startswith(("/v1/sentinel/", "/v1/watcher/", "/v1/vigil/"))]
     assert "/api/automations" not in paths
     assert "/v1/residents" in paths  # the roster endpoint is core, and answers empty
+
+
+# --- metrics catalog (2026-09-27) ---------------------------------------------
+# GET /v1/metrics/catalog serves the catalog to every install. The metrics the
+# reference scraper resident records about this operator's own repo, GitHub org
+# and residents live in agents/chronicler/metrics_catalog.json and are
+# registered only when UNITARES_METRICS_CATALOG_EXTRA names that file. The
+# catalog is built at import, so the default install is checked in a fresh
+# interpreter with the variable unset rather than by patching a module global.
+
+def test_default_install_catalog_is_product_only(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parent.parent
+    env = {k: v for k, v in os.environ.items() if k != "UNITARES_METRICS_CATALOG_EXTRA"}
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import json; from src.fleet_metrics.catalog import catalog; "
+         "print(json.dumps(sorted(catalog)))"],
+        cwd=repo, env=env, capture_output=True, text=True, check=True, timeout=60,
+    )
+    names = json.loads(out.stdout.strip().splitlines()[-1])
+    declared = {
+        m["name"]
+        for m in json.loads(
+            (repo / "agents" / "chronicler" / "metrics_catalog.json").read_text()
+        )["metrics"]
+    }
+    assert declared, "the reference extra catalog must declare its metrics"
+    leaked = sorted(n for n in names if n.removesuffix(".error") in declared)
+    assert not leaked, f"default catalog advertises operator metrics: {leaked}"
+    assert "kg.entries.count" in names  # the product layer still ships

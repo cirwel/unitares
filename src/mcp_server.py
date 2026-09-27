@@ -394,7 +394,12 @@ async def main():
         print(
             "[FastMCP] ERROR: UNITARES_OAUTH_DYNAMIC_REGISTRATION=false was set after "
             "startup read it (e.g. in ~/.env.mcp); dynamic registration is still OPEN. "
-            "Set it in the LaunchAgent plist or process environment and restart.",
+            "Set it in the server's process environment (the plist on a launchd "
+            "install, a shell export, or the governance-mcp environment block "
+            "in docker-compose.yml; .env alone does not reach the container), "
+            "then restart the launchd job, or recreate the container with "
+            "`docker compose up -d` (`docker compose restart` keeps the old "
+            "environment).",
             file=sys.stderr, flush=True,
         )
 
@@ -412,7 +417,7 @@ async def main():
             mcp=mcp,
         )
     except ServerStartupError as exc:
-        print(f"\\n❌ Error: {exc}", file=sys.stderr)
+        print(f"\n❌ Error: {exc}", file=sys.stderr)
         if exc.hint:
             print(f"💡 Tip: {exc.hint}", file=sys.stderr)
         raise SystemExit(1) from exc

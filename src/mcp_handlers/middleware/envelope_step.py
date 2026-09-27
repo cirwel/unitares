@@ -753,16 +753,28 @@ def _metrics_identity_assurance(
     payload: Dict[str, Any],
     binding_assurance: Optional[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
-    """Mark a real metrics read whose binding the server merely inferred.
+    """Mark a real metrics read on a call whose session the server only
+    inferred.
 
-    check_working_state's description promises that such a read returns the
-    agent's state marked identity_assurance.caller_proven=false, since it may
-    be a co-located sibling's. The canonical payload cannot carry that mark:
-    its agent_signature collapses to {"uuid": null} for a server-inferred
-    binding. So the request's assurance comes from the dispatch context
-    (``binding_assurance``), with the signature as a fallback. A
-    caller-proven read gets nothing; an unbound payload (no agent_id) is not a
-    reading of anyone.
+    No self-read reaches this with an inferred binding any more. The /mcp/
+    identity step and the REST prebind never bind a pre_onboard read to a
+    server-inferred source (no sticky consult for a read, and no agent_uuid
+    or X-Agent-Id read proof), so such a read returns the unbound payload,
+    which has no agent_id and gets nothing here: for self-reads the mark is
+    purely defensive.
+
+    It is still reached by an explicit agent_id (through use_tool, or
+    check_working_state over REST; the /mcp/ schema drops the argument) on a
+    call whose session was only inferred (a fingerprint, an onboard pin, a
+    transport-injected REST id). That reading is of the agent the caller
+    named, and caller_proven=false says nothing on the call proves the caller
+    is that agent. check_working_state's description says so.
+
+    The canonical payload cannot carry the mark: its agent_signature is
+    {"uuid": null} for an unbound caller. So the request's assurance comes
+    from the dispatch context (``binding_assurance``), with the signature as
+    a fallback. A caller-proven read gets nothing; an unbound payload (no
+    agent_id) is not a reading of anyone.
     """
     if payload.get("agent_id") is None:
         return None
@@ -1879,8 +1891,10 @@ def _raw_governance_policy(
         include_raw = requested_mode == "full" or (
             requested_mode == "auto" and resolved_mode is None
         )
-        # Re-calling sync_state writes another check-in, so the hint names
-        # the next call rather than a re-call.
+        # Re-calling sync_state writes another check-in, and no read returns
+        # this check-in's decision payload, so the hint names the next call
+        # rather than a re-call and the envelope does not set
+        # raw_governance_available.
         return include_raw, (
             "Pass response_mode='full' on the next sync_state for diagnostics."
         )
@@ -1918,8 +1932,11 @@ def _raw_governance_policy(
         verdict = (payload or {}).get("verdict")
         verdict_value = verdict.get("value") if isinstance(verdict, dict) else verdict
         if verdict_value == "unbound":
-            # Every tier returns the same unbound payload until the caller
-            # binds; next_action names that step, so no tier hint.
+            # No tier shows agent state until the caller binds, and
+            # next_action names that step and why nothing bound, so no tier
+            # hint. 'standard' and 'full' still include the raw unbound
+            # payload under raw_governance, with its unbound_reason when
+            # resolution failed or a resume was refused.
             return resolve_metrics_verbosity(arguments) != "minimal", None
         uninitialized = verdict_value == "uninitialized" or "uninitialized" in str(
             (payload or {}).get("status") or ""
@@ -3050,9 +3067,17 @@ def build_experience_envelope(
         envelope["raw_governance"] = payload
     else:
         # raw_governance_available promises a re-call that fetches the
-        # omitted payload by reading. A routine start_session's record cannot
-        # be fetched afterwards (only another mint would produce one), so it
-        # does not claim one. The write acks have no such read either: a
+        # omitted payload by reading, so only the read aliases claim it: the
+        # re-call their hint names is the same read at a fuller tier. Every
+        # bounded write's only route to its omitted payload writes again.
+        # A routine start_session's record cannot be fetched afterwards (only
+        # another mint would produce one). A bounded sync_state's payload is
+        # this check-in's decision (its reason, margin, policy gates,
+        # enforcement, prediction_id, warnings), and no read returns it:
+        # check_working_state(verbosity='full') and get_governance_metrics
+        # report the agent's current state, not what this check-in decided,
+        # so the hint names response_mode='full' on the next check-in, which
+        # is a new check-in. The write acks have no such read either: a
         # finding's details read returns the stored record, not this ack's
         # payload, and record_result has no read by outcome id. Its one route
         # back is a repeat of the write, which replays instead of writing only
@@ -3061,10 +3086,8 @@ def build_experience_envelope(
         # states them (see _write_ack_raw_policy).
         # An unbound metrics read (no tier hint) has nothing more to fetch
         # at any tier until the caller binds.
-        if (
-            friendly_name != "start_session"
-            and friendly_name not in _COMPACT_WRITE_ALIASES
-            and not (friendly_name == "check_working_state" and raw_hint is None)
+        if friendly_name in _COMPACT_READ_ALIASES and not (
+            friendly_name == "check_working_state" and raw_hint is None
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:

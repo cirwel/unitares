@@ -73,7 +73,9 @@ again. For `store_finding` and `update_finding`, where `response_mode` does not
 apply, it is a `knowledge(action="details", discovery_id=...)` read, which
 returns the stored record rather than the ack's payload. No read returns the
 omitted payload, so these three write acks do not set
-`raw_governance_available`. Write-time warnings and a bounded
+`raw_governance_available`, and neither does a bounded `sync_state`: no read
+returns a check-in's own decision payload, and `response_mode="full"` applies
+to the next check-in, which writes one. Write-time warnings and a bounded
 `related_discoveries` snapshot stay in the ack because that read does not
 return the warnings or the snapshot's summary previews; the snapshot's ids are
 the stored record's `related_to`, so a `store_finding` ack that carries the

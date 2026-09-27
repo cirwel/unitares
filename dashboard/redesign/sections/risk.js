@@ -23,7 +23,7 @@
  *
  * A produced pause verdict is NOT a delivered enforcement action. Gap-
  * suppression downgrades pauses to proceed at any >150s inter-check-in gap —
- * ordinary resident cadence — so the pause series is a count of verdicts
+ * ordinary check-in cadence — so the pause series is a count of verdicts
  * produced, never of interventions delivered. The produced-vs-delivered
  * meter is GET /v1/enforcement/divergence; this section names it rather than
  * quietly implying the stronger reading.
@@ -322,7 +322,7 @@
         <p class="empty" id="risk-pressure-empty" style="display:none"></p>
         <p class="sub" style="max-width:74ch;margin-top:var(--space-2)">
           <strong>Produced, not delivered.</strong> Gap-suppression downgrades a
-          pause to proceed at any &gt;150s inter-check-in gap — ordinary resident
+          pause to proceed at any &gt;150s inter-check-in gap — ordinary check-in
           cadence — so these are verdicts the policy produced, never a count of
           interventions that landed. The produced-vs-delivered meter is
           <code>/v1/enforcement/divergence</code>.

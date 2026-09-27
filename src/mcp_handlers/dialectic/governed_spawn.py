@@ -110,7 +110,7 @@ def dispatcher_uuid() -> Optional[str]:
     if not _UUID_RE.match(raw):
         logger.error(
             "[DIALECTIC] UNITARES_DIALECTIC_DISPATCHER_UUID is not a UUID (%r); "
-            "governed spawn disabled this call — fix the plist value",
+            "governed spawn disabled this call — fix the configured value",
             raw[:40],
         )
         return None
