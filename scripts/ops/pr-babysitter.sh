@@ -19,11 +19,14 @@
 #      CONFLICTING, whose checks failed on its current head, or that has a check
 #      parked for approval, is disarmed so it stops holding the slot; its label
 #      stays, so it returns to the queue.
-#   2. If a PR is still armed (including one the maintainer armed by hand, which
-#      the script never disarms, even while it conflicts), it holds the slot. If it is BEHIND and neither the base nor its arming has
-#      moved for PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not
-#      acted, so update that one branch. Then stop.
-#   3. Otherwise walk the queue in the order the label was applied and arm the
+#   2. Pin the head each newly labelled PR is at (see below), every tick,
+#      whether or not the slot is free.
+#   3. If a PR is still armed (including one the maintainer armed by hand, which
+#      the script never disarms, even while it conflicts), it holds the slot.
+#      If it is BEHIND and neither the base nor its arming has moved for
+#      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted, so
+#      update that one branch. Then stop.
+#   4. Otherwise walk the queue in the order the label was applied and arm the
 #      first PR that can go: its head still the one the approval covers, no
 #      open "merge after #N" dependency, MERGEABLE, no check needing approval.
 #      It is armed with --match-head-commit on that head.
@@ -37,9 +40,12 @@
 # script pins the head it first sees under a label (STATE_FILE); a later head
 # stays covered only if everything since the pin is a base-update merge, and a
 # commit dated after the label is refused outright. Anything else is stale
-# until the label is re-applied, which pins afresh. The residual gap: a commit
-# made before the label but pushed between the label and the next tick (at
-# most five minutes) is pinned as approved.
+# until the label is re-applied, which pins afresh. A label is pinned only if
+# the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
+# with no pin (the script was down, or its state lost) must be re-applied. The
+# residual gap: a commit made before the label but pushed before the script
+# first sees it (normally the next tick, never beyond that window) is pinned
+# as approved.
 #
 # Deliberately out of scope — these stay human or session judgment:
 #   - readying drafts (the draft→ready mark is the owning agent's gate),
@@ -54,6 +60,7 @@ LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
+PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
@@ -126,7 +133,91 @@ while read -r pr; do
   fi
 done <<<"$ours_armed"
 
-# --- 2. a PR holds the slot ---------------------------------------------------
+# --- 2. approvals ---------------------------------------------------------------
+# Runs every tick, before the slot check, so a PR labelled while another holds
+# the slot is pinned as soon as the script sees the label, not when it reaches
+# the head of the queue.
+# When did the approval label last go on, and when was the last commit that
+# was not a base-update merge (GitHub's updater, `gh pr update-branch`)?
+# Prints "<labelled-at> <last-pushed-commit-at>"; either may be "-".
+approval_times() {
+  # --paginate without --jq prints one JSON array per page; jq reads the stream.
+  gh api --paginate "repos/$REPO/issues/$1/timeline" 2>/dev/null | jq -r --arg l "$LABEL" '
+    .[] | if .event == "labeled" and .label.name == $l then "L \(.created_at)"
+          elif .event == "committed"
+               and ((.committer.name == "GitHub" and (.message | startswith("Merge branch ")))
+                    | not)
+            then "C \(.committer.date)"
+          else empty end'
+}
+
+# The head an approval covers. First sight of a label pins the PR's head then;
+# later heads stay covered only if every commit since the pin is a base-update
+# merge. A re-applied label (a newer label event) pins afresh.
+# A missing state file reads as no pins; an unreadable one is an error, never
+# "no pins", since that would re-approve whatever head is there now.
+pinned_head() {
+  [ -e "$STATE_FILE" ] || return 0
+  [ -f "$STATE_FILE" ] && [ -r "$STATE_FILE" ] || return 1
+  awk -v n="$1" -v l="$2" '$1 == n && $3 == l { h = $2 } END { if (h) print h }' "$STATE_FILE"
+}
+pin_head() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3" >>"$STATE_FILE"
+}
+# <pr> <pinned-sha> <head>: the PR's commit list runs from the pin to exactly
+# <head>, and everything after the pin is a base-update merge. GitHub lists at
+# most 250 commits; a list that does not end at <head> proves nothing.
+only_base_updates_since() {
+  gh api --paginate "repos/$REPO/pulls/$1/commits" 2>/dev/null | jq -rs --arg pin "$2" --arg head "$3" '
+    add // [] | (map(.sha) | index($pin)) as $i
+    | if $i == null or (.[-1].sha // "") != $head then false
+      else .[$i + 1:] | all(.commit.committer.name == "GitHub"
+                            and (.commit.message | startswith("Merge branch ")))
+      end' 2>/dev/null | grep -qx true
+}
+
+queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
+              and labelled($l))) | .[]' <<<"$prs") \
+  || { log "could not read the queue; nothing done"; exit 1; }
+
+# Order by when the label went on, which is the order the maintainer approved.
+ordered=""
+while read -r pr; do
+  [ -n "$pr" ] || continue
+  n=$(jq -r .number <<<"$pr")
+  times=$(approval_times "$n") || { log "#$n timeline unreadable; skipped"; continue; }
+  labelled_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
+  [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
+  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    continue
+  fi
+  head=$(jq -r .headRefOid <<<"$pr")
+  pin=$(pinned_head "$n" "$labelled_at") || { log "#$n approval state unreadable ($STATE_FILE); skipped"; continue; }
+  if [ -z "$pin" ]; then
+    # Pin only a label the script sees soon after it went on. An older label
+    # with no pin (the script was down, or its state was lost) no longer says
+    # which head was approved.
+    age=$(minutes_since "$labelled_at")
+    if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
+      log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      continue
+    fi
+    pin_head "$n" "$head" "$labelled_at" || { log "#$n could not record its approved head; skipped"; continue; }
+  elif [ "$pin" != "$head" ]; then
+    if ! only_base_updates_since "$n" "$pin" "$head"; then
+      log "#$n head moved past its approved ${pin:0:8}; re-apply $LABEL to approve ${head:0:8}"
+      continue
+    fi
+    pin_head "$n" "$head" "$labelled_at" || true
+  fi
+  ordered+="$labelled_at $n $head"$'\n'
+done <<<"$queued"
+
+# --- 3. a PR holds the slot ---------------------------------------------------
 # Any armed PR on the base holds it, except one this tick just disarmed. A
 # hand-armed PR counts even when it conflicts: the script never disarms it, so
 # arming another would leave two armed the moment its conflict is resolved,
@@ -162,70 +253,7 @@ if [ -n "$holder" ]; then
   exit 0
 fi
 
-# --- 3. the queue ---------------------------------------------------------------
-# When did the approval label last go on, and when was the last commit that
-# was not a base-update merge (GitHub's updater, `gh pr update-branch`)?
-# Prints "<labelled-at> <last-pushed-commit-at>"; either may be "-".
-approval_times() {
-  # --paginate without --jq prints one JSON array per page; jq reads the stream.
-  gh api --paginate "repos/$REPO/issues/$1/timeline" 2>/dev/null | jq -r --arg l "$LABEL" '
-    .[] | if .event == "labeled" and .label.name == $l then "L \(.created_at)"
-          elif .event == "committed"
-               and ((.committer.name == "GitHub" and (.message | startswith("Merge branch ")))
-                    | not)
-            then "C \(.committer.date)"
-          else empty end'
-}
-
-# The head an approval covers. First sight of a label pins the PR's head then;
-# later heads stay covered only if every commit since the pin is a base-update
-# merge. A re-applied label (a newer label event) pins afresh.
-pinned_head() { awk -v n="$1" -v l="$2" '$1 == n && $3 == l { h = $2 } END { if (h) print h }' "$STATE_FILE" 2>/dev/null; }
-pin_head() {
-  [ "$DRY_RUN" = "1" ] && return 0
-  mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3" >>"$STATE_FILE"
-}
-only_base_updates_since() {  # <pr> <pinned-sha>: every PR commit after the pin is a base-update merge
-  gh api --paginate "repos/$REPO/pulls/$1/commits" 2>/dev/null | jq -rs --arg pin "$2" '
-    add // [] | (map(.sha) | index($pin)) as $i
-    | if $i == null then false
-      else .[$i + 1:] | all(.commit.committer.name == "GitHub"
-                            and (.commit.message | startswith("Merge branch ")))
-      end' 2>/dev/null | grep -qx true
-}
-
-queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
-  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
-              and labelled($l))) | .[]' <<<"$prs") \
-  || { log "could not read the queue; nothing done"; exit 1; }
-
-# Order by when the label went on, which is the order the maintainer approved.
-ordered=""
-while read -r pr; do
-  [ -n "$pr" ] || continue
-  n=$(jq -r .number <<<"$pr")
-  times=$(approval_times "$n") || { log "#$n timeline unreadable; skipped"; continue; }
-  labelled_at=$(grep '^L ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
-  pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
-  [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
-  if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
-    continue
-  fi
-  head=$(jq -r .headRefOid <<<"$pr")
-  pin=$(pinned_head "$n" "$labelled_at")
-  if [ -z "$pin" ]; then
-    pin_head "$n" "$head" "$labelled_at" || { log "#$n could not record its approved head; skipped"; continue; }
-  elif [ "$pin" != "$head" ]; then
-    if ! only_base_updates_since "$n" "$pin"; then
-      log "#$n head moved past its approved ${pin:0:8}; re-apply $LABEL to approve ${head:0:8}"
-      continue
-    fi
-    pin_head "$n" "$head" "$labelled_at" || true
-  fi
-  ordered+="$labelled_at $n $head"$'\n'
-done <<<"$queued"
-
+# --- 4. the queue ---------------------------------------------------------------
 # "merge after #N" / "merge after owner/repo#N" in the body: wait until N merges.
 dependency_open() {
   local pr="$1" dep repo num state

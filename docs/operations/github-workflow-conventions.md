@@ -576,9 +576,12 @@ the operator's machine is awake.
   script pins the head it first sees under the label, keeps it covered
   through base-update merges only, and arms with `--match-head-commit` on that
   head. A push after the label makes the approval stale, and the PR is
-  skipped until the label is re-applied. The residual gap is a commit made
-  before the label but pushed between the label and the next tick (at most
-  five minutes), which gets pinned as approved.
+  skipped until the label is re-applied. A label is pinned only if the
+  script sees it within 15 minutes of going on; an older label with no pin
+  (the machine was asleep, or the script's state was lost) must be
+  re-applied. The residual gap is a commit made before the label but pushed
+  before the script first sees it (normally the next five-minute tick, never
+  beyond those 15 minutes), which gets pinned as approved.
 - **It honours declared order.** A "merge after #N" (or
   `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
   unreadable dependency holds it too.

@@ -104,7 +104,7 @@ def _pr(
     }
 
 
-def _timeline(labelled_min_ago: float | None = 60, pushed_min_ago: float | None = 120, updater_min_ago=None) -> list:
+def _timeline(labelled_min_ago: float | None = 10, pushed_min_ago: float | None = 20, updater_min_ago=None) -> list:
     events: list[dict] = []
     if pushed_min_ago is not None:
         events.append(
@@ -193,7 +193,7 @@ def test_arms_in_approval_order_not_pr_number(tmp_path: Path) -> None:
     calls, _ = _run(
         tmp_path,
         [_pr(10), _pr(12), _pr(11)],
-        timelines={10: _timeline(30), 12: _timeline(90), 11: _timeline(60)},
+        timelines={10: _timeline(5), 12: _timeline(12), 11: _timeline(8)},
     )
     assert calls == [_arm(12)]
 
@@ -217,14 +217,14 @@ def test_a_push_after_approval_makes_it_stale(tmp_path: Path) -> None:
     calls, out = _run(
         tmp_path,
         [_pr(1), _pr(2)],
-        timelines={1: _timeline(labelled_min_ago=60, pushed_min_ago=30), 2: _timeline(50)},
+        timelines={1: _timeline(labelled_min_ago=10, pushed_min_ago=5), 2: _timeline(8)},
     )
     assert calls == [_arm(2)]
     assert "#1 has a commit from" in out and "re-apply approved-to-merge" in out
 
 
 def test_base_update_merges_do_not_make_approval_stale(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(1)], timelines={1: _timeline(60, 120, updater_min_ago=10)})
+    calls, _ = _run(tmp_path, [_pr(1)], timelines={1: _timeline(10, 20, updater_min_ago=5)})
     assert calls == [_arm(1)]
 
 
@@ -232,7 +232,7 @@ def test_merge_after_an_open_pr_waits(tmp_path: Path) -> None:
     calls, out = _run(
         tmp_path,
         [_pr(1, body="Merge after #7 lands."), _pr(2, body="merge after owner/plugin#165")],
-        timelines={1: _timeline(90), 2: _timeline(60)},
+        timelines={1: _timeline(12), 2: _timeline(8)},
         states={"o/r#7": "OPEN", "owner/plugin#165": "OPEN"},
     )
     assert calls == []
@@ -256,14 +256,14 @@ def test_an_unreadable_dependency_fails_closed(tmp_path: Path) -> None:
 def test_unknown_mergeability_holds_the_order(tmp_path: Path) -> None:
     # Right after a merge GitHub is still computing; a later PR must not jump ahead.
     calls, _ = _run(
-        tmp_path, [_pr(1, mergeable="UNKNOWN"), _pr(2)], timelines={1: _timeline(90), 2: _timeline(60)}
+        tmp_path, [_pr(1, mergeable="UNKNOWN"), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}
     )
     assert calls == []
 
 
 def test_conflicting_is_skipped_to_the_next(tmp_path: Path) -> None:
     calls, out = _run(
-        tmp_path, [_pr(1, mergeable="CONFLICTING"), _pr(2)], timelines={1: _timeline(90), 2: _timeline(60)}
+        tmp_path, [_pr(1, mergeable="CONFLICTING"), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}
     )
     assert calls == [_arm(2)]
     assert "#1 queued but CONFLICTING" in out
@@ -293,7 +293,7 @@ def test_failed_on_an_up_to_date_head_is_marked_then_rerun_once(tmp_path: Path) 
     calls, _ = _run(
         tmp_path,
         [_pr(9, state="BLOCKED", checks=checks), _pr(10)],
-        timelines={9: _timeline(90), 10: _timeline(60)},
+        timelines={9: _timeline(12), 10: _timeline(8)},
     )
     assert calls == [
         f"pr edit 9 -R o/r --add-label {RETRIED}",
@@ -365,7 +365,7 @@ def test_failing_status_context_without_a_run_is_skipped(tmp_path: Path) -> None
 def test_a_failed_arm_stops_the_tick(tmp_path: Path) -> None:
     # A failed call may still have armed it; arming the next could leave two armed.
     calls, out = _run(
-        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(90), 2: _timeline(60)}, fail=("pr merge 1",)
+        tmp_path, [_pr(1), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)}, fail=("pr merge 1",)
     )
     assert calls == [_arm(1)]
     assert "#1 arm failed" in out
@@ -456,7 +456,7 @@ def test_first_sight_pins_the_head_and_arms_that_head(tmp_path: Path) -> None:
 
 
 def test_a_head_moved_by_a_push_since_the_pin_is_stale(tmp_path: Path) -> None:
-    tl = _timeline(60)
+    tl = _timeline(60, 120)
     labelled = tl[-1]["created_at"]
     calls, out = _run(
         tmp_path,
@@ -469,7 +469,7 @@ def test_a_head_moved_by_a_push_since_the_pin_is_stale(tmp_path: Path) -> None:
 
 
 def test_a_head_moved_only_by_base_updates_stays_approved(tmp_path: Path) -> None:
-    tl = _timeline(60)
+    tl = _timeline(60, 120)
     labelled = tl[-1]["created_at"]
     calls, _ = _run(
         tmp_path,
@@ -481,7 +481,7 @@ def test_a_head_moved_only_by_base_updates_stays_approved(tmp_path: Path) -> Non
 
 
 def test_a_force_push_that_drops_the_pin_is_stale(tmp_path: Path) -> None:
-    tl = _timeline(60)
+    tl = _timeline(60, 120)
     labelled = tl[-1]["created_at"]
     calls, _ = _run(
         tmp_path, [_pr(1, head="zzz")], pins=[f"1 aaa {labelled}"], timelines={1: tl}, commits={1: [_commit("zzz")]}
@@ -497,6 +497,44 @@ def test_a_reapplied_label_pins_the_new_head(tmp_path: Path) -> None:
         commits={1: [_commit("aaa"), _commit("bbb")]},
     )
     assert calls == [_arm(1, "bbb")]
+
+
+def test_an_old_label_with_no_pin_must_be_reapplied(tmp_path: Path) -> None:
+    # The script was down, or its state was lost: the label no longer says
+    # which head was approved.
+    calls, out = _run(tmp_path, [_pr(1)], timelines={1: _timeline(60, 120)})
+    assert calls == []
+    assert "was never pinned and is 60m old" in out
+    assert not (tmp_path / "state" / "approvals").exists()
+
+
+def test_an_unreadable_state_file_approves_nothing(tmp_path: Path) -> None:
+    state = tmp_path / "state" / "approvals"
+    state.mkdir(parents=True)  # a directory: exists, but awk cannot read it as a file
+    calls, out = _run(tmp_path, [_pr(1)])
+    assert calls == []
+    assert "approval state unreadable" in out
+
+
+def test_a_commit_list_that_stops_short_of_the_head_proves_nothing(tmp_path: Path) -> None:
+    # GitHub lists at most 250 commits; a list ending at the pin says nothing
+    # about the head it omits.
+    tl = _timeline(60, 120)
+    labelled = tl[-1]["created_at"]
+    calls, _ = _run(
+        tmp_path,
+        [_pr(1, head="ddd")],
+        pins=[f"1 aaa {labelled}"],
+        timelines={1: tl},
+        commits={1: [_commit("aaa"), _commit("bbb", updater=True)]},
+    )
+    assert calls == []
+
+
+def test_a_label_is_pinned_even_while_another_pr_holds_the_slot(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=30, state="BLOCKED"), _pr(4, head="eee")])
+    assert calls == []
+    assert (tmp_path / "state" / "approvals").read_text().split()[:2] == ["4", "eee"]
 
 
 def test_dry_run_records_no_pin(tmp_path: Path) -> None:
