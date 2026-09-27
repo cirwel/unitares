@@ -38,6 +38,16 @@ exactly the text being stamped, a best-effort sign that the verifier left the
 wording alone (see Recorded transitions for what it cannot see): the stamp records that its verifier
 re-checked the skill across that change. See Recorded transitions below.
 
+`verifier` names who re-checked the claims: SKILL_ATTESTATION_VERIFIER when
+it is set (for an agent, its name and what it re-checked, for example
+`Claude (re-checked the dialectic claims against handlers.py)`); otherwise,
+only for a person at a terminal (stdin is a TTY), the repository's git
+`user.name`. A stamp with no terminal and no SKILL_ATTESTATION_VERIFIER is
+refused and writes nothing. Agents on the operator's machine commit under the
+operator's git identity, so before 2026-09-27 the fallback recorded an agent's
+stamp as the operator's own re-check whenever the agent left the variable
+unset.
+
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
 line and a `source_digests` block inside SKILL.md, and the skills manifest
 hashed that file, so any two open pull requests that stamped conflicted on the
@@ -187,7 +197,9 @@ YELLOW = "\033[0;33m"
 GREEN = "\033[0;32m"
 NC = "\033[0m"
 
-STAMP_HINT = "scripts/client/check-skill-freshness.sh --stamp"
+VERIFIER_ENV = "SKILL_ATTESTATION_VERIFIER"
+STAMP_HINT = (f'{VERIFIER_ENV}="<who re-checked, and what>" '
+              "scripts/client/check-skill-freshness.sh --stamp")
 
 
 def content_digest(path: Path) -> str:
@@ -463,11 +475,25 @@ def check_skills(root: str, projects_root: str) -> int:
     return 0
 
 
-def _verifier(root: str) -> str:
-    """Who is attesting: an explicit override, else the git author identity."""
-    explicit = os.environ.get("SKILL_ATTESTATION_VERIFIER", "").strip()
+def _interactive() -> bool:
+    """A person at a terminal: stdin is a TTY. Agent and CI shells are not."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
+def _verifier(root: str) -> str | None:
+    """Who is attesting: SKILL_ATTESTATION_VERIFIER, else, for a person at a
+    terminal only, the git author identity. None when neither applies: without
+    a terminal the caller is an agent or a job, and git user.name names whoever
+    configured git, so recording it would credit that person with the caller's
+    re-check."""
+    explicit = os.environ.get(VERIFIER_ENV, "").strip()
     if explicit:
         return explicit
+    if not _interactive():
+        return None
     try:
         name = subprocess.run(
             ["git", "-C", root, "config", "user.name"],
@@ -512,6 +538,18 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
     skills_dir = Path(root) / "skills"
     now = datetime.now(timezone.utc)
     verifier = _verifier(root)
+    if verifier is None:
+        print(
+            f"  [{RED}REFUSED{NC}] no attestation written: {VERIFIER_ENV} is not set and stdin is\n"
+            "          not a terminal. The fallback, git user.name, names whoever configured git\n"
+            "          here, not whoever re-checked the skill. Name the verifier:\n"
+            f'          {VERIFIER_ENV}="<agent or person> (re-checked <claims> against <change>)" \\\n'
+            f"            scripts/client/check-skill-freshness.sh --stamp {' '.join(names)}",
+            file=sys.stderr,
+        )
+        return 2
+    if not os.environ.get(VERIFIER_ENV, "").strip():
+        print(f"  verifier: {verifier} (git user.name; set {VERIFIER_ENV} to name someone else)")
     rc = 0
     for name in names:
         skill_dir = skills_dir / name
@@ -763,7 +801,9 @@ def main(argv: list[str]) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--stamp", nargs="+", metavar="SKILL",
-        help="write a new attestation with today's date and current source digests",
+        help=("write a new attestation with today's date and current source digests; "
+              f"the verifier is ${VERIFIER_ENV}, or git user.name only when stdin is a "
+              "terminal (without either, the stamp is refused)"),
     )
     group.add_argument("--migrate", action="store_true",
                        help="move frontmatter source_digests blocks into attestations")
