@@ -1722,7 +1722,7 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         set(getattr(args, "failed_providers", set()) or set()))
     have = ", ".join(sorted(families)) or "none"
     if candidates:
-        runs = "; ".join(f"review.sh --fresh --reviewer {c}" for c in candidates)
+        runs = "; ".join(f"./scripts/dev/review.sh --fresh --reviewer {c}" for c in candidates)
         next_step = f"run one of: {runs}"
     else:
         next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
@@ -1730,7 +1730,7 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs passing full "
           f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
-          "(e.g. gemini-…, gpt-…) with review.sh record --independent.")
+          "(e.g. gemini-…, gpt-…) with ./scripts/dev/review.sh record --independent.")
     return NEEDS_SECOND_FAMILY
 
 

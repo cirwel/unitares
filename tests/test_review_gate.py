@@ -2360,7 +2360,7 @@ def test_review_sh_never_starts_a_review_and_names_the_next_step(monkeypatch, ca
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
     assert "have: google" in out
-    assert "review.sh --fresh --reviewer codex; review.sh --fresh --reviewer claude" in out
+    assert "./scripts/dev/review.sh --fresh --reviewer codex; ./scripts/dev/review.sh --fresh --reviewer claude" in out
 
 
 def test_two_families_passed_means_nothing_to_report(monkeypatch, capsys):
