@@ -2516,3 +2516,46 @@ def test_a_malformed_agy_model_is_never_written_into_a_marker(monkeypatch):
                     model=rg.marker_model("x reviewer=codex"))
     back = rg.parse_record(rg.render_marker(rec))
     assert back.reviewer == "antigravity" and rg.record_family(back) is None
+
+
+def _sensitive_manual(monkeypatch, comments):
+    monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/x"))
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "post_record", lambda *a: None)
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex"])
+
+
+def test_record_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_path, capsys):
+    """Native Codex on #2504 (P2): record and dispose returned 0 directly, so
+    the author saw success while CI held the PR for a missing family."""
+    _sensitive_manual(monkeypatch, comments=[])
+    review = tmp_path / "review.txt"
+    review.write_text("Examined the OAuth token exchange end to end.\nVERDICT: CLEAN\n")
+    args = SimpleNamespace(independent=True, emit=False, file=str(review),
+                           reviewer_name="claude-subagent", base="origin/master")
+    assert rg.cmd_record(args) == rg.NEEDS_SECOND_FAMILY
+    assert "have: anthropic" in capsys.readouterr().out  # counted before it is readable
+
+
+def test_record_completing_the_second_family_exits_0(monkeypatch, tmp_path):
+    _sensitive_manual(monkeypatch, comments=[_comment(rg.Record("k", "CLEAN", 0, False, "codex"))])
+    review = tmp_path / "review.txt"
+    review.write_text("Examined the OAuth token exchange end to end.\nVERDICT: CLEAN\n")
+    args = SimpleNamespace(independent=True, emit=False, file=str(review),
+                           reviewer_name="gemini-council", base="origin/master")
+    assert rg.cmd_record(args) == 0
+
+
+def test_dispose_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_path, capsys):
+    open_findings = rg.Record("k", "FINDINGS", 1, False, "codex", "url", "1. x")
+    _sensitive_manual(monkeypatch, comments=[_comment(open_findings)])
+    monkeypatch.setattr(rg, "current_record", lambda *a: open_findings)
+    rebuttal = tmp_path / "dispose.txt"
+    rebuttal.write_text("1. rebutted: the token is bound to the client\n")
+    args = SimpleNamespace(emit=False, file=str(rebuttal), base="origin/master")
+    assert rg.cmd_dispose(args) == rg.NEEDS_SECOND_FAMILY
+    assert "have: openai" in capsys.readouterr().out

@@ -1636,7 +1636,8 @@ def second_family_candidates(branch: str, families: set[str], comments: list[dic
 
 
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
-                       passed_by: str | None = None, auto: bool = True) -> int:
+                       passed_by: str | None = None, auto: bool = True,
+                       passed_family: str | None = None) -> int:
     """After a passing review of a security-sensitive diff, say plainly when a
     second model family is still missing, and which reviews would supply it.
 
@@ -1673,6 +1674,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     passed_by = passed_by or getattr(args, "completed_by", None)
     if passed_by and not passed_by.startswith("fix-verify:") and provider_family(passed_by):
         families.add(provider_family(passed_by))
+    if passed_family:
+        # A record or disposition this command just posted, credited by its
+        # own model-aware family (record_family), not by a provider name.
+        families.add(passed_family)
     if len(families) >= 2:
         return result
     candidates = second_family_candidates(
@@ -1945,13 +1950,23 @@ def cmd_record(args) -> int:
     rec = Record(key, verdict, n, False, args.reviewer_name)
     post_record(pr, rec, heading, text)
     print(f"[review] recorded: {rec.status()[1]}")
-    return 0
+    return _after_manual_record(args, repo, pr, key, branch, rec)
+
+
+def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: Record) -> int:
+    """record and dispose finish like a review run: a passing result on a
+    security-sensitive diff still needs a second model family (exit 3)."""
+    if rec.status()[0] != "success":
+        return 0  # findings recorded for later disposition: nothing passed yet
+    args.branch = branch
+    return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
+                              passed_family=record_family(rec))
 
 
 def cmd_dispose(args) -> int:
     if getattr(args, "emit", False):
         return _dispose_emit(args)
-    pr, repo, key, _ = _resolve(args)
+    pr, repo, key, branch = _resolve(args)
     prior = current_record(repo, pr, key, git("rev-parse", "HEAD").strip(), pr_comments(repo, pr))
     if prior is None or prior.verdict != "FINDINGS" or prior.disposed:
         raise SystemExit("review_gate: no open FINDINGS record for this diff to dispose")
@@ -1962,7 +1977,7 @@ def cmd_dispose(args) -> int:
     rec = Record(key, "FINDINGS", prior.findings, True, prior.reviewer, model=prior.model)
     post_record(pr, rec, f"dispositions for FINDINGS({prior.findings}) — {prior.url}", text)
     print(f"[review] {rec.status()[1]}")
-    return 0
+    return _after_manual_record(args, repo, pr, key, branch, rec)
 
 
 def _dispose_emit(args) -> int:
