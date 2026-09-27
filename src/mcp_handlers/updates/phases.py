@@ -678,9 +678,11 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                         purpose=purpose_hint,
                         existing_names=existing_names
                     )
+                    from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
                     ctx.onboarding_guidance["naming"] = {
                         "message": "Name yourself to make your work easier to find",
-                        "action": "Call identity(name='your_chosen_name') to set your name",
+                        "action": f"Call {SET_DISPLAY_NAME_CALL} to set your name",
                         "suggestions": suggestions[:3],
                         "quick_example": suggestions[0]["name"] if suggestions else None
                     }

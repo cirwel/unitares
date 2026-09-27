@@ -164,7 +164,26 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # closure_evidence states its 8 KiB bound. Nothing is removed, retyped or
 # renamed; the input digests of update_finding, knowledge, observe,
 # dialectic and request_review, and the surface digest, move.
-INTERFACE_CONTRACT_VERSION = "1.20.0"
+# 1.21.0 (2026-09-26), numbered after 1.20.0 (#2489): tool
+# descriptions only. check_working_state and get_governance_metrics no longer
+# promise that a binding the server merely inferred returns that agent's real
+# state marked identity_assurance.caller_proven=false: no pre-onboard
+# self-read binds to one any more (the sticky binding is not consulted for a
+# read, and agent_uuid / X-Agent-Id are not read proof), so such a read is
+# unbound, and both texts name the proof that reads your own state.
+# get_governance_metrics no longer offers "an explicit agent_id" as a way to
+# be sure the reading is yours: /mcp/ does not declare agent_id and drops it,
+# and it proves nothing about the caller. Both texts say where it names the
+# agent to read: check_working_state through use_tool or REST, and
+# get_governance_metrics through /mcp/'s use_tool, unless the caller is bound
+# as a different agent, which inject_identity refuses (identity_mismatch);
+# get_governance_metrics over REST, whose direct handler has no inject step,
+# answers it for any caller. check_working_state marks such a reading
+# caller_proven=false on an inferred session. identity's description names
+# client_session_id in the call that sets a display name. No parameter is
+# added, removed, retyped or renamed, and no input digest or the surface
+# digest moves.
+INTERFACE_CONTRACT_VERSION = "1.21.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
