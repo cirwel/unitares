@@ -1,16 +1,16 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "unitares-governance",
-  "verified_at": "2026-09-27T04:25:45Z",
+  "verified_at": "2026-09-27T08:23:49Z",
   "verified_date": "2026-09-27",
-  "verifier": "Claude (#2490 after the master merge through #2495; claims re-checked)",
+  "verifier": "Claude (re-checked the unitares-governance envelope claims against envelope_step.py: bounded sync_state still omits raw_governance and hints response_mode='full'; only the flag moved, which no skill claim cites)",
   "source_digests": {
     "unitares/skills/dialectic-reasoning/SKILL.md": "683eefd8f32b8544",
     "unitares/skills/discord-bridge/SKILL.md": "b1bf0f1276d8756a",
     "unitares/skills/governance-fundamentals/SKILL.md": "5aec85ceeac4aa52",
     "unitares/skills/governance-lifecycle/SKILL.md": "5e5064f0854ddced",
-    "unitares/skills/knowledge-graph/SKILL.md": "f8af7b3c711897e3",
-    "unitares/skills/unitares-dashboard/SKILL.md": "b8d33484d703b627",
+    "unitares/skills/knowledge-graph/SKILL.md": "a3c04f8ec51a38aa",
+    "unitares/skills/unitares-dashboard/SKILL.md": "68a5cdee01768925",
     "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
     "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
     "unitares/src/mcp_handlers/core.py": "36cb632881613e42",
@@ -18,7 +18,7 @@
     "unitares/src/mcp_handlers/identity/session.py": "f2639212259aa5c7",
     "unitares/src/mcp_handlers/introspection/tool_introspection.py": "d2aa474fae0e4368",
     "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
-    "unitares/src/mcp_handlers/middleware/envelope_step.py": "a9b41d2519dd64cd",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "3dcff3cee850f677",
     "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
     "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
     "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
@@ -26,5 +26,10 @@
     "unitares/src/schema_brief.py": "401bbce563c30439",
     "unitares/src/tool_modes.py": "cce173b777ca01c3"
   },
-  "skill_digest": "dbf97610a267ec53"
+  "skill_digest": "dbf97610a267ec53",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "a9b41d2519dd64cd"
+    ]
+  }
 }
