@@ -42,8 +42,8 @@ re-checked the skill across that change. See Recorded transitions below.
 it is set (for an agent, its name and what it re-checked, for example
 `Claude (re-checked the dialectic claims against handlers.py)`); otherwise,
 only for a person at a terminal (stdin is a TTY), the repository's git
-`user.name`. A stamp with no terminal and no SKILL_ATTESTATION_VERIFIER is
-refused and writes nothing. Agents on the operator's machine commit under the
+`user.name`. A stamp without SKILL_ATTESTATION_VERIFIER is refused and writes
+nothing when there is no terminal, or when git has no `user.name` to record. Agents on the operator's machine commit under the
 operator's git identity, so before 2026-09-27 the fallback recorded an agent's
 stamp as the operator's own re-check whenever the agent left the variable
 unset.
@@ -485,10 +485,11 @@ def _interactive() -> bool:
 
 def _verifier(root: str) -> str | None:
     """Who is attesting: SKILL_ATTESTATION_VERIFIER, else, for a person at a
-    terminal only, the git author identity. None when neither applies: without
-    a terminal the caller is an agent or a job, and git user.name names whoever
-    configured git, so recording it would credit that person with the caller's
-    re-check."""
+    terminal only, the git author identity. None when neither names anyone:
+    without a terminal the caller is an agent or a job, and git user.name names
+    whoever configured git, so recording it would credit that person with the
+    caller's re-check; at a terminal with no git user.name there is no name to
+    record, and a record naming nobody is not an attestation."""
     explicit = os.environ.get(VERIFIER_ENV, "").strip()
     if explicit:
         return explicit
@@ -501,7 +502,7 @@ def _verifier(root: str) -> str | None:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         name = ""
-    return name or "unknown"
+    return name or None
 
 
 def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
@@ -539,10 +540,12 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
     now = datetime.now(timezone.utc)
     verifier = _verifier(root)
     if verifier is None:
+        why = ("stdin is a terminal but git user.name is not set" if _interactive() else
+               "stdin is not a terminal, and there the fallback, git user.name, names\n"
+               "          whoever configured git, not whoever re-checked the skill")
         print(
-            f"  [{RED}REFUSED{NC}] no attestation written: {VERIFIER_ENV} is not set and stdin is\n"
-            "          not a terminal. The fallback, git user.name, names whoever configured git\n"
-            "          here, not whoever re-checked the skill. Name the verifier:\n"
+            f"  [{RED}REFUSED{NC}] no attestation written: {VERIFIER_ENV} is not set and\n"
+            f"          {why}. Name the verifier:\n"
             f'          {VERIFIER_ENV}="<agent or person> (re-checked <claims> against <change>)" \\\n'
             f"            scripts/client/check-skill-freshness.sh --stamp {' '.join(names)}",
             file=sys.stderr,
@@ -803,7 +806,7 @@ def main(argv: list[str]) -> int:
         "--stamp", nargs="+", metavar="SKILL",
         help=("write a new attestation with today's date and current source digests; "
               f"the verifier is ${VERIFIER_ENV}, or git user.name only when stdin is a "
-              "terminal (without either, the stamp is refused)"),
+              "terminal (without a name from either, the stamp is refused)"),
     )
     group.add_argument("--migrate", action="store_true",
                        help="move frontmatter source_digests blocks into attestations")

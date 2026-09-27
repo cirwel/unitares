@@ -251,6 +251,21 @@ def test_a_person_at_a_terminal_falls_back_to_the_git_user(layout: Layout):
     assert json.loads(newest.read_text())["verifier"] == "Someone else"
 
 
+def test_a_terminal_stamp_with_no_git_user_is_refused(layout: Layout, tmp_path: Path):
+    # Before this, the record said `"verifier": "unknown"`, naming nobody.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    subprocess.run(["git", "init", "-q", str(layout.repo)], check=True)
+    no_config = tmp_path / "empty-gitconfig"
+    no_config.write_text("")
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER=None,
+                                  GIT_CONFIG_GLOBAL=str(no_config), GIT_CONFIG_NOSYSTEM="1")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (layout.repo / "skills" / ".attestations").exists()
+    assert "git user.name is not set" in result.stderr
+    assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr
+
+
 def test_only_the_stamp_needs_a_verifier(layout: Layout):
     # The check CI runs, and the release-cut prune, record no verifier and
     # run without a terminal, so the refusal must not reach them.
