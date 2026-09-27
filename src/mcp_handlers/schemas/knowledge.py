@@ -126,9 +126,15 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
         default=None,
         description="Filter by severity"
     )
-    sort_by: Literal["created_at", "relevance", "score", "related_count"] = Field(
-        default="created_at",
-        description="Sort field"
+    # Declared here for years and read by no handler, with a default of
+    # created_at that would have flipped every search to time order the day it
+    # was wired. `score` and `related_count` never had an implementation.
+    sort_by: Literal["relevance", "created_at"] = Field(
+        default="relevance",
+        description=(
+            "relevance (default) or created_at: the query's full-text matches, "
+            "newest first"
+        ),
     )
     limit: Union[int, str, None] = Field(
         default=10,
@@ -398,7 +404,8 @@ class KnowledgeParams(AgentIdentityMixin):
                 "severity", "limit", "search_mode", "include_details",
                 "include_archived", "include_cold", "exclude_agent_labels",
                 "min_similarity", "operator", "include_provenance",
-                "agent_id_filter", "authority_mode", "semantic",
+                "agent_id_filter", "authority_mode", "semantic", "sort_by",
+                "created_after", "created_before",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
@@ -571,6 +578,32 @@ class KnowledgeParams(AgentIdentityMixin):
             "Search authority policy. Default prefer_governed down-ranks imported "
             "memory in close relevance contests; all preserves raw relevance order."
         ),
+    )
+    sort_by: Optional[Literal["relevance", "created_at"]] = Field(
+        None,
+        description=(
+            "Result order for action=search. relevance (default) ranks by match "
+            "quality. created_at returns the query's full-text matches newest "
+            "first, so an entry written a minute ago is not buried under older, "
+            "better-matching ones; it cannot be combined with "
+            "search_mode=semantic or hybrid. Without a query, results are "
+            "already newest first."
+        ),
+        json_schema_extra={"brief": "search order: relevance, or created_at (newest text matches first)."},
+    )
+    created_after: Optional[str] = Field(
+        None,
+        description=(
+            "ISO 8601 timestamp for action=search: only entries created after it. "
+            "With no query this is the 'what is new since T' read. A timestamp "
+            "without an offset is taken as UTC."
+        ),
+        json_schema_extra={"brief": "search: created after this ISO time."},
+    )
+    created_before: Optional[str] = Field(
+        None,
+        description="ISO 8601 timestamp for action=search: only entries created before it (UTC if no offset).",
+        json_schema_extra={"brief": "search: created before this ISO time."},
     )
     semantic: Union[bool, str, None] = Field(None, description="Legacy action=search toggle to force or skip semantic retrieval when supported")
     min_similarity: Union[float, str, None] = Field(None, description="Minimum cosine similarity for semantic retrieval modes")
