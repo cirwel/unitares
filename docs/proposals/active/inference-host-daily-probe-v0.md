@@ -68,7 +68,7 @@ row below:
 
 | Host state | Action | Quota spent |
 |---|---|---|
-| A previous probe's timed-out execution was still live at the cleanup pass (whether or not the stop succeeded) | If the stop failed, raise the host's finding to **high** whatever the host's state, because a process the probe cannot stop is the probe's own fault. If the stop succeeded, raise it to **high** only while the host is enabled; for a host the operator has switched off, go to the next row. No new probe either way. | 0 |
+| A previous probe's timed-out execution was still live at the cleanup pass (whether or not the stop succeeded) | While the host is enabled, this reproduces its timeout record (already high). For a host the operator has switched off, go to the next row. No new probe either way. A failed stop is reported separately, whatever the host's state (see *Hung calls*). | 0 |
 | Not enabled by the operator (`UNITARES_HOST_ADAPTER_ENABLED` off, or the host listed in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. An enabled host whose CLI has gone missing is not skipped: it is probed, fails at preflight at no quota cost, and is reported. | 0 |
 | In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`, with no probe. A `quota` cooldown raises no finding: it clears by itself, and consult routes around it meanwhile. An `auth` cooldown raises the host's `auth` finding (**high**) from the cooldown alone. Real traffic can keep a logged-out host cooling indefinitely, and nobody is told to log in unless this row reports it. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
@@ -98,7 +98,7 @@ The probe reads the failure class that `delegate_inference` already returns:
 | Failure classified `quota` | none | `delegate_inference` records the cooldown itself, until the provider's stated reset or, when none is stated, on a backoff from 30 min doubling to 6 h. The limit resets, and failover covers it meanwhile. |
 | Failure classified `auth` | **high** | `delegate_inference` puts an auth failure into a cooldown too, on the 30 min to 6 h backoff, so a login that gets fixed is noticed within hours. Unlike a quota limit, though, a logged-out CLI does not recover on its own: the operator has to log in. |
 | Unclassified failure (malformed envelope, nonzero exit, spawn rejected, orchestrator down) | **medium** | The case nothing else records. |
-| Timeout (`possibly_running`) | **medium**, noted as possibly still running | See *Hung calls* below. |
+| Timeout (`possibly_running`) | **high**, noted as possibly still running | A probe asks for one word, so a timeout means the host hangs. The severity stays high on later runs too, so a host that keeps hanging is re-posted only under the backoff. See *Hung calls* below. |
 
 Findings go through `agents/common/findings.post_finding`, the same
 fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
@@ -132,16 +132,14 @@ that it is not cooling. A few consequences:
   so the host was logged in.
 - A preflight failure closes nothing else. A CLI that has gone missing says
   nothing about whether an old `auth` fault was fixed.
-- A hung call found by the cleanup pass reproduces its timeout record, raised
-  to high, noting whether the stop failed.
+- A hung call found by the cleanup pass reproduces its timeout record.
 - A shared `gov-dispatch` record replaces the member hosts' own records of
   that same pre-CLI failure. It is reproduced by any run in which two or more
   hosts show that failure, and it closes when fewer do. A single host still
   failing then gets its own record, since the fault no longer looks shared.
 - A host the operator switches off has all its records closed, with reason
-  `not_enabled`. The one exception is a hung call whose stop failed. That
-  record stays open at high until a later cleanup pass stops the call,
-  because the leaked process outlives the host's removal from rotation.
+  `not_enabled`. A failed stop is not one of the host's records (see *Hung
+  calls*), so it is unaffected.
 
 A changed failure is covered the same way. A host that failed preflight
 yesterday and fails `auth` today closes the preflight record and opens an
@@ -159,24 +157,20 @@ the reasoning `doctor_findings.py` records at the same step).
 A call that times out may still be running under the orchestrator, and a CLI
 stuck on a prompt would otherwise leave one more child each day. The probe
 stores the `orchestrator_execution_id` of every timed-out call in its state
-file. The next run's cleanup pass reads the orchestrator's
-`GET /v1/executions/<id>` snapshot for each stored id, which does not block. If
-that execution is still live, the probe stops it with
+file. Each run's cleanup pass reads the orchestrator's
+`GET /v1/executions/<id>` snapshot for each stored id, which does not block.
+If that execution is still live, the probe stops it with
 `DELETE /v1/executions/<id>`, which the orchestrator documents as stopping
 exactly that execution. That id is the probe's own spawn, so no other
-caller's work is touched. If the host is still enabled, the probe then
-raises its finding to **high** with the age of the hung call, and does not
-probe that host again that run. A hung call therefore lasts at most a day and never accumulates.
-If the stop fails, the finding says so and the id stays in the state file for
-the next run. So each host has at most one probe child alive
-at a time, however long the hang lasts. By
-existing routing, a finding goes to `#residents`, and a high one also goes to
-`#alerts`.
+caller's work is touched. A stopped or finished execution leaves the state
+file. A host whose hung call was found live is not probed again that run, so
+each host has at most one probe child alive at a time.
 
-Each run also appends one JSON line per host to
-`data/logs/inference-host-probe.log`, with the host's state, action, latency,
-`tokens_used` and failure class. That line is the record of what the probe
-cost.
+If a stop fails, the id stays in the state file for the next pass, and the
+probe posts a **high** finding keyed to that execution id, with fingerprint
+`sha("hung-execution", id)`. The finding belongs to the execution, not to the
+host. It stays open, whether the host is enabled, switched off, or removed from
+the configuration, until a cleanup pass sees the execution gone.
 
 ### Passive evidence
 
