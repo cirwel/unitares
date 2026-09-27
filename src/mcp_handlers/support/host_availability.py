@@ -200,9 +200,10 @@ def cooldown(host_id: str, *, now: Optional[float] = None) -> Optional[dict[str,
         return _public(host_id, entry)
 
 
-def clear(host_id: str) -> None:
+def clear(host_id: str) -> bool:
+    """End ``host_id``'s cooldown; returns whether it had an entry."""
     with _lock:
-        _state.pop(host_id, None)
+        return _state.pop(host_id, None) is not None
 
 
 # --- Redis copy ------------------------------------------------------------
@@ -213,6 +214,17 @@ async def _get_redis() -> Any:
     from src.cache.redis_client import get_redis
 
     return await get_redis()
+
+
+def _redis_configured() -> bool:
+    """Whether Redis is meant to be in use (``REDIS_ENABLED`` not off). A None
+    client then means unreachable or circuit-open, not "no Redis here"."""
+    try:
+        from src.cache.redis_client import _get_client
+
+        return bool(_get_client().config.enabled)
+    except Exception:
+        return False
 
 
 #: What ``_bounded`` returns when Redis was reached for but the call failed,
@@ -350,9 +362,13 @@ async def clear_async(host_id: str) -> None:
     lapses (at most the 12h cap; consult fails over meanwhile). That is
     logged, because nothing else would show why a working host is cooling."""
     async with _write_lock(host_id):
-        clear(host_id)
+        had_entry = clear(host_id)
         result = await _sync(host_id, time.time())
-    if result is _FAILED:
+    # Unreachable or circuit-open Redis returns no client: a copy written
+    # while it was up is just as undeleted as after a failed DEL. Only a host
+    # that had an entry can have a copy (startup loads every copy), so a
+    # routine success while Redis is down stays quiet.
+    if result is _FAILED or (result is None and had_entry and _redis_configured()):
         logger.warning(
             "[HOST_COOLDOWN] %s recovered but its Redis copy %s%s was not deleted; "
             "a restart before it expires reloads the old window",

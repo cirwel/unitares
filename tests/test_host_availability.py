@@ -408,3 +408,22 @@ async def test_a_slow_delete_cannot_erase_a_newer_failure(monkeypatch):
     )
     assert ha.cooldown("codex:host-adapter") is not None
     assert stored is not None  # the newer failure survives a restart
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured, warned", [(True, True), (False, False)],
+                         ids=["unreachable", "disabled"])
+async def test_recovery_without_a_redis_client_is_logged_unless_redis_is_off(
+        monkeypatch, caplog, configured, warned):
+    """Codex review (P2): an unreachable or circuit-open Redis gives no
+    client, which skips the delete as surely as a failed DEL."""
+    async def _no_client():
+        return None
+
+    monkeypatch.setattr(ha, "_get_redis", _no_client)
+    monkeypatch.setattr(ha, "_redis_configured", lambda: configured)
+    await ha.clear_async("codex:host-adapter")  # nothing was cooling: quiet
+    assert "was not deleted" not in caplog.text
+    ha.record_unavailable("codex:host-adapter", QUOTA)
+    await ha.clear_async("codex:host-adapter")
+    assert ("was not deleted" in caplog.text) is warned
