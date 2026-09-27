@@ -26,10 +26,15 @@ def create_discovery_node(
     coherence: Optional[float] = None,
     tags: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    closure_class: Optional[str] = None,
+    closure_evidence: Optional[str] = None,
 ) -> tuple[str, Dict[str, Any]]:
     """
     Build Cypher query to create a Discovery node.
-    
+
+    ``closure_evidence`` is the JSON text of the evidence object, the form the
+    node stores it in (as tags and metadata are stored).
+
     Returns:
         (cypher_query, params_dict)
     """
@@ -68,16 +73,24 @@ def create_discovery_node(
         props["tags"] = tags
     if metadata:
         props["metadata"] = metadata
-    
     # Build properties string (using ${param} format for substitution)
     props_str = ", ".join(f"{k}: ${{{k}}}" for k in props.keys())
-    
+
+    # The closure pair is set on its own, always: MERGE can match an existing
+    # vertex, and SET d += {...} changes only the keys in the map, so leaving
+    # the pair out of an unclassified node would keep a stale class on a
+    # reused id. NULL removes the property, the same form update_discovery
+    # uses. Evidence rides only with a class.
+    props["closure_class"] = closure_class or None
+    props["closure_evidence"] = closure_evidence if closure_class else None
+
     cypher = f"""
         MERGE (d:Discovery {{id: ${{id}}}})
         SET d += {{{props_str}}}
+        SET d.closure_class = ${{closure_class}}, d.closure_evidence = ${{closure_evidence}}
         RETURN d
     """
-    
+
     return cypher, props
 
 

@@ -36,7 +36,8 @@
 #     1. Pull and restart MCP after merging PR #5.
 #     2. Run this script. Verify exit 0.
 #     3. Load the PR #4 BEAM listener launchd plist.
-#     4. Edit ~/.config/cirwel/secrets.env:
+#     4. Edit the secrets env file ($UNITARES_SECRETS_ENV, else
+#        ~/.config/unitares/secrets.env, else legacy ~/.config/cirwel/secrets.env):
 #            export WAVE_3A_HEALTH_CHECK_ON_BEAM=true
 #     5. Restart the MCP (so apply_env_flag_routes picks up the flag).
 #     6. Sanity-check: `curl http://127.0.0.1:8767/v1/admin/wave3a/routing-table`
@@ -105,6 +106,7 @@ print(
     f"ok: {TOOL_NAME!r} registered in TOOL_HANDLERS, "
     f"requires_identity={req!r}.\n"
     "Safe to set WAVE_3A_HEALTH_CHECK_ON_BEAM=true in "
-    "~/.config/cirwel/secrets.env and restart the MCP."
+    "your secrets env file ($UNITARES_SECRETS_ENV, else "
+    "~/.config/unitares/secrets.env) and restart the MCP."
 )
 PY

@@ -179,7 +179,7 @@ curl -s http://127.0.0.1:8767/health/live
 # Exercise the real REST wrapper and preserve its returned session binding
 ./scripts/unitares health
 ./scripts/unitares onboard install-smoke "bare-metal install verification" force
-./scripts/unitares update "bare-metal install verified" 0.2 0.9
+./scripts/unitares call process_agent_update '{"response_text": "bare-metal install verified", "complexity": 0.2, "confidence": 0.9}'
 
 # Dashboard
 open http://127.0.0.1:8767/dashboard
@@ -277,7 +277,7 @@ If you trust the playbook and just want to know it worked:
 redis-cli ping \
   && ./scripts/unitares health \
   && ./scripts/unitares onboard install-smoke "bare-metal smoke" force \
-  && ./scripts/unitares update "bare-metal smoke passed" 0.2 0.9
+  && ./scripts/unitares call process_agent_update '{"response_text": "bare-metal smoke passed", "complexity": 0.2, "confidence": 0.9}'
 ```
 
 If those commands print `PONG`, a UUID, and a verdict, the install is correct.
