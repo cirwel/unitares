@@ -1261,7 +1261,7 @@ Ask an advisory model, and list the hosts that serve one
 - **Timeout:** 5s
 - **Related:** `describe_inference_host`, `consult`, `call_model`, `delegate_inference`
 
-List registered inference hosts with live readiness. Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude and Codex adapters to delegate_inference. Listing works before onboarding; inference calls need a bound identity. Use describe_inference_host for one known id.
+List registered inference hosts with live readiness. Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude, Codex and Antigravity adapters to delegate_inference. Those adapters are an operator extension (the agent orchestrator) that a default install does not run; the extensions field says whether this server has it. Listing works before onboarding; inference calls need a bound identity. Use describe_inference_host for one known id.
 
 ### `describe_inference_host`
 
@@ -1280,7 +1280,7 @@ Return the registry record for one inference host named by host_id, including re
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' needs privacy='cloud_allowed'; against the default privacy='local' it refuses outright unless allow_degraded=true, which returns a standard local answer instead. effort='thorough' asks a strong model from a different family than the caller's when the caller's family can be detected (Claude, Codex or Antigravity, whichever the operator has available); an undetected caller may get any of them. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
+Primary advisory model-help surface: send a brief, get back advisory model evidence, never a governed verdict — request_review produces that. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
 ### `call_model`
 
@@ -1293,13 +1293,13 @@ Run one synchronous advisory completion on the local Ollama lane or the Hugging 
 
 ### `delegate_inference`
 
-- **Tier** common · **operation** read · **stability** beta
+- **Tier** advanced · **operation** read · **stability** beta
 - **Identity:** `required`
 - **Timeout:** 480s
 - **Depends on:** `list_inference_hosts`
 - **Related:** `consult`, `describe_inference_host`, `dialectic`
 
-Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Send one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 
@@ -1734,7 +1734,7 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. UNITARES_DIALECTIC_REVIEWER_HOST picks the orchestrated reviewer backend (local, codex, claude, antigravity, or external, alias gemini); a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
+Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
