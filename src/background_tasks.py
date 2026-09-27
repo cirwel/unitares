@@ -694,47 +694,95 @@ async def progress_flat_probe_task(interval_seconds: float | None = None):
 # Session cleanup
 # ---------------------------------------------------------------------------
 
+# Per-key bound on the cleanup's Redis awaits. Async Redis is not
+# ExecutorPool-wrapped, so every await here is guarded (CLAUDE.md, substrate
+# tax); a timed-out key is left alone and counted as neither deleted nor kept.
+_SESSION_CLEANUP_REDIS_TIMEOUT_S = 2.0
+
+
+async def _session_cleanup_pass() -> tuple[int, int, int]:
+    """Run one cleanup pass. Returns ``(pg_deleted, redis_deleted, redis_live_kept)``.
+
+    A ``core.sessions`` row gets ``expires_at`` = bind time + SESSION_TTL_HOURS
+    and is extended only when a lookup reaches PostgreSQL (PATH 2). A lookup
+    served from Redis (PATH 1) slides the Redis key's TTL instead
+    (``_refresh_session_ttl``), so a client that stays active keeps a live Redis
+    binding while its PG row runs out. Such a key is not an orphan: deleting it
+    with the expired row strands the client, whose next call misses both stores
+    and is refused as ``pg_session_missing`` until it re-onboards.
+
+    So the Redis side deletes only a key with no expiry (TTL -1), which Redis
+    would otherwise keep forever. A key with a positive TTL is left for Redis to
+    expire once its client goes idle: the row and the key get the same TTL at
+    bind time, so a key nobody refreshed expires within moments of its row. A
+    key whose TTL cannot be read is left alone. The PG rows are deleted exactly
+    as before.
+
+    Live 2026-09-01 to 09-07: three discord-bridge session keys were stranded
+    this way. Each flood of misses began right after a cleanup pass that
+    deleted one Redis key, and lasted until the bridge restarted.
+    """
+    pg_deleted = 0
+    redis_deleted = 0
+    redis_live_kept = 0
+
+    expired_session_keys = []
+    try:
+        from src.db import get_db
+        db = get_db()
+        async with db.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    "SELECT session_id FROM core.sessions WHERE expires_at <= now()"
+                )
+                expired_session_keys = [r["session_id"] for r in rows]
+                result = await conn.execute("DELETE FROM core.sessions WHERE expires_at <= now()")
+                pg_deleted = int(result.split()[-1]) if result else 0
+    except Exception as e:
+        logger.warning(f"[SESSION_CLEANUP] PG cleanup failed: {e}")
+
+    if expired_session_keys:
+        try:
+            from src.cache.redis_client import get_redis
+            redis = await get_redis()
+            if redis is not None:
+                for sk in expired_session_keys:
+                    key = f"session:{sk}"
+                    try:
+                        ttl = await asyncio.wait_for(
+                            redis.ttl(key), timeout=_SESSION_CLEANUP_REDIS_TIMEOUT_S,
+                        )
+                        if isinstance(ttl, int) and ttl > 0:
+                            redis_live_kept += 1
+                            continue
+                        if ttl != -1:
+                            continue  # -2: already gone; anything else: unknown
+                        removed = await asyncio.wait_for(
+                            redis.delete(key), timeout=_SESSION_CLEANUP_REDIS_TIMEOUT_S,
+                        )
+                        if removed:
+                            redis_deleted += 1
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"[SESSION_CLEANUP] Redis cleanup failed: {e}")
+
+    return pg_deleted, redis_deleted, redis_live_kept
+
+
 async def session_cleanup_task(interval_hours: float = 6.0):
-    """Delete expired sessions from PG and orphaned Redis session cache keys."""
+    """Delete expired sessions from PG and orphaned Redis session cache keys.
+
+    Live Redis bindings are kept; see ``_session_cleanup_pass``.
+    """
     while True:
         await asyncio.sleep(interval_hours * 3600)
-        pg_deleted = 0
-        redis_deleted = 0
-
-        expired_session_keys = []
-        try:
-            from src.db import get_db
-            db = get_db()
-            async with db.acquire() as conn:
-                async with conn.transaction():
-                    rows = await conn.fetch(
-                        "SELECT session_id FROM core.sessions WHERE expires_at <= now()"
-                    )
-                    expired_session_keys = [r["session_id"] for r in rows]
-                    result = await conn.execute("DELETE FROM core.sessions WHERE expires_at <= now()")
-                    pg_deleted = int(result.split()[-1]) if result else 0
-        except Exception as e:
-            logger.warning(f"[SESSION_CLEANUP] PG cleanup failed: {e}")
-
-        if expired_session_keys:
-            try:
-                from src.cache.redis_client import get_redis
-                redis = await get_redis()
-                if redis is not None:
-                    for sk in expired_session_keys:
-                        try:
-                            removed = await redis.delete(f"session:{sk}")
-                            if removed:
-                                redis_deleted += 1
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.warning(f"[SESSION_CLEANUP] Redis cleanup failed: {e}")
-
-        if pg_deleted or redis_deleted:
+        pg_deleted, redis_deleted, redis_live_kept = await _session_cleanup_pass()
+        if pg_deleted or redis_deleted or redis_live_kept:
             logger.info(
                 f"[SESSION_CLEANUP] Deleted {pg_deleted} expired PG sessions, "
-                f"{redis_deleted} Redis cache keys"
+                f"{redis_deleted} Redis cache keys; kept {redis_live_kept} "
+                f"live Redis bindings"
             )
 
 

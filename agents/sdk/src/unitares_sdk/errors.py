@@ -11,6 +11,15 @@ class GovernanceConnectionError(GovernanceError):
     """Cannot reach governance server."""
 
 
+class GovernanceToolRefused(GovernanceConnectionError):
+    """The server answered, and the tool reported ``success: false``.
+
+    A subclass so every existing ``except GovernanceConnectionError`` still
+    catches it, while a caller deciding whether to retry can tell an answer
+    from a transport failure: re-sending a refused call gets the same refusal.
+    """
+
+
 class GovernanceTimeoutError(GovernanceError):
     """MCP call exceeded timeout (likely anyio deadlock)."""
 

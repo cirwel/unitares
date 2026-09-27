@@ -183,7 +183,17 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # client_session_id in the call that sets a display name. No parameter is
 # added, removed, retyped or renamed, and no input digest or the surface
 # digest moves.
-# 1.22.0 (2026-09-27): dialectic gains action="consult", which files an
+# 1.22.0 (2026-09-27), numbered after 1.21.0 (#2490): knowledge and
+# search_shared_memory declare sort_by ("relevance" | "created_at"),
+# created_after and created_before for action=search. search_knowledge_graph
+# already declared them, but no handler read them; its sort_by default moves
+# from created_at to unset (read as relevance) and its never-implemented "score" and
+# "related_count" values are refused. A compatible addition: the default
+# order is unchanged. To stay inside the progressive-surface ratchet,
+# search_shared_memory advertises shorter briefs for nine existing search
+# parameters (their full descriptions, served by describe_tool, are
+# unchanged). The three input digests and the surface digest move.
+# 1.23.0 (2026-09-27), numbered after 1.22.0 (#2517): dialectic gains action="consult", which files an
 # outside verdict on any session as a transcript record with no authority:
 # it needs no reviewer slot, never advances a phase, never counts as a
 # verdict, and never refreshes the session's liveness clock. The documented
@@ -193,7 +203,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # used. The action enum and descriptions grow; nothing is removed, retyped or
 # renamed. The input digests of dialectic and request_review, and the
 # surface digest, move.
-INTERFACE_CONTRACT_VERSION = "1.22.0"
+INTERFACE_CONTRACT_VERSION = "1.23.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

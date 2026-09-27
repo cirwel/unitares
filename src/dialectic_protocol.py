@@ -666,7 +666,9 @@ class DialecticSession:
         self.session_type = session_type  # "review", "recovery", "dispute", or "exploration"
         self.topic = topic  # Optional topic/theme for exploration sessions
         self.reason = reason  # Why the session was created (human-readable)
-        self.trigger_source = trigger_source  # "circuit_breaker", "manual", "loop_detection", etc.
+        # "manual" for any request made through the tool; an in-process trigger
+        # names itself ("circuit_breaker"). See AutomatedTrigger.
+        self.trigger_source = trigger_source
         # Exploration sessions can have more rounds (default: 10 for exploration, 5 for recovery)
         self.max_synthesis_rounds = max_synthesis_rounds if session_type != "exploration" else max(max_synthesis_rounds, 10)
 
