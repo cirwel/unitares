@@ -1195,6 +1195,10 @@ cmd_update() {
     fi
     echo "Installed: $current"
     echo "Target:    $target"
+    if ! git -C "$root" ls-remote "$(_update_remote)" HEAD >/dev/null 2>&1; then
+        echo "error: could not reach $(_update_remote); check the network and try again." >&2
+        return 1
+    fi
     target_sha=$(_remote_commit "$root" "$target")
     if [ -z "$target_sha" ]; then
         echo "error: $(_update_remote) has no tag or branch named $target." >&2
@@ -1209,8 +1213,13 @@ cmd_update() {
             echo "Run 'unitares update' to move to $target."
         elif _compose ps --status running --services 2>/dev/null | grep -qx "postgres-age"; then
             echo "✓ Already on $target. Pending migrations:"
-            _migrations || return 1
-            echo "  Apply them and restart with: unitares update --to $target"
+            local plan
+            plan=$(_migrations) || { printf '%s\n' "$plan"; return 1; }
+            printf '%s\n' "$plan"
+            case "$plan" in
+                *"No pending migrations"*) ;;
+                *) echo "  Apply them and restart with: unitares update --to $target" ;;
+            esac
         else
             echo "✓ Already on $target. The database is not running, so pending migrations"
             echo "  are not listed; 'unitares update --to $target' applies any it finds."
@@ -1244,7 +1253,7 @@ cmd_update() {
         _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
         _migrations --apply || { echo "error: migrations did not complete; the stack was not restarted." >&2; return 1; }
         echo "… Rebuilding and starting the stack"
-        _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
+        _compose up -d --build --wait || { echo "error: the stack did not come up. The database is already migrated to $target, and the containers still answering may be the previous release." >&2; echo "       Fix what 'unitares logs' shows and re-run 'unitares update --to $target': it rebuilds without migrating again. Do not check the previous code back out onto a migrated database." >&2; return 1; }
         _report_health "On $target with migrations applied."
         return $?
     fi
@@ -1274,7 +1283,7 @@ cmd_update() {
     fi
 
     echo "… Rebuilding and starting the stack"
-    _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
+    _compose up -d --build --wait || { echo "error: the stack did not come up. The database is already migrated to $target, and the containers still answering may be the previous release." >&2; echo "       Fix what 'unitares logs' shows and re-run 'unitares update --to $target': it rebuilds without migrating again. Do not check the previous code back out onto a migrated database." >&2; return 1; }
 
     _report_health "Updated $current → $target."
 }

@@ -1373,3 +1373,13 @@ _report_health "Updated a → b."
     out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
     assert out.returncode == code
     assert marker in out.stdout + out.stderr
+
+
+
+def test_an_unreachable_remote_is_not_reported_as_a_missing_release(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env["UNITARES_UPDATE_REMOTE"] = str(tmp_path / "no-such-remote.git")
+    result = _cli(env, "update", "--check", "--to", "v1.0.0")
+    assert result.returncode == 1
+    assert "could not reach" in result.stderr
+    assert "has no tag or branch" not in result.stderr
