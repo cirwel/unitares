@@ -200,10 +200,9 @@ def cooldown(host_id: str, *, now: Optional[float] = None) -> Optional[dict[str,
         return _public(host_id, entry)
 
 
-def clear(host_id: str) -> bool:
-    """End ``host_id``'s cooldown; returns whether it had an entry."""
+def clear(host_id: str) -> None:
     with _lock:
-        return _state.pop(host_id, None) is not None
+        _state.pop(host_id, None)
 
 
 # --- Redis copy ------------------------------------------------------------
@@ -319,6 +318,11 @@ _write_locks: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, as
 )
 
 
+# Hosts whose recovery delete was skipped and already logged; cleared once a
+# delete for the host lands, so one Redis outage logs once per host.
+_stale_copy_warned: set[str] = set()
+
+
 def _write_lock(host_id: str) -> asyncio.Lock:
     per_loop = _write_locks.setdefault(asyncio.get_running_loop(), {})
     return per_loop.setdefault(host_id, asyncio.Lock())
@@ -362,13 +366,17 @@ async def clear_async(host_id: str) -> None:
     lapses (at most the 12h cap; consult fails over meanwhile). That is
     logged, because nothing else would show why a working host is cooling."""
     async with _write_lock(host_id):
-        had_entry = clear(host_id)
+        clear(host_id)
         result = await _sync(host_id, time.time())
     # Unreachable or circuit-open Redis returns no client: a copy written
-    # while it was up is just as undeleted as after a failed DEL. Only a host
-    # that had an entry can have a copy (startup loads every copy), so a
-    # routine success while Redis is down stays quiet.
-    if result is _FAILED or (result is None and had_entry and _redis_configured()):
+    # while it was up is just as undeleted as after a failed DEL. The cache
+    # cannot say whether a copy exists (startup may not have reached Redis),
+    # so every skipped delete counts, logged once per host until one lands.
+    skipped = result is _FAILED or (result is None and _redis_configured())
+    if not skipped:
+        _stale_copy_warned.discard(host_id)
+    elif host_id not in _stale_copy_warned:
+        _stale_copy_warned.add(host_id)
         logger.warning(
             "[HOST_COOLDOWN] %s recovered but its Redis copy %s%s was not deleted; "
             "a restart before it expires reloads the old window",
@@ -415,3 +423,4 @@ def _reset_for_tests() -> None:
     with _lock:
         _state.clear()
     _write_locks.clear()
+    _stale_copy_warned.clear()

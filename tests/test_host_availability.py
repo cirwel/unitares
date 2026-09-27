@@ -416,14 +416,32 @@ async def test_a_slow_delete_cannot_erase_a_newer_failure(monkeypatch):
 async def test_recovery_without_a_redis_client_is_logged_unless_redis_is_off(
         monkeypatch, caplog, configured, warned):
     """Codex review (P2): an unreachable or circuit-open Redis gives no
-    client, which skips the delete as surely as a failed DEL."""
+    client, which skips the delete as surely as a failed DEL. The cache is not
+    consulted: startup may have missed a copy that still exists."""
     async def _no_client():
         return None
 
     monkeypatch.setattr(ha, "_get_redis", _no_client)
     monkeypatch.setattr(ha, "_redis_configured", lambda: configured)
-    await ha.clear_async("codex:host-adapter")  # nothing was cooling: quiet
-    assert "was not deleted" not in caplog.text
-    ha.record_unavailable("codex:host-adapter", QUOTA)
-    await ha.clear_async("codex:host-adapter")
+    await ha.clear_async("codex:host-adapter")  # nothing in the cache
     assert ("was not deleted" in caplog.text) is warned
+    caplog.clear()
+    await ha.clear_async("codex:host-adapter")  # same outage: logged once
+    assert "was not deleted" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_landed_delete_rearms_the_warning(monkeypatch, caplog, redis):
+    async def _no_client():
+        return None
+
+    real = ha._get_redis
+    monkeypatch.setattr(ha, "_redis_configured", lambda: True)
+    monkeypatch.setattr(ha, "_get_redis", _no_client)
+    await ha.clear_async("codex:host-adapter")
+    monkeypatch.setattr(ha, "_get_redis", real)  # Redis back: delete lands
+    await ha.clear_async("codex:host-adapter")
+    caplog.clear()
+    monkeypatch.setattr(ha, "_get_redis", _no_client)  # a second outage
+    await ha.clear_async("codex:host-adapter")
+    assert "was not deleted" in caplog.text
