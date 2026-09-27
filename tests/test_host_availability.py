@@ -172,7 +172,7 @@ async def test_a_cooldown_survives_a_restart(redis):
 
 
 @pytest.mark.asyncio
-async def test_the_backoff_keeps_counting_across_a_restart(redis):
+async def test_a_restored_window_follows_the_window_rules(redis):
     now = 1_000_000.0
     await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
     _restart()
@@ -188,6 +188,20 @@ async def test_the_backoff_keeps_counting_across_a_restart(redis):
     await ha.load_from_redis(now=now + 4)
     entry = ha._state["claude:host-adapter"]
     assert entry["retry_after"] == now + 120 and entry["retry_after_source"] == "provider"
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_keeps_counting_across_a_restart(redis):
+    """The failure count comes back with the window, so the first failure
+    after a restored window lapses backs off one step longer, not from 30m."""
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    _restart()
+    await ha.load_from_redis(now=now + 1)
+    after = now + ha.BACKOFF_BASE_S + 1  # the restored window has lapsed
+    view = await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=after)
+    assert view["consecutive_failures"] == 2
+    assert ha._state["claude:host-adapter"]["retry_after"] == after + 2 * ha.BACKOFF_BASE_S
 
 
 @pytest.mark.asyncio
@@ -278,3 +292,13 @@ async def test_redis_down_means_in_process_behaviour(monkeypatch, client):
     assert ha.cooldown("codex:host-adapter", now=now + 1) is not None  # load kept it
     await ha.clear_async("codex:host-adapter")
     assert ha.cooldown("codex:host-adapter", now=now + 1) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delete_on_recovery_is_logged(monkeypatch, caplog):
+    async def _redis():
+        return _BrokenRedis()
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    await ha.clear_async("codex:host-adapter")
+    assert "was not deleted" in caplog.text

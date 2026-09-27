@@ -202,8 +202,14 @@ async def _get_redis() -> Any:
     return await get_redis()
 
 
+#: What ``_bounded`` returns when Redis was reached for but the call failed,
+#: so a caller that must know (``clear_async``) can tell it from "no Redis".
+_FAILED = object()
+
+
 async def _bounded(op, what: str) -> Any:
-    """Run ``op(redis)`` under REDIS_TIMEOUT_S; None on no Redis or any error."""
+    """Run ``op(redis)`` under REDIS_TIMEOUT_S. None when Redis is not
+    configured or reachable, ``_FAILED`` on a timeout or error; never raises."""
 
     async def _run() -> Any:
         redis = await _get_redis()
@@ -218,7 +224,7 @@ async def _bounded(op, what: str) -> Any:
                        what, REDIS_TIMEOUT_S)
     except Exception as exc:  # fail soft: the in-process state is authoritative here
         logger.debug("[HOST_COOLDOWN] Redis %s failed: %s", what, exc)
-    return None
+    return _FAILED
 
 
 def _decode(raw: Any) -> Optional[dict[str, Any]]:
@@ -275,7 +281,8 @@ def _adopt(host_id: str, incoming: Optional[dict[str, Any]], now: float) -> bool
 
 async def _pull(host_id: str, now: float) -> None:
     raw = await _bounded(lambda r: r.get(REDIS_KEY_PREFIX + host_id), f"read {host_id}")
-    _adopt(host_id, _decode(raw), now)
+    if raw is not _FAILED:
+        _adopt(host_id, _decode(raw), now)
 
 
 async def _push(host_id: str, now: float) -> None:
@@ -306,9 +313,20 @@ async def record_unavailable_async(
 
 async def clear_async(host_id: str) -> None:
     """``clear`` with the Redis copy removed too, so a restart after a
-    recovered provider does not resurrect its old window."""
+    recovered provider does not bring back its old window.
+
+    If the delete fails, the copy outlives the recovery: a restart before
+    its TTL runs out reloads the window, and the host is refused until it
+    lapses (at most the 12h cap; consult fails over meanwhile). That is
+    logged, because nothing else would show why a working host is cooling."""
     clear(host_id)
-    await _bounded(lambda r: r.delete(REDIS_KEY_PREFIX + host_id), f"delete {host_id}")
+    result = await _bounded(
+        lambda r: r.delete(REDIS_KEY_PREFIX + host_id), f"delete {host_id}")
+    if result is _FAILED:
+        logger.warning(
+            "[HOST_COOLDOWN] %s recovered but its Redis copy %s%s was not deleted; "
+            "a restart before it expires reloads the old window",
+            host_id, REDIS_KEY_PREFIX, host_id)
 
 
 async def load_from_redis(*, now: Optional[float] = None) -> int:
@@ -322,7 +340,9 @@ async def load_from_redis(*, now: Optional[float] = None) -> int:
             return []
         return list(zip(keys, await redis.mget(keys)))
 
-    rows = await _bounded(_read_all, "startup load") or []
+    rows = await _bounded(_read_all, "startup load")
+    if rows is _FAILED or not rows:
+        rows = []
     adopted = 0
     for key, raw in rows:
         key = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
