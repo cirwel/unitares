@@ -704,19 +704,26 @@ row; the instrument emits one `dialectic_guarded_write` record per guarded sweep
 time, the reviewer, phase, status and `updated_at` it read, commit time, outcome), and the report
 reads those. It is
 measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
-durable tables, including a saga-versus-row status join, and by the `dialectic_resolve_already_terminal`
-event, because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no
-saga row. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
+durable tables, including a saga-versus-row status join, and by a `dialectic_beam_resolve` event on
+every BEAM resolve response, because a BEAM resolve that meets an already-terminal row returns
+`already_terminal` with no saga row. The event's coverage is itself measured: the report matches it
+against committed sagas and states the fraction, and (b1) cannot fire while that fraction is below
+99%. BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
+outcomes are contention-benign by construction and need no emitter. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
 
-**A3 — the writer inventory (§1) gains two BEAM writers.** `DialecticLiveness.fail_stuck/2` →
-`DialecticSaga.resolve/1` (fails a session after 4 h; live, 33 sessions carry `liveness_timeout`) and
-`DialecticSaga.update_reviewer/2` (writes the reviewer slot outside any saga). "Both writers", "either
-writer ordering" and "both writer orderings" in §2, §4 and §6 read as **all writers: the Python
-sweeper, the BEAM resolve path, BEAM liveness, `update_reviewer`, and the live Python fallbacks that
-write when a BEAM request is disabled or fails** (the phase-update and terminal-resolution fallbacks
-in the dialectic handlers). The W_pre report counts fallback writes as competing writers, and A9's
-coverage requirement includes them. A guarded refusal names the
-winner (`winner_status`, `winner_reason`).
+**A3 — the writer inventory is defined by rule.** A **writer** is every code path, in either
+runtime, that writes the `status`, `phase`, `reviewer_agent_id` or `awaiting_facilitation` columns of
+`core.dialectic_sessions`. That includes the Python sweeper's guarded writes; the BEAM resolve path
+(`DialecticSaga.commit_session_row`); BEAM liveness (`DialecticLiveness.fail_stuck/2` →
+`DialecticSaga.resolve/1`, which fails a session after 4 h; 33 sessions carry `liveness_timeout`);
+`DialecticSaga.update_reviewer/2`, which writes the reviewer slot outside any saga; and the live
+Python fallbacks (the phase-update and terminal-resolution fallbacks, and
+`_apply_reviewer_reassignment`'s reopen and reviewer-update writes). The list is kept as a checked-in
+inventory that a test compares against the code, failing on any unlisted writer, so the set cannot
+drift silently. "Both writers", "either writer ordering" and "both writer orderings" in §2, §4 and
+§6 mean every inventory writer; the W_pre report counts each one that leaves a durable trace, A9's
+coverage requirement includes all of them, and a guarded refusal names the winner (`winner_status`,
+`winner_reason`).
 
 **A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
 classified once, in this order of precedence: **harm** (a collision under A2, whatever the final
@@ -772,7 +779,10 @@ step 4 reading has two outcomes. If W_pre fires (b1), the gate concludes **no po
 step 4; no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
 instead, the port only becomes **eligible**: the gate is met after step 5, when the design pass has
 run on the chosen §1.2 option and the gate has been signed again as amended. Nothing is built before
-then. Hours against the §4
+then. If W_pre reaches its bound with neither outcome available (coverage below A8, an unexplained
+gap, an unadjudicated failed probe, or emitter coverage below 99%), the reading is **inconclusive**:
+the named defect is fixed, W_pre extends by the uncovered time, and if the fix changes the
+instrument (a new `instrument_version`), W_pre restarts from the first row at the new version. Hours against the §4
 projection were not tracked for either round and are reported as not measured.
 
 **A11 — consistency.** §9 inventories both paths while §2's disconfirmers and §4's exit criteria
