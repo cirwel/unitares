@@ -1611,13 +1611,27 @@ def test_producer_agents_present_recognises_a_beam_producer_by_its_label(doctor,
 
 def test_producer_label_stems_do_not_match_unrelated_jobs(doctor):
     stems = doctor._producer_label_stems(
-        {"deploy_drift_finding", "doctor_check_finding", "sentinel_alarm_finding"})
-    assert stems == {"deploy", "doctor", "sentinel"}
-    assert doctor._label_runs_producer("com.unitares.deploy-drift-doctor", stems)
-    assert doctor._label_runs_producer("com.unitares.doctor-findings", stems)
+        {"deploy_drift_finding", "vigil_finding", "sentinel_alarm_finding"})
+    assert stems == {"deploy", "vigil", "sentinel"}
+    assert doctor._label_runs_producer("com.unitares.sentinel", stems)
+    assert doctor._label_runs_producer("com.unitares.sentinel-beam", stems)
+    assert doctor._label_runs_producer("com.unitares.vigil", stems)
+    # Same resident, different job: a maintenance agent emits no findings.
+    assert not doctor._label_runs_producer("com.unitares.vigil-hygiene", stems)
+    # Script producers are matched by ProgramArguments, not by label prefix.
+    assert not doctor._label_runs_producer("com.unitares.deploy-drift-doctor", stems)
     assert not doctor._label_runs_producer("com.unitares.governance-backup", stems)
     assert not doctor._label_runs_producer("com.unitares.dep-sweep", stems)
     assert not doctor._label_runs_producer(doctor.GOVERNANCE_LAUNCHD_LABEL, stems)
+
+
+def test_producer_agents_present_ignores_a_same_named_maintenance_job(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.vigil-hygiene",
+                       ["/usr/bin/python3", "/opt/u/agents/vigil_hygiene/agent.py"])
+    assert not doctor._producer_agents_present(
+        {"agents/vigil/agent.py"}, agents, events={"vigil_finding"})
 
 
 def test_producer_agents_present_tolerates_missing_dir_and_bad_plists(doctor, tmp_path):

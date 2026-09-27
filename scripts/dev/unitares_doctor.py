@@ -3216,10 +3216,14 @@ def _producer_label_stems(events: set[str]) -> set[str]:
 
 
 def _label_runs_producer(label: str, stems: set[str]) -> bool:
+    """Exact match only: ``com.unitares.<stem>``, or ``<stem>-beam`` for the
+    BEAM port of that producer. A prefix match is too loose: a maintenance
+    job named for the same resident (``<stem>-hygiene``) emits no findings.
+    Producers launched from a Python file are caught by ProgramArguments."""
     if not label.startswith("com.unitares.") or label == GOVERNANCE_LAUNCHD_LABEL:
         return False
     slug = label[len("com.unitares."):]
-    return any(slug == s or slug.startswith(s + "-") for s in stems)
+    return any(slug in (s, f"{s}-beam") for s in stems)
 
 
 def _producer_agents_present(
@@ -3232,9 +3236,10 @@ def _producer_agents_present(
 
     Evidence is specific on purpose. A UNITARES agent counts when:
 
-    - its label names a declared event's stem (``com.unitares.sentinel-beam``
-      for ``sentinel_finding``), loaded or installed, which is the only handle
-      on a producer runtime outside the scanned Python trees; or
+    - its label is exactly a declared event's stem, or that stem's BEAM port
+      (``com.unitares.sentinel-beam`` for ``sentinel_finding``), loaded or
+      installed, which is the only handle on a producer runtime outside the
+      scanned Python trees; or
     - its installed plist's ProgramArguments name a file that declares a
       finding producer, or, for a resident package under ``agents/``, any file
       in that package (its own entry point).
