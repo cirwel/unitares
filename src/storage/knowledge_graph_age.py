@@ -1443,12 +1443,14 @@ class KnowledgeGraphAGE:
             return True
 
         params.append(discovery_id)
-        # Through the backend's acquire(), not db._pool: since the ExecutorPool
-        # (#218) the pool has no fetchval, so every update on this path raised
+        # Through the backend, not db._pool: since the ExecutorPool (#218) the
+        # pool has no fetchval, so every update on this path raised
         # AttributeError (reported as a failed update, or as "Discovery not
         # found" when reached from a missing AGE node) while tests that faked
-        # the pool passed.
-        async with db.acquire() as conn:
+        # the pool passed. A transaction, not a bare connection: the UPDATE and
+        # the tag sync commit together, so a failed tag sync cannot leave the
+        # row half-updated.
+        async with db.transaction() as conn:
             result = await conn.fetchval(
                 f"UPDATE knowledge.discoveries SET {', '.join(set_parts)} WHERE id = ${len(params)} RETURNING id",
                 *params,

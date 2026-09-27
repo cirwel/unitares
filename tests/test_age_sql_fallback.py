@@ -387,6 +387,38 @@ class TestSqlUpdateDiscovery:
         assert sync_called[0][0] == "disc-sql-001"
         assert "new-tag" in sync_called[0][1]
 
+    async def test_the_update_and_tag_sync_share_one_transaction(self):
+        """A failed tag sync must roll the UPDATE back with it, so both run
+        inside db.transaction(), never on a bare acquire() connection."""
+        db = _make_db()
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        entered: list = []
+
+        @asynccontextmanager
+        async def tracking_transaction():
+            entered.append("transaction")
+            yield db._conn
+
+        @asynccontextmanager
+        async def refusing_acquire():
+            raise AssertionError("the SQL fallback must run in a transaction")
+            yield  # pragma: no cover
+
+        db.transaction = tracking_transaction
+        db.acquire = refusing_acquire
+
+        async def failing_sync_tags(conn, disc_id, tags):
+            raise RuntimeError("tag sync failed")
+
+        kg = await _make_kg(db)
+        kg._sync_discovery_tags = failing_sync_tags  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="tag sync failed"):
+            await kg._sql_update_discovery(
+                "disc-sql-001", {"status": "resolved", "tags": ["t"]}
+            )
+        assert entered == ["transaction"]
+
     async def test_tags_sync_not_called_when_row_missing(self):
         db = _make_db()
         db._conn.fetchval = AsyncMock(return_value=None)
