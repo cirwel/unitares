@@ -2468,16 +2468,66 @@ class TestSemanticSearch:
 
     @pytest.mark.asyncio
     async def test_update_discovery_refreshes_embedding_after_details_change(self):
-        """Changing summary/details should trigger embedding refresh."""
+        """A summary/details change refreshes the embedding without the update
+        waiting for it.
+
+        The first embedding in a process loads the model, which outlasted the
+        update tool's timeout on 2026-09-27 after the row had committed.
+        """
+        import asyncio
+
         kg, mock_db = make_kg_with_mock_db()
         mock_db.graph_query = AsyncMock(return_value=[{"d.id": "disc-1"}])
         kg._pgvector_available = AsyncMock(return_value=True)
-        kg._refresh_embedding = AsyncMock()
+        release = asyncio.Event()
+        refreshed: list = []
 
-        ok = await kg.update_discovery("disc-1", {"details": "new details"})
+        async def slow_refresh(discovery_id):
+            await release.wait()
+            refreshed.append(discovery_id)
+
+        kg._refresh_embedding = slow_refresh
+
+        ok = await asyncio.wait_for(
+            kg.update_discovery("disc-1", {"details": "new details"}), timeout=1.0
+        )
 
         assert ok is True
-        kg._refresh_embedding.assert_awaited_once_with("disc-1")
+        assert refreshed == [], "the update returned before the refresh finished"
+        release.set()
+        for _ in range(10):
+            if refreshed:
+                break
+            await asyncio.sleep(0)
+        assert refreshed == ["disc-1"], "the refresh still ran after the update"
+
+    @pytest.mark.asyncio
+    async def test_refresh_that_cannot_be_scheduled_leaves_the_update_saved(self):
+        """The refresh is scheduled after the commit; failing to schedule it
+        must not report the committed update as failed."""
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query = AsyncMock(return_value=[{"d.id": "disc-1"}])
+        kg._refresh_embedding = AsyncMock()
+
+        with patch(
+            "src.background_tasks.create_tracked_task",
+            side_effect=RuntimeError("no loop for tasks"),
+        ):
+            ok = await kg.update_discovery("disc-1", {"details": "new details"})
+
+        assert ok is True
+        kg._refresh_embedding.assert_called_once_with("disc-1")
+
+    @pytest.mark.asyncio
+    async def test_status_only_update_schedules_no_embedding_refresh(self):
+        kg, mock_db = make_kg_with_mock_db()
+        mock_db.graph_query = AsyncMock(return_value=[{"d.id": "disc-1"}])
+        kg._schedule_embedding_refresh = MagicMock()
+
+        ok = await kg.update_discovery("disc-1", {"status": "resolved"})
+
+        assert ok is True
+        kg._schedule_embedding_refresh.assert_not_called()
 
 
 # ============================================================================

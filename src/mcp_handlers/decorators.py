@@ -89,6 +89,12 @@ class ToolDefinition:
 
 _TOOL_DEFINITIONS: Dict[str, ToolDefinition] = {}
 
+# Each action_router's routing map, keyed by router name: action -> the
+# handler it dispatches to. The ToolDefinition carries only the action names
+# (known_actions); a timeout needs the handler behind an action to say whether
+# the interrupted call reads or writes (resolve_call_operation).
+_ROUTER_ACTION_HANDLERS: Dict[str, Dict[str, Callable]] = {}
+
 # Packages that ship in this repo. A tool declared anywhere else was registered
 # by an externally-installed plugin (or by a test) and is not part of the
 # governance surface this repo's contracts describe.
@@ -296,6 +302,24 @@ def mcp_tool(
                     agent_id=effective_agent_id,
                     session_id=session_id,
                 )
+                # The timeout ends the wait for the reply, not the work. A
+                # write can already have committed (the handler was past its
+                # transaction), or commit anyway on the ExecutorPool loop:
+                # cancelling this await cannot undo a COMMIT the server is
+                # already executing. Only a call known to change nothing may
+                # be told to try again.
+                call = resolve_call_operation(tool_name, arguments)
+                if call.operation != "read":
+                    from .error_helpers import unknown_outcome_timeout_error
+
+                    return [unknown_outcome_timeout_error(
+                        tool_name,
+                        timeout,
+                        call=call,
+                        arguments=arguments if isinstance(arguments, dict) else {},
+                        started_at=start_time,
+                        agent_id=effective_agent_id,
+                    )]
                 return [error_response(
                     f"Tool '{tool_name}' timed out after {timeout} seconds.",
                     recovery={
@@ -539,6 +563,114 @@ def get_call_stakes_requirement(tool_name: str, arguments) -> str:
     return stakes_table.get_action_stakes(canonical, action)
 
 
+_OPERATION_RANK = {"read": 0, "write": 1, "admin": 2}
+
+
+@dataclass(frozen=True)
+class CallOperation:
+    """What a call does, as the tool metadata says.
+
+    operation: "read", "write" or "admin", the class describe_tool reports
+        (src/tool_meta.py, or a legacy alias's narrower ``operation``). None
+        when no metadata names the handler, as for a plugin's or a test's
+        tool. Only "read" says the call changes nothing.
+    tool: the name an agent calls: ``knowledge`` for the handler behind
+        ``knowledge(action='update')``.
+    action: the router action, when the call has one.
+    """
+
+    operation: Optional[str]
+    tool: str
+    action: Optional[str] = None
+
+
+def resolve_call_operation(tool_name: str, arguments) -> CallOperation:
+    """The read/write class of the call a handler is running. Never raises.
+
+    ``tool_name`` is the name a timing-out wrapper carries: a registered tool,
+    a router, or the per-action handler a router dispatches to
+    (``update_discovery_status_graph`` for ``knowledge(action='update')``).
+
+    1. A router resolves the action as dispatch does and classifies the
+       handler behind it. An action whose handler has no class of its own, or
+       no name, takes the router's class, which is the most privileged among
+       its actions, so the fallback errs toward write.
+    2. A roster tool carries its own class.
+    3. A per-action handler named by a legacy alias takes the alias's class,
+       else its router's.
+    4. A per-action handler with neither takes the class of the router that
+       routes to it.
+    5. Anything else is unknown: ``operation`` None.
+    """
+    try:
+        return _resolve_call_operation(tool_name, arguments)
+    except Exception:
+        logger.warning(
+            "resolve_call_operation failed for %r; treating the call as unclassified",
+            tool_name,
+            exc_info=True,
+        )
+        return CallOperation(operation=None, tool=tool_name)
+
+
+def _resolve_call_operation(tool_name: str, arguments) -> CallOperation:
+    from src.tool_modes import TOOL_OPERATIONS
+
+    actions = _ROUTER_ACTION_HANDLERS.get(tool_name)
+    if actions is None:
+        return _handler_operation(tool_name)
+
+    _canonical, action = _resolve_canonical_and_action(tool_name, arguments)
+    handler = actions.get(action) if action else None
+    inner = getattr(handler, "_mcp_tool_name", None)
+    operation = None
+    if inner and inner != tool_name:
+        operation = _handler_operation(inner).operation
+    return CallOperation(
+        operation=operation or TOOL_OPERATIONS.get(tool_name),
+        tool=tool_name,
+        action=action,
+    )
+
+
+def _handler_operation(name: str) -> CallOperation:
+    from src.tool_modes import TOOL_OPERATIONS
+
+    if name in TOOL_OPERATIONS:
+        return CallOperation(operation=TOOL_OPERATIONS[name], tool=name)
+
+    try:
+        from src.mcp_handlers.tool_stability import resolve_tool_alias
+        canonical, alias = resolve_tool_alias(name)
+    except ImportError:
+        canonical, alias = name, None
+    if alias is not None:
+        injected = getattr(alias, "inject_action", None)
+        return CallOperation(
+            operation=alias.operation or TOOL_OPERATIONS.get(canonical),
+            tool=canonical,
+            action=str(injected).lower() if injected else None,
+        )
+
+    routes = [
+        (router, action)
+        for router, handlers in _ROUTER_ACTION_HANDLERS.items()
+        for action, handler in handlers.items()
+        if getattr(handler, "_mcp_tool_name", None) == name
+    ]
+    if not routes:
+        return CallOperation(operation=None, tool=name)
+    classes = [TOOL_OPERATIONS[router] for router, _ in routes if router in TOOL_OPERATIONS]
+    router, action = routes[0]
+    return CallOperation(
+        operation=(
+            max(classes, key=lambda c: _OPERATION_RANK.get(c, 1)) if classes else None
+        ),
+        tool=router,
+        action=action,
+    )
+
+
 def get_tool_definition(tool_name: str) -> Optional[ToolDefinition]:
     """Get the full ToolDefinition for a registered tool."""
     return _TOOL_DEFINITIONS.get(tool_name)
@@ -717,4 +849,5 @@ def action_router(
 
         return await handler(arguments)
 
+    _ROUTER_ACTION_HANDLERS[name] = dict(actions)
     return router

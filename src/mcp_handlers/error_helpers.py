@@ -292,7 +292,11 @@ def rate_limit_error(agent_id: str, stats: Optional[Dict[str, Any]] = None) -> S
 
 
 def timeout_error(tool_name: str, timeout: float) -> Sequence[TextContent]:
-    """Standard error for timeout"""
+    """Standard error for the timeout of a call that changes nothing.
+
+    Its recovery says to retry. A call that can write gets
+    unknown_outcome_timeout_error instead.
+    """
     return [error_response(
         f"Tool '{tool_name}' timed out after {timeout} seconds.",
         error_code="TIMEOUT",
@@ -301,6 +305,134 @@ def timeout_error(tool_name: str, timeout: float) -> Sequence[TextContent]:
         recovery=RECOVERY_PATTERNS["timeout"],
         context={"tool_name": tool_name, "timeout_seconds": timeout}
     )]
+
+
+# Create-only knowledge actions: every call adds a new row.
+_KNOWLEDGE_STORE_ACTIONS = frozenset({"store", "note"})
+
+
+def _call_literal(value: Any, placeholder: str) -> str:
+    """A caller-supplied id to quote inside a call shape, else the placeholder.
+
+    Anything that would break the quoting or bloat the reply falls back.
+    """
+    if (
+        isinstance(value, str)
+        and 0 < len(value) <= 200
+        and value.isprintable()
+        and "'" not in value
+        and "\\" not in value
+    ):
+        return value
+    return placeholder
+
+
+def _unknown_outcome_recovery(
+    call: Any, arguments: Dict[str, Any], agent_id: Optional[str]
+) -> Dict[str, Any]:
+    """Recovery for a timed-out call that may have written: read, then decide."""
+    tool = call.tool
+    action = call.action
+
+    if tool == "knowledge" and action == "update":
+        discovery_id = _call_literal(arguments.get("discovery_id"), "<discovery_id>")
+        check = f"knowledge(action='details', discovery_id='{discovery_id}')"
+        return {
+            "action": (
+                "Do not send this update again yet. It may already be saved, and "
+                "resolution_notes append, so a second call adds them twice. Read "
+                f"the discovery first with {check}: an updated_at at or after "
+                "call_started_at means this update was saved."
+            ),
+            "check_before_retry": check,
+            "workflow": [
+                f"1. Call {check}",
+                "2. If updated_at is at or after call_started_at, the update was "
+                "saved; its resolution_notes are at the end of details. Do not "
+                "send it again",
+                "3. If updated_at is still earlier when you read again a few "
+                "seconds later, nothing was saved: send the update again",
+            ],
+            "related_tools": ["knowledge", "health_check"],
+        }
+
+    if (tool == "knowledge" and action in _KNOWLEDGE_STORE_ACTIONS) or tool == "leave_note":
+        writer = _call_literal(arguments.get("agent_id") or agent_id, "<your agent_id>")
+        check = f"knowledge(action='get', agent_id='{writer}', limit=5)"
+        return {
+            "action": (
+                "Do not store this again yet. It may already be saved, and every "
+                "store adds a new row, so a second call leaves two findings. List "
+                f"your newest findings first with {check}: one with this summary "
+                "created at or after call_started_at means it was saved."
+            ),
+            "check_before_retry": check,
+            "workflow": [
+                f"1. Call {check}",
+                "2. If a finding with this summary was created at or after "
+                "call_started_at, it was saved. Do not store it again",
+                "3. If none appears when you read again a few seconds later, "
+                "nothing was saved: store it again",
+            ],
+            "related_tools": ["knowledge", "health_check"],
+        }
+
+    call_shape = f"{tool}(action='{action}')" if action else tool
+    related = [tool, "describe_tool", "health_check"]
+    return {
+        "action": (
+            f"Do not call {call_shape} again yet: it may already have taken "
+            "effect. Read the state it changes with a read-only tool first and "
+            "call it again only if the change is missing. "
+            f"describe_tool(tool_name='{tool}') lists the related tools."
+        ),
+        "check_before_retry": f"describe_tool(tool_name='{tool}')",
+        "workflow": [
+            "1. Read the state this call changes with a read-only tool; "
+            "describe_tool lists the related tools",
+            "2. If the change is there, the call succeeded. Do not send it again",
+            "3. If it is missing, send the call again. If timeouts repeat, "
+            "call health_check",
+        ],
+        "related_tools": list(dict.fromkeys(related)),
+    }
+
+
+def unknown_outcome_timeout_error(
+    tool_name: str,
+    timeout: float,
+    *,
+    call: Any,
+    arguments: Dict[str, Any],
+    started_at: float,
+    agent_id: Optional[str] = None,
+) -> TextContent:
+    """Timeout of a call that may have written: the outcome is unknown.
+
+    The decorator's timeout cancels the await, not the work. A handler can be
+    past its commit, and a COMMIT the server is already executing on the
+    ExecutorPool loop lands after the await is cancelled. So the reply says the
+    change may have been saved, names the read that settles it, and gives no
+    bare retry. ``call`` is the decorators.CallOperation for the interrupted
+    call. error_code and
+    error_category stay TIMEOUT / system_error, the values every timeout
+    already carried.
+    """
+    from datetime import datetime, timezone
+
+    return error_response(
+        f"Tool '{tool_name}' timed out after {timeout} seconds. The outcome is "
+        "unknown: a timeout ends the wait for the reply, not the work, so the "
+        "change may have been saved.",
+        error_code="TIMEOUT",
+        error_category="system_error",
+        details={
+            "outcome": "unknown",
+            "operation": call.operation,
+            "call_started_at": datetime.fromtimestamp(started_at, timezone.utc).isoformat(),
+        },
+        recovery=_unknown_outcome_recovery(call, arguments, agent_id),
+    )
 
 
 def invalid_parameters_error(

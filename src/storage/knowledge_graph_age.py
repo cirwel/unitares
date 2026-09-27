@@ -1578,7 +1578,7 @@ class KnowledgeGraphAGE:
                         )
                         await self._delete_orphan_age_tags(db, conn)
                 if "summary" in updates or "details" in updates:
-                    await self._refresh_embedding(discovery_id)
+                    self._schedule_embedding_refresh(discovery_id)
                 return True
             except Exception as e:
                 # AGE raises TM_Updated ("Entity failed to be updated: 3") on a
@@ -2240,6 +2240,33 @@ class KnowledgeGraphAGE:
                 )
         except Exception as e:
             logger.debug(f"Failed to store embedding for {discovery_id}: {e}")
+
+    def _schedule_embedding_refresh(self, discovery_id: str) -> None:
+        """Refresh the embedding in a background task once an update has committed.
+
+        The update does not wait for it. The first embedding a process computes
+        imports sentence-transformers and loads the model, which can outlast the
+        update tool's 10 s timeout. On 2026-09-27 a committed resolution_notes
+        append on the live AGE backend was reported as a timeout while bge-m3
+        loaded, and the load finished after the reply, so its model was thrown
+        away. The embedding is best-effort derived data: the update's result
+        never depended on it, and _refresh_embedding logs its own failures.
+
+        Called after the commit, so it never raises: a scheduling failure must
+        not turn a saved update into a reported failure.
+        """
+        refresh = self._refresh_embedding(discovery_id)
+        try:
+            from src.background_tasks import create_tracked_task
+
+            create_tracked_task(refresh, name="kg_embedding_refresh")
+        except Exception as e:
+            close = getattr(refresh, "close", None)
+            if callable(close):
+                close()
+            logger.warning(
+                f"Embedding refresh for {discovery_id} not scheduled: {e}"
+            )
 
     async def _refresh_embedding(self, discovery_id: str) -> None:
         """Regenerate the stored embedding after summary/details edits."""
