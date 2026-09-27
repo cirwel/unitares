@@ -748,14 +748,23 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
     originals = {(r.reviewer, r.findings) for _, r in trusted
                  if r and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+    # A native Codex review is a GitHub review, not a comment: its disposition
+    # cites the review by URL (as latest_matching matches it), with its count.
+    native_findings = {r.url: r.findings for r in native
+                       if r.key == key and r.verdict == "FINDINGS" and r.url}
     for c, rec in trusted:
         if rec is None or rec.key != key or rec.reviewer.startswith("fix-verify:"):
             continue
         body = c.get("body", "")
+        answers_a_review = (rec.reviewer, rec.findings) in originals
+        if not answers_a_review and rec.reviewer == "codex-native":
+            rec.text = body
+            cited = _cited_native_review(rec)
+            answers_a_review = bool(cited) and native_findings.get(cited) == rec.findings
         if rec.verdict == "CLEAN" or (
                 rec.verdict == "FINDINGS" and rec.disposed
                 and dispositions_complete(body, rec.findings)
-                and (rec.reviewer, rec.findings) in originals):
+                and answers_a_review):
             families.add(reviewer_family(rec.reviewer))
     for rec in native:
         if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
@@ -1502,8 +1511,9 @@ def cmd_review(args) -> int:
                         return UNREVIEWED
                     return second_family_pass(
                         args, repo, pr, key, head,
-                        finish_record(repo, pr, key, head, existing, comments),
-                        passed_by=existing.reviewer)
+                        finish_record(repo, pr, key, head, existing, comments))
+                        # No passed_by: this record was read back from the PR,
+                        # so passing_families already weighs it (with its checks).
                 # The cap binds the local fallback too: it spends the same quota.
                 # An explicit --reviewer is the author choosing to spend a round.
                 if not args.reviewer:
@@ -1621,7 +1631,7 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     else:
         next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
                      "on this diff)")
-    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing full "
+    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs passing full "
           f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
           "(e.g. gemini-…, gpt-…) with review.sh record --independent.")

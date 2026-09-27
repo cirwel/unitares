@@ -2121,24 +2121,23 @@ def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", 
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     monkeypatch.setattr(rg, "passing_families", lambda *a: set(families))
     monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: list(candidates))
-    monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
-    monkeypatch.setattr(rg, "current_record", lambda *a: None)
-    ran = []
-    monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, p: ran.append(p) or 0)
-    return ran
+    # The notice never starts a review: fail loudly if anything tries.
+    monkeypatch.setattr(rg, "_review_locked",
+                        lambda *a, **k: pytest.fail("the second-family notice started a review"))
+    return []
 
 
 def test_no_second_review_when_not_needed(monkeypatch):
     args = SimpleNamespace(base="origin/master", branch="claude/x", budget=30)
     ran = _second_family_env(monkeypatch, changed=["README.md"], families={"google"})
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0 and ran == []
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
                              families={"google", "openai"})
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0 and ran == []
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
     # Findings come first: no second review until the first one passes.
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
-    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 1) == 1 and ran == []
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 1) == 1
 
 
 def test_no_other_family_available_is_unreviewed(monkeypatch, capsys):
@@ -2146,7 +2145,7 @@ def test_no_other_family_available_is_unreviewed(monkeypatch, capsys):
                              families={"anthropic"}, candidates=("claude",))
     args = SimpleNamespace(base="origin/master", branch="claude/x", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
-    assert ran == [] and "record --independent" in capsys.readouterr().out
+    assert "record --independent" in capsys.readouterr().out
 
 
 
@@ -2231,7 +2230,7 @@ def test_unreadable_native_evidence_is_unreviewed_not_empty(monkeypatch, capsys)
     monkeypatch.setattr(rg, "read_native", boom)
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
-    assert ran == [] and "incomplete" in capsys.readouterr().out
+    assert "incomplete" in capsys.readouterr().out
 
 
 def _capped_rounds():
@@ -2252,15 +2251,14 @@ def test_a_same_family_review_recorded_under_a_plain_name_does_not_complete_the_
 
 def test_review_sh_never_starts_a_review_and_names_the_next_step(monkeypatch, capsys):
     """After #2504's review rounds: the helper only reports; the author picks
-    the second reviewer. It returns UNREVIEWED so review.sh cannot read as done
-    while CI still blocks."""
+    the second reviewer. It returns NEEDS_SECOND_FAMILY (exit 3) so review.sh
+    cannot read as done while CI still blocks."""
     ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
                              families={"google"}, candidates=("codex", "claude"))
     monkeypatch.setattr(rg, "second_family_candidates", lambda *a, **k: ["codex", "claude"])
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.NEEDS_SECOND_FAMILY
     out = capsys.readouterr().out
-    assert ran == []
     assert "have: google" in out
     assert "review.sh --fresh --reviewer codex; review.sh --fresh --reviewer claude" in out
 
@@ -2374,3 +2372,22 @@ def test_the_sweep_does_not_report_a_left_to_author_pr_as_a_failure(monkeypatch,
                         lambda cmd, **kw: SimpleNamespace(returncode=rg.NEEDS_SECOND_FAMILY))
     assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False,
                                         worktree=str(tmp_path / "wt"))) == 0
+
+
+
+def test_a_disposed_native_codex_review_counts_for_openai():
+    """Claude on #2504 (P1): native reviews are GitHub reviews, not comments,
+    so their dispositions never matched an original and OpenAI never counted."""
+    k = "k" * 64
+    native = [rg.Record(k, "FINDINGS", 2, False, "codex-native",
+                        "https://github.com/o/r/pull/1#pullrequestreview-9")]
+    disposition = rg.Record(k, "FINDINGS", 2, True, "codex-native")
+    body_text = ("dispositions for FINDINGS(2) — https://github.com/o/r/pull/1#pullrequestreview-9\n"
+                 "1. rebutted: x\n2. fixed in abc")
+    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude")),
+                _comment(disposition, text=body_text)]
+    assert rg.passing_families(comments, k, native) == {"anthropic", "openai"}
+    # Citing a different review, or with the wrong count, earns nothing.
+    wrong = body_text.replace("review-9", "review-8")
+    comments[1] = _comment(disposition, text=wrong)
+    assert rg.passing_families(comments, k, native) == {"anthropic"}
