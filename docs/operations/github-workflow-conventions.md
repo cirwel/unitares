@@ -586,6 +586,15 @@ the operator's machine is awake.
   re-applied. The residual gap is a commit made before the label but pushed
   before the script first sees it (normally the next five-minute tick, never
   beyond those 15 minutes), which gets pinned as approved.
+- **What the pin is for.** It catches honest mistakes: a follow-up pushed
+  after approval, whether before arming or after (an armed, labelled PR whose
+  content no longer matches its pin is disarmed at the next tick), or a
+  branch changing under the label. It is not a boundary against a hostile
+  agent: every actor authenticates as the same account, so such an agent
+  could apply the label or run `gh pr merge --auto` itself. Forged history
+  (an edit moved to a spot with identical context, backdated or
+  GitHub-imitating commits) is out of scope for the same reason; the guard
+  there is who holds the credentials.
 - **It honours declared order.** A "merge after #N" (or
   `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
   unreadable dependency holds it too.

@@ -509,6 +509,42 @@ def test_a_compare_that_may_be_truncated_approves_nothing(tmp_path: Path) -> Non
     assert "cannot record what was approved" in out
 
 
+def _armed_then_moved(tmp_path: Path, second: dict | None):
+    # Tick 1 arms #3 at aaa; tick 2 sees it still armed, head now bbb.
+    tl = _timeline(10, 20)
+    first_calls, _ = _run(tmp_path, [_pr(3, head="aaa")], timelines={3: tl}, compares={"aaa": CHANGE_A})
+    assert first_calls == [_arm(3, "aaa")]
+    return _run(
+        tmp_path,
+        [_pr(3, head="bbb", armed_min_ago=3, state="BLOCKED"), _pr(4)],
+        timelines={3: tl, 4: _timeline(8, 20)},
+        compares={"aaa": CHANGE_A, "bbb": second},
+    )
+
+
+def test_a_push_to_an_armed_pr_disarms_it(tmp_path: Path) -> None:
+    # --match-head-commit binds only the arming; a later push would merge.
+    calls, out = _armed_then_moved(tmp_path, CHANGE_B)
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "#3 armed but its head changed since the approval" in out
+
+
+def test_a_base_update_to_an_armed_pr_keeps_it_armed(tmp_path: Path) -> None:
+    calls, _ = _armed_then_moved(tmp_path, CHANGE_A_REBASED)
+    assert calls == []
+
+
+def test_an_armed_pr_whose_new_head_cannot_be_read_is_disarmed(tmp_path: Path) -> None:
+    calls, _ = _armed_then_moved(tmp_path, None)
+    assert calls[0] == "pr merge 3 -R o/r --disable-auto"
+
+
+def test_an_armed_labelled_pr_with_no_pin_is_left_alone(tmp_path: Path) -> None:
+    # Armed by hand after labelling, or the state was lost: the maintainer's act.
+    calls, _ = _run(tmp_path, [_pr(3, head="bbb", armed_min_ago=3, state="BLOCKED"), _pr(4)])
+    assert calls == []
+
+
 def test_an_unreadable_diff_after_the_head_moved_approves_nothing(tmp_path: Path) -> None:
     calls, out = _two_ticks(tmp_path, CHANGE_A, None)
     assert calls == []

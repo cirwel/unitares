@@ -48,6 +48,16 @@
 # first sees it (normally the next tick, never beyond that window) is pinned
 # as approved.
 #
+# Threat model. The pin catches honest mistakes: an agent pushing a follow-up
+# after the maintainer approved, or a stale branch changing under the label.
+# It is not a security boundary against a deliberately hostile agent, and does
+# not try to be: every actor here authenticates as the same GitHub account, so
+# such an agent could apply the label itself, or run `gh pr merge --auto`,
+# with nothing technical to stop it. Hardening the fingerprint against forged
+# history (an edit moved to another spot with identical context, backdated or
+# GitHub-imitating commit metadata) would not close that door, so it is out of
+# scope; the guard against a hostile agent is who holds the credentials.
+#
 # Deliberately out of scope — these stay human or session judgment:
 #   - readying drafts (the draft→ready mark is the owning agent's gate),
 #   - resolving conflicts,
@@ -103,41 +113,7 @@ def parked: [.statusCheckRollup[]? | select((.conclusion // "") == "ACTION_REQUI
 # q [jq options...] EXPR — jq with the vocabulary above; the filter comes last.
 q() { local expr="${!#}"; jq "${@:1:$#-1}" "$JQ_DEFS $expr"; }
 
-# --- 1. tidy the slot -----------------------------------------------------------
-ours_armed=$(q -c --arg b "$BASE" --arg l "$LABEL" \
-  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
-              and labelled($l))) | .[]' <<<"$prs") \
-  || { log "could not read the open PRs; nothing done"; exit 1; }
-
-disarmed=" "
-while read -r pr; do
-  [ -n "$pr" ] || continue
-  n=$(jq -r .number <<<"$pr")
-  reason=""
-  if [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
-    reason="CONFLICTING"
-  elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
-    reason="a check is waiting for approval (ACTION_REQUIRED)"
-  elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
-       && [ "$(q 'failed | length' <<<"$pr")" -gt 0 ] \
-       && [ "$(q 'pending | length' <<<"$pr")" -eq 0 ]; then
-    reason="checks failed on its current head"
-  fi
-  if [ -n "$reason" ]; then
-    log "#$n armed but $reason; disarming so it stops holding the queue"
-    if act gh pr merge "$n" -R "$REPO" --disable-auto; then
-      disarmed="$disarmed$n "
-    else
-      log "#$n disarm failed; nothing else done this tick"
-      exit 0
-    fi
-  fi
-done <<<"$ours_armed"
-
-# --- 2. approvals ---------------------------------------------------------------
-# Runs every tick, before the slot check, so a PR labelled while another holds
-# the slot is pinned as soon as the script sees the label, not when it reaches
-# the head of the queue.
+# --- approval helpers -----------------------------------------------------------
 # When did the approval label last go on, and when was the last commit that
 # was not a base-update merge (GitHub's updater, `gh pr update-branch`)?
 # Prints "<labelled-at> <last-pushed-commit-at>"; either may be "-".
@@ -184,6 +160,60 @@ fingerprint() {
     | tojson' 2>/dev/null | shasum -a 256 | cut -c1-64
 }
 
+# An armed, labelled PR whose head has moved since its pin stays armed only if
+# its content still matches (GitHub's base updates move the head too).
+# --match-head-commit binds only the arming; a push after it would otherwise
+# merge. With no pin (armed by hand, or state lost) it is left alone.
+still_approved() {  # <pr> <head>
+  local at line sha fp now
+  at=$(latest_label_time "$1") && [ -n "$at" ] || return 0
+  line=$(pinned "$1" "$at") || return 1
+  [ -n "$line" ] || return 0
+  read -r sha fp <<<"$line"
+  [ "$sha" = "$2" ] && return 0
+  now=$(fingerprint "$2") && [ "$now" = "$fp" ] || return 1
+  pin "$1" "$2" "$at" "$fp" || true
+}
+
+latest_label_time() { approval_times "$1" | grep '^L ' | cut -d' ' -f2 | sort | tail -1; }
+
+# --- 1. tidy the slot -----------------------------------------------------------
+ours_armed=$(q -c --arg b "$BASE" --arg l "$LABEL" \
+  'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest != null
+              and labelled($l))) | .[]' <<<"$prs") \
+  || { log "could not read the open PRs; nothing done"; exit 1; }
+
+disarmed=" "
+while read -r pr; do
+  [ -n "$pr" ] || continue
+  n=$(jq -r .number <<<"$pr")
+  reason=""
+  if [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
+    reason="CONFLICTING"
+  elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
+    reason="its head changed since the approval"
+  elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
+    reason="a check is waiting for approval (ACTION_REQUIRED)"
+  elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
+       && [ "$(q 'failed | length' <<<"$pr")" -gt 0 ] \
+       && [ "$(q 'pending | length' <<<"$pr")" -eq 0 ]; then
+    reason="checks failed on its current head"
+  fi
+  if [ -n "$reason" ]; then
+    log "#$n armed but $reason; disarming so it stops holding the queue"
+    if act gh pr merge "$n" -R "$REPO" --disable-auto; then
+      disarmed="$disarmed$n "
+    else
+      log "#$n disarm failed; nothing else done this tick"
+      exit 0
+    fi
+  fi
+done <<<"$ours_armed"
+
+# --- 2. approvals ---------------------------------------------------------------
+# Runs every tick, before the slot check, so a PR labelled while another holds
+# the slot is pinned as soon as the script sees the label, not when it reaches
+# the head of the queue.
 queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
   'map(select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
               and labelled($l))) | .[]' <<<"$prs") \
