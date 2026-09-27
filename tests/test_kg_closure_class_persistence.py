@@ -234,6 +234,15 @@ def test_admitting_and_clearing_statuses_partition_the_vocabulary():
     assert not CLOSURE_CLASS_ADMITTING_STATUSES & CLOSURE_CLASS_CLEARING_STATUSES
 
 
+def _as_sent_to_age(cypher: str, params: dict) -> str:
+    """The Cypher text AGE receives: graph_query substitutes only the ${name}
+    placeholders the text contains and silently drops any other param, so a
+    param that is present but not placed would never reach the node."""
+    from src.db.mixins.graph import GraphMixin
+
+    return GraphMixin()._interpolate_params(cypher, params)
+
+
 def test_a_created_age_node_carries_the_pair_only_when_classified():
     """The generated Cypher's ``SET`` map literal must itself carry the pair —
     not just the params dict the caller happened to supply. A query generator
@@ -248,6 +257,7 @@ def test_a_created_age_node_carries_the_pair_only_when_classified():
     )
     assert "closure_class" not in bare and "closure_evidence" not in bare
     assert "closure_class" not in bare_cypher and "closure_evidence" not in bare_cypher
+    assert "closure_" not in _as_sent_to_age(bare_cypher, bare)
 
     classified_cypher, classified = create_discovery_node(
         discovery_id="d-1", agent_id="a-1", discovery_type="note", summary="s",
@@ -264,6 +274,9 @@ def test_a_created_age_node_carries_the_pair_only_when_classified():
     assert "closure_evidence: ${closure_evidence}" in set_clause
     assert classified["closure_class"] == "duplicate"
     assert json.loads(classified["closure_evidence"]) == {"of": "d-0"}
+    sent = _as_sent_to_age(classified_cypher, classified)
+    assert "closure_class: 'duplicate'" in sent
+    assert "closure_evidence: '{" in sent and "d-0" in sent
 
 
 @pytest.mark.asyncio
@@ -281,9 +294,14 @@ async def test_rehydrating_an_age_node_from_its_row_keeps_the_pair():
         "closure_class": "obsolete", "closure_evidence": json.dumps({"gone": "x"}),
     }
     await backend._import_discovery_row(_Conn(capture), row)
-    node_create = next(params for cypher, params in capture.cypher if "MERGE (d:Discovery" in cypher)
+    node_cypher, node_create = next(
+        (cypher, params) for cypher, params in capture.cypher if "MERGE (d:Discovery" in cypher
+    )
     assert node_create["closure_class"] == "obsolete"
     assert json.loads(node_create["closure_evidence"]) == {"gone": "x"}
+    sent = _as_sent_to_age(node_cypher, node_create)
+    assert "closure_class: 'obsolete'" in sent
+    assert "closure_evidence: '{" in sent and "gone" in sent
 
 
 # ---------------------------------------------------------------------------
