@@ -156,6 +156,11 @@ class ConsultRequest:
     # a thorough attempt that finds its provider unavailable fails over along
     # this list. Empty = no failover (the pre-failover behaviour).
     thorough_peers: tuple[str, ...] = ()
+    # Hops the thorough lane took, appended as they happen. Shared by every
+    # dataclasses.replace copy of this request (same list object), so the
+    # handler sees them on every path, cancellation included, and the audit
+    # record names each host the brief reached.
+    failover_trace: list[dict[str, str]] = field(default_factory=list, compare=False)
     consultation_id: str = field(default_factory=lambda: str(uuid4()))
 
 
@@ -537,34 +542,35 @@ async def _run_thorough(
 async def _run_thorough_with_failover(
     request: ConsultRequest,
     prompt: str,
-) -> tuple[ConsultRequest, InferenceOutcome, list[dict[str, str]]]:
+) -> tuple[ConsultRequest, InferenceOutcome]:
     """Run the thorough lane, failing over to the next eligible peer when the
     chosen provider is out (usage limit, logged out, preflight-unavailable).
 
     Returns the request as actually served (its thorough_host_id is the host
     that produced the outcome, so the route postcondition and the record name
-    the real destination), the final outcome, and each skipped attempt.
+    the real destination) and the final outcome. Each hop is appended to
+    ``request.failover_trace`` BEFORE the next attempt starts, so a
+    cancellation mid-attempt still records where the brief went.
     """
     started = _clock()
     tried = [request.thorough_host_id]
-    failovers: list[dict[str, str]] = []
     current = request
     while True:
         outcome = await _guarded_inference(
             "thorough", lambda: _run_thorough(current, prompt)
         )
         if outcome.ok or outcome.failure is None:
-            return current, outcome, failovers
+            return current, outcome
         reason = _failover_reason(outcome.failure)
         elapsed = _clock() - started
         if reason is None or (
             elapsed + _THOROUGH_ATTEMPT_S > CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S
         ):
-            return current, outcome, failovers
+            return current, outcome
         nxt = _next_peer(current, tried)
         if nxt is None:
-            return current, outcome, failovers
-        failovers.append({
+            return current, outcome
+        request.failover_trace.append({
             "from_host_id": current.thorough_host_id,
             "reason": reason,
             "to_host_id": nxt,
@@ -854,11 +860,9 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             prompt_hash=prompt_hash,
         )
 
-    request, thorough_outcome, failovers = await _run_thorough_with_failover(
-        request, prompt
-    )
+    request, thorough_outcome = await _run_thorough_with_failover(request, prompt)
     if thorough_outcome.ok:
-        served = _success(
+        return _success(
             request,
             thorough_outcome,
             delivered_effort="thorough",
@@ -867,9 +871,6 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             brief_hash=brief_hash,
             prompt_hash=prompt_hash,
         )
-        if failovers and served.ok:
-            served.data["failover"] = failovers
-        return served
 
     primary_failure = thorough_outcome.failure
     assert primary_failure is not None
@@ -891,10 +892,7 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             recovery_action=_recovery_for_upstream(
                 primary_failure, lane="thorough"
             ),
-            failure_details={
-                "upstream": _safe_failure(primary_failure),
-                **({"failover": failovers} if failovers else {}),
-            },
+            failure_details={"upstream": _safe_failure(primary_failure)},
             diagnostics={"upstream": _failure_diagnostics(primary_failure)},
         )
 
@@ -938,6 +936,14 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
         brief_hash=brief_hash,
         prompt_hash=prompt_hash,
     )
+
+
+def _with_failover(request: ConsultRequest, outcome: ConsultationOutcome) -> ConsultationOutcome:
+    """Every outcome of a call that failed over says so: success, failure,
+    degraded fallback and cancellation alike."""
+    if request.failover_trace:
+        outcome.data["failover"] = [dict(hop) for hop in request.failover_trace]
+    return outcome
 
 
 def _cancelled(request: ConsultRequest) -> ConsultationOutcome:
@@ -1078,6 +1084,11 @@ def _consultation_record(
         # the call is refused or degraded before any host is contacted, and
         # naming one would read as the brief having gone there.
         record["request"]["thorough_host_id"] = request.thorough_host_id
+        if request.failover_trace:
+            # Every host the brief reached, in order; the last is the one that
+            # answered, failed last, or (cancelled) may still be running.
+            record["request"]["thorough_host_id"] = request.failover_trace[-1]["to_host_id"]
+            record["failover"] = [dict(hop) for hop in request.failover_trace]
     for field_name in ("delivery", "degradation", "failure"):
         if data.get(field_name) is not None:
             record[field_name] = _record_value(data[field_name], key)
@@ -1224,8 +1235,9 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except asyncio.CancelledError:
             # A thorough call may already be running on an external host;
             # the record must show the consultation was started.
-            _record_consultation(request, _cancelled(request))
+            _record_consultation(request, _with_failover(request, _cancelled(request)))
             raise
+        outcome = _with_failover(request, outcome)
         # Argument-validation refusals are not recorded (tool-usage counts
         # them); every call that reaches the router is, policy refusals
         # included.

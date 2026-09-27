@@ -64,12 +64,27 @@ def test_without_a_stated_reset_the_backoff_doubles_and_caps():
     now = 1_000_000.0
     spans = []
     for _ in range(6):
+        # Each failure lands after the previous cooldown lapsed (a re-probe).
         ha.record_unavailable("claude:host-adapter", {"reason": "auth", "stated_reset": None},
                               now=now)
-        cool = ha._state["claude:host-adapter"]["retry_after"] - now
-        spans.append(cool)
+        retry_after = ha._state["claude:host-adapter"]["retry_after"]
+        spans.append(retry_after - now)
+        now = retry_after + 1
     assert spans[:4] == [1800, 3600, 7200, 14400]
     assert spans[-1] == ha.BACKOFF_CAP_S
+
+
+def test_concurrent_failures_in_one_window_back_off_once():
+    """Review of #2486 (P3): three in-flight calls failing on one outage made
+    a 2 h cooldown instead of 30 min."""
+    now = 1_000_000.0
+    for i in range(3):
+        ha.record_unavailable("codex:host-adapter", {"reason": "auth", "stated_reset": None},
+                              now=now + i)
+    entry = ha._state["codex:host-adapter"]
+    assert entry["failures"] == 1
+    # One 30-minute window (nudged by the seconds between the failures), not 2 h.
+    assert ha.BACKOFF_BASE_S <= entry["retry_after"] - now < 2 * ha.BACKOFF_BASE_S
 
 
 def test_clear_ends_the_cooldown_and_the_backoff():

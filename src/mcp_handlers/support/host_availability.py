@@ -122,7 +122,12 @@ def record_unavailable(
     """Start or extend a cooldown for ``host_id``; returns the public view."""
     now = time.time() if now is None else now
     with _lock:
-        failures = _state.get(host_id, {}).get("failures", 0) + 1
+        previous = _state.get(host_id, {})
+        # One backoff step per cooldown window: calls that were already in
+        # flight when the outage began fail too, and must not each double it.
+        still_cooling = previous.get("retry_after", 0) > now
+        failures = previous.get("failures", 0) + (0 if still_cooling else 1)
+        failures = max(failures, 1)
         stated = classified.get("stated_reset")
         if isinstance(stated, (int, float)) and stated > now:
             retry_after = min(stated, now + STATED_RESET_CAP_S)
@@ -130,6 +135,8 @@ def record_unavailable(
         else:
             retry_after = now + min(BACKOFF_CAP_S, BACKOFF_BASE_S * 2 ** (failures - 1))
             source = "backoff"
+        if still_cooling and previous["retry_after"] > retry_after:
+            retry_after, source = previous["retry_after"], previous["retry_after_source"]
         _state[host_id] = {
             "reason": classified.get("reason"),
             "retry_after": retry_after,
