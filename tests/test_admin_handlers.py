@@ -1070,6 +1070,50 @@ class TestIssue165HealthCapabilitySplit:
         assert summary["first_action"] == "No action needed."
 
     @pytest.mark.asyncio
+    async def test_unknown_backend_is_never_masked_as_not_configured(
+        self, mock_mcp_server, patch_context_agent_id, monkeypatch,
+    ):
+        """No embedder and none requested is neutral only on a backend that can
+        serve FTS. An unrecognised UNITARES_KNOWLEDGE_BACKEND makes every
+        search raise, so it stays degraded and says why."""
+        monkeypatch.delenv("UNITARES_EMBEDDING_MODEL", raising=False)
+        mock_audit = MagicMock()
+        mock_audit.log_file = MagicMock()
+        mock_audit.log_file.exists.return_value = True
+
+        mock_db = AsyncMock()
+        mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
+        mock_db.init = AsyncMock()
+
+        mock_cal = MagicMock()
+        mock_cal.get_pending_updates.return_value = 0
+
+        with patch("src.mcp_handlers.admin.handlers.mcp_server", mock_mcp_server), \
+             patch("src.calibration.calibration_checker", mock_cal), \
+             patch("src.telemetry.telemetry_collector", MagicMock()), \
+             patch("src.audit_log.audit_logger", mock_audit), \
+             patch("src.db.get_db", return_value=mock_db), \
+             patch("src.embeddings.embeddings_available", return_value=False), \
+             patch("src.knowledge_graph.backend_supports_semantic_search", return_value=False), \
+             patch("src.knowledge_graph.selected_backend_name", return_value="bogus"), \
+             patch("src.calibration_db.calibration_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.audit_db.audit_health_check_async",
+                   new_callable=AsyncMock,
+                   return_value={"status": "healthy", "backend": "postgres"}), \
+             patch("src.cache.is_redis_available", return_value=False):
+
+            from src.services.runtime_queries import get_health_check_data
+            data = await get_health_check_data({"lite": False})
+
+        kg = data["checks"]["knowledge_graph"]
+        assert kg["status"] == "degraded"
+        assert "Unknown knowledge backend 'bogus'" in kg["warning"]
+        assert "knowledge_graph" in data["operator_summary"]["degraded_checks"]
+        assert "knowledge_graph" not in data["operator_summary"]["not_configured_checks"]
+
+    @pytest.mark.asyncio
     async def test_embedder_up_but_backend_lacks_semantic_search(
         self, mock_mcp_server, patch_context_agent_id,
     ):

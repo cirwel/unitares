@@ -796,6 +796,9 @@ NOT_CONFIGURED = "not_configured"
 NO_DATA_YET = "no_data_yet"
 NEUTRAL_STATUSES = frozenset({NOT_CONFIGURED, NO_DATA_YET})
 
+# Knowledge backends get_knowledge_graph() can build (src/knowledge_graph.py).
+_KNOWN_KG_BACKENDS = frozenset({"age", "postgres"})
+
 
 def _audit_log_check(audit_logger) -> Dict[str, Any]:
     """The JSONL audit log check, without calling a missing file a fault.
@@ -1030,9 +1033,13 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         # fault. Naming a model in UNITARES_EMBEDDING_MODEL asks for semantic
         # search, so a missing embedder then IS degraded, as is an embedder
         # whose backend cannot use it.
+        # The neutral state also needs a backend that can serve FTS: an
+        # unrecognised UNITARES_KNOWLEDGE_BACKEND makes every search raise, so
+        # it stays a fault however the embedder is set up.
+        backend_known = backend_name in _KNOWN_KG_BACKENDS
         if semantic_search_reachable:
             kg_status = "healthy"
-        elif not embedder_ok and not embedder_requested:
+        elif not embedder_ok and not embedder_requested and backend_known:
             kg_status = NOT_CONFIGURED
         else:
             kg_status = "degraded"
@@ -1048,6 +1055,11 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
                 "No embedder installed, so knowledge search uses Postgres "
                 "full-text search. Install the semantic extra "
                 "(sentence-transformers) to add semantic search."
+            )
+        elif not backend_known:
+            checks["knowledge_graph"]["warning"] = (
+                f"Unknown knowledge backend '{backend_name}': knowledge search "
+                "will fail. Set UNITARES_KNOWLEDGE_BACKEND to 'age' or 'postgres'."
             )
         elif not embedder_ok:
             checks["knowledge_graph"]["warning"] = (
