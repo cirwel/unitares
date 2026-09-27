@@ -114,6 +114,13 @@
              See dashboard/EXTENSIONS.md. -->
         <key>UNITARES_DASHBOARD_EXT_DIR</key>
         <string></string>
+        <!-- Optional route packs (src/http_routes/packs.py), comma-separated:
+             reference-residents  the reference residents' summaries and the
+                                  finding adjudication queue
+             automation-census    /api/automations
+             Empty = core routes only. See docs/operations/resident-roster.md. -->
+        <key>UNITARES_ROUTE_PACKS</key>
+        <string></string>
         <!-- Static bearer-token gate for /mcp (API-key auth). Empty/unset =
              gate OFF (localhost dev). For a publicly reachable connector set
              this to a long random secret (python3 -c "import secrets;

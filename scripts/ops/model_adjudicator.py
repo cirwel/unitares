@@ -72,9 +72,22 @@ from typing import Any, Callable, Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 GOV_URL = os.environ.get("UNITARES_GOVERNANCE_HTTP_URL", "http://127.0.0.1:8767")
-SECRETS_FILE = os.path.expanduser(
-    os.environ.get("UNITARES_SECRETS_ENV", "~/.config/cirwel/secrets.env")
-)
+
+
+def _resolve_secrets_file() -> str:
+    """UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+    pre-2026-09 ~/.config/cirwel path when only that one exists."""
+    override = os.environ.get("UNITARES_SECRETS_ENV", "").strip()
+    if override:
+        return os.path.expanduser(override)
+    default = os.path.expanduser("~/.config/unitares/secrets.env")
+    legacy = os.path.expanduser("~/.config/cirwel/secrets.env")
+    if not os.path.exists(default) and os.path.exists(legacy):
+        return legacy
+    return default
+
+
+SECRETS_FILE = _resolve_secrets_file()
 HOST = os.environ.get("UNITARES_MODEL_ADJUDICATOR_HOST", "").strip().lower()
 HOST_ID = "claude:host-adapter"
 MAX_ITEMS = int(os.environ.get("UNITARES_ADJUDICATOR_MAX_ITEMS", "5"))

@@ -1335,13 +1335,15 @@ async def handle_get_agent_metadata(arguments: Sequence[TextContent]) -> list:
             # Do NOT reload from DB here — asyncpg awaits inside MCP handlers
             # deadlock under the anyio task group (same bug as list_agents had).
             if not agent_id:
+                from ..identity_bootstrap import SET_DISPLAY_NAME_CALL
+
                 # Provide helpful error message
                 return [error_response(
                     f"Agent not found: '{target_agent}'. Use UUID or label.",
                     recovery={
                         "action": "Use agent(action='list') to find valid agent IDs",
                         "tip": "Labels are case-sensitive. Use agent(action='list', named_only=true) to see agents with labels.",
-                        "note": "If you just set a label with identity(name='...'), it may take a moment to persist. Try again in a few seconds."
+                        "note": f"If you just set a label with {SET_DISPLAY_NAME_CALL}, it may take a moment to persist. Try again in a few seconds."
                     },
                     details={
                         "searched_in": "in-memory cache (Redis + live metadata)",

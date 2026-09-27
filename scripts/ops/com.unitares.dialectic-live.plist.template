@@ -13,9 +13,16 @@
   ready to evaluate the LiveView pane against the buildless JS dashboard, which
   stays the live+sole UI until then.
 
-  Prereq: a prod secret. Generate once and add to ~/.config/cirwel/secrets.env:
+  Prereq: a prod secret. Generate once and add it to the secrets env file
+  start.sh reads. Resolve that file the way start.sh does first, so an
+  existing legacy file is appended to rather than masked by a new one:
+    SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+    if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] \
+       && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
+      SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+    fi
     echo "DIALECTIC_LIVE_SECRET_KEY_BASE=$(cd elixir/dialectic_live && mix phx.gen.secret)" \
-      >> ~/.config/cirwel/secrets.env
+      >> "$SECRETS_FILE"
 
   Install (render __VARS__ then load):
     sed -e "s|__UNITARES_ROOT__|$HOME/projects/unitares|g" \

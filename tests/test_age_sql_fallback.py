@@ -137,21 +137,29 @@ def _make_db(
     })
     db.kg_all_discovery_tags = AsyncMock(return_value={})
 
-    pool = MagicMock()
-    pool.fetchval = AsyncMock(return_value=None)
-    pool.execute = AsyncMock()
-    pool.executemany = AsyncMock()
+    # One connection behind acquire() and transaction(). db._pool mirrors the
+    # ExecutorPool (#218): acquire() only, no query methods. The SQL-only
+    # fallback used to call db._conn.fetchval, which the real pool does not
+    # have; these fakes gave the pool one, so the AttributeError it raised on
+    # every live call never showed here.
+    conn = MagicMock()
+    conn.fetchval = AsyncMock(return_value=None)
+    conn.execute = AsyncMock()
+    conn.executemany = AsyncMock()
 
     @asynccontextmanager
     async def fake_acquire():
-        yield pool
+        yield conn
 
+    pool = MagicMock(spec=["acquire"])
     pool.acquire = fake_acquire
     db._pool = pool
+    db._conn = conn
+    db.acquire = fake_acquire
 
     @asynccontextmanager
     async def fake_transaction():
-        yield pool
+        yield conn
 
     db.transaction = fake_transaction
     return db
@@ -311,14 +319,14 @@ class TestSqlUpdateDiscovery:
 
     async def test_status_update(self):
         db = _make_db()
-        db._pool.fetchval = AsyncMock(return_value="disc-sql-001")
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
         kg = await _make_kg(db)
 
         ok = await kg._sql_update_discovery("disc-sql-001", {"status": "resolved"})
 
         assert ok is True
-        db._pool.fetchval.assert_awaited_once()
-        query, *args = db._pool.fetchval.call_args[0]
+        db._conn.fetchval.assert_awaited_once()
+        query, *args = db._conn.fetchval.call_args[0]
         assert "UPDATE knowledge.discoveries" in query
         assert "status" in query
         assert "RETURNING id" in query
@@ -327,7 +335,7 @@ class TestSqlUpdateDiscovery:
 
     async def test_returns_false_when_row_not_found(self):
         db = _make_db()
-        db._pool.fetchval = AsyncMock(return_value=None)
+        db._conn.fetchval = AsyncMock(return_value=None)
         kg = await _make_kg(db)
 
         ok = await kg._sql_update_discovery("nonexistent", {"status": "archived"})
@@ -339,7 +347,7 @@ class TestSqlUpdateDiscovery:
 
         ok = await kg._sql_update_discovery("disc-sql-001", {})
         assert ok is True
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
 
     async def test_timestamp_coerced_to_datetime(self):
         db = _make_db()
@@ -349,7 +357,7 @@ class TestSqlUpdateDiscovery:
             captured.append((query, args))
             return "disc-sql-001"
 
-        db._pool.fetchval = AsyncMock(side_effect=record_fetchval)
+        db._conn.fetchval = AsyncMock(side_effect=record_fetchval)
         kg = await _make_kg(db)
 
         await kg._sql_update_discovery(
@@ -364,7 +372,7 @@ class TestSqlUpdateDiscovery:
 
     async def test_tags_sync_called_when_tags_updated(self):
         db = _make_db()
-        db._pool.fetchval = AsyncMock(return_value="disc-sql-001")
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
 
         sync_called: list = []
 
@@ -379,9 +387,41 @@ class TestSqlUpdateDiscovery:
         assert sync_called[0][0] == "disc-sql-001"
         assert "new-tag" in sync_called[0][1]
 
+    async def test_the_update_and_tag_sync_share_one_transaction(self):
+        """A failed tag sync must roll the UPDATE back with it, so both run
+        inside db.transaction(), never on a bare acquire() connection."""
+        db = _make_db()
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        entered: list = []
+
+        @asynccontextmanager
+        async def tracking_transaction():
+            entered.append("transaction")
+            yield db._conn
+
+        @asynccontextmanager
+        async def refusing_acquire():
+            raise AssertionError("the SQL fallback must run in a transaction")
+            yield  # pragma: no cover
+
+        db.transaction = tracking_transaction
+        db.acquire = refusing_acquire
+
+        async def failing_sync_tags(conn, disc_id, tags):
+            raise RuntimeError("tag sync failed")
+
+        kg = await _make_kg(db)
+        kg._sync_discovery_tags = failing_sync_tags  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError, match="tag sync failed"):
+            await kg._sql_update_discovery(
+                "disc-sql-001", {"status": "resolved", "tags": ["t"]}
+            )
+        assert entered == ["transaction"]
+
     async def test_tags_sync_not_called_when_row_missing(self):
         db = _make_db()
-        db._pool.fetchval = AsyncMock(return_value=None)
+        db._conn.fetchval = AsyncMock(return_value=None)
         sync_called: list = []
 
         async def fake_sync_tags(conn, disc_id, tags):
@@ -401,7 +441,7 @@ class TestSqlUpdateDiscovery:
             captured.append((query, list(args)))
             return "disc-sql-001"
 
-        db._pool.fetchval = AsyncMock(side_effect=record_fetchval)
+        db._conn.fetchval = AsyncMock(side_effect=record_fetchval)
         kg = await _make_kg(db)
 
         await kg._sql_update_discovery(
@@ -429,40 +469,63 @@ class TestUpdateDiscoverySQLFallback:
     async def test_sql_fallback_when_no_age_node(self):
         """Cypher MATCH returns [] → SQL UPDATE called."""
         db = _make_db(graph_available=True, graph_query_returns=[])
-        db._pool.fetchval = AsyncMock(return_value="disc-sql-001")
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
         kg = await _make_kg(db)
 
         ok = await kg.update_discovery("disc-sql-001", {"status": "resolved"})
 
         assert ok is True
-        db._pool.fetchval.assert_awaited_once()
+        db._conn.fetchval.assert_awaited_once()
+
+    async def test_an_orphan_update_reuses_the_open_transaction(self):
+        """The Cypher MATCH runs in a transaction; when it finds no node, the
+        SQL fallback must run on that same connection. Opening a second
+        transaction needs a second pool connection while the first is held,
+        which waits forever on a one-connection or exhausted pool."""
+        db = _make_db(graph_available=True, graph_query_returns=[])
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        opened: list = []
+
+        @asynccontextmanager
+        async def counting_transaction():
+            opened.append("transaction")
+            yield db._conn
+
+        db.transaction = counting_transaction
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-sql-001", {"status": "resolved"})
+
+        assert ok is True
+        assert opened == ["transaction"]
+        db._conn.fetchval.assert_awaited_once()
 
     async def test_sql_fallback_when_graph_unavailable(self):
         """graph_available() False → directly calls SQL fallback."""
         db = _make_db(graph_available=False)
-        db._pool.fetchval = AsyncMock(return_value="disc-sql-001")
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
         kg = await _make_kg(db)
 
         ok = await kg.update_discovery("disc-sql-001", {"status": "archived"})
 
         assert ok is True
-        db._pool.fetchval.assert_awaited_once()
+        db._conn.fetchval.assert_awaited_once()
         db.graph_query.assert_not_awaited()
 
     async def test_returns_false_when_sql_row_also_missing(self):
         """No AGE node AND no SQL row → False."""
         db = _make_db(graph_available=True, graph_query_returns=[])
-        db._pool.fetchval = AsyncMock(return_value=None)
+        db._conn.fetchval = AsyncMock(return_value=None)
         kg = await _make_kg(db)
 
         ok = await kg.update_discovery("nonexistent", {"status": "archived"})
         assert ok is False
 
     async def test_age_path_not_sql_when_age_node_exists(self):
-        """When Cypher MATCH succeeds, SQL fallback pool.fetchval is NOT called."""
+        """When Cypher MATCH succeeds, the SQL fallback's fetchval is NOT called."""
         age_result = [{"d.id": "disc-age-001"}]
         db = _make_db(graph_available=True, graph_query_returns=age_result)
-        db._pool.fetchval = AsyncMock(return_value=None)
+        db._conn.fetchval = AsyncMock(return_value=None)
 
         sync_calls: list = []
 
@@ -477,7 +540,7 @@ class TestUpdateDiscoverySQLFallback:
         ok = await kg.update_discovery("disc-age-001", {"status": "resolved"})
 
         assert ok is True
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
         assert "disc-age-001" in sync_calls
 
     async def test_empty_updates_skips_both_paths(self):
@@ -488,7 +551,52 @@ class TestUpdateDiscoverySQLFallback:
         ok = await kg.update_discovery("disc-001", {})
         assert ok is True
         db.graph_query.assert_not_awaited()
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
+
+
+# ===========================================================================
+# update_discovery — a Cypher error result is NOT a missing node
+# ===========================================================================
+#
+# Regression: any `graph_query` result whose first row was a dict carrying an
+# "error" key used to be treated identically to an empty result (no matching
+# Discovery vertex), silently redirecting to `_sql_update_discovery`. Postgres
+# JSONB's ~1 GB column limit is far higher than AGE's ~128 KiB parameter
+# limit, so a field too large for AGE would fail the Cypher update yet
+# "succeed" via the SQL fallback — returning True while the AGE node was left
+# permanently out of sync with Postgres.
+
+@pytest.mark.asyncio
+class TestUpdateDiscoveryErrorResultNotMissingNode:
+
+    async def test_error_result_does_not_fall_back_to_sql(self):
+        """A non-empty error-carrying result must not trigger the SQL fallback."""
+        db = _make_db(
+            graph_available=True,
+            graph_query_returns=[{"error": "value exceeds AGE property size limit"}],
+        )
+        db._conn.fetchval = AsyncMock(return_value="disc-age-001")
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-age-001", {"details": "x" * 200_000})
+
+        # The old behavior silently "succeeded" via SQL here; the fix must
+        # surface the failure instead of reporting success out of sync.
+        assert ok is False
+        db._conn.fetchval.assert_not_awaited()
+
+    async def test_genuinely_empty_result_still_falls_back_to_sql(self):
+        """An actually-empty result (no matching vertex) still uses the SQL
+        fallback — the fix narrows the error branch, it does not remove the
+        orphan-row fallback."""
+        db = _make_db(graph_available=True, graph_query_returns=[])
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-sql-001", {"status": "resolved"})
+
+        assert ok is True
+        db._conn.fetchval.assert_awaited_once()
 
 
 # ===========================================================================
@@ -502,7 +610,7 @@ class TestUpdateDiscoveryConcurrentRetry:
     The conflict is transient, so update_discovery retries once."""
 
     def _kg_with_age_node(self, db):
-        db._pool.fetchval = AsyncMock(return_value=None)
+        db._conn.fetchval = AsyncMock(return_value=None)
         return db
 
     async def test_retries_once_on_concurrent_update_conflict(self):
@@ -567,7 +675,7 @@ class TestLastReferencedRemoved:
 
         assert ok is True
         db.graph_query.assert_not_awaited()
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
 
     async def test_sql_fallback_treats_last_referenced_as_noop(self):
         db = _make_db(graph_available=False)
@@ -578,7 +686,7 @@ class TestLastReferencedRemoved:
         )
 
         assert ok is True
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
 
     async def test_update_discovery_last_referenced_noop_when_graph_unavailable(self):
         db = _make_db(graph_available=False)
@@ -590,7 +698,7 @@ class TestLastReferencedRemoved:
 
         assert ok is True
         db.graph_query.assert_not_awaited()
-        db._pool.fetchval.assert_not_awaited()
+        db._conn.fetchval.assert_not_awaited()
 
 
 # ===========================================================================
@@ -927,7 +1035,7 @@ class TestBackfillMissingAgeNodes:
         assert summary["tag_discoveries_drifted"] == 1
         assert summary["tags_reconciled"] == 1
         kg._sync_age_tag_edges.assert_awaited_once_with(
-            db, db._pool, "disc-1", ["keep"]
+            db, db._conn, "disc-1", ["keep"]
         )
 
     async def test_dry_run_reports_duplicate_tag_vertices_without_writing(self):
@@ -995,7 +1103,7 @@ class TestBackfillMissingAgeNodes:
 
         rewire = next(call for call in issued if "MERGE (d)-[:TAGGED]->(canonical)" in call[0])
         assert rewire[1] == {"canonical_id": 10, "duplicate_id": 20}
-        assert rewire[2] is db._pool
+        assert rewire[2] is db._conn
 
         duplicate_delete_index = next(
             i for i, call in enumerate(issued) if "DELETE duplicate" in call[0]
@@ -1004,9 +1112,9 @@ class TestBackfillMissingAgeNodes:
             i for i, call in enumerate(issued) if call[0] == "SYNC_TAG_EDGES"
         )
         assert duplicate_delete_index < sync_index
-        assert all(call[2] is db._pool for call in issued[:duplicate_delete_index + 1])
+        assert all(call[2] is db._conn for call in issued[:duplicate_delete_index + 1])
         kg._sync_age_tag_edges.assert_awaited_once_with(
-            db, db._pool, "disc-1", ["keep"]
+            db, db._conn, "disc-1", ["keep"]
         )
 
     async def test_apply_fails_closed_when_duplicate_tag_postcondition_fails(self):
@@ -1059,12 +1167,12 @@ class TestBackfillMissingAgeNodes:
         assert summary["tag_repair_failed"] == 0
         assert summary["orphan_tags_removed"] == 2
         kg._sync_age_tag_edges.assert_any_await(
-            db, db._pool, "disc-1", ["new"]
+            db, db._conn, "disc-1", ["new"]
         )
         kg._sync_age_tag_edges.assert_any_await(
-            db, db._pool, "disc-2", []
+            db, db._conn, "disc-2", []
         )
-        kg._delete_orphan_age_tags.assert_awaited_once_with(db, db._pool)
+        kg._delete_orphan_age_tags.assert_awaited_once_with(db, db._conn)
 
     async def test_create_age_graph_issues_node_and_edges(self):
         """_create_age_graph_for_discovery MERGEs the node + AUTHORED + TAGGED."""

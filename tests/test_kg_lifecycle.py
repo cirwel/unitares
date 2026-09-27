@@ -1271,7 +1271,13 @@ class TestUpdateDiscoveryExtended:
         from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
 
         discovery = make_discovery(id="disc-cc", severity="low", details="body")
-        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, discovery])
+        # The record read back after the write, as a backend that stores the
+        # class returns it; the response reports this, not the request.
+        refreshed = make_discovery(
+            id="disc-cc", severity="low", details="body", status="resolved"
+        )
+        refreshed.closure_class = "unobserved"
+        mock_graph.get_discovery = AsyncMock(side_effect=[discovery, refreshed])
 
         result = await handle_update_discovery_status_graph({
             "agent_id": registered_agent,
@@ -1287,6 +1293,7 @@ class TestUpdateDiscoveryExtended:
         data = parse_result(result)
         assert data["success"] is True
         assert data["closure_class"] == "unobserved"
+        assert "closure_class_note" not in data
         updates = mock_graph.update_discovery.call_args[0][1]
         assert updates["closure_class"] == "unobserved"
         assert updates["closure_evidence"]["instrument_check"]
