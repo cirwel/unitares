@@ -70,3 +70,40 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     manager.main()
     assert "git clone --branch v2.22.0 " in manual.read_text()
     assert source.read_text() == "2.22.0\n"
+
+
+
+def test_version_bump_moves_the_compose_lease_plane_pin(tmp_path, monkeypatch):
+    """The release tag's own tree must name the lease-plane image built from it.
+
+    The pin follows VERSION, which the release PR bumps before the tag exists.
+    Following PUBLISHED_VERSION instead would move it only after promotion, so
+    every tagged tree would pull the previous release's lease plane.
+    """
+    import yaml
+
+    import scripts.ops.version_manager as manager
+
+    source = tmp_path / "VERSION"
+    published = tmp_path / "PUBLISHED_VERSION"
+    compose = tmp_path / "docker-compose.yml"
+    current = (PROJECT_ROOT / "VERSION").read_text().strip()
+    source.write_text("2.22.99\n", encoding="utf-8")
+    published.write_text("2.22.99\n", encoding="utf-8")
+    compose.write_text(
+        (PROJECT_ROOT / "docker-compose.yml").read_text().replace(f":v{current}", ":v2.22.99")
+    )
+    monkeypatch.setattr(manager, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(manager, "VERSION_FILE", source)
+    monkeypatch.setattr(manager, "PUBLISHED_VERSION_FILE", published)
+    monkeypatch.setattr("sys.argv", ["version_manager.py", "--update"])
+
+    assert manager.bump_version("minor") == "2.23.0"
+    manager.main()
+
+    service = yaml.safe_load(compose.read_text())["services"]["lease-plane"]
+    assert service["image"] == "ghcr.io/cirwel/unitares-lease-plane:v2.23.0"
+    assert service["pull_policy"] == "missing"
+    assert service["build"]["dockerfile"] == "elixir/lease_plane/Dockerfile"
+    # Release preparation leaves the verified publication pin alone.
+    assert published.read_text() == "2.22.99\n"
