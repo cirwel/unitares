@@ -268,7 +268,12 @@ extension that calls a pack route needs that pack enabled on the server.)
   All of these passkey ceremonies (sign-in, enrollment in both methods, and the
   four `/auth/webauthn/*` steps) first require a configured RP id: with
   `UNITARES_DASHBOARD_RP_ID` unset they answer 503 before any credential check.
-  A passkey is bound to one domain, so there is no default.
+  A passkey is bound to one domain, so there is no default. On such an install
+  the session read also fails (403), so when it does the tab asks
+  `DATA.passkeyConfig()` (a credential-free `GET /auth/enroll`) and shows the
+  server's named fix as a neutral setup hint rather than a red session error.
+  Only that exact 503 body counts as "not configured"; any other answer, or
+  none, keeps the error.
 
 The operator credential can be provisioned once via `?operator_token=…`
 (persisted to localStorage and scrubbed from the URL by
