@@ -107,8 +107,9 @@ judging the finding correct (roadmap Invariant 4, the reasoning
 A call that times out may still be running under the orchestrator, and a CLI
 stuck on a prompt would otherwise leave one more child each day. The probe
 stores the `orchestrator_execution_id` of every timed-out call in its state
-file. On the next run it asks the orchestrator whether that execution is still
-live. If it is, the probe does not start another call to that host. Instead
+file. On the next run it polls the orchestrator's
+`/v1/executions/<id>/await` with a short wait, the same poll the host
+adapter's timeout hint names, to see whether that execution is still live. If it is, the probe does not start another call to that host. Instead
 it raises the host's finding to **high** with the age of the stuck execution,
 leaving termination to the operator, since killing orchestrator children is
 outside a diagnose-only script. So each host has at most one probe child alive
