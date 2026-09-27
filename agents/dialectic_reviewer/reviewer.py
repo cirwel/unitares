@@ -788,6 +788,151 @@ def _verdict_with_ratified_conditions(
     )
 
 
+class GovernanceLinkLost(ConnectionError):
+    """The link's connection ended before it answered this call."""
+
+
+class _GovernanceLink:
+    """The reviewer's governance connection, built to outlive a governance
+    restart.
+
+    A reviewer that rejects stays alive for up to an hour to answer the paused
+    agent, and a deploy restarts gov-mcp inside that window. mcp 2.x's
+    streamable-HTTP transport runs in an anyio task group entered by whichever
+    task called ``connect()``, and when the server goes away that group
+    cancels its host task. The reviewer saw ``CancelledError``, a
+    BaseException that no ``except Exception`` in the poll loop catches, and
+    the client stayed dead after the server returned. Live, the reviewer
+    exited status 1 and the paused agent's answer arrived minutes later with
+    nobody left to read it (490c7cf515b89a6e, 85bd219ebb5b9ec9). Closing the
+    client does not free its host task either: after ``disconnect()`` the
+    group's scope still cancelled that task at its next await, so a
+    connection must never be opened in the reviewer's own task at all.
+
+    So each connection lives in a worker task of its own and every call runs
+    there. A lost transport ends the worker, not the reviewer: the pending
+    call fails with ``GovernanceLinkLost``, an ordinary Exception that the
+    poll loop already treats as a transient read, and the next call opens a
+    fresh connection. That connection proves it is the same reviewer process
+    with the same-process continuity token (``identity(agent_uuid,
+    continuity_token, resume=True)``). It never onboards, so a restart cannot
+    mint a second reviewer. A cancellation of the reviewer itself still
+    propagates.
+    """
+
+    def __init__(
+        self,
+        governance_url: str,
+        client_factory: Any,
+        *,
+        agent_uuid: Optional[str] = None,
+        client_session_id: Optional[str] = None,
+        continuity_token: Optional[str] = None,
+    ) -> None:
+        self._url = governance_url
+        self._factory = client_factory
+        self._identity: dict[str, Optional[str]] = {
+            "agent_uuid": agent_uuid,
+            "client_session_id": client_session_id,
+            "continuity_token": continuity_token,
+        }
+        self._worker: Optional[asyncio.Task] = None
+        self._requests: Optional[asyncio.Queue] = None
+        self._connections = 0
+
+    @property
+    def agent_uuid(self) -> Optional[str]:
+        return self._identity["agent_uuid"]
+
+    def _remember(self, client: Any) -> None:
+        for key in self._identity:
+            value = getattr(client, key, None)
+            if isinstance(value, str) and value:
+                self._identity[key] = value
+
+    async def _serve(self, requests: asyncio.Queue) -> None:
+        client = self._factory(self._url)
+        try:
+            await client.connect()
+            for key, value in self._identity.items():
+                if value:
+                    setattr(client, key, value)
+            if self._identity["agent_uuid"] and self._identity["continuity_token"]:
+                try:
+                    await client.identity(
+                        agent_uuid=self._identity["agent_uuid"],
+                        continuity_token=self._identity["continuity_token"],
+                        resume=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 — the session binding may still carry
+                    logger.warning(
+                        "Dialectic reviewer rebind failed; continuing on the "
+                        "existing session binding: %r",
+                        exc,
+                    )
+                self._remember(client)
+            while True:
+                fn, reply = await requests.get()
+                if reply.done():
+                    continue
+                try:
+                    result = await fn(client)
+                except Exception as exc:  # noqa: BLE001 — returned to the caller
+                    if not reply.done():
+                        reply.set_exception(exc)
+                    continue
+                self._remember(client)
+                if not reply.done():
+                    reply.set_result(result)
+        finally:
+            await client.disconnect()
+
+    async def run(self, fn: Any) -> Any:
+        """Await ``fn(client)`` on the link's live connection."""
+        if self._worker is None or self._worker.done():
+            if self._worker is not None:
+                ended = self._worker
+                cause = None if ended.cancelled() else ended.exception()
+                logger.warning(
+                    "Dialectic reviewer reconnecting to governance after a "
+                    "lost connection (connection %d; previous ended by %s)",
+                    self._connections + 1,
+                    repr(cause) if cause else "transport cancellation",
+                )
+            self._connections += 1
+            self._requests = asyncio.Queue()
+            self._worker = asyncio.create_task(self._serve(self._requests))
+        worker = self._worker
+        reply = asyncio.get_running_loop().create_future()
+        await self._requests.put((fn, reply))
+        try:
+            await asyncio.wait({reply, worker}, return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            reply.cancel()
+            raise
+        if reply.done():
+            return reply.result()
+        reply.cancel()
+        cause: Optional[BaseException] = None
+        if not worker.cancelled():
+            cause = worker.exception()
+        raise GovernanceLinkLost(
+            "governance connection ended before the call completed"
+            + (f": {cause!r}" if cause else " (transport cancelled)")
+        )
+
+    async def call_tool(self, name: str, args: dict) -> Any:
+        return await self.run(lambda client: client.call_tool(name, args))
+
+    async def close(self) -> None:
+        worker, self._worker = self._worker, None
+        if worker is None:
+            return
+        if not worker.done():
+            worker.cancel()
+        await asyncio.gather(worker, return_exceptions=True)
+
+
 async def continue_after_disagreement(
     client: Any,
     thesis: Thesis,
@@ -895,19 +1040,28 @@ async def continue_after_disagreement(
                 next_verdict.reasoning,
             )
             return current_verdict
-        result = await client.call_tool(
-            "dialectic",
-            {
-                "action": "synthesis",
-                "session_id": thesis.session_id,
-                "agrees": next_verdict.agrees,
-                "proposed_conditions": next_verdict.proposed_conditions,
-                "root_cause": next_verdict.root_cause,
-                # There is no second antithesis call, so the reconsideration's
-                # rationale belongs on this follow-up synthesis.
-                "reasoning": next_verdict.reasoning,
-            },
-        )
+        try:
+            result = await client.call_tool(
+                "dialectic",
+                {
+                    "action": "synthesis",
+                    "session_id": thesis.session_id,
+                    "agrees": next_verdict.agrees,
+                    "proposed_conditions": next_verdict.proposed_conditions,
+                    "root_cause": next_verdict.root_cause,
+                    # There is no second antithesis call, so the reconsideration's
+                    # rationale belongs on this follow-up synthesis.
+                    "reasoning": next_verdict.reasoning,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — session state decides what is still owed
+            # Whether the write landed is unknown, and the next read settles
+            # it: a synthesis that landed now follows the paused response, so
+            # nothing is pending; one that did not leaves the response pending,
+            # and it is answered again. Neither case files twice.
+            logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
+            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            continue
         if isinstance(result, dict) and result.get("success") is False:
             logger.warning("Dialectic continuation synthesis was refused: %s", result)
             return current_verdict
@@ -1007,15 +1161,19 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             verdict.reasoning,
         )
 
-    client = GovernanceClient(governance_url)
-    await client.connect()
+    # Every governance call runs on the link, never on a client opened in
+    # this task: see _GovernanceLink for why a restart would otherwise kill
+    # the reviewer mid-review.
+    client = _GovernanceLink(governance_url, GovernanceClient)
     try:
-        await client.onboard(
-            name=REVIEWER_NAME,  # required first arg of GovernanceClient.onboard
-            force_new=True,
-            parent_agent_id=parent_agent_id,
-            spawn_reason=SPAWN_REASON,
-            model_type=_reviewer_model_type(provenance),
+        await client.run(
+            lambda c: c.onboard(
+                name=REVIEWER_NAME,  # required first arg of GovernanceClient.onboard
+                force_new=True,
+                parent_agent_id=parent_agent_id,
+                spawn_reason=SPAWN_REASON,
+                model_type=_reviewer_model_type(provenance),
+            )
         )
         # Claim the open reviewer slot as first-responder. The bare submit_*
         # handlers are register=False; the public MCP surface is the `dialectic`
@@ -1094,17 +1252,19 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
         # records meaningful work even if the orchestrator later reaps it.
         # SDK checkin() maps to the server's process_agent_update.
         try:
-            await client.checkin(
-                response_text=(
-                    f"dialectic review submitted: agrees={verdict.agrees}"
-                    + (" (degraded fallback)" if verdict.degraded else "")
-                    + f"; {_reviewer_audit_text(provenance)}"
-                ),
-                complexity=0.4,
-                confidence=0.6 if not verdict.degraded else 0.3,
-                # The VERDICT is model-produced, but this check-in text is an
-                # f-string over verdict fields, so the substrate composed the row.
-                epistemic_class="substrate_interpretation",
+            await client.run(
+                lambda c: c.checkin(
+                    response_text=(
+                        f"dialectic review submitted: agrees={verdict.agrees}"
+                        + (" (degraded fallback)" if verdict.degraded else "")
+                        + f"; {_reviewer_audit_text(provenance)}"
+                    ),
+                    complexity=0.4,
+                    confidence=0.6 if not verdict.degraded else 0.3,
+                    # The VERDICT is model-produced, but this check-in text is an
+                    # f-string over verdict fields, so the substrate composed the row.
+                    epistemic_class="substrate_interpretation",
+                )
             )
         except Exception as exc:  # noqa: BLE001 — verdict is already durable
             # A check-in is diagnostic evidence, not part of the dialectic
@@ -1127,11 +1287,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 thesis,
                 verdict,
                 paused_agent_id=parent_agent_id,
-                reviewer_agent_id=getattr(client, "agent_uuid", None),
+                reviewer_agent_id=client.agent_uuid,
             )
         return verdict
     finally:
-        await client.disconnect()
+        await client.close()
 
 
 def main() -> int:
