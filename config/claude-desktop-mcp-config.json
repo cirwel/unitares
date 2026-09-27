@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "anima": {
-      "type": "http",
-      "url": "http://YOUR_ANIMA_HOST:8766/mcp/"
-    },
     "unitares-governance": {
       "type": "http",
       "url": "http://localhost:8767/mcp/"

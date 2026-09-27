@@ -6,6 +6,9 @@
 #
 # Then point an MCP client at http://localhost:8767/mcp/ and call start_session().
 #
+# On a master checkout, or after changing source, add --build so every service
+# is built from the tree you have (see the lease-plane service below).
+#
 # This brings up:
 #   - postgres-age      Postgres 18 + Apache AGE + pgvector  (port 5432)
 #   - redis             De-facto primary session store + locks (port 6379)
@@ -67,6 +70,16 @@ services:
     restart: unless-stopped
 
   lease-plane:
+    # A release checkout pulls the lease-plane image published from that same
+    # release tag, so a fresh install does not fetch Hex packages or compile
+    # Elixir. `make version-bump` moves this tag with VERSION when a release is
+    # prepared (scripts/ops/version_manager.py); do not edit it by hand. If the
+    # tag cannot be pulled (a release that predates the image, a release not yet
+    # published, or no registry access), Compose builds from the block below
+    # instead. On a master checkout the tag names a release, not your source:
+    # run `docker compose up --build` to build what you have checked out.
+    image: ghcr.io/cirwel/unitares-lease-plane:v3.0.0
+    pull_policy: missing
     build:
       context: .
       dockerfile: elixir/lease_plane/Dockerfile
@@ -157,6 +170,11 @@ services:
       UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-}
       UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}
       UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
+      # Opt-in route packs (src/http_routes/packs.py); empty mounts core routes
+      # only. Dashboard extensions: set the variable AND mount that directory
+      # into this container, or the extension route has nothing to serve.
+      UNITARES_ROUTE_PACKS: ${UNITARES_ROUTE_PACKS:-}
+      UNITARES_DASHBOARD_EXT_DIR: ${UNITARES_DASHBOARD_EXT_DIR:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}

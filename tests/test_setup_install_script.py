@@ -168,6 +168,15 @@ def test_remediation_for_secrets_wrong_mode(setup_mod):
     assert "chmod 600" in items[0].command
 
 
+def test_remediation_for_secrets_uses_the_path_the_doctor_checked(setup_mod):
+    # The doctor may have resolved the legacy file; chmod-ing the new default
+    # instead would leave the reported file unchanged.
+    payload = _doctor_payload(("secrets_file", "fail", "mode is 0o644 — must be 0600"))
+    payload["results"][0]["detail"] = "chmod 600 /home/u/.config/cirwel/secrets.env"
+    items = setup_mod.build_remediation(payload)
+    assert items[0].command == "chmod 600 /home/u/.config/cirwel/secrets.env"
+
+
 def test_remediation_skips_pass_results(setup_mod):
     payload = _doctor_payload(
         ("python_version", "pass", "Python 3.14"),
@@ -213,6 +222,40 @@ def test_ensure_anchor_dir_apply_idempotent(setup_mod, tmp_path):
     assert item.applied is False
 
 
+def test_resolve_secrets_path_defaults_to_neutral_location(setup_mod, tmp_path):
+    assert setup_mod.resolve_secrets_path(tmp_path, {}) == (
+        tmp_path / ".config" / "unitares" / "secrets.env"
+    )
+
+
+def test_resolve_secrets_path_keeps_existing_legacy_file(setup_mod, tmp_path):
+    legacy = tmp_path / ".config" / "cirwel" / "secrets.env"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("X=1\n")
+    assert setup_mod.resolve_secrets_path(tmp_path, {}) == legacy
+
+
+def test_resolve_secrets_path_honours_override(setup_mod, tmp_path):
+    target = tmp_path / "custom.env"
+    env = {"UNITARES_SECRETS_ENV": str(target)}
+    assert setup_mod.resolve_secrets_path(tmp_path, env) == target
+
+
+def test_secrets_template_does_not_claim_the_server_reads_it(setup_mod):
+    assert "does NOT read this file" in setup_mod.SECRETS_TEMPLATE
+
+
+def test_secrets_template_examples_are_exported(setup_mod):
+    # Several consumers source the file without `set -a`; an unexported
+    # assignment never reaches the process they launch.
+    examples = [
+        line for line in setup_mod.SECRETS_TEMPLATE.splitlines()
+        if line.startswith("# ") and "=" in line and line.rstrip().endswith("=")
+    ]
+    assert examples
+    assert all(line.startswith("# export ") for line in examples)
+
+
 def test_ensure_secrets_file_dry_run_no_writes(setup_mod, tmp_path):
     target = tmp_path / "secrets.env"
     item = setup_mod.ensure_secrets_file(target, apply=False)
@@ -228,7 +271,7 @@ def test_ensure_secrets_file_apply_creates_with_mode_0600(setup_mod, tmp_path):
     actual = stat.S_IMODE(target.stat().st_mode)
     assert actual == 0o600, f"expected 0o600 got {oct(actual)}"
     content = target.read_text()
-    assert "ANTHROPIC_API_KEY" in content
+    assert content == setup_mod.SECRETS_TEMPLATE
     assert "mode 0600, never commit" in content
     assert item.applied is True
 
