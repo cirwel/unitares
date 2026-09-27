@@ -1537,7 +1537,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     # its own post): count its family from what we already know, so the same
     # family is never run twice as the "second" one.
     passed_by = passed_by or getattr(args, "completed_by", None)
-    if passed_by:
+    # A fix-verify receipt did not review the new lines (see passing_families).
+    if passed_by and not passed_by.startswith("fix-verify:"):
         families.add(reviewer_family(passed_by))
     if len(families) >= 2:
         return result

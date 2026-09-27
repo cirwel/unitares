@@ -2025,6 +2025,7 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
     globs = rg.second_family_paths()
     for path in ("src/oauth_provider.py", "src/mcp_handlers/identity/handlers.py",
                  "src/mcp_handlers/schemas/identity.py",
+                 "src/services/mcp_transport_service.py", "src/mcp_listen_config.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2221,3 +2222,15 @@ def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
     monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
     rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True))
     assert posted[0][3] == "action_required" and "unreadable" in posted[0][4]
+
+
+
+def test_a_just_passed_fix_verification_is_not_a_family(monkeypatch):
+    """Native Codex on #2504 (P1): the just-passed shortcut re-added the
+    fix-verify family that passing_families excludes."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families={"google"}, candidates=("codex", "claude"))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0,
+                                 passed_by="fix-verify:claude") == 0
+    assert ran == ["codex"]  # still needs a real second family
