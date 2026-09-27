@@ -704,11 +704,11 @@ row; the instrument emits one `dialectic_guarded_write` record per guarded sweep
 time, the reviewer, phase, status and `updated_at` it read, commit time, outcome), and the report
 reads those. It is
 measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
-durable tables, including a saga-versus-row status join, and by a `dialectic_beam_resolve` event on
-every BEAM resolve response, because a BEAM resolve that meets an already-terminal row returns
-`already_terminal` with no saga row. The event's coverage is itself measured: the report matches it
-against committed sagas and states the fraction, and (b1) cannot fire while that fraction is below
-99%. BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
+durable tables, including a saga-versus-row status join, and by `dialectic_beam_resolve` records,
+because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no saga
+row. Python records every BEAM resolve call as an attempt before it and a response after it, so the
+records carry their own denominator (responses ÷ attempts, including no-saga responses); (b1) cannot
+fire while that fraction is below 99%. BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
 outcomes are contention-benign by construction and need no emitter. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
 
 **A3 — the writer inventory is defined by rule.** A **writer** is every code path, in either
@@ -775,8 +775,10 @@ bypasses), not by (b1)'s channel. R2's evidence needs a BEAM-side emitter with t
 specified at step 5, because R1 disables the Python resolver that emits the current channel.
 
 **A10 — §8, split, and how the gate completes.** The council round is held (2026-09-27). The §7
-step 4 reading has two outcomes. If W_pre fires (b1), the gate concludes **no port** and is met at
-step 4; no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
+step 4 reading has two outcomes. If W_pre fires (b1), it concludes **no port for the reap path**;
+facilitation and reassignment, which (b1) cannot speak for (A7), get an operator disposition
+recorded at step 4, stated as a judgment and not as evidence. With both, the gate is met at step 4
+and no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
 instead, the port only becomes **eligible**: the gate is met after step 5, when the design pass has
 run on the chosen §1.2 option and the gate has been signed again as amended. Nothing is built before
 then. If W_pre reaches its bound with neither outcome available (coverage below A8, an unexplained
@@ -785,7 +787,6 @@ the named defect is fixed, W_pre extends by the uncovered time, and if the fix c
 instrument (a new `instrument_version`), W_pre restarts from the first row at the new version. Hours against the §4
 projection were not tracked for either round and are reported as not measured.
 
-**A11 — consistency.** §9 inventories both paths while §2's disconfirmers and §4's exit criteria
-cover path (1) only. The status note's "six … closed" counts §6.5's deferral, which is not an answer.
-"Three orderings" means two BEAM-first and one sweeper-first, and A3 widens "writer" beyond them.
-
+**A11 — consistency.** §9 inventories both paths; §2 and §4 cover path (1) only. The status note's
+"six … closed" counts §6.5's deferral, which is not an answer. "Three orderings" means two
+BEAM-first and one sweeper-first; A3 widens "writer" beyond them.
