@@ -26,7 +26,7 @@ import re
 import threading
 import time
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -256,34 +256,149 @@ async def test_read_tool_timeout_keeps_the_retry_recovery(tool_name):
     assert "outcome" not in payload
 
 
-STORE_CHECK = "knowledge(action='search', query='<words from your summary>')"
+BOUND_UUID = "5b7c0e1a-2d3f-4a5b-8c6d-7e8f9a0b1c2d"
 
 
-@pytest.mark.asyncio
+def _store_lookup_payload(arguments: dict, *, bound: str | None = None) -> dict:
+    """A store/note timeout reply for ``arguments`` under a short timeout."""
+
+    async def _run():
+        @mcp_tool("store_knowledge_graph", timeout=0.05, register=False)
+        async def _slow(args):
+            await asyncio.sleep(5)
+
+        return _payload(await _slow(dict(arguments)))
+
+    with patch("src.coordination_failure_emit.emit_coordination_failure_sync"), patch(
+        "src.mcp_handlers.context.get_context_agent_id", return_value=bound
+    ):
+        return asyncio.run(_run())
+
+
+def _assert_window_lookup(payload: dict, writer: str | None) -> dict:
+    """The check lists the writer's rows created in the call's own window."""
+    from src.mcp_handlers.error_helpers import _render_call
+
+    recovery = payload["recovery"]
+    lookup = recovery["check_arguments"]
+    expected = {"action": "search"}
+    if writer is not None:
+        expected["agent_id_filter"] = writer
+    expected.update(
+        {
+            "created_after": payload["call_started_at"],
+            "created_before": payload["settled_by"],
+            "sort_by": "created_at",
+            "include_archived": True,
+            "include_cold": True,
+            "limit": 100,
+        }
+    )
+    assert lookup == expected
+    assert "query" not in lookup, "a relevance query would rank and cut the page"
+    assert recovery["check_before_retry"] == _render_call("knowledge", lookup)
+    assert recovery["check_before_retry"] in recovery["action"]
+    assert "not relevance" in recovery["action"]
+    assert "count is below 100" in recovery["action"]
+    assert "new row" in recovery["action"]
+    assert "try again" not in recovery["action"].lower()
+    return recovery
+
+
+def test_bound_store_timeout_lists_the_identitys_rows_in_the_call_window():
+    payload = _store_lookup_payload({"action": "store", "summary": "s"}, bound=BOUND_UUID)
+
+    assert payload["outcome"] == "unknown"
+    recovery = _assert_window_lookup(payload, BOUND_UUID)
+    assert "Rows under your identity come from calls bound to it" in recovery["action"]
+    assert "no ownership check stops" in recovery["action"]
+    assert recovery["workflow"][1].endswith("it was saved. Do not store it again")
+
+
+def test_anonymous_store_timeout_names_the_pseudonym_the_handler_writes():
+    """The low-friction path records a pseudonym derived from the session; it is
+    not a registered agent, so the lookup filters on it rather than asking
+    knowledge(action='get', agent_id=...), which would refuse this caller."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    arguments = {"action": "store", "summary": "s", "client_session_id": "sess-abc"}
+    payload = _store_lookup_payload(arguments)
+
+    pseudonym = kg_handlers._derive_anonymous_writer_id(dict(arguments))
+    assert pseudonym.startswith("anonkg_") and not pseudonym.endswith("_local")
+    recovery = _assert_window_lookup(payload, pseudonym)
+    assert "derived from your session's signals" in recovery["action"]
+    assert "only its absence is proof" in recovery["action"]
+    assert "may be another caller's" in recovery["workflow"][1]
+
+
+def test_a_shared_anonymous_pseudonym_is_not_claimed_as_proof_of_authorship():
+    payload = _store_lookup_payload({"action": "store", "summary": "s"})
+
+    writer = payload["recovery"]["check_arguments"]["agent_id_filter"]
+    assert writer.startswith("anonkg_") and writer.endswith("_local")
+    recovery = _assert_window_lookup(payload, writer)
+    assert "carries no identifying signal" in recovery["action"]
+    assert "only its absence is proof" in recovery["action"]
+
+
 @pytest.mark.parametrize(
     "writer",
     [
         "agent-1",
-        # The low-friction path writes a pseudonym into arguments before the
-        # store; it is not a registered agent, so a check that looks the writer
-        # up (knowledge get by agent_id) would refuse this caller.
+        # knowledge(action='note') runs its handler on the router's own dict,
+        # so a timed-out note can already carry the pseudonym it resolved.
         "anonkg_mcp_0123456789ab",
     ],
 )
-async def test_store_timeout_names_a_search_any_caller_can_run(writer):
-    @mcp_tool("store_knowledge_graph", timeout=0.05, register=False)
-    async def _slow(arguments):
-        await asyncio.sleep(5)
+def test_a_named_writer_is_filtered_on_but_not_claimed_as_the_callers(writer):
+    payload = _store_lookup_payload({"action": "store", "agent_id": writer})
 
-    with patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-        payload = _payload(await _slow({"action": "store", "agent_id": writer}))
+    recovery = _assert_window_lookup(payload, writer)
+    assert "That id is not yours alone" in recovery["action"]
 
-    assert payload["outcome"] == "unknown"
-    recovery = payload["recovery"]
-    assert recovery["check_before_retry"] == STORE_CHECK
-    assert writer not in json.dumps(recovery)
-    assert "new row" in recovery["action"]
-    assert "try again" not in recovery["action"].lower()
+
+def test_an_unresolvable_writer_lists_every_writer_and_says_so():
+    """A high-severity store needs a registered agent; with none the handler
+    would refuse, so no author can be named and the window is not filtered."""
+    server = MagicMock()
+    server.agent_metadata = {}
+    with patch("src.mcp_handlers.shared.get_mcp_server", return_value=server):
+        payload = _store_lookup_payload({"action": "store", "severity": "high"})
+
+    recovery = _assert_window_lookup(payload, None)
+    assert "could not be resolved" in recovery["action"]
+    assert "may be another writer's" in recovery["action"]
+
+
+def test_a_failing_author_resolution_is_logged_and_the_window_stays(caplog):
+    with patch(
+        "src.mcp_handlers.knowledge.handlers._resolve_low_friction_writer",
+        side_effect=RuntimeError("context unavailable"),
+    ), caplog.at_level("WARNING"):
+        payload = _store_lookup_payload({"action": "store", "summary": "s"})
+
+    _assert_window_lookup(payload, None)
+    assert any(
+        "author of a timed-out knowledge write" in record.getMessage()
+        and record.levelname == "WARNING"
+        for record in caplog.records
+    )
+
+
+def test_the_lookup_arguments_survive_the_knowledge_schema():
+    """Every lookup field is declared for action=search: the unified schema
+    drops undeclared fields, and a dropped include_cold would hide rows."""
+    from src.mcp_handlers.schemas.knowledge import KnowledgeParams
+
+    payload = _store_lookup_payload({"action": "store"}, bound=BOUND_UUID)
+    lookup = payload["recovery"]["check_arguments"]
+
+    dumped = KnowledgeParams.model_validate(lookup).model_dump(exclude_none=True)
+    for key, value in lookup.items():
+        assert dumped[key] == value, key
+        if key != "action":
+            assert key in KnowledgeParams.ACTION_FIELDS["search"], key
 
 
 def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
@@ -431,7 +546,8 @@ async def test_router_level_timeout_classifies_the_routed_action():
         read = _payload(await wrapper({"action": "search"}))
 
     assert write["outcome"] == "unknown"
-    assert write["recovery"]["check_before_retry"] == STORE_CHECK
+    assert write["recovery"]["check_arguments"]["agent_id_filter"] == "agent-1"
+    assert write["recovery"]["check_arguments"]["sort_by"] == "created_at"
     assert read["recovery"]["action"] == READ_RECOVERY
 
 
@@ -551,3 +667,224 @@ def test_call_literal_falls_back_to_the_placeholder(value):
 
 def test_call_literal_keeps_an_ordinary_id():
     assert _call_literal(DISCOVERY_ID, "<discovery_id>") == DISCOVERY_ID
+
+
+# ---------------------------------------------------------------------------
+# The store lookup is exhaustive for the window, on both backends
+# ---------------------------------------------------------------------------
+#
+# Codex review on #2543: the store recovery used to name a relevance search
+# for the summary. That page is ranked and bounded (default 20), so the saved
+# row could rank off it and absence read as "nothing saved", and another
+# writer's row with the same summary matched too. The lookup is now a
+# queryless search filtered to the writer and a created_at window. These run
+# the recovery's own check_arguments through the real search handler against
+# governance_test (the live_postgres_backend fixture; skipped without it).
+
+PROBE = "timeout lookup probe"
+OTHER_WRITER = "0c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f"
+ANON_WRITER = "anonkg_mcp_0123456789ab"
+
+
+def _row(suffix: str, *, writer: str, created: datetime, summary: str, status="open",
+         details: str = "") -> DiscoveryNode:
+    return DiscoveryNode(
+        id=f"{created.isoformat()}-{suffix}",
+        agent_id=writer,
+        type="note",
+        summary=summary,
+        details=details,
+        tags=["timeout-lookup"],
+        severity="low",
+        status=status,
+        timestamp=created.isoformat(),
+    )
+
+
+def _window():
+    started = datetime.now(timezone.utc) - timedelta(seconds=20)
+    return started, started + timedelta(seconds=45)
+
+
+def _pg_graph(db):
+    from src.storage.knowledge_graph_postgres import KnowledgeGraphPostgres
+
+    graph = KnowledgeGraphPostgres()
+    graph._get_db = AsyncMock(return_value=db)
+    return graph
+
+
+def _age_graph(db):
+    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+    graph = KnowledgeGraphAGE()
+    graph._get_db = AsyncMock(return_value=db)
+    return graph
+
+
+GRAPHS = {"postgres": _pg_graph, "age": _age_graph}
+
+
+async def _search(graph, arguments: dict) -> dict:
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    with patch.object(kg_handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
+         patch.object(kg_handlers, "_broadcast_knowledge_read", AsyncMock()), \
+         patch.object(
+             kg_handlers,
+             "_resolve_agent_display",
+             MagicMock(side_effect=lambda agent_id: {"display_name": agent_id}),
+         ):
+        result = await kg_handlers.handle_search_knowledge_graph(dict(arguments))
+    return json.loads(result[0].text)
+
+
+def _lookup_for(writer: str, started: datetime, settled: datetime) -> dict:
+    """The recovery's check_arguments for a store timed out by ``writer``."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    bound = writer if not writer.startswith("anonkg_") else None
+    arguments = {} if bound else {"agent_id": writer}
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=bound):
+        recovery = _unknown_outcome_recovery(
+            CallOperation(operation="write", tool="knowledge", action="store"),
+            arguments,
+            call_started_at=started.isoformat(),
+            settled_by=settled.isoformat(),
+        )
+    lookup = recovery["check_arguments"]
+    assert lookup["agent_id_filter"] == writer
+    return lookup
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", sorted(GRAPHS))
+@pytest.mark.parametrize("writer", [BOUND_UUID, ANON_WRITER])
+async def test_the_store_lookup_lists_exactly_this_writers_rows_in_the_window(
+    live_postgres_backend, backend, writer
+):
+    started, settled = _window()
+    ours = [
+        _row("open", writer=writer, created=started + timedelta(seconds=1),
+             summary=PROBE, details="unrelated narrative " * 40),
+        _row("archived", writer=writer, created=started + timedelta(seconds=2),
+             summary="archived at store time", status="archived"),
+        _row("cold", writer=writer, created=started + timedelta(seconds=3),
+             summary="cold at store time", status="cold"),
+    ]
+    excluded = [
+        # This writer, before the call began.
+        _row("before", writer=writer, created=started - timedelta(seconds=60),
+             summary=PROBE),
+        # This writer, after settled_by.
+        _row("after", writer=writer, created=settled + timedelta(seconds=5),
+             summary=PROBE),
+        # Another writer, same summary, inside the window.
+        _row("other", writer=OTHER_WRITER, created=started + timedelta(seconds=1),
+             summary=PROBE),
+    ]
+    # Rows that outrank ours on relevance for the summary's words: 30 of them,
+    # more than the default page of 20.
+    noise = [
+        _row(f"noise-{i:02d}", writer=OTHER_WRITER,
+             created=started + timedelta(seconds=4, milliseconds=i),
+             summary=f"{PROBE}: {PROBE}, {PROBE}", details=f"{PROBE} " * 20)
+        for i in range(30)
+    ]
+    for node in ours + excluded + noise:
+        await live_postgres_backend.kg_add_discovery(node)
+    graph = GRAPHS[backend](live_postgres_backend)
+
+    if backend == "postgres":
+        # The premise: the relevance search the recovery used to name loses
+        # the row off its page, while another writer's same summary matches.
+        relevance = await _search(graph, {"action": "search", "query": PROBE})
+        relevance_ids = [d["id"] for d in relevance["discoveries"]]
+        assert ours[0].id not in relevance_ids
+        assert any(d["_agent_id"] == OTHER_WRITER for d in relevance["discoveries"])
+
+    lookup = _lookup_for(writer, started, settled)
+    payload = await _search(graph, lookup)
+
+    assert payload["success"] is True, payload
+    assert [d["id"] for d in payload["discoveries"]] == [n.id for n in reversed(ours)]
+    assert {d["_agent_id"] for d in payload["discoveries"]} == {writer}
+    assert payload["count"] == 3 < lookup["limit"]
+    assert "_more_available" not in payload
+    assert "limit_clamped_from" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", sorted(GRAPHS))
+async def test_a_full_page_is_flagged_and_paging_back_reaches_the_rest(live_postgres_backend, backend):
+    """Step 4: at count == limit the page may be cut; created_before set to
+    the oldest row listed reads the older rest of the window."""
+    started, settled = _window()
+    rows = [
+        _row(f"r{i:03d}", writer=BOUND_UUID,
+             created=started + timedelta(milliseconds=100 * (i + 1)), summary=f"row {i}")
+        for i in range(101)
+    ]
+    for node in rows:
+        await live_postgres_backend.kg_add_discovery(node)
+    graph = GRAPHS[backend](live_postgres_backend)
+
+    lookup = _lookup_for(BOUND_UUID, started, settled)
+    first = await _search(graph, lookup)
+    assert first["count"] == 100
+    assert "_more_available" in first
+    assert rows[0].id not in {d["id"] for d in first["discoveries"]}, (
+        "premise: the oldest row, nearest the call's start, is the one cut"
+    )
+
+    rest = await _search(
+        graph, {**lookup, "created_before": first["discoveries"][-1]["created_at"]}
+    )
+    assert [d["id"] for d in rest["discoveries"]] == [rows[0].id]
+    assert rest["count"] == 1 < lookup["limit"]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_windowed_read_on_age_is_an_error_not_an_empty_window():
+    """An empty window is the lookup's proof that nothing was saved, so the AGE
+    backend must not turn a failed read into one. The postgres backend raises
+    here already."""
+    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+    db = MagicMock()
+    db.kg_query = AsyncMock(side_effect=RuntimeError("connection reset"))
+    graph = KnowledgeGraphAGE()
+    graph._get_db = AsyncMock(return_value=db)
+    started, settled = _window()
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await graph.query(agent_id=BOUND_UUID, created_after=started, limit=100)
+
+    payload = await _search(graph, _lookup_for(BOUND_UUID, started, settled))
+    assert payload["success"] is False
+    assert "connection reset" in payload["error"]
+
+    # An unwindowed tag read keeps its old failure shape.
+    assert await graph.query(tags=["timeout-lookup"], limit=5) == []
+
+
+def test_an_alias_lookup_failure_is_logged_and_leaves_the_call_unclassified(
+    monkeypatch, caplog
+):
+    """Watcher P006 on this PR: the ImportError fallback in _handler_operation
+    swallowed the failure without a log. It now reaches resolve_call_operation,
+    which logs it and answers with an unclassified call, never a retry-safe one."""
+    import sys
+
+    monkeypatch.setitem(sys.modules, "src.mcp_handlers.tool_stability", None)
+    with caplog.at_level("WARNING"):
+        call = resolve_call_operation("store_knowledge_graph", {"action": "store"})
+
+    assert call.operation is None
+    assert call.retry_safe is False
+    assert any(
+        record.levelname == "WARNING"
+        and "resolve_call_operation failed" in record.getMessage()
+        for record in caplog.records
+    )

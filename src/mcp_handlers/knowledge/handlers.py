@@ -1091,6 +1091,10 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
 
 _ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
 _ANONYMOUS_WRITER_FALLBACK_KEY = secrets.token_bytes(32)
+_ANONYMOUS_WRITER_PREFIX = "anonkg_"
+# The pseudonym of a session with no identifying signal; every such caller
+# shares it. A derived pseudonym ends in a hex digest instead.
+_ANONYMOUS_WRITER_SHARED_SUFFIX = "_local"
 
 
 def _pseudonymize_anonymous_writer_source(source: str) -> str:
@@ -1134,8 +1138,8 @@ def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
 
     if source:
         digest = _pseudonymize_anonymous_writer_source(str(source))
-        return f"anonkg_{client_hint}_{digest}"
-    return f"anonkg_{client_hint}_local"
+        return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}_{digest}"
+    return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}{_ANONYMOUS_WRITER_SHARED_SUFFIX}"
 
 
 def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Optional[TextContent], bool]:
@@ -1192,12 +1196,16 @@ class _KnowledgeStoreState:
     similar_discoveries: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
+    """A high or critical store must come from a registered agent."""
+    return str(arguments.get("severity", "low")).lower() in {"high", "critical"}
+
+
 def _resolve_store_writer(
     arguments: Dict[str, Any],
 ) -> tuple[str, Optional[TextContent], Optional[str], bool]:
     """Resolve the writer using the severity-dependent identity policy."""
-    raw_severity = str(arguments.get("severity", "low")).lower()
-    if raw_severity not in {"high", "critical"}:
+    if not _store_needs_registered_writer(arguments):
         agent_id, error, is_anonymous = _resolve_low_friction_writer(arguments)
         return agent_id, error, None, is_anonymous
 
@@ -1206,6 +1214,73 @@ def _resolve_store_writer(
         return agent_id, error, None, False
     display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
     return agent_id, display_name_error, display_name_warning, False
+
+
+@dataclass(frozen=True)
+class KnowledgeWriteAuthor:
+    """The agent_id a knowledge store or note records, and who else can use it.
+
+    kind says whether only this caller writes under agent_id:
+
+    - "bound": the identity bound to this session. Calls bound to it write
+      under it; so can a call that reaches the handler unbound and passes it
+      as agent_id on a low or medium write, which no ownership check stops
+      (only high and critical stores verify ownership).
+    - "anonymous": the low-friction pseudonym derived from this session's
+      signals. An anonymous caller whose session yields the same signals
+      (the last fallback is an IP and user-agent fingerprint) writes under
+      it too.
+    - "anonymous_shared": the pseudonym for a session with no identifying
+      signal (``anonkg_<client>_local``), which every such caller shares.
+    - "named": an agent_id the call passed that is not this session's
+      binding. Any caller can pass it.
+    """
+
+    agent_id: str
+    kind: str
+
+
+def resolve_knowledge_write_author(
+    arguments: Dict[str, Any], *, store: bool
+) -> Optional[KnowledgeWriteAuthor]:
+    """The author a knowledge store (``store``) or note records for this call.
+
+    For the recovery of a timed-out write: it runs the writer resolution the
+    handler runs (the store's severity-dependent policy, or the note's
+    low-friction one) on a copy, so the caller's arguments stay as sent. The
+    display-name check the store also runs is skipped; it can relabel an
+    agent but never changes the author. None when the handler would refuse
+    the writer or the resolution fails, which it logs.
+    """
+    from ..context import get_context_agent_id
+
+    candidate = dict(arguments)
+    try:
+        if store and _store_needs_registered_writer(candidate):
+            agent_id, error = require_registered_agent(candidate)
+        else:
+            agent_id, error, _ = _resolve_low_friction_writer(candidate)
+        bound = get_context_agent_id()
+    except Exception:
+        logger.warning(
+            "Could not resolve the author of a timed-out knowledge write",
+            exc_info=True,
+        )
+        return None
+    if error is not None or not agent_id:
+        return None
+    agent_id = str(agent_id)
+    if bound and agent_id == bound:
+        kind = "bound"
+    elif agent_id.startswith(_ANONYMOUS_WRITER_PREFIX):
+        kind = (
+            "anonymous_shared"
+            if agent_id.endswith(_ANONYMOUS_WRITER_SHARED_SUFFIX)
+            else "anonymous"
+        )
+    else:
+        kind = "named"
+    return KnowledgeWriteAuthor(agent_id=agent_id, kind=kind)
 
 
 def _parse_single_store_request(

@@ -1148,6 +1148,11 @@ class KnowledgeGraphAGE:
                 exclude_cold=exclude_cold,
                 created_after=created_after,
                 created_before=created_before,
+                # An empty windowed read answers "nothing was created in this
+                # window", which is how a timed-out write's recovery settles
+                # that it saved nothing (error_helpers). A failed read must
+                # not give that answer; the postgres backend raises here too.
+                raise_on_error=bool(created_after or created_before),
             )
 
         # Check if graph is available
@@ -1269,6 +1274,7 @@ class KnowledgeGraphAGE:
         exclude_cold: bool = False,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> List[DiscoveryNode]:
         """Read discoveries straight from knowledge.discoveries (source of truth).
 
@@ -1277,6 +1283,9 @@ class KnowledgeGraphAGE:
         read returns nothing while the data is plainly present (get_discovery()
         still finds it). This mirrors the SQL fallback those read paths already
         use so query()/search stop looking write-only.
+
+        A failed read is logged and returns no rows, unless ``raise_on_error``,
+        which re-raises it for a caller that must not read a failure as "none".
         """
         # The date bounds ride only when set, so an unwindowed read makes the
         # same call it always did.
@@ -1302,6 +1311,8 @@ class KnowledgeGraphAGE:
             )
         except Exception as exc:
             logger.warning(f"SQL fallback query failed: {exc}")
+            if raise_on_error:
+                raise
             return []
 
         discoveries: List[DiscoveryNode] = []
@@ -2292,7 +2303,9 @@ class KnowledgeGraphAGE:
         append on the live AGE backend was reported as a timeout while bge-m3
         loaded, and the load finished after the reply, so its model was thrown
         away. The embedding is best-effort derived data: the update's result
-        never depended on it, and _refresh_embedding logs its own failures.
+        never depended on it. _refresh_embedding and _store_embedding catch
+        their own failures and log them at debug, as they did when the update
+        awaited the refresh.
 
         One pass runs at a time per discovery. A pass reads the row before it
         encodes, so two overlapping passes could store the older text last and

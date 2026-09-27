@@ -657,11 +657,11 @@ def _handler_operation(name: str) -> CallOperation:
     if name in TOOL_OPERATIONS:
         return CallOperation(operation=TOOL_OPERATIONS[name], tool=name)
 
-    try:
-        from src.mcp_handlers.tool_stability import resolve_tool_alias
-        canonical, alias = resolve_tool_alias(name)
-    except ImportError:
-        canonical, alias = name, None
+    # No fallback here: a failure reaches resolve_call_operation, which logs it
+    # and answers with an unclassified call, never a retry-safe one.
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    canonical, alias = resolve_tool_alias(name)
     if alias is not None:
         injected = getattr(alias, "inject_action", None)
         return CallOperation(

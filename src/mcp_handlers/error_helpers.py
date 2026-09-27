@@ -6,8 +6,11 @@ Standardizes error responses with recovery guidance and context.
 
 from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
+from src.logging_utils import get_logger
 from .identity_bootstrap import SET_DISPLAY_NAME_CALL
 from .utils import error_response
+
+logger = get_logger(__name__)
 
 # Recovery for a caller that has no identity yet, then names it. The name
 # call carries client_session_id: with only name= identity() resolves from
@@ -327,11 +330,170 @@ def _call_literal(value: Any, placeholder: str) -> str:
     return placeholder
 
 
-def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str, Any]:
+# The search limit's ceiling (_parse_knowledge_search_request clamps above it).
+_WINDOW_LOOKUP_LIMIT = 100
+
+# Why a row under the writer id may not be this caller's, by
+# KnowledgeWriteAuthor.kind. A bound identity has its own wording below.
+_SHARED_WRITER_REASONS = {
+    "anonymous": (
+        "it is the anonymous id derived from your session's signals, and an "
+        "anonymous caller whose session yields the same signals writes under "
+        "it too"
+    ),
+    "anonymous_shared": (
+        "it is the anonymous id every caller whose session carries no "
+        "identifying signal writes under"
+    ),
+    "named": (
+        "it is the agent_id this call passed, not a binding this session holds, "
+        "and any caller can pass it"
+    ),
+}
+
+
+def _render_call(tool: str, arguments: Dict[str, Any]) -> str:
+    """A call shape for a recovery step: strings quoted, flags as true/false."""
+    parts = []
+    for key, value in arguments.items():
+        if isinstance(value, bool):
+            text = "true" if value else "false"
+        elif isinstance(value, int):
+            text = str(value)
+        else:
+            text = f"'{value}'"
+        parts.append(f"{key}={text}")
+    return f"{tool}({', '.join(parts)})"
+
+
+def _knowledge_write_author(call: Any, arguments: Dict[str, Any]) -> Any:
+    """The KnowledgeWriteAuthor a timed-out store or note records, else None."""
+    try:
+        from .knowledge.handlers import resolve_knowledge_write_author
+
+        return resolve_knowledge_write_author(
+            arguments, store=call.tool == "knowledge" and call.action == "store"
+        )
+    except Exception:
+        logger.warning(
+            "Could not resolve the author of a timed-out knowledge write",
+            exc_info=True,
+        )
+        return None
+
+
+def _knowledge_store_recovery(
+    call: Any,
+    arguments: Dict[str, Any],
+    *,
+    call_started_at: Optional[str],
+    settled_by: Optional[str],
+) -> Dict[str, Any]:
+    """Recovery for a timed-out store or note: list this writer's new rows.
+
+    The check filters on the author and on creation time, not on relevance:
+    a queryless search with a created_at window reads the rows newest first
+    straight from knowledge.discoveries on both backends (graph.query), so a
+    page below the limit is every row that author created in the window,
+    whatever its status. The window runs from the call's start to settled_by;
+    the row a store or note writes is stamped when the handler builds it,
+    before the timeout.
+    """
+    author = _knowledge_write_author(call, arguments)
+    writer = _call_literal(author.agent_id, "") if author is not None else ""
+    lookup: Dict[str, Any] = {"action": "search"}
+    if writer:
+        lookup["agent_id_filter"] = writer
+    lookup.update(
+        {
+            "created_after": call_started_at or "<call_started_at>",
+            "created_before": settled_by or "<settled_by>",
+            "sort_by": "created_at",
+            "include_archived": True,
+            "include_cold": True,
+            "limit": _WINDOW_LOOKUP_LIMIT,
+        }
+    )
+    check = _render_call("knowledge", lookup)
+    limit = _WINDOW_LOOKUP_LIMIT
+    yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
+
+    if writer and author.kind == "bound":
+        listed = f"every row your bound identity '{writer}' created"
+        attribution = (
+            "Rows under your identity come from calls bound to it, so a row "
+            "with your summary is your write: this call's, unless you sent the "
+            "same summary in another call in the window. The exception is a "
+            "call that reaches the handler unbound and passes your id as "
+            "agent_id on a low or medium write, which no ownership check stops."
+        )
+        found_step = (
+            f"2. If a row in it has {yours}, it was saved. Do not store it again"
+        )
+    else:
+        if writer:
+            listed = f"every row writer '{writer}' created"
+            reason = _SHARED_WRITER_REASONS.get(
+                author.kind, "another caller can write under it"
+            )
+            attribution = (
+                f"That id is not yours alone: {reason}. A row with your summary "
+                "shows a write under it landed, possibly another caller's, so "
+                "only its absence is proof."
+            )
+        else:
+            listed = "every row any writer created"
+            attribution = (
+                "The id this call would be recorded under could not be "
+                "resolved, so the list is not filtered by writer: a row with "
+                "your summary may be another writer's, and only its absence is "
+                "proof."
+            )
+        found_step = (
+            f"2. If a row in it has {yours}, a write like yours landed in the "
+            "window but may be another caller's. Do not store it again unless "
+            "you know that row is not yours"
+        )
+
+    return {
+        "action": (
+            "Do not store this again yet. It may already be saved, and every "
+            "store adds a new row, so a second call leaves two findings. "
+            f"{check} lists {listed} between call_started_at and settled_by, "
+            "newest first and whatever its status: it filters on writer and "
+            f"creation time, not relevance. {attribution} A list with no row "
+            "carrying your summary proves nothing was saved, but only when it "
+            f"was read after settled_by and its count is below {limit}."
+        ),
+        "check_before_retry": check,
+        "check_arguments": lookup,
+        "workflow": [
+            f"1. Call {check}; search needs no bound identity",
+            found_step,
+            "3. If no row has your summary on a read after settled_by and count "
+            f"is below {limit}, nothing was saved: store it again",
+            f"4. If count is {limit}, older rows in the window, where this "
+            "call's row would be, may be missing: read again with "
+            "created_before set to the created_at of the oldest row listed, "
+            f"until a read returns fewer than {limit}",
+        ],
+        "related_tools": ["knowledge", "health_check"],
+    }
+
+
+def _unknown_outcome_recovery(
+    call: Any,
+    arguments: Dict[str, Any],
+    *,
+    call_started_at: Optional[str] = None,
+    settled_by: Optional[str] = None,
+) -> Dict[str, Any]:
     """Recovery for a timed-out call that may have written: read, then decide.
 
     No step resends before settled_by, when a statement still running at the
     timeout has finished, so a retry cannot race the write it would repeat.
+    call_started_at and settled_by are the reply's values; a step that needs
+    them as literals falls back to placeholders without them.
     """
     tool = call.tool
     action = call.action
@@ -437,26 +599,15 @@ def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str,
     if (tool == "knowledge" and action in _KNOWLEDGE_STORE_ACTIONS) or tool == "leave_note":
         # Search serves unbound callers; an anonymous writer's id (anonkg_*) is
         # not a registered agent, so knowledge(action='get', agent_id=...) would
-        # refuse the very caller who needs the check.
-        check = "knowledge(action='search', query='<words from your summary>')"
-        return {
-            "action": (
-                "Do not store this again yet. It may already be saved, and every "
-                "store adds a new row, so a second call leaves two findings. "
-                f"Search for it first with {check}: a result with your summary "
-                "created at or after call_started_at means it was saved. Do not "
-                "conclude it was not saved before settled_by."
-            ),
-            "check_before_retry": check,
-            "workflow": [
-                f"1. Call {check}; search needs no bound identity",
-                "2. If a result with your summary was created at or after "
-                "call_started_at, it was saved. Do not store it again",
-                "3. If none appears in a search after settled_by, nothing was "
-                "saved: store it again",
-            ],
-            "related_tools": ["knowledge", "search_shared_memory", "health_check"],
-        }
+        # refuse the very caller who needs the check. A relevance search would
+        # not settle it: its page is ranked and bounded, so the row can fall
+        # off it, and another writer's row with the same summary matches too.
+        return _knowledge_store_recovery(
+            call,
+            arguments,
+            call_started_at=call_started_at,
+            settled_by=settled_by,
+        )
 
     call_shape = f"{tool}(action='{action}')" if action else tool
     related = [tool, "describe_tool", "health_check"]
@@ -511,6 +662,8 @@ def unknown_outcome_timeout_error(
     def _iso(seconds: float) -> str:
         return datetime.fromtimestamp(seconds, timezone.utc).isoformat()
 
+    call_started_at = _iso(started_at)
+    settled_by = _iso(time.time() + COMMAND_TIMEOUT_SECONDS)
     return error_response(
         f"Tool '{tool_name}' timed out after {timeout} seconds. The outcome is "
         "unknown: a timeout ends the wait for the reply, not the work, so the "
@@ -520,10 +673,15 @@ def unknown_outcome_timeout_error(
         details={
             "outcome": "unknown",
             "operation": call.operation,
-            "call_started_at": _iso(started_at),
-            "settled_by": _iso(time.time() + COMMAND_TIMEOUT_SECONDS),
+            "call_started_at": call_started_at,
+            "settled_by": settled_by,
         },
-        recovery=_unknown_outcome_recovery(call, arguments),
+        recovery=_unknown_outcome_recovery(
+            call,
+            arguments,
+            call_started_at=call_started_at,
+            settled_by=settled_by,
+        ),
     )
 
 
