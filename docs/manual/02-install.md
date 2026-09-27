@@ -129,7 +129,7 @@ let the new `update` do the rest:
 ```bash
 git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
 git checkout --detach vX.Y.Z
-docker compose up -d --wait postgres-age
+docker compose up -d --build --wait postgres-age
 ./scripts/unitares update --to vX.Y.Z
 ```
 

@@ -1113,6 +1113,27 @@ _deep_health_status() {
     printf '%s' "$status"
 }
 
+_report_health() {
+    # Print the outcome line and return the exit status for it: healthy or
+    # moderate (a degraded component, e.g. no embedding model) is success;
+    # critical or no recognized answer is failure, so `update --yes` in
+    # automation never reports a broken stack as done.
+    local done_msg="$1" url health
+    url=$(_stack_url)
+    health=$(_deep_health_status "$url")
+    case "$health" in
+        healthy|moderate)
+            echo "✓ $done_msg Deep health: $health ($url/health/deep)"
+            return 0 ;;
+        critical)
+            echo "✗ $done_msg but deep health is critical ($url/health/deep). See: unitares logs" >&2
+            return 1 ;;
+        *)
+            echo "✗ $done_msg but deep health gave no status at $url/health/deep. See: unitares logs" >&2
+            return 1 ;;
+    esac
+}
+
 _published_version() {
     local repo="${UNITARES_RELEASE_REPO:-cirwel/unitares}"
     curl -fsSL --max-time "$TIMEOUT" "https://raw.githubusercontent.com/${repo}/master/PUBLISHED_VERSION" 2>/dev/null | tr -d '[:space:]'
@@ -1218,15 +1239,14 @@ cmd_update() {
         _confirm "Apply any pending migrations, then rebuild and restart the stack on $target?"
         case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
         echo "… Starting the database"
-        _compose up -d --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
+        # --build: an existing install must run this release's database image
+        # before its migrations, as the move path does.
+        _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
         _migrations --apply || { echo "error: migrations did not complete; the stack was not restarted." >&2; return 1; }
         echo "… Rebuilding and starting the stack"
         _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
-        local url health
-        url=$(_stack_url)
-        health=$(_deep_health_status "$url")
-        echo "✓ On $target with migrations applied. Deep health: ${health:-no answer} ($url/health/deep)"
-        return 0
+        _report_health "On $target with migrations applied."
+        return $?
     fi
     _confirm "Move this install from $current to $target, rebuild, and apply its database migrations?"
     case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
@@ -1256,10 +1276,7 @@ cmd_update() {
     echo "… Rebuilding and starting the stack"
     _compose up -d --build --wait || { echo "error: the stack did not come up; see: unitares logs" >&2; return 1; }
 
-    local url health
-    url=$(_stack_url)
-    health=$(_deep_health_status "$url")
-    echo "✓ Updated $current → $target. Deep health: ${health:-no answer} ($url/health/deep)"
+    _report_health "Updated $current → $target."
 }
 
 cmd_help() {

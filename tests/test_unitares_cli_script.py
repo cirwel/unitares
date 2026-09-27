@@ -1355,3 +1355,21 @@ _migration_db_url
     env.update(POSTGRES_USER="gov user", POSTGRES_PASSWORD="p@ss/w#rd%", POSTGRES_DB="governance")
     out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
     assert out.stdout.strip() == "postgresql://gov%20user:p%40ss%2Fw%23rd%25@localhost:5432/governance"
+
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "marker"),
+    [("healthy", 0, "✓"), ("moderate", 0, "✓"), ("critical", 1, "✗"), ("", 1, "✗")],
+)
+def test_update_fails_unless_deep_health_is_acceptable(status, code, marker):
+    # _report_health decides update's final exit status from deep health.
+    script = f'''
+eval "$(sed -n '/^_report_health()/,/^}}/p' "{CLI}")"
+_stack_url() {{ printf 'http://stub'; }}
+_deep_health_status() {{ printf '%s' "{status}"; }}
+_report_health "Updated a → b."
+'''
+    out = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    assert out.returncode == code
+    assert marker in out.stdout + out.stderr
