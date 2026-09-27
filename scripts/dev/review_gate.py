@@ -676,13 +676,19 @@ def sensitive_paths(paths: list[str], globs: list[str] | None = None) -> list[st
     return [p for p in paths if any(fnmatch.fnmatchcase(p, g) for g in globs)]
 
 
-def changed_paths(base: str, head: str) -> list[str]:
-    """Paths the diff touches, from git's own list (never diff text)."""
+def changed_paths(base: str, head: str) -> list[str] | None:
+    """Paths the diff touches, from git's own list (never diff text), or None
+    when git could not produce the list. Read as bytes and decoded with
+    surrogateescape: a filename that is not valid UTF-8 must neither crash the
+    read nor hide a sensitive path beside it (diff_key supports such names)."""
     try:
-        out = git("diff", "--name-only", "-z", "--no-renames", f"{base}...{head}", check=False)
-    except Exception:  # noqa: BLE001 - no diff to read is no sensitive path
-        return []
-    return [p for p in (out or "").split("\0") if p]
+        proc = _launch(["git", "diff", "--name-only", "-z", "--no-renames", f"{base}...{head}"],
+                       capture_output=True)
+    except Exception:  # noqa: BLE001 - reported as unknown, never as "nothing changed"
+        return None
+    if proc.returncode != 0 or not isinstance(proc.stdout, bytes):
+        return None
+    return [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p]
 
 
 def reviewer_family(reviewer: str) -> str:
@@ -1516,7 +1522,9 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     review lock (every caller holds it)."""
     if result != 0:
         return result
-    sensitive = sensitive_paths(changed_paths(getattr(args, "base", "origin/master"), "HEAD"))
+    changed = changed_paths(getattr(args, "base", "origin/master"), "HEAD")
+    # Locally an unreadable list skips the helper; CI still enforces the rule.
+    sensitive = sensitive_paths(changed) if changed else []
     if not sensitive:
         return result
     comments = pr_comments(repo, pr)
@@ -2034,7 +2042,11 @@ def cmd_ci(args) -> int:
     else:
         url = rec.url
     conclusion, desc = review_check(rec)
-    sensitive = sensitive_paths(changed_paths(f"origin/{base_ref}", head))
+    changed = changed_paths(f"origin/{base_ref}", head)
+    # A diff whose paths cannot be read is treated as sensitive: this is the
+    # gate, and "could not tell" must not pass with a single family.
+    sensitive = (sensitive_paths(changed) if changed is not None
+                 else ["(changed paths unreadable)"])
     conclusion, desc = second_family_check(
         conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
     desc += round_note(snapshot.rounds)

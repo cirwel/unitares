@@ -2024,6 +2024,7 @@ def test_reviewer_family_mapping():
 def test_the_shipped_policy_covers_the_sensitive_surfaces():
     globs = rg.second_family_paths()
     for path in ("src/oauth_provider.py", "src/mcp_handlers/identity/handlers.py",
+                 "src/mcp_handlers/schemas/identity.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2073,7 +2074,8 @@ def test_a_sensitive_diff_needs_two_families_before_the_check_passes():
 def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
     monkeypatch.setattr(rg, "gh_json", lambda *a: {"state": "open", "head": {"sha": "h"},
                                                     "base": {"ref": "master"}})
-    monkeypatch.setattr(rg, "git", lambda *a, **k: "src/oauth_provider.py\0" if "diff" in a else "")
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     comments = [_comment(rg.Record("k", "CLEAN", 0, False, "antigravity"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
@@ -2187,3 +2189,35 @@ def test_review_with_fallback_reports_which_provider_completed(monkeypatch):
     args = SimpleNamespace(budget=30, reviewer=None, branch="x/y")
     assert rg.review_with_fallback(args, 1, "k", "antigravity") == 0
     assert args.completed_by == "claude"
+
+
+
+def test_non_utf8_filenames_neither_crash_nor_hide_a_sensitive_path(repo):
+    """Native Codex on #2504 (P1): a non-UTF-8 name made the read raise and
+    return no paths, so a sensitive change beside it passed with one family."""
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                          input=b"x\n", capture_output=True, check=True).stdout.strip()
+    subprocess.run([b"git", b"-C", bytes(repo), b"update-index", b"--add",
+                    b"--cacheinfo", b"100644," + blob + b",bad-\xff.txt"], check=True)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "oauth_provider.py").write_text("x = 1\n")
+    _git(repo, "add", "src/oauth_provider.py")
+    _git(repo, "commit", "-q", "-m", "odd name beside a sensitive file")
+    paths = rg.changed_paths("master", "HEAD")
+    assert "src/oauth_provider.py" in paths and any(p.startswith("bad-") for p in paths)
+    assert rg.sensitive_paths(paths, ["src/oauth_provider.py"]) == ["src/oauth_provider.py"]
+
+
+def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"state": "open", "head": {"sha": "h"},
+                                                    "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: None)
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "claude"))]
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    posted = []
+    monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
+    rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True))
+    assert posted[0][3] == "action_required" and "unreadable" in posted[0][4]
