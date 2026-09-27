@@ -1134,6 +1134,21 @@ def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "govern
     return env, log
 
 
+def _local_remote(tmp_path, env):
+    """A bare repo with release tag v1.0.0, used as the update remote, so the
+    update tests never reach the network."""
+    remote = tmp_path / "remote.git"
+    work = tmp_path / "work"
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid"]
+    subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True)
+    subprocess.run(["git", "init", "-q", str(work)], check=True)
+    subprocess.run([*git, "-C", str(work), "commit", "-q", "--allow-empty", "-m", "release"], check=True)
+    subprocess.run([*git, "-C", str(work), "tag", "-a", "v1.0.0", "-m", "v1.0.0"], check=True)
+    subprocess.run(["git", "-C", str(work), "push", "-q", str(remote), "HEAD:refs/heads/main", "--tags"], check=True)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    return env
+
+
 def _cli(env, *args):
     return subprocess.run([str(CLI), *args], env=env, capture_output=True, text=True, timeout=60)
 
@@ -1174,16 +1189,27 @@ def test_start_runs_compose_for_this_checkout(tmp_path):
 
 def test_update_check_reports_without_changing_anything(tmp_path):
     env, log = _fake_bin(tmp_path, launchd=False, compose=True)
-    result = _cli(env, "update", "--check", "--to", "v99.0.0")
+    env = _local_remote(tmp_path, env)
+    result = _cli(env, "update", "--check", "--to", "v1.0.0")
     assert result.returncode == 0, result.stderr
-    assert "Target:    v99.0.0" in result.stdout
+    assert "Target:    v1.0.0" in result.stdout
+    assert "Run 'unitares update' to move to v1.0.0" in result.stdout
     calls = log.read_text()
     assert " up " not in calls and " exec " not in calls
 
 
+def test_update_names_a_target_the_remote_does_not_have(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    env = _local_remote(tmp_path, env)
+    result = _cli(env, "update", "--check", "--to", "v99.0.0")
+    assert result.returncode == 1
+    assert "no tag or branch named v99.0.0" in result.stderr
+
+
 def test_update_without_a_terminal_needs_yes(tmp_path):
     env, log = _fake_bin(tmp_path, launchd=False, compose=True)
-    result = subprocess.run([str(CLI), "update", "--to", "v99.0.0"], env=env, capture_output=True,
+    env = _local_remote(tmp_path, env)
+    result = subprocess.run([str(CLI), "update", "--to", "v1.0.0"], env=env, capture_output=True,
                             text=True, timeout=60, stdin=subprocess.DEVNULL)
     # Refused before touching anything: by the terminal check, or first by the
     # clean-tree check when this checkout has local edits.

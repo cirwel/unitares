@@ -1101,15 +1101,30 @@ _published_version() {
 }
 
 _confirm() {
-    # Yes only on an explicit y/yes from a terminal; --yes skips the prompt.
+    # 0 on an explicit y/yes from a terminal (or --yes), 1 when the operator
+    # declines, 2 when there is no terminal to ask: callers fail on 2, so
+    # automation that forgot --yes does not read as success.
     local prompt="$1" answer
     [ "${assume_yes:-0}" = "1" ] && return 0
     if [ ! -t 0 ]; then
         echo "error: not a terminal; re-run with --yes to proceed." >&2
-        return 1
+        return 2
     fi
     read -r -p "$prompt [y/N] " answer || return 1
     case "$answer" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+_remote_commit() {
+    # Commit a release tag or branch names on the update remote, or nothing.
+    # An annotated tag's peeled line (^{}) is the commit it points at.
+    local root="$1" ref="$2" lines
+    lines=$(git -C "$root" ls-remote "$(_update_remote)" "refs/tags/$ref" "refs/tags/$ref^{}" "refs/heads/$ref" 2>/dev/null) || return 1
+    printf '%s\n' "$lines" | awk '$2 ~ /\^\{\}$/ {print $1; found=1; exit} END {}' | grep . \
+        || printf '%s\n' "$lines" | awk 'NF {print $1; exit}'
+}
+
+_update_remote() {
+    printf '%s' "${UNITARES_UPDATE_REMOTE:-origin}"
 }
 
 cmd_update() {
@@ -1126,9 +1141,10 @@ cmd_update() {
     done
     _require_compose_install existing || return 1
 
-    local root current
+    local root current current_sha target_sha
     root="$(_repo_root)"
     current=$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --short HEAD)
+    current_sha=$(git -C "$root" rev-parse HEAD)
     if [ -z "$target" ]; then
         local published
         published=$(_published_version)
@@ -1140,13 +1156,21 @@ cmd_update() {
     fi
     echo "Installed: $current"
     echo "Target:    $target"
+    target_sha=$(_remote_commit "$root" "$target")
+    if [ -z "$target_sha" ]; then
+        echo "error: $(_update_remote) has no tag or branch named $target." >&2
+        return 1
+    fi
 
-    if [ "$current" = "$target" ]; then
+    # Compare commits, not names: a checkout moved by commit shows a SHA, not
+    # the tag it is on.
+    if [ "$current_sha" = "$target_sha" ]; then
         echo "✓ Already on $target. Checking the database schema…"
         _migrations || return 1
         echo "  Apply any pending migrations with: unitares update --to $target --yes"
         [ "$check_only" = "1" ] && return 0
-        _confirm "Apply pending migrations now?" || return 0
+        _confirm "Apply pending migrations now?"
+        case $? in 0) ;; 2) return 1 ;; *) return 0 ;; esac
         _migrations --apply
         return $?
     fi
@@ -1156,19 +1180,28 @@ cmd_update() {
         echo "error: $root has local changes to tracked files; commit or discard them first." >&2
         return 1
     fi
-    _confirm "Move this install from $current to $target, rebuild, and apply its database migrations?" || { echo "Nothing changed."; return 0; }
+    _confirm "Move this install from $current to $target, rebuild, and apply its database migrations?"
+    case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
 
     echo "… Fetching $target"
-    git -C "$root" fetch --depth 1 origin "$target" || { echo "error: could not fetch $target" >&2; return 1; }
-    git -C "$root" checkout --quiet --detach FETCH_HEAD || return 1
+    # A tag is stored as a local tag, so the next update and `git describe`
+    # recognise the release; a branch is checked out from FETCH_HEAD.
+    if git -C "$root" ls-remote --exit-code "$(_update_remote)" "refs/tags/$target" >/dev/null 2>&1; then
+        git -C "$root" fetch --depth 1 --no-tags "$(_update_remote)" "+refs/tags/$target:refs/tags/$target" \
+            || { echo "error: could not fetch $target" >&2; return 1; }
+        git -C "$root" checkout --quiet --detach "refs/tags/$target^{commit}" || return 1
+    else
+        git -C "$root" fetch --depth 1 "$(_update_remote)" "$target" || { echo "error: could not fetch $target" >&2; return 1; }
+        git -C "$root" checkout --quiet --detach FETCH_HEAD || return 1
+    fi
 
     echo "… Starting the database"
-    _compose up -d --build --wait postgres-age || { echo "error: the database did not start; still on the new code, roll back with: git -C $root checkout $current" >&2; return 1; }
+    _compose up -d --build --wait postgres-age || { echo "error: the database did not start; still on the new code, roll back with: git -C $root checkout $current_sha" >&2; return 1; }
 
     echo "… Applying database migrations"
     if ! _migrations --apply; then
         echo "error: migrations did not complete. The code is at $target and the database is where the output above stops." >&2
-        echo "       Fix the reported problem and re-run 'unitares update --to $target', or roll the code back with: git -C $root checkout $current" >&2
+        echo "       Fix the reported problem and re-run 'unitares update --to $target', or roll the code back with: git -C $root checkout $current_sha" >&2
         return 1
     fi
 
