@@ -1269,6 +1269,21 @@ def analyze(
     )
     if first_v2 is not None and first_v2 > since:
         since = first_v2
+    # ...and it ends where another instrument version begins: rows whose
+    # fields mean different things are never pooled with v2's.
+    requested_until = until
+    next_version = min(
+        (_ts(c.get("ts")) for c in cycles
+         if _payload(c).get("instrument_version") not in (None, INSTRUMENT_VERSION)
+         and _ts(c.get("ts")) is not None and since <= _ts(c.get("ts")) < until),
+        default=None,
+    )
+    if next_version is not None:
+        until = next_version
+    cycles = [c for c in cycles
+              if _payload(c).get("instrument_version") in (None, INSTRUMENT_VERSION)]
+    writes = [w for w in writes
+              if _payload(w).get("instrument_version") in (None, INSTRUMENT_VERSION)]
 
     def _in(t):
         return t is not None and since <= t < until
@@ -1371,6 +1386,7 @@ def analyze(
     return {
         "window": {"since": _iso(since), "until": _iso(until),
                    "requested_since": _iso(requested_since),
+                   "requested_until": _iso(requested_until),
                    "correlation_hours": correlation_hours,
                    "silence_minutes": silence_minutes},
         "reading": comp_check["reading"],
@@ -1416,6 +1432,9 @@ def render_text(report: Dict[str, Any]) -> str:
         *([f"  (requested --since {w['requested_since']}; the window starts at the first "
            "periodic v2 row, because nothing before it was recorded)"]
           if w.get("requested_since") != w["since"] else []),
+        *([f"  (requested --until {w['requested_until']}; the window ends where another "
+           "instrument version's rows begin -- versions are never pooled)"]
+          if w.get("requested_until") not in (None, w["until"]) else []),
         f"  correlation bound {w['correlation_hours']}h, silence bound {w['silence_minutes']} min",
         "",
     ]

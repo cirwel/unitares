@@ -547,6 +547,20 @@ class TestCompleteness:
             "boots_not_registered"]
         assert result["reading"] == "INCONCLUSIVE"
 
+    def test_the_window_ends_where_another_instrument_version_begins(self):
+        v3 = cycle(at(30), 1, boot="boot-v3")
+        v3["payload"]["instrument_version"] = "wave3-instrument-v3"
+        late = write("s9", commit_at=at(40), read_at=at(39), cycle_id="c9")
+        late["payload"]["instrument_version"] = "wave3-instrument-v3"
+        result = run([write(), late], cycles=[cycle(at(-0.5), 1, cycle_id="c1",
+                                                    attempts=1, succeeded=1, clean=1), v3],
+                     sessions=[session_row(), session_row("s9")], fill=False)
+        assert result["window"]["until"] == at(30).isoformat()
+        seen = [w["session_id"] for w in result["writes"]] + [
+            w["session_id"] for w in result["writes_excluded_as_uncovered"]]
+        assert "s1" in seen and "s9" not in seen, "the v3 write is not pooled"
+        assert "versions are never pooled" in report.render_text(result)
+
     def test_no_instrument_rows_is_not_started_not_complete(self):
         result = run([], cycles=[], fill=False)
         assert result["reading"] == "NOT_STARTED"

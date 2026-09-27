@@ -497,3 +497,12 @@ def test_the_first_cycle_row_registers_this_boot_on_the_ledger(tmp_path, monkeyp
     assert lines[0]["record"] == "boot"
     assert lines[0]["process_boot_id"] == sw.PROCESS_BOOT_ID
     assert lines[0]["code_commit"] == "abc123" and lines[0]["host"]
+
+
+
+def test_a_relative_ledger_override_is_made_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv(sw.EMIT_FAILURE_LEDGER_ENV, "instrument-failures.jsonl")
+    monkeypatch.setattr(sw, "_LEDGER_ENSURED", None)
+    sw.ensure_emit_failure_ledger()
+    assert (tmp_path / "instrument-failures.jsonl").exists()

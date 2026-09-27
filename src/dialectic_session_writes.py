@@ -125,7 +125,8 @@ def emit_failure_ledger_path() -> str:
     """The append-only emit-failure ledger: env override, else data/dialectic/."""
     override = os.environ.get(EMIT_FAILURE_LEDGER_ENV, "").strip()
     if override:
-        return os.path.expanduser(override)
+        # Absolute, so a bare relative filename has a directory to create.
+        return os.path.abspath(os.path.expanduser(override))
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(repo_root, "data", "dialectic", "instrument_emit_failures.jsonl")
 
@@ -170,7 +171,9 @@ def ensure_emit_failure_ledger(code_commit: Optional[str] = None) -> None:
 
 
 def _write_ledger_line(path: str, line: Dict[str, Any]) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
     with open(path, "a", encoding="utf-8") as fh:
         fh.write(json.dumps(line, default=str) + "\n")
         fh.flush()
