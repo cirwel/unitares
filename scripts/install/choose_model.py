@@ -39,10 +39,18 @@ HOST_OLLAMA = "http://localhost:11434"
 PREFERRED_MODEL = "gemma4:latest"
 
 
+def ollama_root(url: str) -> str:
+    """An Ollama URL reduced to its root: no surrounding space, trailing ``/`` or ``/v1``."""
+    url = url.strip().rstrip("/")
+    if url.endswith("/v1"):
+        url = url[: -len("/v1")].rstrip("/")
+    return url
+
+
 def list_ollama_models(base: str, timeout: float = 3.0) -> list[str] | None:
     """Model names pulled into the Ollama at ``base``, or None if it did not answer."""
     try:
-        with urllib.request.urlopen(base.rstrip("/") + "/api/tags", timeout=timeout) as resp:
+        with urllib.request.urlopen(ollama_root(base) + "/api/tags", timeout=timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError):
         return None
@@ -61,10 +69,7 @@ def container_base(host_url: str) -> str:
     host is already reachable by name and is kept as given. A trailing ``/`` or
     ``/v1`` is dropped: the setting is the root URL.
     """
-    url = host_url.strip().rstrip("/")
-    if url.endswith("/v1"):
-        url = url[: -len("/v1")].rstrip("/")
-    parts = urlsplit(url)
+    parts = urlsplit(ollama_root(host_url))
     if parts.hostname in ("localhost", "127.0.0.1", "::1"):
         port = f":{parts.port}" if parts.port else ""
         parts = parts._replace(netloc=f"host.docker.internal{port}")
@@ -194,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.no_docker:
         print("✓ Source install: set these in the server's environment (shell, or the launchd plist), then restart it:")
-        print(f"  {BASE_KEY}={args.ollama.rstrip('/')}")
+        print(f"  {BASE_KEY}={ollama_root(args.ollama)}")
         print(f"  {MODEL_KEY}={model}")
         return 0
 

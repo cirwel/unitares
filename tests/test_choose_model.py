@@ -211,3 +211,30 @@ def test_a_custom_endpoint_is_what_the_server_is_given(tmp_path: Path, stubs):
     env = tmp_path / ".env"
     assert cm.main(["--ollama", "http://gpu-box.lan:11500", "--yes", "--no-rebuild", "--env-file", str(env)]) == 0
     assert "UNITARES_OLLAMA_BASE=http://gpu-box.lan:11500" in env.read_text()
+
+
+def test_discovery_queries_the_root_even_when_given_the_v1_form(monkeypatch):
+    seen = []
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"models": [{"name": "gemma4:latest"}]}'
+
+    def fake_urlopen(url, timeout=0):
+        seen.append(url)
+        return _Resp()
+
+    monkeypatch.setattr(cm.urllib.request, "urlopen", fake_urlopen)
+    assert cm.list_ollama_models("http://localhost:11434/v1/") == ["gemma4:latest"]
+    assert seen == ["http://localhost:11434/api/tags"]
+
+
+def test_source_install_prints_the_root_form(tmp_path: Path, stubs, capsys):
+    assert cm.main(["--ollama", "http://localhost:11434/v1", "--yes", "--no-docker", "--env-file", str(tmp_path / ".env")]) == 0
+    assert "UNITARES_OLLAMA_BASE=http://localhost:11434\n" in capsys.readouterr().out
