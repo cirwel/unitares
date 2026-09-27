@@ -71,14 +71,15 @@
 
   const num = (x, d) => (x == null || isNaN(x) ? "—" : Number(x).toFixed(d == null ? 3 : d));
 
-  // One point per day → MM-DD category labels. NOT a Chart.js `time`
+  // One point per UTC day → MM-DD category labels. NOT a Chart.js `time`
   // scale: app.html loads chart.umd without the date adapter, so a time axis
-  // renders blank.
+  // renders blank. UTC getters, because the points are UTC days stamped at
+  // 00:00Z: local getters labelled every point a day early west of UTC.
   function fmtDay(ts) {
     const d = new Date(ts);
     if (isNaN(d)) return String(ts || "");
     const p = (x) => String(x).padStart(2, "0");
-    return p(d.getMonth() + 1) + "-" + p(d.getDate());
+    return p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate());
   }
   function fmtStamp(ts) {
     const d = new Date(ts);
@@ -249,10 +250,10 @@
       `<div class="card"${title ? ` title="${esc(title)}"` : ""}><h3>${esc(label)}</h3><div class="num">${value}</div><div class="sub">${esc(sub)}</div></div>`;
     return [
       card("Fleet mean risk", num(latest ? latest.value : null),
-        latest ? "7d rolling · as of " + fmtDay(latest.ts) : "no check-ins in window",
-        "Fleet-mean risk_score over non-synthetic check-ins in the trailing 7 days (the governance.risk.mean.7d definition)"),
+        latest ? "7 UTC days to " + fmtDay(latest.ts) + " (today partial)" : "no check-ins in window",
+        "Fleet-mean risk_score over non-synthetic check-ins in the seven UTC calendar days ending on the date shown; the latest point includes today so far. Same filters as governance.risk.mean.7d, which uses an exact now − 7 days window instead."),
       card("Pause verdicts", latestPause ? String(latestPause.value) : "—",
-        "produced in trailing 7d — not deliveries",
+        "produced in the last 7 UTC days — not deliveries",
         "A produced pause is not a delivered enforcement action; gap-suppression downgrades at >150s check-in gaps."),
       card("Highest-risk agent", top ? num(top.risk) : "—",
         top ? top.name : "no recent check-ins",

@@ -139,6 +139,14 @@ describe("risk history section", () => {
     expect(text).toMatch(/±0\.15/);
   });
 
+  it("labels UTC-midnight day points with their UTC date in any time zone", async () => {
+    // The server stamps each day at 00:00Z. Local getters read that as the
+    // previous day anywhere west of UTC (this suite's own zone included).
+    const m = mount({ trend: { windowDays: 7, risk: [{ ts: "2026-09-27T00:00:00Z", value: 0.05 }], pause: [], guide: [] } });
+    await m.win.Risk.load();
+    expect(m.built[0].data.labels).toEqual(["09-27"]);
+  });
+
   it("draws the trend on a category axis with MM-DD labels", async () => {
     const m = mount();
     await m.win.Risk.load();

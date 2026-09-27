@@ -3,9 +3,10 @@
 The dashboard's Risk section used to chart Chronicler's daily scrape of
 ``governance.risk.mean.7d`` / ``governance.guide.7d`` / ``governance.pause.7d``.
 Chronicler is a reference resident, so an install without it had an empty Risk
-tab. This module computes the same three trailing-7-day series straight from
-the table Chronicler's scrapers read (``agents/chronicler/scrapers.py``), with
-the same filters, so any install can draw them.
+tab. This module computes the same three series straight from the table
+Chronicler's scrapers read (``agents/chronicler/scrapers.py``), with the same
+filters, so any install can draw them. Its windows are seven UTC calendar
+days per point rather than an exact ``now() - 7 days`` (see rolling_series).
 
 The live table is not an archive: retention thins rows older than about ten
 weeks. The window is therefore capped at ``MAX_WINDOW_DAYS`` so that every
@@ -51,12 +52,15 @@ def clamp_window(days: Any) -> int:
 def rolling_series(
     daily: Iterable[Mapping[str, Any]], *, window_days: int, today: date
 ) -> dict[str, list[dict[str, Any]]]:
-    """Turn per-day sums into trailing-7-day series, one point per day.
+    """Turn per-day sums into seven-calendar-day series, one point per day.
 
-    ``daily`` rows carry ``day`` (a date), ``risk_sum``, ``risk_n``, ``guide``
-    and ``pause``. The last point ends on ``today`` and, like a Chronicler
-    scrape taken now, covers a partial final day. A day whose trailing week
-    holds no risk readings gets no risk point rather than a zero.
+    ``daily`` rows carry ``day`` (a UTC date), ``risk_sum``, ``risk_n``,
+    ``guide`` and ``pause``. Each point aggregates the seven UTC calendar days
+    ending on its date. That differs from Chronicler's exact ``now() - 7 days``
+    window in one place: the last point ends on ``today``, which is only
+    partly elapsed, so it covers six full days plus today so far rather than
+    a full 168 hours. The response ``note`` and the Risk view say so. A day
+    whose window holds no risk readings gets no risk point rather than a zero.
     """
     by_day = {row["day"]: row for row in daily}
     risk: list[dict[str, Any]] = []
@@ -96,10 +100,13 @@ async def query_governance_trend(conn, *, window_days: int, now: datetime | None
         "window_days": window_days,
         "trailing_days": TRAILING_DAYS,
         "source": "core.agent_state",
+        "window_kind": "utc_calendar_days",
         "note": (
-            "Trailing-7-day aggregates of non-synthetic check-ins. Pause counts "
-            "are verdicts produced, not interventions delivered. The window is "
-            f"capped at {MAX_WINDOW_DAYS} days because retention thins older rows."
+            "Each point aggregates non-synthetic check-ins over the seven UTC "
+            "calendar days ending on its date; the latest point includes the "
+            "current, partial day. Pause counts are verdicts produced, not "
+            "interventions delivered. The window is capped at "
+            f"{MAX_WINDOW_DAYS} days because retention thins older rows."
         ),
         **series,
     }

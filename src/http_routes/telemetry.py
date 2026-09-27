@@ -239,7 +239,8 @@ _governance_trend_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 async def http_governance_trend(request):
     """GET /v1/governance/trend?days=60 — fleet risk and verdict pressure.
 
-    Trailing-7-day fleet-mean risk, guide and pause counts per day, computed
+    Fleet-mean risk, guide and pause counts over the seven UTC calendar days
+    ending on each day (the latest partial), computed
     from core.agent_state (src/governance_trend.py). Any install can draw it;
     it does not need the Chronicler resident. The query scans the window's
     check-ins and the series move daily, so each window is cached for ten

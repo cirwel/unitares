@@ -537,8 +537,8 @@
       }, () => { const e = S().eisv || {}; return { series: e.series || [], raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq ?? 0.5 }; });
     },
 
-    // Fleet risk history: trailing-7-day fleet-mean risk plus guide and pause
-    // counts, one point per day, computed server-side from core.agent_state
+    // Fleet risk history: fleet-mean risk plus guide and pause counts over the
+    // seven UTC calendar days ending on each day (the latest partial), computed server-side from core.agent_state
     // (/v1/governance/trend). It used to read Chronicler's daily scrape, which
     // left the Risk tab empty on any install without that resident. The server
     // caps the window at 60 days, inside retained history.
