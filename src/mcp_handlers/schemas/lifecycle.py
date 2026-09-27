@@ -346,9 +346,9 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     # mark required for one action (see KnowledgeParams.ACTION_REQUIRED_FIELDS).
     # archive and delete never default the target to the caller: dispatch does
     # not inject the session's id for them, and the handlers refuse a call with
-    # no agent_id or one that is not exactly the target's own id: a label or
-    # public id is refused (lifecycle/mutation.py, _require_named_target and
-    # _wrong_target_error). delete also refuses without confirm=true.
+    # no agent_id, with one that is not a UUID (a label or public id), or with a
+    # UUID that does not resolve to exactly that agent (lifecycle/mutation.py,
+    # _require_named_target). delete also refuses without confirm=true.
     ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "archive": ("agent_id",),
         "delete": ("agent_id", "confirm"),

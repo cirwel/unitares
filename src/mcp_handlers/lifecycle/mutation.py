@@ -64,7 +64,7 @@ def _canonical_uuid(value: Any) -> Optional[str]:
 def _require_named_target(
     arguments: Dict[str, Any], action: str,
 ) -> Tuple[Optional[str], Optional[TextContent]]:
-    """The agent a destructive action names in ``agent_id``, or a refusal.
+    """The UUID a destructive action names in ``agent_id``, or a refusal.
 
     archive and delete act on another agent as readily as on the caller, so
     they never fall back to the caller's own identity: dispatch does not inject
@@ -73,71 +73,57 @@ def _require_named_target(
     2026-09-27 agent(action='delete', confirm=true) with no agent_id deleted
     the caller, and describe_tool's lite view of both actions hid agent_id.
 
-    A UUID is returned in canonical form (and written back to ``agent_id``) so
-    the handler can require the resolved agent to be exactly this one; see
-    _wrong_target_error for why nothing else may select a target.
+    Only a UUID names a target. A label is self-claimed, public_agent_id is
+    shared by most identities that carry one (src/mcp_handlers/dialectic/
+    auth.py), and require_registered_agent resolves either to the first
+    cached holder, so delete(agent_id='<shared handle>') could delete an
+    arbitrary agent. A metadata key is no better: legacy rows are keyed by
+    their old non-UUID agent_id, which can equal another agent's handle.
+    The UUID is returned canonical and written back to ``agent_id``; the
+    handler then requires the resolved agent to be exactly it.
     """
     named = arguments.get("agent_id")
     if isinstance(named, str):
         named = named.strip()
-    if named:
-        named = str(named)
-        canonical = _canonical_uuid(named)
-        if canonical is not None:
-            named = canonical
-            arguments["agent_id"] = canonical
-        return named, None
-    example = (
-        "agent(action='delete', agent_id='<agent UUID>', confirm=true)"
-        if action == "delete"
-        else f"agent(action='{action}', agent_id='<agent UUID>')"
-    )
-    return None, error_response(
-        f"agent(action='{action}') needs agent_id, the UUID of the agent to "
-        f"{action}. It never defaults to your own agent.",
-        error_code="TARGET_AGENT_REQUIRED",
-        error_category="validation_error",
-        details={
-            "error_type": "target_agent_required",
-            "action": action,
-            "parameter": "agent_id",
-        },
-        recovery={
-            "action": (
-                f"Pass agent_id: the UUID of the agent to {action}. "
-                "agent(action='list') shows each agent's UUID. To act on your "
-                "own agent, pass your own UUID (start_session returned it as uuid)."
-            ),
-            "related_tools": ["agent"],
-            "example": example,
-        },
-    )
-
-
-def _wrong_target_error(named: str, action: str) -> TextContent:
-    """Refusal for a target that did not resolve to exactly the agent named.
-
-    Only the target's own id selects it. require_registered_agent resolves a
-    name it cannot find to the session's bound agent (right for a caller
-    naming itself, wrong for a target), and resolves a label or public id to
-    the first cached holder. Neither is unique: public_agent_id is shared by
-    most identities that carry one (src/mcp_handlers/dialectic/auth.py), and a
-    label is self-claimed. So archive(agent_id='<typo>') archived the caller,
-    and delete(agent_id='<shared handle>') could delete whichever holder the
-    cache listed first.
-    """
-    done = "archived" if action == "archive" else "deleted"
-    if _canonical_uuid(named) is None:
-        return error_response(
-            f"agent_id '{named}' is not an agent UUID, so nothing was {done}. "
-            f"{action} takes the target's UUID: labels and public ids are "
-            "shared by many agents and never select one to archive or delete.",
+    if not named:
+        example = (
+            "agent(action='delete', agent_id='<agent UUID>', confirm=true)"
+            if action == "delete"
+            else f"agent(action='{action}', agent_id='<agent UUID>')"
+        )
+        return None, error_response(
+            f"agent(action='{action}') needs agent_id, the UUID of the agent to "
+            f"{action}. It never defaults to your own agent.",
+            error_code="TARGET_AGENT_REQUIRED",
+            error_category="validation_error",
+            details={
+                "error_type": "target_agent_required",
+                "action": action,
+                "parameter": "agent_id",
+            },
+            recovery={
+                "action": (
+                    f"Pass agent_id: the UUID of the agent to {action}. "
+                    "agent(action='list') shows each agent's UUID. To act on your "
+                    "own agent, pass your own UUID (start_session returned it as uuid)."
+                ),
+                "related_tools": ["agent"],
+                "example": example,
+            },
+        )
+    canonical = _canonical_uuid(named)
+    if canonical is None:
+        return None, error_response(
+            f"agent_id '{named}' is not an agent UUID, so nothing was "
+            f"{_DONE[action]}. {action} takes the target's UUID: labels and "
+            "public ids are shared by many agents and never select one to "
+            "archive or delete.",
             error_code="TARGET_AGENT_UUID_REQUIRED",
             error_category="validation_error",
             details={
                 "error_type": "target_agent_uuid_required",
                 "action": action,
-                "agent_id": named,
+                "agent_id": str(named),
             },
             recovery={
                 "action": (
@@ -148,9 +134,23 @@ def _wrong_target_error(named: str, action: str) -> TextContent:
                 "related_tools": ["agent"],
             },
         )
+    arguments["agent_id"] = canonical
+    return canonical, None
+
+
+_DONE = {"archive": "archived", "delete": "deleted"}
+
+
+def _target_not_found_error(named: str, action: str) -> TextContent:
+    """The named UUID did not resolve to that agent.
+
+    require_registered_agent resolves an id it cannot find to the session's
+    bound agent, which is right for a caller naming itself and wrong for a
+    target: archive(agent_id='<unknown UUID>') archived the caller.
+    """
     return error_response(
-        f"agent_id '{named}' names no registered agent, so nothing was {done}. "
-        f"{action} never falls back to your own agent.",
+        f"agent_id '{named}' names no registered agent, so nothing was "
+        f"{_DONE[action]}. {action} never falls back to your own agent.",
         error_code="TARGET_AGENT_NOT_FOUND",
         error_category="validation_error",
         details={
@@ -357,7 +357,7 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     meta = mcp_server.agent_metadata[agent_uuid]
 
     if agent_uuid != named:
-        return [_wrong_target_error(named, "archive")]
+        return [_target_not_found_error(named, "archive")]
 
     if meta.status == "archived":
         return [error_response(
@@ -500,7 +500,7 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     meta = mcp_server.agent_metadata[agent_uuid]
 
     if agent_uuid != named:
-        return [_wrong_target_error(named, "delete")]
+        return [_target_not_found_error(named, "delete")]
 
     # Check if agent is a pioneer (protected)
     if "pioneer" in meta.tags:

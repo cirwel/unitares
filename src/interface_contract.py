@@ -189,9 +189,10 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # is refused with TARGET_AGENT_REQUIRED where it used to act on the caller's
 # own agent, because dispatch wrote the session's id in; a UUID no agent
 # holds is refused with TARGET_AGENT_NOT_FOUND where it used to fall back to
-# the caller; and a label or public id is refused with
-# TARGET_AGENT_UUID_REQUIRED where it used to select the first cached holder
-# (public ids are shared by most identities that carry one). The legacy
+# the caller; and an agent_id that is not a UUID (a label, public id or
+# legacy non-UUID key) is refused with TARGET_AGENT_UUID_REQUIRED where it
+# used to select the first cached holder (public ids are shared by most
+# identities that carry one). The legacy
 # archive_agent and delete_agent names follow. get, update, resume and
 # release_presence are unchanged. agent's agent_id description says it is the
 # target's UUID, required for archive and delete, and names who get, resume

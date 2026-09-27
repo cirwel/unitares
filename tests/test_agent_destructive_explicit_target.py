@@ -251,6 +251,30 @@ def test_delete_acts_on_the_agent_named():
         assert bound.server.agent_metadata[CALLER].status == "active"
 
 
+def test_a_legacy_non_uuid_key_is_no_target_either():
+    """The second review round on #2532: a legacy row is keyed by its old
+    agent_id, which can equal a handle other agents share, so being the cache
+    key is not being unique. 312 of 313 such rows were archived on 2026-09-27.
+    """
+    with _Bound() as bound:
+        metadata = bound.server.agent_metadata
+        metadata["legacy-handle"] = make_agent_meta(
+            label="legacy", public_agent_id="legacy-handle"
+        )
+        metadata["legacy-handle"].agent_uuid = "legacy-handle"
+        metadata[TARGET].public_agent_id = "legacy-handle"
+        for action in ("archive", "delete"):
+            _sent, payload = asyncio.run(
+                _dispatch(
+                    "agent",
+                    {"action": action, "agent_id": "legacy-handle", "confirm": True},
+                )
+            )
+            assert payload.get("error_code") == "TARGET_AGENT_UUID_REQUIRED", payload
+        assert bound.archived() == [] and bound.deleted() == []
+        assert {m.status for m in metadata.values()} == {"active"}
+
+
 # ---------------------------------------------------------------------------
 # Reads and self-scoped actions keep their session default
 # ---------------------------------------------------------------------------
