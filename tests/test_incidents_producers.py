@@ -46,8 +46,10 @@ async def test_an_empty_anomaly_feed_is_undetermined_not_quiet(audit):
     anomalies = body["producers"]["anomaly_detected"]
     assert anomalies["cadence"] == "on_demand"
     assert anomalies["newest_at"] is None
+    # Review rounds 1-2 on #2535: never a list of causes; any list implies
+    # the unlisted states (a failed run, a dropped audit write) were ruled out.
     assert anomalies["absence_means"].startswith("undetermined")
-    assert "findings, not runs" in stuck_absence(body)
+    assert stuck_absence(body).startswith("undetermined")
     stuck = body["producers"]["stuck_detected"]
     assert stuck["cadence"] == "scheduled"
     assert stuck["newest_at"] == "2026-09-24T13:04:15+00:00"
