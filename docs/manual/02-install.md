@@ -33,6 +33,17 @@ version intentionally permits one trusted issuer because lease rows do not yet
 persist issuer-qualified principals; it does not establish cross-operator trust
 or outcome benefit.
 
+The same lease plane protects files. With the
+[governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+installed, Claude Code and Codex take a lease on each file before editing it and
+release it afterwards, so a second agent editing the same file in the same
+checkout is refused instead of overwriting the first. With the Compose defaults
+this needs no setup: the plugin presents the stack's development bearer to the
+loopback lease plane. If you set your own `LEASE_PLANE_BEARER_TOKEN` in `.env`,
+put the same line in `~/.config/unitares/secrets.env` (or point
+`UNITARES_SECRETS_ENV` at a file that has it) so the plugin can present it. When
+leases are enabled but would not work, the plugin says so at session start.
+
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
 exercise self-relative scoring or establish predictive value.
