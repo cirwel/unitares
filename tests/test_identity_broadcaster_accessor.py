@@ -93,3 +93,40 @@ async def test_resident_fork_event_reaches_the_shared_broadcaster():
     assert kwargs["event_type"] == "resident_fork_detected"
     assert kwargs["agent_id"] == new_uuid
     assert kwargs["payload"]["existing_agent_id"] == existing_uuid
+
+
+@pytest.mark.asyncio
+async def test_sync_fingerprint_event_is_tracked_and_reaches_the_shared_broadcaster(monkeypatch):
+    """The sync PATH 1 fingerprint check cannot await, so it schedules the
+    broadcast. The task must be held (create_tracked_task), not a bare
+    loop.create_task the loop references only weakly."""
+    import src.background_tasks as background_tasks
+    from src.mcp_handlers.identity import shared
+
+    key = "agent-5b2f0c1e9a4d"
+    uuid = "5b2f0c1e-9a4d-4c3b-8e21-7d6f5a4b3c2d"
+    monkeypatch.setitem(shared._bind_fingerprints, key, "fp_bound")
+
+    tracked = []
+    create = background_tasks.create_tracked_task
+
+    def _track(coro, *, name=None):
+        task = create(coro, name=name)
+        tracked.append(task)
+        return task
+
+    monkeypatch.setattr(background_tasks, "create_tracked_task", _track)
+
+    with patch.object(shared, "get_session_signals",
+                      return_value=SimpleNamespace(ip_ua_fingerprint="fp_other")), \
+         patch.object(shared, "session_fingerprint_check_mode", return_value="log"), \
+         patch.object(broadcaster_instance, "broadcast_event", new=AsyncMock()) as sent:
+        assert shared._check_path1_fingerprint_sync(key, uuid) is True
+        assert len(tracked) == 1, "the broadcast must be scheduled through create_tracked_task"
+        await tracked[0]
+
+    sent.assert_awaited_once()
+    kwargs = sent.await_args.kwargs
+    assert kwargs["event_type"] == "identity_hijack_suspected"
+    assert kwargs["agent_id"] == uuid
+    assert kwargs["payload"]["path"] == "path1_sync_session_id"
