@@ -86,8 +86,7 @@ from src.knowledge_authority import (
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
-    has_channel_marker,
-    has_imported_memory_marker,
+    is_lane_filter,
     rank_by_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
@@ -2329,16 +2328,15 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
     A source-tag query is already an explicit request to inspect the imported
     lane, so applying its default penalty there would only distort that lane's
     own relevance order. A `channel-*` tag filter is the same request for a
-    channel lane.
+    channel lane. Only a filter made entirely of lane tags counts: tags match
+    any-of, so a mixed filter also returns ordinary findings.
     """
     if request.authority_mode == "all":
         return False
     if request.sort_by == "created_at":
         # The caller asked for time order; an authority nudge would reorder it.
         return False
-    return not (
-        has_imported_memory_marker(request.tags) or has_channel_marker(request.tags)
-    )
+    return not is_lane_filter(request.tags)
 
 
 def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
@@ -2381,7 +2379,15 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
         if state.search_mode in ("substring_scan", "substring_newest_first")
         else None
     )
-    filter_cap = state.rerank_pool_size if state.rerank_on else (50 if state.hybrid_on else request.limit)
+    # Authority ranking has to see more than the page it reorders: capped at
+    # `limit`, a native finding just below a page of down-ranked rows was
+    # dropped before its multiplier could lift it.
+    if state.rerank_on:
+        filter_cap = state.rerank_pool_size
+    elif state.hybrid_on or _authority_ranking_enabled(request):
+        filter_cap = max(request.limit, 50)
+    else:
+        filter_cap = request.limit
     filtered = []
     for document in state.candidates:
         if request.tags and not _matches_tags(document, request.tags):

@@ -94,9 +94,18 @@ def is_channel_tag(tag: object) -> bool:
     return str(tag or "").strip().lower().startswith("channel-")
 
 
-def has_channel_marker(tags: Iterable[object] | None) -> bool:
-    """Whether a tag filter names a channel lane (an explicit request to read it)."""
-    return any(is_channel_tag(tag) for tag in (tags or ()))
+def is_lane_filter(tags: Iterable[object] | None) -> bool:
+    """Whether a tag filter asks to read one provenance lane on its own terms.
+
+    True only when every supplied tag is an imported-memory or channel tag.
+    Tag filters match any-of, so a mixed filter such as
+    ``["channel-x", "review"]`` also returns ordinary findings, and those
+    still need the authority order.
+    """
+    values = [tag for tag in (tags or ()) if str(tag or "").strip()]
+    return bool(values) and all(
+        is_imported_memory_tag(tag) or is_channel_tag(tag) for tag in values
+    )
 
 
 def is_channel_message(document: Any) -> bool:

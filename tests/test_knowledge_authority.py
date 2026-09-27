@@ -338,3 +338,50 @@ async def test_channel_results_disclose_the_authority_policy():
         "channel_message": 1,
         "native_finding": 1,
     }
+
+
+def test_only_a_filter_made_of_lane_tags_is_exempt():
+    # Review on #2537: tags match any-of, so a mixed filter also returns
+    # ordinary findings and must keep the authority order.
+    from src.mcp_handlers.knowledge.handlers import (
+        _authority_ranking_enabled,
+        _parse_knowledge_search_request,
+    )
+
+    def enabled(tags):
+        return _authority_ranking_enabled(
+            _parse_knowledge_search_request({"query": "x", "tags": tags})
+        )
+
+    assert not enabled(["channel-resource-agent"])
+    assert not enabled(["source-claude-memory", "channel-resource-agent"])
+    assert enabled(["channel-resource-agent", "review"])
+    assert enabled(["memory-sync", "review"])
+
+
+@pytest.mark.asyncio
+async def test_authority_sees_past_the_page_on_the_default_path():
+    # Review on #2537 (P1): with hybrid and the reranker off, the candidate
+    # list was cut to `limit` before authority ranking, so a native finding
+    # just below a page of channel notes could never be lifted.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(3)
+    ]
+    native = _discovery("finding-1")
+    request = _parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.hybrid_on = False
+    state.rerank_on = False
+    state.candidates = [*channel, native]
+    state.semantic_scores = {"m0": 0.82, "m1": 0.81, "m2": 0.80, "finding-1": 0.60}
+
+    await _filter_and_rerank_candidates(state)
+
+    assert [row.id for row in state.results] == ["finding-1", "m0"]
