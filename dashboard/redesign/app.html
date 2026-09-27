@@ -212,7 +212,7 @@ themeBtn.onclick = () => {
   syncThemeLabel();
   if (window.EISV && window.EISV.retheme) window.EISV.retheme();
   if (window.Risk && window.Risk.retheme) window.Risk.retheme();
-  Object.values(EXT).forEach((x) => { const g = window[x.global]; if (g && g.retheme) g.retheme(); });
+  Object.values(EXT).forEach((x) => { if (typeof x.mod.retheme === "function") x.mod.retheme(); });
 };
 
 // section switch
@@ -249,8 +249,7 @@ function lazyLoad(id) {
   if (id === "eisv" && window.EISV) { loaded[id] = true; window.EISV.load(); }
   if (id === "risk" && window.Risk) { loaded[id] = true; window.Risk.load(); }
   if (id === "security" && window.Security) { loaded[id] = true; window.Security.load(); }
-  const ext = EXT[id];
-  if (ext && window[ext.global]) { loaded[id] = true; window[ext.global].load(); }
+  if (EXT[id]) { loaded[id] = true; EXT[id].mod.load(); }
 }
 
 // ── auto-refresh: keep the monitor views live ──────────────────────────────
@@ -373,6 +372,10 @@ async function loadExtensions() {
     // Never shadow a core section: an extension adds panes, it does not replace them.
     if (nav.querySelector(`a[data-section="${sec.id}"]`)) continue;
     const mountId = EXT_ID.test(sec.mount || "") ? sec.mount : sec.id + "-mount";
+    // The global must be NEW: one already on window belongs to a core section
+    // or an earlier entry, and accepting it would let this entry register on
+    // someone else's loader (and render into the wrong mount).
+    if (sec.global in window) { console.warn("[dashboard ext]", sec.id, "global already defined:", sec.global); continue; }
     try { injectScript(await DATA.extScript(sec.script)); } catch (e) { console.warn("[dashboard ext]", sec.script, e); continue; }
     // An injected <script> that throws while evaluating does not reject the
     // try above, so check the entry point it was supposed to define: no
@@ -399,8 +402,10 @@ async function loadExtensions() {
     mount.id = mountId;
     pane.appendChild(mount);
     main.appendChild(pane);
-    EXT[sec.id] = sec;
-    if (sec.auto) RELOAD[sec.id] = () => window[sec.global] && window[sec.global].load();
+    // Keep this entry's own module, so a later script reassigning the global
+    // cannot redirect this tab.
+    EXT[sec.id] = Object.assign({}, sec, { mod: g });
+    if (sec.auto) RELOAD[sec.id] = () => g.load();
   }
 }
 

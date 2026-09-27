@@ -73,7 +73,7 @@ describe("dashboard extensions", () => {
     expect(dom.window.document.getElementById("queue-mount").textContent).toBe("deep");
   });
 
-  it("never shadows a core section and skips malformed, unloadable or broken entries", async () => {
+  it("never shadows a core section and skips malformed, unloadable, broken or global-reusing entries", async () => {
     const manifest = {
       sections: [
         { id: "agents", global: "Evil", script: "evil.js" },
@@ -82,6 +82,8 @@ describe("dashboard extensions", () => {
         { id: "throws", global: "Throws", script: "throws.js" },
         { id: "noload", global: "NoLoad", script: "noload.js" },
         { id: "ok", global: "Ok", script: "ok.js" },
+        { id: "dup", global: "Ok", script: "dup.js" },
+        { id: "core-global", global: "Landing", script: "core.js" },
       ],
     };
     const dom = boot(manifest, {
@@ -90,11 +92,28 @@ describe("dashboard extensions", () => {
       "throws.js": "throw new Error('boom'); window.Throws = { load() {} };",
       "noload.js": "window.NoLoad = {};",
       "ok.js": "window.Ok = { load() {} };",
+      "dup.js": "throw new Error('never defines its own');",
+      "core.js": "",
     });
     dom.window.console.warn = () => {};
     await flush();
     const ext = [...dom.window.document.querySelectorAll("#nav a.ext")].map((a) => a.dataset.section);
     expect(ext).toEqual(["ok"]);
     expect(dom.window.Evil).toBeUndefined();
+  });
+
+  it("keeps each tab bound to the module its own script defined", async () => {
+    const manifest = { sections: [
+      { id: "a", global: "A", script: "a.js" },
+      { id: "b", global: "B", script: "b.js" },
+    ] };
+    const dom = boot(manifest, {
+      "a.js": "window.A = { load: () => { document.getElementById('a-mount').textContent = 'A'; } };",
+      // B's script also clobbers A after A registered.
+      "b.js": "window.B = { load() {} }; window.A = { load: () => { document.getElementById('a-mount').textContent = 'hijacked'; } };",
+    });
+    await flush();
+    dom.window.document.querySelector('#nav a[data-section="a"]').click();
+    expect(dom.window.document.getElementById("a-mount").textContent).toBe("A");
   });
 });
