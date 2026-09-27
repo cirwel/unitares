@@ -144,7 +144,11 @@ For more control, use the `knowledge()` tool with an action parameter:
 
 Imported memory is context, not policy. Source tags such as `memory-sync` and
 the harness-neutral `source-<provider>-memory` pattern classify a row as
-`imported_context`. Normal stores are `native_finding`. A row becomes
+`imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
+together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
+`channel_message` and get the same close-contest down-rank; a `channel-*` tag
+filter reads that lane in its own order. Normal stores are `native_finding`.
+A row becomes
 `governed_claim` only through `knowledge(action="promote")`, which adds a
 server-authored receipt that ordinary store arguments cannot forge.
 

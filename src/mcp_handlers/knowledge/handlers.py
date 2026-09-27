@@ -80,11 +80,13 @@ from src.knowledge_graph import (
     closure_evidence_to_json,
 )
 from src.knowledge_authority import (
+    CHANNEL_MESSAGE,
     GOVERNED_CLAIM,
     IMPORTED_CONTEXT,
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
+    has_channel_marker,
     has_imported_memory_marker,
     rank_by_authority,
 )
@@ -2326,14 +2328,17 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
 
     A source-tag query is already an explicit request to inspect the imported
     lane, so applying its default penalty there would only distort that lane's
-    own relevance order.
+    own relevance order. A `channel-*` tag filter is the same request for a
+    channel lane.
     """
     if request.authority_mode == "all":
         return False
     if request.sort_by == "created_at":
         # The caller asked for time order; an authority nudge would reorder it.
         return False
-    return not has_imported_memory_marker(request.tags)
+    return not (
+        has_imported_memory_marker(request.tags) or has_channel_marker(request.tags)
+    )
 
 
 def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
@@ -2838,7 +2843,9 @@ def _attach_search_diagnostics(
         tier = assess_authority(document).tier
         authority_counts[tier] = authority_counts.get(tier, 0) + 1
     if authority_counts and (
-        IMPORTED_CONTEXT in authority_counts or GOVERNED_CLAIM in authority_counts
+        IMPORTED_CONTEXT in authority_counts
+        or CHANNEL_MESSAGE in authority_counts
+        or GOVERNED_CLAIM in authority_counts
     ):
         response["authority_policy"] = {
             "mode": state.request.authority_mode,
@@ -2846,8 +2853,8 @@ def _attach_search_diagnostics(
             "result_tiers": authority_counts,
             "note": (
                 "Authority affects close ranking contests; it is provenance-aware "
-                "retrieval, not a truth verdict. Filter by source tags or pass "
-                "authority_mode='all' to inspect raw relevance order."
+                "retrieval, not a truth verdict. Filter by source or channel tags "
+                "or pass authority_mode='all' to inspect raw relevance order."
             ),
         }
 
