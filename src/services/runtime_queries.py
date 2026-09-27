@@ -1005,9 +1005,11 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
     # silently routes to FTS. Surfacing both lets callers see the gap.
     try:
         embedder_ok = False
+        embedder_requested = False
         try:
-            from src.embeddings import embeddings_available
+            from src.embeddings import embedding_model_requested, embeddings_available
             embedder_ok = embeddings_available()
+            embedder_requested = embedding_model_requested()
         except Exception:
             pass
         try:
@@ -1028,7 +1030,6 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         # fault. Naming a model in UNITARES_EMBEDDING_MODEL asks for semantic
         # search, so a missing embedder then IS degraded, as is an embedder
         # whose backend cannot use it.
-        embedder_requested = bool(os.getenv("UNITARES_EMBEDDING_MODEL", "").strip())
         if semantic_search_reachable:
             kg_status = "healthy"
         elif not embedder_ok and not embedder_requested:

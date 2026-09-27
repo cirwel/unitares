@@ -98,7 +98,7 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
-| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py); `''` (agents/vigil/agent.py) | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py, agents/vigil/agent.py |
+| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:253, agents/vigil/agent.py) | True when the operator named a model, asking for semantic search | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
