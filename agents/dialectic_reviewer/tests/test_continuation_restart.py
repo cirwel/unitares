@@ -60,7 +60,8 @@ def _paused_agent_answers(session: DialecticSession) -> None:
     assert result["blocked"] == "reviewer_objection_stands"
 
 
-def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filing=False):
+def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filing=False,
+              filing_error=None):
     """Install a fake GovernanceClient backed by ``session``.
 
     The server "restarts" on the Nth ``get``: that client is dead from then on.
@@ -72,6 +73,8 @@ def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filin
         "identity_calls": [],
         "calls": [],
         "filing_failures_left": 1 if fail_first_filing else 0,
+        "filing_error": filing_error or ConnectionError("connection reset while filing"),
+        "filings": 0,
     }
 
     class FakeClient:
@@ -120,9 +123,10 @@ def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filin
                     )
                 )
             if action == "synthesis":
+                state["filings"] += 1
                 if args["agrees"] is True and state["filing_failures_left"]:
                     state["filing_failures_left"] -= 1
-                    raise ConnectionError("connection reset while filing")
+                    raise state["filing_error"]
                 return session.submit_synthesis(
                     DialecticMessage(
                         phase="synthesis",
@@ -153,6 +157,7 @@ def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filin
 
 
 def _model_replies(monkeypatch):
+    calls = []
     outputs = iter(
         [
             '{"agrees": false, "root_cause": "shallow", '
@@ -165,6 +170,7 @@ def _model_replies(monkeypatch):
     )
 
     async def fake_obtain(prompt):
+        calls.append(prompt)
         # The selected host answered; no fallback fired.
         r._record_reviewer_provenance(
             {"backend": "codex", "host_id": "codex:host-adapter", "models_used": [], "warnings": []}
@@ -174,6 +180,7 @@ def _model_replies(monkeypatch):
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "2")
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_POLL_S", "0.01")
+    return calls
 
 
 @pytest.mark.asyncio
@@ -212,7 +219,7 @@ async def test_a_dropped_filing_is_retried_from_session_state(monkeypatch):
     is still pending on the next read and is answered again; if it had
     landed, the reviewer's own synthesis now follows it and nothing is owed.
     """
-    _model_replies(monkeypatch)
+    model_calls = _model_replies(monkeypatch)
     session = _open_session("sess-refile")
     state = _fake_sdk(monkeypatch, session, restart_after_gets=2, fail_first_filing=True)
 
@@ -228,6 +235,35 @@ async def test_a_dropped_filing_is_retried_from_session_state(monkeypatch):
     ]
     assert [m.agrees for m in reviewer_syntheses] == [False, True]
     assert state["filing_failures_left"] == 0
+    # Review round 1 on #2508: the formed verdict is re-filed as formed. A
+    # second model call could reach a different verdict, and a dropped
+    # connection must not be able to change the outcome.
+    assert len(model_calls) == 2, "the continuation re-judged instead of re-filing"
+    assert state["filings"] == 3  # initial rejection, cut-off approval, re-filed approval
+
+
+@pytest.mark.asyncio
+async def test_a_refused_filing_is_an_answer_not_an_outage(monkeypatch):
+    """The SDK raises for success=false; retrying that would re-file on
+    every poll until the deadline (review round 1 on #2508)."""
+
+    class ToolRefused(Exception):
+        pass
+
+    model_calls = _model_replies(monkeypatch)
+    session = _open_session("sess-refused")
+    state = _fake_sdk(monkeypatch, session, restart_after_gets=2, fail_first_filing=True,
+                      filing_error=ToolRefused("Tool dialectic failed: not authorized"))
+
+    verdict = await r.run(
+        Thesis(session_id="sess-refused", root_cause="claimed", proposed_conditions=["initial"]),
+        governance_url="http://localhost:8767",
+        parent_agent_id=PAUSED,
+    )
+
+    assert verdict.agrees is False  # the standing rejection is what stands
+    assert state["filings"] == 2
+    assert len(model_calls) == 2
 
 
 @pytest.mark.asyncio
