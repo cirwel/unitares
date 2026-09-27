@@ -119,7 +119,9 @@ async def beam_create_session(
 
         if status in (200, 201) and isinstance(body, dict) and body.get("ok"):
             logger.info(f"[BEAM_CREATE] session {session_id[:16]} created on BEAM (created={body.get('created')})")
-            rec.respond(outcome="written", http_status=status)
+            # BEAM answers a duplicate id with ok=true, created=false: no write.
+            rec.respond(outcome="not_written" if body.get("created") is False else "written",
+                        http_status=status)
             return body
 
         logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")

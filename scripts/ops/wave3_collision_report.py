@@ -449,6 +449,11 @@ def competing_writes(
             continue
         if response.get("via") == "sweeper":
             continue  # the sweeper's own write
+        if response.get("kind") == "message":
+            # Already observed above from core.dialectic_messages, with its
+            # exact database timestamp; the attempt/response bracket would
+            # only duplicate it less precisely.
+            continue
         outcome = response.get("outcome")
         if outcome not in ("written", "not_written", "already_terminal"):
             continue  # errored or interrupted: its effect is unknown, not a write
@@ -610,7 +615,16 @@ def classify_write(
         # Only a terminal row refuses a guarded write. A non-terminal winner
         # means the row changed again between the refused UPDATE and the
         # follow-up read (a reopen, say), so the read does not name the winner.
-        if winner is None or winner not in TERMINAL_STATUSES:
+        # A reopen that landed around the refusal means the same even when the
+        # read found a terminal row again: the read may describe the later
+        # transition, not the one that refused the write.
+        reopened_around = any(
+            c["kind"] == "session_write:reopen" and c.get("landed")
+            and decision_read is not None and commit is not None
+            and decision_read < c["effect_ts"] <= commit + dt.timedelta(seconds=5)
+            for c in competing
+        )
+        if winner is None or winner not in TERMINAL_STATUSES or reopened_around:
             klass = "contention_unattributed"
         elif winner == intended:
             klass = "contention_benign"

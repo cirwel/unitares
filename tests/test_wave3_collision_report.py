@@ -295,6 +295,22 @@ class TestContention:
         w = only(run([write(outcome="refused", winner_status="active")]))
         assert w["class"] == "contention_unattributed"
 
+    def test_a_reopen_around_the_refusal_makes_the_winner_unattributed(self):
+        """The follow-up read may describe a later transition, not the refusal's."""
+        w = only(run([write(outcome="refused", winner_status="failed")],
+                     events=session_write(at(-0.5), at(0.001), kind="reopen",
+                                          requested="antithesis")))
+        assert w["class"] == "contention_unattributed"
+
+    def test_message_session_writes_are_not_double_counted(self):
+        """A message is observed from its table row; its bracket adds nothing."""
+        w = only(run([write(attempted="awaiting_facilitation")],
+                     sessions=[session_row(status="active")],
+                     messages=[message(at(0.3))],
+                     events=session_write(at(-0.2), at(0.4), kind="message",
+                                          requested="synthesis")))
+        assert w["class"] != "ambiguous"
+
     def test_refused_without_a_recorded_winner_is_unattributed(self):
         w = only(run([write(outcome="refused", winner_status=None)]))
         assert w["class"] == "contention_unattributed"

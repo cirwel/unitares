@@ -452,3 +452,14 @@ class TestNoOpsAreNotWrites:
         await dialectic_db.create_session_async(session_id="s1")
         _attempt, response = _pair(captured)
         assert response["outcome"] == "not_written"
+
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_beam_create_is_not_written(monkeypatch, captured):
+    _enable(monkeypatch)
+    body = {"ok": True, "created": False}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}):
+        assert await brc.beam_create_session("s1", "p") == body
+    _attempt, response = _pair(captured)
+    assert response["outcome"] == "not_written"
