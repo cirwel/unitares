@@ -27,6 +27,10 @@ FAKE_GH = r"""#!/usr/bin/env bash
 d="$FAKE_GH_DIR"
 case "$1 $2" in
   "pr list") cat "$d/prs.json"; exit 0 ;;
+  "pr diff")
+    f="$d/diff_$3"
+    [ -f "$f" ] && { cat "$f"; exit 0; }
+    printf 'diff --git a/f b/f\n@@ -1 +1 @@\n+pr %s\n' "$3"; exit 0 ;;
   "pr view")
     f="$d/state_${5//\//_}_$3"
     [ -f "$f" ] && { cat "$f"; exit 0; }
@@ -132,8 +136,7 @@ def _run(
     base_idle_min: float = 1,
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
-    commits: dict[int, list] | None = None,
-    pins: list[str] | None = None,
+    diffs: dict[int, str | None] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -149,12 +152,13 @@ def _run(
     timelines = timelines or {}
     for pr in prs:
         (d / f"timeline_{pr['number']}.json").write_text(json.dumps(timelines.get(pr["number"], _timeline())))
-    for number, items in (commits or {}).items():
-        (d / f"commits_{number}.json").write_text(json.dumps(items))
+    for number, text in (diffs or {}).items():
+        target = d / f"diff_{number}"
+        if text is None:  # unreadable: gh prints nothing
+            target.write_text("")
+        else:
+            target.write_text(text)
     state_file = tmp_path / "state" / "approvals"
-    if pins is not None:
-        state_file.parent.mkdir(exist_ok=True)
-        state_file.write_text("".join(line + "\n" for line in pins))
     for key, value in (states or {}).items():
         repo, number = key.split("#")
         (d / f"state_{repo.replace('/', '_')}_{number}").write_text(value + "\n")
@@ -179,11 +183,6 @@ def _run(
 def _arm(n: int, head: str | None = None) -> str:
     return f"pr merge {n} -R o/r --auto --squash --match-head-commit {head or f'sha{n}'}"
 
-
-def _commit(sha: str, *, updater: bool = False) -> dict:
-    if updater:
-        return {"sha": sha, "commit": {"committer": {"name": "GitHub"}, "message": "Merge branch 'master' into x"}}
-    return {"sha": sha, "commit": {"committer": {"name": "Kenny"}, "message": "fix: more"}}
 
 
 # --- the queue -----------------------------------------------------------------
@@ -452,50 +451,54 @@ def test_first_sight_pins_the_head_and_arms_that_head(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_pr(1, head="aaa")])
     assert calls == [_arm(1, "aaa")]
     pins = (tmp_path / "state" / "approvals").read_text().split()
-    assert pins[:2] == ["1", "aaa"]
+    assert pins[:2] == ["1", "aaa"] and len(pins) == 4
 
 
-def test_a_head_moved_by_a_push_since_the_pin_is_stale(tmp_path: Path) -> None:
-    tl = _timeline(60, 120)
-    labelled = tl[-1]["created_at"]
-    calls, out = _run(
-        tmp_path,
-        [_pr(1, head="bbb")],
-        pins=[f"1 aaa {labelled}"], timelines={1: tl},
-        commits={1: [_commit("aaa"), _commit("bbb")]},
-    )
+DIFF_A = "diff --git a/f b/f\nindex 111..222 100644\n@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n"
+# The same change after a clean base update: new blob ids and line numbers.
+DIFF_A_REBASED = "diff --git a/f b/f\nindex 333..444 100644\n@@ -40,3 +40,3 @@\n ctx\n-old\n+new\n"
+DIFF_B = "diff --git a/f b/f\nindex 111..555 100644\n@@ -1,3 +1,4 @@\n ctx\n-old\n+new\n+sneaky\n"
+
+
+def _two_ticks(tmp_path: Path, first_diff: str, second_diff: str | None, second_head: str = "bbb"):
+    # Tick 1: #3 (hand-armed) holds the slot, so #1 is only pinned.
+    tl = _timeline(10, 20)
+    _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, state="BLOCKED"), _pr(1, head="aaa")],
+         timelines={1: tl}, diffs={1: first_diff})
+    # Tick 2: the slot is free and #1's head has moved.
+    return _run(tmp_path, [_pr(1, head=second_head)], timelines={1: tl}, diffs={1: second_diff})
+
+
+def test_a_clean_base_update_keeps_the_approval(tmp_path: Path) -> None:
+    calls, _ = _two_ticks(tmp_path, DIFF_A, DIFF_A_REBASED)
+    assert calls == [_arm(1, "bbb")]
+
+
+def test_a_changed_diff_makes_the_approval_stale(tmp_path: Path) -> None:
+    # Whatever the new commit claims to be (committer "GitHub", "Merge branch"
+    # subject), the change it carries is not the one approved.
+    calls, out = _two_ticks(tmp_path, DIFF_A, DIFF_B)
     assert calls == []
-    assert "#1 head moved past its approved aaa" in out
+    assert "#1 changed since its approval at aaa" in out
 
 
-def test_a_head_moved_only_by_base_updates_stays_approved(tmp_path: Path) -> None:
-    tl = _timeline(60, 120)
-    labelled = tl[-1]["created_at"]
-    calls, _ = _run(
-        tmp_path,
-        [_pr(1, head="ccc")],
-        pins=[f"1 aaa {labelled}"], timelines={1: tl},
-        commits={1: [_commit("aaa"), _commit("bbb", updater=True), _commit("ccc", updater=True)]},
-    )
-    assert calls == [_arm(1, "ccc")]
-
-
-def test_a_force_push_that_drops_the_pin_is_stale(tmp_path: Path) -> None:
-    tl = _timeline(60, 120)
-    labelled = tl[-1]["created_at"]
-    calls, _ = _run(
-        tmp_path, [_pr(1, head="zzz")], pins=[f"1 aaa {labelled}"], timelines={1: tl}, commits={1: [_commit("zzz")]}
-    )
+def test_an_unreadable_diff_after_the_head_moved_approves_nothing(tmp_path: Path) -> None:
+    calls, out = _two_ticks(tmp_path, DIFF_A, None)
     assert calls == []
+    assert "diff unreadable" in out
+
+
+def test_an_unreadable_diff_at_first_sight_records_nothing(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1)], diffs={1: None})
+    assert calls == []
+    assert "cannot record what was approved" in out
+    assert not (tmp_path / "state" / "approvals").exists()
 
 
 def test_a_reapplied_label_pins_the_new_head(tmp_path: Path) -> None:
-    calls, _ = _run(
-        tmp_path,
-        [_pr(1, head="bbb")],
-        pins=["1 aaa 2020-01-01T00:00:00Z"],  # the pin belongs to an older label event
-        commits={1: [_commit("aaa"), _commit("bbb")]},
-    )
+    _two_ticks(tmp_path, DIFF_A, DIFF_B)  # stale after the change
+    # The maintainer re-applies the label: a newer label event pins afresh.
+    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: _timeline(2, 20)}, diffs={1: DIFF_B})
     assert calls == [_arm(1, "bbb")]
 
 
@@ -514,21 +517,6 @@ def test_an_unreadable_state_file_approves_nothing(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1)])
     assert calls == []
     assert "approval state unreadable" in out
-
-
-def test_a_commit_list_that_stops_short_of_the_head_proves_nothing(tmp_path: Path) -> None:
-    # GitHub lists at most 250 commits; a list ending at the pin says nothing
-    # about the head it omits.
-    tl = _timeline(60, 120)
-    labelled = tl[-1]["created_at"]
-    calls, _ = _run(
-        tmp_path,
-        [_pr(1, head="ddd")],
-        pins=[f"1 aaa {labelled}"],
-        timelines={1: tl},
-        commits={1: [_commit("aaa"), _commit("bbb", updater=True)]},
-    )
-    assert calls == []
 
 
 def test_a_label_is_pinned_even_while_another_pr_holds_the_slot(tmp_path: Path) -> None:

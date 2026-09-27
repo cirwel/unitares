@@ -37,9 +37,10 @@
 # The approval label is the maintainer's merge decision made ahead of time,
 # exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
 # shared contract). It approves the PR as it stood when the label went on. The
-# script pins the head it first sees under a label (STATE_FILE); a later head
-# stays covered only if everything since the pin is a base-update merge, and a
-# commit dated after the label is refused outright. Anything else is stale
+# script pins the head and diff fingerprint it first sees under a label
+# (STATE_FILE); a later head stays covered only while the diff is unchanged
+# (a clean base update), and a commit dated after the label is refused
+# outright. Anything else is stale
 # until the label is re-applied, which pins afresh. A label is pinned only if
 # the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
 # with no pin (the script was down, or its state lost) must be re-applied. The
@@ -151,30 +152,30 @@ approval_times() {
           else empty end'
 }
 
-# The head an approval covers. First sight of a label pins the PR's head then;
-# later heads stay covered only if every commit since the pin is a base-update
-# merge. A re-applied label (a newer label event) pins afresh.
+# What an approval covers. First sight of a label records the PR's head and a
+# fingerprint of its diff against the base (hunk line numbers and blob ids
+# dropped, so a clean base update leaves it unchanged). A later head stays
+# covered only while the fingerprint matches: commit metadata (committer name,
+# message, even a web-flow signature) is author-controlled or API-mintable, so
+# it cannot prove a commit was only a base update, but the content can. A
+# re-applied label (a newer label event) pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
-pinned_head() {
+pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
   [ -e "$STATE_FILE" ] || return 0
   [ -f "$STATE_FILE" ] && [ -r "$STATE_FILE" ] || return 1
-  awk -v n="$1" -v l="$2" '$1 == n && $3 == l { h = $2 } END { if (h) print h }' "$STATE_FILE"
+  awk -v n="$1" -v l="$2" '$1 == n && $3 == l { h = $2 " " $4 } END { if (h) print h }' "$STATE_FILE"
 }
-pin_head() {
+pin() {  # <pr> <sha> <labelled-at> <fingerprint>
   [ "$DRY_RUN" = "1" ] && return 0
-  mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3" >>"$STATE_FILE"
+  mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3 $4" >>"$STATE_FILE"
 }
-# <pr> <pinned-sha> <head>: the PR's commit list runs from the pin to exactly
-# <head>, and everything after the pin is a base-update merge. GitHub lists at
-# most 250 commits; a list that does not end at <head> proves nothing.
-only_base_updates_since() {
-  gh api --paginate "repos/$REPO/pulls/$1/commits" 2>/dev/null | jq -rs --arg pin "$2" --arg head "$3" '
-    add // [] | (map(.sha) | index($pin)) as $i
-    | if $i == null or (.[-1].sha // "") != $head then false
-      else .[$i + 1:] | all(.commit.committer.name == "GitHub"
-                            and (.commit.message | startswith("Merge branch ")))
-      end' 2>/dev/null | grep -qx true
+# A diff GitHub will not return (too large, API error) fails, and so does the
+# approval that depends on it.
+fingerprint() {
+  local diff
+  diff=$(gh pr diff "$1" -R "$REPO" 2>/dev/null) && [ -n "$diff" ] || return 1
+  grep -vE '^(index |@@)' <<<"$diff" | shasum -a 256 | cut -c1-64
 }
 
 queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
@@ -196,23 +197,28 @@ while read -r pr; do
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
-  pin=$(pinned_head "$n" "$labelled_at") || { log "#$n approval state unreadable ($STATE_FILE); skipped"; continue; }
-  if [ -z "$pin" ]; then
+  pinned_line=$(pinned "$n" "$labelled_at") || { log "#$n approval state unreadable ($STATE_FILE); skipped"; continue; }
+  if [ -z "$pinned_line" ]; then
     # Pin only a label the script sees soon after it went on. An older label
     # with no pin (the script was down, or its state was lost) no longer says
-    # which head was approved.
+    # what was approved.
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
       log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
       continue
     fi
-    pin_head "$n" "$head" "$labelled_at" || { log "#$n could not record its approved head; skipped"; continue; }
-  elif [ "$pin" != "$head" ]; then
-    if ! only_base_updates_since "$n" "$pin" "$head"; then
-      log "#$n head moved past its approved ${pin:0:8}; re-apply $LABEL to approve ${head:0:8}"
-      continue
+    fp=$(fingerprint "$n") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
+    pin "$n" "$head" "$labelled_at" "$fp" || { log "#$n could not record its approval; skipped"; continue; }
+  else
+    read -r pinned_sha pinned_fp <<<"$pinned_line"
+    if [ "$pinned_sha" != "$head" ]; then
+      fp=$(fingerprint "$n") || { log "#$n diff unreadable; skipped"; continue; }
+      if [ "$fp" != "$pinned_fp" ]; then
+        log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        continue
+      fi
+      pin "$n" "$head" "$labelled_at" "$fp" || true
     fi
-    pin_head "$n" "$head" "$labelled_at" || true
   fi
   ordered+="$labelled_at $n $head"$'\n'
 done <<<"$queued"
