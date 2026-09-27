@@ -153,16 +153,31 @@ def pick_model(models: list[str], requested: str | None, assume_yes: bool) -> st
     return None
 
 
-def compose(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["docker", "compose", *args], cwd=cwd, text=True, capture_output=True)
+def compose(args: list[str], env_file: Path, settings: dict[str, str]) -> subprocess.CompletedProcess:
+    """Run ``docker compose`` for this checkout with the chosen .env and settings.
 
-
-def server_reaches_model(cwd: Path) -> bool:
-    probe = (
-        "import os,urllib.request;"
-        f"urllib.request.urlopen(os.environ['{BASE_KEY}'].rstrip('/')+'/api/tags',timeout=5).read()"
+    Compose reads only ``.env`` beside the compose file unless told otherwise,
+    and a variable exported in the calling shell outranks ``.env``. So the
+    project directory is the checkout, the env file is passed explicitly, and
+    the child environment carries the chosen values, not inherited ones.
+    """
+    env = dict(os.environ)
+    env.pop(ALIAS_KEY, None)
+    env.update(settings)
+    return subprocess.run(
+        ["docker", "compose", "--project-directory", str(REPO_ROOT), "--env-file", str(env_file), *args],
+        cwd=REPO_ROOT, env=env, text=True, capture_output=True,
     )
-    return compose(["exec", "-T", "governance-mcp", "python", "-c", probe], cwd).returncode == 0
+
+
+def server_reaches_model(env_file: Path, settings: dict[str, str]) -> bool:
+    """True when the server, from inside its container, sees the chosen model listed."""
+    probe = (
+        "import json,os,sys,urllib.request;"
+        f"tags=json.load(urllib.request.urlopen(os.environ['{BASE_KEY}'].rstrip('/')+'/api/tags',timeout=5));"
+        f"sys.exit(0 if os.environ['{MODEL_KEY}'] in [m.get('name') for m in tags.get('models',[])] else 1)"
+    )
+    return compose(["exec", "-T", "governance-mcp", "python", "-c", probe], env_file, settings).returncode == 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -220,13 +235,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     print("… Rebuilding the server (docker compose up -d --build --wait governance-mcp)")
-    result = compose(["up", "-d", "--build", "--wait", "governance-mcp"], env_file.parent)
+    settings = {BASE_KEY: server_base, MODEL_KEY: model}
+    result = compose(["up", "-d", "--build", "--wait", "governance-mcp"], env_file, settings)
     if result.returncode != 0:
         print("✗ The rebuild failed:")
         print((result.stderr or result.stdout).strip()[-2000:])
         return result.returncode or 1
 
-    if server_reaches_model(env_file.parent):
+    if server_reaches_model(env_file, settings):
         print(f"✓ The server reaches {model}. consult and dialectic reviews will use it.")
         return 0
     print(f"✗ The server cannot reach Ollama at {server_base}.")

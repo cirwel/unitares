@@ -66,8 +66,9 @@ def stubs(monkeypatch):
     state = {"models": ["gemma4:latest", "qwen3:8b"], "compose_rc": 0, "reaches": True}
     monkeypatch.setattr(cm, "list_ollama_models", lambda base, timeout=3.0: state["models"])
 
-    def fake_compose(args, cwd):
+    def fake_compose(args, env_file, settings):
         calls.append(args)
+        state.setdefault("seen", []).append((env_file, dict(settings)))
         rc = state["compose_rc"] if args[0] == "up" else (0 if state["reaches"] else 1)
         return subprocess.CompletedProcess(args, rc, stdout="", stderr="boom" if rc else "")
 
@@ -238,3 +239,31 @@ def test_discovery_queries_the_root_even_when_given_the_v1_form(monkeypatch):
 def test_source_install_prints_the_root_form(tmp_path: Path, stubs, capsys):
     assert cm.main(["--ollama", "http://localhost:11434/v1", "--yes", "--no-docker", "--env-file", str(tmp_path / ".env")]) == 0
     assert "UNITARES_OLLAMA_BASE=http://localhost:11434\n" in capsys.readouterr().out
+
+
+def test_compose_gets_the_chosen_env_file_and_values_not_inherited_ones(tmp_path: Path, monkeypatch):
+    runs = []
+
+    def fake_run(cmd, cwd=None, env=None, text=None, capture_output=None):
+        runs.append((cmd, cwd, env))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(cm.subprocess, "run", fake_run)
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://stale:11434")
+    monkeypatch.setenv("UNITARES_LLM_MODEL", "stale:1b")
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://stale:11434/v1")
+    env_file = tmp_path / "staging.env"
+    cm.compose(["up"], env_file, {cm.BASE_KEY: "http://host.docker.internal:11434", cm.MODEL_KEY: "qwen3:8b"})
+    cmd, cwd, env = runs[0]
+    assert cmd[:6] == ["docker", "compose", "--project-directory", str(cm.REPO_ROOT), "--env-file", str(env_file)]
+    assert cwd == cm.REPO_ROOT
+    assert env["UNITARES_OLLAMA_BASE"] == "http://host.docker.internal:11434"
+    assert env["UNITARES_LLM_MODEL"] == "qwen3:8b"
+    assert "UNITARES_OLLAMA_BASE_URL" not in env
+
+
+def test_rebuild_and_probe_use_the_file_and_model_just_written(tmp_path: Path, stubs):
+    state, _ = stubs
+    env = tmp_path / "staging.env"
+    assert cm.main(["--model", "qwen3:8b", "--yes", "--env-file", str(env)]) == 0
+    assert all(f == env and s == {cm.BASE_KEY: "http://host.docker.internal:11434", cm.MODEL_KEY: "qwen3:8b"} for f, s in state["seen"])
