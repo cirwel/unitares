@@ -1827,6 +1827,14 @@ async def stop_all_background_tasks() -> None:
             )
 
 
+async def restore_host_cooldowns():
+    """Refill provider cooldowns from Redis so a restart does not spend one
+    failed call per provider still at its limit. Fail-soft inside."""
+    from src.mcp_handlers.support import host_availability
+
+    await host_availability.load_from_redis()
+
+
 def start_all_background_tasks(set_ready):
     """
     Start all background tasks. Call once during server initialization.
@@ -1869,6 +1877,7 @@ def start_all_background_tasks(set_ready):
     )
     logger.info("[DIALECTIC_SWEEP] Started stuck dialectic-session sweep (every 10m)")
     _supervised_create_task(server_warmup_task(set_ready), name="server_warmup")
+    _supervised_create_task(restore_host_cooldowns(), name="host_cooldown_restore")
     _supervised_create_task(deep_health_probe_task(), name="deep_health_probe")
     logger.info("[HEALTH_PROBE] Deep health probe started (cached snapshots for health_check handler)")
 
