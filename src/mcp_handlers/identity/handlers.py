@@ -76,17 +76,20 @@ from .persistence import (
 
 
 def _broadcaster():
-    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``).
-    Returns None only when src.broadcaster fails to import. Mirrors the helper
-    in persistence.py; kept at module level here so tests patching
-    handlers._broadcaster can intercept cleanly. The import name is held by
-    tests/test_identity_broadcaster_accessor.py: a wrong one is swallowed here
-    and silently drops every identity event this accessor gates."""
+    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``),
+    wrapped so the caller never waits on the fan-out (see
+    persistence._ScheduledBroadcaster). Returns None only when src.broadcaster
+    fails to import. Mirrors the helper in persistence.py; kept at module level
+    here so tests patching handlers._broadcaster can intercept cleanly. The
+    import name is held by tests/test_identity_broadcaster_accessor.py: a wrong
+    one is swallowed here and silently drops every identity event this
+    accessor gates."""
     try:
         from src.broadcaster import broadcaster_instance as _b
-        return _b
+        from .persistence import _ScheduledBroadcaster
     except Exception:
         return None
+    return _ScheduledBroadcaster(_b)
 
 
 _s1d_false_reached_logged = False
