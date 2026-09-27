@@ -191,6 +191,24 @@ that reported
 "clean" over known coupling would be the same instrument-optimism failure it
 exists to catch.
 
+## Route packs
+
+Some HTTP routes exist only because a deployment runs something specific. They
+are grouped into packs (`src/http_routes/packs.py`) and mounted only when the
+governance server's `UNITARES_ROUTE_PACKS` names them, comma-separated. The
+shipped default is empty, so an install that runs none of these carries none of
+their endpoints.
+
+| Pack | Routes | Enable when |
+|---|---|---|
+| `reference-residents` | `/v1/sentinel/{backlog,summary,adjudication-queue,adjudicate,model-adjudicate}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` (and their backlog / adjudication tooling, e.g. `scripts/ops/model_adjudicator.py`) |
+| `automation-census` | `/api/automations` | you run the `unitares-automations` census ([setup](automation-census-setup.md)) |
+
+A pack name that matches nothing is logged at startup rather than ignored.
+Packs are named for what they serve, never for a resident, for the reason in
+the next-but-one section. Declaring residents in `UNITARES_RESIDENTS` does not
+mount a pack; the two settings are independent.
+
 ## Calibration note
 
 Each named resident becomes its own N=1 calibration class: `classify_agent`
