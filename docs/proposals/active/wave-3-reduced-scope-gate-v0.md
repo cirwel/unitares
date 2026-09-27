@@ -790,5 +790,10 @@ attempts, the sweeper's per-write records against each cycle's `write_attempt_co
 against `cycle_seq` within a boot). Every failed emission is counted in-process and reported on the
 next cycle row, and appended (fsynced) to a local file outside the audit database before the process
 continues, so a failure survives the process; the A2 report must read that file for every
-deployment in W_pre, and a missing or unreadable file is itself inconclusive. Completeness is 100%:
-any unmatched unit or recorded emission failure makes the reading inconclusive (A10), never a zero.
+deployment in W_pre, and a missing or unreadable file is inconclusive. A recorded failure makes the
+span from the last complete cycle before it to the first after it **uncovered**, like a heartbeat
+gap: its exposure does not count and W_pre extends. Each response carries the write's effect time
+from the database clock where Python performs the write; a BEAM write started over HTTP is bounded
+by its attempt and response, and one whose bounds straddle the sweeper's commit is **ambiguous**,
+never harm and never a zero. Completeness is 100%: any unmatched unit or ambiguous ordering makes
+the reading inconclusive (A10).
