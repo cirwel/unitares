@@ -639,10 +639,12 @@ gate doc"), against this document as it stood on `master` with no amendment in f
 What the signature does:
 
 - It ratifies this document **as the reduced-scope gate** that the 2026-08-22 go-decision (§4)
-  required: the scope in §1, the disconfirmers in §2, the prerequisites in §3, the exit criteria
+  required: the inventory in §1 of the two paths the gate may cover, the disconfirmers in §2, the prerequisites in §3, the exit criteria
   in §4, the stop signs in §5, the six settled §6 dispositions as recorded (the rulings in
   §6.1, §6.2, §6.3, §6.6 and §6.7, and §6.5's deferral), and the §7 sequence. ⛔§6.4 is not
-  among them: it is still owed, and the signature does not decide it.
+  among them: it is still owed, and the signature does not decide it. ⛔Nor does it choose
+  the scope or the design: §1.1's path-(1)-only reduction is a proposal §6.5 deferred, and
+  §1.2's option is open until §7 step 5.
 - From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
   before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
   first, then the signature) is the precedent.
