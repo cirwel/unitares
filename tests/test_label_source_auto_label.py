@@ -217,6 +217,31 @@ async def test_a_fresh_mint_without_a_structured_id_still_avoids_it(minted):
 
 
 @pytest.mark.asyncio
+async def test_a_lazily_minted_agent_avoids_the_structured_id_it_will_get(minted):
+    """identity(name=...) on a fresh session mints lazily: the agent has no
+    in-memory entry, and the setter builds one (and its structured id) only
+    after the rename. The rename must avoid that id all the same."""
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+
+    result, _meta = await _mint(minted)
+    agent_uuid = result["agent_uuid"]
+    minted.registry.pop(agent_uuid)
+    minted.db.get_identity = AsyncMock(
+        return_value=SimpleNamespace(identity_id="ident-1", metadata={})
+    )
+    stem = "mcp_client_20260927"
+    minted.db.find_agent_by_label = _held_by_another(stem)
+
+    with patch(
+        "src.mcp_handlers.support.naming_helpers.generate_structured_id",
+        return_value=f"{stem}_{agent_uuid[:8]}",
+    ):
+        applied = await set_agent_label_resolved(agent_uuid, stem)
+
+    assert applied == f"{stem}_{agent_uuid[:13]}"
+
+
+@pytest.mark.asyncio
 async def test_the_persisted_record_alone_is_enough_to_avoid_the_mint_label(minted):
     """With no in-memory record (the entry was never loaded, or a claim
     cleared it), the ``auto_label`` persisted in core.identities.metadata
