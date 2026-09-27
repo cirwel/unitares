@@ -412,7 +412,7 @@ async def main():
             mcp=mcp,
         )
     except ServerStartupError as exc:
-        print(f"\\n❌ Error: {exc}", file=sys.stderr)
+        print(f"\n❌ Error: {exc}", file=sys.stderr)
         if exc.hint:
             print(f"💡 Tip: {exc.hint}", file=sys.stderr)
         raise SystemExit(1) from exc

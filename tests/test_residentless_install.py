@@ -236,3 +236,98 @@ class TestTheGuardCoversWhatShips:
 
         missing = {pkg for pkg in shipped if not any(p == pkg or p.startswith(f"{pkg}/") for p in scanned)}
         assert not missing, f"shipped but unguarded: {sorted(missing)}"
+
+
+class TestTheDoctorExpectsNoResidents:
+    """The install doctor ships with no resident roster either.
+
+    Until 2026-09-27 ``scripts/dev/unitares_doctor.py`` carried a hardcoded
+    table of one operator's resident LaunchAgents and warned that they were
+    "not loaded" on every other install. Which residents a host runs is now
+    declared (``UNITARES_DOCTOR_RESIDENT_LAUNCHD``); with nothing declared the
+    check has nothing to expect.
+    """
+
+    @pytest.fixture
+    def doctor(self, monkeypatch):
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        name = "unitares_doctor_residentless"
+        script = Path(__file__).resolve().parents[1] / "scripts/dev/unitares_doctor.py"
+        spec = importlib.util.spec_from_file_location(name, script)
+        mod = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, mod)  # dataclasses resolve via sys.modules
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_resident_launchagent_is_declared_by_default(self, doctor, monkeypatch):
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        assert doctor.resident_launchd_slots() == ()
+
+    def test_a_launchd_host_with_no_roster_expects_no_residents(self, doctor, monkeypatch):
+        # Even on a real launchd deployment, an undeclared roster is SKIP, not
+        # a warning about somebody else's residents.
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        result = doctor.check_resident_agents({doctor.GOVERNANCE_LAUNCHD_LABEL})
+
+        assert result.status == doctor.Status.SKIP
+
+
+# --- the agent-first Overview (2026-09-27) ------------------------------------
+# The dashboard's Overview now leads with agents and hides its resident block
+# when the roster is empty (dashboard/tests/landing-agent-first.test.js). What
+# it leans on server-side must therefore not depend on the roster: with none
+# declared, every agent's check-in still reaches the feed and the verdict
+# counts, and nothing is filtered out as "not a resident".
+
+def test_agent_feed_and_checkin_counts_ignore_an_empty_roster(residentless):
+    import asyncio
+    import time
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from src.broadcaster import broadcaster_instance
+    from src.http_routes.telemetry import http_eisv_agents
+    from src.http_routes.overview import http_activity
+
+    broadcaster_instance.event_history.clear()
+    broadcaster_instance.activity_history.clear()
+    for agent_id, decision in (("a", {"action": "proceed"}),
+                               ("b", {"action": "proceed", "sub_action": "guide"})):
+        asyncio.run(broadcaster_instance.broadcast({
+            "type": "eisv_update", "agent_id": agent_id, "agent_name": "agent-" + agent_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            "decision": decision,
+        }))
+    app = Starlette(routes=[Route("/v1/eisv/agents", http_eisv_agents), Route("/api/activity", http_activity)])
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    feed = client.get("/v1/eisv/agents").json()
+    assert sorted(r["agent_id"] for r in feed["agents"]) == ["a", "b"]
+    totals = client.get("/api/activity").json()["totals"]
+    assert totals == {"proceed": 1, "guide": 1, "pause": 0}
+
+
+# --- route packs (2026-09-27) -------------------------------------------------
+# The reference residents' summary / backlog / adjudication routes are mounted
+# only by the opt-in `reference-residents` route pack. Declaring no residents is
+# the default install, and it must carry none of those endpoints — independent
+# of the roster, which does not mount a pack either way.
+
+def test_default_install_mounts_no_resident_routes(residentless, monkeypatch):
+    from starlette.applications import Starlette
+    from src.http_api import register_http_routes
+
+    monkeypatch.delenv("UNITARES_ROUTE_PACKS", raising=False)
+    app = Starlette()
+    register_http_routes(app, server_ready_fn=lambda: True, server_start_time=0.0,
+                         server_version="t", has_streamable_http=False)
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert not [p for p in paths if p.startswith(("/v1/sentinel/", "/v1/watcher/", "/v1/vigil/"))]
+    assert "/api/automations" not in paths
+    assert "/v1/residents" in paths  # the roster endpoint is core, and answers empty

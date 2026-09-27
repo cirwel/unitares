@@ -9,7 +9,12 @@ cd "$APP_DIR"
 
 # Secrets (mode 600). Provides DIALECTIC_LIVE_SECRET_KEY_BASE and, optionally,
 # UNITARES_HTTP_API_TOKEN for authenticated tool-calls.
-SECRETS="${UNITARES_SECRETS_ENV:-$HOME/.config/cirwel/secrets.env}"
+# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+# pre-2026-09 ~/.config/cirwel path when only that one exists.
+SECRETS="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
+    SECRETS="$HOME/.config/cirwel/secrets.env"
+fi
 if [ -f "$SECRETS" ]; then
   set -a
   # shellcheck disable=SC1090

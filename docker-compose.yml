@@ -157,6 +157,11 @@ services:
       UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-}
       UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}
       UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
+      # Opt-in route packs (src/http_routes/packs.py); empty mounts core routes
+      # only. Dashboard extensions: set the variable AND mount that directory
+      # into this container, or the extension route has nothing to serve.
+      UNITARES_ROUTE_PACKS: ${UNITARES_ROUTE_PACKS:-}
+      UNITARES_DASHBOARD_EXT_DIR: ${UNITARES_DASHBOARD_EXT_DIR:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}

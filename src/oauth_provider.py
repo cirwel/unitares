@@ -318,7 +318,16 @@ class GovernanceOAuthProvider(OAuthAuthorizationServerProvider):
     async def exchange_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry,
     ) -> OAuthToken:
-        self._auth_codes.pop(authorization_code.code, None)
+        # Claim the code before minting anything, as exchange_refresh_token
+        # claims its token: load_authorization_code only reads, so two
+        # requests carrying the same code could both pass it. Whichever pops
+        # the entry redeems it; the other gets invalid_grant, so a code yields
+        # one token pair at most (RFC 6749 section 4.1.2).
+        if self._auth_codes.pop(authorization_code.code, None) is None:
+            raise TokenError(
+                error="invalid_grant",
+                error_description="authorization code already used",
+            )
 
         access_token_str = self._generate_token("at")
         refresh_token_str = self._generate_token("rt")
