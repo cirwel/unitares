@@ -299,17 +299,59 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
     """Return (line, value) for each string literal in JavaScript source.
 
     A small scanner, not a parser. It knows '...', "...", `...`, // and /* */
-    comments, and descends into template interpolation: the dashboard builds
-    markup as `<div>${head("Watcher", ...)}</div>`, so the label literal lives
-    inside ${...}, and a scanner that took the template as one opaque string
-    missed every one of them. The template's own text (outside ${...}) is
-    returned as a literal too. Regex literals are not modelled: a quote inside
-    one opens a string. Single and double quoted strings cannot span a line in
-    JavaScript, so that state is dropped at the newline and a desync costs at
-    most one line.
+    comments, regex literals, and descends into template interpolation: the
+    dashboard builds markup as `<div>${head("Watcher", ...)}</div>`, so the
+    label literal lives inside ${...}, and a scanner that took the template as
+    one opaque string missed every one of them. The template's own text
+    (outside ${...}) is returned as a literal too.
+
+    A regex literal is skipped whole. Unmodelled, a quote inside one (`/["']/`)
+    opened a string that swallowed the next real literal on the line, so a
+    label after a regex went unseen. Whether `/` starts a regex or divides is
+    decided from the previous significant token, the usual heuristic; it errs
+    toward division, which at worst misses nothing (a division is not a quote).
+    Single and double quoted strings cannot span a line in JavaScript, so that
+    state is dropped at the newline and a desync costs at most one line.
     """
     out: list[tuple[int, str]] = []
     n = len(source)
+
+    def regex_can_start(i: int) -> bool:
+        """Whether a '/' at i begins a regex literal rather than a division."""
+        j = i - 1
+        while j >= 0 and source[j] in " \t\r\n":
+            j -= 1
+        if j < 0:
+            return True
+        prev = source[j]
+        if prev in "(,=:[!&|?{};+-*%<>~^":
+            return True
+        if prev.isalnum() or prev in "_$":
+            k = j
+            while k >= 0 and (source[k].isalnum() or source[k] in "_$"):
+                k -= 1
+            return source[k + 1:j + 1] in _JS_REGEX_KEYWORDS
+        return False
+
+    def skip_regex(i: int) -> int:
+        """From the opening '/', return the index just past the regex and its flags."""
+        j, in_class = i + 1, False
+        while j < n and source[j] != "\n":
+            c = source[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                j += 1
+                while j < n and (source[j].isalnum() or source[j] == "_"):
+                    j += 1
+                return j
+            j += 1
+        return j  # unterminated on this line: resume at the newline
 
     def scan(i: int, line: int, in_braces: bool) -> tuple[int, int]:
         """Scan code from i; inside ${...} stop after the matching '}'."""
@@ -327,6 +369,8 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
                 end = n if end == -1 else end + 2
                 line += source.count("\n", i, end)
                 i = end
+            elif ch == "/" and regex_can_start(i):
+                i = skip_regex(i)
             elif ch in "'\"":
                 start_line, j, buf = line, i + 1, []
                 while j < n and source[j] != ch and source[j] != "\n":
