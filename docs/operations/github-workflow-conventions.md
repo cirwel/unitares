@@ -82,9 +82,26 @@ veto by removing the label.
   session pushed a review-fix commit onto the branch while the local session
   that owned it was still working. The owner's push was rejected, and only
   its backup branch kept the two from overwriting each other.
+- <a id="adoption"></a>**A stuck queued PR may be adopted.** Sessions rarely
+  leave a trace that identifies them (most work through `git -C` from
+  elsewhere, and dozens are open at once), so "ask the owner" often has no
+  one to ask. When a PR carrying `approved-to-merge` has been stuck for 12
+  hours (conflicting, a required check failing or unreviewed, or its
+  approval stale) with no commit or comment from its owner in that time, any
+  agent may take it over:
+  1. Post a handover comment on the PR saying you are adopting it and why.
+     That comment is the handover.
+  2. Fix it on the same branch with fast-forward pushes only: merge the base
+     in, never rebase or force-push.
+  3. Run the review, and renew the label (remove, then add) once validation
+     passes.
+  If the owner replies on the PR, stop and hand it back. Operator decision,
+  2026-09-27, after the first queue run left seven PRs stuck with no
+  findable owner.
 - **Do not** enable auto-merge by default.
-- A draft PR means "visible, not claiming merged." **Merging** is the
-  operator's deliberate action. **Marking ready** is the working agent's:
+- A draft PR means "visible, not claiming merged." **Merging** is the merge
+  queue's, entered by the owning agent's `approved-to-merge` label (section
+  4); arming by hand is the operator's. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
   actually passed — CI green, a completed review with findings addressed (see
   "Review workflow" below), and no collision with an in-flight branch. A
