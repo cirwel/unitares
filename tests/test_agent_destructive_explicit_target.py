@@ -5,14 +5,17 @@ session's own id into agent_id for every non-browsable call, so
 agent(action='delete', confirm=true) with no agent_id deleted the CALLER. And a
 named target the server could not resolve (a typo, a label it does not hold)
 reached require_registered_agent, which falls back to the bound agent, so
-archive(agent_id='<typo>') archived the caller too. describe_tool's lite view
+archive(agent_id='<typo>') archived the caller too; and a label or public id
+resolved to the first cached holder, although public_agent_id is shared by most
+identities that carry one (src/mcp_handlers/dialectic/auth.py), so a shared
+handle could delete an arbitrary agent. describe_tool's lite view
 of both actions hid agent_id (LITE_IDENTITY_FIELDS), which is how a caller
 reading it came to send the call without one.
 
 Three pieces now hold the rule, and the last test here holds them together:
 - middleware/params_step.py _EXPLICIT_TARGET_CALLS: no injection for them;
-- lifecycle/mutation.py: refuse a call that names no target, or a name that
-  resolves to some other agent;
+- lifecycle/mutation.py: refuse a call that names no target, and accept only
+  the target's own id (a UUID), never a label or public id;
 - AgentParams.ACTION_REQUIRED_FIELDS: lite lists agent_id as required at call
   time.
 """
@@ -42,7 +45,9 @@ from tests.helpers import (
 )
 
 CALLER = "11111111-1111-4111-8111-111111111111"
-TARGET = "22222222-2222-4222-8222-222222222222"
+TARGET = "2222abcd-2222-4222-8222-22222222abcd"
+# A well-formed UUID that no agent holds.
+UNREGISTERED = "44444444-4444-4444-8444-444444444444"
 
 
 def _server():
@@ -165,11 +170,11 @@ def test_a_blank_agent_id_is_no_target(action, blank):
 def test_an_unresolvable_agent_id_is_refused_rather_than_resolved_to_the_caller(action):
     with _Bound() as bound:
         _sent, payload = asyncio.run(
-            _dispatch("agent", {"action": action, "agent_id": "no-such-agent", "confirm": True})
+            _dispatch("agent", {"action": action, "agent_id": UNREGISTERED, "confirm": True})
         )
         assert payload.get("success") is False, payload
         assert payload.get("error_code") == "TARGET_AGENT_NOT_FOUND", payload
-        assert "no-such-agent" in payload.get("error", ""), payload
+        assert UNREGISTERED in payload.get("error", ""), payload
         assert bound.archived() == [] and bound.deleted() == []
         assert bound.server.agent_metadata[CALLER].status == "active"
 
@@ -179,8 +184,8 @@ def test_an_unresolvable_agent_id_is_refused_rather_than_resolved_to_the_caller(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("named", [TARGET, "target-label", "target-pub"])
-def test_archive_acts_on_the_agent_named(named):
+@pytest.mark.parametrize("named", [TARGET, TARGET.upper(), f"{{{TARGET}}}"])
+def test_archive_acts_on_the_agent_whose_uuid_is_named(named):
     with _Bound() as bound:
         _sent, payload = asyncio.run(
             _dispatch("agent", {"action": "archive", "agent_id": named})
@@ -189,14 +194,48 @@ def test_archive_acts_on_the_agent_named(named):
         assert bound.archived() == [TARGET]
 
 
-@pytest.mark.parametrize("named", [CALLER, "caller-label", "caller-pub"])
-def test_archiving_yourself_needs_your_own_name(named):
+def test_archiving_yourself_needs_your_own_uuid():
     with _Bound() as bound:
         _sent, payload = asyncio.run(
-            _dispatch("archive_agent", {"agent_id": named})
+            _dispatch("archive_agent", {"agent_id": CALLER})
         )
         assert payload.get("success") is True, payload
         assert bound.archived() == [CALLER]
+
+
+@pytest.mark.parametrize("action", ["archive", "delete"])
+@pytest.mark.parametrize(
+    "named", ["target-label", "target-pub", "caller-label", "caller-pub"]
+)
+def test_a_label_or_public_id_never_selects_a_target(action, named):
+    """Not even the caller's own: a handle is not an identity."""
+    with _Bound() as bound:
+        _sent, payload = asyncio.run(
+            _dispatch("agent", {"action": action, "agent_id": named, "confirm": True})
+        )
+        assert payload.get("success") is False, payload
+        assert payload.get("error_code") == "TARGET_AGENT_UUID_REQUIRED", payload
+        assert "UUID" in (payload.get("recovery") or {}).get("action", ""), payload
+        assert bound.archived() == [] and bound.deleted() == []
+
+
+def test_a_shared_public_id_cannot_delete_whichever_holder_is_cached_first():
+    """The reviewer's case on #2532: most public ids have many holders."""
+    third = "33333333-3333-4333-8333-333333333333"
+    with _Bound() as bound:
+        metadata = bound.server.agent_metadata
+        metadata[third] = make_agent_meta(label="third", public_agent_id="shared-handle")
+        metadata[third].agent_uuid = third
+        metadata[TARGET].public_agent_id = "shared-handle"
+        _sent, payload = asyncio.run(
+            _dispatch(
+                "agent",
+                {"action": "delete", "agent_id": "shared-handle", "confirm": True},
+            )
+        )
+        assert payload.get("error_code") == "TARGET_AGENT_UUID_REQUIRED", payload
+        assert bound.deleted() == []
+        assert {m.status for m in metadata.values()} == {"active"}
 
 
 def test_delete_acts_on_the_agent_named():

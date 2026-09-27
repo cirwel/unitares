@@ -345,9 +345,10 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     # What an action refuses to run without, which the flat wire schema cannot
     # mark required for one action (see KnowledgeParams.ACTION_REQUIRED_FIELDS).
     # archive and delete never default the target to the caller: dispatch does
-    # not inject the session's id for them and the handlers refuse a call with
-    # no agent_id (lifecycle/mutation.py, _require_named_target). delete also
-    # refuses without confirm=true.
+    # not inject the session's id for them, and the handlers refuse a call with
+    # no agent_id or one that is not exactly the target's own id: a label or
+    # public id is refused (lifecycle/mutation.py, _require_named_target and
+    # _wrong_target_error). delete also refuses without confirm=true.
     ACTION_REQUIRED_FIELDS: ClassVar[Mapping[str, Tuple[str, ...]]] = {
         "archive": ("agent_id",),
         "delete": ("agent_id", "confirm"),
@@ -357,12 +358,13 @@ class AgentParams(ListAgentOptionsMixin, AgentIdentityMixin):
     agent_id: Optional[str] = Field(
         None,
         description=(
-            "Target agent's UUID or label. Required for archive and delete, "
-            "which never default to your own agent; get and resume default to "
-            "you, and update changes only your own record."
+            "Target agent's UUID. Required for archive and delete, which take "
+            "only a UUID (labels and public ids are shared) and never default "
+            "to your own agent; get and resume default to you, and update "
+            "changes only your own record."
         ),
         json_schema_extra={
-            "brief": "Target UUID or label; required for archive and delete, which never default to you."
+            "brief": "Target agent's UUID; required for archive and delete, which never default to you."
         },
     )
     tags: Optional[List[Any]] = Field(None, description="Tags to set (for action=update)")
