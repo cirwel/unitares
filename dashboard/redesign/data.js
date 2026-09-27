@@ -456,8 +456,8 @@
           byStatus: st ? st.by_status : null,
         };
       }, () => {
-        const d = S().discoveries;
-        return { list: d.list, total: d.total, byType: d.byType, byStatus: d.byStatus };
+        const d = S().discoveries || {};
+        return { list: d.list || [], total: d.total, byType: d.byType, byStatus: d.byStatus };
       });
     },
 
@@ -498,7 +498,7 @@
           } else c.active++;
         });
         return { sessions, counts: c };
-      }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
+      }, () => { const dl = S().dialectic || {}; return { sessions: dl.sessions || [], counts: dl.counts || {} }; });
     },
 
     async dialecticSession(id) {
@@ -541,7 +541,7 @@
           semantics: runtime.semantics || {},
         } : { available: false, source: "unavailable", windowHours: 24, summary: {}, processes: [] };
         return { events, buckets, operational, windowMin: (act && act.window_minutes) || 60, bucketMin: (act && act.bucket_minutes) || 5 };
-      }, () => S().activity);
+      }, () => S().activity || { events: [], buckets: [], operational: null, windowMin: 60, bucketMin: 5 });
     },
 
     async eisv() {
@@ -613,7 +613,7 @@
       return withFallback(async () => {
         const j = await authFetch("/v1/metrics/catalog");
         return j && Array.isArray(j.metrics) ? j.metrics : null;
-      }, () => S().metrics.catalog);
+      }, () => (S().metrics || {}).catalog || []);
     },
 
     async metricsSeries(name, sinceDays) {
@@ -622,7 +622,7 @@
         const since = new Date(Date.now() - (sinceDays || 14) * 86400 * 1000).toISOString();
         const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) + "&since=" + encodeURIComponent(since));
         return j && Array.isArray(j.points) ? j.points : null;
-      }, () => (S().metrics.series[name] || []));
+      }, () => (((S().metrics || {}).series || {})[name] || []));
     },
 
     // Fleet risk history — Chronicler's daily governance.* scrape, three series
@@ -693,7 +693,7 @@
           const j = await authFetch("/v1/sentinel/adjudication-queue?limit=5");
           return j && j.success ? j : null;
         },
-        () => S().adjudication,
+        () => S().adjudication || { queue: [], progress: null, pending_total: 0, dismiss_reasons: [] },
       );
     },
 
