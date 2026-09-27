@@ -111,6 +111,8 @@ def test_current_repository_version_and_claims_are_synchronized_without_network(
         # A release PR bumps agents/sdk ahead of PyPI, and the public pins move
         # only after the sdk-v tag publishes. Nothing else may disagree, and the
         # tree may never declare a version older than the one it advertises.
+        # This branch can stay green offline indefinitely; the scheduled
+        # `SDK release sync` sentinel reads PyPI and is the backstop.
         assert _codes(report) == {"declared_registry_mismatch"}
         as_tuple = lambda v: tuple(int(p) for p in v.split("."))  # noqa: E731
         assert as_tuple(declared) > as_tuple(published)

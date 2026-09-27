@@ -75,9 +75,12 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   class properties; earlier code does not read them, but after a later roll
   forward those findings read as classified again until they are next
   reopened or reclassified. Discovery profiles are gone
-  (#2137): every transport advertises one complete catalog — every registered
-  tool plus the primary workflow aliases — so a client that selected tools from
-  discovery on v2.22.0 sees additional names, and no removals beyond
+  (#2137), and the initial listing is progressive (#2328): `tools/list` starts
+  with the workflow tools plus `list_tools`, `describe_tool` and `use_tool`,
+  and the rest of the catalog stays callable and reachable through them. A
+  client that took its tools from a v2.22.0 `lite` or `full` listing therefore
+  sees fewer names in the initial list; set `UNITARES_TOOL_ADVERTISEMENT=full`
+  to advertise every schema up front. The only callable removed is
   `direct_resume_if_safe`, which only `full` mode advertised. Legacy
   `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
   but ignored, `minimal` included, so that value no longer restores the v2.22.0
