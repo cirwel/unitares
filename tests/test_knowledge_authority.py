@@ -420,3 +420,25 @@ async def test_retrieval_windows_widen_when_authority_ranking_is_on(monkeypatch)
     raw_state = _KnowledgeSearchState(request=raw, graph=graph)
     await _run_text_search(raw_state)
     assert [row.id for row in raw_state.results] == ["m0", "m1"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_pool_is_ranked_before_the_page_is_cut():
+    # Review on #2537 (round 3): the FTS fallback kept only the first
+    # `limit` rows before authority ranking ran.
+    from src.mcp_handlers.knowledge import handlers
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(2)
+    ]
+    native = _discovery("finding-1")
+    graph = AsyncMock()
+    graph.semantic_search = AsyncMock(return_value=[])
+    graph.full_text_search = AsyncMock(return_value=[*channel, native])
+    request = handlers._parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = handlers._KnowledgeSearchState(request=request, graph=graph)
+    with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
+         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+        await handlers._execute_knowledge_search(state)
+    assert state.search_mode == "semantic_fallback_fts"
+    assert [row.id for row in state.results][0] == "finding-1"

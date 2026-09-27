@@ -2670,7 +2670,9 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             if not _candidate_matches_semantic_fallback(document, request):
                 continue
             state.results.append(document)
-            if len(state.results) >= request.limit:
+            # The executor ranks and then cuts the page, so collect the
+            # whole authority pool here, not just `limit`.
+            if len(state.results) >= max(request.limit, _authority_pool_size(request)):
                 break
         if not state.results:
             return
