@@ -76,12 +76,14 @@ from .persistence import (
 
 
 def _broadcaster():
-    """Lazy accessor for the shared broadcaster. Returns None when broadcaster
-    isn't importable (e.g., unit tests without a live server). Mirrors the
-    helper in persistence.py; kept at module level here so tests patching
-    handlers._broadcaster can intercept cleanly."""
+    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``).
+    Returns None only when src.broadcaster fails to import. Mirrors the helper
+    in persistence.py; kept at module level here so tests patching
+    handlers._broadcaster can intercept cleanly. The import name is held by
+    tests/test_identity_broadcaster_accessor.py: a wrong one is swallowed here
+    and silently drops every identity event this accessor gates."""
     try:
-        from src.broadcaster import broadcaster as _b
+        from src.broadcaster import broadcaster_instance as _b
         return _b
     except Exception:
         return None
