@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import sys
 from pathlib import Path
 
@@ -215,9 +216,232 @@ def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
     return domain + names, []
 
 
+# ---------------------------------------------------------------------------
+# Served surfaces
+# ---------------------------------------------------------------------------
+# The AST scan above reads Python. A fresh install also receives text that is
+# not Python, verbatim: the dashboard served to the operator's browser, and the
+# skills and tool descriptions served to every agent that connects. On
+# 2026-09-26 a fresh-installer audit found this guard clean while the dashboard
+# gated three panels on resident labels and bundled a real capture of one
+# deployment's fleet, and the served skills carried one operator's Discord
+# bridge. None of it was checked, because none of it was Python.
+#
+# Two rules, by how the text reaches its reader:
+#
+# - Dashboard CODE (.js, and <script> in .html) keeps the Python rule: a string
+#   literal that IS a name is a finding, a comment naming one is provenance.
+# - PROSE (served .md, SKILL.md, tool_descriptions.json, and .html markup
+#   outside <script>) has no comments: every word is delivered. A resident name
+#   anywhere in it is a finding.
+#
+# The operator domain fails everywhere, as above.
+
+# Everything under this root with these suffixes is served
+# (src/http_routes/dashboard.py, http_dashboard_redesign).
+SERVED_DASHBOARD_ROOT = "dashboard/redesign"
+SERVED_DASHBOARD_SUFFIXES = (".js", ".html", ".md")
+# The retired classic dashboard still serves these two at /phase.
+SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
+# Agent-facing text. tool_descriptions.json is served through tools/list and
+# describe_tool; every skills/<name>/SKILL.md is served by the `skills` tool.
+SERVED_PROSE_FILES = ("src/tool_descriptions.json",)
+SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
+
+# Served surfaces that name residents today. Same contract as KNOWN_COUPLINGS:
+# reported on every run, never silenced, a line deleted when its fix lands.
+SERVED_KNOWN_COUPLINGS: dict[str, str] = {
+    "dashboard/redesign/snapshot.js":
+        "a real capture of one deployment's fleet, bundled as the offline "
+        "fallback; replace with synthetic data once #2492 stops served pages "
+        "falling back to it",
+    "dashboard/redesign/preview.html":
+        "carries the same capture as snapshot.js in a literal FLEET array",
+    "dashboard/redesign/PLAN.md":
+        "design notes describing one deployment's own fleet",
+    "dashboard/redesign/data.js":
+        "gates the Watcher/Sentinel/Vigil summary panels on those labels "
+        "(inRoster); the panel set should come from roster capabilities",
+    "dashboard/redesign/sections/residents.js":
+        "resident-specific panels keyed by label",
+    "skills/discord-bridge/SKILL.md":
+        "one operator's Discord bridge (separate repo), served to every agent",
+    "skills/unitares-dashboard/SKILL.md":
+        "describes the Sentinel adjudication panel by resident name",
+    "src/tool_descriptions.json":
+        "names Lumen in outcome_event's drawing outcome and an observe example; "
+        "#2490 rewrites this file, fix after it lands",
+}
+
+_NAME_WORD = re.compile(
+    r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b"
+)
+_SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\s*>)", re.S | re.I)
+
+
+def js_string_literals(source: str) -> list[tuple[int, str]]:
+    """Return (line, value) for each string literal in JavaScript source.
+
+    A small scanner, not a parser. It knows '...', "...", `...`, // and /* */
+    comments, and descends into template interpolation: the dashboard builds
+    markup as `<div>${head("Watcher", ...)}</div>`, so the label literal lives
+    inside ${...}, and a scanner that took the template as one opaque string
+    missed every one of them. The template's own text (outside ${...}) is
+    returned as a literal too. Regex literals are not modelled: a quote inside
+    one opens a string. Single and double quoted strings cannot span a line in
+    JavaScript, so that state is dropped at the newline and a desync costs at
+    most one line.
+    """
+    out: list[tuple[int, str]] = []
+    n = len(source)
+
+    def scan(i: int, line: int, in_braces: bool) -> tuple[int, int]:
+        """Scan code from i; inside ${...} stop after the matching '}'."""
+        depth = 0
+        while i < n:
+            ch = source[i]
+            if ch == "\n":
+                line += 1
+                i += 1
+            elif source.startswith("//", i):
+                end = source.find("\n", i)
+                i = n if end == -1 else end
+            elif source.startswith("/*", i):
+                end = source.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                line += source.count("\n", i, end)
+                i = end
+            elif ch in "'\"":
+                start_line, j, buf = line, i + 1, []
+                while j < n and source[j] != ch and source[j] != "\n":
+                    if source[j] == "\\" and j + 1 < n:
+                        buf.append(source[j + 1])
+                        j += 2
+                        continue
+                    buf.append(source[j])
+                    j += 1
+                out.append((start_line, "".join(buf)))
+                i = j + 1 if j < n and source[j] == ch else j
+            elif ch == "`":
+                i, line = template(i + 1, line)
+            elif ch == "{" and in_braces:
+                depth += 1
+                i += 1
+            elif ch == "}" and in_braces:
+                if depth == 0:
+                    return i + 1, line
+                depth -= 1
+                i += 1
+            else:
+                i += 1
+        return i, line
+
+    def template(i: int, line: int) -> tuple[int, int]:
+        """Scan a template literal body from i (just past the opening backtick)."""
+        start_line, buf = line, []
+        while i < n and source[i] != "`":
+            if source[i] == "\\" and i + 1 < n:
+                buf.append(source[i + 1])
+                i += 2
+            elif source.startswith("${", i):
+                buf.append("${}")
+                i, line = scan(i + 2, line, in_braces=True)
+            else:
+                if source[i] == "\n":
+                    line += 1
+                buf.append(source[i])
+                i += 1
+        out.append((start_line, "".join(buf)))
+        return i + 1, line
+
+    scan(0, 1, in_braces=False)
+    out.sort(key=lambda item: item[0])
+    return out
+
+
+def _code_findings(rel: str, source: str, line_offset: int = 0) -> list[str]:
+    """Python's rule applied to JavaScript: a literal that IS a name, or holds the domain."""
+    findings: list[str] = []
+    for lineno, value in js_string_literals(source):
+        at = f"  {rel}:{lineno + line_offset}"
+        domain = _operator_domain_in(value)
+        if domain:
+            findings.append(f'{at}: hardcoded operator domain "{domain}" in a string literal')
+        elif _identity_literal(value):
+            findings.append(
+                f'{at}: hardcoded fleet identity "{_identity_literal(value)}" in a string literal'
+            )
+    return findings
+
+
+def _prose_findings(rel: str, text: str, line_offset: int = 0) -> list[str]:
+    """Delivered text has no comments: any resident name or the domain is a finding."""
+    findings: list[str] = []
+    for k, row in enumerate(text.splitlines(), start=1):
+        at = f"  {rel}:{k + line_offset}"
+        domain = _operator_domain_in(row)
+        if domain:
+            findings.append(f'{at}: operator domain "{domain}" in served text')
+        for name in dict.fromkeys(_NAME_WORD.findall(row)):
+            findings.append(f'{at}: fleet identity "{name}" in served text')
+    return findings
+
+
+def scan_served_file(path: Path) -> list[str]:
+    """Scan one served, non-Python file by the rule for how it is delivered."""
+    try:
+        rel = path.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix == ".js":
+        return _code_findings(rel, text)
+    if path.suffix != ".html":
+        return _prose_findings(rel, text)
+    findings: list[str] = []
+    markup, last = [], 0
+    for m in _SCRIPT_BLOCK.finditer(text):
+        body_start = m.start(2)
+        findings += _code_findings(rel, m.group(2), text.count("\n", 0, body_start))
+        # Keep the line count of the script body so markup line numbers stay true.
+        markup.append(text[last:body_start] + "\n" * m.group(2).count("\n"))
+        last = m.end(2)
+    markup.append(text[last:])
+    return findings + _prose_findings(rel, "".join(markup))
+
+
+def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """Every non-Python file the server serves verbatim, in a stable order."""
+    files: set[Path] = set()
+    root = repo_root / SERVED_DASHBOARD_ROOT
+    if root.exists():
+        files.update(
+            p for p in root.rglob("*")
+            if p.is_file() and p.suffix in SERVED_DASHBOARD_SUFFIXES
+        )
+    for rel in SERVED_DASHBOARD_FILES + SERVED_PROSE_FILES:
+        if (repo_root / rel).is_file():
+            files.add(repo_root / rel)
+    files.update(repo_root.glob(SERVED_SKILLS_GLOB))
+    return sorted(files)
+
+
+def triage_served(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
+    """Split one served file's hits into (failing, known-but-deferred)."""
+    domain = [h for h in hits if "operator domain" in h]
+    names = [h for h in hits if "operator domain" not in h]
+    if rel in SERVED_KNOWN_COUPLINGS:
+        return domain, names
+    return domain + names, []
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--paths", nargs="*", default=list(DEFAULT_PATHS))
+    parser.add_argument(
+        "--no-served", action="store_true",
+        help="skip the served dashboard/skills/tool-description scan",
+    )
     args = parser.parse_args()
 
     findings: list[str] = []
@@ -237,6 +461,18 @@ def main() -> int:
             findings.extend(failing)
             known.extend(deferred)
 
+    served_known: list[str] = []
+    if not args.no_served:
+        for path in served_files():
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            scanned += 1
+            hits = scan_served_file(path)
+            if not hits:
+                continue
+            failing, deferred = triage_served(rel, hits)
+            findings.extend(failing)
+            served_known.extend(deferred)
+
     # Always printed, pass or fail: this repo has known coupling and the guard
     # must not imply otherwise.
     if known:
@@ -244,6 +480,18 @@ def main() -> int:
         for line in known:
             rel = line.strip().split(":")[0]
             print(f"{line}\n      reason deferred: {KNOWN_COUPLINGS.get(rel, '')}")
+        print()
+    if served_known:
+        by_file: dict[str, int] = {}
+        for line in served_known:
+            rel = line.strip().split(":")[0]
+            by_file[rel] = by_file.get(rel, 0) + 1
+        print(
+            f"⚠️  Fleet-identity guard: {len(served_known)} KNOWN reference(s) in "
+            f"{len(by_file)} served file(s), not yet fixed"
+        )
+        for rel, count in sorted(by_file.items()):
+            print(f"  {rel}: {count}\n      reason deferred: {SERVED_KNOWN_COUPLINGS[rel]}")
         print()
 
     if not findings:
