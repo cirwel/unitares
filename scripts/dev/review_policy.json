@@ -10,6 +10,8 @@
     "src/mcp_handlers/identity/*",
     "src/mcp_handlers/middleware/identity_step.py",
     "src/mcp_handlers/support/agent_auth.py",
+    "src/agent_identity_auth.py",
+    "src/effect_grant.py",
     "src/mcp_handlers/schemas/identity.py",
     "src/mcp_handlers/identity_bootstrap.py",
     "src/services/http_tool_service.py",
@@ -19,5 +21,6 @@
     "scripts/dev/review_gate.py",
     "scripts/dev/review_policy.json",
     ".github/workflows/review-gate.yml"
-  ]
+  ],
+  "_boundary": "Listed: files whose main job is an authentication or authorisation decision, or the wiring that configures one (mcp_server.py, mcp_listen_config.py), plus the review gate itself. Deliberately NOT listed: large multi-purpose files that contain a single check (http_routes/sentinel.py, mcp_handlers/updates/phases.py, mcp_server_std.py, dialectic_protocol.py, mcp_handlers/wave3a_probe.py, mcp_handlers/consolidated.py); listing them would put most of the codebase under the rule. Audited 2026-09-27 by grepping src/ for strict-identity refusals, compare_digest, CSRF, WebAuthn and trusted-network checks."
 }

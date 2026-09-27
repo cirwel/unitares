@@ -2028,6 +2028,7 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
                  "src/services/mcp_transport_service.py", "src/mcp_listen_config.py",
                  "src/mcp_server.py", "src/dashboard_auth.py",
                  "src/mcp_handlers/identity_bootstrap.py", "src/services/http_tool_service.py",
+                 "src/agent_identity_auth.py", "src/effect_grant.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
