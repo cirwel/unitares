@@ -90,16 +90,32 @@ def test_stale_and_missing_public_claims_are_both_visible():
 
 def test_current_repository_version_and_claims_are_synchronized_without_network():
     declared = declared_version(REPO_ROOT)
+    advertised = advertised_versions(REPO_ROOT)
+    pins = set(advertised.values())
+    # Every public page pins one install version; that pin stands in for PyPI
+    # here, and the scheduled sentinel reads the registry itself.
+    assert len(pins) == 1 and None not in pins, advertised
+    (published,) = pins
     report = assess(
         declared=declared,
-        published="0.3.0",
+        published=published,
         # The general test workflow intentionally uses a shallow, tagless checkout.
         # Tag parsing is exercised through assess() above; the scheduled sentinel's
         # workflow contract below separately requires fetch-depth: 0.
-        tagged={declared},
-        advertised=advertised_versions(REPO_ROOT),
+        tagged={declared, published},
+        advertised=advertised,
     )
-    assert report["synced"] is True
+    if declared == published:
+        assert report["synced"] is True
+    else:
+        # A release PR bumps agents/sdk ahead of PyPI, and the public pins move
+        # only after the sdk-v tag publishes. Nothing else may disagree, and the
+        # tree may never declare a version older than the one it advertises.
+        # This branch can stay green offline indefinitely; the scheduled
+        # `SDK release sync` sentinel reads PyPI and is the backstop.
+        assert _codes(report) == {"declared_registry_mismatch"}
+        as_tuple = lambda v: tuple(int(p) for p in v.split("."))  # noqa: E731
+        assert as_tuple(declared) > as_tuple(published)
 
 
 def test_workflow_is_scheduled_deduplicated_and_self_closing():
