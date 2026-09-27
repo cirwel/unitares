@@ -596,6 +596,22 @@ def resolution_failed_surface(resolve_result: dict) -> dict:
 # misses it unless it checks this marker. `rollout_flag` is written by
 # `strict_identity_refusal_payload` and by nothing else in the codebase, so it
 # is a precise marker: no other success payload can false-positive on it.
+#
+# `rollout_flag`'s own name gives a caller no reason to suspect it means
+# "this was refused" -- it reads like a feature-flag echo, not an error
+# indicator, so a generic caller with no knowledge of #425 has nothing to
+# key on (2026-09-27 review finding: "an error path that reports success").
+# `refused` (below, in `strict_identity_refusal_payload`) is the
+# self-describing sibling for exactly that caller: a plain boolean, present
+# only on this payload, that says what it means without decoding a magic
+# string. It is deliberately NOT `success: false` or an `error` key -- see
+# that function's docstring for why a real error shape here reintroduces the
+# #425 ghost-leak (retry-with-mint catches a generic tool failure and mints a
+# fresh identity on every refused call). `identity_refusal_status` below
+# still keys on `rollout_flag` alone (its one-writer invariant is pinned by
+# TestPredicate.test_the_marker_has_exactly_one_writer in
+# tests/test_identity_refusal_predicate_2134.py); `refused` is additive, not
+# a second source of truth.
 IDENTITY_REFUSAL_MARKER = "STRICT_IDENTITY_REQUIRED"
 
 
@@ -647,11 +663,25 @@ def strict_identity_refusal_payload(
 
     A structured success-shape, not an error: error responses invite
     retry-with-mint catch paths and would reintroduce the ghost leak.
+
+    ``refused: true`` is the self-describing marker for a caller who does
+    not know the #425 contract (2026-09-27 review finding: the payload
+    otherwise gives a naive caller nothing to distinguish it from a real
+    success — ``rollout_flag`` carries the same information but its name
+    reads as a feature-flag echo, not an error indicator). It is additive:
+    ``identity_refusal_status`` still keys on ``rollout_flag`` alone, and
+    this does not touch ``success`` or add an ``error`` key, so it cannot
+    trip generic success/error branching (that branching is exactly what
+    caused the ghost leak the paragraph above describes -- see
+    ``_raise_for_tool_failure`` in ``agents/sdk/src/unitares_sdk/client.py``,
+    which raises on ``success is False`` alone, before the SDK's own
+    #425-aware detection ever runs).
     """
     payload = {
         "status": status,
         "tool": tool_name,
         "tool_class": "required",
+        "refused": True,
         "hint": hint if hint is not None else _DEFAULT_REFUSAL_HINT,
         "next_step": next_step if next_step is not None else _DEFAULT_REFUSAL_NEXT_STEP,
         "safe_options": [

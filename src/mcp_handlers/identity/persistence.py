@@ -765,9 +765,41 @@ def drop_stale_display_name(meta, label: str) -> None:
     as one that was never auto-named: the claimed label is displayed and
     label_source reads ``claimed``. The cold-start loader never restores
     display_name, so a restart already had this effect.
+
+    Any non-``None`` ``display_name`` here means "auto-named" -- it has
+    exactly one writer, above -- so its call site (``set_agent_label_resolved``,
+    after the collision-rename already picked the label actually applied)
+    always represents a real claim and must always clear it. The ``label``
+    parameter used to gate that: skip clearing when ``display_name`` already
+    equalled the incoming ``label``. That is reachable, not just theoretical
+    -- a collision rename appends this agent's OWN uuid8
+    (``f"{label}_{agent_uuid[:8]}"``), which is exactly how the auto-name was
+    built, so claiming a taken name can resolve to a string identical to the
+    stale auto-name (e.g. claim ``"Agent"``, collide, land on
+    ``"Agent_<uuid8>"`` -- the same string ``_check_display_name_required``
+    already wrote). The old guard read that coincidence as "nothing to
+    clear" and left ``label_source`` reading ``auto`` for a name the caller
+    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27).
+
+    ``auto_label`` is cleared in the same branch, for the same reason.
+    ``label_source_for`` (services/identity_payloads.py) reads ``auto``
+    whenever the displayed label still equals ``auto_label``, and the
+    knowledge write that sets this in-memory ``display_name`` sets
+    ``auto_label`` in the exact same call (knowledge/handlers.
+    _check_display_name_required) -- they are one event's two fields, not
+    two independent facts. Clearing only ``display_name`` left
+    ``compute_agent_signature``'s fallback (``display_name or label``) read
+    the just-applied ``label`` instead, which in the same collision
+    coincidence above still equals the stale ``auto_label`` --
+    ``label_source`` kept reading ``auto`` even after the ``display_name``
+    fix. A mint-time ``auto_label`` (persisted to ``core.identities.metadata``,
+    "written once ... and never updated" -- agent_metadata_model.py) is never
+    reachable here: it does not set ``display_name``, so this function is a
+    no-op for it and it is untouched, exactly as documented.
     """
-    if getattr(meta, "display_name", None) not in (None, label):
+    if getattr(meta, "display_name", None) is not None:
         meta.display_name = None
+        meta.auto_label = None
 
 
 async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str] = None) -> bool:

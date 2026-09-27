@@ -146,6 +146,25 @@ async def execute_nested_http_tool(
         # specific prebinding. The outer use_tool call deliberately deferred
         # its charge to this target and must not turn that shortcut into a
         # zero-charge path.
+        #
+        # 2026-09-27 review finding (false positive, recorded so it is not
+        # re-raised): a nested REST use_tool call for a tool WITH a direct
+        # handler (get_governance_metrics) re-enters via this branch and
+        # `execute_http_tool` below, landing on the SAME direct handler
+        # (`_execute_http_get_governance_metrics`) as a top-level REST call --
+        # never the generic MCP dispatch pipeline, so `inject_identity` never
+        # runs and no `identity_mismatch` is possible here. That is
+        # deliberate and matches the shipped contract (interface contract
+        # 1.21.0 / commit 3d130aca8: "get_governance_metrics over REST runs a
+        # direct handler with no inject step and answers the named agent for
+        # any caller", both direct and through use_tool). `inject_identity`
+        # DOES run, and DOES refuse a mismatch, for the actual MCP-protocol
+        # `use_tool` (a real MCP client on /mcp/, not this REST route) --
+        # see test_through_use_tool_a_caller_bound_as_another_agent_is_refused
+        # in tests/test_inferred_read_paths_closed.py, which pins that half.
+        # This function's own test,
+        # test_over_rest_get_governance_metrics_reads_the_named_agent_for_a_bound_caller,
+        # pins the REST half and passes against this code as written.
         if get_direct_http_tool_handler(tool_name) is not None:
             from src.mcp_handlers.context import get_context_agent_id
             from src.mcp_handlers.middleware import DispatchContext, check_rate_limit
