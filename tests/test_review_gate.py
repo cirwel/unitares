@@ -2417,7 +2417,8 @@ def test_the_policy_covers_the_dialectic_and_beam_auth_modules():
                  "elixir/agent_orchestrator/lib/agent_orchestrator/http_auth.ex",
                  "elixir/lease_plane/lib/unitares_lease_plane/identity_binding.ex",
                  "elixir/wave3a_handlers/lib/wave3a_handlers/http_router.ex",
-                 "src/mcp_handlers/middleware/__init__.py"):
+                 "src/mcp_handlers/middleware/__init__.py",
+                 "src/mcp_handlers/decorators.py", "src/mcp_handlers/stakes_table.py"):
         assert rg.sensitive_paths([path], globs) == [path], path
     assert rg.sensitive_paths(["elixir/agent_orchestrator/lib/agent_orchestrator/agent_runner.ex"],
                               globs) == []
