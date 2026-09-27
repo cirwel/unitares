@@ -69,3 +69,19 @@ def test_the_public_listener_is_never_trusted_even_when_listed(monkeypatch):
     monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
     assert _is_trusted_network(_request("100.64.0.9", **{PUBLIC_LISTENER_SCOPE_KEY: True})) is False
     assert _is_trusted_network(_request("127.0.0.1", **{PUBLIC_LISTENER_SCOPE_KEY: True})) is False
+
+
+def test_a_cidr_with_host_bits_is_refused_not_masked_wider(monkeypatch):
+    # 203.0.113.7/8 is a likely typo for one host; masking it would trust a /8.
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "203.0.113.7/8")
+    assert _is_trusted_network(_request("203.0.113.7")) is False
+    assert _is_trusted_network(_request("203.1.2.3")) is False
+
+
+def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "0.0.0.0/0")
+    with caplog.at_level(logging.WARNING):
+        assert _is_trusted_network(_request("8.8.8.8")) is True
+    assert "trusts every caller" in caplog.text

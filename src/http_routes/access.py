@@ -108,7 +108,10 @@ def extra_trusted_networks() -> tuple:
 
     Comma-separated CIDRs or addresses, for example ``100.64.0.0/10`` for a
     Tailscale tailnet. Unset or empty adds nothing. An entry that does not
-    parse is logged and skipped, never widened into something broader.
+    parse, including a CIDR with host bits set (``203.0.113.7/8``, a likely
+    typo for one host), is logged and skipped, never widened into something
+    broader. A catch-all (``0.0.0.0/0``, ``::/0``) is honoured, since the
+    operator wrote it, but logged, because it trusts every caller.
     """
     global _extra_networks_cache
     raw = os.getenv("UNITARES_TRUSTED_NETWORKS", "").strip()
@@ -120,9 +123,21 @@ def extra_trusted_networks() -> tuple:
         if not item:
             continue
         try:
-            nets.append(_ipaddress.ip_network(item, strict=False))
+            net = _ipaddress.ip_network(item, strict=True)
         except ValueError:
-            logger.warning("UNITARES_TRUSTED_NETWORKS: ignoring %r, not a CIDR or address", item)
+            logger.warning(
+                "UNITARES_TRUSTED_NETWORKS: ignoring %r, not an address or a CIDR "
+                "without host bits",
+                item,
+            )
+            continue
+        if net.prefixlen == 0:
+            logger.warning(
+                "UNITARES_TRUSTED_NETWORKS: %s trusts every caller; local-posture "
+                "auth is effectively off",
+                net,
+            )
+        nets.append(net)
     _extra_networks_cache = (raw, tuple(nets))
     return _extra_networks_cache[1]
 
