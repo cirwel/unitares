@@ -10,6 +10,8 @@ check-in) — so the predicate lives beside the builder it tests for.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.mcp_handlers.identity_bootstrap import (
@@ -17,6 +19,7 @@ from src.mcp_handlers.identity_bootstrap import (
     identity_refusal_status,
     strict_identity_refusal_payload,
 )
+from src.mcp_handlers.response_base import success_response
 
 
 class TestPredicate:
@@ -29,6 +32,22 @@ class TestPredicate:
             "onboard", status="lineage_declaration_required"
         )
         assert identity_refusal_status(payload) == "lineage_declaration_required"
+
+    def test_carries_a_self_describing_refusal_marker(self):
+        """2026-09-27 review finding: `rollout_flag`'s own name gives a naive
+        caller no reason to suspect it means "refused". `refused` is the
+        additive, self-describing sibling -- present only here, so a caller
+        with no #425 knowledge still has something unambiguous to check.
+        Additive: it must not disturb the success-shape the ghost-leak
+        avoidance depends on.
+        """
+        payload = strict_identity_refusal_payload("process_agent_update")
+        assert payload["refused"] is True
+        assert "error" not in payload
+        raw = success_response(payload)
+        body = json.loads(raw[0].text)
+        assert body["refused"] is True
+        assert body["success"] is True  # the ghost-leak-avoidance premise
 
     @pytest.mark.parametrize("payload", [
         {"success": True, "status": "healthy"},
