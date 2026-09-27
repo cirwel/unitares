@@ -87,21 +87,32 @@ jobs:
       - name: Deep health reports no failing checks
         run: |
           # No -f: a failing stack answers 503 with the JSON we need to read.
-          body=""
+          # Only 200 and 503 are health answers; anything else (a 401 after an
+          # auth regression, a proxy error page) must fail the step, not be
+          # read as an empty report.
+          code=""
           for attempt in $(seq 1 20); do
-            body=$(curl -sS http://localhost:8767/health/deep) && \
-              printf '%s' "$body" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("status") != "unavailable" else 1)' && break
+            code=$(curl -sS -o /tmp/deep.json -w '%{http_code}' http://localhost:8767/health/deep || true)
+            if [ "$code" = "200" ] || [ "$code" = "503" ]; then
+              python3 -c 'import json,sys; sys.exit(0 if json.load(open("/tmp/deep.json")).get("status") != "unavailable" else 1)' && break
+            fi
             sleep 3
           done
-          printf '%s' "$body" | python3 -c '
+          python3 - "$code" <<'PY'
           import json, sys
-          body = json.load(sys.stdin)
+          code = sys.argv[1]
+          if code not in ("200", "503"):
+              sys.exit(f"/health/deep answered HTTP {code or 'nothing'}, not a health report")
+          body = json.load(open("/tmp/deep.json"))
+          status = body.get("status")
+          checks = body.get("checks")
+          if status not in {"healthy", "moderate", "critical"} or not isinstance(checks, dict) or not checks:
+              sys.exit(f"/health/deep body is not a health report: status={status!r}, checks={type(checks).__name__}")
           failing = (body.get("operator_summary") or {}).get("failing_checks") or []
-          errors = {k: v for k, v in (body.get("checks") or {}).items()
-                    if isinstance(v, dict) and v.get("status") == "error"}
-          print("deep health:", body.get("status"), "| failing:", failing, "| errors:", sorted(errors))
+          errors = sorted(k for k, v in checks.items() if isinstance(v, dict) and v.get("status") == "error")
+          print(f"deep health: {status} (HTTP {code}) | {len(checks)} checks | failing: {failing} | errors: {errors}")
           sys.exit(1 if failing or errors else 0)
-          '
+          PY
 
       - name: Verify progressive MCP discovery and complete federation contract
         run: docker compose exec -T governance-mcp python - --mode progressive < scripts/ci/check_mcp_tool_surface.py
