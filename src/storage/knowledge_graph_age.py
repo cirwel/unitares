@@ -1411,8 +1411,18 @@ class KnowledgeGraphAGE:
             ),
         )
 
-    async def _sql_update_discovery(self, discovery_id: str, updates: Dict[str, Any]) -> bool:
-        """SQL UPDATE fallback for SQL-only discoveries that have no AGE node."""
+    async def _sql_update_discovery(
+        self, discovery_id: str, updates: Dict[str, Any], conn: Any = None
+    ) -> bool:
+        """SQL UPDATE fallback for SQL-only discoveries that have no AGE node.
+
+        ``conn`` is a connection already inside a transaction. update_discovery
+        passes its own when the Cypher MATCH finds no node, so the fallback
+        runs in that transaction instead of taking a second pool connection
+        while the first is held (with a one-connection pool, or a pool full of
+        such updates, that waits forever). Without one, the fallback opens its
+        own transaction.
+        """
         from src.knowledge_graph import normalize_tags
         db = await self._get_db()
         updates = apply_closure_reopen_rule(updates)
@@ -1447,17 +1457,21 @@ class KnowledgeGraphAGE:
         # pool has no fetchval, so every update on this path raised
         # AttributeError (reported as a failed update, or as "Discovery not
         # found" when reached from a missing AGE node) while tests that faked
-        # the pool passed. A transaction, not a bare connection: the UPDATE and
-        # the tag sync commit together, so a failed tag sync cannot leave the
-        # row half-updated.
-        async with db.transaction() as conn:
-            result = await conn.fetchval(
-                f"UPDATE knowledge.discoveries SET {', '.join(set_parts)} WHERE id = ${len(params)} RETURNING id",
-                *params,
-            )
+        # the pool passed. In a transaction, not on a bare connection: the
+        # UPDATE and the tag sync commit together, so a failed tag sync cannot
+        # leave the row half-updated.
+        sql = f"UPDATE knowledge.discoveries SET {', '.join(set_parts)} WHERE id = ${len(params)} RETURNING id"
+
+        async def _apply(tx_conn) -> bool:
+            result = await tx_conn.fetchval(sql, *params)
             if result is not None and "tags" in updates:
-                await self._sync_discovery_tags(conn, discovery_id, updates.get("tags") or [])
-        return result is not None
+                await self._sync_discovery_tags(tx_conn, discovery_id, updates.get("tags") or [])
+            return result is not None
+
+        if conn is not None:
+            return await _apply(conn)
+        async with db.transaction() as own_conn:
+            return await _apply(own_conn)
 
     async def update_discovery(self, discovery_id: str, updates: Dict[str, Any]) -> bool:
         """Update discovery fields in AGE graph.
@@ -1523,8 +1537,10 @@ class KnowledgeGraphAGE:
                         # A genuinely empty result set: the Cypher MATCH found
                         # no Discovery vertex with this id. That is the only
                         # condition that means "no AGE node" — fall back to
-                        # SQL for SQL-only orphans.
-                        return await self._sql_update_discovery(discovery_id, updates)
+                        # SQL for SQL-only orphans, in this transaction.
+                        return await self._sql_update_discovery(
+                            discovery_id, updates, conn=conn
+                        )
                     if isinstance(result[0], dict) and "error" in result[0]:
                         # A row that reports an error is a failed query, not a
                         # missing node, so it is a failure here rather than a

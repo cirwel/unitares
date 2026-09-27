@@ -90,8 +90,8 @@ async def test_audit_events_passes_target_agent_id_through_unresolved():
 def test_target_agent_id_does_not_promise_a_uuid_for_audit_events():
     """audit.events stores some writers by name, not by UUID.
 
-    The stuck-agent sweep writes its audit entry as agent_id="system"; residents
-    such as sentinel record their name too. A text telling the caller to pass a
+    The stuck-agent sweep writes its audit entry as agent_id="system", and
+    other writers may record a name too. A text telling the caller to pass a
     UUID steers it away from exactly those rows.
     """
     from pathlib import Path
@@ -103,7 +103,7 @@ def test_target_agent_id_does_not_promise_a_uuid_for_audit_events():
     assert 'agent_id="system"' in stuck
 
     field = ObserveParams.model_fields["target_agent_id"]
-    assert "stored by name" in field.description and "system" in field.description
+    assert "record a name" in field.description and "system" in field.description
     assert "a UUID, and" not in field.description
     brief = field.json_schema_extra["brief"]
     assert "exact stored agent_id" in brief

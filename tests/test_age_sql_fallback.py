@@ -477,6 +477,29 @@ class TestUpdateDiscoverySQLFallback:
         assert ok is True
         db._conn.fetchval.assert_awaited_once()
 
+    async def test_an_orphan_update_reuses_the_open_transaction(self):
+        """The Cypher MATCH runs in a transaction; when it finds no node, the
+        SQL fallback must run on that same connection. Opening a second
+        transaction needs a second pool connection while the first is held,
+        which waits forever on a one-connection or exhausted pool."""
+        db = _make_db(graph_available=True, graph_query_returns=[])
+        db._conn.fetchval = AsyncMock(return_value="disc-sql-001")
+        opened: list = []
+
+        @asynccontextmanager
+        async def counting_transaction():
+            opened.append("transaction")
+            yield db._conn
+
+        db.transaction = counting_transaction
+        kg = await _make_kg(db)
+
+        ok = await kg.update_discovery("disc-sql-001", {"status": "resolved"})
+
+        assert ok is True
+        assert opened == ["transaction"]
+        db._conn.fetchval.assert_awaited_once()
+
     async def test_sql_fallback_when_graph_unavailable(self):
         """graph_available() False → directly calls SQL fallback."""
         db = _make_db(graph_available=False)
