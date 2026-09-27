@@ -613,7 +613,7 @@ are now deferred, and the instrument moved to the front.
    bounded zeros remain informational and do not close the reduced scope; only a tail-complete
    observation can fire (b1), while a shared serialization primitive may independently fire (b2).
    ⛔Whichever result is cited, name which of the four states it rules out and how.
-5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
+5. **Only if the port becomes eligible** (⛔trigger amended by §10 A10; nothing is built before this step and a new signature): reopen §6.5 (scope), choose the §1.2 option, and specify the
    reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
    step 4, and none may be started on the strength of this document.
 
@@ -693,7 +693,7 @@ Overlap evidence comes from the time-correlated check (any saga on the session, 
 created at or after the early check) and from the A2 report.
 
 **A2 — collision defined causally, with a bound.** A **collision** is a competing write on the
-session (a resolve, a reviewer assignment, or a new protocol message) that either (a) has its cause
+session by any A3 writer that either (a) has its cause
 (the triggering message's timestamp, or the saga's `created_at`) before the sweeper's guarded commit
 and its effect after it, within a **correlation bound of 6 hours** (a session id can be reused by a
 reopen, so an unbounded search would match unrelated rounds); or (b) lands between the sweeper's
@@ -704,7 +704,7 @@ row; the instrument emits one `dialectic_guarded_write` record per guarded sweep
 time, the reviewer, phase, status and `updated_at` it read, commit time, outcome), and the report
 reads those. It is
 measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
-durable tables, including a saga-versus-row status join, and by `dialectic_beam_resolve` records,
+durable tables, including a saga-versus-row status join, and by `dialectic_session_write` records,
 because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no saga
 row. Python records every BEAM resolve call as an attempt before it and a response after it, so the
 records carry their own denominator (responses ÷ attempts, including no-saga responses). BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
@@ -793,6 +793,8 @@ projection were not tracked for either round and are reported as not measured.
 BEAM-first and one sweeper-first; A3 widens "writer" beyond them.
 
 **A12 — no zero from an incomplete record.** Every record stream a reading relies on carries its own
-denominator: resolve responses against attempts, `dialectic_guarded_write` rows against each cycle's
+denominator: for every A3 write that Python initiates (BEAM resolve, phase and reviewer calls, and
+the Python fallbacks) a response against its attempt; protocol messages as durable rows; BEAM
+liveness is benign by construction (A2); `dialectic_guarded_write` rows against each cycle's
 `write_attempt_count`, and cycle rows against `cycle_seq` within each boot. Completeness is 100%: any
 unmatched unit makes the reading inconclusive (A10), never a zero.
