@@ -59,15 +59,21 @@ branch does not deploy the master-only public Pages workflow.
    also moves the lease-plane `image:` tag in `docker-compose.yml` to the new
    version, so the tagged tree pulls the lease-plane image published from its
    own tag; until that image exists, Compose builds the lease plane from source.
-   In the same commit as the changelog fold, prune the skill attestations:
-   `python3 scripts/client/_check_freshness.py . .. --prune 3`, then
-   `python3 scripts/client/_check_freshness.py . ..` must still report
-   every skill FRESH. Prune keeps every record that vouches for the current
-   skill text or carries a source forward, so the served `last_verified` and
-   `stale` do not move; it removes history that re-verification appends
-   (about 400 files between 2026-09-24 and 09-27). The container ships
-   `skills/.attestations/`, because the server reads it at runtime, so an
-   unpruned release carries all of it.
+   In the same commit as the changelog fold, prune the skill attestations
+   with the wrapper, which resolves cited sources in other repositories
+   against `UNITARES_PROJECTS_ROOT` (default: the directory above this
+   checkout). Set it when the release checkout is a worktree, for example
+   under `wt/`, or those sources resolve to the wrong place:
+   `scripts/client/check-skill-freshness.sh --prune 3`, then
+   `scripts/client/check-skill-freshness.sh` must report every skill FRESH
+   and no line may say `cited source(s) absent from this checkout, not
+   covered`. That note means an external source was never read, so FRESH
+   there is not a verification. Prune keeps every record that vouches for
+   the current skill text or carries a source forward, so the served
+   `last_verified` and `stale` do not move; it removes history that
+   re-verification appends (about 400 files between 2026-09-24 and 09-27).
+   The container ships `skills/.attestations/`, because the server reads it
+   at runtime, so an unpruned release carries all of it.
 3. Run `./scripts/dev/test-cache.sh` and `make validate`. When container build
    inputs changed **anywhere in the release range** (`vLAST..master`), not merely
    in the release PR's own diff, also run the documented Docker quickstart on a

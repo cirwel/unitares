@@ -31,6 +31,7 @@ from src.mcp_handlers.core import (
     handle_process_agent_update,
     metrics_agent_is_known,
     unbound_metrics_payload,
+    unbound_read_cause,
     unknown_agent_error,
 )
 from src.mcp_handlers.utils import require_agent_id
@@ -145,6 +146,25 @@ async def execute_nested_http_tool(
         # specific prebinding. The outer use_tool call deliberately deferred
         # its charge to this target and must not turn that shortcut into a
         # zero-charge path.
+        #
+        # 2026-09-27 review finding (false positive, recorded so it is not
+        # re-raised): a nested REST use_tool call for a tool WITH a direct
+        # handler (get_governance_metrics) re-enters via this branch and
+        # `execute_http_tool` below, landing on the SAME direct handler
+        # (`_execute_http_get_governance_metrics`) as a top-level REST call --
+        # never the generic MCP dispatch pipeline, so `inject_identity` never
+        # runs and no `identity_mismatch` is possible here. That is
+        # deliberate and matches the shipped contract (interface contract
+        # 1.21.0: "get_governance_metrics over REST runs a
+        # direct handler with no inject step and answers the named agent for
+        # any caller", both direct and through use_tool). `inject_identity`
+        # DOES run, and DOES refuse a mismatch, for the actual MCP-protocol
+        # `use_tool` (a real MCP client on /mcp/, not this REST route) --
+        # see test_through_use_tool_a_caller_bound_as_another_agent_is_refused
+        # in tests/test_inferred_read_paths_closed.py, which pins that half.
+        # This function's own test,
+        # test_over_rest_get_governance_metrics_reads_the_named_agent_for_a_bound_caller,
+        # pins the REST half and passes against this code as written.
         if get_direct_http_tool_handler(tool_name) is not None:
             from src.mcp_handlers.context import get_context_agent_id
             from src.mcp_handlers.middleware import DispatchContext, check_rate_limit
@@ -197,12 +217,11 @@ async def _execute_http_get_governance_metrics(arguments: Dict[str, Any]) -> Any
             bound_agent_id = None
             transport_injected = False
         if not bound_agent_id:
-            from src.mcp_handlers.identity_bootstrap import (
-                caller_sent_usable_session_id,
-            )
-
+            # Keyed on why the prebind bound nothing, as the MCP handler is.
+            caller_sent_session_id, resolution = unbound_read_cause(arguments)
             return unbound_metrics_payload(
-                caller_sent_session_id=caller_sent_usable_session_id(arguments)
+                caller_sent_session_id=caller_sent_session_id,
+                resolution=resolution,
             )
     agent_id, error = require_agent_id(arguments)
     if error:
@@ -323,12 +342,10 @@ def _strict_identity_refusal_or_none(
     # recovery keys on whether the caller itself sent a client_session_id. On
     # REST every call carries one, so an id the transport put there (from the
     # fingerprint, a pin, or a header it derived) does not count.
-    from src.mcp_handlers.context import (
-        get_http_prebind_resolution,
-    )
+    from src.mcp_handlers.context import get_unbound_resolution
     from src.mcp_handlers.identity_bootstrap import unbound_call_refusal
 
-    resolution = get_http_prebind_resolution()
+    resolution = get_unbound_resolution()
     if resolution is not None and "caller_sent_session_id" in resolution:
         # Recorded by the prebind (caller_sent_usable_session_id).
         caller_sent_session_id = bool(resolution["caller_sent_session_id"])
