@@ -1010,6 +1010,19 @@ async def continue_after_disagreement(
 
         if not isinstance(session_data, dict):
             return current_verdict
+        paused_response = find_pending_paused_response(
+            session_data,
+            paused_agent_id=paused_agent_id,
+            reviewer_agent_id=reviewer_agent_id,
+        )
+        if unfiled is not None and paused_response != unfiled[0]:
+            # The response it answered is no longer the pending one, so the
+            # cut-off filing landed after all: it is the standing verdict. This
+            # runs before the terminal check because a landed approval is
+            # exactly what makes the session terminal.
+            current_verdict, unfiled = unfiled[1], None
+            if current_verdict.agrees:
+                return current_verdict
         phase = str(session_data.get("phase") or "").lower()
         if phase in _TERMINAL_PHASES:
             return current_verdict
@@ -1029,17 +1042,6 @@ async def continue_after_disagreement(
         ):
             return current_verdict
 
-        paused_response = find_pending_paused_response(
-            session_data,
-            paused_agent_id=paused_agent_id,
-            reviewer_agent_id=reviewer_agent_id,
-        )
-        if unfiled is not None and paused_response != unfiled[0]:
-            # The response it answered is no longer the pending one, so the
-            # cut-off filing landed after all: it is the standing verdict.
-            current_verdict, unfiled = unfiled[1], None
-            if current_verdict.agrees:
-                return current_verdict
         if paused_response is None:
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue

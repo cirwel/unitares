@@ -61,7 +61,7 @@ def _paused_agent_answers(session: DialecticSession) -> None:
 
 
 def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filing=False,
-              filing_error=None):
+              filing_error=None, filing_lands_before_error=False):
     """Install a fake GovernanceClient backed by ``session``.
 
     The server "restarts" on the Nth ``get``: that client is dead from then on.
@@ -126,6 +126,18 @@ def _fake_sdk(monkeypatch, session, *, restart_after_gets: int, fail_first_filin
                 state["filings"] += 1
                 if args["agrees"] is True and state["filing_failures_left"]:
                     state["filing_failures_left"] -= 1
+                    if filing_lands_before_error:
+                        session.submit_synthesis(
+                            DialecticMessage(
+                                phase="synthesis",
+                                agent_id=REVIEWER,
+                                timestamp="2026-09-26T00:04:00+00:00",
+                                agrees=True,
+                                root_cause=args.get("root_cause"),
+                                proposed_conditions=args.get("proposed_conditions"),
+                                reasoning=args.get("reasoning"),
+                            )
+                        )
                     raise state["filing_error"]
                 return session.submit_synthesis(
                     DialecticMessage(
@@ -387,3 +399,24 @@ def test_sdk_wrapped_transport_failures_are_retryable_and_refusals_are_not():
     assert r._is_transport_loss(r.GovernanceLinkLost("ended"))
     assert not r._is_transport_loss(errors.GovernanceToolRefused("Tool dialectic failed: no"))
     assert not r._is_transport_loss(ValueError("a bug, not an outage"))
+
+
+@pytest.mark.asyncio
+async def test_an_approval_that_landed_with_its_reply_lost_is_reported(monkeypatch):
+    """Review round 3 on #2508: the landed approval resolves the session, so
+    the next read is terminal, and it must still report what was filed."""
+    model_calls = _model_replies(monkeypatch)
+    session = _open_session("sess-landed")
+    state = _fake_sdk(monkeypatch, session, restart_after_gets=2, fail_first_filing=True,
+                      filing_lands_before_error=True)
+
+    verdict = await r.run(
+        Thesis(session_id="sess-landed", root_cause="claimed", proposed_conditions=["initial"]),
+        governance_url="http://localhost:8767",
+        parent_agent_id=PAUSED,
+    )
+
+    assert session.phase == DialecticPhase.RESOLVED
+    assert verdict.agrees is True, "reported the old rejection over the recorded approval"
+    assert state["filings"] == 2  # no re-file after it landed
+    assert len(model_calls) == 2
