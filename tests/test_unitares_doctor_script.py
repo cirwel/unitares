@@ -582,6 +582,17 @@ def test_secrets_file_wrong_mode_fails(doctor, tmp_path):
     assert result.status == doctor.Status.FAIL
 
 
+def test_secrets_file_remediation_quotes_the_path(doctor, tmp_path):
+    target = tmp_path / "Application Support" / "secrets.env"
+    target.parent.mkdir()
+    target.write_text("X=1\n")
+    target.chmod(0o644)
+
+    result = doctor.check_secrets_file(target)
+
+    assert result.detail == f"chmod 600 '{target}'"
+
+
 # ---------- elixir_deprecated_scheme_lint (RFC §7.11.8 — Phase B prep) ----------
 
 

@@ -146,9 +146,11 @@ SECRETS_TEMPLATE = """\
 # The governance server does NOT read this file: it reads its own process
 # environment (.env under Docker Compose, the plist on a launchd install).
 # Helper scripts that run beside it (scripts/dev/ship.sh, the BEAM start
-# scripts under elixir/) source it, e.g. for:
-# LEASE_PLANE_BEARER_TOKEN=
-# UNITARES_HTTP_API_TOKEN=
+# scripts under elixir/) source it. Keep the `export`: some of those scripts
+# source without `set -a`, and an unexported variable never reaches the
+# process they launch. For example:
+# export LEASE_PLANE_BEARER_TOKEN=
+# export UNITARES_HTTP_API_TOKEN=
 """
 
 # Where the secrets env file lives. UNITARES_SECRETS_ENV wins; otherwise the

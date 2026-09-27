@@ -245,6 +245,17 @@ def test_secrets_template_does_not_claim_the_server_reads_it(setup_mod):
     assert "does NOT read this file" in setup_mod.SECRETS_TEMPLATE
 
 
+def test_secrets_template_examples_are_exported(setup_mod):
+    # Several consumers source the file without `set -a`; an unexported
+    # assignment never reaches the process they launch.
+    examples = [
+        line for line in setup_mod.SECRETS_TEMPLATE.splitlines()
+        if line.startswith("# ") and "=" in line and line.rstrip().endswith("=")
+    ]
+    assert examples
+    assert all(line.startswith("# export ") for line in examples)
+
+
 def test_ensure_secrets_file_dry_run_no_writes(setup_mod, tmp_path):
     target = tmp_path / "secrets.env"
     item = setup_mod.ensure_secrets_file(target, apply=False)

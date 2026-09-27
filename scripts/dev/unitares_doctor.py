@@ -31,6 +31,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -1156,7 +1157,7 @@ def check_secrets_file(path: Path | None = None) -> CheckResult:
         return CheckResult(name, mode, Status.PASS, f"{secrets_file} (0600)")
     return CheckResult(name, mode, Status.FAIL,
                        f"{secrets_file} mode is {oct(actual)} — must be 0600",
-                       detail=f"chmod 600 {secrets_file}")
+                       detail=f"chmod 600 {shlex.quote(str(secrets_file))}")
 
 
 # ---------------------------------------------------------------------------
