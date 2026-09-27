@@ -244,22 +244,52 @@ async def test_read_tool_timeout_keeps_the_retry_recovery(tool_name):
     assert "outcome" not in payload
 
 
+STORE_CHECK = "knowledge(action='search', query='<words from your summary>')"
+
+
 @pytest.mark.asyncio
-async def test_store_timeout_names_the_listing_that_shows_a_saved_finding():
+@pytest.mark.parametrize(
+    "writer",
+    [
+        "agent-1",
+        # The low-friction path writes a pseudonym into arguments before the
+        # store; it is not a registered agent, so a check that looks the writer
+        # up (knowledge get by agent_id) would refuse this caller.
+        "anonkg_mcp_0123456789ab",
+    ],
+)
+async def test_store_timeout_names_a_search_any_caller_can_run(writer):
     @mcp_tool("store_knowledge_graph", timeout=0.05, register=False)
     async def _slow(arguments):
         await asyncio.sleep(5)
 
     with patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-        payload = _payload(await _slow({"action": "store", "agent_id": "agent-1"}))
+        payload = _payload(await _slow({"action": "store", "agent_id": writer}))
 
     assert payload["outcome"] == "unknown"
     recovery = payload["recovery"]
-    assert recovery["check_before_retry"] == (
-        "knowledge(action='get', agent_id='agent-1', limit=5)"
-    )
+    assert recovery["check_before_retry"] == STORE_CHECK
+    assert writer not in json.dumps(recovery)
     assert "new row" in recovery["action"]
     assert "try again" not in recovery["action"].lower()
+
+
+def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
+    """Another writer can move updated_at after this call starts; only the
+    caller's own fields show that this call's write landed."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    recovery = _unknown_outcome_recovery(
+        CallOperation(operation="write", tool="knowledge", action="update"),
+        {"discovery_id": DISCOVERY_ID},
+    )
+    steps = " ".join(recovery["workflow"])
+    assert "by this call or another" in recovery["action"]
+    assert "earlier than call_started_at" in steps
+    assert "your resolution_notes at the end of details" in steps
+    assert "pagination.total_length" in steps
+    assert "another writer changed it" in steps
 
 
 @pytest.mark.asyncio
@@ -272,7 +302,7 @@ async def test_router_level_timeout_classifies_the_routed_action():
         read = _payload(await wrapper({"action": "search"}))
 
     assert write["outcome"] == "unknown"
-    assert write["recovery"]["check_before_retry"].startswith("knowledge(action='get'")
+    assert write["recovery"]["check_before_retry"] == STORE_CHECK
     assert read["recovery"]["action"] == READ_RECOVERY
 
 

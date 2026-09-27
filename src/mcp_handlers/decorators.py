@@ -318,7 +318,6 @@ def mcp_tool(
                         call=call,
                         arguments=arguments if isinstance(arguments, dict) else {},
                         started_at=start_time,
-                        agent_id=effective_agent_id,
                     )]
                 return [error_response(
                     f"Tool '{tool_name}' timed out after {timeout} seconds.",

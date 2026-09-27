@@ -327,9 +327,7 @@ def _call_literal(value: Any, placeholder: str) -> str:
     return placeholder
 
 
-def _unknown_outcome_recovery(
-    call: Any, arguments: Dict[str, Any], agent_id: Optional[str]
-) -> Dict[str, Any]:
+def _unknown_outcome_recovery(call: Any, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Recovery for a timed-out call that may have written: read, then decide."""
     tool = call.tool
     action = call.action
@@ -337,44 +335,57 @@ def _unknown_outcome_recovery(
     if tool == "knowledge" and action == "update":
         discovery_id = _call_literal(arguments.get("discovery_id"), "<discovery_id>")
         check = f"knowledge(action='details', discovery_id='{discovery_id}')"
+        # updated_at alone cannot prove this call wrote: any writer moves it.
+        # Earlier than the call's start does prove nothing has landed yet.
         return {
             "action": (
                 "Do not send this update again yet. It may already be saved, and "
                 "resolution_notes append, so a second call adds them twice. Read "
-                f"the discovery first with {check}: an updated_at at or after "
-                "call_started_at means this update was saved."
+                f"the discovery with {check} and compare it with what you sent. "
+                "An updated_at earlier than call_started_at means nothing has "
+                "been written since this call began; a later one means the row "
+                "was written, by this call or another, so look for your own "
+                "fields before deciding."
             ),
             "check_before_retry": check,
             "workflow": [
                 f"1. Call {check}",
-                "2. If updated_at is at or after call_started_at, the update was "
-                "saved; its resolution_notes are at the end of details. Do not "
-                "send it again",
-                "3. If updated_at is still earlier when you read again a few "
-                "seconds later, nothing was saved: send the update again",
+                "2. If updated_at is earlier than call_started_at, nothing has "
+                "been written since this call began. Read again a few seconds "
+                "later; if it is still earlier, send the update again",
+                "3. If updated_at is at or after call_started_at, look for what "
+                "you sent: the status you set, and your resolution_notes at the "
+                "end of details (read the tail with offset near "
+                "pagination.total_length). If they are there, the update was "
+                "saved. Do not send it again",
+                "4. If the row changed but your fields are still missing on a "
+                "second read a few seconds later, another writer changed it: "
+                "send your update again",
             ],
             "related_tools": ["knowledge", "health_check"],
         }
 
     if (tool == "knowledge" and action in _KNOWLEDGE_STORE_ACTIONS) or tool == "leave_note":
-        writer = _call_literal(arguments.get("agent_id") or agent_id, "<your agent_id>")
-        check = f"knowledge(action='get', agent_id='{writer}', limit=5)"
+        # Search serves unbound callers; an anonymous writer's id (anonkg_*) is
+        # not a registered agent, so knowledge(action='get', agent_id=...) would
+        # refuse the very caller who needs the check.
+        check = "knowledge(action='search', query='<words from your summary>')"
         return {
             "action": (
                 "Do not store this again yet. It may already be saved, and every "
-                "store adds a new row, so a second call leaves two findings. List "
-                f"your newest findings first with {check}: one with this summary "
+                "store adds a new row, so a second call leaves two findings. "
+                f"Search for it first with {check}: a result with your summary "
                 "created at or after call_started_at means it was saved."
             ),
             "check_before_retry": check,
             "workflow": [
-                f"1. Call {check}",
-                "2. If a finding with this summary was created at or after "
+                f"1. Call {check}; search needs no bound identity",
+                "2. If a result with your summary was created at or after "
                 "call_started_at, it was saved. Do not store it again",
-                "3. If none appears when you read again a few seconds later, "
+                "3. If none appears when you search again a few seconds later, "
                 "nothing was saved: store it again",
             ],
-            "related_tools": ["knowledge", "health_check"],
+            "related_tools": ["knowledge", "search_shared_memory", "health_check"],
         }
 
     call_shape = f"{tool}(action='{action}')" if action else tool
@@ -405,7 +416,6 @@ def unknown_outcome_timeout_error(
     call: Any,
     arguments: Dict[str, Any],
     started_at: float,
-    agent_id: Optional[str] = None,
 ) -> TextContent:
     """Timeout of a call that may have written: the outcome is unknown.
 
@@ -431,7 +441,7 @@ def unknown_outcome_timeout_error(
             "operation": call.operation,
             "call_started_at": datetime.fromtimestamp(started_at, timezone.utc).isoformat(),
         },
-        recovery=_unknown_outcome_recovery(call, arguments, agent_id),
+        recovery=_unknown_outcome_recovery(call, arguments),
     )
 
 

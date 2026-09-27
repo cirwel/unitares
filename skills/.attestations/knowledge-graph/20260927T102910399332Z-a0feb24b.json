@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "knowledge-graph",
-  "verified_at": "2026-09-27T10:17:29Z",
+  "verified_at": "2026-09-27T10:29:10Z",
   "verified_date": "2026-09-27",
-  "verifier": "Claude (re-checked the knowledge-graph update, search and lifecycle claims against the AGE update_discovery change that moves the embedding refresh off the request path; no claim names embedding timing or timeouts)",
+  "verifier": "Claude (re-checked the knowledge-graph update, search and lifecycle claims against the AGE update_discovery change that moves the embedding refresh off the request path and serializes it per discovery; no claim names embedding timing or timeouts)",
   "source_digests": {
     "unitares/src/alias_schema.py": "8ffea8289331373b",
     "unitares/src/db/mixins/knowledge_graph.py": "a84f14433b35a475",
@@ -17,7 +17,7 @@
     "unitares/src/mcp_handlers/schemas/knowledge.py": "b0866e8aa34cfad7",
     "unitares/src/mcp_handlers/support/param_normalization.py": "c4f33d12a062c18d",
     "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
-    "unitares/src/storage/knowledge_graph_age.py": "9c9e28ac31b32833",
+    "unitares/src/storage/knowledge_graph_age.py": "defa2d12942ca72e",
     "unitares/src/storage/knowledge_graph_postgres.py": "67c39bf11d3dfffb",
     "unitares/src/tool_descriptions.json": "c0f9f04d41c2a36b"
   },

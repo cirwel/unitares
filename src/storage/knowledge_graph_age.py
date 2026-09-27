@@ -87,6 +87,10 @@ class KnowledgeGraphAGE:
         self._db = None
         self._indexes_created = False
         self.rate_limit_stores_per_hour = 20  # Max stores per agent per hour
+        # Background embedding refreshes, one pass at a time per discovery
+        # (_schedule_embedding_refresh).
+        self._embedding_refresh_running: set[str] = set()
+        self._embedding_refresh_again: set[str] = set()
 
     @staticmethod
     def _parse_optional_datetime(value: Any) -> Optional[datetime]:
@@ -2252,14 +2256,25 @@ class KnowledgeGraphAGE:
         away. The embedding is best-effort derived data: the update's result
         never depended on it, and _refresh_embedding logs its own failures.
 
+        One pass runs at a time per discovery. A pass reads the row before it
+        encodes, so two overlapping passes could store the older text last and
+        leave the embedding stale until the next edit. A commit that lands
+        while a pass runs asks for one more pass instead, which reads the
+        latest row.
+
         Called after the commit, so it never raises: a scheduling failure must
         not turn a saved update into a reported failure.
         """
-        refresh = self._refresh_embedding(discovery_id)
+        refresh = None
         try:
+            if discovery_id in self._embedding_refresh_running:
+                self._embedding_refresh_again.add(discovery_id)
+                return
             from src.background_tasks import create_tracked_task
 
+            refresh = self._run_embedding_refresh(discovery_id)
             create_tracked_task(refresh, name="kg_embedding_refresh")
+            self._embedding_refresh_running.add(discovery_id)
         except Exception as e:
             close = getattr(refresh, "close", None)
             if callable(close):
@@ -2267,6 +2282,18 @@ class KnowledgeGraphAGE:
             logger.warning(
                 f"Embedding refresh for {discovery_id} not scheduled: {e}"
             )
+
+    async def _run_embedding_refresh(self, discovery_id: str) -> None:
+        """Refresh until no commit for this discovery arrived during a pass."""
+        try:
+            while True:
+                self._embedding_refresh_again.discard(discovery_id)
+                await self._refresh_embedding(discovery_id)
+                if discovery_id not in self._embedding_refresh_again:
+                    return
+        finally:
+            self._embedding_refresh_running.discard(discovery_id)
+            self._embedding_refresh_again.discard(discovery_id)
 
     async def _refresh_embedding(self, discovery_id: str) -> None:
         """Regenerate the stored embedding after summary/details edits."""
