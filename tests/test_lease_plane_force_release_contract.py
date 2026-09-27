@@ -67,12 +67,26 @@ if not _router_reachable():
 
 # ---------- helpers ----------
 
+def _secrets_path() -> Path:
+    """The secrets env file, resolved the way every launcher resolves it:
+    UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+    pre-2026-09 ~/.config/cirwel path when only that one exists."""
+    override = (os.environ.get("UNITARES_SECRETS_ENV") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    default = Path.home() / ".config" / "unitares" / "secrets.env"
+    legacy = Path.home() / ".config" / "cirwel" / "secrets.env"
+    if not default.exists() and legacy.exists():
+        return legacy
+    return default
+
+
 def _read_secrets_var(var_name: str) -> str | None:
-    """Read VAR_NAME from env or ~/.config/cirwel/secrets.env."""
+    """Read VAR_NAME from env or the secrets env file (_secrets_path)."""
     tok = os.environ.get(var_name)
     if tok:
         return tok
-    secrets_path = Path.home() / ".config" / "cirwel" / "secrets.env"
+    secrets_path = _secrets_path()
     if not secrets_path.exists():
         return None
     prefix = f"{var_name}="
@@ -86,7 +100,7 @@ def _read_secrets_var(var_name: str) -> str | None:
 
 
 def _read_force_release_token() -> str | None:
-    """Read LEASE_FORCE_RELEASE_TOKEN from env or ~/.config/cirwel/secrets.env."""
+    """Read LEASE_FORCE_RELEASE_TOKEN from env or the secrets env file."""
     return _read_secrets_var("LEASE_FORCE_RELEASE_TOKEN")
 
 
@@ -159,7 +173,7 @@ def test_force_release_rejects_governance_token(monkeypatch):
     force_release_token = _read_force_release_token()
     if not force_release_token:
         pytest.skip(
-            "LEASE_FORCE_RELEASE_TOKEN not set (env or ~/.config/cirwel/secrets.env); "
+            "LEASE_FORCE_RELEASE_TOKEN not set (env or the secrets env file); "
             "cannot complete sub-assertion 3 (elevated-token success path)"
         )
 
@@ -171,7 +185,7 @@ def test_force_release_rejects_governance_token(monkeypatch):
     lease_plane_bearer = _read_lease_plane_bearer()
     if not lease_plane_bearer:
         pytest.skip(
-            "LEASE_PLANE_BEARER_TOKEN not set (env or ~/.config/cirwel/secrets.env); "
+            "LEASE_PLANE_BEARER_TOKEN not set (env or the secrets env file); "
             "cannot acquire a real lease for sub-assertion 3"
         )
 
@@ -232,7 +246,7 @@ def test_release_rejects_forced_reason_on_release_endpoint():
     lease_plane_bearer = _read_lease_plane_bearer()
     if not lease_plane_bearer:
         pytest.skip(
-            "LEASE_PLANE_BEARER_TOKEN not set (env or ~/.config/cirwel/secrets.env); "
+            "LEASE_PLANE_BEARER_TOKEN not set (env or the secrets env file); "
             "cannot exercise the semantic-rejection path with a valid bearer"
         )
     status, body = _post_json(

@@ -52,7 +52,7 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 |------|---------------|----------------|
 | Start a fresh process identity | `start_session(force_new=true, ...)` | `onboard` |
 | Check in after meaningful work | `sync_state(response_text=..., complexity=...)` | `process_agent_update` |
-| Check your working state | `check_working_state()` | `get_governance_metrics` |
+| Check your working state | `check_working_state(client_session_id=...)` | `get_governance_metrics` |
 | Avoid duplicate work | `search_shared_memory(query=...)` | `knowledge(action="search")` |
 | Record what actually happened | `record_result(...)` | `outcome_event` |
 | Ask for a structured review | `request_review(issue_description=...)` | `dialectic(action="request")` |
@@ -162,10 +162,10 @@ the field that kept it.
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`
 (`identity_required` or `lineage_declaration_required`), `hint`, `next_step`,
-`safe_options`, `do_not`, and `rollout_flag`. There is no `next_action` —
+`safe_options`, `do_not`, `rollout_flag`, and `refused: true`. There is no `next_action` —
 read `next_step` and `safe_options`. It carries `success: true`, because it is
 a structured refusal rather than a transport error, so branching on
-`success is False` will miss it; branch on `status` or `rollout_flag`. The target
+`success is False` will miss it; branch on `refused`, `status` or `rollout_flag`. The target
 tool handler did not run. Treat that as a no-handler-execution receipt, not a
 blanket no-write receipt: resolver-failure paths may already have performed
 identity-resolution bookkeeping. Follow `next_step` rather than retrying the
@@ -298,7 +298,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 
 - `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
 - `sync_state()` — Check in with work summary and complexity. Pass `confidence` **only when you are actually stating a belief about your own work**: the server mints a tactical prediction from any value supplied and scores it into the fleet calibration curve, so a habitual or placeholder number becomes a forecast nobody made. Omitting it mints nothing and costs nothing.
-- `check_working_state()` — Read your current EISV state
+- `check_working_state(client_session_id=...)` — Read your current EISV state. It reads your state only on proof sent with the call (your `client_session_id`, an `X-Session-ID` header, or a verified `continuity_token`); without it the read of your own state answers `unbound`, never a state the server inferred from the connection, and its `next_action` says how to recover
 - `identity(client_session_id=...)` — Confirm who the runtime thinks you are and how continuity was resolved; never call it with no arguments (see Identity above), and include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd; discover its schema and invoke it through `use_tool` under progressive advertisement
 - `search_shared_memory(query=...)` — Find existing knowledge before creating new entries

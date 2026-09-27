@@ -8,9 +8,14 @@ If you're considering a contribution, please **open an issue first** describing 
 
 ```bash
 git clone https://github.com/cirwel/unitares.git && cd unitares
-docker compose up -d --wait         # Postgres + AGE + pgvector + Redis + server
+docker compose up -d --wait --build # Postgres + AGE + pgvector + Redis + lease plane + server
 make demo                           # 60-second install check (six check-ins)
 ```
+
+Use `--build` on a `master` checkout and after changing source. Compose pins the
+lease plane to the release image named by `VERSION` and pulls it when it is
+missing, so without `--build` you would run that release's lease plane rather
+than the code in your tree. CI's Docker quickstart job always builds from source.
 
 If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
 

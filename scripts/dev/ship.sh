@@ -42,7 +42,13 @@ cd "$PROJECT_ROOT"
 # which surfaces as "lease: service_unavailable" — harmless per RFC v0.5 §6.1
 # (Phase A is non-fatal) but obscures real outages. Sourcing is best-effort:
 # missing file is fine, agents on hosts without the secrets still ship.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-${HOME}/.config/cirwel/secrets.env}"
+# Resolution matches scripts/dev/unitares_doctor.py: UNITARES_SECRETS_ENV, else
+# ~/.config/unitares/secrets.env, else the pre-2026-09 ~/.config/cirwel path
+# when only that one exists.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-${HOME}/.config/unitares/secrets.env}"
+if [[ -z "${UNITARES_SECRETS_ENV:-}" && ! -f "$SECRETS_FILE" && -f "${HOME}/.config/cirwel/secrets.env" ]]; then
+    SECRETS_FILE="${HOME}/.config/cirwel/secrets.env"
+fi
 if [[ -f "$SECRETS_FILE" ]]; then
     set -a
     # shellcheck disable=SC1090
@@ -461,6 +467,11 @@ case "$DELIVERY" in
                 echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
             else
                 review_rc=$?
+                if [[ "$review_rc" == "3" ]]; then
+                    echo "[ship] review passed, but this security-sensitive diff needs a second model family."
+                    echo "[ship] run one of the review.sh --fresh --reviewer commands printed above; keep the PR draft until CI is green."
+                    exit 3
+                fi
                 if [[ "$review_rc" == "2" ]]; then
                     echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
                     echo "[ship] report the blocker and next action explicitly; keep the PR draft."

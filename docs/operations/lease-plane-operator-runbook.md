@@ -44,7 +44,7 @@ Service auto-starts on boot (`RunAtLoad=true`, `KeepAlive=true`, `ThrottleInterv
 launchctl list | grep com.unitares.lease-plane
 tail -f ~/Library/Logs/unitares-lease-plane.log
 
-# Health probe (sources LEASE_PLANE_BEARER_TOKEN from ~/.config/cirwel/secrets.env)
+# Health probe (sources LEASE_PLANE_BEARER_TOKEN from the secrets env file; see "Where the token lives")
 curl -s -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
      "http://127.0.0.1:8788/v1/health"
 ```
@@ -118,7 +118,7 @@ database is in trouble, not the health probe.
 | Condition | Alarm | Action |
 |-----------|-------|--------|
 | 0 successful probes in last 5 min | `lease_plane.unreachable` | Check `launchctl list com.unitares.lease-plane`; restart via `launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane` |
-| HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source `~/.config/cirwel/secrets.env` and `launchctl kickstart` Sentinel |
+| HTTP 401 on probe | `lease_plane.auth_drift` | Sentinel's bearer token diverged from the lease plane's; re-source the secrets env file (`$SECRETS_FILE`, see "Where the token lives") and `launchctl kickstart` Sentinel |
 | HTTP 503 sustained | `lease_plane.db_degraded` | Postgres flapping; check `pg_isready -h localhost -p 5432` |
 | Probe latency > 1s sustained | `lease_plane.slow` | Postgres lock contention or backlog; inspect `pg_stat_activity` for stuck transactions on `lease_plane.surface_leases` |
 
@@ -297,13 +297,26 @@ Force-release is a separate authority from regular lease access. It uses its own
 **Where the token lives**
 
 ```
-~/.config/cirwel/secrets.env    # mode 600, local-Mac-only
+$SECRETS_FILE                   # mode 600, local-Mac-only (resolved below)
 export LEASE_FORCE_RELEASE_TOKEN=<32-byte-random-hex>
+```
+
+`$SECRETS_FILE` is the one secrets env file every launcher and CLI reads, in
+this order: `$UNITARES_SECRETS_ENV`; else `~/.config/unitares/secrets.env`;
+else the legacy `~/.config/cirwel/secrets.env` when only that one exists.
+Resolve it the same way before writing, so a token never lands in a file
+nothing reads:
+
+```bash
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
+    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+fi
 ```
 
 The `export` is **required**, not cosmetic: `start.sh` does `source secrets.env` then `exec mix run`, and a sourced-but-not-exported variable is a shell local the exec'd BEAM process never sees — so without `export`, force-release silently stays 503 even though the line is present. Every key in `secrets.env` already uses `export` for this reason.
 
-This follows the existing `~/.config/cirwel/secrets.env` convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-Mac-only by design** — there is no off-host force-release path. If the operator is travelling, they SSH to the Mac or wait for the lease's TTL.
+This follows the existing secrets env file convention (noun-first, `_TOKEN` suffix; cf. `ZENODO_TOKEN`, `CLOUDFLARE_API_TOKEN`). Mode 600. v0 is **local-Mac-only by design** — there is no off-host force-release path. If the operator is travelling, they SSH to the Mac or wait for the lease's TTL.
 
 **Initial provisioning**
 
@@ -314,11 +327,11 @@ TOKEN=$(openssl rand -hex 32)
 # 2. Add to secrets.env (preserve existing keys; do NOT overwrite the file).
 #    NOTE the `export` — start.sh sources this file then execs mix; a
 #    non-exported var never reaches the BEAM process (force-release stays 503).
-printf 'export LEASE_FORCE_RELEASE_TOKEN=%s\n' "$TOKEN" >> ~/.config/cirwel/secrets.env
+printf 'export LEASE_FORCE_RELEASE_TOKEN=%s\n' "$TOKEN" >> "$SECRETS_FILE"
 
 # 3. Verify mode is still 600
-chmod 600 ~/.config/cirwel/secrets.env
-ls -la ~/.config/cirwel/secrets.env
+chmod 600 "$SECRETS_FILE"
+ls -la "$SECRETS_FILE"
 
 # 4. Reload the lease-plane LaunchAgent so it picks up the new env
 launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane
@@ -330,13 +343,13 @@ curl -fsS -H "Authorization: Bearer $LEASE_PLANE_BEARER_TOKEN" \
 
 **Rotation cadence**
 
-Same as other operator-scoped tokens at `~/.config/cirwel/secrets.env`. No special rotation infrastructure for v0 — it's manual:
+Same as other operator-scoped tokens in `$SECRETS_FILE`. No special rotation infrastructure for v0 — it's manual:
 
 ```bash
 # 1. Rotate
 NEW_TOKEN=$(openssl rand -hex 32)
-sed -i.bak "s/^export LEASE_FORCE_RELEASE_TOKEN=.*$/export LEASE_FORCE_RELEASE_TOKEN=$NEW_TOKEN/" ~/.config/cirwel/secrets.env
-rm ~/.config/cirwel/secrets.env.bak
+sed -i.bak "s/^export LEASE_FORCE_RELEASE_TOKEN=.*$/export LEASE_FORCE_RELEASE_TOKEN=$NEW_TOKEN/" "$SECRETS_FILE"
+rm "$SECRETS_FILE.bak"
 
 # 2. Reload
 launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane
@@ -453,7 +466,7 @@ When a new version of a module is deployed, the BEAM node can swap it in place w
 ### How it works now
 
 Enable once (a single restart pays for itself): set a strong random
-`LEASE_PLANE_NODE_COOKIE` in `~/.config/cirwel/secrets.env`, then restart the
+`LEASE_PLANE_NODE_COOKIE` in the secrets env file (`$SECRETS_FILE`), then restart the
 plane (`launchctl kickstart -k gui/$(id -u)/com.unitares.lease-plane`). From
 then on the node runs named + cookied, distribution pinned to loopback.
 

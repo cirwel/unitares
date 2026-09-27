@@ -17,7 +17,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 LEASE_PLANE_DIR="$REPO_ROOT/elixir/lease_plane"
-SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+# pre-2026-09 ~/.config/cirwel path when only that one exists.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
+    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+fi
 
 if [[ -f "$SECRETS_FILE" ]]; then
     # shellcheck disable=SC1090
