@@ -1,11 +1,18 @@
 name: Promote Release
 
 # Step 8 of docs/operations/RELEASE_PROCESS.md as one approval. `verify` reads
-# the already-published artifact and records its evidence; `promote` waits for a
-# required reviewer on the release-promotion environment, then moves GHCR
-# latest to the verified digest without rebuilding; `pin` pushes a branch that
-# advances PUBLISHED_VERSION. Merging that branch's PR stays a human act, and
-# GITHUB_TOKEN cannot open pull requests in this repository by setting.
+# the already-published artifacts and records their evidence; `promote` waits for
+# a required reviewer on the release-promotion environment, then moves GHCR
+# latest to the verified server digest without rebuilding; `pin` pushes a branch
+# that advances PUBLISHED_VERSION. Merging that branch's PR stays a human act,
+# and GITHUB_TOKEN cannot open pull requests in this repository by setting.
+#
+# The lease-plane image is verified but never tagged `latest`. The tagged
+# docker-compose.yml already names it by the release tag (version_manager.py
+# moves that pin with VERSION when the release is prepared), so the install pins
+# that `pin` advances are what direct users to it. Compose names an exact
+# release, the doctor fails a floating tag, and a second mutable pointer would
+# need its own guard across the approval wait.
 
 on:
   workflow_dispatch:
@@ -25,6 +32,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  LEASE_PLANE_IMAGE_NAME: ${{ github.repository }}-lease-plane
   PROMOTION_ENVIRONMENT: release-promotion
 
 jobs:
@@ -41,6 +49,7 @@ jobs:
       source_sha: ${{ steps.release.outputs.source_sha }}
       digest: ${{ steps.image.outputs.digest }}
       prior_latest: ${{ steps.image.outputs.prior_latest }}
+      lease_plane_digest: ${{ steps.lease_plane.outputs.digest }}
     steps:
       - name: Validate the requested tag
         id: tag
@@ -144,6 +153,31 @@ jobs:
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
           echo "prior_latest=$prior_latest" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve the lease-plane digest, platforms, and SBOMs
+        id: lease_plane
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # This job never logs in, so an image that anonymous pulls cannot read
+          # (a new GHCR package starts private) fails here, before any approval.
+          image="$REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG"
+          digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No index digest for $image" >&2; exit 1; }
+          platforms=$(docker buildx imagetools inspect "$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$digest" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[]? | select(.platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"] | sort | join(",")')
+          if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected linux/amd64 and linux/arm64 for $image; got: $platforms" >&2
+            exit 1
+          fi
+          sboms=$(docker buildx imagetools inspect "$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$digest" --format '{{json .SBOM}}' \
+            | jq -r '[to_entries[] | select(.value.SPDX != null) | .key] | sort | join(",")')
+          if [ "$sboms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected an SPDX SBOM for both lease-plane platforms; got: $sboms" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+
       - name: Verify build provenance from the release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -159,12 +193,41 @@ jobs:
             --format json > attestation.json
           jq -e 'length >= 1' attestation.json > /dev/null
 
+      - name: Require the tagged Compose file to pull this release's lease plane
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # A release checkout pulls whatever its own docker-compose.yml names, so
+          # the verified image must be the one the tagged tree asks for.
+          if ! git show "$RELEASE_TAG:docker-compose.yml" \
+            | grep -q "image: $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG\$"; then
+            echo "docker-compose.yml at $RELEASE_TAG does not pin $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG." >&2
+            exit 1
+          fi
+
+      - name: Verify lease-plane provenance from the release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          LEASE_PLANE_DIGEST: ${{ steps.lease_plane.outputs.digest }}
+        run: |
+          gh attestation verify "oci://$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$LEASE_PLANE_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --format json > lease-plane-attestation.json
+          jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
+
       - name: Record release evidence
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
           SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
           DIGEST: ${{ steps.image.outputs.digest }}
           PLATFORMS: ${{ steps.image.outputs.platforms }}
+          LEASE_PLANE_DIGEST: ${{ steps.lease_plane.outputs.digest }}
+          LEASE_PLANE_PLATFORMS: ${{ steps.lease_plane.outputs.platforms }}
         run: |
           {
             echo "## Release evidence for $RELEASE_TAG"
@@ -176,6 +239,10 @@ jobs:
             echo "| Platforms | $PLATFORMS |"
             echo "| SBOM | SPDX for both platforms |"
             echo "| Provenance | verified: publish-container.yml at refs/tags/$RELEASE_TAG |"
+            echo "| Lease-plane index digest | \`$LEASE_PLANE_DIGEST\` |"
+            echo "| Lease-plane platforms | $LEASE_PLANE_PLATFORMS |"
+            echo "| Lease-plane SBOM | SPDX for both platforms |"
+            echo "| Lease-plane provenance | verified: publish-container.yml at refs/tags/$RELEASE_TAG |"
             echo "| Release page | published |"
             echo
             echo "Promotion waits for approval on the \`$PROMOTION_ENVIRONMENT\` environment."
@@ -209,6 +276,7 @@ jobs:
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           DIGEST: ${{ needs.verify.outputs.digest }}
           PRIOR_LATEST: ${{ needs.verify.outputs.prior_latest }}
+          LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
         run: |
           # A job-specific re-run can reuse verify outputs for 30 days. Re-read
           # every mutable pointer immediately before touching latest.
@@ -234,6 +302,13 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > attestation.json
           jq -e 'length >= 1' attestation.json > /dev/null
+          gh attestation verify "oci://$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$LEASE_PLANE_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --format json > lease-plane-attestation.json
+          jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -279,6 +354,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           DIGEST: ${{ needs.verify.outputs.digest }}
+          LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
         run: |
           scripts/ci/release_promotion_freshness.sh pin
           draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
@@ -293,12 +369,20 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > attestation.json
           jq -e 'length >= 1' attestation.json > /dev/null
+          gh attestation verify "oci://$REGISTRY/$LEASE_PLANE_IMAGE_NAME@$LEASE_PLANE_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --format json > lease-plane-attestation.json
+          jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
 
       - name: Push a branch that advances PUBLISHED_VERSION
         env:
           RELEASE_TAG: ${{ needs.verify.outputs.tag }}
           VERSION: ${{ needs.verify.outputs.version }}
           DIGEST: ${{ needs.verify.outputs.digest }}
+          LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
         run: |
           branch="publish/$RELEASE_TAG"
           # A re-run after an unmerged earlier run must not die on a raw push
@@ -319,7 +403,8 @@ jobs:
           git add PUBLISHED_VERSION
           git add -u
           git commit -m "chore(release): publish $RELEASE_TAG" \
-            -m "Verified and promoted by the Promote Release workflow; GHCR latest serves $DIGEST."
+            -m "Verified and promoted by the Promote Release workflow; GHCR latest serves $DIGEST." \
+            -m "The release's Compose lease plane is $RELEASE_TAG, index digest $LEASE_PLANE_DIGEST."
           git push origin "$branch"
           {
             echo "Pushed \`$branch\`. Open its pull request so required checks run:"

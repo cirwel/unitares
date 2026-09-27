@@ -28,6 +28,13 @@ sys.modules["dialectic_unresolved"] = report
 SPEC.loader.exec_module(report)
 
 
+@pytest.fixture(autouse=True)
+def _no_live_superseders(monkeypatch):
+    """main() makes a second read for supersession; never let a test reach a
+    real database through it. Tests that exercise supersession override this."""
+    monkeypatch.setattr(report, "fetch_superseders", lambda dsn, window_days: [])
+
+
 def _row(**over):
     base = dict(
         session_id="abc123",
@@ -602,3 +609,226 @@ def test_seen_at_without_an_offset_is_refused(ledger, monkeypatch, capsys):
     assert rc == 2
     assert "WITH an offset" in capsys.readouterr().err
     assert not ledger.exists()
+
+
+# ── supersession ────────────────────────────────────────────────────────────
+#
+# The list could not see a LATER accepted review of the same subject, so the
+# SessionStart count read 45-46 when the 2026-09-18 triage found 8 already
+# answered by hand. Every one of those 8 is a fixture below, by the signal that
+# actually matched it on the live database.
+
+
+def _accepted(session_id, created, subject="", text=None, accepted=None):
+    return dict(session_id=session_id, created_at=created, subject=subject,
+                text=subject if text is None else text,
+                accepted_at=accepted or created + dt.timedelta(minutes=30))
+
+
+D = dt.datetime
+
+
+class TestSubjectPr:
+    @pytest.mark.parametrize("text, number, repo", [
+        ("Code-review PR https://github.com/cirwel/unitares/pull/2025 at commit 530d36c3",
+         2025, "cirwel/unitares"),
+        ("Independent code review requested for cirwel/unitares PR #2348 (commit c8e0243e)",
+         2348, "cirwel/unitares"),
+        ("PR cirwel/unitares#2128 — Watcher detector reported a truncated prompt", 2128,
+         "cirwel/unitares"),
+        ("Design choice (plugin PR cirwel/unitares-governance-plugin#146, finding ...)",
+         146, "cirwel/unitares-governance-plugin"),
+        # The word before "PR" is never trusted as a repo: an adjective here...
+        ("Review the current PR #2348 diff for correctness", 2348, None),
+        # ...and a repo here, with nothing to tell the two apart.
+        ("fermata PR #59: declared custody landed", 59, None),
+        ("Independent final review of unitares PR #2025 at exact head 5dd21203", 2025, None),
+        ("Review request for PR #2064 (draft, stacked on #2063)", 2064, None),
+        ("PR #2316 caps the corroboration grade", 2316, None),
+        ("Re-review the revised fix for issue #1817 / draft PR #1819", 1819, None),
+    ])
+    def test_the_first_pr_named_is_the_subject(self, text, number, repo):
+        assert report.subject_pr(text) == report.PrRef(number, repo)
+
+    @pytest.mark.parametrize("text", [
+        "Scheduled canary probe (#1387 positive control).",
+        "Is adoption measurable? The #1387 clock read shows ...",
+        "Should AI systems have the right to refuse human commands?",
+        "",
+    ])
+    def test_a_bare_number_or_no_pr_is_not_a_subject(self, text):
+        assert report.subject_pr(text) is None
+
+    def test_only_two_explicit_repos_can_disagree(self):
+        plugin = report.PrRef(146, "cirwel/unitares-governance-plugin")
+        assert not plugin.same_as(report.PrRef(146, "cirwel/unitares"))
+        # A fork's #42 is not upstream's #42 (review round 1 on #2511).
+        assert not report.PrRef(42, "alice/unitares").same_as(report.PrRef(42, "bob/unitares"))
+        assert plugin.same_as(report.PrRef(146))
+        assert not plugin.same_as(report.PrRef(147))
+
+
+class TestFindSupersessions:
+    def test_a_later_accepted_review_citing_the_session_supersedes_it(self):
+        rows = [_row(session_id="196acc3739ea0008", created_at=D(2026, 8, 22, 1),
+                     topic="Policy review: should a Phi cold-start spike ...")]
+        later = [_accepted("a493adde00761526", D(2026, 8, 22, 9),
+                           "Re-review the revised fix for draft PR #1819. Prior dialectic "
+                           "196acc3739ea0008 correctly rejected ...")]
+        assert report.find_supersessions(rows, later) == {
+            "196acc3739ea0008": {"session_id": "a493adde00761526", "signal": "cites_session_id"}}
+
+    def test_a_citation_in_the_thesis_text_counts(self):
+        rows = [_row(session_id="2958a8ff5e266a6c", created_at=D(2026, 8, 30, 1), topic="x")]
+        later = [_accepted("83edd2d6248f2050", D(2026, 8, 30, 9), "Exact-commit review",
+                           text="Exact-commit review\nsupersedes 2958a8ff5e266a6c")]
+        assert report.find_supersessions(rows, later)["2958a8ff5e266a6c"]["session_id"] == \
+            "83edd2d6248f2050"
+
+    def test_the_same_subject_pr_supersedes_every_earlier_rejection(self):
+        rows = [
+            _row(session_id="8da00e5b5d39e337", created_at=D(2026, 8, 29, 1),
+                 topic="Independent code review of PR https://github.com/cirwel/unitares/pull/2025"),
+            _row(session_id="0dc43b1d11e07bbb", created_at=D(2026, 8, 29, 2),
+                 topic="Code-review PR https://github.com/cirwel/unitares/pull/2025 at 91cbe5be"),
+        ]
+        later = [_accepted("9cd71f4ad5933832", D(2026, 8, 29, 9),
+                           "Independent final review of unitares PR #2025 at exact head 5dd21203")]
+        found = report.find_supersessions(rows, later)
+        assert set(found) == {"8da00e5b5d39e337", "0dc43b1d11e07bbb"}
+        assert found["8da00e5b5d39e337"] == {
+            "session_id": "9cd71f4ad5933832", "signal": "same_subject_pr", "pr": "cirwel/unitares#2025"}
+
+    def test_an_earlier_acceptance_supersedes_nothing(self):
+        rows = [_row(session_id="bbbb000011112222", created_at=D(2026, 9, 2),
+                     topic="Review PR #2064")]
+        earlier = [_accepted("aaaa000011112222", D(2026, 9, 1), "Review PR #2064",
+                             text="Review PR #2064, and bbbb000011112222")]
+        assert report.find_supersessions(rows, earlier) == {}
+
+    def test_an_unqualified_pr_matches_a_url_for_the_same_number(self):
+        """Live miss before the rule change: "the current PR #2348" read
+        "current" as a repo, and 78129de5 stayed listed after faee73eb accepted
+        the same PR twelve minutes later."""
+        rows = [_row(session_id="78129de50c19837f", created_at=D(2026, 9, 23, 2, 52),
+                     topic="Independent code review requested for cirwel/unitares PR #2348")]
+        later = [_accepted("faee73eb2ef1db6f", D(2026, 9, 23, 3, 4),
+                           "Review the current PR #2348 diff for correctness.")]
+        assert report.find_supersessions(rows, later)["78129de50c19837f"]["session_id"] == \
+            "faee73eb2ef1db6f"
+
+    def test_a_pr_mentioned_in_passing_is_not_the_subject(self):
+        """A review of #2064 "stacked on #2063" is not answered by accepting #2063."""
+        rows = [_row(session_id="9f884c21e53c0026", created_at=D(2026, 9, 2),
+                     topic="Review request for PR #2064 (draft, stacked on #2063)")]
+        later = [_accepted("cccc000011112222", D(2026, 9, 3), "Review PR #2063")]
+        assert report.find_supersessions(rows, later) == {}
+
+    def test_a_shared_issue_number_is_not_a_shared_subject(self):
+        """Live false positive, caught before shipping: a canary probe citing
+        the #1387 clock hid a design review that had never been answered."""
+        rows = [_row(session_id="c1db868e3323bad5", created_at=D(2026, 8, 16, 1),
+                     topic="Is `request_review` adoption measurable? The #1387 clock read ...")]
+        later = [_accepted("ecdd3c52affdc1f5", D(2026, 8, 16, 9),
+                           "Scheduled canary probe: verifying the review surface (#1387 positive control).")]
+        assert report.find_supersessions(rows, later) == {}
+
+    def test_an_acceptance_older_than_the_objection_does_not_hide_it(self):
+        """Review round 1 on #2511: A opened, B opened and accepted, then A's
+        reviewer rejected. B's acceptance cannot have answered that."""
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 1, 1),
+                     standing_since=D(2026, 9, 1, 5), topic="Review PR #3000")]
+        later = [_accepted("bbbb000011112222", D(2026, 9, 1, 2), "Review PR #3000",
+                           accepted=D(2026, 9, 1, 3))]
+        assert report.find_supersessions(rows, later) == {}
+        later[0]["accepted_at"] = D(2026, 9, 1, 6)
+        assert set(report.find_supersessions(rows, later)) == {"aaaa000011112222"}
+
+    def test_a_commit_sha_is_not_a_session_citation(self):
+        rows = [_row(session_id="5db1710cf8bca186", created_at=D(2026, 8, 29), topic="x")]
+        later = [_accepted("dddd000011112222", D(2026, 8, 30), "y",
+                           text="at commit 5db1710cf8bca1861234567890abcdef12345678")]
+        assert report.find_supersessions(rows, later) == {}
+
+
+class TestSupersessionInTheListing:
+    def _two(self, monkeypatch):
+        rows = [
+            _row(session_id="8da00e5b5d39e337", created_at=D(2026, 8, 29, 1),
+                 topic="Code-review PR https://github.com/cirwel/unitares/pull/2025"),
+            _row(session_id="open000011112222", created_at=D(2026, 8, 29, 2),
+                 topic="Review PR #9999"),
+        ]
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [dict(r) for r in rows])
+        monkeypatch.setattr(report, "fetch_superseders", lambda dsn, window_days: [
+            _accepted("9cd71f4ad5933832", D(2026, 8, 29, 9), "unitares PR #2025 final review")])
+
+    def test_superseded_reviews_leave_the_list_and_are_counted(self, ledger, monkeypatch, capsys):
+        self._two(monkeypatch)
+        assert report.main(["--json"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert [r["session_id"] for r in out["reviews"]] == ["open000011112222"]
+        assert out["count"] == 1
+        assert out["superseded_hidden"] == 1
+
+    def test_the_text_listing_says_how_many_it_hid(self, ledger, monkeypatch, capsys):
+        self._two(monkeypatch)
+        report.main([])
+        out = capsys.readouterr().out
+        assert "8da00e5b5d39e337" not in out
+        assert "1 review(s) hidden as superseded" in out
+
+    def test_all_shows_the_superseded_review_and_what_superseded_it(self, ledger, monkeypatch, capsys):
+        self._two(monkeypatch)
+        report.main(["--all"])
+        out = capsys.readouterr().out
+        assert "8da00e5b5d39e337" in out
+        assert "SUPERSEDED by accepted review 9cd71f4ad5933832 (same subject PR cirwel/unitares#2025)" in out
+
+    def test_all_keeps_the_acknowledgement_of_a_superseded_review(self, ledger, monkeypatch, capsys):
+        """Review round 2 on #2511: the operator's recorded disposition must
+        survive a later automatic supersession."""
+        self._two(monkeypatch)
+        ledger.parent.mkdir(parents=True, exist_ok=True)
+        ledger.write_text(_ack_line("8da00e5b5d39e337", reason="PR #2025 merged") + "\n")
+        report.main(["--all"])
+        out = capsys.readouterr().out
+        assert "SUPERSEDED by accepted review 9cd71f4ad5933832" in out
+        assert "ACKNOWLEDGED superseded" in out and "PR #2025 merged" in out
+
+    def test_a_failed_supersession_read_hides_nothing(self, ledger, monkeypatch, capsys):
+        self._two(monkeypatch)
+
+        def boom(dsn, window_days):
+            raise RuntimeError("db went away")
+
+        monkeypatch.setattr(report, "fetch_superseders", boom)
+        assert report.main(["--json"]) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["count"] == 2
+        assert "hiding nothing" in captured.err
+
+
+class TestSupersederQueryShape:
+    def test_acceptance_is_the_reviewers_verdict_not_the_status(self):
+        q = report.SUPERSEDER_QUERY
+        assert "v.agrees IS TRUE" in q
+        assert "dm.agent_id = s.reviewer_agent_id" in q
+        assert "status" not in q
+
+    def test_a_self_review_can_never_supersede(self):
+        assert "s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id" in report.SUPERSEDER_QUERY
+
+    def test_probes_cannot_supersede_organic_reviews(self):
+        """Same frozen rule as QUERY (review round 1 on #2511)."""
+        q = report.SUPERSEDER_QUERY
+        assert "LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id" in q
+        assert "(probe|canary)" in q and "^RP[0-9]" in q
+
+    def test_a_citation_in_the_thesis_conditions_is_read(self):
+        """Review round 3 on #2511: a re-review may cite the prior session
+        only in a proposed condition."""
+        assert "t.proposed_conditions::text" in report.SUPERSEDER_QUERY
+
+    def test_the_acceptance_time_is_read(self):
+        assert "v.timestamp AS accepted_at" in report.SUPERSEDER_QUERY

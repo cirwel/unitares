@@ -12,7 +12,9 @@ and checks whether their most recent auto-merge timeline event is a
 disarm. Hits are reported through ONE tracking issue updated in place
 (never one issue per PR — this is a dashboard, not an alarm bell), plus
 the job summary. Re-arming stays a human/session decision by design; the
-detector only ends the silence. A DELIBERATE hold is expressed by
+detector only ends the silence. (The operator's queue script re-arms PRs
+the maintainer labelled `approved-to-merge`, so one may appear here
+briefly while its failed checks are re-run.) A DELIBERATE hold is expressed by
 labeling the PR `automerge-hold`, which mutes it here — the mute is
 itself visible on the PR, so it is not a silent suppression.
 
