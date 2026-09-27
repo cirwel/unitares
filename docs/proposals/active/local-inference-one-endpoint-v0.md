@@ -25,7 +25,14 @@ Paths in the server that call a local model (all in `src/mcp_handlers/`):
 Outside the server, two agent processes build their own clients on the same
 Ollama base with a hard-coded `"ollama"` key: the orchestrated dialectic
 reviewer's `local` backend (`agents/dialectic_reviewer/reviewer.py`) and the
-local resident runner (`agents/local_resident/runner.py`). Its `external` backend
+local resident runner (`agents/local_resident/runner.py`).
+
+Out of scope: the Watcher resident (`agents/watcher/agent.py`) reads its own
+`WATCHER_OLLAMA_URL` and pins its own model on purpose, because its finding
+calibration was measured against that model. It keeps its settings. Moving it
+onto the shared endpoint is a separate decision that needs its own
+recalibration, so "every local-model path" below means the server and the
+processes the server starts, plus the local resident runner. Its `external` backend
 (`host_backends.py`) already talks to any OpenAI-compatible endpoint, configured
 by `UNITARES_DIALECTIC_EXTERNAL_BASE_URL`, `_MODEL` and `_API_KEY_ENV`. That
 backend runs only in the orchestrated reviewer, which a default install does
@@ -183,15 +190,22 @@ changes no setting. One rule orders them: no step may let a request with
    No client changes and no key setting yet: every client still sends a fixed
    key, so documenting one here would describe a setting nothing reads.
 2. **Client and key.** Add `local_model_client.py` and
-   `UNITARES_MODEL_API_KEY_ENV` together, with its Compose mapping and, for the
-   default key variable, the mapping of the value into `governance-mcp`. Move
+   `UNITARES_MODEL_API_KEY_ENV` together. Every request to the endpoint sends
+   the key, including the model-listing requests of `unitares model`, the
+   doctor check and (from step 3) the registry probe, or an authenticated
+   endpoint answers inference but reads as down during setup and diagnosis.
+   Compose maps `UNITARES_MODEL_API_KEY` into `governance-mcp`, and only that
+   name: Compose forwards variables it names, not ones chosen at run time, so a
+   Compose install keeps its key in `UNITARES_MODEL_API_KEY`, and the manual
+   says so. A custom `UNITARES_MODEL_API_KEY_ENV` is for source installs and
+   for the orchestrator's own environment. Move
    all six constructions onto the client (the four in the server, the
    reviewer's `local` backend and the local resident runner), forward the key's
    name to the orchestrated reviewer as 2.6 describes, and keep `/api/chat`
    behind Ollama detection. Only now does the manual describe authenticated
    endpoints.
 3. **Discovery and fallback.** The `/models` availability probe for the
-   registry, and the fallback endpoint with the Hugging Face default and its
+   registry, sending the key as step 2 does, and the fallback endpoint with the Hugging Face default and its
    Compose mappings.
 4. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy` and describe
    `provider` as primary or fallback. This moves input-schema digests, so it
