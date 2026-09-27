@@ -105,26 +105,30 @@ fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
 `sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
 re-alert backoff so a host that stays broken does not re-post daily.
-Recovery uses `doctor_findings.py`'s rule: at the end of each run, an open
+Recovery follows `doctor_findings.py`'s rule. At the end of each run, a
 record that this run did not reproduce is closed and its backoff dropped, so
-a later failure of the same kind alerts at once. That one rule covers a
-success, a changed failure (a host that failed preflight yesterday and fails
-`auth` today closes the preflight record and opens an `auth` one), and a
-shared `gov-dispatch` failure that is no longer shared (its record closes, and
-any host still failing gets its own). A host in a cooldown is partly assessed. A cooldown is recorded only from a
-call whose CLI ran to completion (`dispatch_phase == "terminal"`). That
-includes a CLI that ran and reported itself logged out. So it proves gov's
-dispatch path worked and the CLI started. The host's pre-CLI and
-unclassified records therefore close, while a record of the same class as the
-cooldown (an `auth` record under an `auth` cooldown) stays open. A
-host the operator has switched off has its records closed with the reason
-`not_enabled`: the operator has taken it out of rotation.
+a later failure of the same kind alerts at once. What counts as reproducing a
+record depends on what the run observed for the host:
+
+| Observed this run | Records kept open | Records closed |
+|---|---|---|
+| Probe succeeded, or passive evidence | none | all of the host's |
+| Probe failed with class C | C (re-posted under the backoff) | every other class |
+| Cooldown of class C | C: the cooldown is itself a fresh failure of that class | pre-CLI and unclassified, because a cooldown is recorded only from a call whose CLI ran to completion (`dispatch_phase == "terminal"`, which includes a CLI reporting itself logged out), so gov's dispatch path worked |
+| Hung call stopped by the cleanup pass | the timeout record, raised to high | none |
+| Operator switched the host off | none | all, with reason `not_enabled` |
+
+This covers a changed failure: a host that failed preflight yesterday and
+fails `auth` today closes the preflight record and opens an `auth` one. It
+also covers a shared `gov-dispatch` failure that is no longer shared. That
+record closes, and any host still failing gets its own.
+
 Recovery is noticed on the next daily run, so a record can stay open up to a
 day after a host recovers. That delay costs nothing more: the backoff already
-holds back re-posting, and the finding was posted once. That closure is local state
-only. It emits no `outcome_event`, because a probe passing is not an operator
-judging the finding correct (roadmap Invariant 4, the reasoning
-`doctor_findings.py` records at the same step).
+holds back re-posting, and the finding was posted once. Closing a record
+changes local state only. It emits no `outcome_event`, because a probe
+passing is not an operator judging the finding correct (roadmap Invariant 4,
+the reasoning `doctor_findings.py` records at the same step).
 
 ### Hung calls
 
@@ -166,8 +170,9 @@ day. So after each successful probe, the probe reads that host's `last_ok`
 from `list_inference_hosts` and stores the exact value in its state file. It
 skips a host only when all four of these hold:
 
-- the host has no open record, since closing a record needs a probe from
-  after it opened;
+- the host has no open record, so an open record is always retested by the
+  probe's own call rather than closed on another caller's success, which may
+  have used a different model or come before the fault;
 - `last_ok` is under 24 h old;
 - it differs from the stored value, meaning some other caller has succeeded
   since;
