@@ -216,16 +216,25 @@ def attestation_regressions(src: pathlib.Path, dst: pathlib.Path) -> list[str]:
     Other older mirror-only files are ones canonical has since pruned, or ones
     for text canonical no longer carries, and deleting them is the sync doing
     its job.
+
+    A skill canonical no longer carries at all (no ``<skill>/SKILL.md``) is out
+    of scope, the same as a mirror-only SKILL.md in ``regressions``: canonical
+    is authoritative for WHICH skills exist, so its attestations go with it.
+    Without this, removing a skill from canonical made every one of its
+    mirror attestations "newer than any canonical record" (there are none),
+    and the sync refused the removal it was meant to carry.
     """
     blocked: list[str] = []
     mirror_root = dst / ".attestations"
     if not mirror_root.is_dir():
         return blocked
     for adir in sorted(p for p in mirror_root.iterdir() if p.is_dir()):
+        canon_md = src / adir.name / "SKILL.md"
+        if not canon_md.exists():
+            continue
         canon_dir = src / ".attestations" / adir.name
         canon_names = {p.name for p in canon_dir.glob("*.json")} if canon_dir.is_dir() else set()
         canon_newest = max(canon_names, default="")
-        canon_md = src / adir.name / "SKILL.md"
         try:
             current = skill_text_digest(canon_md) if canon_md.is_file() else None
         except OSError:

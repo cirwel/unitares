@@ -232,6 +232,26 @@ class TestOnboardFailureSurfaces:
         assert client.agent_uuid is None
 
 
+class TestToolRefusalIsDistinguishable:
+    @pytest.mark.asyncio
+    async def test_success_false_raises_the_refusal_subclass(self):
+        """A caller deciding whether to retry must tell an answer from a
+        transport failure; existing `except GovernanceConnectionError` still
+        catches both."""
+        from unitares_sdk.errors import GovernanceToolRefused
+
+        session = AsyncMock()
+        session.call_tool = AsyncMock(return_value=make_mcp_result({
+            "success": False,
+            "error": "not the assigned reviewer",
+        }))
+        client = make_client_with_session(session)
+
+        with pytest.raises(GovernanceToolRefused, match="not the assigned reviewer") as caught:
+            await client.call_tool("dialectic", {"action": "synthesis"})
+        assert isinstance(caught.value, GovernanceConnectionError)
+
+
 # --- Tool name mapping ---
 
 

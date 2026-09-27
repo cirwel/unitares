@@ -124,3 +124,324 @@ def test_a_guess_never_overwrites_a_stated_reset_in_its_window():
                           {"reason": "auth", "stated_reset": None}, now=now + 1)
     entry = ha._state["codex:host-adapter"]
     assert entry["retry_after"] == now + 300 and entry["retry_after_source"] == "provider"
+    # The kept window keeps its cause: the auth guess did not set it.
+    assert entry["reason"] == "quota"
+
+
+# --- Redis copy: a restart remembers a provider at its limit ---------------
+
+fakeredis = pytest.importorskip("fakeredis")
+import asyncio  # noqa: E402
+import json  # noqa: E402
+
+import fakeredis.aioredis  # noqa: E402
+
+QUOTA = {"reason": "quota", "stated_reset": None}
+
+
+@pytest.fixture
+def redis(monkeypatch):
+    """A fake Redis in place of the live one (conftest cuts the live one off)."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+
+    async def _fake():
+        return fake
+
+    monkeypatch.setattr(ha, "_get_redis", _fake)
+    return fake
+
+
+def _restart():
+    """What a gov restart does to this module: the process state is gone."""
+    ha._reset_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_a_cooldown_survives_a_restart(redis):
+    now = 1_000_000.0
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 3600},
+        detail="usage limit", now=now)
+    key = ha.REDIS_KEY_PREFIX + "codex:host-adapter"
+    assert 3590 <= await redis.ttl(key) <= 3600  # TTL = retry_after - now
+
+    _restart()
+    assert ha.cooldown("codex:host-adapter", now=now + 60) is None  # cache empty
+    assert await ha.load_from_redis(now=now + 60) == 1
+    restored = ha.cooldown("codex:host-adapter", now=now + 60)
+    assert restored == view  # same window, source, reason and failure count
+    assert ha.cooldown("codex:host-adapter", now=now + 3601) is None
+
+
+@pytest.mark.asyncio
+async def test_a_restored_window_follows_the_window_rules(redis):
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    _restart()
+    await ha.load_from_redis(now=now + 1)
+    # Inside the restored window a further guess changes nothing...
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now + 2)
+    assert ha._state["claude:host-adapter"]["retry_after"] == now + ha.BACKOFF_BASE_S
+    assert ha._state["claude:host-adapter"]["failures"] == 1
+    # ...and a provider-stated reset still wins over the restored guess.
+    await ha.record_unavailable_async(
+        "claude:host-adapter", {"reason": "quota", "stated_reset": now + 120}, now=now + 3)
+    _restart()
+    await ha.load_from_redis(now=now + 4)
+    entry = ha._state["claude:host-adapter"]
+    assert entry["retry_after"] == now + 120 and entry["retry_after_source"] == "provider"
+
+
+@pytest.mark.asyncio
+async def test_the_backoff_keeps_counting_across_a_restart(redis):
+    """The failure count comes back with the window, so the first failure
+    after a restored window lapses backs off one step longer, not from 30m."""
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    _restart()
+    await ha.load_from_redis(now=now + 1)
+    after = now + ha.BACKOFF_BASE_S + 1  # the restored window has lapsed
+    view = await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=after)
+    assert view["consecutive_failures"] == 2
+    assert ha._state["claude:host-adapter"]["retry_after"] == after + 2 * ha.BACKOFF_BASE_S
+
+
+@pytest.mark.asyncio
+async def test_a_write_syncs_a_window_it_did_not_know_about(redis):
+    """Another process (or the run before a restart whose load lost the race
+    with the first call) holds a stated reset: a local guess must not replace
+    it in Redis."""
+    now = 1_000_000.0
+    await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 7200}, now=now)
+    _restart()  # no load: the cache has not seen it
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "auth", "stated_reset": None}, now=now + 5)
+    assert view["retry_after_source"] == "provider"
+    assert view["reason"] == "quota"
+    stored = json.loads(await redis.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
+    assert stored["retry_after"] == now + 7200
+
+
+@pytest.mark.asyncio
+async def test_a_stored_window_is_still_capped_at_twelve_hours(redis):
+    now = 1_000_000.0
+    await redis.set(ha.REDIS_KEY_PREFIX + "codex:host-adapter", json.dumps({
+        "reason": "quota", "retry_after": now + 7 * 86400, "retry_after_source": "provider",
+        "failures": 1, "detail": "", "recorded_at": now}))
+    await ha.load_from_redis(now=now)
+    assert ha._state["codex:host-adapter"]["retry_after"] == now + ha.STATED_RESET_CAP_S
+
+
+@pytest.mark.asyncio
+async def test_lapsed_and_foreign_copies_are_ignored(redis):
+    now = 1_000_000.0
+    await redis.set(ha.REDIS_KEY_PREFIX + "claude:host-adapter", json.dumps({
+        "reason": "quota", "retry_after": now - 1, "retry_after_source": "backoff",
+        "failures": 1}))
+    await redis.set(ha.REDIS_KEY_PREFIX + "codex:host-adapter", "not json")
+    await redis.set(ha.REDIS_KEY_PREFIX + "antigravity:host-adapter", json.dumps({
+        "retry_after": now + 60, "retry_after_source": "made-up"}))
+    assert await ha.load_from_redis(now=now) == 0
+    assert ha._state == {}
+
+
+@pytest.mark.asyncio
+async def test_clear_removes_the_copy_so_a_restart_does_not_resurrect_it(redis):
+    now = 1_000_000.0
+    await ha.record_unavailable_async("claude:host-adapter", QUOTA, now=now)
+    await ha.clear_async("claude:host-adapter")
+    assert await redis.get(ha.REDIS_KEY_PREFIX + "claude:host-adapter") is None
+    _restart()
+    assert await ha.load_from_redis(now=now + 1) == 0
+
+
+class _BrokenRedis:
+    async def get(self, *a, **k):
+        raise ConnectionError("redis down")
+
+    set = delete = mget = get
+
+    def scan_iter(self, *a, **k):
+        raise ConnectionError("redis down")
+
+
+class _HangingRedis:
+    async def get(self, *a, **k):
+        await asyncio.sleep(3600)
+
+    set = delete = mget = get
+
+    async def scan_iter(self, *a, **k):
+        await asyncio.sleep(3600)
+        yield ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client", [None, _BrokenRedis(), _HangingRedis()],
+                         ids=["absent", "raising", "hanging"])
+async def test_redis_down_means_in_process_behaviour(monkeypatch, client):
+    async def _redis():
+        return client
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    monkeypatch.setattr(ha, "REDIS_TIMEOUT_S", 0.05)
+    now = 1_000_000.0
+    view = await ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 600}, now=now)
+    assert view["retry_after_source"] == "provider"
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is not None
+    assert await ha.load_from_redis(now=now + 1) == 0
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is not None  # load kept it
+    await ha.clear_async("codex:host-adapter")
+    assert ha.cooldown("codex:host-adapter", now=now + 1) is None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_delete_on_recovery_is_logged(monkeypatch, caplog):
+    async def _redis():
+        return _BrokenRedis()
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    await ha.clear_async("codex:host-adapter")
+    assert "was not deleted" in caplog.text
+
+
+def test_an_older_stated_reset_arriving_late_does_not_replace_a_newer_one():
+    """Review round 3 (antigravity): the call that saw its failure first can
+    finish second; the later statement must still win."""
+    now = 1_000_000.0
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 600}, now=now + 10)
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 3600}, now=now + 5)
+    entry = ha._state["codex:host-adapter"]
+    assert entry["retry_after"] == now + 600 and entry["recorded_at"] == now + 10
+
+
+@pytest.mark.asyncio
+async def test_concurrent_stated_resets_keep_the_later_statement(monkeypatch):
+    """The same race end to end: the first caller's Redis read is slow."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    slow_once = {"left": 1}
+
+    class _SlowFirstRead:
+        def __getattr__(self, name):
+            return getattr(fake, name)
+
+        async def get(self, key):
+            if slow_once["left"]:
+                slow_once["left"] -= 1
+                await asyncio.sleep(0.05)
+            return await fake.get(key)
+
+    async def _redis():
+        return _SlowFirstRead()
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    now = 1_000_000.0
+    first = ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 3600}, now=now)
+    second = ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 600}, now=now + 1)
+    await asyncio.gather(first, second)
+    assert ha._state["codex:host-adapter"]["retry_after"] == now + 600
+    stored = json.loads(await fake.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
+    assert stored["retry_after"] == now + 600
+
+
+class _SlowOp:
+    """Fake Redis whose named operation is delayed once, to force the network
+    completion order the opposite way round from the call order."""
+
+    def __init__(self, fake, slow: str):
+        self._fake, self._slow, self._left = fake, slow, 1
+
+    def __getattr__(self, name):
+        attr = getattr(self._fake, name)
+        if name != self._slow:
+            return attr
+
+        async def _delayed(*a, **k):
+            if self._left:
+                self._left -= 1
+                await asyncio.sleep(0.05)
+            return await attr(*a, **k)
+
+        return _delayed
+
+
+async def _race(monkeypatch, slow: str, first, second):
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    client = _SlowOp(fake, slow)
+
+    async def _redis():
+        return client
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    task = asyncio.ensure_future(first())
+    await asyncio.sleep(0.01)  # the first call is now inside its slow operation
+    await second()
+    await task
+    return await fake.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter")
+
+
+@pytest.mark.asyncio
+async def test_a_slow_write_cannot_resurrect_a_window_a_newer_success_cleared(monkeypatch):
+    """Codex review (P2): a failure's SET that lands after a newer success's
+    DEL would reload a cleared window on the next restart."""
+    stored = await _race(
+        monkeypatch, "set",
+        lambda: ha.record_unavailable_async("codex:host-adapter", QUOTA),
+        lambda: ha.clear_async("codex:host-adapter"),
+    )
+    assert ha.cooldown("codex:host-adapter") is None
+    assert stored is None  # Redis agrees with the process
+
+
+@pytest.mark.asyncio
+async def test_a_slow_delete_cannot_erase_a_newer_failure(monkeypatch):
+    stored = await _race(
+        monkeypatch, "delete",
+        lambda: ha.clear_async("codex:host-adapter"),
+        lambda: ha.record_unavailable_async("codex:host-adapter", QUOTA),
+    )
+    assert ha.cooldown("codex:host-adapter") is not None
+    assert stored is not None  # the newer failure survives a restart
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("configured, warned", [(True, True), (False, False)],
+                         ids=["unreachable", "disabled"])
+async def test_recovery_without_a_redis_client_is_logged_unless_redis_is_off(
+        monkeypatch, caplog, configured, warned):
+    """Codex review (P2): an unreachable or circuit-open Redis gives no
+    client, which skips the delete as surely as a failed DEL. The cache is not
+    consulted: startup may have missed a copy that still exists."""
+    async def _no_client():
+        return None
+
+    monkeypatch.setattr(ha, "_get_redis", _no_client)
+    monkeypatch.setattr(ha, "_redis_configured", lambda: configured)
+    await ha.clear_async("codex:host-adapter")  # nothing in the cache
+    assert ("was not deleted" in caplog.text) is warned
+    caplog.clear()
+    await ha.clear_async("codex:host-adapter")  # same outage: logged once
+    assert "was not deleted" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_landed_delete_rearms_the_warning(monkeypatch, caplog, redis):
+    async def _no_client():
+        return None
+
+    real = ha._get_redis
+    monkeypatch.setattr(ha, "_redis_configured", lambda: True)
+    monkeypatch.setattr(ha, "_get_redis", _no_client)
+    await ha.clear_async("codex:host-adapter")
+    monkeypatch.setattr(ha, "_get_redis", real)  # Redis back: delete lands
+    await ha.clear_async("codex:host-adapter")
+    caplog.clear()
+    monkeypatch.setattr(ha, "_get_redis", _no_client)  # a second outage
+    await ha.clear_async("codex:host-adapter")
+    assert "was not deleted" in caplog.text

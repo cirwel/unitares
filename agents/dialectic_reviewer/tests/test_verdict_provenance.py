@@ -52,6 +52,16 @@ def test_persisted_provenance_keeps_the_attribution_fields():
     assert stored["degraded"] is False
 
 
+def test_the_stamp_names_its_reviewer_kind():
+    """The server passes this stamp through without adding a kind, so without
+    it `reviewer_kind='orchestrated'` counted 0 of 120 orchestrated verdicts."""
+    from src.mcp_handlers.dialectic.handlers import _REVIEWER_KINDS
+
+    stored = r._provenance_for_message(FULL_PROVENANCE, degraded=False)
+    assert stored["reviewer_kind"] == "orchestrated"
+    assert stored["reviewer_kind"] in _REVIEWER_KINDS
+
+
 def test_fallback_is_recorded_when_one_fired():
     provenance = {
         "backend": "ollama",

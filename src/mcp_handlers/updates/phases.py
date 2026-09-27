@@ -1923,29 +1923,12 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     except Exception as e:
         logger.debug(f"CIRS resonance persistence skipped: {e}")
 
-    # Drift: Auto-trigger dialectic review after sustained high drift
-    try:
-        monitor = ctx.monitor
-        consecutive = getattr(monitor, '_consecutive_high_drift', 0) if monitor else 0
-        if consecutive >= 3:
-            # Check agent isn't already in a dialectic session
-            from ..dialectic import is_agent_in_active_session
-            already_in_session = await is_agent_in_active_session(agent_id)
-            if not already_in_session:
-                drift_vec = getattr(monitor, '_last_drift_vector', None)
-                drift_desc = f"||Δη||={drift_vec.norm:.3f}" if drift_vec else "sustained high drift"
-                from ..dialectic import handle_request_dialectic_review
-                await handle_request_dialectic_review({
-                    'agent_id': agent_id,
-                    'issue_description': f'Ethical drift threshold exceeded: {drift_desc}',
-                    'reason': 'Auto-triggered by sustained drift (3+ consecutive high-drift updates)',
-                    'session_type': 'recovery',
-                    'reviewer_mode': 'auto',
-                })
-                monitor._consecutive_high_drift = 0  # Reset after triggering
-                logger.info(f"Drift-triggered dialectic review for {agent_id}")
-    except Exception as e:
-        logger.debug(f"Drift dialectic trigger skipped: {e}")
+    # No drift-triggered review. One lived here, keyed on three consecutive
+    # high-drift updates, and it never ran after the 2026-03-09 package reorg:
+    # its import of is_agent_in_active_session failed and the error was logged
+    # at debug level. Removed 2026-09-27 rather than revived: a review nobody
+    # asked for has nobody to answer the reviewer, and an unanswered rejection
+    # is already how most dialectic sessions strand.
 
 
 async def _post_update_record_state(ctx: UpdateContext) -> bool:

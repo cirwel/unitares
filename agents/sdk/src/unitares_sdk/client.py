@@ -19,6 +19,7 @@ from unitares_sdk._metrics_fields import resolve_metrics_fields
 from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.errors import (
     GovernanceConnectionError,
+    GovernanceToolRefused,
     GovernanceTimeoutError,
     GovernanceUnavailableError,
     IdentityDriftError,
@@ -954,7 +955,7 @@ class GovernanceClient:
     def _raise_for_tool_failure(tool_name: str, raw: dict) -> None:
         if raw.get("success") is False:
             error = raw.get("error", "Unknown error")
-            raise GovernanceConnectionError(f"Tool {tool_name} failed: {error}")
+            raise GovernanceToolRefused(f"Tool {tool_name} failed: {error}")
 
     @staticmethod
     def _parse_mcp_result(result: Any) -> dict:
