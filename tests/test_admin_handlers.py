@@ -633,11 +633,12 @@ class TestHealthCheck:
             assert "calibration" in data["operator_summary"]["failing_checks"]
 
     @pytest.mark.asyncio
-    async def test_health_check_overall_status_logic(self, mock_mcp_server, patch_context_agent_id):
+    async def test_health_check_overall_status_logic(self, mock_mcp_server, patch_context_agent_id, tmp_path):
         """Test the three-tier status logic: healthy, moderate, critical."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
@@ -679,12 +680,13 @@ class TestHealthCheck:
     async def test_health_check_reports_degraded_local_identity_continuity(
         self,
         mock_mcp_server,
-        patch_context_agent_id,
+        patch_context_agent_id, tmp_path,
     ):
         """Default health output should state when continuity is degraded-local."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})
@@ -727,12 +729,13 @@ class TestHealthCheck:
     async def test_health_check_reports_redis_identity_continuity(
         self,
         mock_mcp_server,
-        patch_context_agent_id,
+        patch_context_agent_id, tmp_path,
     ):
         """Health output should explicitly report Redis-backed continuity when available."""
         mock_audit = MagicMock()
-        mock_audit.log_file = MagicMock()
-        mock_audit.log_file.exists.return_value = True
+        # A real, writable log: the check verifies it can still be appended to.
+        mock_audit.log_file = tmp_path / "audit_log.jsonl"
+        mock_audit.log_file.write_text("{}\n")
 
         mock_db = AsyncMock()
         mock_db.health_check = AsyncMock(return_value={"status": "healthy"})

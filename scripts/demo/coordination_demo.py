@@ -150,35 +150,42 @@ def port_pairing_problem(
     default — which on a host running a second server is that server's port.
     That happened with the install manual's own example, which remapped only
     the lease plane, so the demo registered its participants on an unrelated
-    live server. A port stated anywhere (environment or .env, which Compose
-    reads too) or an explicit URL counts as saying something, so a real
-    one-sided remap still runs once the default side is stated.
+    live server. Each half is stated by its own port (environment or .env,
+    which Compose reads too) or its own explicit URL; an explicit URL for one
+    half says nothing about the other. A real one-sided remap still runs once
+    the default side is stated.
     """
     env = os.environ if environ is None else environ
-    if env.get("UNITARES_COORDINATION_DEMO_URL") or env.get(
-        "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL"
-    ):
-        return None
     dotenv = _dotenv_values(dotenv_path)
 
-    def env_remap(names: tuple[str, ...]) -> str | None:
-        return next((name for name in names if env.get(name)), None)
+    def env_remap(names: tuple[str, ...], url_var: str) -> str | None:
+        return next((name for name in (url_var, *names) if env.get(name)), None)
 
-    def stated(names: tuple[str, ...]) -> bool:
-        return any(env.get(name) or dotenv.get(name) for name in names)
+    def stated(names: tuple[str, ...], url_var: str) -> bool:
+        return bool(env.get(url_var)) or any(
+            env.get(name) or dotenv.get(name) for name in names
+        )
 
-    for moved, silent, silent_default, silent_hint in (
-        (_LEASE_PORT_VARS, _GOVERNANCE_PORT_VARS, "8767", "GOVERNANCE_HOST_PORT"),
-        (_GOVERNANCE_PORT_VARS, _LEASE_PORT_VARS, "8788", "LEASE_PLANE_HOST_PORT"),
+    for moved, moved_url, silent, silent_url, silent_default, silent_hint in (
+        (
+            _LEASE_PORT_VARS, "UNITARES_COORDINATION_DEMO_URL",
+            _GOVERNANCE_PORT_VARS, "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL",
+            "8767", "GOVERNANCE_HOST_PORT",
+        ),
+        (
+            _GOVERNANCE_PORT_VARS, "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL",
+            _LEASE_PORT_VARS, "UNITARES_COORDINATION_DEMO_URL",
+            "8788", "LEASE_PLANE_HOST_PORT",
+        ),
     ):
-        name = env_remap(moved)
-        if name and not stated(silent):
+        name = env_remap(moved, moved_url)
+        if name and not stated(silent, silent_url):
             return (
                 f"{name} moves one half of the stack, but nothing says where the "
                 f"other half is, so the demo would use port {silent_default} for "
                 "it and could talk to a different server there.\n"
-                f"Set {silent_hint} as well (to {silent_default} if that half "
-                "really is on its default port), for example:\n"
+                f"Set {silent_hint} (or {silent_url}) as well, to {silent_default} "
+                "if that half really is on its default port. For example:\n"
                 "    GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 "
                 "make coordination-demo"
             )

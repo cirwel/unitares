@@ -286,6 +286,9 @@ def test_half_remapped_ports_are_refused_before_any_network_call(tmp_path) -> No
         {"LEASE_PLANE_HOST_PORT": "18788"},
         {"GOVERNANCE_HOST_PORT": "18767"},
         {"UNITARES_COORDINATION_DEMO_GOVERNANCE_PORT": "18767"},
+        # an explicit URL for one half says nothing about the other
+        {"UNITARES_COORDINATION_DEMO_URL": "http://lease.example:8788"},
+        {"UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"},
     ):
         problem = coordination_demo.port_pairing_problem(env, missing)
         assert problem, env
@@ -303,8 +306,9 @@ def test_stated_ports_urls_and_defaults_are_not_refused(tmp_path) -> None:
         ({"LEASE_PLANE_HOST_PORT": "18788", "GOVERNANCE_HOST_PORT": "8767"}, missing),
         # the other side stated in .env, which Compose reads as well
         ({"UNITARES_COORDINATION_DEMO_PORT": "18788"}, both),
-        # explicit URLs are taken as they are
-        ({"UNITARES_COORDINATION_DEMO_URL": "http://lease.example:8788"}, missing),
+        # an explicit URL states its own half
+        ({"UNITARES_COORDINATION_DEMO_URL": "http://lease.example:8788",
+          "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"}, missing),
         ({"LEASE_PLANE_HOST_PORT": "18788",
           "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"}, missing),
     ):
