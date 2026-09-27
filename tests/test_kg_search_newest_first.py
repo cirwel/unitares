@@ -410,6 +410,23 @@ class TestUnifiedSchemaCarriesRecencyParams:
 # ---------------------------------------------------------------------------
 
 
+def test_legacy_validation_dump_keeps_a_queryless_window_time_ordered():
+    """The legacy tool's arguments reach the handler as params_step's plain
+    model_dump(), defaults included. An omitted sort_by must survive that as
+    "unset" so the queryless window still reads as time order."""
+    from src.mcp_handlers.schemas.knowledge import SearchKnowledgeGraphParams
+
+    dumped = SearchKnowledgeGraphParams.model_validate(
+        {"created_after": "2026-09-26T00:00:00Z"}
+    ).model_dump()
+    assert dumped["sort_by"] is None
+    assert _parse_knowledge_search_request(dumped).sort_by == "created_at"
+    explicit = SearchKnowledgeGraphParams.model_validate(
+        {"created_after": "2026-09-26T00:00:00Z", "sort_by": "relevance"}
+    ).model_dump()
+    assert _parse_knowledge_search_request(explicit).sort_by == "relevance"
+
+
 class TestParseRecencyArguments:
     def test_defaults(self):
         request = _parse_knowledge_search_request({"query": "x"})
