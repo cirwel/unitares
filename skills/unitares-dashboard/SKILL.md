@@ -155,10 +155,11 @@ always returns `{}`, and `withFallback` tags the result `unavailable`, not
 `snapshot`. A fallback that dereferences a nested key (`S().x.y`) throws *out of*
 `withFallback` on the first failed read and the pane never renders. Return the
 shape the view expects, empty — `() => (S().x || {}).y || []` —
-as the dialectic, metrics-catalog and activity accessors in `data.js` do.
-`dashboard/tests/sections-unavailable.test.js` loads every section with all
-requests failing and fails if any rejects or shows bundled data; add new
-sections to its table.
+as the dialectic and activity accessors in `data.js` do.
+`dashboard/tests/sections-unavailable.test.js` loads every core section with
+all requests failing and fails if any rejects or shows bundled data; add new
+sections to its table. An extension's accessors have no bundled snapshot at
+all, so their fallbacks are always the empty shape.
 
 **The snapshot can be missing.** Since 2026-08 `snapshot.js` is auth-gated
 when served, and `app.html` loads it with a plain `<script src>` that sends
