@@ -56,18 +56,40 @@ trimmed. Search also supports `include_provenance`;
 request `response_mode="full"` when you need the full result fields. The search
 alias omits controls for other actions, such as closure evidence and synthesis;
 use `update_finding` or the corresponding `knowledge` action for those tasks.
-Date filters (`created_after` / `created_before`) are not supported by this
-search action. A supplied-but-blank query is rejected so a caller mistake cannot turn
+A supplied-but-blank query is rejected so a caller mistake cannot turn
 into an accidental broad scan. Omit `include_details` to let the server expand a
 small result set (up to 3 hits) automatically; pass `include_details=false` when
 summaries only are intentional.
+
+### Newest first, and "what is new since T"
+
+Relevance order can bury an entry written this morning under older, better
+matches. Two controls answer "what is new":
+
+- `sort_by="created_at"` returns the query's full-text matches newest first.
+  The database orders the match set, so a fresh entry comes first however
+  weakly it ranks. It cannot be combined with `search_mode="semantic"` or
+  `"hybrid"`, or with `semantic=true`: similarity has no match boundary to
+  order within. An entry that shares no query terms (after stemming) is not a
+  match, and a multi-term query needs every term unless the AND search found
+  nothing, in which case it falls back to OR.
+- `created_after` / `created_before` take ISO 8601 timestamps (UTC when no
+  offset is given; `"2026-09-26"` is midnight UTC) and are exclusive. They work
+  with any order and any search mode. With no query, `created_after` alone is
+  the "what is new since T" read, newest first:
+  `search_shared_memory(created_after="2026-09-26T00:00:00Z")`.
+
+An unparseable or inverted window is refused, not ignored. The response echoes
+`sort_by` and the window when they differ from the default. The default order
+is still relevance.
 
 Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
 relevance contests against native findings and evidence-linked governed claims.
 This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
 to preserve raw backend order, or filter by a source-memory tag to inspect that
-lane directly.
+lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
+window) apply no authority reorder: time order is what they asked for.
 
 ## Quick Contribution
 
