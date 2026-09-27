@@ -38,6 +38,10 @@ RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 COPY src/ src/
 COPY governance_core/ governance_core/
 COPY agents/ agents/
+# The server imports unitares_sdk (src/lease_plane re-exports its lease-plane
+# client). It ships in agents/sdk; install it so the import resolves. Its
+# dependencies (httpx, mcp, pydantic) are already installed above.
+RUN pip install --no-cache-dir --no-deps ./agents/sdk
 COPY config/ config/
 COPY dashboard/ dashboard/
 COPY skills/ skills/
