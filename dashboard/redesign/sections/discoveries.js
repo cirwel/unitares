@@ -117,7 +117,9 @@
          <button id="dsc-new" class="theme-toggle" title="New knowledge written since you loaded — click to refresh" style="display:${newCount > 0 ? "inline-flex" : "none"};border-color:var(--accent);color:var(--accent)">${newCount} new · refresh</button>
        </div>
        <div style="display:flex;flex-direction:column;gap:var(--space-3)">
-         ${rows.length ? rows.map((d) => card(d, q)).join("") : `<p class="empty">No matches. Clear filters or change search.</p>`}
+         ${rows.length ? rows.map((d) => card(d, q)).join("")
+           : MODEL.source === "unavailable" ? `<p class="empty">Server not answering — discoveries unavailable.</p>`
+           : `<p class="empty">No matches. Clear filters or change search.</p>`}
        </div>`;
     wire();
   }

@@ -253,7 +253,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .footnote code { font-family: var(--font-mono); color: var(--ink-2); }
 .src-badge { font-family: var(--font-mono); font-size: 0.68rem; padding: 1px 6px; border-radius: var(--radius-sm); }
 .src-badge.live { color: var(--ok); background: color-mix(in srgb, var(--ok) 12%, transparent); }
-.src-badge.snapshot { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.src-badge.snapshot, .src-badge.unavailable { color: var(--warn-text); background: color-mix(in srgb, var(--warn) 12%, transparent); }
 
 /* Two-up layouts (agent detail state|identity, resident panels, Pulse risk|eisv)
    that collapse to a single stacked column on phones — see the 640px block. */

@@ -94,10 +94,16 @@ as the template for a new section.
 ## Data seam — live-or-snapshot (Item 2)
 
 Views never call `fetch` directly. They `await DATA.x()`, which returns
-`{ source: "live" | "snapshot", data }`. The accessor tries the live endpoint
-(`authFetch` for REST, `callTool` for `/v1/tools/call`) and falls back to the
-bundled `SNAPSHOT` on any failure, so the dashboard renders portably (opened as
-a file, cross-origin, or server down). `authFetch` carries same-origin passkey
+`{ source: "live" | "snapshot" | "unavailable", data }`. The accessor tries the live endpoint
+(`authFetch` for REST, `callTool` for `/v1/tools/call`) and, on any failure,
+returns its `snapFn` result tagged `snapshot`. The bundled `SNAPSHOT` backs
+that fallback only when there is no server to ask — the page opened from a
+file — or when a design preview passes `?snapshot=1` (`SNAPSHOT_FALLBACK` in
+`data.js`). On a page served by a UNITARES server, the `S` accessor returns `{}`: the bundle is
+a capture of one deployment's fleet, and a failed read there means this server
+blipped, so it must render "unavailable", never another deployment's
+residents, EISV or version (a fresh install showed the bundled fleet as its own
+after one failed read, 2026-09-26). `authFetch` carries same-origin passkey
 session cookies and the optional bearer token. The `/ws/eisv` WebSocket
 connects cookie-first (a browser cannot set headers on a socket); only if that
 handshake fails early and a bearer is available does `ws.js` retry once with
@@ -120,6 +126,16 @@ decide whether an empty array/object is valid live data and map it to `null`
 themselves when it is not. For headline cards where a stale snapshot under a
 "live" badge would mislead, prefer returning `null` per-field and rendering "—"
 (see `data.js::stats`).
+
+**Every `snapFn` must render as empty.** On a served page the `S` accessor
+always returns `{}`, and `withFallback` tags the result `unavailable`, not
+`snapshot`. A fallback that dereferences a nested key (`S().x.y`) throws *out of*
+`withFallback` on the first failed read and the pane never renders. Return the
+shape the view expects, empty — `() => (S().x || {}).y || []` —
+as the dialectic, metrics-catalog and activity accessors in `data.js` do.
+`dashboard/tests/sections-unavailable.test.js` loads every section with all
+requests failing and fails if any rejects or shows bundled data; add new
+sections to its table.
 
 **The snapshot can be missing.** Since 2026-08 `snapshot.js` is auth-gated
 when served, and `app.html` loads it with a plain `<script src>` that sends
@@ -248,7 +264,7 @@ The dashboard is buildless, so the gate is lint plus a cheap logic check:
 | `new Chart()` on every refresh tick | Flicker + leaks. Update datasets in place; rebuild only on theme change. |
 | Full `innerHTML` rebuild of a section with a live `<select>` | Clobbers operator's selection. First-render once, update in place. |
 | Calling `fetch` in a view | Bypasses the live-or-snapshot seam; the section stops rendering offline. |
-| A `snapFn` that dereferences `S().x.y` | Throws out of `withFallback` when `snapshot.js` was not served. Guard every level. |
+| A `snapFn` that dereferences `S().x.y` | Throws out of `withFallback` on every served page (the `S` accessor returns `{}` there). Guard every level; `tests/sections-unavailable.test.js` catches it. |
 | Looking for an allowlist / restarting the server | No per-asset allowlist and no restart for the redesign (files are read per request). The only gates are the auth check on `snapshot.js` and the 404 for `auth/*.html`; the surviving `allowed_files` list serves only `/dashboard/phase.js`. |
 
 ## When NOT to use this skill

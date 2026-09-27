@@ -90,21 +90,38 @@
     return j.result !== undefined ? j.result : j;
   }
 
-  // wrap an accessor so any failure degrades to snapshot, tagged.
+  // Wrap an accessor so any failure degrades to its fallback, tagged with what
+  // the fallback actually is: "snapshot" when the bundled snapshot backs it
+  // (offline/preview renders, see SNAPSHOT_FALLBACK below), otherwise
+  // "unavailable" — the producer did not answer, which is not the same claim
+  // as a snapshot that recorded nothing.
   async function withFallback(liveFn, snapFn) {
     try {
       const v = await liveFn();
       if (v == null) throw new Error("empty");
       return { source: "live", data: v };
     } catch {
-      return { source: "snapshot", data: snapFn() };
+      return { source: SNAPSHOT_FALLBACK ? "snapshot" : "unavailable", data: snapFn() };
     }
   }
 
   // Never throws. snapshot.js can legitimately be absent (it is auth-gated and
   // a <script src> carries no bearer token), and a fallback that raises turns a
   // recoverable "no offline copy" into a dead page.
-  const S = () => window.SNAPSHOT || {};
+  //
+  // The snapshot is a capture of ONE deployment's fleet, bundled for offline
+  // and design renders. On a page served by a UNITARES server, a failed live
+  // call means THIS server did not answer (a restart, a blip), and another
+  // deployment's residents, EISV and version must not stand in for it: on
+  // 2026-09-26 a fresh install's Overview showed the bundled fleet's residents
+  // as its own after one failed /v1/residents during a restart. So the
+  // snapshot backs the fallback only when there is no server to ask — the page
+  // opened from a file — or when a design preview asks for it with ?snapshot=1.
+  // Everywhere else the fallback yields nothing and the views render
+  // "unavailable", the same path a bearer-only operator already takes.
+  const SNAPSHOT_FALLBACK = location.protocol === "file:"
+    || new URLSearchParams(location.search).get("snapshot") === "1";
+  const S = () => (SNAPSHOT_FALLBACK && window.SNAPSHOT) || {};
 
   function eisvMeasurementSource(event) {
     const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
@@ -189,6 +206,8 @@
   }
 
   const DATA = {
+    // Whether a failed live read may fall back to the bundled snapshot (see S).
+    snapshotFallback: SNAPSHOT_FALLBACK,
     bucketEisv,
     eisvMeasurementSource,
     summarizeEisvSources,
@@ -332,7 +351,13 @@
           anomaliesScanned: anomR && anomR.scan && typeof anomR.scan.agents_scanned === "number" ? anomR.scan.agents_scanned : null,
           anomaliesActive: anomR && anomR.scan && typeof anomR.scan.agents_active === "number" ? anomR.scan.agents_active : null,
           systemHealth: healthR ? (healthR.status === "healthy" ? "OK" : healthR.status) : null,
-          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn${hb.error ? " · " + hb.error + " err" : ""}` : null,
+          // Name every non-healthy bucket the headline status is derived from.
+          // Omitting degraded/unavailable read "moderate · 10 ok · 0 warn" on a
+          // fresh install, a status the detail line appeared to contradict.
+          systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn`
+            + (hb.degraded ? ` · ${hb.degraded} degraded` : "")
+            + (hb.unavailable ? ` · ${hb.unavailable} unavailable` : "")
+            + (hb.error ? ` · ${hb.error} err` : "") : null,
           degraded: [agentsR, kgR, dlcR, stuckR, calR, anomR, healthR, tierR].filter((x) => !x).length,
         };
       // LAZY, deliberately. This used to read `const snap = S().stats` as the
@@ -435,8 +460,8 @@
           byStatus: st ? st.by_status : null,
         };
       }, () => {
-        const d = S().discoveries;
-        return { list: d.list, total: d.total, byType: d.byType, byStatus: d.byStatus };
+        const d = S().discoveries || {};
+        return { list: d.list || [], total: d.total, byType: d.byType, byStatus: d.byStatus };
       });
     },
 
@@ -477,7 +502,7 @@
           } else c.active++;
         });
         return { sessions, counts: c };
-      }, () => ({ sessions: S().dialectic.sessions, counts: S().dialectic.counts }));
+      }, () => { const dl = S().dialectic || {}; return { sessions: dl.sessions || [], counts: dl.counts || {} }; });
     },
 
     async dialecticSession(id) {
@@ -520,7 +545,7 @@
           semantics: runtime.semantics || {},
         } : { available: false, source: "unavailable", windowHours: 24, summary: {}, processes: [] };
         return { events, buckets, operational, windowMin: (act && act.window_minutes) || 60, bucketMin: (act && act.bucket_minutes) || 5 };
-      }, () => S().activity);
+      }, () => S().activity || { events: [], buckets: [], operational: null, windowMin: 60, bucketMin: 5 });
     },
 
     async eisv() {
@@ -592,7 +617,7 @@
       return withFallback(async () => {
         const j = await authFetch("/v1/metrics/catalog");
         return j && Array.isArray(j.metrics) ? j.metrics : null;
-      }, () => S().metrics.catalog);
+      }, () => (S().metrics || {}).catalog || []);
     },
 
     async metricsSeries(name, sinceDays) {
@@ -601,7 +626,7 @@
         const since = new Date(Date.now() - (sinceDays || 14) * 86400 * 1000).toISOString();
         const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) + "&since=" + encodeURIComponent(since));
         return j && Array.isArray(j.points) ? j.points : null;
-      }, () => (S().metrics.series[name] || []));
+      }, () => (((S().metrics || {}).series || {})[name] || []));
     },
 
     // Fleet risk history — Chronicler's daily governance.* scrape, three series
@@ -672,7 +697,7 @@
           const j = await authFetch("/v1/sentinel/adjudication-queue?limit=5");
           return j && j.success ? j : null;
         },
-        () => S().adjudication,
+        () => S().adjudication || { queue: [], progress: null, pending_total: 0, dismiss_reasons: [] },
       );
     },
 
