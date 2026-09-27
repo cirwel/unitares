@@ -3199,20 +3199,55 @@ def finding_producer_files(repo_root: Path) -> dict[str, set[str]]:
     return files
 
 
-def _producer_agents_present(
-    producer_files: set[str], agents_dir: Path | None = None,
-) -> bool:
-    """Whether an installed LaunchAgent runs one of the declared producers.
+def _producer_label_stems(events: set[str]) -> set[str]:
+    """The label stem each declared event names: its first word.
 
-    Evidence is specific on purpose: an installed ``com.unitares.*`` plist
-    whose ProgramArguments name a file that declares a finding producer, or,
-    for a resident package under ``agents/``, any file in that package (its own
-    entry point). ``scripts/ops/`` is one flat directory of unrelated jobs, so
-    sharing it proves nothing: a backup job there says nothing about producers
-    and must not turn a fresh install's empty history into a warning.
+    ``sentinel_alarm_finding`` -> ``sentinel``, ``deploy_drift_finding`` ->
+    ``deploy``. A producer's LaunchAgent is labelled for what it runs, and a
+    runtime outside the scanned Python trees (a BEAM port launched by a shell
+    script) is only recognisable by that label.
+    """
+    stems = set()
+    for event in events:
+        head = event.removesuffix("_finding").split("_", 1)[0]
+        if head:
+            stems.add(head.replace("_", "-"))
+    return stems
+
+
+def _label_runs_producer(label: str, stems: set[str]) -> bool:
+    if not label.startswith("com.unitares.") or label == GOVERNANCE_LAUNCHD_LABEL:
+        return False
+    slug = label[len("com.unitares."):]
+    return any(slug == s or slug.startswith(s + "-") for s in stems)
+
+
+def _producer_agents_present(
+    producer_files: set[str],
+    agents_dir: Path | None = None,
+    events: set[str] = frozenset(),
+    loaded: set[str] = frozenset(),
+) -> bool:
+    """Whether a LaunchAgent on this host runs one of the declared producers.
+
+    Evidence is specific on purpose. A UNITARES agent counts when:
+
+    - its label names a declared event's stem (``com.unitares.sentinel-beam``
+      for ``sentinel_finding``), loaded or installed, which is the only handle
+      on a producer runtime outside the scanned Python trees; or
+    - its installed plist's ProgramArguments name a file that declares a
+      finding producer, or, for a resident package under ``agents/``, any file
+      in that package (its own entry point).
+
+    ``scripts/ops/`` is one flat directory of unrelated jobs, so sharing it
+    proves nothing: a backup job there says nothing about producers and must
+    not turn a fresh install's empty history into a warning.
     """
     import plistlib
 
+    stems = _producer_label_stems(set(events))
+    if any(_label_runs_producer(label, stems) for label in loaded):
+        return True
     directory = agents_dir if agents_dir is not None else (
         Path.home() / "Library" / "LaunchAgents")
     producer_dirs = {Path(rel).parent.as_posix() for rel in producer_files
@@ -3222,6 +3257,8 @@ def _producer_agents_present(
     except OSError:
         return False
     for plist in plists:
+        if _label_runs_producer(plist.name.removesuffix(".plist"), stems):
+            return True
         try:
             with plist.open("rb") as fh:
                 args = plistlib.load(fh).get("ProgramArguments") or []
@@ -3277,7 +3314,8 @@ def check_producer_never_reported(
     seen = {r[0] for r in rows if r and r[0]}
     if not seen and producers_expected is None:
         producers_expected = _producer_agents_present(
-            set(finding_producer_files(repo_root)))
+            set(finding_producer_files(repo_root)), events=declared,
+            loaded=_launchctl_loaded())
     if not seen and not producers_expected:
         # No finding has ever been posted AND nothing on this host runs a
         # producer: a fresh install, not a fleet of never-born producers. The

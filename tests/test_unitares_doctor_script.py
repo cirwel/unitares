@@ -1594,6 +1594,32 @@ def test_producer_agents_present_matches_a_residents_own_directory(doctor, tmp_p
     assert doctor._producer_agents_present({"agents/sentinel/agent.py"}, agents)
 
 
+def test_producer_agents_present_recognises_a_beam_producer_by_its_label(doctor, tmp_path):
+    """A BEAM port launched by a shell script names no Python producer file;
+    its label (the event's stem) is the only handle on it."""
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.sentinel-beam",
+                       ["/opt/u/elixir/sentinel/scripts/start.sh"])
+    events = {"sentinel_finding", "sentinel_alarm_finding"}
+    assert doctor._producer_agents_present(set(), agents, events=events)
+    # Loaded but with no plist in the directory counts too.
+    assert doctor._producer_agents_present(
+        set(), tmp_path / "absent", events=events,
+        loaded={"com.unitares.sentinel-beam"})
+
+
+def test_producer_label_stems_do_not_match_unrelated_jobs(doctor):
+    stems = doctor._producer_label_stems(
+        {"deploy_drift_finding", "doctor_check_finding", "sentinel_alarm_finding"})
+    assert stems == {"deploy", "doctor", "sentinel"}
+    assert doctor._label_runs_producer("com.unitares.deploy-drift-doctor", stems)
+    assert doctor._label_runs_producer("com.unitares.doctor-findings", stems)
+    assert not doctor._label_runs_producer("com.unitares.governance-backup", stems)
+    assert not doctor._label_runs_producer("com.unitares.dep-sweep", stems)
+    assert not doctor._label_runs_producer(doctor.GOVERNANCE_LAUNCHD_LABEL, stems)
+
+
 def test_producer_agents_present_tolerates_missing_dir_and_bad_plists(doctor, tmp_path):
     assert not doctor._producer_agents_present({"agents/x/a.py"}, tmp_path / "absent")
     agents = tmp_path / "LaunchAgents"
