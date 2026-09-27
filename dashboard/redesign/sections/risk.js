@@ -9,12 +9,15 @@
  * EISV trajectory chart dropped on the floor. This section gives those
  * horizons a surface:
  *
- *   1. Fleet mean risk       — Chronicler's daily scrape of governance.risk.mean.7d
- *   2. Verdict pressure      — governance.pause.7d + governance.guide.7d
- *   3. Per-agent trajectory  — one resident's own risk over its lifespan
+ *   1. Fleet mean risk       — trailing-7-day mean, one point per day
+ *   2. Verdict pressure      — trailing-7-day pause + guide counts
+ *   3. Per-agent trajectory  — one agent's own risk over its lifespan
  *
- * Reads DATA.riskTrend(), DATA.residents() and DATA.agentHistory(). No fetch
- * logic here.
+ * The first two come from /v1/governance/trend, computed from core.agent_state
+ * with the definitions Chronicler's governance.*.7d scrapers use; they no
+ * longer need that resident. The picker lists agents that checked in recently,
+ * residents or not. Reads DATA.riskTrend(), DATA.recentAgents() and
+ * DATA.agentHistory(). No fetch logic here.
  *
  * ── Three things this view must not say ───────────────────────────────────
  *
@@ -57,24 +60,26 @@
     return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
   }
 
-  const WINDOWS = [30, 60, 90, 180];
+  // The server caps the trend at 60 days: retention thins older check-ins.
+  const WINDOWS = [14, 30, 60];
   let windowDays = 60;
 
   let trendChart = null, pressureChart = null, agentChart = null;
   let mounted = false;
   // Cached model so retheme() can rebuild from data without refetching.
-  let TREND = null, RESIDENTS = [], AGENT = { id: null, name: null, points: [], loading: false, total: 0 };
+  let TREND = null, AGENTS = [], AGENT = { id: null, name: null, points: [], loading: false, total: 0 };
 
   const num = (x, d) => (x == null || isNaN(x) ? "—" : Number(x).toFixed(d == null ? 3 : d));
 
-  // Chronicler scrapes daily → MM-DD category labels. NOT a Chart.js `time`
+  // One point per UTC day → MM-DD category labels. NOT a Chart.js `time`
   // scale: app.html loads chart.umd without the date adapter, so a time axis
-  // renders blank.
+  // renders blank. UTC getters, because the points are UTC days stamped at
+  // 00:00Z: local getters labelled every point a day early west of UTC.
   function fmtDay(ts) {
     const d = new Date(ts);
     if (isNaN(d)) return String(ts || "");
     const p = (x) => String(x).padStart(2, "0");
-    return p(d.getMonth() + 1) + "-" + p(d.getDate());
+    return p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate());
   }
   function fmtStamp(ts) {
     const d = new Date(ts);
@@ -237,7 +242,7 @@
     const latest = pts.length ? pts[pts.length - 1] : null;
     const pausePts = (TREND && TREND.pause) || [];
     const latestPause = pausePts.length ? pausePts[pausePts.length - 1] : null;
-    const withRisk = RESIDENTS.filter((r) => typeof r.risk === "number");
+    const withRisk = AGENTS.filter((r) => typeof r.risk === "number");
     const top = withRisk.slice().sort((a, b) => b.risk - a.risk)[0] || null;
     const lo = withRisk.length ? Math.min.apply(null, withRisk.map((r) => r.risk)) : null;
     const hi = withRisk.length ? Math.max.apply(null, withRisk.map((r) => r.risk)) : null;
@@ -245,29 +250,29 @@
       `<div class="card"${title ? ` title="${esc(title)}"` : ""}><h3>${esc(label)}</h3><div class="num">${value}</div><div class="sub">${esc(sub)}</div></div>`;
     return [
       card("Fleet mean risk", num(latest ? latest.value : null),
-        latest ? "7d rolling · scraped " + fmtDay(latest.ts) : "no scrape in window",
-        "governance.risk.mean.7d — fleet-mean risk_score over non-synthetic check-ins"),
+        latest ? "7 UTC days to " + fmtDay(latest.ts) + " (today partial)" : "no check-ins in window",
+        "Fleet-mean risk_score over non-synthetic check-ins in the seven UTC calendar days ending on the date shown; the latest point includes today so far. Same filters as governance.risk.mean.7d, which uses an exact now − 7 days window instead."),
       card("Pause verdicts", latestPause ? String(latestPause.value) : "—",
-        "produced in trailing 7d — not deliveries",
+        "produced in the last 7 UTC days — not deliveries",
         "A produced pause is not a delivered enforcement action; gap-suppression downgrades at >150s check-in gaps."),
-      card("Highest-risk resident", top ? num(top.risk) : "—",
-        top ? top.name : "no resident risk available",
-        "Current decision risk, live residents"),
-      card("Resident spread", lo == null ? "—" : num(lo, 2) + "–" + num(hi, 2),
-        withRisk.length + " residents reporting",
-        "Between-resident range of current decision risk"),
+      card("Highest-risk agent", top ? num(top.risk) : "—",
+        top ? top.name : "no recent check-ins",
+        "Latest decision risk among agents that checked in since the server's check-in history began"),
+      card("Agent spread", lo == null ? "—" : num(lo, 2) + "–" + num(hi, 2),
+        withRisk.length + " agent" + (withRisk.length === 1 ? "" : "s") + " checked in recently",
+        "Range of latest decision risk across recently checked-in agents"),
     ].join("");
   }
 
   function agentOptions() {
-    const withId = RESIDENTS.filter((r) => r.id);
-    if (!withId.length) return `<option value="">(no residents)</option>`;
-    return `<option value="">select a resident…</option>` + withId.map((r) =>
+    const withId = AGENTS.filter((r) => r.id);
+    if (!withId.length) return `<option value="">(no recent check-ins)</option>`;
+    return `<option value="">select an agent…</option>` + withId.map((r) =>
       `<option value="${esc(r.id)}" ${r.id === AGENT.id ? "selected" : ""}>${esc(r.name)}${typeof r.risk === "number" ? " · " + num(r.risk, 2) : ""}</option>`).join("");
   }
 
   function agentPanelBody() {
-    if (!AGENT.id) return `<p class="empty">Pick a resident to see its own risk history. Live reads ${'/v1/agents/{id}/history'} — thousands of real check-ins, decimated evenly across the agent's whole lifespan.</p>`;
+    if (!AGENT.id) return `<p class="empty">Pick an agent to see its own risk history. Live reads ${'/v1/agents/{id}/history'} — thousands of real check-ins, decimated evenly across the agent's whole lifespan.</p>`;
     if (AGENT.loading) return `<p class="empty">Loading ${esc(AGENT.name || "agent")} history…</p>`;
     if (!AGENT.points.length) return `<p class="empty">No check-in history available for ${esc(AGENT.name || "this agent")}.</p>`;
     const c = actionCounts(AGENT.points);
@@ -326,7 +331,7 @@
       <div class="panel" style="margin-top:var(--space-4)">
         <div class="panel-head" style="margin-bottom:var(--space-3)">
           <h2>Per-agent risk trajectory</h2><span class="spring"></span>
-          <select id="risk-agent-pick" class="theme-toggle" title="Select a resident"></select>
+          <select id="risk-agent-pick" class="theme-toggle" title="Select an agent"></select>
           <span class="fresh" id="risk-agent-meta" style="margin-left:var(--space-2)"></span>
         </div>
         <div id="risk-agent-body"></div>
@@ -362,11 +367,11 @@
     const meta = $("#risk-trend-meta"), empty = $("#risk-trend-empty");
     const canvas = $("#risk-trend");
     if (meta) meta.textContent = pts.length
-      ? pts.length + " scrape" + (pts.length === 1 ? "" : "s") + " · " + fmtDay(pts[0].ts) + " → " + fmtDay(pts[pts.length - 1].ts)
+      ? pts.length + " day" + (pts.length === 1 ? "" : "s") + " · " + fmtDay(pts[0].ts) + " → " + fmtDay(pts[pts.length - 1].ts)
       : "no data";
     if (!pts.length) {
       if (canvas) canvas.style.display = "none";
-      if (empty) { empty.style.display = ""; empty.textContent = "No risk scrapes in the last " + windowDays + " days. Chronicler runs daily — check back after the next cycle."; }
+      if (empty) { empty.style.display = ""; empty.textContent = "No check-ins with a risk reading in the last " + windowDays + " days."; }
       if (trendChart) { trendChart.destroy(); trendChart = null; }
       return;
     }
@@ -380,7 +385,7 @@
     const canvas = $("#risk-pressure"), empty = $("#risk-pressure-empty");
     if (!pause.length && !guide.length) {
       if (canvas) canvas.style.display = "none";
-      if (empty) { empty.style.display = ""; empty.textContent = "No verdict-pressure scrapes in this window."; }
+      if (empty) { empty.style.display = ""; empty.textContent = "No verdicts recorded in this window."; }
       if (pressureChart) { pressureChart.destroy(); pressureChart = null; }
       return;
     }
@@ -416,7 +421,7 @@
       paintAgent();
       return;
     }
-    const res = RESIDENTS.find((r) => r.id === id);
+    const res = AGENTS.find((r) => r.id === id);
     AGENT = { id, name: res ? res.name : id, points: [], loading: true, total: 0 };
     paintAgent();
     // mode:"all" decimates evenly across the whole lifespan (every point is a
@@ -443,8 +448,8 @@
   async function load() {
     const mount = $("#risk-mount");
     if (!mount) return;
-    const res = await window.DATA.residents();
-    RESIDENTS = (res && res.data) || [];
+    const res = await window.DATA.recentAgents();
+    AGENTS = (res && res.data && res.data.agents) || [];
     if (!mounted) { renderShell(res.source); mounted = true; }
     const pick = $("#risk-agent-pick");
     // Repopulate without clobbering an operator's current selection.
