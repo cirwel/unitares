@@ -1268,6 +1268,10 @@ def analyze(
 
     hb = heartbeat(window_cycles, since=since, until=until,
                    silence=dt.timedelta(minutes=silence_minutes))
+    # The saga cross-check covers the effective window only: a saga created
+    # before the instrument started is not a unit the instrument owed.
+    window_sagas = [g for g in window_sagas if _ts(g.get("created_at")) is None
+                    or _in(_ts(g.get("created_at")))]
     comp_check = completeness(
         session_write_events=competing_events, guarded_writes=writes, cycles=cycles,
         heartbeat_report=hb, window_sagas=window_sagas, since=since, until=until,

@@ -482,6 +482,11 @@ class TestCompleteness:
         assert result["guarded_writes"] == 0
         assert "requested --since" in report.render_text(result)
 
+    def test_a_saga_before_the_instrument_started_is_not_owed(self):
+        early = {"saga_id": "sg-old", "payload_reason": None, "created_at": at(-30)}
+        result = run([], cycles=[cycle(at(0), 1)], window_sagas=[early])
+        assert result["reading"] == "COMPLETE"
+
     def test_no_instrument_rows_is_not_started_not_complete(self):
         result = run([], cycles=[])
         assert result["reading"] == "NOT_STARTED"

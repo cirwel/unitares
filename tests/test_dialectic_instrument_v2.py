@@ -403,3 +403,24 @@ async def test_a_write_interrupted_by_shutdown_still_gets_its_row():
     _assert_balanced(cycle)
     assert len(recorder.writes) == cycle["write_attempt_count"] == 1
     assert (recorder.writes[0]["outcome"], recorder.writes[0]["error"]) == ("error", "cancelled")
+
+
+
+@pytest.mark.asyncio
+async def test_a_hung_audit_sink_cannot_hold_the_cycle_forever(tmp_path, monkeypatch):
+    """The timed-out cycle's own row emit is bounded too; a miss is recorded on
+    the durable emit-failure ledger instead of hanging the loop."""
+    import json as _json
+
+    ledger = tmp_path / "ledger.jsonl"
+    monkeypatch.setenv("UNITARES_DIALECTIC_EMIT_FAILURE_LEDGER", str(ledger))
+    hang = _Hang()
+    with patch(f"{AUTO}.get_active_sessions_async", side_effect=hang.fn), \
+         patch(f"{AUTO}.emit_sweep_cycle", side_effect=hang.fn):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        await asyncio.wait_for(
+            auto_resolve_stuck_sessions(trigger_source="periodic", timeout_s=0.05),
+            timeout=5,
+        )
+    lines = [_json.loads(x) for x in ledger.read_text().splitlines()]
+    assert any(x["event_type"] == "dialectic_sweep_cycle" for x in lines)

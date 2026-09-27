@@ -16,7 +16,11 @@ from time import monotonic
 from typing import Awaitable, Callable, Dict, Any, List, Optional
 
 from src.dialectic_protocol import DialecticPhase
-from src.dialectic_session_writes import attempt_id_scope, session_write_via
+from src.dialectic_session_writes import (
+    attempt_id_scope,
+    record_emit_failure,
+    session_write_via,
+)
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .events import (
@@ -1056,7 +1060,7 @@ async def auto_resolve_stuck_sessions(
         def _n(key: str) -> int:
             return int(cycle.get(key, 0) or 0)
 
-        try:
+        async def _emit_rows() -> None:
             if counts.pending_row is not None:
                 # A write (or its row) was cut short. Its row is written now,
                 # after the cancellation, so the per-write rows still sum to
@@ -1089,6 +1093,24 @@ async def auto_resolve_stuck_sessions(
                 duration_ms=elapsed_ms,
                 error=str(cycle["error"]) if cycle.get("error") else interrupted,
                 cycle_id=counts.cycle_id,
+            )
+
+        try:
+            if timeout_s is not None and timeout_s > 0:
+                # These emits use the same audit path that may be what hung
+                # the cycle, so they get their own bound: a hung audit sink
+                # must not hold this task, and every later periodic cycle,
+                # forever. A row that misses the bound is recorded on the
+                # durable emit-failure ledger instead.
+                await asyncio.wait_for(_emit_rows(), timeout=timeout_s)
+            else:
+                await _emit_rows()
+        except TimeoutError:
+            record_emit_failure(event_type="dialectic_sweep_cycle")
+            logger.warning(
+                "[DIALECTIC_SWEEP] %s cycle rows did not land within %.0fs; "
+                "recorded on the emit-failure ledger",
+                trigger_source, timeout_s,
             )
         finally:
             AUTO_RESOLVE_IN_PROGRESS.reset(token)
