@@ -183,7 +183,17 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # client_session_id in the call that sets a display name. No parameter is
 # added, removed, retyped or renamed, and no input digest or the surface
 # digest moves.
-# 1.22.0 (2026-09-27), numbered after 1.21.0 (#2490): agent(action='archive')
+# 1.22.0 (2026-09-27), numbered after 1.21.0 (#2490): knowledge and
+# search_shared_memory declare sort_by ("relevance" | "created_at"),
+# created_after and created_before for action=search. search_knowledge_graph
+# already declared them, but no handler read them; its sort_by default moves
+# from created_at to unset (read as relevance) and its never-implemented "score" and
+# "related_count" values are refused. A compatible addition: the default
+# order is unchanged. To stay inside the progressive-surface ratchet,
+# search_shared_memory advertises shorter briefs for nine existing search
+# parameters (their full descriptions, served by describe_tool, are
+# unchanged). The three input digests and the surface digest move.
+# 1.23.0 (2026-09-27), numbered after 1.22.0 (#2517): agent(action='archive')
 # and agent(action='delete') act only on the agent named in agent_id. Behavior
 # that changes for existing inputs: a call with no agent_id (or a blank one)
 # is refused with TARGET_AGENT_REQUIRED where it used to act on the caller's
@@ -201,7 +211,7 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # required at call time, and of get and resume lists agent_id. No parameter is
 # added, removed, retyped or renamed; agent's input_schema_sha256 and the
 # surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.22.0"
+INTERFACE_CONTRACT_VERSION = "1.23.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
