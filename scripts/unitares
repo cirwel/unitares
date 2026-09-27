@@ -1166,6 +1166,23 @@ _update_remote() {
     printf '%s' "${UNITARES_UPDATE_REMOTE:-origin}"
 }
 
+_rollback_code() {
+    # The new release's stack did not come up after its migrations applied.
+    # Put the code back to the previous release and rebuild it, leaving the
+    # database migrated: migrations are forward-only and additive, so the
+    # previous release runs on the newer schema (the same rule as
+    # scripts/ops/deploy-mcp.sh), while code left ahead of the running
+    # containers would surface at the next restart.
+    local root="$1" current="$2" current_sha="$3" target="$4"
+    echo "error: the stack did not come up on $target. Rolling the code back to $current…" >&2
+    if git -C "$root" checkout --quiet --detach "$current_sha" && _compose up -d --build --wait >/dev/null 2>&1; then
+        echo "       Back on $current and running. The database stays migrated to $target, which $current runs on." >&2
+    else
+        echo "       The rollback did not come up either. The code is at $current, the database at $target's schema." >&2
+    fi
+    echo "       Fix what 'unitares logs' shows, then re-run 'unitares update --to $target'." >&2
+}
+
 cmd_update() {
     local check_only=0 target="" assume_yes=0 arg
     while [ $# -gt 0 ]; do
@@ -1253,7 +1270,7 @@ cmd_update() {
         _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
         _migrations --apply || { echo "error: migrations did not complete; the stack was not restarted." >&2; return 1; }
         echo "… Rebuilding and starting the stack"
-        _compose up -d --build --wait || { echo "error: the stack did not come up. The database is already migrated to $target, and the containers still answering may be the previous release." >&2; echo "       Fix what 'unitares logs' shows and re-run 'unitares update --to $target': it rebuilds without migrating again. Do not check the previous code back out onto a migrated database." >&2; return 1; }
+        _compose up -d --build --wait || { echo "error: the stack did not come up on $target; its migrations are applied. Fix what 'unitares logs' shows and re-run 'unitares update --to $target'." >&2; return 1; }
         _report_health "On $target with migrations applied."
         return $?
     fi
@@ -1283,7 +1300,7 @@ cmd_update() {
     fi
 
     echo "… Rebuilding and starting the stack"
-    _compose up -d --build --wait || { echo "error: the stack did not come up. The database is already migrated to $target, and the containers still answering may be the previous release." >&2; echo "       Fix what 'unitares logs' shows and re-run 'unitares update --to $target': it rebuilds without migrating again. Do not check the previous code back out onto a migrated database." >&2; return 1; }
+    _compose up -d --build --wait || { _rollback_code "$root" "$current" "$current_sha" "$target"; return 1; }
 
     _report_health "Updated $current → $target."
 }
