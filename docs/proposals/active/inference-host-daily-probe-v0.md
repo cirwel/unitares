@@ -140,7 +140,10 @@ that it is not cooling. A few consequences:
   hosts show that failure, and it closes when fewer do. A single host still
   failing then gets its own record, since the fault no longer looks shared.
 - A host the operator switches off has all its records closed, with reason
-  `not_enabled`. A failed stop is not one of the host's records (see *Hung
+  `not_enabled`. A host with open records that no longer appears in
+  `list_inference_hosts` at all is treated the same way, with reason
+  `removed`. The run checks every host in its records, not only the hosts
+  listed. A failed stop is not one of the host's records (see *Hung
   calls*), so it is unaffected.
 
 A changed failure is covered the same way. A host that failed preflight
