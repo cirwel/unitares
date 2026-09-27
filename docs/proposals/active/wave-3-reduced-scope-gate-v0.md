@@ -692,43 +692,30 @@ probe was invisible to both, so the pilot's zero overlaps are *not recordable*, 
 Overlap evidence comes from the time-correlated check (any saga on the session, in any state,
 created at or after the early check) and from the A2 report.
 
-**A2 — collision defined causally, with a bound.** A **collision** is a competing write on the
-session by any A3 writer that either (a) has its cause
-(the triggering message's timestamp, or the saga's `created_at`) before the sweeper's guarded commit
-and its effect after it, within a **correlation bound of 6 hours** (a session id can be reused by a
-reopen, so an unbounded search would match unrelated rounds); or (b) lands between the sweeper's
-decision read of the session and its guarded commit. (b) covers a reviewer write that revives a
-session just before the sweeper reaps it: both writes succeed, and the sweeper acts on stale state.
-Because a reap overwrites the session's `updated_at`, (b) cannot be reconstructed from the session
-row; the instrument emits one `dialectic_guarded_write` record per guarded sweeper write (decision-read
-time, the reviewer, phase, status and `updated_at` it read, commit time, outcome), and the report
-reads those. It is
-measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
-durable tables, including a saga-versus-row status join, and by `dialectic_session_write` records,
-because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no saga
-row. Python records every BEAM resolve call as an attempt before it and a response after it, so the
-records carry their own denominator (responses ÷ attempts, including no-saga responses). BEAM liveness resolves inside BEAM and only ever writes `failed`, so its `already_terminal`
-outcomes are contention-benign by construction and need no emitter. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
+**A2 — collision defined causally, with a bound.** A **collision** is a write by any A3 writer
+whose cause precedes the sweeper's guarded commit and whose effect lands after it, within a
+**correlation bound of 6 hours** (a session id can be reused by a reopen); or that lands between the
+sweeper's decision read and its commit, so the sweeper acts on stale state. A write's cause is its
+attempt time (A12), or a saga's `created_at`. A BEAM resolve that meets an already-terminal row
+returns `already_terminal` with no saga row, so collisions are measured from the A12 records and the
+pre-registered read-only report `scripts/ops/wave3_collision_report.py` (including a saga-versus-row
+status join), never from the session row alone, which a reap overwrites. "Observed continuously or
+correlated" in §6.7 and §7 step 1 means this definition.
 
 **A3 — the writer inventory is defined by rule.** A **writer** is every code path, in either
-runtime, that writes the `status`, `phase`, `reviewer_agent_id` or `awaiting_facilitation` columns of
-`core.dialectic_sessions`, or changes its sweep eligibility (anything that moves `updated_at`,
-including protocol-message inserts). That includes the Python sweeper's guarded writes; the BEAM resolve path
-(`DialecticSaga.commit_session_row`); BEAM liveness (`DialecticLiveness.fail_stuck/2` →
-`DialecticSaga.resolve/1`, which fails a session after 4 h; 33 sessions carry `liveness_timeout`);
-`DialecticSaga.update_reviewer/2`, which writes the reviewer slot outside any saga; and the live
-Python fallbacks (the phase-update and terminal-resolution fallbacks, and
-`_apply_reviewer_reassignment`'s reopen and reviewer-update writes). The list is kept as a checked-in
-inventory that a test compares against the code, failing on any unlisted writer, so the set cannot
-drift silently. "Both writers", "either writer ordering" and "both writer orderings" in §2, §4 and
-§6 mean every inventory writer; the W_pre report counts each one that leaves a durable trace, A9's
-coverage requirement includes all of them, and a guarded refusal names the winner (`winner_status`,
-`winner_reason`).
+runtime, that writes a session's `status`, `phase`, `reviewer_agent_id` or `awaiting_facilitation`,
+or moves its `updated_at` (which decides sweep eligibility). That includes the sweeper, the BEAM
+resolve and reviewer paths, BEAM liveness (33 sessions carry `liveness_timeout`), protocol-message
+inserts, and every Python fallback. The set lives in a checked-in inventory that a test compares
+against the code, failing on any unlisted writer. "Both writers" and "either/both writer orderings"
+in §2, §4 and §6 mean every inventory writer; A9's coverage includes all of them; a guarded refusal
+names the winner (`winner_status`, `winner_reason`).
 
 **A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
-classified once, in this order of precedence: **harm** (a collision under A2, whatever the final
-status), then, for what is not harm, **contention-divergent** (the winner's final status differs
-from what the sweeper intended) or **contention-benign** (it is the same). A refusal is the terminal
+classified once, in this order of precedence: **harm** (a collision under A2 with an adverse
+consequence: the sweeper overwrote or contradicted the other write's effect, or acted on state it
+had changed), then **contention-divergent** (the final status differs from the sweeper's intent) or
+**contention-benign** (it is the same, including same-value overlaps). A refusal is the terminal
 guard working and is never counted as harm by itself. The first clause of §6.5's reopen condition,
 and "collisions" in §7 step 4, mean an **adjudicated harm-class collision**. This narrows a clause of
 the operator's 2026-08-29 §6.5 ruling, by the operator's 2026-09-27 delegation; the other two
@@ -792,9 +779,10 @@ projection were not tracked for either round and are reported as not measured.
 "six … closed" counts §6.5's deferral, which is not an answer. "Three orderings" means two
 BEAM-first and one sweeper-first; A3 widens "writer" beyond them.
 
-**A12 — no zero from an incomplete record.** Every record stream a reading relies on carries its own
-denominator: for every A3 write that Python initiates (BEAM resolve, phase and reviewer calls, and
-the Python fallbacks) a response against its attempt; protocol messages as durable rows; BEAM
-liveness is benign by construction (A2); `dialectic_guarded_write` rows against each cycle's
-`write_attempt_count`, and cycle rows against `cycle_seq` within each boot. Completeness is 100%: any
-unmatched unit makes the reading inconclusive (A10), never a zero.
+**A12 — no zero from an incomplete record.** Every inventory writer that runs in Python, or is
+started from Python over HTTP, emits an attempt record before its write and a response record after,
+and the inventory test fails on any writer that does not; BEAM liveness only writes `failed`, so its
+outcomes are benign by construction. Each stream carries its own denominator (responses against
+attempts, the sweeper's per-write records against each cycle's `write_attempt_count`, cycle rows
+against `cycle_seq` within a boot). Completeness is 100%: any unmatched unit makes the reading
+inconclusive (A10), never a zero.
