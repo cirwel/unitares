@@ -1,7 +1,8 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
-**Status:** ⛔ **PROPOSED — UNRATIFIED as a gate.** The document as a whole still awaits operator
-signature and the council round §8 records as unheld.
+**Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9). ⛔Ratified is
+not met: the §8 council round is still unheld, the §7 window has not started, and §6.4 is still
+owed. The signature authorises nothing to be built.
 
 ⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
@@ -627,3 +628,30 @@ precisely because it is not one.
 
 ⛔Not held. The §4 authorisation names "its design pass and council review" alongside this
 document; neither has run. This gate is not met until they have.
+
+---
+
+## §9 Signature
+
+**Signed by the operator, 2026-09-27.** Recorded by Claude at the operator's instruction ("i sign
+gate doc"), against this document as it stood on `master` with no amendment in flight.
+
+What the signature does:
+
+- It ratifies this document **as the reduced-scope gate** that the 2026-08-22 go-decision (§4)
+  required: the scope in §1, the disconfirmers in §2, the prerequisites in §3, the exit criteria
+  in §4, the stop signs in §5, the seven §6 rulings as recorded, and the §7 sequence.
+- From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
+  before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
+  first, then the signature) is the precedent.
+
+What it does not do:
+
+- ⛔**It does not authorise building.** §7 still governs: nothing in the reduced scope may be
+  built until steps 4–5 have run and this gate is signed again as amended.
+- ⛔**It does not meet the gate.** §8 says the gate is not met until its design pass and council
+  review have run, and neither has.
+- It does not start the §7 window. The window starts at the recorded deploy of the complete
+  instrument, and that slot is still empty.
+- It does not answer §6.4, and it does not lift or re-read the (D) halt on the original scope.
+
