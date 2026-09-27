@@ -1891,8 +1891,10 @@ def _raw_governance_policy(
         include_raw = requested_mode == "full" or (
             requested_mode == "auto" and resolved_mode is None
         )
-        # Re-calling sync_state writes another check-in, so the hint names
-        # the next call rather than a re-call.
+        # Re-calling sync_state writes another check-in, and no read returns
+        # this check-in's decision payload, so the hint names the next call
+        # rather than a re-call and the envelope does not set
+        # raw_governance_available.
         return include_raw, (
             "Pass response_mode='full' on the next sync_state for diagnostics."
         )
@@ -3065,9 +3067,17 @@ def build_experience_envelope(
         envelope["raw_governance"] = payload
     else:
         # raw_governance_available promises a re-call that fetches the
-        # omitted payload by reading. A routine start_session's record cannot
-        # be fetched afterwards (only another mint would produce one), so it
-        # does not claim one. The write acks have no such read either: a
+        # omitted payload by reading, so only the read aliases claim it: the
+        # re-call their hint names is the same read at a fuller tier. Every
+        # bounded write's only route to its omitted payload writes again.
+        # A routine start_session's record cannot be fetched afterwards (only
+        # another mint would produce one). A bounded sync_state's payload is
+        # this check-in's decision (its reason, margin, policy gates,
+        # enforcement, prediction_id, warnings), and no read returns it:
+        # check_working_state(verbosity='full') and get_governance_metrics
+        # report the agent's current state, not what this check-in decided,
+        # so the hint names response_mode='full' on the next check-in, which
+        # is a new check-in. The write acks have no such read either: a
         # finding's details read returns the stored record, not this ack's
         # payload, and record_result has no read by outcome id. Its one route
         # back is a repeat of the write, which replays instead of writing only
@@ -3076,10 +3086,8 @@ def build_experience_envelope(
         # states them (see _write_ack_raw_policy).
         # An unbound metrics read (no tier hint) has nothing more to fetch
         # at any tier until the caller binds.
-        if (
-            friendly_name != "start_session"
-            and friendly_name not in _COMPACT_WRITE_ALIASES
-            and not (friendly_name == "check_working_state" and raw_hint is None)
+        if friendly_name in _COMPACT_READ_ALIASES and not (
+            friendly_name == "check_working_state" and raw_hint is None
         ):
             envelope["raw_governance_available"] = True
         if raw_hint:
