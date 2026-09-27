@@ -285,3 +285,17 @@ def test_compact_keeps_sub_action_with_action():
         dict(_fat_event(), decision={"action": "proceed", "sub_action": "guide", "reason": "x" * 400}))
     event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
     assert event["decision"] == {"action": "proceed", "sub_action": "guide"}
+
+
+def test_activity_totals_cover_the_whole_window_not_just_aligned_buckets():
+    """Buckets start at an aligned boundary up to one bucket inside the window;
+    a check-in 58 minutes ago is in the hour but may sit before the first
+    bucket. The exact totals must still count it."""
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.activity_history.append((time.time() - 58 * 60, "proceed"))
+    b.activity_history.append((time.time() - 61 * 60, "proceed"))  # outside
+    b.activity_history.append((time.time() - 60, "risk_pause"))
+    assert b.activity_totals(60) == {"proceed": 1, "guide": 0, "pause": 1}

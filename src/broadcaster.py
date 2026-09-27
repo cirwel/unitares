@@ -72,6 +72,20 @@ class EISVBroadcaster:
             start = max(start, self.activity_history[0][0])
         return max(start, time.time() - window_minutes * 60)
 
+    def activity_totals(self, window_minutes=60) -> dict:
+        """Exact verdict counts over [now - window, now].
+
+        The sparkline buckets are aligned to bucket boundaries, so their span
+        starts up to one bucket inside the window and summing them can drop
+        the window's first few minutes. A total uses this instead.
+        """
+        cutoff = time.time() - window_minutes * 60
+        totals = {"proceed": 0, "guide": 0, "pause": 0}
+        for ts, action in self.activity_history:
+            if ts >= cutoff:
+                totals[verdict_bucket(action)] += 1
+        return totals
+
     def get_activity_buckets(self, window_minutes=60, bucket_minutes=5):
         """Return check-in counts grouped by 5-min bucket + verdict for sparkline."""
         now = time.time()

@@ -563,6 +563,9 @@ async def http_activity(request):
             # In-memory history: after a restart, or once the ring is full,
             # the window is only partly covered. Epoch seconds.
             "coverage_start": broadcaster_instance.activity_coverage_start(window),
+            # Exact counts over the whole window; the aligned buckets can start
+            # up to one bucket late, so a total must not sum them.
+            "totals": broadcaster_instance.activity_totals(window),
         })
     except Exception as e:
         logger.error(f"Error fetching activity: {e}")

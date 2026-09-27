@@ -320,3 +320,15 @@ describe("risk trend accessor (#2502)", () => {
     expect(r.data.guide[0].value).toBe(4);
   });
 });
+
+describe("check-in activity accessor (#2502)", () => {
+  it("uses the server's exact window totals over summed buckets", async () => {
+    const dom = new JSDOM("", { runScripts: "outside-only", url: "https://governance.test/" });
+    dom.window.fetch = async () => ({ ok: true, status: 200, json: async () => ({
+      success: true, window_minutes: 60, bucket_minutes: 5, coverage_start: 1,
+      buckets: [{ proceed: 1, guide: 0, pause: 0 }], totals: { proceed: 3, guide: 2, pause: 1 } }) });
+    dom.window.eval(readFileSync(new URL("../redesign/data.js", import.meta.url), "utf8"));
+    const r = await dom.window.DATA.checkinActivity();
+    expect(r.data).toMatchObject({ proceed: 3, guide: 2, pause: 1, total: 6 });
+  });
+});

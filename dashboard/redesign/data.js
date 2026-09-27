@@ -589,8 +589,14 @@
       return withFallback(async () => {
         const j = await authFetch("/api/activity?window=60&bucket=5");
         if (!j || !j.success || !Array.isArray(j.buckets)) return null;
-        const t = { proceed: 0, guide: 0, pause: 0 };
-        j.buckets.forEach((b) => { t.proceed += b.proceed || 0; t.guide += b.guide || 0; t.pause += b.pause || 0; });
+        // Prefer the server's exact window totals: its buckets are aligned to
+        // bucket boundaries and can start up to one bucket inside the hour.
+        // Summing buckets is the fallback for an older server.
+        let t = j.totals && typeof j.totals.proceed === "number" ? { proceed: j.totals.proceed, guide: j.totals.guide || 0, pause: j.totals.pause || 0 } : null;
+        if (!t) {
+          t = { proceed: 0, guide: 0, pause: 0 };
+          j.buckets.forEach((b) => { t.proceed += b.proceed || 0; t.guide += b.guide || 0; t.pause += b.pause || 0; });
+        }
         return { ...t, total: t.proceed + t.guide + t.pause, windowMin: j.window_minutes || 60,
           coverageStart: typeof j.coverage_start === "number" ? j.coverage_start : null };
       }, () => S().checkinActivity || null);
