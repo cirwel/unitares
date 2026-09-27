@@ -285,6 +285,25 @@ attempt per hour of cooldown. Agents without local tooling read the same file
 before posting `@codex review`. An explicit `review.sh --reviewer <name>`
 still tries a disabled provider. Re-enable it by deleting its entry.
 
+<a id="second-family-review"></a>
+**Second-family review for security-sensitive paths.** A diff that touches a
+path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth,
+`access.py`, the strong-model host adapter and Antigravity client, the dialectic
+reviewer's backends, and the review gate itself) needs a passing review from
+**two different model families** before the `review` check goes green: OpenAI
+(Codex, native or local), Anthropic (Claude) or Google (Antigravity), with a
+recorded reviewer counted by its name. A passing review is `CLEAN`, or
+`FINDINGS` with every disposition recorded; open findings still block as
+before. `review.sh` adds the second review itself when a sensitive diff has
+only one family's pass, choosing a reviewer from a family that has not passed
+yet, and reports UNREVIEWED when no such reviewer is available (record an
+independent one with `review.sh record --independent`). CI reads the policy
+from the base branch, so a PR cannot remove itself from the list; the policy
+file and the review workflow are on it. Why: on PR #2486 the first reviewer
+returned a bare CLEAN and a second family then found two P2 defects; the
+`agy` isolation hole (standing grants in `~/.gemini`) was found by one family
+and would have shipped on another's pass.
+
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
 used only when the `agy` command is installed. The ordering prefers a model

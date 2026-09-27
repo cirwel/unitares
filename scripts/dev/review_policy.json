@@ -1,0 +1,16 @@
+{
+  "_doc": "Review policy read by review_gate.py. CI reads this file from the BASE branch (the trusted checkout), so a PR cannot remove itself from the list. second_family_paths: fnmatch globs (\"*\" also matches \"/\"); a diff touching any of them needs a passing review (CLEAN, or FINDINGS disposed) from TWO different model families before the review check goes green. See docs/operations/github-workflow-conventions.md#second-family-review.",
+  "second_family_paths": [
+    "src/oauth_provider.py",
+    "src/http_routes/access.py",
+    "src/mcp_handlers/identity/*",
+    "src/mcp_handlers/middleware/identity_step.py",
+    "src/mcp_handlers/support/agent_auth.py",
+    "src/mcp_handlers/support/host_adapter.py",
+    "src/mcp_handlers/support/antigravity_cli_client.py",
+    "agents/dialectic_reviewer/host_backends.py",
+    "scripts/dev/review_gate.py",
+    "scripts/dev/review_policy.json",
+    ".github/workflows/review-gate.yml"
+  ]
+}

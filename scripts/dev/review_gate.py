@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -648,6 +649,87 @@ End with exactly one line and nothing after it:
 VERDICT: CLEAN
 or
 VERDICT: FINDINGS(<number of findings>)"""
+
+
+POLICY_FILE = Path(__file__).resolve().with_name("review_policy.json")
+
+
+def second_family_paths() -> list[str]:
+    """Globs whose diffs need passing reviews from two model families.
+
+    A missing file means no such paths. An unreadable one also means none,
+    and warns: failing closed would block every PR on a bad hand edit."""
+    try:
+        raw = json.loads(POLICY_FILE.read_text())
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as exc:
+        print(f"[review] WARNING: {POLICY_FILE.name} unreadable ({exc}); "
+              "no second-family requirement applied", file=sys.stderr)
+        return []
+    globs = raw.get("second_family_paths") if isinstance(raw, dict) else None
+    return [g for g in globs if isinstance(g, str)] if isinstance(globs, list) else []
+
+
+def sensitive_paths(paths: list[str], globs: list[str] | None = None) -> list[str]:
+    globs = second_family_paths() if globs is None else globs
+    return [p for p in paths if any(fnmatch.fnmatchcase(p, g) for g in globs)]
+
+
+def changed_paths(base: str, head: str) -> list[str]:
+    """Paths the diff touches, from git's own list (never diff text)."""
+    try:
+        out = git("diff", "--name-only", "-z", "--no-renames", f"{base}...{head}", check=False)
+    except Exception:  # noqa: BLE001 - no diff to read is no sensitive path
+        return []
+    return [p for p in (out or "").split("\0") if p]
+
+
+def reviewer_family(reviewer: str) -> str:
+    """The model family behind a record's reviewer name. A recorded reviewer
+    (``record --reviewer-name``) counts by its name unless the name says
+    which family it is."""
+    name = (reviewer or "").lower()
+    if any(m in name for m in ("codex", "openai", "gpt", "chatgpt")):
+        return "openai"
+    if any(m in name for m in ("claude", "anthropic")):
+        return "anthropic"
+    if any(m in name for m in ("antigravity", "agy", "gemini", "google")):
+        return "google"
+    return name or "unknown"
+
+
+def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
+    """Families with a passing review of this diff: CLEAN, or FINDINGS whose
+    dispositions are complete. Same trust rules as latest_matching."""
+    families = set()
+    for c in comments:
+        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        body = c.get("body", "")
+        rec = parse_record(body)
+        if rec is None or rec.key != key:
+            continue
+        if rec.verdict == "CLEAN" or (
+                rec.verdict == "FINDINGS" and rec.disposed
+                and dispositions_complete(body, rec.findings)):
+            families.add(reviewer_family(rec.reviewer))
+    for rec in native:
+        if rec.key == key and (rec.verdict == "CLEAN" or (rec.verdict == "FINDINGS" and rec.disposed)):
+            families.add(reviewer_family(rec.reviewer))
+    return families
+
+
+def second_family_check(conclusion: str, desc: str, sensitive: list[str],
+                        families: set[str]) -> tuple[str, str]:
+    """Hold a passing check on a sensitive diff until two families passed."""
+    if conclusion != "success" or not sensitive or len(families) >= 2:
+        return conclusion, desc
+    have = ", ".join(sorted(families)) or "none"
+    more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
+    return ("action_required",
+            f"security-sensitive path {sensitive[0]}{more}: needs a passing review "
+            f"from a second model family (have: {have}); run review.sh again")
 
 
 def disabled_providers() -> dict[str, str]:
@@ -1370,7 +1452,9 @@ def cmd_review(args) -> int:
                     print(existing.text)
                     if existing.verdict == "FAILED":
                         return UNREVIEWED
-                    return finish_record(repo, pr, key, head, existing, comments)
+                    return second_family_pass(
+                        args, repo, pr, key, head,
+                        finish_record(repo, pr, key, head, existing, comments))
                 # The cap binds the local fallback too: it spends the same quota.
                 # An explicit --reviewer is the author choosing to spend a round.
                 if not args.reviewer:
@@ -1391,7 +1475,9 @@ def cmd_review(args) -> int:
                         rec = None
                     if rec:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
-                        return finish_record(repo, pr, key, head, rec, pr_comments(repo, pr))
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            finish_record(repo, pr, key, head, rec, pr_comments(repo, pr)))
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 result = review_with_fallback(args, pr, key, reviewer)
                 # A cloud review can finish while the local fallback runs.
@@ -1405,7 +1491,9 @@ def cmd_review(args) -> int:
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     print(f"[review] {latest.status()[1]}\n{latest.url}\n{latest.text}")
                     return 1
-                return completed_review_exit(repo, pr, key, head, result)
+                return second_family_pass(
+                    args, repo, pr, key, head,
+                    completed_review_exit(repo, pr, key, head, result))
         if not joined:
             print("[review] joining the review already running for this diff…", flush=True)
             joined = True
@@ -1414,6 +1502,39 @@ def cmd_review(args) -> int:
                   "Run scripts/dev/review.sh again before marking ready.")
             return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
+
+
+def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int) -> int:
+    """After a passing review of a security-sensitive diff, add a review from
+    a second model family when only one has passed, so the CI check can go
+    green without the author having to know the rule. Runs inside the diff's
+    review lock (every caller holds it)."""
+    if result != 0:
+        return result
+    sensitive = sensitive_paths(changed_paths(getattr(args, "base", "origin/master"), "HEAD"))
+    if not sensitive:
+        return result
+    comments = pr_comments(repo, pr)
+    try:
+        native = read_native(repo, pr, key, head, comments).records
+    except SystemExit:
+        native = []
+    families = passing_families(comments, key, native)
+    if len(families) >= 2:
+        return result
+    candidates = [p for p in reviewer_candidates(getattr(args, "branch", "") or "")
+                  if reviewer_family(p) not in families]
+    have = ", ".join(sorted(families)) or "none"
+    if not candidates:
+        print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs a passing "
+              f"review from a second model family (have: {have}); no other reviewer is "
+              "available. Record an independent one with review.sh record --independent.")
+        return UNREVIEWED
+    print(f"[review] {sensitive[0]} is security-sensitive: second review by "
+          f"{candidates[0]} (have: {have})", flush=True)
+    attempt = argparse.Namespace(**vars(args))
+    return completed_review_exit(repo, pr, key, head,
+                                 _review_locked(attempt, pr, key, candidates[0]))
 
 
 def pr_rounds(repo: str, pr: int, key: str, head: str, comments: list[dict]) -> CodexRounds:
@@ -1893,6 +2014,9 @@ def cmd_ci(args) -> int:
     else:
         url = rec.url
     conclusion, desc = review_check(rec)
+    sensitive = sensitive_paths(changed_paths(f"origin/{base_ref}", head))
+    conclusion, desc = second_family_check(
+        conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
     desc += round_note(snapshot.rounds)
     print(f"PR #{pr} head {head[:12]} key {key[:12]}: {conclusion} — {desc}")
     if conclusion == "neutral":
