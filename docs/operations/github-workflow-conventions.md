@@ -553,6 +553,25 @@ created, and so every run since — on each push to master plus hourly — exite
 early having done nothing. Restoring it would put a second updater in a race
 with GitHub's native one.
 
+**Arming many PRs at once is its own cascade.** GitHub's updater acts on every
+armed PR, so with N armed each merge re-runs CI on the other N−1 and only one
+of them wins: roughly N²/2 CI runs to land N PRs, all competing for the same
+Actions concurrency, so every merge slows down. The operator's queue avoids
+that. Label a ready PR `queue` instead of arming it, and
+`scripts/ops/pr-babysitter.sh` (launchd, every five minutes) keeps exactly one
+PR armed: while any non-draft, conflict-free PR is armed it waits, otherwise it
+arms the lowest-numbered queued PR that is mergeable and has no failing check.
+The label is the merge decision made ahead of time, so like arming it is the
+maintainer's, never an agent's. It also closes the silent-disarm gap: GitHub
+switches auto-merge off when a required check fails, even transiently, so a
+queued PR with a failing check gets its failed Actions jobs re-run once and the
+`queue-retried` label; after that it is skipped until someone removes that
+label. The script's one update-branch call is a fallback for the single
+in-flight PR when the base has sat still for 15 minutes and GitHub's own
+updater still has not acted. That grace period is what keeps it from racing the
+native updater; the rule above against a babysitter that updates every behind
+PR still stands.
+
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
 `--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
 open draft that is behind, conflict-free, and idle for 12h, every four hours.
