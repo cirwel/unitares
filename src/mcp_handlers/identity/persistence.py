@@ -589,16 +589,42 @@ async def _collision_label(
     return f"{label}_{agent_uuid}"
 
 
+class _ScheduledBroadcaster:
+    """What the identity accessors hand out: ``broadcast_event`` schedules the
+    real broadcast as a tracked background task and returns at once.
+
+    ``EISVBroadcaster.broadcast_event`` awaits the WebSocket fan-out, up to 2 s
+    per stalled client plus 2 s to close it, and identity resolution runs
+    inside tight budgets (the REST csid corroboration lookup allows 0.5 s). An
+    awaited telemetry event could time that lookup out, and the cancelled
+    fan-out would never cull the stalled client, so every later lookup would
+    stall on it too. Identity events are telemetry: they must never decide
+    whether a resolution finishes."""
+
+    def __init__(self, target):
+        self._target = target
+
+    async def broadcast_event(self, event_type, agent_id=None, payload=None):
+        from src.background_tasks import create_tracked_task
+        create_tracked_task(
+            self._target.broadcast_event(
+                event_type=event_type, agent_id=agent_id, payload=payload
+            ),
+            name=f"identity_broadcast:{event_type}",
+        )
+
+
 def _broadcaster():
-    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``).
+    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``),
+    wrapped so the caller never waits on the fan-out (``_ScheduledBroadcaster``).
     Returns None only when src.broadcaster fails to import. Kept as a
     module-level function so tests can patch persistence._broadcaster. The
     import name is held by tests/test_identity_broadcaster_accessor.py."""
     try:
         from src.broadcaster import broadcaster_instance as _b
-        return _b
     except Exception:
         return None
+    return _ScheduledBroadcaster(_b)
 
 # =============================================================================
 # LAZY CREATION HELPERS (v2.4.1+)
