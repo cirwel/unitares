@@ -1,6 +1,7 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
-**Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9). ⛔Ratified is
+**Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
+same day, before any window started** (§10, Amendment 1). ⛔Ratified is
 not met: the §8 design pass and council round have not run, and the §7 window has not
 started. The signature
 authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
@@ -513,7 +514,8 @@ nor dissolves it. A later continuously/correlated instrument may make (b1) reada
 serialization primitive may instead fire (b2) and dissolve the port question.
 
 ⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
-criterion 9's apparatus exists to prevent. **Reopen condition:** a nonzero overlap/refusal is
+criterion 9's apparatus exists to prevent. **Reopen condition** (⛔first clause amended by §10 A4:
+read "an adjudicated harm-class collision" for "a nonzero overlap/refusal"): a nonzero overlap/refusal is
 observed, the operator elects the port on other grounds, or a tail-complete replacement instrument
 makes (b1) readable. ⛔§1.1's recommendation of path (1) stands as a recommendation only and has
 **not** been ratified.
@@ -605,7 +607,8 @@ are now deferred, and the instrument moved to the front.
 
 **Then — the decision this gate was built to inform:**
 
-4. **Read the window against (b1) and (b2).** Collisions make the ownership case on data. Clean
+4. **Read the window against (b1) and (b2)** (⛔as amended by §10: the collision classes of A4, the
+   window of A6, and A7's scope; (b2) cannot fire before step 5, A9). Collisions make the ownership case on data. Clean
    bounded zeros remain informational and do not close the reduced scope; only a tail-complete
    observation can fire (b1), while a shared serialization primitive may independently fire (b2).
    ⛔Whichever result is cited, name which of the four states it rules out and how.
@@ -666,4 +669,94 @@ What it does not do:
   instrument, and that slot is still empty.
 - It does not answer §6.4 (non-gating for this scope, still owed), and it does not lift or
   re-read the (D) halt on the original scope.
+
+---
+
+## §10 Amendment 1 (2026-09-27): adopted from the §8 council round, before any window
+
+**Authority.** The §8 council round was held on 2026-09-27 on the document as signed (its record
+is kept in the operator's local notes archive, since the repository keeps review deliberation out of
+tree). Its verdict was unanimous: the §7 window must not start on the instrument as it then stood.
+The operator adopted its recommendations the same day by delegation ("proceed best", 2026-09-27),
+which includes setting the priors below. This amendment lands **before any window starts**; no
+window has started, and the instrument change it depends on (A5) had not been deployed when it was
+written. Per §9, nothing here is read retroactively.
+
+**A1 — the probe does not close the interval it was credited with (§3.1).** The early saga check and
+the post-write probe matched only in-flight sagas, but sagas commit in milliseconds (p50 6.5 ms,
+p99 84 ms, n=138 at amendment time). A saga that starts after the early check and commits before the
+probe was invisible to both, so the pilot's zero overlaps are *not recordable*, not *genuinely zero*.
+§3.1's description of the probe as covering the interval up to just after the write is withdrawn.
+Overlap evidence comes from the time-correlated check (any saga on the session, in any state,
+created at or after the early check) and from the A2 report.
+
+**A2 — collision defined causally, with a bound.** A **collision** is a resolve or reviewer write on a
+session whose cause (the triggering message's timestamp, or the saga's `created_at`) precedes the
+sweeper's guarded commit and whose effect lands after it, within a **correlation bound of 6 hours**
+(a session id can be reused by a reopen, so an unbounded search would match unrelated rounds). It is
+measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
+durable tables, including a saga-versus-row status join, and by the `dialectic_resolve_already_terminal`
+event, because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no
+saga row. "Observed continuously or correlated" in §6.7 and §7 step 1 means this definition.
+
+**A3 — the writer inventory (§1) gains two BEAM writers.** `DialecticLiveness.fail_stuck/2` →
+`DialecticSaga.resolve/1` (fails a session after 4 h; live, 33 sessions carry `liveness_timeout`) and
+`DialecticSaga.update_reviewer/2` (writes the reviewer slot outside any saga). "Both writers", "either
+writer ordering" and "both writer orderings" in §2, §4 and §6 read as **all writers: the Python
+sweeper, the BEAM resolve path, BEAM liveness and `update_reviewer`**. A guarded refusal names the
+winner (`winner_status`, `winner_reason`).
+
+**A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
+classified once: **contention-benign** (the winner's final status equals what the sweeper intended),
+**contention-divergent** (it differs), or **harm** (a collision under A2). A refusal is the terminal
+guard working and is never counted as harm by itself. The first clause of §6.5's reopen condition,
+and "collisions" in §7 step 4, mean an **adjudicated harm-class collision**. This narrows a clause of
+the operator's 2026-08-29 §6.5 ruling, by the operator's 2026-09-27 delegation; the other two
+clauses stand.
+
+**A5 — heartbeats must be classifiable.** Each `dialectic_sweep_cycle` row carries
+`process_boot_id`, a per-boot `cycle_seq` and `instrument_version`, and each periodic cycle is
+bounded by a timeout that still emits a row with `error="timeout"`. A sequence gap inside one boot
+is a lost audit write, a boot change is a restart, and an in-boot silence with no sequence gap is a
+hung loop. The complete instrument is `instrument_version = "wave3-instrument-v2"`.
+
+**A6 — the window, named and denominated in exposure.** The §7 step 3 window is **W_pre**, distinct
+from R1's post-port window. W_pre starts at the first periodic `dialectic_sweep_cycle` row with
+`instrument_version = "wave3-instrument-v2"` written after this amendment is on `master`; the row
+records its own start, so §7 step 2's slot is filled from it rather than from memory. W_pre closes
+when **both** hold: at least **30 calendar days**, and at least **60 guarded sweeper reaps**. Pilot
+rows before that start may inform priors and are never counted.
+
+**A7 — what (b1) can speak for.** Reaps only. Facilitation (about one per month) and reassignment
+(none by the sweeper in the pilot, two in the whole history) will not accrue exposure at any
+practical window length; (b1) makes no claim about them, and they are not evidence either way.
+
+**A8 — priors, set.** Set by the operator's delegation before any window, as choices stated before
+they are applied:
+
+| Standard | Setting |
+|---|---|
+| (b1) window | W_pre (A6): ≥30 days and ≥60 guarded reaps |
+| (b1) heartbeat coverage | ≥95% of W_pre covered by periodic rows with gaps ≤22 min; no unexplained gap >60 min; W_pre extends by any uncovered time; restart gaps are explained by `process_boot_id` |
+| (b1) harm-class collisions | 0 |
+| (b1) failed probes | 0 unadjudicated; a failed probe counts only if the A2 report covers that write |
+| Pro-port threshold (§7 step 4; §6.5) | ≥1 adjudicated harm-class collision makes the port eligible for step 5; contention-divergent is reviewed; contention-benign is telemetry |
+| Correlation bound (A2) | 6 hours |
+| R1 production window | Not settable yet; shape fixed now: ≥30 days, ≥60 BEAM-owned guarded writes, ≥95% BEAM heartbeat coverage |
+| R4, (b3), stop sign #14 | Not settable until §1.2; Python baselines are recorded pre-window (periodic cycle p50 6 ms, p99 31 ms; lazy p50 2 ms, p99 14 ms) |
+| (b5) 25% | Already settled by §6.3; §9's "the §2 priors stay proposed" does not include it |
+
+**A9 — (b2) and R2.** A (b2) serialization primitive is a build item under §7's bar, so (b2) cannot
+fire before step 5; the step 4 reading is against (b1) only. When it is built it must be honoured by
+every A3 writer, and it is measured by writer coverage (a static inventory, 100%, and zero runtime
+bypasses), not by (b1)'s channel. R2's evidence needs a BEAM-side emitter with the §3.1 schema,
+specified at step 5, because R1 disables the Python resolver that emits the current channel.
+
+**A10 — §8, split.** The council round is held (2026-09-27). The design pass is defined on §1.2's
+chosen option and runs at §7 step 5; the gate is not met until it has. Hours against the §4
+projection were not tracked for either round and are reported as not measured.
+
+**A11 — consistency.** §9 inventories both paths while §2's disconfirmers and §4's exit criteria
+cover path (1) only. The status note's "six … closed" counts §6.5's deferral, which is not an answer.
+"Three orderings" means two BEAM-first and one sweeper-first, and A3 widens "writer" beyond them.
 
