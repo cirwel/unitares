@@ -1276,3 +1276,45 @@ _env_value GOVERNANCE_HOST_PORT 8767
     env.pop("GOVERNANCE_HOST_PORT")
     out = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
     assert out.stdout == "8767"   # no export, no .env in a clean checkout: the default
+
+
+def _checkout_on_release(tmp_path):
+    """A throwaway checkout holding a copy of the CLI, on annotated tag v1.0.0,
+    with a bare remote that has the same tag: the already-on-target case."""
+    repo = tmp_path / "install"
+    (repo / "scripts").mkdir(parents=True)
+    (repo / "scripts" / "unitares").write_text(CLI.read_text())
+    (repo / "scripts" / "unitares").chmod(0o755)
+    (repo / "docker-compose.yml").write_text("services: {}\n")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo)]
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "release"], check=True)
+    subprocess.run([*git, "tag", "-a", "v1.0.0", "-m", "v1.0.0"], check=True)
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(repo), str(remote)], check=True)
+    return repo, remote
+
+
+def test_check_on_the_target_release_starts_nothing(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--check", "--to", "v1.0.0"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert "Already on v1.0.0" in result.stdout
+    assert "database is not running" in result.stdout
+    assert " up " not in log.read_text()
+
+
+def test_local_edits_block_migrations_even_on_the_target_release(tmp_path):
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    (repo / "docker-compose.yml").write_text("services: {edited: {}}\n")   # a tracked local edit
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "local changes to tracked files" in result.stderr
+    assert " up " not in log.read_text() and " exec " not in log.read_text()

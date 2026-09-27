@@ -1170,11 +1170,32 @@ cmd_update() {
 
     # Compare commits, not names: a checkout moved by commit shows a SHA, not
     # the tag it is on.
+    # --check changes nothing: no database start, no fetch, no checkout.
+    if [ "$check_only" = "1" ]; then
+        if [ "$current_sha" != "$target_sha" ]; then
+            echo "Run 'unitares update' to move to $target."
+        elif _compose ps --status running --services 2>/dev/null | grep -qx "postgres-age"; then
+            echo "✓ Already on $target. Pending migrations:"
+            _migrations || return 1
+            echo "  Apply them and restart with: unitares update --to $target"
+        else
+            echo "✓ Already on $target. The database is not running, so pending migrations"
+            echo "  are not listed; 'unitares update --to $target' applies any it finds."
+        fi
+        return 0
+    fi
+
+    # Every path from here changes the install, and a locally edited file
+    # (a migration above all) must never be applied: refuse on tracked edits.
+    if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
+        echo "error: $root has local changes to tracked files; commit or discard them first." >&2
+        return 1
+    fi
+
     if [ "$current_sha" = "$target_sha" ]; then
         echo "✓ Already on $target. Checking the database schema…"
         _compose up -d --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
         _migrations || return 1
-        [ "$check_only" = "1" ] && { echo "  Apply pending migrations and restart with: unitares update --to $target"; return 0; }
         _confirm "Apply pending migrations, then rebuild and restart the stack on $target?"
         case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
         _migrations --apply || { echo "error: migrations did not complete; the stack was not restarted." >&2; return 1; }
@@ -1185,12 +1206,6 @@ cmd_update() {
         health=$(_deep_health_status "$url")
         echo "✓ On $target with migrations applied. Deep health: ${health:-no answer} ($url/health/deep)"
         return 0
-    fi
-    [ "$check_only" = "1" ] && { echo "Run 'unitares update' to move to $target."; return 0; }
-
-    if [ -n "$(git -C "$root" status --porcelain --untracked-files=no)" ]; then
-        echo "error: $root has local changes to tracked files; commit or discard them first." >&2
-        return 1
     fi
     _confirm "Move this install from $current to $target, rebuild, and apply its database migrations?"
     case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
