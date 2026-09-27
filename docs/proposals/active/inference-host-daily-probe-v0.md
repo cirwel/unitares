@@ -101,12 +101,17 @@ fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
 `sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
 re-alert backoff so a host that stays broken does not re-post daily.
-Recovery follows `doctor_findings.py` too, and it is keyed by host, not by
-fingerprint. A success carries no failure class, so when a host succeeds,
-whether through a probe or through passive evidence, the probe closes every
-open record for that host, whatever its class, and drops their backoff. A
-later failure then alerts at once. A success on any host also closes the
-shared `gov-dispatch` record, because it proves gov's dispatch path works.
+Recovery uses `doctor_findings.py`'s rule: at the end of each run, an open
+record that this run did not reproduce is closed and its backoff dropped, so
+a later failure of the same kind alerts at once. That one rule covers a
+success, a changed failure (a host that failed preflight yesterday and fails
+`auth` today closes the preflight record and opens an `auth` one), and a
+shared `gov-dispatch` failure that is no longer shared (its record closes, and
+any host still failing gets its own). The one exception is a host the run
+could not assess, because it was cooling or had a live hung execution. Its
+records stay as they are, since not looking is not evidence of recovery. A
+host the operator has switched off has its records closed with the reason
+`not_enabled`: the operator has taken it out of rotation.
 Recovery is noticed on the next daily run, so a record can stay open up to a
 day after a host recovers. That delay costs nothing more: the backoff already
 holds back re-posting, and the finding was posted once. That closure is local state
@@ -148,10 +153,13 @@ already runs on every successful call, also sets
 The probe's own successes set `last_ok` as well, and they must not count as
 passive evidence. If they did, a probe at 04:15:05 would make the next day's
 04:15:00 run skip the host, and idle hosts would be probed only every other
-day. The probe therefore keeps, in its state file, when each of its own probes
-of that host finished. It skips a host only when `last_ok` is under 24 h old
-**and** later than that time, meaning some other caller has succeeded since
-the last probe. An idle host is probed every day. A busy host costs nothing.
+day. So after each successful probe, the probe reads that host's `last_ok`
+from `list_inference_hosts` and stores the exact value in its state file. It
+skips a host only when `last_ok` is under 24 h old **and** differs from the
+stored value, meaning some other caller has succeeded since. Comparing values
+rather than clocks does not depend on the order in which gov and the script
+record their times. An idle host is probed every day. A busy host costs
+nothing.
 
 ### Cost per day
 
