@@ -34,9 +34,9 @@
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
 #
-# The approval label is the maintainer's merge decision made ahead of time,
-# exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
-# shared contract). It approves the PR as it stood when the label went on. The
+# The approval label is the merge decision. The agent that owns a PR applies it
+# when it marks the PR ready, never on another agent's PR, and the maintainer
+# vetoes by removing it (AGENTS.md / CLAUDE.md shared contract). It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
@@ -49,7 +49,7 @@
 # as approved.
 #
 # Threat model. The pin catches honest mistakes: an agent pushing a follow-up
-# after the maintainer approved, or a stale branch changing under the label.
+# after the PR was approved, or a stale branch changing under the label.
 # It is not a security boundary against a deliberately hostile agent, and does
 # not try to be: every actor here authenticates as the same GitHub account, so
 # such an agent could apply the label itself, or run `gh pr merge --auto`,
@@ -246,7 +246,7 @@ queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
               and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
-# Order by when the label went on, which is the order the maintainer approved.
+# Order by when the label went on, which is the order the PRs were approved.
 ordered=""
 while read -r pr; do
   [ -n "$pr" ] || continue
