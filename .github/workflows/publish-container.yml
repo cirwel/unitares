@@ -24,12 +24,31 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# One release publishes two images from the same tag, with the same hardening:
+# the server (`ghcr.io/<repo>`) and the Compose lease plane
+# (`ghcr.io/<repo>-lease-plane`). docker-compose.yml pins the lease plane to the
+# verified release and falls back to building it from source when the tag cannot
+# be pulled. Neither image gets `latest` here; Promote Release moves only the
+# server's `latest` and pins the lease plane by version.
 jobs:
   publish:
+    name: publish (${{ matrix.artifact }})
     if: >-
       (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v')) ||
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.ref, 'v'))
     runs-on: ubuntu-latest
+    strategy:
+      # The server image must not be cancelled by a lease-plane failure, or the
+      # reverse; Promote Release refuses a release unless both verify.
+      fail-fast: false
+      matrix:
+        include:
+          - artifact: server
+            image_suffix: ""
+            dockerfile: Dockerfile
+          - artifact: lease-plane
+            image_suffix: -lease-plane
+            dockerfile: elixir/lease_plane/Dockerfile
     steps:
       - name: Resolve release tag
         id: release
@@ -48,6 +67,10 @@ jobs:
           ref: ${{ steps.release.outputs.tag }}
           persist-credentials: false
 
+      - name: Record the source commit
+        id: source
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
@@ -65,7 +88,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
           flavor: latest=false
           tags: |
             type=raw,value=${{ steps.release.outputs.tag }}
@@ -75,18 +98,24 @@ jobs:
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The lease plane has no .git in its image; bake the release commit so
+          # its /health reports a build_sha instead of "unknown". The server
+          # Dockerfile declares no such argument, so it gets none.
+          build-args: ${{ matrix.artifact == 'lease-plane' && format('UNITARES_BUILD_SHA={0}', steps.source.outputs.sha) || '' }}
+          # Separate cache scopes so the two builds do not evict each other.
+          cache-from: type=gha,scope=${{ matrix.artifact }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
           sbom: true
           provenance: mode=max
 
       - name: Attest published image
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true

@@ -19,12 +19,15 @@ esac
 : "${DIGEST:?DIGEST is required}"
 : "${REGISTRY:?REGISTRY is required}"
 : "${IMAGE_NAME:?IMAGE_NAME is required}"
+: "${LEASE_PLANE_IMAGE_NAME:?LEASE_PLANE_IMAGE_NAME is required}"
+: "${LEASE_PLANE_DIGEST:?LEASE_PLANE_DIGEST is required}"
 
 [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid release tag: $RELEASE_TAG"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid release version: $VERSION"
 [[ "$RELEASE_TAG" == "v$VERSION" ]] || die "Release tag $RELEASE_TAG does not match version $VERSION"
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || die "Invalid release source SHA: $SOURCE_SHA"
 [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid release digest: $DIGEST"
+[[ "$LEASE_PLANE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid lease-plane digest: $LEASE_PLANE_DIGEST"
 
 current_source=$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null) || \
   die "$RELEASE_TAG is no longer a readable tag."
@@ -61,6 +64,18 @@ fi
 [[ "$tag_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid current digest for $RELEASE_TAG: $tag_digest"
 if [ "$tag_digest" != "$DIGEST" ]; then
   die "$RELEASE_TAG now resolves to $tag_digest, not verified digest $DIGEST."
+fi
+
+# The pin moves docker-compose.yml onto the lease-plane release tag, so that tag
+# must still name the image verified before approval.
+if ! lease_plane_digest=$(docker buildx imagetools inspect \
+  "$REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' | jq -r .digest); then
+  die "Could not resolve the current lease-plane digest for $RELEASE_TAG."
+fi
+[[ "$lease_plane_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+  die "Invalid current lease-plane digest for $RELEASE_TAG: $lease_plane_digest"
+if [ "$lease_plane_digest" != "$LEASE_PLANE_DIGEST" ]; then
+  die "The lease plane's $RELEASE_TAG now resolves to $lease_plane_digest, not verified digest $LEASE_PLANE_DIGEST."
 fi
 
 if ! current_latest=$(docker buildx imagetools inspect \
