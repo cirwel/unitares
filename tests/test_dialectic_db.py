@@ -976,26 +976,43 @@ class TestAddMessage:
         conn.execute.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_a_record_that_is_not_a_move_leaves_updated_at_alone(self, db):
-        """touch_session=False (a consult) inserts without refreshing the
-        session's updated_at, which the inactivity sweeper reads as activity."""
+    @pytest.mark.parametrize("held, expect_insert", [(7, True), (8, False)])
+    async def test_a_bounded_message_counts_under_a_lock_and_never_touches_the_session(
+        self, db, held, expect_insert,
+    ):
+        """Review round 1 on #2540: the bound on consults is enforced in one
+        transaction under a per-session advisory lock, so concurrent filers
+        cannot overshoot it."""
+        from contextlib import asynccontextmanager
         instance, pool, conn = db
 
         class DictRecord(dict):
             def __getitem__(self, key):
                 return dict.__getitem__(self, key)
 
-        conn.fetchrow = AsyncMock(return_value=DictRecord({"message_id": 9}))
-        conn.execute = AsyncMock(return_value="UPDATE 1")
+        @asynccontextmanager
+        async def transaction():
+            yield
+        conn.transaction = transaction
+        conn.execute = AsyncMock(return_value="SELECT 1")
+        conn.fetchval = AsyncMock(return_value=held)
+        conn.fetchrow = AsyncMock(return_value=DictRecord({"message_id": 5}))
 
-        result = await instance.add_message(
+        result = await instance.add_bounded_message(
             session_id="sess-001", agent_id="agent-X", message_type="consult",
-            reasoning="outside view", touch_session=False,
+            max_of_type=8, reasoning="outside view",
         )
 
-        assert result == 9
-        conn.fetchrow.assert_awaited_once()
-        conn.execute.assert_not_awaited()
+        lock_sql = conn.execute.await_args_list[0].args[0]
+        assert "pg_advisory_xact_lock" in lock_sql
+        # The only execute is the lock: no UPDATE of dialectic_sessions.
+        assert all("dialectic_sessions" not in c.args[0] for c in conn.execute.await_args_list)
+        if expect_insert:
+            assert result == 5
+            conn.fetchrow.assert_awaited_once()
+        else:
+            assert result is None
+            conn.fetchrow.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_add_message_minimal_args(self, db):

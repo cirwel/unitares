@@ -189,8 +189,12 @@ orchestrated reviewer takes it within about a minute of the request. `consult`
 - **Mark failures as failures.** Set `degraded: true` when the consult errored
   or timed out but still reached a judgment you are filing. A failed pass filed
   as a clean one is worse than no row at all.
-- **If no judgment was reached, do not file one.** When the consult returned
-  nothing you could read as a verdict, pass `judgment_formed: false` instead.
+- **If no judgment was reached, do not file one.** For a `consult`, simply
+  don't call it: an outside run that returned nothing you could read as a
+  verdict is not a consult, and `consult` refuses `judgment_formed: false`
+  without recording anything (`NO_JUDGMENT`). If you are the assigned reviewer
+  and your own backend reached no judgment, pass `judgment_formed: false` on
+  the antithesis instead.
   The server records an abstention without claiming or changing reviewer-slot
   ownership; the slot is OPEN only when no reviewer was already assigned. It does
   not file a rejection. `degraded` describes the BACKEND, `judgment_formed`

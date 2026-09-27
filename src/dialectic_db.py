@@ -524,15 +524,8 @@ class DialecticDB:
         concerns: List[str] = None,
         agrees: bool = None,
         signature: str = None,
-        touch_session: bool = True,
     ) -> int:
-        """Add a message to a session.
-
-        ``touch_session=False`` records the message without refreshing the
-        session's ``updated_at``, which the inactivity sweeper reads as
-        protocol activity. A consult is a record, not a move, and must not be
-        able to hold a stalled session open.
-        """
+        """Add a message to a session."""
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow("""
@@ -555,12 +548,64 @@ class DialecticDB:
                 signature,
             )
 
-            if touch_session:
-                await conn.execute("""
-                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-                """, session_id)
+            await conn.execute("""
+                UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+            """, session_id)
 
             return row["message_id"] if row else 0
+
+    async def add_bounded_message(
+        self,
+        session_id: str,
+        agent_id: str,
+        message_type: str,
+        max_of_type: int,
+        root_cause: str = None,
+        proposed_conditions: List[str] = None,
+        reasoning: str = None,
+        observed_metrics: Dict = None,
+        concerns: List[str] = None,
+    ) -> Optional[int]:
+        """Insert a record-only message unless the session already holds
+        ``max_of_type`` of that type; return its id, or None when full.
+
+        The count and the insert run in one transaction under a per-session
+        advisory lock, so concurrent filers cannot each see room for one more
+        and overshoot the bound. The session row is not touched: a record-only
+        message is not protocol activity (add_message refreshes updated_at, which the sweeper reads as activity).
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"dialectic-bounded:{message_type}:{session_id}",
+                )
+                held = await conn.fetchval(
+                    "SELECT count(*) FROM core.dialectic_messages "
+                    "WHERE session_id = $1 AND message_type = $2",
+                    session_id, message_type,
+                )
+                if held >= max_of_type:
+                    return None
+                row = await conn.fetchrow("""
+                    INSERT INTO core.dialectic_messages (
+                        session_id, agent_id, message_type,
+                        root_cause, proposed_conditions, reasoning,
+                        observed_metrics, concerns, agrees, signature
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+                    RETURNING message_id
+                """,
+                    session_id,
+                    agent_id,
+                    message_type,
+                    root_cause,
+                    json.dumps(proposed_conditions) if proposed_conditions else None,
+                    reasoning,
+                    json.dumps(observed_metrics) if observed_metrics else None,
+                    json.dumps(concerns) if concerns else None,
+                )
+                return row["message_id"] if row else None
 
     async def is_agent_in_active_session(self, agent_id: str) -> bool:
         """Check if agent is in an active session.
@@ -879,6 +924,11 @@ async def has_recently_reviewed_async(reviewer_id: str, paused_agent_id: str, ho
 async def add_message_async(**kwargs) -> int:
     db = await get_dialectic_db()
     return await db.add_message(**kwargs)
+
+
+async def add_bounded_message_async(**kwargs) -> Optional[int]:
+    db = await get_dialectic_db()
+    return await db.add_bounded_message(**kwargs)
 
 
 async def update_session_phase_async(

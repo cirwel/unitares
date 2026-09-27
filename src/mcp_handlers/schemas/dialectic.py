@@ -212,6 +212,7 @@ class DialecticParams(AgentIdentityMixin):
         "consult": (
                 "session_id", "reasoning", "reviewer_provenance", "agrees",
                 "proposed_conditions", "conditions", "concerns", "root_cause",
+                "judgment_formed",
         ),
         "reassign": (
                 "session_id", "new_reviewer_id", "reason",

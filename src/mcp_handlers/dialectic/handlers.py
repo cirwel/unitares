@@ -163,6 +163,7 @@ from src.dialectic_db import (
     update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
     reopen_session_async as pg_reopen_session,
     add_message_async as pg_add_message,
+    add_bounded_message_async as pg_add_bounded_message,
     resolve_session_async as pg_resolve_session,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
 )
@@ -2289,7 +2290,8 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
     at filing. It has no authority: it never advances a phase, never counts as
     a verdict (``agrees`` stays NULL; the position it states lives in
     ``observed_metrics.consult.position``), and never refreshes the session's
-    liveness clock.
+    liveness clock. The per-session bound is enforced atomically in
+    PostgreSQL (``add_bounded_message``), not on a loaded transcript.
     """
     try:
         session_id = arguments.get("session_id")
@@ -2324,28 +2326,51 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
                 error_category="validation_error",
                 arguments=arguments,
             )]
-        provenance = arguments.get("reviewer_provenance")
-        if not isinstance(provenance, dict) or not provenance:
+        # A consult with no judgment is not filed: the record exists to count
+        # outside verdicts, and an abstention is not one.
+        if arguments.get("judgment_formed") is not None and not _judgment_was_formed(
+            arguments.get("judgment_formed")
+        ):
             return [error_response(
-                "reviewer_provenance is required: name where the verdict came from "
-                "(backend, model_used, consult_source)",
+                "No judgment was formed, so there is no consult to file. Nothing was recorded.",
+                error_code="NO_JUDGMENT",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        provenance = arguments.get("reviewer_provenance")
+        # The stamp keeps only known keys, so a mapping of misspelt or
+        # irrelevant keys would file an external_consult row that names no
+        # source at all. At least one of these must say where it came from.
+        named_source = isinstance(provenance, dict) and any(
+            isinstance(provenance.get(key), str) and provenance.get(key).strip()
+            for key in ("backend", "model_used", "consult_source")
+        )
+        if not named_source:
+            return [error_response(
+                "reviewer_provenance must name where the verdict came from: at least "
+                "one of backend, model_used or consult_source",
                 error_code="MISSING_PARAM",
                 error_category="validation_error",
                 arguments=arguments,
             )]
 
-        filed = sum(1 for m in session.transcript if getattr(m, "phase", None) == CONSULT_PHASE)
-        if filed >= MAX_CONSULTS_PER_SESSION:
-            return [error_response(
-                f"This session already holds {filed} consults, the most one session keeps.",
-                error_code="CONSULT_LIMIT",
-                error_category="validation_error",
-                arguments=arguments,
-            )]
-
         position = None
-        if arguments.get("agrees") is not None:
-            position = "agrees" if coerce_bool(arguments.get("agrees"), default=False) else "disagrees"
+        raw_agrees = arguments.get("agrees")
+        if raw_agrees is not None:
+            # Only unambiguous spellings. coerce_bool's default would turn a
+            # typo or "approve" into a recorded disagreement.
+            spelled = str(raw_agrees).strip().lower() if not isinstance(raw_agrees, bool) else raw_agrees
+            if spelled in (True, "true"):
+                position = "agrees"
+            elif spelled in (False, "false"):
+                position = "disagrees"
+            else:
+                return [error_response(
+                    f"agrees must be true or false, not {raw_agrees!r}; omit it to state no position",
+                    error_code="INVALID_PARAM",
+                    error_category="validation_error",
+                    arguments=arguments,
+                )]
         if agent_id == session.paused_agent_id:
             filer_role = "paused_agent"
         elif agent_id == session.reviewer_agent_id:
@@ -2372,18 +2397,25 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
         concerns = _consult_list(arguments.get("concerns"))
         root_cause = arguments.get("root_cause")
 
-        message_id = await pg_add_message(
+        message_id = await pg_add_bounded_message(
             session_id=session_id,
             agent_id=agent_id,
             message_type=CONSULT_PHASE,
+            max_of_type=MAX_CONSULTS_PER_SESSION,
             root_cause=root_cause,
             proposed_conditions=proposed_conditions or None,
             reasoning=reasoning,
             observed_metrics=observed_metrics,
             concerns=concerns or None,
-            agrees=None,
-            touch_session=False,
         )
+        if message_id is None:
+            return [error_response(
+                f"This session already holds {MAX_CONSULTS_PER_SESSION} consults, "
+                "the most one session keeps. Nothing was recorded.",
+                error_code="CONSULT_LIMIT",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
         session.transcript.append(DialecticMessage(
             phase=CONSULT_PHASE,
             agent_id=agent_id,

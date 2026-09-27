@@ -26,14 +26,14 @@ def _session(phase=DialecticPhase.SYNTHESIS):
     return session
 
 
-async def _consult(session, caller="agent-outside", **arguments):
-    add_message = AsyncMock(return_value=77)
+async def _consult(session, caller="agent-outside", insert_returns=77, **arguments):
+    add_message = AsyncMock(return_value=insert_returns)
     h.ACTIVE_SESSIONS[session.session_id] = session
     try:
         with patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
                    new=AsyncMock(return_value=(caller, None))), \
              patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.pg_add_message", add_message), \
+             patch(f"{DIALECTIC}.pg_add_bounded_message", add_message), \
              patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
             result = await h.handle_submit_consult({"session_id": session.session_id, **arguments})
     finally:
@@ -54,8 +54,9 @@ async def test_a_third_party_files_a_consult_without_the_reviewer_slot():
     assert data["filer_role"] == "third_party"
     kwargs = add_message.await_args.kwargs
     assert kwargs["message_type"] == "consult"
-    assert kwargs["agrees"] is None, "a consult must never write the verdict column"
-    assert kwargs["touch_session"] is False, "a consult must not hold a session open"
+    assert kwargs["max_of_type"] == h.MAX_CONSULTS_PER_SESSION
+    # The bounded insert writes agrees NULL and never touches the session row.
+    assert "agrees" not in kwargs
     stamp = kwargs["observed_metrics"]["reviewer_backend"]
     assert stamp["reviewer_kind"] == "external_consult"
     assert stamp["backend"] == "codex-cli"
@@ -85,6 +86,10 @@ async def test_the_kind_is_forced_whatever_the_caller_claims():
     ({"reviewer_provenance": PROVENANCE}, "reasoning"),
     ({"reasoning": "r"}, "reviewer_provenance"),
     ({"reasoning": "r", "reviewer_provenance": {}}, "reviewer_provenance"),
+    # Review round 1 on #2540: keys the stamp drops would file a sourceless row.
+    ({"reasoning": "r", "reviewer_provenance": {"reviewer_kind": "external_consult"}},
+     "reviewer_provenance"),
+    ({"reasoning": "r", "reviewer_provenance": {"bakend": "codex"}}, "reviewer_provenance"),
 ])
 async def test_reasoning_and_provenance_are_required(arguments, missing):
     data, add_message = await _consult(_session(), **arguments)
@@ -109,14 +114,41 @@ async def test_the_paused_agent_may_file_one_and_is_labelled():
 
 
 @pytest.mark.asyncio
-async def test_consults_per_session_are_bounded():
-    session = _session()
-    for _ in range(h.MAX_CONSULTS_PER_SESSION):
-        session.transcript.append(DialecticMessage(
-            phase="consult", agent_id="x", timestamp="2026-09-27T00:00:00+00:00", reasoning="r"))
-    data, add_message = await _consult(session, reasoning="r", reviewer_provenance=PROVENANCE)
+async def test_a_full_session_refuses_and_records_nothing():
+    """The bound is enforced in PostgreSQL; a None insert means full."""
+    data, add_message = await _consult(_session(), insert_returns=None,
+                                       reasoning="r", reviewer_provenance=PROVENANCE)
     assert data["success"] is False
     assert data.get("error_code") == "CONSULT_LIMIT"
+    assert "Nothing was recorded" in data["error"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["approve", "agree", "ture", "1", 1])
+async def test_an_unrecognised_position_is_refused_not_recorded_as_a_rejection(value):
+    """Review round 1 on #2540."""
+    data, add_message = await _consult(_session(), reasoning="r", agrees=value,
+                                       reviewer_provenance=PROVENANCE)
+    assert data["success"] is False
+    assert data.get("error_code") == "INVALID_PARAM"
+    add_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value, position", [(True, "agrees"), ("False", "disagrees")])
+async def test_true_and_false_are_the_positions(value, position):
+    data, _ = await _consult(_session(), reasoning="r", agrees=value,
+                             reviewer_provenance=PROVENANCE)
+    assert data["position"] == position
+
+
+@pytest.mark.asyncio
+async def test_an_abstention_is_not_filed():
+    """Review round 1 on #2540: no judgment, no consult."""
+    data, add_message = await _consult(_session(), reasoning="model returned nothing",
+                                       judgment_formed=False, reviewer_provenance=PROVENANCE)
+    assert data["success"] is False
+    assert data.get("error_code") == "NO_JUDGMENT"
     add_message.assert_not_awaited()
 
 
