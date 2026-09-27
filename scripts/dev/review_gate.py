@@ -670,7 +670,11 @@ def second_family_paths(text: str | None = None) -> list[str]:
               "no second-family requirement applied", file=sys.stderr)
         return []
     globs = raw.get("second_family_paths") if isinstance(raw, dict) else None
-    return [g for g in globs if isinstance(g, str)] if isinstance(globs, list) else []
+    if not isinstance(globs, list):
+        print(f"[review] WARNING: {POLICY_FILE.name} has no second_family_paths list; "
+              "no second-family requirement applied", file=sys.stderr)
+        return []
+    return [g for g in globs if isinstance(g, str)]
 
 
 def base_policy_paths(base: str) -> list[str]:
@@ -706,19 +710,25 @@ def changed_paths(base: str, head: str) -> list[str] | None:
     return [p.decode("utf-8", "surrogateescape") for p in proc.stdout.split(b"\0") if p]
 
 
+_FAMILY_TOKENS = {
+    "openai": {"codex", "openai", "gpt", "chatgpt"},
+    "anthropic": {"claude", "anthropic", "opus", "sonnet", "haiku"},
+    "google": {"antigravity", "agy", "gemini", "google"},
+}
+
+
 def reviewer_family(reviewer: str) -> str | None:
     """The model family behind a record's reviewer name, or None when the name
-    does not say. An unrecognised name (a recorded "council", "opus-subagent")
-    counts as NO family: counting it as its own would let two reviews from one
-    family satisfy the two-family rule. Record such a review under a name that
+    does not say. Matched on whole tokens of the name (split on anything that
+    is not a letter), so "strategy-review" is not Google and "gpt-5-reviewer"
+    is OpenAI. An unrecognised name (a recorded "council") counts as NO
+    family: counting it as its own would let two reviews from one family
+    satisfy the two-family rule. Record such a review under a name that
     carries its family (e.g. "gemini-council", "gpt-5-reviewer")."""
-    name = (reviewer or "").lower()
-    if any(m in name for m in ("codex", "openai", "gpt", "chatgpt")):
-        return "openai"
-    if any(m in name for m in ("claude", "anthropic")):
-        return "anthropic"
-    if any(m in name for m in ("antigravity", "agy", "gemini", "google")):
-        return "google"
+    tokens = set(re.split(r"[^a-z]+", (reviewer or "").lower()))
+    for family, names in _FAMILY_TOKENS.items():
+        if tokens & names:
+            return family
     return None
 
 
@@ -1453,8 +1463,6 @@ def cmd_review(args) -> int:
     args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
     deadline = time.monotonic() + args.budget
-    # One wall-clock budget for the whole command, second-family pass included.
-    args.review_deadline = deadline
     joined = False
     while True:
         with review_lock(key) as lock:
@@ -1551,112 +1559,57 @@ def second_family_candidates(branch: str, families: set[str], comments: list[dic
             and p not in exhausted and not provider_cooldown(p)]
 
 
-#: A second-family attempt needs at least this much of the shared budget.
-SECOND_FAMILY_MIN_S = 120
-
-
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
                        passed_by: str | None = None, auto: bool = True) -> int:
-    """After a passing review of a security-sensitive diff, add a review from
-    a second model family when only one has passed, so the CI check can go
-    green without the author having to know the rule. Runs inside the diff's
-    review lock (every caller holds it)."""
+    """After a passing review of a security-sensitive diff, say plainly when a
+    second model family is still missing, and which reviews would supply it.
+
+    It never starts a review itself. An automatic second run collided with the
+    round cap, fresh runs and the sweep in round after round of PR #2504's
+    review; the rule's enforcement is the CI check, and choosing the second
+    reviewer is the author's. Returns UNREVIEWED while the family is missing,
+    so a foreground review.sh cannot read as done while CI would still block.
+    ``auto`` is accepted for the callers' sake and no longer changes anything.
+    """
     if result != 0:
         return result
     base = getattr(args, "base", "origin/master")
     changed = changed_paths(base, "HEAD")
-    # Locally an unreadable list skips the helper; CI still enforces the rule.
-    # The base ref's policy, as CI uses: a PR editing the policy must not make
-    # the local helper disagree with the check it is trying to satisfy.
+    # Locally an unreadable list skips the notice; CI still enforces the rule.
+    # The base ref's policy, as CI uses it.
     sensitive = sensitive_paths(changed, base_policy_paths(base)) if changed else []
     if not sensitive:
         return result
     comments = pr_comments(repo, pr)
     try:
-        snapshot = read_native(repo, pr, key, head, comments)
-        native = snapshot.records
+        native = read_native(repo, pr, key, head, comments).records
     except SystemExit as exc:
-        # As every other cmd_review path: incomplete evidence could hide an
-        # open native FINDINGS review, so it is UNREVIEWED, never "no records".
+        # Incomplete evidence could hide an open native FINDINGS review.
         print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
         return UNREVIEWED
     families = passing_families(comments, key, native)
     # The review that just passed may not be readable yet (API read lag after
-    # its own post): count its family from what we already know, so the same
-    # family is never run twice as the "second" one.
+    # its own post): count its family from what is already known. A fix-verify
+    # receipt did not review the new lines (see passing_families).
     passed_by = passed_by or getattr(args, "completed_by", None)
-    # A fix-verify receipt did not review the new lines (see passing_families).
     if passed_by and not passed_by.startswith("fix-verify:") and reviewer_family(passed_by):
         families.add(reviewer_family(passed_by))
     if len(families) >= 2:
         return result
-    explicit = getattr(args, "reviewer", None)
-    # Checked here on every path, not left to callers: after a capped fix
-    # verification, later runs arrive through the existing-record fast path
-    # (and the sweep), and must not start full reviews on their own either.
-    # Two ways a run is past the cap: the cap is live, or this diff's pass IS
-    # a fix verification (capped() turns False once a round is answered,
-    # because a NEW push is new work; the same diff is not).
-    fix_verified = (passed_by or "").startswith("fix-verify:")
-    capped = (snapshot.rounds or CodexRounds()).capped() or fix_verified
-    if not auto or (capped and not explicit):
-        print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing full "
-              f"reviews from two model families (have: {', '.join(sorted(families)) or 'none'}). "
-              "The review round cap is reached, so none runs automatically: spend a round with "
-              "review.sh --fresh --reviewer <provider>, or record an independent review under a "
-              "name that carries its model family (e.g. gemini-…, gpt-…) with "
-              "review.sh record --independent.")
-        return UNREVIEWED
-    # Same availability rules as review_with_fallback: no provider in a quota
-    # or auth cooldown, none that exhausted its retries on this diff (derived
-    # from the record here: the existing-record fast path reaches this helper
-    # before cmd_review computes failed_providers).
     candidates = second_family_candidates(
         getattr(args, "branch", "") or "", families, comments, key,
         set(getattr(args, "failed_providers", set()) or set()))
-    if explicit and capped:
-        # The author spent a round on one provider, not on every family.
-        candidates = [p for p in candidates if p == explicit]
-    deadline = getattr(args, "review_deadline", None)
-    for provider in candidates:
-        if reviewer_family(provider) in families:
-            continue
-        remaining = (deadline - time.monotonic()) if deadline is not None else None
-        if remaining is not None and remaining < SECOND_FAMILY_MIN_S:
-            print(f"[review] UNREVIEWED: the review budget is used up before a second model "
-                  f"family could review {sensitive[0]}; run review.sh again.")
-            return UNREVIEWED
-        print(f"[review] {sensitive[0]} is security-sensitive: review by {provider} "
-              f"(full-review families so far: {', '.join(sorted(families)) or 'none'})",
-              flush=True)
-        attempt = argparse.Namespace(**vars(args))
-        if remaining is not None:
-            attempt.budget = int(remaining)
-        result = _review_locked(attempt, pr, key, provider)
-        if result == UNREVIEWED:
-            print(f"[review] {provider} did not complete; trying the next family", flush=True)
-            continue
-        result = completed_review_exit(repo, pr, key, head, result)
-        if result != 0:
-            return result  # findings (or a moved diff) go back to the author first
-        # A cloud review can post findings while this reviewer runs: return
-        # them, as the initial-review path does, instead of reporting success.
-        try:
-            latest = current_record(repo, pr, key, head, pr_comments(repo, pr))
-        except SystemExit as exc:
-            print(f"[review] UNREVIEWED: completion evidence is incomplete: {exc}; retry review.sh")
-            return UNREVIEWED
-        if latest and latest.verdict == "FINDINGS" and not latest.disposed:
-            print(f"[review] {latest.status()[1]}\n{latest.url}\n{latest.text}")
-            return 1
-        families.add(reviewer_family(provider))
-        if len(families) >= 2:
-            return 0
-        # A fix-verify receipt left no full family: one more is still needed.
-    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing "
-          f"full reviews from two model families (have: "
-          f"{', '.join(sorted(families)) or 'none'}); no other reviewer is available. "
-          "Record an independent one with review.sh record --independent.")
+    have = ", ".join(sorted(families)) or "none"
+    if candidates:
+        runs = "; ".join(f"review.sh --fresh --reviewer {c}" for c in candidates)
+        next_step = f"run one of: {runs}"
+    else:
+        next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
+                     "on this diff)")
+    print(f"[review] UNREVIEWED: {sensitive[0]} is security-sensitive and needs passing full "
+          f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
+          "Or record an independent review under a name that carries its model family "
+          "(e.g. gemini-…, gpt-…) with review.sh record --independent.")
     return UNREVIEWED
 
 
@@ -2027,39 +1980,13 @@ def cmd_sweep(args) -> int:
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
         try:
-            sweep_snapshot = read_native(repo, n, key, head, comments)
-            native = sweep_snapshot.records
-            rec = latest_matching(comments, key, native)
+            rec = current_record(repo, n, key, head, comments)
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             continue  # cannot decide which findings remain open from partial evidence
-        # A passing record on a sensitive diff with one family is not done:
-        # review it again, which runs the second-family pass.
-        changed = changed_paths(f"origin/{base}", head)
-        needs_second = (
-            rec is not None and rec.status()[0] == "success"
-            and bool(changed)
-            and bool(sensitive_paths(changed, base_policy_paths(f"origin/{base}")))
-            and len(passing_families(comments, key, native)) < 2
-        )
-        if needs_second and ((sweep_snapshot.rounds or CodexRounds()).capped()
-                             or rec.reviewer.startswith("fix-verify:")):
-            # Past the cap no full review starts on its own (see
-            # second_family_pass); the author decides.
-            print(f"[sweep] PR #{n}: security-sensitive diff needs a second model family, "
-                  "but the review round cap is reached; author decides")
-            continue
-        if needs_second and not second_family_candidates(
-                p["headRefName"], passing_families(comments, key, native), comments, key):
-            # Selecting it would spend the sweep's one slot on a child that can
-            # only return UNREVIEWED, every run, starving the PRs behind it.
-            print(f"[sweep] PR #{n}: security-sensitive diff needs a second model family; "
-                  "no eligible reviewer now (disabled, cooling down or exhausted)")
-            continue
-        if needs_second:
-            print(f"[sweep] PR #{n}: security-sensitive diff has one model family; "
-                  "starting the second")
-        elif rec is not None and not (rec.verdict == "FAILED" and any(
+        # A sensitive diff with one family's pass is left to its author: the
+        # review check says what is missing, and no review starts on its own.
+        if rec is not None and not (rec.verdict == "FAILED" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":

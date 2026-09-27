@@ -287,28 +287,32 @@ still tries a disabled provider. Re-enable it by deleting its entry.
 
 <a id="second-family-review"></a>
 **Second-family review for security-sensitive paths.** A diff that touches a
-path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth,
-`access.py`, the strong-model host adapter and Antigravity client, the dialectic
-reviewer's backends, and the review gate itself) needs a passing review from
-**two different model families** before the `review` check goes green: OpenAI
-(Codex, native or local), Anthropic (Claude) or Google (Antigravity), with a
-recorded reviewer counted only when its name carries its family (`gemini-…`,
-`gpt-…`, `claude-…`; an unrecognised name such as `council` counts as none). A passing review is `CLEAN`, or
-`FINDINGS` with every disposition recorded; open findings still block as
-before. `review.sh` adds the second review itself when a sensitive diff has
-only one family's pass, choosing a reviewer from a family that has not passed
-yet, and reports UNREVIEWED when no such reviewer is available (record an
-independent one with `review.sh record --independent`). Past the review round cap
-no full review runs automatically, sensitive or not: a fix verification is not a
-full review, so the gate stays UNREVIEWED until the author spends a round with
-`review.sh --fresh --reviewer <provider>` (only that provider runs) or records an
-independent review. That holds on every path, including a re-run and the
-scheduled sweep, once the diff's pass is a fix verification. CI reads the policy
-as merged on the PR's base ref, never from the PR head, so a PR cannot remove
-itself from the list; the policy file and the review workflow are on it. Why: on PR #2486 the first reviewer
-returned a bare CLEAN and a second family then found two P2 defects; the
-`agy` isolation hole (standing grants in `~/.gemini`) was found by one family
-and would have shipped on another's pass.
+path listed in `scripts/dev/review_policy.json` (OAuth, identity and auth, the
+MCP authorization gate, lease and effect authorization, the strong-model host
+adapter and Antigravity client, the dialectic reviewer's backends, and the
+review gate itself; `_boundary` in the file says what is deliberately left
+off) needs a passing full review from **two different model families** before
+the `review` check goes green: OpenAI (Codex, native or local), Anthropic
+(Claude) or Google (Antigravity). A recorded reviewer counts only when its name
+carries its family as a word (`gemini-council`, `gpt-5-reviewer`, `claude-…`);
+an unrecognised name such as `council` counts as none. A passing review is
+`CLEAN`, or `FINDINGS` with every disposition recorded; a fix-verification
+receipt is not a full review and never counts. Open findings still block as
+before. CI enforces the rule, reading the policy as merged on the PR's base
+ref, never from the PR head, so a PR cannot remove itself from the list; if
+the changed paths cannot be read, it requires the second family.
+
+`review.sh` never starts the second review itself. When a sensitive diff has
+only one family's pass it exits UNREVIEWED and prints the next step: the exact
+`review.sh --fresh --reviewer <provider>` commands for providers that are
+eligible now (not disabled, cooling down or exhausted on this diff), or that
+none is, with `review.sh record --independent` as the alternative. The author
+chooses; the round cap and the scheduled sweep are unchanged by this rule. (An
+automatic second run was tried and removed: it kept colliding with the round
+cap, fresh runs and the sweep, over a dozen review rounds on PR #2504.) Why the
+rule exists: on PR #2486 the first reviewer returned a bare CLEAN and a second
+family then found two P2 defects; the `agy` isolation hole (standing grants in
+`~/.gemini`) was found by one family and would have shipped on another's pass.
 
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
