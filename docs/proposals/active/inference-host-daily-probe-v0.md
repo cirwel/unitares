@@ -64,9 +64,9 @@ row below:
 
 | Host state | Action | Quota spent |
 |---|---|---|
+| A previous probe's timed-out execution is still live (see *Hung calls*) | Stop it and raise the host's finding (see *Hung calls*); no new probe. | 0 |
 | Not enabled (flag off, CLI missing, or in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. | 0 |
 | In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
-| A previous probe's timed-out execution is still live (see *Hung calls*) | No probe; raise the host's finding to **high**. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
 | Otherwise | Probe once. | one call |
 
@@ -107,9 +107,11 @@ a later failure of the same kind alerts at once. That one rule covers a
 success, a changed failure (a host that failed preflight yesterday and fails
 `auth` today closes the preflight record and opens an `auth` one), and a
 shared `gov-dispatch` failure that is no longer shared (its record closes, and
-any host still failing gets its own). The one exception is a host the run
-could not assess, because it was cooling or had a live hung execution. Its
-records stay as they are, since not looking is not evidence of recovery. A
+any host still failing gets its own). A host in a cooldown is partly assessed. A cooldown is recorded only from a
+call the provider answered (`dispatch_phase == "terminal"`), so it proves
+gov's dispatch path and the CLI both worked. The host's pre-CLI and
+unclassified records therefore close, while a record of the same class as the
+cooldown (an `auth` record under an `auth` cooldown) stays open. A
 host the operator has switched off has its records closed with the reason
 `not_enabled`: the operator has taken it out of rotation.
 Recovery is noticed on the next daily run, so a record can stay open up to a
@@ -124,14 +126,16 @@ judging the finding correct (roadmap Invariant 4, the reasoning
 A call that times out may still be running under the orchestrator, and a CLI
 stuck on a prompt would otherwise leave one more child each day. The probe
 stores the `orchestrator_execution_id` of every timed-out call in its state
-file. On the next run it polls the orchestrator's
-`/v1/executions/<id>/await` with a short wait, the same poll the host
-adapter's timeout hint names, to see whether that execution is still live. If it is, the probe does not start another call to that host. Instead
-it raises the host's finding to **high** with the age of the stuck execution,
-and leaves termination to the operator. The probe's only effect is its own one
-call per host. Killing an orchestrator child could end work the probe cannot
-see, such as another caller's execution on the same host, so it is not the
-probe's to do. So each host has at most one probe child alive
+file. On the next run, before anything else for that host, it reads the
+orchestrator's `GET /v1/executions/<id>` snapshot, which does not block. If
+that execution is still live, the probe stops it with
+`DELETE /v1/executions/<id>`, which the orchestrator documents as stopping
+exactly that execution. That id is the probe's own spawn, so no other
+caller's work is touched. The probe then raises the host's finding to
+**high** with the age of the hung call, and does not probe that host again
+that run. A hung call therefore lasts at most a day and never accumulates.
+If the stop fails, the finding says so and the id stays in the state file for
+the next run. So each host has at most one probe child alive
 at a time, however long the hang lasts. By
 existing routing, a finding goes to `#residents`, and a high one also goes to
 `#alerts`.
@@ -156,9 +160,12 @@ passive evidence. If they did, a probe at 04:15:05 would make the next day's
 day. So after each successful probe, the probe reads that host's `last_ok`
 from `list_inference_hosts` and stores the exact value in its state file. It
 skips a host only when `last_ok` is under 24 h old **and** differs from the
-stored value, meaning some other caller has succeeded since. Comparing values
-rather than clocks does not depend on the order in which gov and the script
-record their times. An idle host is probed every day. A busy host costs
+stored value, meaning some other caller has succeeded since. This works because
+`delegated_inference` awaits `clear_async` before it returns its response
+(it does today), so `last_ok` is already written when the probe reads it. The
+build keeps `last_ok` inside that awaited call, and a test asserts it: if the
+write were ever moved to a background task, the stored value could be the
+pre-probe one. An idle host is probed every day. A busy host costs
 nothing.
 
 ### Cost per day
@@ -210,7 +217,12 @@ nothing.
    and failover covers it. The alternative is a low-severity finding when one
    host has cooled for more than N days in a row.
 4. **Scope:** all three host adapters, or leave out one whose quota is tight.
-5. **Passive evidence (`last_ok`):** build it with the probe as proposed, or
+5. **Stopping a hung probe call:** the probe stops only its own timed-out
+   execution, by id, through the orchestrator's `DELETE`. This is proposed as
+   on, since it is the only thing that bounds a hung CLI. It is also the
+   probe's one act beyond its own call, so it can instead report only and
+   leave the stop to the operator.
+6. **Passive evidence (`last_ok`):** build it with the probe as proposed, or
    probe every enabled host every day, which is simpler but always costs about
    3 calls.
 
@@ -219,8 +231,9 @@ nothing.
 1. `last_ok` write-through in `host_availability.clear_async`, plus the field
    in `list_inference_hosts`. Tests cover the 48 h TTL and Redis being down.
 2. `scripts/ops/inference_host_probe.py` with injectable I/O, as in
-   `model_adjudicator.py`. Tests cover each row of both tables above, and
-   check that a cooling host and a `last_ok` host are never probed.
+   `model_adjudicator.py`. Tests cover each row of both tables above, check
+   that a cooling host and a `last_ok` host are never probed, and check that
+   only an execution id from the probe's own state file is ever stopped.
 3. The launchd plist template and census registration.
 4. A `--dry-run` against live gov, then a single supervised real run to
    measure `tokens_used` per host before the schedule is loaded.
