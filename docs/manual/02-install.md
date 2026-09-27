@@ -66,8 +66,20 @@ waiting for a peer or the operator. That also happens with a model when the
 thesis is about the review system itself (recusal), when the model runs past
 the review time budget, or when its synthesis does not approve.
 
-To use Ollama on the Docker host, install it there, pull a model, and name both
-in `.env`:
+The quickest way is to run, from the checkout, once Ollama is installed and has
+a model pulled:
+
+```bash
+make setup-model
+```
+
+It lists the models your Ollama has, writes your choice to `.env`, rebuilds the
+server, and checks that the server can reach the model. `--help` shows the
+non-interactive flags; `--no-docker` prints the two settings for a source
+install instead.
+
+To do the same by hand, install Ollama on the Docker host, pull a model, and
+name both in `.env`:
 
 ```bash
 ollama pull gemma4:latest

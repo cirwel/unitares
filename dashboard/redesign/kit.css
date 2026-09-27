@@ -135,6 +135,7 @@ a.card:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line-2)
 .card .num .of { font-size: var(--text-lg); color: var(--faint); }
 .card .sub { font-size: var(--text-xs); color: var(--muted); }
 .card .sub.up { color: var(--ok); } .card .sub.down { color: var(--danger); }
+.card .sub.warn { color: var(--warn-text); }
 .card.wide { grid-column: span 2; }
 .card.accent-rule { border-top: 2px solid var(--accent); }
 
