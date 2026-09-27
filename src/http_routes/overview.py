@@ -511,7 +511,9 @@ async def http_bootstrap_silent(request):
 
 
 # How each incident type reaches the audit trail. An empty or old list reads as
-# a quiet fleet unless the reader knows whether anything was looking.
+# a quiet fleet unless the reader knows how the rows are produced. Neither
+# producer records its runs here, so absence is stated as undetermined, never
+# as "nothing was looking" or "nothing was found".
 # anomaly_detected is written only when a caller runs detect_anomalies
 # (observe(action='anomalies')); nothing schedules it. Until 2026-09-26 the
 # dashboard's Anomalies card called it on every refresh, so the feed looked
@@ -520,12 +522,20 @@ INCIDENT_PRODUCERS = {
     "anomaly_detected": {
         "cadence": "on_demand",
         "written_by": "detect_anomalies",
-        "absence_means": "no caller ran detect_anomalies, not that no anomaly exists",
+        # Two states share an empty feed and this endpoint cannot tell them
+        # apart: nobody ran detect_anomalies, or a run found nothing new.
+        "absence_means": (
+            "undetermined: either no caller ran detect_anomalies, or a run "
+            "found no new anomaly; this feed records findings, not runs"
+        ),
     },
     "stuck_detected": {
         "cadence": "scheduled",
         "written_by": "detect_stuck_agents (5-minute background sweep)",
-        "absence_means": "the sweep found no newly stuck agent",
+        "absence_means": (
+            "no newly stuck agent was recorded; the sweep is scheduled, but "
+            "this feed records findings, not runs, so it cannot show a sweep ran"
+        ),
     },
 }
 

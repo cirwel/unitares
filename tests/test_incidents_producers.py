@@ -36,7 +36,9 @@ def audit(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_an_empty_anomaly_feed_says_nothing_was_looking(audit):
+async def test_an_empty_anomaly_feed_is_undetermined_not_quiet(audit):
+    """Review round 1 on #2535: a run that found nothing and no run at all
+    leave the same empty feed, so the response must not pick one."""
     from src.http_routes.overview import http_incidents
 
     body = json.loads((await http_incidents(_request())).body)
@@ -44,11 +46,16 @@ async def test_an_empty_anomaly_feed_says_nothing_was_looking(audit):
     anomalies = body["producers"]["anomaly_detected"]
     assert anomalies["cadence"] == "on_demand"
     assert anomalies["newest_at"] is None
-    assert "not that no anomaly exists" in anomalies["absence_means"]
+    assert anomalies["absence_means"].startswith("undetermined")
+    assert "findings, not runs" in stuck_absence(body)
     stuck = body["producers"]["stuck_detected"]
     assert stuck["cadence"] == "scheduled"
     assert stuck["newest_at"] == "2026-09-24T13:04:15+00:00"
     assert body["count"] == 1
+
+
+def stuck_absence(body):
+    return body["producers"]["stuck_detected"]["absence_means"]
 
 
 @pytest.mark.asyncio
