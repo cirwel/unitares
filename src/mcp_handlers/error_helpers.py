@@ -6,53 +6,64 @@ Standardizes error responses with recovery guidance and context.
 
 from typing import Dict, Any, Optional, Sequence
 from mcp.types import TextContent
+from .identity_bootstrap import SET_DISPLAY_NAME_CALL
 from .utils import error_response
+
+# Recovery for a caller that has no identity yet, then names it. The name
+# call carries client_session_id: with only name= identity() resolves from
+# transport signals, which can name a co-located agent instead.
+_BIND_THEN_NAME_ACTION = (
+    "Bind an identity with start_session(force_new=true) if this process has "
+    f"none, then set a cosmetic name with {SET_DISPLAY_NAME_CALL}"
+)
+_BIND_THEN_NAME_WORKFLOW = [
+    "1. If this process has no identity yet, call start_session(force_new=true) "
+    "and keep the client_session_id it returns",
+    f"2. Call {SET_DISPLAY_NAME_CALL} with that id to set your display name",
+    "3. Then call this tool again",
+]
 
 
 # Standard recovery patterns for common error types
 # Updated Dec 2025: API keys deprecated, UUID-based identity is now primary
 RECOVERY_PATTERNS = {
     "agent_not_found": {
-        "action": "Call any tool to auto-create identity, then use identity() to name yourself",
-        "related_tools": ["identity", "agent"],
-        "workflow": [
-            "1. Call process_agent_update() or any tool - identity auto-creates",
-            "2. Call identity(name='your_name') to set your display name",
-            "3. Then call this tool again"
-        ]
+        "action": _BIND_THEN_NAME_ACTION,
+        "related_tools": ["start_session", "identity", "agent"],
+        "workflow": list(_BIND_THEN_NAME_WORKFLOW),
     },
     "agent_not_registered": {
-        "action": "Call any tool to auto-create identity, then use identity() to name yourself",
-        "related_tools": ["identity", "agent"],
-        "workflow": [
-            "1. Call process_agent_update() or any tool - identity auto-creates",
-            "2. Call identity(name='your_name') to set your display name",
-            "3. Then call this tool again"
-        ]
+        "action": _BIND_THEN_NAME_ACTION,
+        "related_tools": ["start_session", "identity", "agent"],
+        "workflow": list(_BIND_THEN_NAME_WORKFLOW),
     },
     "authentication_failed": {
-        "action": "Identity should auto-bind on first tool call",
+        "action": "Pass the client_session_id start_session returned to this process",
         "related_tools": ["identity", "health_check"],
         "workflow": [
-            "1. Call identity() to check your current binding",
-            "2. If unbound, call any tool - identity auto-creates",
-            "3. Retry your original request"
+            # An argument-less identity() mints before it reads, so it cannot
+            # report the binding this process already has.
+            "1. Call identity(client_session_id='...') to check your current binding",
+            "2. If this process never called start_session, call "
+            "start_session(force_new=true) first",
+            "3. Retry your original request with that client_session_id"
         ]
     },
     "authentication_required": {
-        "action": "Identity auto-binds on first tool call",
-        "related_tools": ["identity", "process_agent_update"],
+        "action": "Pass the client_session_id start_session returned to this process",
+        "related_tools": ["start_session", "identity", "process_agent_update"],
         "workflow": [
-            "1. Call any tool - identity auto-binds from session",
-            "2. Use identity(name='your_name') to set your display name",
-            "3. Retry your original request"
+            "1. If this process has no identity yet, call start_session(force_new=true) "
+            "and keep the client_session_id it returns",
+            f"2. To set a display name, call {SET_DISPLAY_NAME_CALL} with that id",
+            "3. Retry your original request with that client_session_id"
         ]
     },
     "ownership_required": {
         "action": "You can only modify your own resources",
         "related_tools": ["identity", "agent"],
         "workflow": [
-            "1. Call identity() to verify your bound identity",
+            "1. Call identity(client_session_id='...') to verify your bound identity",
             "2. Ensure the resource belongs to your agent_uuid",
             "3. You cannot modify resources owned by other agents"
         ]
@@ -126,7 +137,7 @@ RECOVERY_PATTERNS = {
         "action": "Provide active session continuity metadata or re-onboard explicitly",
         "related_tools": ["identity", "onboard"],
         "workflow": [
-            "1. Call identity() to inspect the current binding",
+            "1. Call identity(client_session_id='...') to inspect the current binding",
             "2. Include continuity_token for a proof-owned UUID rebind when available",
             "3. For a fresh process, call onboard(force_new=true) and use parent_agent_id for lineage"
         ]
@@ -135,7 +146,7 @@ RECOVERY_PATTERNS = {
         "action": "Verify your session identity matches",
         "related_tools": ["identity", "admin"],
         "workflow": [
-            "1. Call identity() to check your resolved identity",
+            "1. Call identity(client_session_id='...') to check your resolved identity",
             "2. Ensure client_session_id or continuity_token matches your active session",
             "3. If mismatch persists, call onboard(force_new=true) and declare parent_agent_id when inheriting work",
             "4. Retry your request with the resolved binding"
@@ -163,7 +174,7 @@ RECOVERY_PATTERNS = {
         "action": "Verify you have required permissions",
         "related_tools": ["identity", "get_governance_metrics"],
         "workflow": [
-            "1. Call identity() to verify your identity",
+            "1. Call identity(client_session_id='...') to verify your identity",
             "2. Check if operation requires specific permissions",
             "3. Some operations require registered agent (call onboard() first)",
             "4. Retry after verifying permissions"

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from src.governance_glossary import EISV_INLINE_SUMMARY
 from src.tool_meta import tool_relationships
+from src.mcp_handlers.identity_bootstrap import SET_DISPLAY_NAME_CALL
 
 
 # Deprecation registry surfaced by both list_tools (via TOOL_RELATIONSHIPS)
@@ -346,12 +347,12 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "file": "export(action=\"file\", format=\"json\", filename=\"agent_history\")"
     },
     "get_governance_metrics": {
-        "check_state": "get_governance_metrics()  # uses bound identity",
+        "check_state": "get_governance_metrics(client_session_id=\"<your client_session_id>\")  # Reads YOUR state; with no proof the read returns unbound",
         "with_history": "get_governance_metrics(include_history=true)"
     },
     "identity": {
         "check_identity": "identity(client_session_id=\"<your client_session_id>\")  # Reports on YOUR binding; with no proof argument the call is gated to a fresh mint",
-        "name_yourself": "identity(name=\"my_agent\")  # Set your display name"
+        "name_yourself": f"{SET_DISPLAY_NAME_CALL}  # Set your display name; without client_session_id the call can resolve a co-located agent"
     },
     "list_agents": {
         "all_agents": "list_agents()  # List all agents with metadata",
