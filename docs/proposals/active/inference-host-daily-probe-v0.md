@@ -65,17 +65,24 @@ row below:
 | Host state | Action | Quota spent |
 |---|---|---|
 | Not enabled (flag off, CLI missing, or in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. | 0 |
-| In a cooldown (`cooldown` field set) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
+| In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
+| A previous probe's timed-out execution is still live (see *Hung calls*) | No probe; raise the host's finding to **high**. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
 | Otherwise | Probe once. | one call |
 
 The probe prompt is `Reply with exactly: OK`, with `timeout_s=120` and no
-retry. Hosts are probed one after another, never in parallel. If a probe fails
-before any CLI ran (`dispatch_phase` is `preflight` or `spawn_rejected`), the
-fault is gov's orchestrator, which every host shares. The run then stops,
-posts a single finding with fingerprint `sha("orchestrator", failure_class)`
-instead of one per host, and probes no further host that day. Probing the
-rest would only spend quota to repeat the same failure.
+retry. Hosts are probed one after another, never in parallel.
+
+A failure before any CLI ran (`dispatch_phase` is `preflight` or
+`spawn_rejected`) may be local to one host or shared by all of them. Preflight
+covers a missing CLI for that host and also an unset orchestrator bearer. A
+spawn can be rejected for one host's spec or because the orchestrator is
+unhealthy. The phase alone cannot tell which, so the probe does not stop
+early. It checks every host, which costs no quota for pre-CLI failures because
+no provider was called. When two or more hosts fail at the same pre-CLI phase
+with the same error, it posts one shared finding with fingerprint
+`sha("gov-dispatch", phase, error)` in place of per-host findings. Any other
+pre-CLI failure stays a per-host finding.
 
 ### What counts as a failure, and what it reports
 
@@ -84,7 +91,7 @@ The probe reads the failure class that `delegate_inference` already returns:
 | Result | Finding | Why |
 |---|---|---|
 | Success | none; log latency, tokens, model | |
-| Failure classified `quota` | none | `delegate_inference` records the cooldown itself; the limit resets and failover covers it. |
+| Failure classified `quota` | none | `delegate_inference` records the cooldown itself, until the provider's stated reset or, when none is stated, on a backoff from 30 min doubling to 6 h. The limit resets, and failover covers it meanwhile. |
 | Failure classified `auth` | **high** | A logged-out CLI does not recover on its own; the operator has to log in. |
 | Unclassified failure (malformed envelope, nonzero exit, spawn rejected, orchestrator down) | **medium** | The case nothing else records. |
 | Timeout (`possibly_running`) | **medium**, noted as possibly still running | See *Hung calls* below. |
@@ -94,10 +101,15 @@ fingerprinted and deduplicated path Sentinel, Watcher and the doctors use.
 They use event type `inference_host_finding` and fingerprint
 `sha(host_id, failure_class)`, and take `doctor_findings.py`'s doubling
 re-alert backoff so a host that stays broken does not re-post daily.
-Recovery follows `doctor_findings.py` too. When a host that has an open
-finding succeeds, whether through a probe or through passive evidence, the
-local record for that finding is closed and its backoff is dropped, so a
-later failure of the same class alerts at once. That closure is local state
+Recovery follows `doctor_findings.py` too, and it is keyed by host, not by
+fingerprint. A success carries no failure class, so when a host succeeds,
+whether through a probe or through passive evidence, the probe closes every
+open record for that host, whatever its class, and drops their backoff. A
+later failure then alerts at once. A success on any host also closes the
+shared `gov-dispatch` record, because it proves gov's dispatch path works.
+Recovery is noticed on the next daily run, so a record can stay open up to a
+day after a host recovers. That delay costs nothing more: the backoff already
+holds back re-posting, and the finding was posted once. That closure is local state
 only. It emits no `outcome_event`, because a probe passing is not an operator
 judging the finding correct (roadmap Invariant 4, the reasoning
 `doctor_findings.py` records at the same step).
@@ -111,8 +123,10 @@ file. On the next run it polls the orchestrator's
 `/v1/executions/<id>/await` with a short wait, the same poll the host
 adapter's timeout hint names, to see whether that execution is still live. If it is, the probe does not start another call to that host. Instead
 it raises the host's finding to **high** with the age of the stuck execution,
-leaving termination to the operator, since killing orchestrator children is
-outside a diagnose-only script. So each host has at most one probe child alive
+and leaves termination to the operator. The probe's only effect is its own one
+call per host. Killing an orchestrator child could end work the probe cannot
+see, such as another caller's execution on the same host, so it is not the
+probe's to do. So each host has at most one probe child alive
 at a time, however long the hang lasts. By
 existing routing, a finding goes to `#residents`, and a high one also goes to
 `#alerts`.
