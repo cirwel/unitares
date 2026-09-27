@@ -253,7 +253,8 @@ settings when its own are unset.
   operator names it.
 - No change to the host-adapter lane (`delegate_inference`,
   `consult(effort='thorough')`), which stays an operator extension.
-- No change to `consult`'s contract or its route postconditions.
+- No change to `consult`'s contract. Its route postconditions change only so
+  they accept the resolved primary and fallback routes (step 3).
 
 ## 4. Staging
 
@@ -298,15 +299,17 @@ release note says what to set first. One rule orders them: no step may let a req
    the key, including the model-listing requests of `unitares model`, the
    doctor check and (from step 3) the registry probe, or an authenticated
    endpoint answers inference but reads as down during setup and diagnosis.
-   Compose maps `UNITARES_MODEL_API_KEY` into `governance-mcp`, and only that
-   name: Compose forwards variables it names, not ones chosen at run time, so a
+   This step's settings join the list in 2.1.2, so Compose and the LaunchAgent
+   template carry `UNITARES_MODEL_API_KEY_ENV`,
+   `UNITARES_MODEL_ALLOW_INSECURE_HTTP` and the key value under its default
+   name. For the key value that default name is the only one Compose carries:
+   Compose forwards variables it names, not ones chosen at run time, so a
    Compose install keeps its key in `UNITARES_MODEL_API_KEY`, and the manual
    says so. A custom `UNITARES_MODEL_API_KEY_ENV` is for source installs and
    for the orchestrator's own environment. Move
    all six constructions onto the client (the four in the server, the
    reviewer's `local` backend and the local resident runner), forward the key's
-   name to the orchestrated reviewer as 2.6 describes, add the key-name entry
-   to the LaunchAgent template, and keep `/api/chat` behind the step-1 Ollama
+   name to the orchestrated reviewer as 2.6 describes, and keep `/api/chat` behind the step-1 Ollama
    detection. Only now does the manual describe authenticated
    endpoints.
 3. **Discovery and fallback.** The `/models` availability probe for the
