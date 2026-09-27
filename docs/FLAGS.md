@@ -46,7 +46,6 @@ additions merge cleanly. -->
 | `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
-| `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | src/http_routes/overview.py |
 | `UNITARES_AUTOSELECT_REVIEWER` | `''` | Gate for reviewer auto-selection | src/mcp_handlers/dialectic/reviewer.py |
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
@@ -120,7 +119,7 @@ additions merge cleanly. -->
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
-| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+15 more) |
+| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+16 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |

@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from src.http_api import _vigil_agent_id, _vigil_stats
+from agents.vigil.routes import _vigil_agent_id, _vigil_stats
 
 
 # Anchor on real wall-clock so offsets stay consistent with `time.time()`

@@ -3066,8 +3066,8 @@ def check_anchor_all_positive_generator(db_url: str) -> CheckResult:
             detail=(
                 "A family that has never produced the opposite verdict is the "
                 "all-positive (or all-negative) generator the exogenous-anchor "
-                "contract forbids — see the invariant on "
-                "_SENTINEL_FINDING_EVENT_TYPES in src/http_routes/sentinel.py. "
+                "contract forbids (the invariant the retired operator queue "
+                "stated, 2026-09-27). "
                 "Before treating this as detector quality, rule out that the "
                 "opposite verdict is UNREACHABLE on every surface: check that the "
                 "outcome_type is present in VALID_OUTCOME_TYPES and in the "

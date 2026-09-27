@@ -94,8 +94,6 @@ NOT_IDENTITIES: dict[str, str] = {
         "test_emit_rejects_unknown_service; not agent labels",
     "src/coordination_failure_emit.py":
         "same coordination-protocol service ids as coordination_events.py",
-    "src/http_routes/sentinel.py":
-        "producer_ref protocol value, not an agent label lookup",
     "src/watcher_state_reader.py":
         "legacy filesystem path component (data/watcher) read only for "
         "migration off the pre-#595 location",
@@ -109,13 +107,10 @@ NOT_IDENTITIES: dict[str, str] = {
 # would be the same failure it exists to catch: an instrument reporting health
 # it did not establish. Fix an entry and delete its line; never add one to
 # quiet a NEW leak.
-KNOWN_COUPLINGS: dict[str, str] = {
-    "src/http_routes/vigil.py":
-        "resident-specific route module that dispatches on label.lower() == "
-        '"vigil"; mounted only with the reference-residents route pack '
-        "(src/http_routes/packs.py), so an install without it carries no "
-        "endpoint, but the name dispatch itself remains",
-}
+# (Empty since 2026-09-27: the one entry, the resident-specific Vigil route
+# module, moved to agents/vigil/routes.py, the reference-resident zone outside
+# this guard's scope, and mounts only with the reference-residents route pack.)
+KNOWN_COUPLINGS: dict[str, str] = {}
 
 # Match only when the literal IS a name, not when it merely contains one.
 #

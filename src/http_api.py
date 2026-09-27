@@ -107,7 +107,6 @@ from src.http_routes.telemetry import (
 )
 from src.http_routes.overview import (
     http_agent_history,
-    http_automations,
     http_tier_distribution,
     http_bootstrap_silent,
     http_incidents,
@@ -120,26 +119,11 @@ from src.http_routes.metrics_api import (
     http_get_metrics_catalog,
     http_get_progress_flat_recent,
 )
-from src.http_routes.watcher import (
-    _watcher_findings_path,
-    _WATCHER_DAILY_WINDOW_DAYS,
-    _watcher_summary_from_rows,
-    http_watcher_summary,
-)
-from src.http_routes.sentinel import (
+from src.http_routes.findings import (
     _FINDING_SEVERITIES,
     _FINDING_TYPE_SUFFIX,
     _FINDING_REQUIRED_FIELDS,
-    _SENTINEL_FINDING_EVENT_TYPES,
-    _SENTINEL_BACKLOG_DEFAULT_SEVERITIES,
-    _SENTINEL_DEFAULT_WINDOW_HOURS,
-    _SENTINEL_DEFAULT_RECENT_LIMIT,
-    _sentinel_summary_from_events,
-    _sentinel_event_from_audit,
-    _sentinel_events_durable,
-    http_sentinel_summary,
     http_record_finding,
-    http_sentinel_backlog,
     _FORCED_RELEASE_MESSAGE_PREFIX,
     _UUID_RE,
     _assess_forced_release_row,
@@ -147,15 +131,9 @@ from src.http_routes.sentinel import (
     _fetch_lease_rows,
     _attach_forced_release_evidence,
 )
-from src.http_routes.vigil import (
-    _VIGIL_DEFAULT_WINDOW_HOURS,
-    _VIGIL_DEFAULT_RECENT_LIMIT,
-    _VIGIL_CYCLE_HISTORY_LIMIT,
-    _vigil_agent_id,
-    _vigil_cycle_history,
-    _vigil_stats,
-    http_vigil_summary,
-)
+# The reference residents' routes (agents/*/routes.py) and the automation
+# census route (scripts/ops/automation_census_route.py) are not imported here:
+# src/http_routes/packs.py loads them only when their route pack is enabled.
 from src.http_routes.substrate import (
     http_record_bridge_event,
     http_bridge_summary,

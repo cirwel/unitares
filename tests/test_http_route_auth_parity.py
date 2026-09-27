@@ -93,10 +93,6 @@ ROUTE_REGISTRARS = (
     "src.http_api",
     "src.mcp_handlers.wave3a_probe",
     "src.mcp_handlers.wave3a_admin",
-    # Opt-in route packs (UNITARES_ROUTE_PACKS). Read even though the shipped
-    # default mounts none: a deployment that enables a pack exposes these
-    # routes, so each must be gated like the rest.
-    "src.http_routes.packs",
 )
 
 
@@ -114,6 +110,12 @@ def _registered_get_routes() -> list[tuple[str, object]]:
         mod = importlib.import_module(mod_name)
         source = inspect.getsource(mod)
         out.extend(_get_routes_in(mod, source))
+    # Opt-in route packs (UNITARES_ROUTE_PACKS), resolved through their table.
+    # Read even though the shipped default mounts none: a deployment that
+    # enables a pack exposes these routes, so each must be gated like the rest.
+    from src.http_routes import packs
+    for routes in packs.pack_routes().values():
+        out.extend((r.path, r.endpoint) for r in routes if "GET" in (r.methods or ()))
     return out
 
 
