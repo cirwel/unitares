@@ -731,3 +731,88 @@ async def test_failed_delegation_names_its_privacy_class(monkeypatch):
     assert details["provider_kind"] == "claude_host_adapter"
     assert details["privacy_class"] == "operator_authorized_external"
 
+
+
+def _failed_adapter(error, *, phase="terminal"):
+    async def fake_invoke(host_id, prompt, **kwargs):
+        return {
+            "ok": False, "host_id": host_id, "dispatch_phase": phase,
+            "status": "malformed", "exit_status": 1, "execution_id": "ex-1",
+            "error": error, "provenance": {},
+        }
+    return fake_invoke
+
+
+@pytest.mark.asyncio
+async def test_a_usage_limit_starts_a_cooldown_with_the_providers_reset(monkeypatch):
+    from src.mcp_handlers.support import host_availability
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _h: _claude_host())
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter(
+        "Claude CLI reported an error result: Claude AI usage limit reached|4102444800"))
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid=None))
+    unavailable = outcome.failure.details["provider_unavailable"]
+    assert unavailable["reason"] == "quota"
+    assert unavailable["retry_after_source"] == "provider"
+    assert outcome.failure.possibly_running is False
+    assert host_availability.cooldown("claude:host-adapter") is not None
+
+    # While cooling down, the next call is refused before any spawn and says when.
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter("must not run"))
+    again = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid=None))
+    assert again.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+    assert again.failure.execution_started is False
+    assert "retry after" in again.failure.recovery["action"]
+
+
+@pytest.mark.asyncio
+async def test_our_own_spawn_rejection_is_not_a_provider_outage(monkeypatch):
+    from src.mcp_handlers.support import host_availability
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _h: _claude_host())
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter(
+        "spawn 401: unauthorized", phase="spawn_rejected"))
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid=None))
+    assert "provider_unavailable" not in outcome.failure.details
+    assert host_availability.cooldown("claude:host-adapter") is None
+
+
+@pytest.mark.asyncio
+async def test_an_unrecognised_failure_takes_no_host_out_of_rotation(monkeypatch):
+    from src.mcp_handlers.support import host_availability
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _h: _claude_host())
+    monkeypatch.setattr(di, "invoke_host_adapter", _failed_adapter(
+        "Host CLI returned a malformed terminal answer envelope"))
+    await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid=None))
+    assert host_availability.cooldown("claude:host-adapter") is None
+
+
+@pytest.mark.asyncio
+async def test_a_success_clears_the_cooldown(monkeypatch):
+    from src.mcp_handlers.support import host_availability
+
+    host_availability.record_unavailable(
+        "claude:host-adapter", {"reason": "quota", "stated_reset": None}, now=0.0)
+    assert host_availability.cooldown("claude:host-adapter") is None  # lapsed
+    assert host_availability._state["claude:host-adapter"]["failures"] == 1
+
+    async def ok_invoke(host_id, prompt, **kwargs):
+        return {"ok": True, "host_id": host_id, "text": "fine", "exit_status": 0,
+                "execution_id": "ex", "provenance": {"terminal_answer": {
+                    "schema": "unitares.terminal_answer.v1", "status": "complete"}}}
+
+    async def no_track(*a, **k):
+        return None
+
+    monkeypatch.setattr(di, "get_inference_host", lambda _h: _claude_host())
+    monkeypatch.setattr(di, "invoke_host_adapter", ok_invoke)
+    monkeypatch.setattr(di, "_track_energy", no_track)
+    outcome = await di.run_delegated_inference(di.DelegatedInferenceRequest(
+        prompt="hi", requesting_agent_uuid=None))
+    assert outcome.ok
+    assert "claude:host-adapter" not in host_availability._state

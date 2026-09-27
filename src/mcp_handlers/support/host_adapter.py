@@ -36,6 +36,8 @@ from typing import Any, Dict, List, Optional
 
 import logging
 
+from . import host_availability
+
 logger = logging.getLogger(__name__)
 
 
@@ -281,14 +283,18 @@ def _orchestrator_url() -> str:
 
 def host_adapter_available(host_id: str) -> bool:
     """A host adapter is available only when: opt-in flag on, its CLI resolves,
-    and a bearer token for the orchestrator is configured. Orchestrator reachability
-    is checked at call time (fail-safe), not here, to keep this cheap for the registry."""
+    a bearer token for the orchestrator is configured, and the provider is not
+    in a cooldown after a quota or auth failure (host_availability). Orchestrator
+    reachability is checked at call time (fail-safe), not here, to keep this
+    cheap for the registry."""
     if not host_adapter_enabled():
         return False
     spec = _HOST_COMMANDS.get(host_id)
     if spec is None:
         return False
     if host_id in host_adapter_disabled_hosts():
+        return False
+    if host_availability.cooldown(host_id) is not None:
         return False
     if resolve_host_cli(host_id) is None:
         return False
@@ -850,7 +856,12 @@ async def invoke_host_adapter(
         if family == "anthropic_claude":
             if provider_metadata.get("provider_is_error"):
                 adapter_ok = False
-                adapter_error = "Claude CLI reported an error result"
+                # Carry the provider's own words (a usage limit and its reset
+                # time, a logged-out CLI) so the failure can be classified.
+                detail = provider_text.strip().replace("\n", " ")[:300]
+                adapter_error = "Claude CLI reported an error result" + (
+                    f": {detail}" if detail else ""
+                )
         elif family in ("openai_codex", "google_antigravity"):
             provider_errors = provider_metadata.get("provider_errors")
             if isinstance(provider_errors, list) and provider_errors:

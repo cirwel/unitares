@@ -867,3 +867,14 @@ def set_governance_config(monkeypatch):
         import config.governance_config as cfg
         monkeypatch.setattr(cfg.GovernanceConfig, attr, value)
     return _set
+
+
+@pytest.fixture(autouse=True)
+def _reset_host_availability_cooldowns():
+    """Provider cooldowns are process-global; one test's recorded usage limit
+    must not make a host unavailable in the next."""
+    from src.mcp_handlers.support import host_availability
+
+    host_availability._reset_for_tests()
+    yield
+    host_availability._reset_for_tests()
