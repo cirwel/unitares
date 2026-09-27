@@ -155,7 +155,7 @@ async def execute_nested_http_tool(
         # never the generic MCP dispatch pipeline, so `inject_identity` never
         # runs and no `identity_mismatch` is possible here. That is
         # deliberate and matches the shipped contract (interface contract
-        # 1.21.0 / commit 3d130aca8: "get_governance_metrics over REST runs a
+        # 1.21.0: "get_governance_metrics over REST runs a
         # direct handler with no inject step and answers the named agent for
         # any caller", both direct and through use_tool). `inject_identity`
         # DOES run, and DOES refuse a mismatch, for the actual MCP-protocol

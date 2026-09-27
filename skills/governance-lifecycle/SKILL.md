@@ -162,10 +162,10 @@ the field that kept it.
 One response is deliberately **not** that envelope. When a call is refused for
 identity, you get the typed refusal contract instead: `status`
 (`identity_required` or `lineage_declaration_required`), `hint`, `next_step`,
-`safe_options`, `do_not`, and `rollout_flag`. There is no `next_action` —
+`safe_options`, `do_not`, `rollout_flag`, and `refused: true`. There is no `next_action` —
 read `next_step` and `safe_options`. It carries `success: true`, because it is
 a structured refusal rather than a transport error, so branching on
-`success is False` will miss it; branch on `status` or `rollout_flag`. The target
+`success is False` will miss it; branch on `refused`, `status` or `rollout_flag`. The target
 tool handler did not run. Treat that as a no-handler-execution receipt, not a
 blanket no-write receipt: resolver-failure paths may already have performed
 identity-resolution bookkeeping. Follow `next_step` rather than retrying the
