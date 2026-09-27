@@ -385,3 +385,38 @@ async def test_authority_sees_past_the_page_on_the_default_path():
     await _filter_and_rerank_candidates(state)
 
     assert [row.id for row in state.results] == ["finding-1", "m0"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_windows_widen_when_authority_ranking_is_on(monkeypatch):
+    # Review on #2537 (P1, round 2): widening only the post-retrieval cap
+    # could not help while semantic_search was asked for limit * 2 rows.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_text_search,
+    )
+
+    monkeypatch.delenv("UNITARES_ENABLE_HYBRID", raising=False)
+    monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "0")
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(4)
+    ]
+    native = _discovery("finding-1")
+    scored = [(row, 0.82 - i * 0.01) for i, row in enumerate(channel)] + [(native, 0.60)]
+
+    async def semantic_search(query, *, limit, min_similarity, **_):
+        return scored[:limit]
+
+    graph = AsyncMock()
+    graph.semantic_search = semantic_search
+    graph.full_text_search = AsyncMock(return_value=[])
+    request = _parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = _KnowledgeSearchState(request=request, graph=graph)
+    await _run_text_search(state)
+    assert [row.id for row in state.results] == ["finding-1", "m0"]
+
+    raw = _parse_knowledge_search_request({"query": "review", "limit": 2, "authority_mode": "all"})
+    raw_state = _KnowledgeSearchState(request=raw, graph=graph)
+    await _run_text_search(raw_state)
+    assert [row.id for row in raw_state.results] == ["m0", "m1"]
