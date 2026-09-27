@@ -125,6 +125,9 @@ the rest. An unlabelled finding is treated as [P1].
 
 The repository's house rules are in AGENTS.md; a violation of one is a finding.
 
+Before the VERDICT line, always say what you examined and what you verified,
+even when you find nothing: a verdict with no reasoning is not recorded.
+
 End with exactly one line and nothing after it:
 VERDICT: CLEAN
 or
@@ -644,6 +647,9 @@ finding and say what input or state makes it go wrong. Do not report style
 preferences. If the material is not enough to judge something, say so
 rather than assuming it is fine.
 
+Before the VERDICT line, always say what you examined and what you verified,
+even when you find nothing: a verdict with no reasoning is not recorded.
+
 End with exactly one line and nothing after it:
 VERDICT: CLEAN
 or
@@ -766,6 +772,22 @@ def dispositions_complete(text: str, n: int) -> bool:
     """
     numbered = {int(m) for m in re.findall(r"^\s*#?(\d+)[.):]\s+\S", text or "", re.M)}
     return n > 0 and all(k in numbered for k in range(1, n + 1))
+
+
+#: A verdict counts only with this much reasoning before it (non-whitespace
+#: characters). Operator-visible judgement call, 2026-09-27: Antigravity twice
+#: returned a bare "VERDICT: CLEAN" (PR #2486 round 1 after reading ~97K tokens;
+#: an independent review of the same diff then found two P2s), and a verdict
+#: nobody can check is not a review. 200 is a floor for "said what it looked
+#: at", well under any real review seen so far.
+REVIEW_MIN_REASONING_CHARS = 200
+
+
+def has_reasoning(text: str) -> bool:
+    """True when the text before the final VERDICT line says something."""
+    lines = [ln for ln in (text or "").splitlines() if ln.strip()]
+    body = "".join("".join(ln.split()) for ln in lines[:-1])
+    return len(body) >= REVIEW_MIN_REASONING_CHARS
 
 
 def parse_verdict(text: str) -> tuple[str, int] | None:
@@ -970,7 +992,7 @@ def _antigravity_text(stdout: str) -> str:
 #: of them 3x hit it again each time (agy re-reasons), hence one try only.
 #: File mode (#2476) makes agy reach for grep/find more often: its own review
 #: of #2476 was denied three times in a row, so denials get a third resume.
-AGY_RESUME_LIMITS = {"denied": 3, "truncated": 1}
+AGY_RESUME_LIMITS = {"denied": 3, "truncated": 1, "bare": 1}
 AGY_RESUME_PROMPTS = {
     "denied": (
         "A tool call was denied. This review session cannot run commands, and file "
@@ -983,6 +1005,11 @@ AGY_RESUME_PROMPTS = {
         "Your previous answer was cut off by the output limit before it was delivered "
         "in full. Send your complete final review again from the beginning: every "
         "finding, then the VERDICT line. Do not investigate further; write it out."
+    ),
+    "bare": (
+        "Your reply was only the VERDICT line, which cannot be checked. Write the "
+        "review: which files and behaviours you examined, what you verified in each, "
+        "and every finding with file:line, then the VERDICT line."
     ),
 }
 #: A resume needs at least this much budget left to be worth starting.
@@ -1012,9 +1039,12 @@ def _agy_stall(stdout: str, stderr: str) -> tuple[str | None, str | None]:
             return "truncated", cid
         return None, None
     denied = data.get("denied_actions")
-    if not str(data.get("response") or "").strip() and (
+    response = str(data.get("response") or "")
+    if not response.strip() and (
             _AGY_DENIED_MARK in stderr or (isinstance(denied, list) and denied)):
         return "denied", cid
+    if parse_verdict(response) is not None and not has_reasoning(response):
+        return "bare", cid
     return None, None
 
 
@@ -1143,6 +1173,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
         failure = {
             "truncated": "output limit not recovered",
             "denied": "no answer after a denied command",
+            "bare": "verdict without reasoning",
         }[stall] + f" after {resumes.get(stall, 0)} resume(s)"
     if failure is not None:
         if failure.startswith("could not start"):
@@ -1610,6 +1641,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
+    if parsed is not None and not has_reasoning(text):
+        # Not a review: fall back to the next reviewer instead of recording it.
+        parsed, note = None, "verdict without reasoning"
     if parsed is None:
         remember_unavailable(reviewer, text, note)
         rec = Record(key, "FAILED", 0, False, reviewer)
