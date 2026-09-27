@@ -62,11 +62,14 @@ def _compact_eisv_event(event: dict) -> dict:
             out[key] = event[key]
 
     # The verdict, without the ~1.9 KB of reasoning around it. Kept nested so
-    # the compact event stays a strict subset of the full one: the Overview's
-    # recent-check-ins feed reads `decision.action` from either shape.
+    # the compact event stays a strict subset of the full one. `sub_action`
+    # travels with `action`: a guided check-in is action="proceed",
+    # sub_action="guide", and the verdict is sub_action when present.
     decision = event.get("decision")
-    if isinstance(decision, dict) and "action" in decision:
-        out["decision"] = {"action": decision["action"]}
+    if isinstance(decision, dict):
+        trimmed = {k: decision[k] for k in ("action", "sub_action") if k in decision}
+        if trimmed:
+            out["decision"] = trimmed
 
     telemetry = event.get("eisv_telemetry") or event.get("telemetry")
     if isinstance(telemetry, dict):

@@ -257,3 +257,31 @@ def test_agents_is_empty_not_an_error_on_a_fresh_server():
     http_api.broadcaster_instance.event_history.clear()
     body = _agents_client().get("/v1/eisv/agents").json()
     assert body["count"] == 0 and body["agents"] == []
+
+
+# --- verdict = sub_action when present (review #2502) ------------------------
+
+def test_guided_checkin_counts_as_guide_not_proceed():
+    """A guided check-in is decision.action="proceed", sub_action="guide" — the
+    rule record_agent_state persists by. Reading `action` alone made the
+    Overview's guide count zero while the fleet produced thousands."""
+    import asyncio
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    for decision in ({"action": "proceed", "sub_action": "guide"}, {"action": "proceed"},
+                     {"action": "proceed", "sub_action": "risk_pause"}, {"action": "approve"}):
+        asyncio.run(b.broadcast({"type": "eisv_update", "decision": decision}))
+    totals = {"proceed": 0, "guide": 0, "pause": 0}
+    for bucket in b.get_activity_buckets(60, 5):
+        for k in totals:
+            totals[k] += bucket[k]
+    assert totals == {"proceed": 2, "guide": 1, "pause": 1}
+
+
+def test_compact_keeps_sub_action_with_action():
+    http_api.broadcaster_instance.event_history.clear()
+    http_api.broadcaster_instance.event_history.append(
+        dict(_fat_event(), decision={"action": "proceed", "sub_action": "guide", "reason": "x" * 400}))
+    event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
+    assert event["decision"] == {"action": "proceed", "sub_action": "guide"}

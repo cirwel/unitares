@@ -307,3 +307,16 @@ describe("risk history section", () => {
     expect(legend).toMatch(/produced/);
   });
 });
+
+describe("risk trend accessor (#2502)", () => {
+  it("keeps a successful empty risk series live, with its verdict pressure", async () => {
+    const dom = new JSDOM("", { runScripts: "outside-only", url: "https://governance.test/" });
+    dom.window.fetch = async () => ({ ok: true, status: 200, json: async () => ({
+      success: true, window_days: 14, risk: [], guide: [{ ts: "2026-09-27T00:00:00Z", value: 4 }], pause: [] }) });
+    dom.window.eval(readFileSync(new URL("../redesign/data.js", import.meta.url), "utf8"));
+    const r = await dom.window.DATA.riskTrend(14);
+    expect(r.source).toBe("live");
+    expect(r.data.risk).toEqual([]);
+    expect(r.data.guide[0].value).toBe(4);
+  });
+});

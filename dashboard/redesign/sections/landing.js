@@ -222,17 +222,28 @@
     }).join("");
   }
 
-  // Verdict → pill tone. approve/proceed are the calm case; guide is a nudge;
-  // anything else (pause, reject, a new hard stop) is a hard verdict.
-  const tone = (a) => !a || a === "proceed" || a === "approve" ? "" : a === "guide" ? " warn" : " danger";
+  // Verdict → bucket and pill tone, matching the server's rule
+  // (src/broadcaster.py verdict_bucket): proceed/approve/continue are the calm
+  // case; guide is a nudge; anything else (pause, reject, risk_pause, a new
+  // hard stop) is a hard verdict.
+  const verdictBucket = (a) => a === "guide" ? "guide" : !a || a === "proceed" || a === "approve" || a === "continue" ? "proceed" : "pause";
+  const tone = (a) => ({ proceed: "", guide: " warn", pause: " danger" })[verdictBucket(a)];
   const ago = (ms) => ms == null ? "—" : fmtSil(Math.max(0, Math.round((Date.now() - ms) / 1000))) + " ago";
 
   // Latest check-in of ANY agent (not only residents), from the check-in ring.
   function renderPulse() {
     const last = AMODEL && AMODEL[0];
     if (!last) {
+      // Clear the detail too: after a restart (ring empty) or an outage, the
+      // previous agent's risk, verdict and EISV must not stay on screen under
+      // "no check-ins yet".
       $("pulseWho").textContent = AGENTS_SRC === "unavailable" ? "server not answering" : "no check-ins yet";
       $("pulseFresh").textContent = "";
+      $("riskVal").textContent = "—";
+      $("riskFill").style.width = "0%";
+      $("pulseVerdict").className = "verdict";
+      $("pulseVerdict").querySelector("span:last-child").textContent = "—";
+      $("eisv").innerHTML = "";
       return;
     }
     $("pulseWho").textContent = last.name;
@@ -314,7 +325,7 @@
   // the same rule the server uses). Returns true: the view is current.
   function applyEvent(msg) {
     if (!msg || msg.type !== "eisv_update" || !msg.agent_id) return false;
-    const act = (msg.decision && msg.decision.action) || null;
+    const act = (msg.decision && (msg.decision.sub_action || msg.decision.action)) || null;
     if (AMODEL) {
       const prev = AMODEL.find((a) => a.id === msg.agent_id);
       const row = Object.assign(prev || { id: msg.agent_id, checkins: 0 }, {
@@ -328,10 +339,9 @@
       row.checkins = (row.checkins || 0) + 1;
       AMODEL = [row].concat(AMODEL.filter((a) => a !== row));
     }
-    if (CHK) {
-      const bucket = !act || act === "proceed" || act === "approve" ? "proceed" : act === "guide" ? "guide" : "pause";
-      CHK[bucket] += 1; CHK.total += 1;
-    }
+    // Count it now; refreshStats re-reads the server's hour on its cadence, so
+    // pushed check-ins age out of "last hour" instead of accumulating.
+    if (CHK) { CHK[verdictBucket(act)] += 1; CHK.total += 1; }
     const r = msg.agent_name && RMODEL.find((x) => x.name === msg.agent_name);
     if (r) {
       if (msg.eisv) r.eisv = msg.eisv;
@@ -417,8 +427,15 @@
     // never retried and its fallback stayed on screen. Retry here, on the
     // stats cadence, until both answer live.
     if (lastSource !== "live" || lastHealthSource !== "live" || AGENTS_SRC !== "live") await refresh();
-    const stats = await DATA.stats();
+    // The "last hour" cards are live-updated by pushed check-ins, which only
+    // add. Re-read both rings here so check-ins older than an hour drop out
+    // while the stream stays open. Both reads are in-memory on the server.
+    const [stats, agents, checkins] = await Promise.all([DATA.stats(), recentAgents(), checkinActivity()]);
+    if (agents) seedAgents(agents);
+    if (checkins) seedCheckins(checkins);
     renderStats(stats.data);
+    renderPulse();
+    renderRecent();
   }
 
   window.Landing = { render, refresh, refreshStats, applyEvent, tickSilence };

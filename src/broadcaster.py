@@ -15,6 +15,29 @@ ACTIVITY_HISTORY_MAX = 720  # ~1 hour at 5s intervals, generous buffer
 EVENT_HISTORY_MAX = 2000
 
 
+# Verdicts that are neither a nudge nor a hard stop. Anything else recorded
+# (pause, reject, risk_pause, cirs_block, a future hard-stop action) is a
+# produced hard verdict — the open-ended rule governance.pause.7d uses, so a
+# new action folds in rather than being counted as a proceed.
+_PROCEED_ACTIONS = frozenset({"proceed", "approve", "continue"})
+
+
+def verdict_of(event: dict) -> str:
+    """The verdict an eisv_update carries: sub_action when present, else action."""
+    decision = event.get("decision") if isinstance(event, dict) else None
+    if not isinstance(decision, dict):
+        return "proceed"
+    return decision.get("sub_action") or decision.get("action") or "proceed"
+
+
+def verdict_bucket(action: Optional[str]) -> str:
+    if action == "guide":
+        return "guide"
+    if not action or action in _PROCEED_ACTIONS:
+        return "proceed"
+    return "pause"
+
+
 class EISVBroadcaster:
     def __init__(self):
         self.connections: list[WebSocket] = []
@@ -76,22 +99,19 @@ class EISVBroadcaster:
                 continue
             bucket_idx = int((ts - bucket_starts[0]) // bucket_size)
             if 0 <= bucket_idx < len(buckets):
-                if action in ("guide",):
-                    buckets[bucket_idx]["guide"] += 1
-                elif action in ("pause", "reject"):
-                    buckets[bucket_idx]["pause"] += 1
-                else:
-                    buckets[bucket_idx]["proceed"] += 1
+                buckets[bucket_idx][verdict_bucket(action)] += 1
 
         return buckets
 
     async def broadcast(self, data: dict):
         self.last_update = data
 
-        # Track activity for sparkline
-        decision = data.get("decision", {})
-        action = decision.get("action", "proceed") if isinstance(decision, dict) else "proceed"
-        self.activity_history.append((time.time(), action))
+        # Track activity for sparkline. The verdict is `sub_action` when present
+        # (a guided check-in is action="proceed", sub_action="guide"), else
+        # `action` — the same rule record_agent_state persists by
+        # (src/mcp_handlers/updates/phases.py). Reading `action` alone counted
+        # every guide as a proceed.
+        self.activity_history.append((time.time(), verdict_of(data)))
 
         # Store in event history for sentinel/query access
         self.event_history.append(data)

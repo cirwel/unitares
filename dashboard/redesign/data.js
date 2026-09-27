@@ -543,14 +543,15 @@
     // left the Risk tab empty on any install without that resident. The server
     // caps the window at 60 days, inside retained history.
     //
-    // The risk series is the headline: with no points there is nothing to draw,
-    // so return null and let withFallback take over. `pause`/`guide` are
-    // companions and all-zero is legitimate live data for them.
+    // A successful response is live even when `risk` is empty: that is "the
+    // producer ran and found no risk readings" (a fresh install), not an
+    // outage, and its pause/guide series may still carry verdicts. Only a
+    // failed or malformed response falls back.
     async riskTrend(days) {
       const d = Number.isFinite(days) ? Math.max(7, Math.min(60, Math.round(days))) : 60;
       return withFallback(async () => {
         const j = await authFetch("/v1/governance/trend?days=" + d);
-        if (!j || !j.success || !Array.isArray(j.risk) || !j.risk.length) return null;
+        if (!j || !j.success || !Array.isArray(j.risk)) return null;
         return { windowDays: j.window_days || d, risk: j.risk, pause: j.pause || [], guide: j.guide || [] };
       }, () => S().riskTrend || { windowDays: d, risk: [], pause: [], guide: [] });
     },
@@ -571,7 +572,9 @@
           eisv: e.eisv || null,
           coherence: typeof e.coherence === "number" ? e.coherence : null,
           risk: typeof e.risk === "number" ? e.risk : null,
-          action: (e.decision && e.decision.action) || null,
+          // The verdict is sub_action when present (a guided check-in is
+          // action "proceed", sub_action "guide"), the rule the server persists by.
+          action: (e.decision && (e.decision.sub_action || e.decision.action)) || null,
           checkins: e.checkins || 0,
         }));
         return { agents, coverageStart: typeof r.coverage_start === "number" ? r.coverage_start : null };

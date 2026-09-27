@@ -150,3 +150,32 @@ describe("resident block", () => {
     expect(doc.getElementById("residents").textContent).toContain("coh 0.47");
   });
 });
+
+describe("review follow-ups (#2502)", () => {
+  it("reads a guided check-in's verdict from sub_action", async () => {
+    const { dom, doc, card } = await boot({ agents: [A("a", 30)] });
+    dom.window.Landing.applyEvent({ type: "eisv_update", agent_id: "a", agent_name: "agent-a",
+      decision: { action: "proceed", sub_action: "guide" } });
+    expect(doc.getElementById("pulseVerdict").textContent).toContain("guide");
+    expect(card("Check-ins").sub.textContent).toContain("3 guide");
+  });
+
+  it("re-reads the hour on the stats cadence so pushed check-ins age out", async () => {
+    const { dom, card } = await boot({ agents: [A("a", 30)] });
+    dom.window.Landing.applyEvent({ type: "eisv_update", agent_id: "a", decision: { action: "proceed" } });
+    expect(card("Check-ins").num).toBe("8");
+    await dom.window.Landing.refreshStats();
+    expect(card("Check-ins").num).toBe("7"); // the server's own hour, not a running tally
+  });
+
+  it("clears the latest-check-in detail when the ring empties", async () => {
+    const { dom, doc } = await boot({ agents: [A("a", 30, { risk: 0.5, action: "pause" })] });
+    expect(doc.getElementById("riskVal").textContent).toBe("0.50");
+    dom.window.DATA.recentAgents = async () => ({ source: "live", data: { agents: [], coverageStart: Date.now() / 1000 } });
+    await dom.window.Landing.refresh();
+    expect(doc.getElementById("pulseWho").textContent).toBe("no check-ins yet");
+    expect(doc.getElementById("riskVal").textContent).toBe("—");
+    expect(doc.getElementById("pulseVerdict").className).toBe("verdict");
+    expect(doc.getElementById("eisv").innerHTML).toBe("");
+  });
+});
