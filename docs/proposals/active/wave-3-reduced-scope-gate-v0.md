@@ -2,8 +2,8 @@
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
 same day, before any window started** (§10, Amendment 1). ⛔Ratified is
-not met: the §8 design pass and council round have not run, and the §7 window has not
-started. The signature
+not met: the §8 council round was held on 2026-09-27, but the §8 design pass (at §7 step 5) has not
+run and the W_pre window (§10 A6) has not started. The signature
 authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
 artifacts are still owed.)
 
@@ -618,7 +618,7 @@ are now deferred, and the instrument moved to the front.
 
 **Independent of the above, and owed regardless:**
 
-6. **Council round on this document** (§8) — unheld, and named by the go-decision §4 alongside it.
+6. **Council round on this document** (§8) — held 2026-09-27; adopted as §10, Amendment 1.
 7. **Pin criterion 10's resolution half** — needs a `resolved+failed` denominator ≥30, upstream of
    this gate and of anything in it.
 8. **§6.4** — the two missing handoff artifacts remain owed; §6.3 is settled above.
@@ -629,10 +629,11 @@ precisely because it is not one.
 
 ---
 
-## §8 Council pass — owed
+## §8 Council pass — held; design pass owed
 
-⛔Not held. The §4 authorisation names "its design pass and council review" alongside this
-document; neither has run. This gate is not met until they have.
+The council round was held on 2026-09-27 and adopted as §10 (A10 splits this section). The §4
+authorisation names "its design pass and council review" alongside this document; the design pass
+is defined on §1.2's chosen option and runs at §7 step 5. This gate is not met until it has.
 
 ---
 
@@ -664,7 +665,7 @@ What it does not do:
 - ⛔**It does not authorise building.** §7 still governs: nothing in the reduced scope may be
   built until steps 4–5 have run and this gate is signed again as amended.
 - ⛔**It does not meet the gate.** §8 says the gate is not met until its design pass and council
-  review have run, and neither has.
+  review have run, and at signing neither had (the council has since been held; see §10).
 - It does not start the §7 window. The window starts at the recorded deploy of the complete
   instrument, and that slot is still empty.
 - It does not answer §6.4 (non-gating for this scope, still owed), and it does not lift or
@@ -690,10 +691,13 @@ probe was invisible to both, so the pilot's zero overlaps are *not recordable*, 
 Overlap evidence comes from the time-correlated check (any saga on the session, in any state,
 created at or after the early check) and from the A2 report.
 
-**A2 — collision defined causally, with a bound.** A **collision** is a resolve or reviewer write on a
-session whose cause (the triggering message's timestamp, or the saga's `created_at`) precedes the
-sweeper's guarded commit and whose effect lands after it, within a **correlation bound of 6 hours**
-(a session id can be reused by a reopen, so an unbounded search would match unrelated rounds). It is
+**A2 — collision defined causally, with a bound.** A **collision** is a competing write on the
+session (a resolve, a reviewer assignment, or a new protocol message) that either (a) has its cause
+(the triggering message's timestamp, or the saga's `created_at`) before the sweeper's guarded commit
+and its effect after it, within a **correlation bound of 6 hours** (a session id can be reused by a
+reopen, so an unbounded search would match unrelated rounds); or (b) lands between the sweeper's
+decision read of the session and its guarded commit. (b) covers a reviewer write that revives a
+session just before the sweeper reaps it: both writes succeed, and the sweeper acts on stale state. It is
 measured by the pre-registered read-only report `scripts/ops/wave3_collision_report.py` over
 durable tables, including a saga-versus-row status join, and by the `dialectic_resolve_already_terminal`
 event, because a BEAM resolve that meets an already-terminal row returns `already_terminal` with no
@@ -707,8 +711,9 @@ sweeper, the BEAM resolve path, BEAM liveness and `update_reviewer`**. A guarded
 winner (`winner_status`, `winner_reason`).
 
 **A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
-classified once: **contention-benign** (the winner's final status equals what the sweeper intended),
-**contention-divergent** (it differs), or **harm** (a collision under A2). A refusal is the terminal
+classified once, in this order of precedence: **harm** (a collision under A2, whatever the final
+status), then, for what is not harm, **contention-divergent** (the winner's final status differs
+from what the sweeper intended) or **contention-benign** (it is the same). A refusal is the terminal
 guard working and is never counted as harm by itself. The first clause of §6.5's reopen condition,
 and "collisions" in §7 step 4, mean an **adjudicated harm-class collision**. This narrows a clause of
 the operator's 2026-08-29 §6.5 ruling, by the operator's 2026-09-27 delegation; the other two
