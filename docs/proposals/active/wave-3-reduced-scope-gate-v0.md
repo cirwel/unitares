@@ -1,7 +1,8 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9). ⛔Ratified is
-not met: the §8 council round is still unheld and the §7 window has not started. The signature
+not met: the §8 design pass and council round have not run, and the §7 window has not
+started. The signature
 authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
 artifacts are still owed.)
 
