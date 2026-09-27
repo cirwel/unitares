@@ -2160,3 +2160,30 @@ def test_the_second_review_tries_the_next_family_when_one_does_not_complete(monk
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
     assert ran == ["codex", "claude"]
+
+
+
+def test_the_family_that_just_passed_counts_even_before_its_record_is_readable(monkeypatch):
+    """#2504 (antigravity): a read that lags the just-posted record left the
+    families empty, so the same family ran again as the "second" one."""
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families=set(), candidates=("codex", "claude"))
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0, passed_by="codex-native") == 0
+    assert ran == ["claude"]
+    ran = _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                             families=set(), candidates=("antigravity", "claude"))
+    args.completed_by = "antigravity"  # set by review_with_fallback
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert ran == ["claude"]
+
+
+def test_review_with_fallback_reports_which_provider_completed(monkeypatch):
+    monkeypatch.setattr(rg, "reviewer_candidates", lambda branch: ["antigravity", "claude"])
+    monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
+    monkeypatch.setattr(rg, "_review_locked",
+                        lambda a, pr, key, p: rg.UNREVIEWED if p == "antigravity" else 0)
+    args = SimpleNamespace(budget=30, reviewer=None, branch="x/y")
+    assert rg.review_with_fallback(args, 1, "k", "antigravity") == 0
+    assert args.completed_by == "claude"

@@ -1456,7 +1456,8 @@ def cmd_review(args) -> int:
                         return UNREVIEWED
                     return second_family_pass(
                         args, repo, pr, key, head,
-                        finish_record(repo, pr, key, head, existing, comments))
+                        finish_record(repo, pr, key, head, existing, comments),
+                        passed_by=existing.reviewer)
                 # The cap binds the local fallback too: it spends the same quota.
                 # An explicit --reviewer is the author choosing to spend a round.
                 if not args.reviewer:
@@ -1479,7 +1480,8 @@ def cmd_review(args) -> int:
                         print(f"[review] {rec.status()[1]}\n{rec.url}\n{rec.text}")
                         return second_family_pass(
                             args, repo, pr, key, head,
-                            finish_record(repo, pr, key, head, rec, pr_comments(repo, pr)))
+                            finish_record(repo, pr, key, head, rec, pr_comments(repo, pr)),
+                            passed_by=rec.reviewer)
                     args.budget = max(0, args.budget - int(time.monotonic() - native_start))
                 result = review_with_fallback(args, pr, key, reviewer)
                 # A cloud review can finish while the local fallback runs.
@@ -1506,7 +1508,8 @@ def cmd_review(args) -> int:
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
-def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int) -> int:
+def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
+                       passed_by: str | None = None) -> int:
     """After a passing review of a security-sensitive diff, add a review from
     a second model family when only one has passed, so the CI check can go
     green without the author having to know the rule. Runs inside the diff's
@@ -1522,6 +1525,12 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     except SystemExit:
         native = []
     families = passing_families(comments, key, native)
+    # The review that just passed may not be readable yet (API read lag after
+    # its own post): count its family from what we already know, so the same
+    # family is never run twice as the "second" one.
+    passed_by = passed_by or getattr(args, "completed_by", None)
+    if passed_by:
+        families.add(reviewer_family(passed_by))
     if len(families) >= 2:
         return result
     # Same availability rules as review_with_fallback: no provider in a quota
@@ -1712,6 +1721,9 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         attempt.budget = max(1, remaining // (len(available) - i))
         result = _review_locked(attempt, pr, key, provider)
         if result != UNREVIEWED:
+            # second_family_pass needs to know this without re-reading the
+            # comment it just posted (GitHub reads can lag a fresh write).
+            args.completed_by = provider
             return result
         print(f"[review] {provider} did not complete; checking remaining reviewers", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
