@@ -342,3 +342,30 @@ async def test_adding_a_classified_node_stores_the_pair_and_a_reopening_readd_cl
         }
     finally:
         await _delete(backend, discovery_id)
+
+
+@pytest.mark.asyncio
+async def test_the_status_only_writer_clears_the_pair_when_it_reopens(live_postgres_backend):
+    """kg_update_status reopens a classified row the way every other update
+    path does: the pair goes, instead of 071's check refusing the reopen."""
+    from src.knowledge_graph import DiscoveryNode
+
+    backend = live_postgres_backend
+    await _require_071(backend)
+    discovery_id = "071-status-only"
+    try:
+        await backend.kg_add_discovery(DiscoveryNode(
+            id=discovery_id, agent_id="agent-071", type="bug_found", summary="s",
+            status="resolved", closure_class="fix_verified", closure_evidence=EVIDENCE,
+        ))
+        assert await backend.kg_update_status(discovery_id, "closed")
+        assert (await _row(backend, discovery_id))["closure_class"] == "fix_verified"
+
+        assert await backend.kg_update_status(discovery_id, "open")
+        assert await _row(backend, discovery_id) == {
+            "status": "open",
+            "closure_class": None,
+            "closure_evidence": None,
+        }
+    finally:
+        await _delete(backend, discovery_id)

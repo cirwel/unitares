@@ -73,20 +73,24 @@ def create_discovery_node(
         props["tags"] = tags
     if metadata:
         props["metadata"] = metadata
-    if closure_class:
-        props["closure_class"] = closure_class
-        if closure_evidence:
-            props["closure_evidence"] = closure_evidence
-
     # Build properties string (using ${param} format for substitution)
     props_str = ", ".join(f"{k}: ${{{k}}}" for k in props.keys())
-    
+
+    # The closure pair is set on its own, always: MERGE can match an existing
+    # vertex, and SET d += {...} changes only the keys in the map, so leaving
+    # the pair out of an unclassified node would keep a stale class on a
+    # reused id. NULL removes the property, the same form update_discovery
+    # uses. Evidence rides only with a class.
+    props["closure_class"] = closure_class or None
+    props["closure_evidence"] = closure_evidence if closure_class else None
+
     cypher = f"""
         MERGE (d:Discovery {{id: ${{id}}}})
         SET d += {{{props_str}}}
+        SET d.closure_class = ${{closure_class}}, d.closure_evidence = ${{closure_evidence}}
         RETURN d
     """
-    
+
     return cypher, props
 
 

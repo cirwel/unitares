@@ -521,18 +521,31 @@ class KnowledgeGraphMixin:
         status: str,
         resolved_at: Optional[str] = None,
     ) -> bool:
-        """Update discovery status."""
+        """Update discovery status.
+
+        A reopening status (open, disputed) clears closure_class and
+        closure_evidence, as every other update path does
+        (apply_closure_reopen_rule); otherwise the reopen would violate
+        discoveries_closure_class_requires_closed on a classified row.
+        """
+        from src.knowledge_graph import CLOSURE_CLASS_CLEARING_STATUSES
+
+        clear_pair = (
+            ", closure_class = NULL, closure_evidence = NULL"
+            if status in CLOSURE_CLASS_CLEARING_STATUSES
+            else ""
+        )
         async with self.acquire() as conn:
             if resolved_at:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, resolved_at = $2, updated_at = now()
+                    SET status = $1, resolved_at = $2, updated_at = now(){clear_pair}
                     WHERE id = $3
                 """, status, resolved_at, discovery_id)
             else:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, updated_at = now()
+                    SET status = $1, updated_at = now(){clear_pair}
                     WHERE id = $2
                 """, status, discovery_id)
             return "UPDATE 1" in result

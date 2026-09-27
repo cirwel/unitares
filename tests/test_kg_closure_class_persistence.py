@@ -244,39 +244,43 @@ def _as_sent_to_age(cypher: str, params: dict) -> str:
 
 
 def test_a_created_age_node_carries_the_pair_only_when_classified():
-    """The generated Cypher's ``SET`` map literal must itself carry the pair —
-    not just the params dict the caller happened to supply. A query generator
-    that silently dropped ``closure_class``/``closure_evidence`` from the
-    ``SET`` clause would previously still pass this test, because the old
-    assertion only echoed the input kwargs back from the returned params dict.
-    """
+    """The Cypher AGE receives sets the pair explicitly: to the class and its
+    evidence on a classified node, and to NULL (which removes the property)
+    on an unclassified one, so MERGE reusing an existing vertex cannot keep a
+    stale class. A params dict alone would not show this: graph_query drops
+    any param the Cypher has no placeholder for."""
     from src.db.age_queries import create_discovery_node
 
     bare_cypher, bare = create_discovery_node(
         discovery_id="d-1", agent_id="a-1", discovery_type="note", summary="s"
     )
-    assert "closure_class" not in bare and "closure_evidence" not in bare
-    assert "closure_class" not in bare_cypher and "closure_evidence" not in bare_cypher
-    assert "closure_" not in _as_sent_to_age(bare_cypher, bare)
+    assert bare["closure_class"] is None and bare["closure_evidence"] is None
+    assert "SET d.closure_class = ${closure_class}, d.closure_evidence = ${closure_evidence}" in bare_cypher
+    bare_sent = _as_sent_to_age(bare_cypher, bare)
+    assert "d.closure_class = NULL" in bare_sent
+    assert "d.closure_evidence = NULL" in bare_sent
 
     classified_cypher, classified = create_discovery_node(
         discovery_id="d-1", agent_id="a-1", discovery_type="note", summary="s",
         status="resolved", closure_class="duplicate",
         closure_evidence=json.dumps({"of": "d-0"}),
     )
-    # The SET clause is a single `SET d += {...}` map literal (props_str), so
-    # each property appears as `key: ${key}` inside it — assert against the
-    # actual query text, not just the params dict passed straight through.
-    set_clause_match = re.search(r"SET d \+= \{(.*)\}", classified_cypher, re.DOTALL)
-    assert set_clause_match, classified_cypher
-    set_clause = set_clause_match.group(1)
-    assert "closure_class: ${closure_class}" in set_clause
-    assert "closure_evidence: ${closure_evidence}" in set_clause
     assert classified["closure_class"] == "duplicate"
     assert json.loads(classified["closure_evidence"]) == {"of": "d-0"}
     sent = _as_sent_to_age(classified_cypher, classified)
-    assert "closure_class: 'duplicate'" in sent
-    assert "closure_evidence: '{" in sent and "d-0" in sent
+    assert "d.closure_class = 'duplicate'" in sent
+    assert "d.closure_evidence = '{" in sent and "d-0" in sent
+
+
+def test_evidence_does_not_reach_a_node_without_a_class():
+    from src.db.age_queries import create_discovery_node
+
+    cypher, params = create_discovery_node(
+        discovery_id="d-1", agent_id="a-1", discovery_type="note", summary="s",
+        closure_evidence=json.dumps({"of": "d-0"}),
+    )
+    assert params["closure_evidence"] is None
+    assert "d.closure_evidence = NULL" in _as_sent_to_age(cypher, params)
 
 
 @pytest.mark.asyncio
@@ -300,8 +304,8 @@ async def test_rehydrating_an_age_node_from_its_row_keeps_the_pair():
     assert node_create["closure_class"] == "obsolete"
     assert json.loads(node_create["closure_evidence"]) == {"gone": "x"}
     sent = _as_sent_to_age(node_cypher, node_create)
-    assert "closure_class: 'obsolete'" in sent
-    assert "closure_evidence: '{" in sent and "gone" in sent
+    assert "d.closure_class = 'obsolete'" in sent
+    assert "d.closure_evidence = '{" in sent and "gone" in sent
 
 
 # ---------------------------------------------------------------------------
