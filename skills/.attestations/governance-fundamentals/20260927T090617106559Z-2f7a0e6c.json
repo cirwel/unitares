@@ -1,7 +1,7 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "governance-fundamentals",
-  "verified_at": "2026-09-27T08:59:10Z",
+  "verified_at": "2026-09-27T09:06:17Z",
   "verified_date": "2026-09-27",
   "verifier": "Kenny Wang",
   "source_digests": {
@@ -27,7 +27,7 @@
     "unitares/src/monitor_decision.py": "c80f4e13511fe8ba",
     "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
     "unitares/src/monitor_result.py": "07ef4ae4a00fa05e",
-    "unitares/src/services/runtime_queries.py": "bfb34204c29f95d7"
+    "unitares/src/services/runtime_queries.py": "a9fdac174fc9e19c"
   },
   "skill_digest": "5aec85ceeac4aa52"
 }

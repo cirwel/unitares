@@ -819,14 +819,15 @@ def _audit_log_check(audit_logger) -> Dict[str, Any]:
             "note": "JSONL audit writes are off (UNITARES_AUDIT_WRITE_JSONL=0).",
         }
     if log_file.exists():
-        if os.access(log_file, os.W_OK):
+        if log_file.is_file() and os.access(log_file, os.W_OK):
             return {"status": "healthy", "audit_log_exists": True}
-        # Writes append to this file and only log a warning on failure, so an
-        # existing but read-only log is an ongoing loss, not a healthy one.
+        # Writes append to this file and only log a warning on failure, so a
+        # log that is read-only, or is not a regular file at all, is an
+        # ongoing loss, not a healthy one.
         return {
             "status": "warning",
             "audit_log_exists": True,
-            "warning": f"Audit log {log_file} exists but is not writable; new audit events are not recorded in it.",
+            "warning": f"Audit log {log_file} is not an appendable file; new audit events are not recorded in it.",
         }
     parent = log_file.parent
     if parent.is_dir() and os.access(parent, os.W_OK):

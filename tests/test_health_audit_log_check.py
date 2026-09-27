@@ -44,6 +44,14 @@ def test_existing_read_only_log_is_a_warning(tmp_path):
     assert check["audit_log_exists"] is True
 
 
+def test_log_path_that_is_a_directory_is_a_warning(tmp_path):
+    log = tmp_path / "audit_log.jsonl"
+    log.mkdir()
+    check = _audit_log_check(_logger(log))
+    assert check["status"] == "warning"
+    assert "not an appendable file" in check["warning"]
+
+
 def test_absent_log_in_a_writable_directory_is_no_data_yet(tmp_path):
     check = _audit_log_check(_logger(tmp_path / "audit_log.jsonl"))
     assert check["status"] == NO_DATA_YET
