@@ -36,6 +36,7 @@ def test_one_base_url_for_every_local_route(monkeypatch):
     """UNITARES_OLLAMA_BASE must move the OpenAI-compat client, the native
     structured endpoint, AND the availability probe together — a base override
     that only some routes honor splits the plane between two hosts."""
+    monkeypatch.delenv("UNITARES_OLLAMA_BASE_URL", raising=False)
     monkeypatch.setenv("UNITARES_OLLAMA_BASE", BASE_OVERRIDE)
 
     assert inference_registry.ollama_base_url() == BASE_OVERRIDE
@@ -48,6 +49,9 @@ def test_one_base_url_for_every_local_route(monkeypatch):
 
 
 def test_trailing_slash_and_default_port_are_normalized(monkeypatch):
+    # The alias (see tests/test_local_inference_env.py) would otherwise decide
+    # the unset case below on a machine that exports it.
+    monkeypatch.delenv("UNITARES_OLLAMA_BASE_URL", raising=False)
     monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://10.0.0.5:11434/")
     assert inference_registry.ollama_base_url() == "http://10.0.0.5:11434"
     assert inference_registry._ollama_host_port() == ("10.0.0.5", 11434)

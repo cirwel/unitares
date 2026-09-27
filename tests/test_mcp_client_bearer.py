@@ -241,7 +241,7 @@ def test_dialectic_reviewer_inherits_the_token():
             for c in node.elts
             if isinstance(c, ast.Constant) and isinstance(c.value, str)
         }
-        >= {"UNITARES_MCP_BEARER_TOKEN", "UNITARES_OLLAMA_BASE_URL"}
+        >= {"UNITARES_MCP_BEARER_TOKEN", "UNITARES_LLM_MODEL"}
         for node in ast.walk(tree)
     )
     assert "UNITARES_MCP_BEARER_TOKEN" in forwarded

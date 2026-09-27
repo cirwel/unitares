@@ -39,6 +39,8 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from src.local_inference_env import default_local_model, ollama_base_url
+
 from . import host_availability
 from .host_adapter import host_adapter_available, host_adapter_enabled
 
@@ -49,17 +51,11 @@ from .host_adapter import host_adapter_available, host_adapter_enabled
 # internal llm_delegation lane (dialectic synthetic reviewer, knowledge
 # synthesis, check-in coaching) — resolves the base URL, default model, and
 # availability through these, so UNITARES_OLLAMA_BASE / UNITARES_LLM_MODEL
-# cannot split the plane between two hosts or two defaults.
+# cannot split the plane between two hosts or two defaults. The base URL and
+# default model are resolved in src/local_inference_env.py (re-exported here),
+# which the agent processes share, so the orchestrated reviewer and the local
+# residents read the same host as the server.
 # ---------------------------------------------------------------------------
-
-def ollama_base_url() -> str:
-    """Base URL of the local Ollama endpoint (no trailing slash)."""
-    return os.getenv("UNITARES_OLLAMA_BASE", "http://localhost:11434").rstrip("/")
-
-
-def default_local_model() -> str:
-    """Default model for local inference (UNITARES_LLM_MODEL override)."""
-    return os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
 
 
 def sha256_text(text: str) -> str:
