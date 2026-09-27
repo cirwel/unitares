@@ -124,9 +124,10 @@ not a router: nothing chooses between providers by cost or load.
 - The doctor gains a check that the endpoint answers and lists the configured
   model.
 - `unitares model` (`cmd_model` in `scripts/unitares`, backed by
-  `scripts/install/choose_model.py`) lists models from `{base}/models`, so it
-  works for any such server. Ollama instructions become one example in the
-  manual.
+  `scripts/install/choose_model.py`, which today reads Ollama's `/api/tags`
+  and writes only the Ollama names) lists models from `{base}/models`, so it
+  works for any such server (step 1). Ollama instructions become one example
+  in the manual.
 
 ### 2.6 The agent processes follow, without carrying the key
 
@@ -160,22 +161,38 @@ settings when its own are unset.
 
 ## 4. Staging
 
-Each step is its own pull request and preserves behavior until the last.
+Each step is its own pull request and preserves behavior for an install that
+changes no setting. One rule orders them: no step may let a request with
+`privacy='local'` reach an endpoint the server has not classified as local.
 
-1. **Settings.** Add `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` with their
-   aliases in `local_inference_env.py`, the doctor check, and the manual and
-   `.env.example` text. No client changes, and no key setting yet: every
-   client still sends a fixed key, so documenting one here would describe a
-   setting nothing reads.
+1. **Settings, with the privacy check.** In one pull request:
+   - `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` with their aliases in
+     `local_inference_env.py`;
+   - the endpoint classification and the `privacy='local'` refusal from 2.3,
+     applied to every path that reads the setting, because this is the first
+     step in which the base URL can name a machine the operator does not run;
+   - the two `docker-compose.yml` mappings for `governance-mcp`, beside the
+     existing `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and
+     `UNITARES_LLM_MODEL` lines, or `.env` values never reach the server;
+   - `unitares model`: `scripts/install/choose_model.py` lists models from
+     `{base}/models` instead of Ollama's `/api/tags`, writes the new names, and
+     keeps its Ollama-only steps (pull hints, the `host.docker.internal`
+     rewrite) behind Ollama detection, with its tests;
+   - the doctor check, and the manual and `.env.example` text.
+
+   No client changes and no key setting yet: every client still sends a fixed
+   key, so documenting one here would describe a setting nothing reads.
 2. **Client and key.** Add `local_model_client.py` and
-   `UNITARES_MODEL_API_KEY_ENV` together. Move all six constructions onto the
-   client (the four in the server, the reviewer's `local` backend and the local
-   resident runner), forward the key's name to the orchestrated reviewer as
-   2.6 describes, and keep `/api/chat` behind Ollama detection. Only now does
-   the manual describe authenticated endpoints.
-3. **Privacy and fallback.** Endpoint classification and the `privacy='local'`
-   refusal, the `/models` availability probe, and the fallback endpoint with the
-   Hugging Face default.
+   `UNITARES_MODEL_API_KEY_ENV` together, with its Compose mapping and, for the
+   default key variable, the mapping of the value into `governance-mcp`. Move
+   all six constructions onto the client (the four in the server, the
+   reviewer's `local` backend and the local resident runner), forward the key's
+   name to the orchestrated reviewer as 2.6 describes, and keep `/api/chat`
+   behind Ollama detection. Only now does the manual describe authenticated
+   endpoints.
+3. **Discovery and fallback.** The `/models` availability probe for the
+   registry, and the fallback endpoint with the Hugging Face default and its
+   Compose mappings.
 4. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy` and describe
    `provider` as primary or fallback. This moves input-schema digests, so it
    waits for the next batched interface-contract release (see
