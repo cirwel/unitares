@@ -238,6 +238,34 @@ def host_adapter_enabled() -> bool:
     )
 
 
+#: The Codex, Claude and Antigravity adapters are an operator extension, not
+#: part of the default install: they run through the agent orchestrator
+#: (elixir/agent_orchestrator, launchd only), which no Compose service starts.
+HOST_ADAPTER_EXTENSION = "agent_orchestrator"
+HOST_ADAPTER_EXTENSION_NOTE = (
+    "Operator extension, off on a default install: the Codex, Claude and "
+    "Antigravity adapters run through the agent orchestrator, which the "
+    "default install does not start. It serves delegate_inference and "
+    "consult(effort='thorough'). An operator turns it on by running the "
+    "orchestrator, setting UNITARES_HOST_ADAPTER_ENABLED=1 and "
+    "AGENT_ORCHESTRATOR_BEARER_TOKEN, and putting an authenticated CLI on PATH."
+)
+
+
+def host_adapter_ids() -> tuple[str, ...]:
+    """The host ids the orchestrator extension serves."""
+    return tuple(_HOST_COMMANDS)
+
+
+def host_adapter_lane_configured() -> bool:
+    """Whether this server is set up to use the orchestrator extension at all:
+    the opt-in flag AND the orchestrator bearer. Per-host readiness (CLI on
+    PATH, cooldown, operator switch-off) is ``host_adapter_available``."""
+    return host_adapter_enabled() and bool(
+        os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
+    )
+
+
 def host_adapter_disabled_hosts() -> frozenset[str]:
     """Hosts the operator switched off individually.
 
