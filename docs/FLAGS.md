@@ -151,6 +151,7 @@ additions merge cleanly. -->
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
+| `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_MODEL_ADJUDICATION_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |

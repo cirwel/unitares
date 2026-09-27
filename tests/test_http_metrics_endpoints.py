@@ -64,7 +64,7 @@ class TestPostMetric:
 
         req = _make_request(
             "POST", "/v1/metrics",
-            body=b'{"name":"tokei.unitares.src.code","value":70000}',
+            body=b'{"name":"kg.entries.count","value":70000}',
             headers={"content-type": "application/json"},
         )
         with patch("src.fleet_metrics.record", new=AsyncMock(return_value=None)) as mock_rec:
@@ -107,7 +107,7 @@ class TestPostMetric:
 
         req = _make_request(
             "POST", "/v1/metrics",
-            body=b'{"name":"tokei.unitares.src.code","value":"not-a-number"}',
+            body=b'{"name":"kg.entries.count","value":"not-a-number"}',
         )
         resp = await http_post_metric(req)
         assert resp.status_code == 400
@@ -119,7 +119,7 @@ class TestPostMetric:
 
         req = _make_request(
             "POST", "/v1/metrics",
-            body=b'{"name":"tokei.unitares.src.code","value":true}',
+            body=b'{"name":"kg.entries.count","value":true}',
         )
         resp = await http_post_metric(req)
         assert resp.status_code == 400
@@ -130,7 +130,7 @@ class TestPostMetric:
 
         req = _make_request(
             "POST", "/v1/metrics",
-            body=b'{"name":"tokei.unitares.src.code","value":1,"ts":"not-a-timestamp"}',
+            body=b'{"name":"kg.entries.count","value":1,"ts":"not-a-timestamp"}',
         )
         resp = await http_post_metric(req)
         assert resp.status_code == 400
@@ -149,7 +149,7 @@ class TestPostMetric:
 
         req = _make_request(
             "POST", "/v1/metrics",
-            body=b'{"name":"tokei.unitares.src.code","value":1}',
+            body=b'{"name":"kg.entries.count","value":1}',
             client=("203.0.113.7", 55555),  # TEST-NET-3, not in trusted nets
         )
         with patch.dict("os.environ", {"UNITARES_HTTP_API_TOKEN": "secret"}):
@@ -171,12 +171,12 @@ class TestGetMetricsSeries:
         ts = datetime(2026, 4, 19, tzinfo=timezone.utc)
         fake_points = [MetricPoint(ts=ts, value=123.0)]
         with patch("src.fleet_metrics.query", new=AsyncMock(return_value=fake_points)):
-            req = _make_request("GET", "/v1/metrics/series", query="name=tokei.unitares.src.code")
+            req = _make_request("GET", "/v1/metrics/series", query="name=kg.entries.count")
             resp = await http_get_metrics(req)
         body = await _read_json(resp)
         assert resp.status_code == 200
         assert body["success"] is True
-        assert body["name"] == "tokei.unitares.src.code"
+        assert body["name"] == "kg.entries.count"
         assert body["count"] == 1
         assert body["points"][0]["value"] == 123.0
 
@@ -194,7 +194,7 @@ class TestGetMetricsSeries:
 
         req = _make_request(
             "GET", "/v1/metrics/series",
-            query="name=tokei.unitares.src.code&since=not-a-date",
+            query="name=kg.entries.count&since=not-a-date",
         )
         resp = await http_get_metrics(req)
         assert resp.status_code == 400
@@ -205,7 +205,7 @@ class TestGetMetricsSeries:
 
         req = _make_request(
             "GET", "/v1/metrics/series",
-            query="name=tokei.unitares.src.code&limit=abc",
+            query="name=kg.entries.count&limit=abc",
         )
         resp = await http_get_metrics(req)
         assert resp.status_code == 400
@@ -227,7 +227,7 @@ class TestGetMetricsCatalog:
         assert resp.status_code == 200
         assert body["success"] is True
         names = {m["name"] for m in body["metrics"]}
-        assert "tokei.unitares.src.code" in names
+        assert "kg.entries.count" in names
 
     @pytest.mark.asyncio
     async def test_includes_last_point_ts_field(self):
@@ -238,17 +238,17 @@ class TestGetMetricsCatalog:
         ts = datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc)
         with patch(
             "src.fleet_metrics.storage.latest_ts_for_names",
-            new=AsyncMock(return_value={"tokei.unitares.src.code": ts}),
+            new=AsyncMock(return_value={"kg.entries.count": ts}),
         ):
             req = _make_request("GET", "/v1/metrics/catalog")
             resp = await http_get_metrics_catalog(req)
             body = await _read_json(resp)
 
         by_name = {m["name"]: m for m in body["metrics"]}
-        assert by_name["tokei.unitares.src.code"]["last_point_ts"] == ts.isoformat()
+        assert by_name["kg.entries.count"]["last_point_ts"] == ts.isoformat()
         # An entry not in the latest_ts dict reports None — `.error` twins
         # without points hit this branch and the dashboard hides them.
-        assert by_name["tokei.unitares.src.code.error"]["last_point_ts"] is None
+        assert by_name["kg.entries.count.error"]["last_point_ts"] is None
 
     @pytest.mark.asyncio
     async def test_last_ts_probe_failure_degrades_to_null(self):
