@@ -50,6 +50,7 @@ import argparse
 import ast
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -249,41 +250,57 @@ SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
 SERVED_PROSE_FILES = ("src/tool_descriptions.json",)
 SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 
-# Served surfaces that name residents today, each with the number of
-# references it holds. Same contract as KNOWN_COUPLINGS: reported on every run,
-# never silenced. The count is a ceiling, not a file-wide pass: one reference
-# more in a listed file is a NEW leak and fails, and a test fails when a file
-# holds fewer than its ceiling, so every fix lowers the number and the last one
-# deletes the entry. A ratchet that only turns one way.
-SERVED_KNOWN_COUPLINGS: dict[str, tuple[int, str]] = {
+# Served surfaces that name residents today, each pinned to the EXACT
+# multiset of matched values (name per occurrence, case as served) it is
+# known to hold today — not just a count. Same contract as KNOWN_COUPLINGS:
+# reported on every run, never silenced.
+#
+# A bare count used to be the exemption: "this file may have up to N hits."
+# That let a developer remove one known reference and add a DIFFERENT one in
+# the same file — the count stayed put, so the guard still passed the
+# substitution. Pinning the actual matched values closes that: an approved
+# occurrence may be removed for free (a partial fix still defers), but every
+# remaining hit must fit inside what is on record for its own name, so a
+# swapped-in name — or one more of a name already at its recorded count —
+# is a NEW leak and fails. A ratchet that only turns one way: fixing a
+# reference means deleting one entry from its file's tuple below, and the
+# last deletion removes the entry.
+SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "dashboard/redesign/snapshot.js": (
-        15,
+        ("Sentinel",) * 8 + ("Watcher",) * 2 + ("Vigil",) * 2 + ("Lumen",) * 2
+        + ("Chronicler",) * 1,
         "a real capture of one deployment's fleet, bundled as the offline "
         "fallback; replace with synthetic data once #2492 stops served pages "
         "falling back to it",
     ),
     "dashboard/redesign/preview.html": (
-        5, "carries the same capture as snapshot.js in a literal FLEET array",
+        ("Watcher", "Vigil", "Lumen", "Sentinel", "Chronicler"),
+        "carries the same capture as snapshot.js in a literal FLEET array",
     ),
     "dashboard/redesign/PLAN.md": (
-        7, "design notes describing one deployment's own fleet",
+        ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
+        "design notes describing one deployment's own fleet",
     ),
     "dashboard/redesign/data.js": (
-        11,
+        ("Watcher",) * 2 + ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Chronicler",) * 1
+        + ("Lumen",) * 1 + ("watcher",) * 1 + ("sentinel",) * 1 + ("vigil",) * 1,
         "gates the Watcher/Sentinel/Vigil summary panels on those labels "
         "(inRoster); the panel set should come from roster capabilities",
     ),
     "dashboard/redesign/sections/residents.js": (
-        5, "resident-specific panels keyed by label",
+        ("Watcher", "Sentinel", "Vigil", "Chronicler", "Lumen"),
+        "resident-specific panels keyed by label",
     ),
     "skills/discord-bridge/SKILL.md": (
-        15, "one operator's Discord bridge (separate repo), served to every agent",
+        ("Lumen",) * 8 + ("lumen",) * 3 + ("Sentinel",) * 1 + ("sentinel",) * 2 + ("LUMEN",) * 1,
+        "one operator's Discord bridge (separate repo), served to every agent",
     ),
     "skills/unitares-dashboard/SKILL.md": (
-        3, "describes the Sentinel adjudication panel and its route by resident name",
+        ("sentinel",) * 2 + ("Sentinel",) * 1,
+        "describes the Sentinel adjudication panel and its route by resident name",
     ),
     "src/tool_descriptions.json": (
-        2,
+        ("Lumen",) * 2,
         "names Lumen in outcome_event's drawing outcome and an observe example; "
         "#2490 rewrites this file, fix after it lands",
     ),
@@ -292,7 +309,14 @@ SERVED_KNOWN_COUPLINGS: dict[str, tuple[int, str]] = {
 _NAME_WORD = re.compile(
     r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
 )
-_SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\s*>)", re.S | re.I)
+_SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\b[^>]*>)", re.S | re.I)
+_HIT_VALUE = re.compile(r'"([^"]*)"')
+
+
+def _hit_value(hit: str) -> str:
+    """The quoted matched name/domain out of one finding line."""
+    m = _HIT_VALUE.search(hit)
+    return m.group(1) if m else hit
 
 
 def js_string_literals(source: str) -> list[tuple[int, str]]:
@@ -303,13 +327,62 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
     markup as `<div>${head("Watcher", ...)}</div>`, so the label literal lives
     inside ${...}, and a scanner that took the template as one opaque string
     missed every one of them. The template's own text (outside ${...}) is
-    returned as a literal too. Regex literals are not modelled: a quote inside
-    one opens a string. Single and double quoted strings cannot span a line in
-    JavaScript, so that state is dropped at the newline and a desync costs at
-    most one line.
+    returned as a literal too. Regex literals are skipped as opaque spans
+    (heuristically, by what precedes the '/') so a quote INSIDE one — e.g.
+    ``/["']/; const label = "Lumen";`` — cannot desynchronize the string
+    scanner into missing the literal that follows. Single and double quoted
+    strings cannot span a line in JavaScript, so that state is dropped at the
+    newline and a desync costs at most one line.
     """
     out: list[tuple[int, str]] = []
     n = len(source)
+
+    def prev_significant(i: int) -> str:
+        """The nearest non-whitespace character before i, or "" at start."""
+        j = i - 1
+        while j >= 0 and source[j] in " \t\r\n":
+            j -= 1
+        return source[j] if j >= 0 else ""
+
+    def looks_like_regex_start(i: int) -> bool:
+        """True unless the char before '/' shows it is division, not a regex.
+
+        A value-ish preceding token (identifier/number char, or a closing
+        `)`/`]`/`}`) means '/' divides; anything else (operator, punctuation,
+        another '(', start of file/statement) means '/' opens a regex
+        literal. Imprecise for `return /re/` and similar keyword-preceded
+        cases, but sufficient to stop a quote inside a regex from being read
+        as a string opener.
+        """
+        prev = prev_significant(i)
+        if not prev:
+            return True
+        return not (prev.isalnum() or prev in "_$)]}")
+
+    def regex_literal(i: int, line: int) -> tuple[int, int]:
+        """Skip a /pattern/flags literal starting at its opening '/'."""
+        j = i + 1
+        in_class = False
+        while j < n:
+            c = source[j]
+            if c == "\\" and j + 1 < n:
+                j += 2
+                continue
+            if c == "\n":
+                # A real regex literal cannot contain a literal newline, so
+                # this was not one; bail without consuming anything.
+                return i + 1, line
+            if c == "[":
+                in_class = True
+            elif c == "]":
+                in_class = False
+            elif c == "/" and not in_class:
+                j += 1
+                break
+            j += 1
+        while j < n and source[j].isalpha():
+            j += 1
+        return j, line
 
     def scan(i: int, line: int, in_braces: bool) -> tuple[int, int]:
         """Scan code from i; inside ${...} stop after the matching '}'."""
@@ -327,6 +400,8 @@ def js_string_literals(source: str) -> list[tuple[int, str]]:
                 end = n if end == -1 else end + 2
                 line += source.count("\n", i, end)
                 i = end
+            elif ch == "/" and looks_like_regex_start(i):
+                i, line = regex_literal(i, line)
             elif ch in "'\"":
                 start_line, j, buf = line, i + 1, []
                 while j < n and source[j] != ch and source[j] != "\n":
@@ -445,15 +520,22 @@ def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
 def triage_served(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
     """Split one served file's hits into (failing, known-but-deferred).
 
-    A listed file defers at most its ceiling of name references. Past the
-    ceiling every name reference fails: the guard cannot tell which one is new,
-    and pointing at all of them is better than passing the one that is.
+    A listed file defers only the hits whose matched value fits inside its
+    recorded multiset of approved occurrences (fewer of an approved name is a
+    partial fix and still defers; an unlisted name, or more of a listed one
+    than recorded, is a NEW leak and every name hit in the file fails). The
+    guard cannot tell WHICH hit is new once the budget for its name is
+    exceeded, so pointing at all of them is better than passing the one that
+    is.
     """
     domain = [h for h in hits if "operator domain" in h]
     names = [h for h in hits if "operator domain" not in h]
-    ceiling = SERVED_KNOWN_COUPLINGS.get(rel, (0, ""))[0]
-    if names and len(names) <= ceiling:
-        return domain, names
+    approved = SERVED_KNOWN_COUPLINGS.get(rel, ((), ""))[0]
+    if names:
+        budget = Counter(approved)
+        observed = Counter(_hit_value(h) for h in names)
+        if all(observed[value] <= budget.get(value, 0) for value in observed):
+            return domain, names
     return domain + names, []
 
 
@@ -513,8 +595,8 @@ def main() -> int:
             f"{len(by_file)} served file(s), not yet fixed"
         )
         for rel, count in sorted(by_file.items()):
-            ceiling, reason = SERVED_KNOWN_COUPLINGS[rel]
-            print(f"  {rel}: {count} of {ceiling}\n      reason deferred: {reason}")
+            approved, reason = SERVED_KNOWN_COUPLINGS[rel]
+            print(f"  {rel}: {count} of {len(approved)}\n      reason deferred: {reason}")
         print()
 
     if not findings:

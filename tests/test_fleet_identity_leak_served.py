@@ -69,6 +69,22 @@ def test_js_line_numbers_survive_multiline_templates(tmp_path):
     assert len(hits) == 1 and ":4:" in hits[0]
 
 
+def test_js_regex_literal_does_not_desync_string_scanning(tmp_path):
+    # A regex literal containing a quote must not be read as opening a string
+    # — the resident literal right after it must still be found.
+    src = '/["\']/;\nconst label = "Lumen";\n'
+    hits = guard.scan_served_file(_write(tmp_path, "r.js", src))
+    assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0]
+
+
+def test_js_division_is_not_mistaken_for_a_regex(tmp_path):
+    # A genuine division must not be swallowed as an (unterminated) regex
+    # body, which would desync scanning of what follows on the same line.
+    src = 'const ratio = a / b; const label = "Lumen";\n'
+    hits = guard.scan_served_file(_write(tmp_path, "s.js", src))
+    assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0]
+
+
 def test_js_operator_domain_is_flagged(tmp_path):
     hits = guard.scan_served_file(_write(tmp_path, "g.js", 'const u = "https://gov.cirwel.org/x";\n'))
     assert len(hits) == 1 and 'operator domain "cirwel.org"' in hits[0]
@@ -117,6 +133,19 @@ def test_html_splits_markup_from_script(tmp_path):
 # --- Discovery and triage ------------------------------------------------------
 
 
+def test_script_end_tag_with_embedded_whitespace_is_recognized(tmp_path):
+    # CodeQL: a script end tag like `</script\t\n bar>` must still close the
+    # <script> block, or its content (here, a provenance comment) gets
+    # rescanned under the stricter no-comments prose rule instead of the code
+    # rule, and the markup after it goes unrecognized as markup.
+    src = (
+        "<script>\nconst a = cfg.label; // Watcher provenance comment\n"
+        "</script\t\n bar>\n<p>Lumen</p>\n"
+    )
+    hits = guard.scan_served_file(_write(tmp_path, "q.html", src))
+    assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0]
+
+
 def test_served_files_cover_every_served_surface():
     rels = {p.relative_to(REPO).as_posix() for p in guard.served_files()}
     assert "src/tool_descriptions.json" in rels
@@ -128,35 +157,66 @@ def test_served_files_cover_every_served_surface():
     assert not any("/.attestations/" in r for r in rels)
 
 
-def test_known_coupling_defers_up_to_its_ceiling_only():
+def test_known_coupling_defers_up_to_its_known_occurrences():
     rel = "dashboard/redesign/data.js"
-    ceiling = guard.SERVED_KNOWN_COUPLINGS[rel][0]
-    at_ceiling = [f'  {rel}:{k}: hardcoded fleet identity "Lumen" in a string literal' for k in range(ceiling)]
-    assert guard.triage_served(rel, at_ceiling) == ([], at_ceiling)
-    # One more reference in an already-listed file is a NEW leak, not a pass.
-    over = at_ceiling + [f'  {rel}:9999: hardcoded fleet identity "Lumen" in a string literal']
+    approved = guard.SERVED_KNOWN_COUPLINGS[rel][0]
+    at_budget = [
+        f'  {rel}:{k}: hardcoded fleet identity "{name}" in a string literal'
+        for k, name in enumerate(approved)
+    ]
+    assert guard.triage_served(rel, at_budget) == ([], at_budget)
+    # A partial fix (fewer than the recorded occurrences) still defers.
+    fewer = at_budget[:-1]
+    assert guard.triage_served(rel, fewer) == ([], fewer)
+    # One more reference of an already-budgeted name is a NEW leak, not a pass.
+    over = at_budget + [f'  {rel}:9999: hardcoded fleet identity "{approved[0]}" in a string literal']
     assert guard.triage_served(rel, over) == (over, [])
 
 
-def test_domain_is_never_deferred_by_a_ceiling():
+def test_known_coupling_name_substitution_is_caught():
+    # The bug this pins: removing one known reference and adding a DIFFERENT
+    # name in the same file must not pass just because the total count is
+    # unchanged — the old ceiling-only check let this through.
+    rel = "dashboard/redesign/data.js"
+    approved = list(guard.SERVED_KNOWN_COUPLINGS[rel][0])
+    swapped = approved[:-1] + ["Steward"]  # a name never recorded for this file
+    hits = [
+        f'  {rel}:{k}: hardcoded fleet identity "{name}" in a string literal'
+        for k, name in enumerate(swapped)
+    ]
+    failing, deferred = guard.triage_served(rel, hits)
+    assert failing == hits and deferred == []
+
+
+def test_domain_is_never_deferred_by_a_known_coupling():
     rel = next(iter(guard.SERVED_KNOWN_COUPLINGS))
-    name_hit = f'  {rel}:1: fleet identity "Lumen" in served text'
+    approved_name = guard.SERVED_KNOWN_COUPLINGS[rel][0][0]
+    name_hit = f'  {rel}:1: fleet identity "{approved_name}" in served text'
     domain_hit = f'  {rel}:2: operator domain "cirwel.org" in served text'
     failing, deferred = guard.triage_served(rel, [name_hit, domain_hit])
     assert failing == [domain_hit] and deferred == [name_hit]
     assert guard.triage_served("skills/new/SKILL.md", [name_hit]) == ([name_hit], [])
 
 
-def test_every_ceiling_is_exact():
-    # Ceilings only ratchet down: a fix must lower the number, and the last fix
-    # deletes the entry. A ceiling above the real count would silently admit
-    # new references up to the slack.
-    for rel, (ceiling, _reason) in guard.SERVED_KNOWN_COUPLINGS.items():
+def test_every_known_occurrence_is_exact():
+    # The recorded multiset only ratchets down: a fix removes one entry from
+    # it, and the last removal deletes the file's whole entry. A recorded set
+    # that does not match reality would either fail to defer a legitimate
+    # occurrence or, worse, silently budget for one that no longer exists
+    # (freeing room for an unrelated new leak of the same name).
+    from collections import Counter
+
+    for rel, (approved, _reason) in guard.SERVED_KNOWN_COUPLINGS.items():
         path = REPO / rel
         assert path.is_file(), f"{rel} is listed in SERVED_KNOWN_COUPLINGS but does not exist"
-        names = [h for h in guard.scan_served_file(path) if "operator domain" not in h]
-        assert names, f"{rel} no longer names a resident; delete its entry"
-        assert len(names) == ceiling, f"{rel}: {len(names)} references, ceiling {ceiling}; set it to {len(names)}"
+        hits = [h for h in guard.scan_served_file(path) if "operator domain" not in h]
+        assert hits, f"{rel} no longer names a resident; delete its entry"
+        observed = Counter(guard._hit_value(h) for h in hits)
+        approved_count = Counter(approved)
+        assert observed == approved_count, (
+            f"{rel}: observed {dict(observed)} != recorded {dict(approved_count)}; "
+            "update SERVED_KNOWN_COUPLINGS to match reality"
+        )
 
 
 def test_served_tree_has_no_new_leak():
