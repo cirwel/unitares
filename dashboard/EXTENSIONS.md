@@ -116,9 +116,10 @@ does:
   cookieless 401 to sign-in.
 - `callTool(name, args)` calls a governance tool through `/v1/tools/call`.
 - `withFallback(liveFn, emptyFn)` returns `{ source: "live", data }`, or
-  `{ source: "snapshot", data: emptyFn() }` when `liveFn` throws or returns
-  `null`. Make the fallback an empty shape your view can render. The bundled
-  snapshot covers only the core tabs.
+  `{ source: "unavailable", data: emptyFn() }` when `liveFn` throws or returns
+  `null` on a served page. Make the fallback an empty shape your view can
+  render, and badge `source` so the viewer can tell. The bundled snapshot
+  covers only the core tabs.
 
 ## Trust
 
