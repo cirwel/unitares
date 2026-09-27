@@ -236,3 +236,39 @@ class TestTheGuardCoversWhatShips:
 
         missing = {pkg for pkg in shipped if not any(p == pkg or p.startswith(f"{pkg}/") for p in scanned)}
         assert not missing, f"shipped but unguarded: {sorted(missing)}"
+
+
+# --- the agent-first Overview (2026-09-27) ------------------------------------
+# The dashboard's Overview now leads with agents and hides its resident block
+# when the roster is empty (dashboard/tests/landing-agent-first.test.js). What
+# it leans on server-side must therefore not depend on the roster: with none
+# declared, every agent's check-in still reaches the feed and the verdict
+# counts, and nothing is filtered out as "not a resident".
+
+def test_agent_feed_and_checkin_counts_ignore_an_empty_roster(residentless):
+    import asyncio
+    import time
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from src.broadcaster import broadcaster_instance
+    from src.http_routes.telemetry import http_eisv_agents
+    from src.http_routes.overview import http_activity
+
+    broadcaster_instance.event_history.clear()
+    broadcaster_instance.activity_history.clear()
+    for agent_id, decision in (("a", {"action": "proceed"}),
+                               ("b", {"action": "proceed", "sub_action": "guide"})):
+        asyncio.run(broadcaster_instance.broadcast({
+            "type": "eisv_update", "agent_id": agent_id, "agent_name": "agent-" + agent_id,
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+            "decision": decision,
+        }))
+    app = Starlette(routes=[Route("/v1/eisv/agents", http_eisv_agents), Route("/api/activity", http_activity)])
+    client = TestClient(app, client=("127.0.0.1", 50000))
+
+    feed = client.get("/v1/eisv/agents").json()
+    assert sorted(r["agent_id"] for r in feed["agents"]) == ["a", "b"]
+    totals = client.get("/api/activity").json()["totals"]
+    assert totals == {"proceed": 1, "guide": 1, "pause": 0}

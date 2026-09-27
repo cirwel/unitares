@@ -185,7 +185,8 @@ describe("snapshot fallback on a served page", () => {
       const body = s.endsWith("/health") ? { version: "9.9.9", uptime: { formatted: "2m" }, database: { status: "connected" } }
         : s.includes("/health/deep") ? { status: "healthy", status_breakdown: {}, checks: {} }
         : s.includes("/v1/residents") ? { residents: [] }
-        : s.includes("/api/automations") ? { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: false, snapshot_age_seconds: 60 }
+        : s.includes("/v1/eisv/agents") ? { type: "eisv_agents", count: 0, coverage_start: Date.now() / 1000 - 7200, agents: [] }
+        : s.includes("/api/activity") ? { success: true, buckets: [], window_minutes: 60, bucket_minutes: 5, coverage_start: Date.now() / 1000 - 3600 }
         : { success: true };
       return { ok: true, status: 200, json: async () => body };
     };

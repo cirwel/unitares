@@ -97,6 +97,8 @@ from src.http_routes.telemetry import (
     _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS,
     _eisv_telemetry_health_cache,
     http_eisv_telemetry_health,
+    http_eisv_agents,
+    http_governance_trend,
     http_events,
     _LIFECYCLE_EVENT_TYPES,
     http_enforcement_divergence,
@@ -331,6 +333,8 @@ def register_http_routes(
     app.routes.append(Route("/v1/eisv/latest", http_eisv_latest, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/recent", http_eisv_recent, methods=["GET"]))
     app.routes.append(Route("/v1/eisv/telemetry-health", http_eisv_telemetry_health, methods=["GET"]))
+    app.routes.append(Route("/v1/governance/trend", http_governance_trend, methods=["GET"]))
+    app.routes.append(Route("/v1/eisv/agents", http_eisv_agents, methods=["GET"]))
     app.routes.append(Route("/v1/lifecycle/recent", http_lifecycle_recent, methods=["GET"]))
     app.routes.append(Route("/v1/enforcement/divergence", http_enforcement_divergence, methods=["GET"]))
     app.routes.append(Route("/api/events", http_events, methods=["GET"]))

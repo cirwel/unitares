@@ -34,7 +34,7 @@ The old code's special-cases are the regression suite; robustness is inherited, 
 
 - `tokens.css` — the system. One calm base, one accent, semantic data-hues, two themes via `[data-theme]`.
   Replaces the role of the 5,877-line `styles.css`.
-- `preview.html` — landing reference (residents strip + stats grid + Pulse) on a real fleet snapshot.
+- `preview.html` — landing reference on a real fleet snapshot. Deleted 2026-09-27 (it bundled a capture of the operator's fleet); use `app.html?snapshot=1`.
   Component CSS is inline here; it gets extracted into the primitive kit in increment 1.
 
 ## Primitive kit (to extract in increment 1)
