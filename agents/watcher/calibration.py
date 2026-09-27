@@ -287,6 +287,51 @@ from typing import Iterable, Mapping
 # enum and have no consistent meaning).
 PRECISION_REASONS_TRUE_NEGATIVE = frozenset({"fp"})
 
+# When a pattern's detection rule last changed, as UTC ISO timestamps. A
+# resolution grades the rule that produced the finding, so findings of a
+# listed pattern detected before its entry are left out of its precision:
+# they measure a rule Watcher no longer runs. Add or move an entry whenever
+# a change alters what a pattern flags.
+#
+# P006: #2424 and #2447 dropped handlers that already react (log, re-raise,
+# return an error). Every fp dismissal behind the P006 floor came from one
+# 2026-09-23/24 triage of the earlier rule, where most flagged handlers were
+# of exactly that kind. The timestamp is when #2447 reached the deploy
+# checkout that runs Watcher; the merge itself was 2026-09-25T23:42:10Z.
+PATTERN_RULE_EPOCHS: dict[str, str] = {
+    "P006": "2026-09-26T00:58:47Z",
+}
+
+# Patterns whose ``line_content_hash`` is not a hash of the source line.
+# Review findings (R000) hash the hint text, so two unrelated lines with the
+# same observation would otherwise look like copies of one line. Shared by
+# the listing's grouping and by the copy count below.
+UNGROUPED_PATTERNS = frozenset({"R000"})
+
+
+def _copy_key(row: Mapping[str, object], pattern: str, file_path: str) -> tuple | None:
+    """Identify copies of one flagged line for the precision count, or None.
+
+    Watcher state is shared across worktrees and the fingerprint keeps the
+    absolute path and line, so one handler dismissed in four worktrees is
+    four rows. Those are one judgement about one piece of code, so they
+    count once. The key is the pattern, the line content hash and the last
+    two path components: most resolved rows point into removed worktrees,
+    so the repo-relative path cannot be asked of git. Two different files
+    that share a parent directory name and a file name, or two handlers in
+    one file with the same line text, therefore count once. Both undercount
+    evidence, which delays demotion rather than hiding findings. A file at
+    a checkout's top level keeps the checkout name in its key and is not
+    merged across worktrees.
+    """
+    content_hash = row.get("line_content_hash")
+    if not isinstance(content_hash, str) or not content_hash:
+        return None
+    if pattern in UNGROUPED_PATTERNS:
+        return None
+    tail = Path(file_path).parts[-2:]
+    return (pattern, content_hash, *tail)
+
 
 @dataclass(frozen=True)
 class BucketStats:
@@ -314,6 +359,7 @@ def precision_by_pattern_and_class(
     half_life_days: float = 30.0,
     min_weighted_n: float = 10.0,
     true_negative_reasons: Iterable[str] = PRECISION_REASONS_TRUE_NEGATIVE,
+    rule_epochs: Mapping[str, str] | None = None,
 ) -> dict[tuple[str, str], BucketStats]:
     """Aggregate findings into per-(pattern, file_class) precision stats.
 
@@ -323,14 +369,30 @@ def precision_by_pattern_and_class(
     with free-text reasons or no reason are excluded from the dismissed
     count — they don't represent a precision-relevant signal.
 
+    A row of a pattern listed in ``rule_epochs`` (default
+    ``PATTERN_RULE_EPOCHS``) counts only when it was detected at or after
+    that pattern's entry; a row with no readable ``detected_at`` does not
+    count for such a pattern. Copies of one flagged line (see
+    ``_copy_key``) count once per status, at their largest decay weight.
+
     Returns ``{(pattern, file_class): BucketStats}``. Buckets with
     ``weighted_n < min_weighted_n`` carry ``ci_lower=None`` so callers
     can distinguish 'unmeasured' from 'measured-as-zero'.
     """
     reference = now or datetime.now(timezone.utc)
     tn_reasons = frozenset(true_negative_reasons)
+    epochs = {
+        pattern: parsed
+        for pattern, raw in (
+            PATTERN_RULE_EPOCHS if rule_epochs is None else rule_epochs
+        ).items()
+        if (parsed := parse_iso_z(raw)) is not None
+    }
 
     aggregates: dict[tuple[str, str], dict] = {}
+    # Largest weight counted so far per (status, file class, copy key); see
+    # _copy_key.
+    copy_weights: dict[tuple, float] = {}
 
     for row in findings:
         status = row.get("status")
@@ -357,6 +419,13 @@ def precision_by_pattern_and_class(
             if not isinstance(reason, str) or reason not in tn_reasons:
                 continue
 
+        rule_epoch = epochs.get(pattern)
+        if rule_epoch is not None:
+            detected_raw = row.get("detected_at")
+            detected = parse_iso_z(detected_raw) if isinstance(detected_raw, str) else None
+            if detected is None or detected < rule_epoch:
+                continue
+
         file_class = classify_file(file_path)
         key = (pattern, file_class)
         weight = decay_weight(ts, reference, half_life_days)
@@ -364,6 +433,13 @@ def precision_by_pattern_and_class(
             key,
             {"confirmed": 0.0, "dismissed": 0.0, "latest": None},
         )
+        # A copy counts once, at the weight of its most recent resolution.
+        copy_key = _copy_key(row, pattern, file_path)
+        if copy_key is not None:
+            ledger_key = (status, file_class, copy_key)
+            seen = copy_weights.get(ledger_key)
+            copy_weights[ledger_key] = max(weight, seen or 0.0)
+            weight = max(0.0, weight - (seen or 0.0))
         if status == "confirmed":
             bucket["confirmed"] = float(bucket["confirmed"]) + weight
         else:

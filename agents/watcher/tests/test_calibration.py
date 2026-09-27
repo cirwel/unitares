@@ -154,13 +154,15 @@ class TestParseIsoZ:
 
 
 from agents.watcher.calibration import (
+    PATTERN_RULE_EPOCHS,
     PRECISION_REASONS_TRUE_NEGATIVE,
     BucketStats,
     precision_by_pattern_and_class,
 )
 
 
-def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed_at=None):
+def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed_at=None,
+         line_content_hash=None):
     """Helper: build a findings.jsonl-shaped dict."""
     r = {
         "pattern": pattern,
@@ -179,6 +181,8 @@ def _row(*, pattern, file, status, ts, reason=None, confirmed_at=None, dismissed
         r["dismissed_at"] = dismissed_at
     if reason is not None:
         r["resolution_reason"] = reason
+    if line_content_hash is not None:
+        r["line_content_hash"] = line_content_hash
     return r
 
 
@@ -294,10 +298,127 @@ class TestPrecisionByPatternAndClass:
         assert bucket.weighted_confirmed == pytest.approx(1.0, rel=0.05)
 
 
+class TestRuleEpochs:
+    """A resolution grades the rule that produced the finding. Rows of a
+    pattern detected before its rule last changed measure a rule Watcher no
+    longer runs, so they stay out of that pattern's precision."""
+
+    NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
+    EPOCHS = {"P1": "2026-09-26T00:00:00Z"}
+
+    def _fp(self, detected_at, file="/a/src/x.py", **kw):
+        return _row(pattern="P1", file=file, status="dismissed", reason="fp",
+                    ts=detected_at, dismissed_at="2026-09-26T12:00:00Z", **kw)
+
+    def test_rows_detected_before_the_epoch_are_left_out(self):
+        rows = [self._fp("2026-09-25T23:59:59Z"), self._fp("2026-09-26T00:00:00Z")]
+        result = precision_by_pattern_and_class(
+            rows, now=self.NOW, min_weighted_n=0.5, rule_epochs=self.EPOCHS)
+        assert result[("P1", "app")].weighted_dismissed == pytest.approx(0.99, rel=0.02)
+
+    def test_epoch_reads_detected_at_not_the_resolution_time(self):
+        # Dismissed after the epoch, detected before it: still the old rule.
+        rows = [self._fp("2026-09-20T00:00:00Z")]
+        result = precision_by_pattern_and_class(
+            rows, now=self.NOW, min_weighted_n=0.5, rule_epochs=self.EPOCHS)
+        assert ("P1", "app") not in result
+
+    def test_row_without_detected_at_is_left_out_for_a_listed_pattern(self):
+        row = self._fp("2026-09-26T06:00:00Z")
+        del row["detected_at"]
+        result = precision_by_pattern_and_class(
+            [row], now=self.NOW, min_weighted_n=0.5, rule_epochs=self.EPOCHS)
+        assert result == {}
+
+    def test_unlisted_pattern_keeps_its_history(self):
+        rows = [_row(pattern="P2", file="/a/src/x.py", status="dismissed", reason="fp",
+                     ts="2026-01-01T00:00:00Z", dismissed_at="2026-09-26T12:00:00Z")]
+        result = precision_by_pattern_and_class(
+            rows, now=self.NOW, min_weighted_n=0.5, rule_epochs=self.EPOCHS)
+        assert result[("P2", "app")].weighted_dismissed > 0
+
+    def test_p006_triage_before_its_rule_change_no_longer_demotes(self):
+        """The 2026-09-23/24 triage dismissed 25 P006 app findings of the
+        earlier rule. Under the default table they leave no measured bucket,
+        so the demotion callsite (which needs a ci_lower) cannot fire."""
+        rows = [
+            _row(pattern="P006", file=f"/wt/tree-{i}/src/mod_{i}.py", status="dismissed",
+                 reason="fp", ts="2026-09-23T20:00:00Z",
+                 dismissed_at="2026-09-24T20:00:00Z")
+            for i in range(25)
+        ]
+        result = precision_by_pattern_and_class(rows, now=self.NOW)
+        assert ("P006", "app") not in result
+
+
+class TestCopiesCountOnce:
+    """One flagged line resolved in several worktrees is one judgement."""
+
+    NOW = datetime(2026, 9, 27, tzinfo=timezone.utc)
+
+    def _fp(self, file, *, h="c0ffee000000", pattern="P1", dismissed_at="2026-09-26T12:00:00Z",
+            status="dismissed"):
+        return _row(pattern=pattern, file=file, status=status,
+                    reason="fp" if status == "dismissed" else None,
+                    ts="2026-09-26T00:00:00Z", dismissed_at=dismissed_at,
+                    confirmed_at=dismissed_at if status == "confirmed" else None,
+                    line_content_hash=h)
+
+    def _bucket(self, rows, key=("P1", "app")):
+        result = precision_by_pattern_and_class(
+            rows, now=self.NOW, min_weighted_n=0.1, rule_epochs={})
+        return result[key]
+
+    def test_same_line_in_several_worktrees_counts_once(self):
+        rows = [self._fp(f"/projects/wt/{t}/src/pkg/mod.py") for t in ("a", "b", "c", "d")]
+        rows.append(self._fp("/projects/unitares/src/pkg/mod.py"))
+        one = self._bucket([rows[0]]).weighted_dismissed
+        assert self._bucket(rows).weighted_dismissed == pytest.approx(one)
+
+    def test_copy_counts_at_its_most_recent_resolution(self):
+        old = self._fp("/wt/a/src/pkg/mod.py", dismissed_at="2026-07-28T12:00:00Z")
+        new = self._fp("/wt/b/src/pkg/mod.py", dismissed_at="2026-09-26T12:00:00Z")
+        expected = self._bucket([new]).weighted_dismissed
+        assert self._bucket([old, new]).weighted_dismissed == pytest.approx(expected)
+        assert self._bucket([new, old]).weighted_dismissed == pytest.approx(expected)
+
+    def test_different_line_text_or_file_counts_separately(self):
+        rows = [
+            self._fp("/wt/a/src/pkg/mod.py"),
+            self._fp("/wt/b/src/pkg/mod.py", h="different000"),
+            self._fp("/wt/a/src/pkg/other.py"),
+            self._fp("/wt/a/src/lib/mod.py"),
+        ]
+        one = self._bucket([rows[0]]).weighted_dismissed
+        assert self._bucket(rows).weighted_dismissed == pytest.approx(4 * one)
+
+    def test_confirmed_and_dismissed_copies_both_count(self):
+        rows = [
+            self._fp("/wt/a/src/pkg/mod.py"),
+            self._fp("/wt/b/src/pkg/mod.py", status="confirmed"),
+        ]
+        bucket = self._bucket(rows)
+        assert bucket.weighted_confirmed > 0
+        assert bucket.weighted_dismissed > 0
+
+    def test_review_findings_are_never_merged(self):
+        # R000 hashes the hint text, not the line.
+        rows = [self._fp(f"/wt/{t}/src/pkg/mod.py", pattern="R000") for t in ("a", "b")]
+        one = self._bucket([rows[0]], key=("R000", "app")).weighted_dismissed
+        assert self._bucket(rows, key=("R000", "app")).weighted_dismissed == pytest.approx(2 * one)
+
+
 def test_precision_reasons_constant_shape():
     """Document the canonical taxonomy. Precision math counts as TN ONLY
     the reasons that mean 'this finding was a false positive'."""
     assert PRECISION_REASONS_TRUE_NEGATIVE == frozenset({"fp"})
+
+
+def test_pattern_rule_epochs_parse():
+    """Every entry must parse: an unparseable one is silently ignored."""
+    for pattern, raw in PATTERN_RULE_EPOCHS.items():
+        assert parse_iso_z(raw) is not None, pattern
+    assert "P006" in PATTERN_RULE_EPOCHS
 
 
 from agents.watcher.calibration import probe_rate_for_n, should_probe
