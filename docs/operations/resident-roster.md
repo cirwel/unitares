@@ -203,7 +203,7 @@ their endpoints.
 | Pack | Routes | Enable when |
 |---|---|---|
 | `reference-residents` | `/v1/sentinel/{backlog,summary}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` |
-| `automation-census` | `/api/automations` | you run the `unitares-automations` census ([setup](automation-census-setup.md)) |
+| `automation-census` | `/api/automations` | you run the `unitares-automations` census on the server's host ([setup](automation-census-setup.md)); not available in the Docker image |
 
 The pack code lives next to what it serves, not in the installed server
 package: the resident routes in `agents/<resident>/routes.py`, the census route
