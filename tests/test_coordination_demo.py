@@ -304,6 +304,10 @@ def test_stated_ports_urls_and_defaults_are_not_refused(tmp_path) -> None:
         ({"GOVERNANCE_HOST_PORT": "18767", "LEASE_PLANE_HOST_PORT": "18788"}, missing),
         # a genuine one-sided remap, with the default side stated
         ({"LEASE_PLANE_HOST_PORT": "18788", "GOVERNANCE_HOST_PORT": "8767"}, missing),
+        # a variable that states a default is not a move
+        ({"LEASE_PLANE_HOST_PORT": "8788"}, missing),
+        ({"GOVERNANCE_HOST_PORT": "8767"}, missing),
+        ({"UNITARES_COORDINATION_DEMO_URL": "http://127.0.0.1:8788/"}, missing),
         # the other side stated in .env, which Compose reads as well
         ({"UNITARES_COORDINATION_DEMO_PORT": "18788"}, both),
         # an explicit URL states its own half

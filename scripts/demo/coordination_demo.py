@@ -158,28 +158,34 @@ def port_pairing_problem(
     env = os.environ if environ is None else environ
     dotenv = _dotenv_values(dotenv_path)
 
-    def env_remap(names: tuple[str, ...], url_var: str) -> str | None:
-        return next((name for name in (url_var, *names) if env.get(name)), None)
+    def env_remap(
+        names: tuple[str, ...], url_var: str, default_port: str, default_url: str
+    ) -> str | None:
+        # Judge the value the demo will actually use (the URL, else the first
+        # port variable set); one that states the default is not a move.
+        url = (env.get(url_var) or "").rstrip("/")
+        if url:
+            return url_var if url != default_url else None
+        name = next((name for name in names if env.get(name)), None)
+        return name if name and env.get(name) != default_port else None
 
     def stated(names: tuple[str, ...], url_var: str) -> bool:
         return bool(env.get(url_var)) or any(
             env.get(name) or dotenv.get(name) for name in names
         )
 
-    for moved, moved_url, silent, silent_url, silent_default, silent_hint in (
-        (
-            _LEASE_PORT_VARS, "UNITARES_COORDINATION_DEMO_URL",
-            _GOVERNANCE_PORT_VARS, "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL",
-            "8767", "GOVERNANCE_HOST_PORT",
-        ),
-        (
-            _GOVERNANCE_PORT_VARS, "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL",
-            _LEASE_PORT_VARS, "UNITARES_COORDINATION_DEMO_URL",
-            "8788", "LEASE_PLANE_HOST_PORT",
-        ),
+    lease = (_LEASE_PORT_VARS, "UNITARES_COORDINATION_DEMO_URL", "8788", DEFAULT_BASE_URL)
+    governance = (
+        _GOVERNANCE_PORT_VARS, "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL",
+        "8767", DEFAULT_GOVERNANCE_URL,
+    )
+    for moved, silent, silent_hint in (
+        (lease, governance, "GOVERNANCE_HOST_PORT"),
+        (governance, lease, "LEASE_PLANE_HOST_PORT"),
     ):
-        name = env_remap(moved, moved_url)
-        if name and not stated(silent, silent_url):
+        silent_url, silent_default = silent[1], silent[2]
+        name = env_remap(*moved)
+        if name and not stated(silent[0], silent_url):
             return (
                 f"{name} moves one half of the stack, but nothing says where the "
                 f"other half is, so the demo would use port {silent_default} for "
