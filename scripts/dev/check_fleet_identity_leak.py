@@ -231,16 +231,17 @@ def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
 #
 # - Dashboard CODE (.js, and <script> in .html) keeps the Python rule: a string
 #   literal that IS a name is a finding, a comment naming one is provenance.
-# - PROSE (served .md, SKILL.md, tool_descriptions.json, and .html markup
-#   outside <script>) has no comments: every word is delivered. A resident name
-#   anywhere in it is a finding.
+# - PROSE (served .md, SKILL.md, tool_descriptions.json, .css, and .html
+#   markup outside <script>) has no comments: every word is delivered. A
+#   resident name anywhere in it, in any case, is a finding; labels are
+#   compared case-insensitively, so `lumen` is the same leak as `Lumen`.
 #
 # The operator domain fails everywhere, as above.
 
 # Everything under this root with these suffixes is served
 # (src/http_routes/dashboard.py, http_dashboard_redesign).
 SERVED_DASHBOARD_ROOT = "dashboard/redesign"
-SERVED_DASHBOARD_SUFFIXES = (".js", ".html", ".md")
+SERVED_DASHBOARD_SUFFIXES = (".js", ".html", ".md", ".css")
 # The retired classic dashboard still serves these two at /phase.
 SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
 # Agent-facing text. tool_descriptions.json is served through tools/list and
@@ -248,33 +249,48 @@ SERVED_DASHBOARD_FILES = ("dashboard/phase.html", "dashboard/phase.js")
 SERVED_PROSE_FILES = ("src/tool_descriptions.json",)
 SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 
-# Served surfaces that name residents today. Same contract as KNOWN_COUPLINGS:
-# reported on every run, never silenced, a line deleted when its fix lands.
-SERVED_KNOWN_COUPLINGS: dict[str, str] = {
-    "dashboard/redesign/snapshot.js":
+# Served surfaces that name residents today, each with the number of
+# references it holds. Same contract as KNOWN_COUPLINGS: reported on every run,
+# never silenced. The count is a ceiling, not a file-wide pass: one reference
+# more in a listed file is a NEW leak and fails, and a test fails when a file
+# holds fewer than its ceiling, so every fix lowers the number and the last one
+# deletes the entry. A ratchet that only turns one way.
+SERVED_KNOWN_COUPLINGS: dict[str, tuple[int, str]] = {
+    "dashboard/redesign/snapshot.js": (
+        15,
         "a real capture of one deployment's fleet, bundled as the offline "
         "fallback; replace with synthetic data once #2492 stops served pages "
         "falling back to it",
-    "dashboard/redesign/preview.html":
-        "carries the same capture as snapshot.js in a literal FLEET array",
-    "dashboard/redesign/PLAN.md":
-        "design notes describing one deployment's own fleet",
-    "dashboard/redesign/data.js":
+    ),
+    "dashboard/redesign/preview.html": (
+        5, "carries the same capture as snapshot.js in a literal FLEET array",
+    ),
+    "dashboard/redesign/PLAN.md": (
+        7, "design notes describing one deployment's own fleet",
+    ),
+    "dashboard/redesign/data.js": (
+        11,
         "gates the Watcher/Sentinel/Vigil summary panels on those labels "
         "(inRoster); the panel set should come from roster capabilities",
-    "dashboard/redesign/sections/residents.js":
-        "resident-specific panels keyed by label",
-    "skills/discord-bridge/SKILL.md":
-        "one operator's Discord bridge (separate repo), served to every agent",
-    "skills/unitares-dashboard/SKILL.md":
-        "describes the Sentinel adjudication panel by resident name",
-    "src/tool_descriptions.json":
+    ),
+    "dashboard/redesign/sections/residents.js": (
+        5, "resident-specific panels keyed by label",
+    ),
+    "skills/discord-bridge/SKILL.md": (
+        15, "one operator's Discord bridge (separate repo), served to every agent",
+    ),
+    "skills/unitares-dashboard/SKILL.md": (
+        3, "describes the Sentinel adjudication panel and its route by resident name",
+    ),
+    "src/tool_descriptions.json": (
+        2,
         "names Lumen in outcome_event's drawing outcome and an observe example; "
         "#2490 rewrites this file, fix after it lands",
+    ),
 }
 
 _NAME_WORD = re.compile(
-    r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b"
+    r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
 )
 _SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\s*>)", re.S | re.I)
 
@@ -427,10 +443,16 @@ def served_files(repo_root: Path = REPO_ROOT) -> list[Path]:
 
 
 def triage_served(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
-    """Split one served file's hits into (failing, known-but-deferred)."""
+    """Split one served file's hits into (failing, known-but-deferred).
+
+    A listed file defers at most its ceiling of name references. Past the
+    ceiling every name reference fails: the guard cannot tell which one is new,
+    and pointing at all of them is better than passing the one that is.
+    """
     domain = [h for h in hits if "operator domain" in h]
     names = [h for h in hits if "operator domain" not in h]
-    if rel in SERVED_KNOWN_COUPLINGS:
+    ceiling = SERVED_KNOWN_COUPLINGS.get(rel, (0, ""))[0]
+    if names and len(names) <= ceiling:
         return domain, names
     return domain + names, []
 
@@ -491,7 +513,8 @@ def main() -> int:
             f"{len(by_file)} served file(s), not yet fixed"
         )
         for rel, count in sorted(by_file.items()):
-            print(f"  {rel}: {count}\n      reason deferred: {SERVED_KNOWN_COUPLINGS[rel]}")
+            ceiling, reason = SERVED_KNOWN_COUPLINGS[rel]
+            print(f"  {rel}: {count} of {ceiling}\n      reason deferred: {reason}")
         print()
 
     if not findings:
