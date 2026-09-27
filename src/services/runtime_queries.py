@@ -786,6 +786,50 @@ async def _probe_lease_plane_boundary(loop) -> Dict[str, Any]:
         return {"status": "error", "error": str(e)}
 
 
+# Health statuses that are neither healthy nor a fault. A default install runs
+# without optional components, and a new one has not written everything yet;
+# painting either as degraded makes a working server read as failing, and
+# painting it healthy would claim a component that is not there. Both are
+# counted in status_breakdown and listed in operator_summary.not_configured_checks,
+# and neither moves the overall status.
+NOT_CONFIGURED = "not_configured"
+NO_DATA_YET = "no_data_yet"
+NEUTRAL_STATUSES = frozenset({NOT_CONFIGURED, NO_DATA_YET})
+
+
+def _audit_log_check(audit_logger) -> Dict[str, Any]:
+    """The JSONL audit log check, without calling a missing file a fault.
+
+    The file is created by the first audit event, so on a new install it is
+    absent because nothing has happened yet. It is only a fault when it can
+    never be created (its directory is not writable). With JSONL writes turned
+    off (UNITARES_AUDIT_WRITE_JSONL=0) there is no file to expect at all.
+    """
+    import os
+
+    log_file = audit_logger.log_file
+    if getattr(audit_logger, "_jsonl_enabled", True) is False:
+        return {
+            "status": NOT_CONFIGURED,
+            "audit_log_exists": log_file.exists(),
+            "note": "JSONL audit writes are off (UNITARES_AUDIT_WRITE_JSONL=0).",
+        }
+    if log_file.exists():
+        return {"status": "healthy", "audit_log_exists": True}
+    parent = log_file.parent
+    if parent.is_dir() and os.access(parent, os.W_OK):
+        return {
+            "status": NO_DATA_YET,
+            "audit_log_exists": False,
+            "note": "No audit events written yet; the log is created by the first one.",
+        }
+    return {
+        "status": "warning",
+        "audit_log_exists": False,
+        "warning": f"Audit log directory {parent} is missing or not writable.",
+    }
+
+
 async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[str, Any]:
     """Build plain health-check data for operators and transports."""
     server = server or mcp_server
@@ -826,8 +870,9 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
 
 
     try:
-        log_exists = await loop.run_in_executor(None, lambda: audit_logger.log_file.exists())
-        checks["telemetry"] = {"status": "healthy" if log_exists else "warning", "audit_log_exists": log_exists}
+        checks["telemetry"] = await loop.run_in_executor(
+            None, lambda: _audit_log_check(audit_logger)
+        )
     except Exception as e:
         checks["telemetry"] = {"status": "error", "error": str(e)}
 
@@ -977,14 +1022,33 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
             semantic_backend_ok = False
 
         semantic_search_reachable = embedder_ok and semantic_backend_ok
+        # No embedder installed and none asked for is how the shipped container
+        # runs (requirements-docker.txt leaves sentence-transformers out):
+        # search answers from Postgres FTS, which is a setup choice, not a
+        # fault. Naming a model in UNITARES_EMBEDDING_MODEL asks for semantic
+        # search, so a missing embedder then IS degraded, as is an embedder
+        # whose backend cannot use it.
+        embedder_requested = bool(os.getenv("UNITARES_EMBEDDING_MODEL", "").strip())
+        if semantic_search_reachable:
+            kg_status = "healthy"
+        elif not embedder_ok and not embedder_requested:
+            kg_status = NOT_CONFIGURED
+        else:
+            kg_status = "degraded"
         checks["knowledge_graph"] = {
-            "status": "healthy" if semantic_search_reachable else "degraded",
+            "status": kg_status,
             "backend": backend_name,
             "embedder_available": embedder_ok,
             "semantic_backend_available": semantic_backend_ok,
             "semantic_search_reachable": semantic_search_reachable,
         }
-        if not embedder_ok:
+        if kg_status == NOT_CONFIGURED:
+            checks["knowledge_graph"]["note"] = (
+                "No embedder installed, so knowledge search uses Postgres "
+                "full-text search. Install the semantic extra "
+                "(sentence-transformers) to add semantic search."
+            )
+        elif not embedder_ok:
             checks["knowledge_graph"]["warning"] = (
                 "Embedder service not loaded — semantic search unavailable."
             )
@@ -1034,7 +1098,11 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         effective_checks.pop("lease_plane", None)
 
     statuses = [c.get("status") for c in effective_checks.values()]
-    overall_status = "critical" if "error" in statuses else ("healthy" if all(s == "healthy" for s in statuses) else "moderate")
+    # A component that is not set up, or has had nothing to record yet, is
+    # neither healthy nor failing. It is counted and named below, but it does
+    # not move the overall status in either direction.
+    judged = [s for s in statuses if s not in NEUTRAL_STATUSES]
+    overall_status = "critical" if "error" in judged else ("healthy" if all(s == "healthy" for s in judged) else "moderate")
     status_breakdown = {
         "healthy": sum(1 for s in statuses if s == "healthy"),
         "warning": sum(1 for s in statuses if s == "warning"),
@@ -1042,6 +1110,8 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         "deprecated": sum(1 for s in statuses if s == "deprecated"),
         "unavailable": sum(1 for s in statuses if s == "unavailable"),
         "error": sum(1 for s in statuses if s == "error"),
+        NOT_CONFIGURED: sum(1 for s in statuses if s == NOT_CONFIGURED),
+        NO_DATA_YET: sum(1 for s in statuses if s == NO_DATA_YET),
     }
     failing_checks = sorted(name for name, check in effective_checks.items() if check.get("status") == "error")
     # `degraded` belongs here: the knowledge-graph check emits it when the embedder
@@ -1055,6 +1125,11 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
         name
         for name, check in effective_checks.items()
         if check.get("status") in {"warning", "degraded", "deprecated", "unavailable"}
+    )
+    neutral_checks = sorted(
+        name
+        for name, check in effective_checks.items()
+        if check.get("status") in NEUTRAL_STATUSES
     )
 
     first_action = "No action needed."
@@ -1082,6 +1157,8 @@ async def get_health_check_data(arguments: Dict[str, Any], server=None) -> Dict[
             "overall_status": overall_status,
             "failing_checks": failing_checks,
             "degraded_checks": degraded_checks,
+            # Not set up, or nothing recorded yet: informational, never a fault.
+            "not_configured_checks": neutral_checks,
             "first_action": first_action,
             "identity_continuity_mode": continuity_status.get("mode", "unknown"),
         },
