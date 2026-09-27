@@ -866,7 +866,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
     """Set display name for an agent. ``True`` iff the write succeeded.
 
     ⛔The label written may DIFFER from the one requested: a collision with
-    another active agent renames this one to ``{label}_{uuid8}``. A bool cannot
+    another active agent renames this one, ordinarily to ``{label}_{uuid8}``
+    and sometimes to a longer uuid suffix (``_collision_label``). A bool cannot
     express that, and callers that read "success" as "I got the name I asked
     for" reported the requested label back to the agent while the database
     held the renamed one. Use ``set_agent_label_resolved`` when the answer
