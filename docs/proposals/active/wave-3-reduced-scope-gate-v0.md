@@ -2,8 +2,9 @@
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
 same day, before any window started** (§10, Amendment 1). ⛔Ratified is
-not met: the §8 council round was held on 2026-09-27; the W_pre window (§10 A6) has not started, and
-the gate completes at §7 step 4 (§10 A10). The signature
+not met: the §8 council round was held on 2026-09-27 and the W_pre window (§10 A6) has not started.
+A no-port outcome completes the gate at §7 step 4; a pro-port outcome completes it only after the
+step 5 design pass and a new signature (§10 A10). The signature
 authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
 artifacts are still owed.)
 
@@ -711,7 +712,10 @@ saga row. "Observed continuously or correlated" in §6.7 and §7 step 1 means th
 `DialecticSaga.resolve/1` (fails a session after 4 h; live, 33 sessions carry `liveness_timeout`) and
 `DialecticSaga.update_reviewer/2` (writes the reviewer slot outside any saga). "Both writers", "either
 writer ordering" and "both writer orderings" in §2, §4 and §6 read as **all writers: the Python
-sweeper, the BEAM resolve path, BEAM liveness and `update_reviewer`**. A guarded refusal names the
+sweeper, the BEAM resolve path, BEAM liveness, `update_reviewer`, and the live Python fallbacks that
+write when a BEAM request is disabled or fails** (the phase-update and terminal-resolution fallbacks
+in the dialectic handlers). The W_pre report counts fallback writes as competing writers, and A9's
+coverage requirement includes them. A guarded refusal names the
 winner (`winner_status`, `winner_reason`).
 
 **A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
@@ -763,11 +767,12 @@ every A3 writer, and it is measured by writer coverage (a static inventory, 100%
 bypasses), not by (b1)'s channel. R2's evidence needs a BEAM-side emitter with the §3.1 schema,
 specified at step 5, because R1 disables the Python resolver that emits the current channel.
 
-**A10 — §8, split, and how the gate completes.** The council round is held (2026-09-27). The gate
-completes at §7 step 4 in one of two ways. If W_pre fires (b1), the gate concludes **no port** and is
-met; no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
-instead, the port becomes eligible for step 5, where the design pass runs on the chosen §1.2 option,
-and nothing is built until it has and the gate is signed again as amended. Hours against the §4
+**A10 — §8, split, and how the gate completes.** The council round is held (2026-09-27). The §7
+step 4 reading has two outcomes. If W_pre fires (b1), the gate concludes **no port** and is met at
+step 4; no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
+instead, the port only becomes **eligible**: the gate is met after step 5, when the design pass has
+run on the chosen §1.2 option and the gate has been signed again as amended. Nothing is built before
+then. Hours against the §4
 projection were not tracked for either round and are reported as not measured.
 
 **A11 — consistency.** §9 inventories both paths while §2's disconfirmers and §4's exit criteria
