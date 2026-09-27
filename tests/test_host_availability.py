@@ -93,3 +93,21 @@ def test_clear_ends_the_cooldown_and_the_backoff():
     ha.clear("antigravity:host-adapter")
     assert ha.cooldown("antigravity:host-adapter") is None
     assert "antigravity:host-adapter" not in ha._state
+
+
+
+def test_a_stated_reset_overrides_a_running_guess_even_when_sooner():
+    """Review of #2486 (antigravity, round 3): a guessed backoff must not hide
+    the provider's own, earlier reset time."""
+    now = 1_000_000.0
+    ha.record_unavailable("claude:host-adapter", {"reason": "auth", "stated_reset": None}, now=now)
+    ha.record_unavailable("claude:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 300}, now=now + 1)
+    entry = ha._state["claude:host-adapter"]
+    assert entry["retry_after"] == now + 300 and entry["retry_after_source"] == "provider"
+    # ...while a second guess inside the window still never shortens it.
+    ha.record_unavailable("codex:host-adapter", {"reason": "auth", "stated_reset": None}, now=now)
+    first = ha._state["codex:host-adapter"]["retry_after"]
+    ha.record_unavailable("codex:host-adapter", {"reason": "auth", "stated_reset": None},
+                          now=now - 10)
+    assert ha._state["codex:host-adapter"]["retry_after"] == first
