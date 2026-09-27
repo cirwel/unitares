@@ -40,7 +40,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # scripts/ops/hot-reload.sh -> lease_plane root is two levels up
 LEASE_PLANE_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+# UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+# pre-2026-09 ~/.config/cirwel path when only that one exists.
+SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
+if [ -z "${UNITARES_SECRETS_ENV:-}" ] && [ ! -f "$SECRETS_FILE" ] && [ -f "$HOME/.config/cirwel/secrets.env" ]; then
+    SECRETS_FILE="$HOME/.config/cirwel/secrets.env"
+fi
 # Colon-separated: the SDK path dep (unitares_sdk) compiles into its own ebin
 # in this _build — a changed SDK classifier must be scannable or --changed
 # silently skips it and the node keeps the stale module.

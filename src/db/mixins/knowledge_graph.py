@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from src.logging_utils import get_logger
@@ -47,7 +48,7 @@ class KnowledgeGraphMixin:
     async def kg_add_discovery(self, discovery) -> None:
         """Add a discovery to the knowledge graph."""
         from datetime import datetime as dt
-        from src.knowledge_graph import normalize_tags
+        from src.knowledge_graph import closure_evidence_to_json, normalize_tags
 
         if hasattr(discovery, 'tags') and discovery.tags:
             discovery.tags = normalize_tags(discovery.tags)
@@ -77,14 +78,17 @@ class KnowledgeGraphMixin:
                 INSERT INTO knowledge.discoveries (
                     id, agent_id, type, summary, details, tags, severity, status,
                     references_files, related_to, response_to_id, response_type,
-                    provenance, provenance_chain, created_at, epoch
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                    provenance, provenance_chain, created_at, epoch,
+                    closure_class, closure_evidence
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (id) DO UPDATE SET
                     summary = EXCLUDED.summary,
                     details = EXCLUDED.details,
                     tags = EXCLUDED.tags,
                     status = EXCLUDED.status,
                     provenance_chain = EXCLUDED.provenance_chain,
+                    closure_class = EXCLUDED.closure_class,
+                    closure_evidence = EXCLUDED.closure_evidence,
                     updated_at = now()
             """,
                 discovery.id,
@@ -103,6 +107,10 @@ class KnowledgeGraphMixin:
                 json.dumps(discovery.provenance_chain) if discovery.provenance_chain else None,
                 created_at,
                 GovernanceConfig.CURRENT_EPOCH,
+                # The pair a classified node carries, as the update paths
+                # store it; the upsert follows status, as above.
+                getattr(discovery, 'closure_class', None),
+                closure_evidence_to_json(getattr(discovery, 'closure_evidence', None)),
             )
 
     async def kg_query(
@@ -112,12 +120,18 @@ class KnowledgeGraphMixin:
         type: Optional[str] = None,
         severity: Optional[str] = None,
         status: Optional[str] = None,
-        created_after: Optional[str] = None,
+        created_after: Optional[datetime] = None,
         limit: int = 50,
         exclude_archived: bool = False,
         exclude_cold: bool = False,
+        created_before: Optional[datetime] = None,
     ) -> List[Dict[str, Any]]:
-        """Query discoveries with filters."""
+        """Query discoveries with filters, newest first.
+
+        ``created_after`` / ``created_before`` are exclusive bounds on
+        ``created_at`` and must be timezone-aware datetimes: the column is
+        TIMESTAMPTZ and asyncpg will not coerce an ISO string.
+        """
         async with self.acquire() as conn:
             conditions = []
             params = []
@@ -147,6 +161,10 @@ class KnowledgeGraphMixin:
             if created_after:
                 conditions.append(f"created_at > ${param_idx}")
                 params.append(created_after)
+                param_idx += 1
+            if created_before:
+                conditions.append(f"created_at < ${param_idx}")
+                params.append(created_before)
                 param_idx += 1
             if exclude_archived and not status:
                 conditions.append("status IS DISTINCT FROM 'archived'")
@@ -187,6 +205,11 @@ class KnowledgeGraphMixin:
         limit: int = 20,
         operator: str = "AND",
         tags: Optional[List[str]] = None,
+        order_by: str = "rank",
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        before: Optional[tuple] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using PostgreSQL tsvector.
 
@@ -210,20 +233,63 @@ class KnowledgeGraphMixin:
         ts_query = _apply_operator(query, operator=operator)
         # The tag predicate has to sit inside the ranked query: filtering the
         # top-N afterwards drops every tagged row that ranked below N.
+        #
+        # order_by="created_at" keeps the tsquery as the membership test and
+        # orders the matches newest first. It has to be done here, not by
+        # re-sorting a rank-ordered page: a match written a minute ago that
+        # ranks below the page limit would never reach the caller. The date
+        # window sits inside the query for the same reason as the tag clause.
+        if order_by not in ("rank", "created_at"):
+            raise ValueError(f"order_by must be 'rank' or 'created_at', not {order_by!r}")
         params: List[Any] = [ts_query]
-        tag_clause = ""
+        clauses = []
         if tags:
             from src.knowledge_graph import normalize_tags
             params.append(normalize_tags(tags))
-            tag_clause = f"AND tags && ${len(params)}"
+            clauses.append(f"AND tags && ${len(params)}")
+        if created_after:
+            params.append(created_after)
+            clauses.append(f"AND created_at > ${len(params)}")
+        if created_before:
+            params.append(created_before)
+            clauses.append(f"AND created_at < ${len(params)}")
+        # Row filters the caller would otherwise apply after the LIMIT. Under
+        # created_at order a burst of newer archived (or wrong-type) matches
+        # would fill the page and leave nothing to return, so newest-first
+        # reads send them here. Keys: agent_id, type, severity, status,
+        # exclude_archived, exclude_cold.
+        filters = filters or {}
+        for column in ("agent_id", "type", "severity", "status"):
+            value = filters.get(column)
+            if value:
+                params.append(value)
+                clauses.append(f"AND {column} = ${len(params)}")
+        if not filters.get("status"):
+            if filters.get("exclude_archived"):
+                clauses.append("AND status IS DISTINCT FROM 'archived'")
+            if filters.get("exclude_cold"):
+                clauses.append("AND status IS DISTINCT FROM 'cold'")
+        if before is not None:
+            # Keyset cursor for newest-first continuation: (created_at, id) of
+            # the oldest row already read. The pair, not created_at alone, so
+            # rows sharing that timestamp are not skipped.
+            params.append(before[0])
+            params.append(before[1])
+            clauses.append(f"AND (created_at, id) < (${len(params) - 1}, ${len(params)})")
+        filter_clause = " ".join(clauses)
+        order_clause = (
+            "created_at DESC, id DESC"
+            if order_by == "created_at"
+            else "rank DESC, created_at DESC"
+        )
         params.append(limit)
         async with self.acquire() as conn:
             rows = await conn.fetch(f"""
                 SELECT *, ts_rank_cd(search_vector, websearch_to_tsquery('english', $1), 32) as rank
                 FROM knowledge.discoveries
                 WHERE search_vector @@ websearch_to_tsquery('english', $1)
-                  {tag_clause}
-                ORDER BY rank DESC, created_at DESC
+                  {filter_clause}
+                ORDER BY {order_clause}
                 LIMIT ${len(params)}
             """, *params)
 
@@ -514,18 +580,31 @@ class KnowledgeGraphMixin:
         status: str,
         resolved_at: Optional[str] = None,
     ) -> bool:
-        """Update discovery status."""
+        """Update discovery status.
+
+        A reopening status (open, disputed) clears closure_class and
+        closure_evidence, as every other update path does
+        (apply_closure_reopen_rule); otherwise the reopen would violate
+        discoveries_closure_class_requires_closed on a classified row.
+        """
+        from src.knowledge_graph import CLOSURE_CLASS_CLEARING_STATUSES
+
+        clear_pair = (
+            ", closure_class = NULL, closure_evidence = NULL"
+            if status in CLOSURE_CLASS_CLEARING_STATUSES
+            else ""
+        )
         async with self.acquire() as conn:
             if resolved_at:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, resolved_at = $2, updated_at = now()
+                    SET status = $1, resolved_at = $2, updated_at = now(){clear_pair}
                     WHERE id = $3
                 """, status, resolved_at, discovery_id)
             else:
-                result = await conn.execute("""
+                result = await conn.execute(f"""
                     UPDATE knowledge.discoveries
-                    SET status = $1, updated_at = now()
+                    SET status = $1, updated_at = now(){clear_pair}
                     WHERE id = $2
                 """, status, discovery_id)
             return "UPDATE 1" in result
@@ -542,6 +621,9 @@ class KnowledgeGraphMixin:
             d['provenance'] = json.loads(d['provenance'])
         if d.get('provenance_chain') and isinstance(d['provenance_chain'], str):
             d['provenance_chain'] = json.loads(d['provenance_chain'])
+        if d.get('closure_evidence') and isinstance(d['closure_evidence'], str):
+            from src.knowledge_graph import closure_evidence_from_stored
+            d['closure_evidence'] = closure_evidence_from_stored(d['closure_evidence'])
         d.pop('search_vector', None)
         # 'rank' is deliberately NOT popped. Only kg_full_text_search's SQL
         # emits it (no other caller's SELECT produces the column), and both
