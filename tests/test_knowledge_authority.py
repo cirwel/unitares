@@ -442,3 +442,21 @@ async def test_semantic_fallback_pool_is_ranked_before_the_page_is_cut():
         await handlers._execute_knowledge_search(state)
     assert state.search_mode == "semantic_fallback_fts"
     assert [row.id for row in state.results][0] == "finding-1"
+
+
+def test_semantic_fallback_hides_cold_rows_by_default():
+    # Review on #2537 (round 4): the fallback predicate checked archived but
+    # never cold, and the wider pool made that reachable.
+    from src.mcp_handlers.knowledge.handlers import (
+        _candidate_matches_semantic_fallback,
+        _parse_knowledge_search_request,
+    )
+
+    cold = _discovery("cold-1")
+    cold.status = "cold"
+    default = _parse_knowledge_search_request({"query": "x"})
+    assert not _candidate_matches_semantic_fallback(cold, default)
+    with_cold = _parse_knowledge_search_request({"query": "x", "include_cold": True})
+    assert _candidate_matches_semantic_fallback(cold, with_cold)
+    explicit = _parse_knowledge_search_request({"query": "x", "status": "cold"})
+    assert _candidate_matches_semantic_fallback(cold, explicit)

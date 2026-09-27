@@ -2701,9 +2701,9 @@ def _candidate_matches_semantic_fallback(
         return False
     if request.severity and document.severity != request.severity:
         return False
-    if request.status and document.status != request.status:
-        return False
-    if not request.status and not request.include_archived and document.status == "archived":
+    # The same status predicate as the main path: this one used to check
+    # archived only, so a cold row could come back from a default search.
+    if not _candidate_status_visible(document, request):
         return False
     if request.tags and not any(tag in set(document.tags or []) for tag in request.tags):
         return False
