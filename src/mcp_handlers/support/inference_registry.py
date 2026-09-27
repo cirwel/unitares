@@ -39,6 +39,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from . import host_availability
 from .host_adapter import host_adapter_available, host_adapter_enabled
 
 
@@ -89,6 +90,9 @@ class InferenceHost:
     # Agent-callable tools that actually route to this host. Empty = registered
     # but unreachable; see the module docstring.
     accepts_host_id_from: list[str]
+    # Set while the provider is cooling down after a quota or auth failure
+    # (host_availability): why, and when the next call re-checks it.
+    cooldown: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -183,6 +187,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("codex:host-adapter"),
+            cooldown=host_availability.cooldown("codex:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
@@ -215,6 +220,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("claude:host-adapter"),
+            cooldown=host_availability.cooldown("claude:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",
@@ -240,6 +246,7 @@ def _base_hosts() -> list[InferenceHost]:
             transport="host_adapter",
             configured=host_adapter_enabled(),
             available=host_adapter_available("antigravity:host-adapter"),
+            cooldown=host_availability.cooldown("antigravity:host-adapter"),
             privacy_class="operator_authorized_external",
             cost_class="subscription_backed",
             accountability_class="tool_evidence",

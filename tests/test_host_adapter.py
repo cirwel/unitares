@@ -355,7 +355,7 @@ def test_invoke_claude_provider_error_is_not_reported_as_success(monkeypatch):
     ))
 
     assert r["ok"] is False
-    assert r["error"] == "Claude CLI reported an error result"
+    assert r["error"] == "Claude CLI reported an error result: provider failed"
     assert r["provenance"]["provider_is_error"] is True
 
 
@@ -878,3 +878,20 @@ def test_disabled_hosts_accept_family_aliases_and_log_unknown_names(monkeypatch,
 )
 def test_the_agy_client_deadline_leaves_a_short_budget_usable(timeout_s, client_s):
     assert ha._client_deadline_s(timeout_s) == client_s
+
+
+def test_a_provider_cooldown_makes_the_host_unavailable_and_is_listed(monkeypatch):
+    """A usage-limited account still has a working CLI; the cooldown is what
+    takes it out of rotation, and the registry says why and until when."""
+    from src.mcp_handlers.support import host_availability, inference_registry as reg
+
+    _enable(monkeypatch)
+    assert ha.host_adapter_available("codex:host-adapter") is True
+    host_availability.record_unavailable(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": None})
+    assert ha.host_adapter_available("codex:host-adapter") is False
+    assert ha.host_adapter_available("claude:host-adapter") is True
+    hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    assert hosts["codex:host-adapter"]["available"] is False
+    assert hosts["codex:host-adapter"]["cooldown"]["reason"] == "quota"
+    assert hosts["claude:host-adapter"]["cooldown"] is None
