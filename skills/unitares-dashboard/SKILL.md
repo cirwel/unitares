@@ -78,7 +78,7 @@ Health; a "Latest check-in" panel and feed over every agent from
 `/v1/eisv/agents`; and the resident strip only when the deployment configures
 residents. Fleet Coherence left the row: its between-agent spread is ~0.008, so
 it could not move. Risk's trend reads `/v1/governance/trend` (computed from
-`core.agent_state`, capped at 60 days by retention), not Chronicler's scrape,
+`core.agent_state`, capped at 60 days by retention), not a resident's metric scrape,
 and its picker lists recent agents. Totals over the server's in-memory rings
 (`/api/activity`, `/v1/eisv/agents`) carry a `coverage_start` and say when the
 hour is only partly covered. Adding a card back is the same decision.
@@ -249,9 +249,8 @@ badge). The WS plumbing lives in `ws.js`.
 ## Mostly read-only — explicit authenticated write surfaces
 
 The redesign sends the read bearer token everywhere; core sections are
-read-only except one area. (The Sentinel adjudication write,
-`POST /v1/sentinel/adjudicate` with `X-Unitares-Csrf: 1`, is still served, but
-its view is now an extension.)
+read-only except one area. (A finding-adjudication write endpoint, with
+`X-Unitares-Csrf: 1`, is still served, but its view is now an extension.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the
