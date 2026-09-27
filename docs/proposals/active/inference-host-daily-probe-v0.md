@@ -177,7 +177,7 @@ skips a host only when all four of these hold:
 call except the two refusals where gov never tried the host: a host in a
 cooldown, and a host the operator has switched off. That includes preflight
 and spawn failures, so an orchestrator that breaks in the afternoon is not
-hidden by a morning success. Without the third condition, a success in
+hidden by a morning success. Without the last condition, a success in
 the morning would hide an afternoon failure whose short cooldown had lapsed
 by the next run. `last_ok` is written only by gov's own success path, inside
 the call. A timed-out call has already returned its failure, so if the
