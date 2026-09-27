@@ -140,29 +140,32 @@ register(Metric(
     unit="findings",
 ))
 
-# GitHub traffic for the CIRWEL org. The GitHub traffic API only exposes a
+# GitHub traffic for the org the scraper is pointed at (GITHUB_SCRAPE_ORG in
+# agents/chronicler/scrapers.py). The github.cirwel.* names stay as stable keys
+# because renaming a metric orphans its stored series; the org they measure is
+# configuration. The GitHub traffic API only exposes a
 # rolling 14-day window, so daily snapshots overlap heavily by design — the
 # longitudinal value is the trend curve, not point-in-time deltas. Aggregated
 # across all non-archived repos because per-repo series would mean ~64 entries
 # in this catalog before any of them earned their rent.
 register(Metric(
     name="github.cirwel.traffic.views.14d",
-    description="GitHub page-view count summed across non-archived CIRWEL repos. GitHub traffic API rolling 14-day window; not daily delta.",
+    description="GitHub page-view count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
     unit="views",
 ))
 register(Metric(
     name="github.cirwel.traffic.views.uniques.14d",
-    description="GitHub unique-visitor count summed across non-archived CIRWEL repos. GitHub traffic API rolling 14-day window; not daily delta.",
+    description="GitHub unique-visitor count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
     unit="visitors",
 ))
 register(Metric(
     name="github.cirwel.traffic.clones.14d",
-    description="GitHub clone count summed across non-archived CIRWEL repos. GitHub traffic API rolling 14-day window; not daily delta.",
+    description="GitHub clone count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
     unit="clones",
 ))
 register(Metric(
     name="github.cirwel.traffic.clones.uniques.14d",
-    description="GitHub unique-cloner count summed across non-archived CIRWEL repos. GitHub traffic API rolling 14-day window; not daily delta.",
+    description="GitHub unique-cloner count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
     unit="cloners",
 ))
 

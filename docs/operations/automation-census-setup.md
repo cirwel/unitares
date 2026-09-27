@@ -59,7 +59,11 @@ auto-discovered.
    ```
    Schedule it (cron / systemd timer / launchd) so the registry stays fresh; the
    dashboard shows the snapshot age and flags it stale.
-4. The dashboard endpoint (`/api/automations`) serves `last.json` from its default
+4. Mount the endpoint: add `automation-census` to `UNITARES_ROUTE_PACKS` in the
+   governance server's environment (e.g. `UNITARES_ROUTE_PACKS=automation-census`).
+   The shipped default mounts no route packs, so without this `/api/automations`
+   answers 404. See "Route packs" in `docs/operations/resident-roster.md`.
+   The endpoint (`/api/automations`) serves `last.json` from its default
    location (`~/.local/state/unitares-automations/last.json`). It does not read
    `UNITARES_AUTOMATION_STATE_DIR`: if you moved the snapshot, set
    `UNITARES_AUTOMATION_CENSUS_PATH` to that `last.json` in the governance

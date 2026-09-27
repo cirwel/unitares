@@ -42,17 +42,17 @@ test-smoke: ## Run fast critical-path tests
 serve: ## Start server locally (foreground)
 	@python3 src/mcp_server.py --port 8767
 
-restart: ## Restart governance-mcp launchd service
+restart: ## Restart the launchd-managed server (macOS source install; Docker: docker compose restart governance-mcp)
 	@launchctl unload ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 	@launchctl load ~/Library/LaunchAgents/com.unitares.governance-mcp.plist
 	@echo "Restarted. Checking health..."
 	@sleep 2
 	@curl -s http://localhost:8767/health | python3 -m json.tool
 
-logs: ## Tail server logs
+logs: ## Tail launchd server logs (Docker: docker compose logs -f governance-mcp)
 	@tail -f data/logs/mcp_server.log
 
-logs-err: ## Tail server error logs
+logs-err: ## Tail launchd server error logs
 	@tail -f data/logs/mcp_server_error.log
 
 # ── Documentation ────────────────────────────────────────

@@ -92,8 +92,8 @@ Your state sits in a basin — a region of the EISV space:
   `basin` and `margin` are two different notions of "edge", and the boundary condition is carried
   by `basin`, the `guide` sub-action, and the guidance text, not by the margin enum.
 
-Use `check_working_state(verbosity="standard")` (`get_governance_metrics()`
-canonically) as the source of truth for the current basin/mode labels rather
+Use `check_working_state(client_session_id=..., verbosity="standard")`
+(`get_governance_metrics()` canonically) as the source of truth for the current basin/mode labels rather
 than assuming they are constant across runtime versions; the default
 `check_working_state()` envelope leaves them out.
 
@@ -151,7 +151,7 @@ The actionable levels are `tight`, `warning`, and `critical` — each carries a 
 | `margin_scope` | `all_edges`, `measured_edges_only` | Whether every edge was judged, or only some of them. `GovernanceConfig.compute_proprioceptive_margin` sets it only on `comfortable`/`tight`, but several decision paths in `GovernanceConfig.make_decision` and `monitor_decision.make_decision` re-emit it with a default of `all_edges`, so an `all_edges` reading beside a `settling`/`warning`/`critical` margin is that default and not a finding that every edge was judged |
 | `unmeasurable_edges` | list of edge names | The edges that had no band to judge against, so they were not assessed at all |
 
-An edge is unmeasurable when it has no threshold band for this agent. Coherence is the usual case, and the gate is provenance, not history: the coherence edge is judged only when `coherence_role` is `behavioral_update_consistency` (`GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE`), the history window carries that same role, and at least 10 samples exist. With the deployed `legacy_tanh_v` / `ode_control_feedback` producer the edge stays unmeasurable no matter how much history accumulates, so `comfortable` normally arrives as `margin_scope: measured_edges_only` with `unmeasurable_edges: ["coherence"]`. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state()` is the source of truth.
+An edge is unmeasurable when it has no threshold band for this agent. Coherence is the usual case, and the gate is provenance, not history: the coherence edge is judged only when `coherence_role` is `behavioral_update_consistency` (`GovernanceConfig.COHERENCE_INTERPRETABLE_ROLE`), the history window carries that same role, and at least 10 samples exist. With the deployed `legacy_tanh_v` / `ode_control_feedback` producer the edge stays unmeasurable no matter how much history accumulates, so `comfortable` normally arrives as `margin_scope: measured_edges_only` with `unmeasurable_edges: ["coherence"]`. `comfortable` with `margin_scope: measured_edges_only` means "clear of the edges we could judge", not "nothing is near": read `unmeasurable_edges` for what was never assessed. Prefer the live values over assuming a fixed enum across runtime versions — `check_working_state(client_session_id=...)` is the source of truth.
 
 Do not transfer this check-in margin into recovery eligibility. Recovery emits a
 separate `recovery.margin.v2` view whose authoritative inputs are risk and
@@ -201,8 +201,9 @@ When the numbers look surprising, do not guess first. Use:
 
 - `identity(client_session_id=...)` to verify who the runtime thinks you are, trusting it only when `identity_assurance.caller_proven` is true (with no arguments it mints a fresh identity instead of answering about yours)
 - `health_check()` to verify the server and knowledge graph are healthy
-- `check_working_state()` for the current interpreted state and risk
-  provenance; canonical `get_governance_metrics()` also returns the
+- `check_working_state(client_session_id=...)` for the current interpreted
+  state and risk provenance (without proof sent with the call, a read of your
+  own state answers `unbound`); canonical `get_governance_metrics()` also returns the
   compatibility thresholds
 
 ## What NOT to Do

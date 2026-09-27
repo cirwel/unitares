@@ -122,8 +122,8 @@ response.
 
 If the call is refused for identity, the response is the typed refusal rather
 than the envelope: no `next_action`, but `status`, `hint`, `next_step`,
-`safe_options` and `do_not`. It carries `success: true`, so detect it by
-`status` or `rollout_flag`, not by `success is False`. The target tool handler
+`safe_options`, `do_not` and `refused: true`. It carries `success: true`, so
+detect it by `refused`, `status` or `rollout_flag`, not by `success is False`. The target tool handler
 did not run. Treat that as a no-handler-execution receipt, not a blanket
 no-write receipt: resolver-failure paths may already have performed
 identity-resolution bookkeeping.

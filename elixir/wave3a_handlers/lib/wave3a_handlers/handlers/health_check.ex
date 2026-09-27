@@ -2,8 +2,10 @@ defmodule Wave3aHandlers.Handlers.HealthCheck do
   @moduledoc """
   Wave 3a `health_check` handler — first end-to-end cutover (RFC §5 PR #5).
 
-  Topology, after operator flips `WAVE_3A_HEALTH_CHECK_ON_BEAM=true` in
-  `~/.config/cirwel/secrets.env` and restarts the MCP:
+  Topology, after operator flips `WAVE_3A_HEALTH_CHECK_ON_BEAM=true` in the
+  secrets env file (`$UNITARES_SECRETS_ENV`, else
+  `~/.config/unitares/secrets.env`, else legacy `~/.config/cirwel/secrets.env`)
+  and restarts the MCP:
 
       MCP client
           ↓
