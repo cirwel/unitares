@@ -497,10 +497,20 @@ def test_launchagent_passes_when_loaded(doctor):
     assert result.status == doctor.Status.PASS
 
 
-def test_launchagent_warns_when_other_unitares_agents_are_loaded(doctor):
+def test_launchagent_skips_when_only_auxiliary_agents_are_loaded(doctor, no_launch_agents):
+    # Governance in Docker or stdio next to a lease-plane / dialectic-live /
+    # watchdog LaunchAgent: those say nothing about how governance runs.
     result = doctor.check_launchagent({"com.unitares.some-sidecar"})
 
-    assert result.status == doctor.Status.WARN
+    assert result.status == doctor.Status.SKIP
+
+
+def test_launchagent_skips_when_only_auxiliary_plists_are_installed(doctor, no_launch_agents):
+    (no_launch_agents / "com.unitares.lease-plane.plist").write_text("")
+
+    result = doctor.check_launchagent(set())
+
+    assert result.status == doctor.Status.SKIP
 
 
 def test_check_pid_file_skips_missing_file_without_launchd(doctor, tmp_path):

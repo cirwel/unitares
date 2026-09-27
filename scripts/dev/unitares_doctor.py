@@ -1488,7 +1488,7 @@ def check_pid_file(
         # containerised server writes it inside the container, so a missing
         # file on a host with no launchd deployment says nothing.
         return CheckResult(name, mode, Status.SKIP,
-                           f"{pid_file} missing; {_NO_LAUNCHD}")
+                           f"{pid_file} missing; {_GOVERNANCE_NOT_LAUNCHD}")
     service_active = service_active or _http_health_available()
     if not pid_file.exists():
         return CheckResult(name, mode, Status.WARN,
@@ -1555,15 +1555,36 @@ _NO_LAUNCHD = ("no UNITARES LaunchAgent loaded or installed on this host "
                "(Docker Compose, Linux and stdio installs do not use launchd)")
 
 
+def _governance_under_launchd(loaded: set[str]) -> bool:
+    """Whether the governance server itself is launchd-managed on this host.
+
+    Narrower than _launchd_deployment on purpose: a host can run governance in
+    Docker or stdio next to auxiliary UNITARES LaunchAgents (lease plane,
+    dialectic-live, a watchdog), and those say nothing about how governance
+    runs. Loaded label OR installed plist, so a stopped server is still seen.
+    """
+    if GOVERNANCE_LAUNCHD_LABEL in loaded:
+        return True
+    try:
+        return (LAUNCH_AGENTS_DIR / f"{GOVERNANCE_LAUNCHD_LABEL}.plist").exists()
+    except OSError:
+        return False
+
+
+_GOVERNANCE_NOT_LAUNCHD = (f"{GOVERNANCE_LAUNCHD_LABEL} is neither loaded nor "
+                           "installed; governance is not launchd-managed on this "
+                           "host (Docker Compose, Linux and stdio installs)")
+
+
 def check_launchagent(loaded: set[str]) -> CheckResult:
     name, mode = "launchagent_loaded", "operator"
     label = GOVERNANCE_LAUNCHD_LABEL
     if label in loaded:
         return CheckResult(name, mode, Status.PASS, f"{label} loaded")
-    if not _launchd_deployment(loaded):
-        return CheckResult(name, mode, Status.SKIP, _NO_LAUNCHD)
+    if not _governance_under_launchd(loaded):
+        return CheckResult(name, mode, Status.SKIP, _GOVERNANCE_NOT_LAUNCHD)
     return CheckResult(name, mode, Status.WARN,
-                       f"{label} not loaded on a launchd deployment — "
+                       f"{label} is installed but not loaded — "
                        f"the launchd-managed server is down")
 
 
@@ -3901,7 +3922,7 @@ def build_checks(
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
         Check("pid_file", "operator",
               lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded(),
-                                     launchd_host=_launchd_deployment(loaded()))),
+                                     launchd_host=_governance_under_launchd(loaded()))),
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),
