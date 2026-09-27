@@ -104,20 +104,20 @@ Old names are handled by one rule, so they cannot pile up across releases:
   the new name and the removal release, and the flag catalog lists it as
   "alias of X until vN".
 
-This matters most at the spawn boundary. The governance server, the
-orchestrator service and the reviewer child can run different releases on one
-host, and federated operators upgrade on their own schedules. While an alias is
-in the table, the dispatcher forwards both the new and the old name (2.6), so
-an older child still reads its model and a newer one reads the new name. A
-hard rename would break any pairing that straddles it.
+Expiring aliases rather than a hard rename is what a federation needs:
+operators upgrade on their own schedules, and processes that read these
+settings from their own configuration (the local resident runner, an
+operator's own scripts) can run a different release from the server on one
+host. Each reads the old names for the table's window, so no single upgrade
+breaks them.
 
-The server's own release cannot prove that the orchestrator service has caught
-up, so the spawn boundary does not follow the table's removal date. The
-dispatcher keeps forwarding an old name until the orchestrator reports a
-release at or past that name's removal release (its health response carries
-its release; step 1 adds that if it is missing), and forwards both whenever it
-cannot read one. Dropping an old name at the spawn boundary is therefore
-decided by the child's release, not the server's.
+The orchestrated reviewer child is not one of those processes. The dispatcher
+starts it with the governance server's own interpreter, from the server's own
+checkout (`_build_spec` in `orchestrator_dispatch.py`: `sys.executable`, `cd`
+and `PYTHONPATH` set to `_REPO_ROOT`); the orchestrator service only runs the
+command. The child therefore always runs the dispatcher's release and alias
+table, and the spawn boundary needs no version check: the dispatcher forwards
+exactly the names its own release reads.
 
 An existing install keeps working with no edits, except that one which relies
 on the implicit model must name it before step 4 (section 4).
@@ -127,16 +127,17 @@ on the implicit model must name it before step 4 (section 4).
 The settings in this proposal are: the endpoint, model and key-name settings;
 the classifier's `UNITARES_MODEL_LOCAL_HOSTS` and `UNITARES_MODEL_PRIVACY`; the
 `UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in; the probe timeout; the same set
-under `UNITARES_MODEL_FALLBACK_*`; and the key value under its default name,
-`UNITARES_MODEL_API_KEY`. A setting that exists but does not reach the process
+under `UNITARES_MODEL_FALLBACK_*`; and the key values under their default
+names, `UNITARES_MODEL_API_KEY` and `UNITARES_MODEL_FALLBACK_API_KEY`, so a
+primary and a fallback from different providers each authenticate. A setting that exists but does not reach the process
 that reads it is worse than none, because the install looks configured. So
 one list in `local_inference_env.py` names them all, and one test checks that
 every name on it is:
 
 - mapped for `governance-mcp` in `docker-compose.yml`;
-- present in the macOS LaunchAgent template, key value included as a
-  placeholder, because a launchd service inherits no shell environment;
-- forwarded by the reviewer dispatcher (2.6), except the key value, which is
+- present in the macOS LaunchAgent template, key values included as
+  placeholders, because a launchd service inherits no shell environment;
+- forwarded by the reviewer dispatcher (2.6), except the key values, which are
   never forwarded; the classifier settings are forwarded so the child reaches
   the same `local` or `external` answer as the server.
 
@@ -232,8 +233,7 @@ The reviewer's `local` backend and the local resident runner use
 The orchestrated reviewer is started through a governed spawn whose
 environment becomes an audited effect record, so
 `orchestrator_dispatch.py` forwards configuration but never credential
-values. The same rule applies here, and while the old names are in the alias
-table (2.1.1) each is forwarded beside its new name. The dispatcher forwards
+values. The same rule applies here. The dispatcher forwards
 `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
 (the variable's name), and the key's value must be provisioned in the
 orchestrator service's own environment, which the child inherits. With the
