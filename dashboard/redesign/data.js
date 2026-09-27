@@ -104,7 +104,20 @@
   // Never throws. snapshot.js can legitimately be absent (it is auth-gated and
   // a <script src> carries no bearer token), and a fallback that raises turns a
   // recoverable "no offline copy" into a dead page.
-  const S = () => window.SNAPSHOT || {};
+  //
+  // The snapshot is a capture of ONE deployment's fleet, bundled for offline
+  // and design renders. On a page served by a UNITARES server, a failed live
+  // call means THIS server did not answer (a restart, a blip), and another
+  // deployment's residents, EISV and version must not stand in for it: on
+  // 2026-09-26 a fresh install's Overview showed the bundled fleet's residents
+  // as its own after one failed /v1/residents during a restart. So the
+  // snapshot backs the fallback only when there is no server to ask — the page
+  // opened from a file — or when a design preview asks for it with ?snapshot=1.
+  // Everywhere else the fallback yields nothing and the views render
+  // "unavailable", the same path a bearer-only operator already takes.
+  const SNAPSHOT_FALLBACK = location.protocol === "file:"
+    || new URLSearchParams(location.search).get("snapshot") === "1";
+  const S = () => (SNAPSHOT_FALLBACK && window.SNAPSHOT) || {};
 
   function eisvMeasurementSource(event) {
     const telemetry = (event && (event.eisv_telemetry || event.telemetry)) || {};
@@ -189,6 +202,8 @@
   }
 
   const DATA = {
+    // Whether a failed live read may fall back to the bundled snapshot (see S).
+    snapshotFallback: SNAPSHOT_FALLBACK,
     bucketEisv,
     eisvMeasurementSource,
     summarizeEisvSources,

@@ -47,9 +47,12 @@
     return { part: p, coh, sub };
   }
 
+  // Not live and no snapshot in play (a served page whose server did not
+  // answer): say "unavailable", not "snapshot" — nothing bundled is shown.
   function badge(el, source) {
-    el.className = "src-badge " + source;
-    el.textContent = source === "live" ? "live" : "snapshot";
+    const label = source === "live" ? "live" : DATA.snapshotFallback ? "snapshot" : "unavailable";
+    el.className = "src-badge " + (label === "unavailable" ? "snapshot" : label);
+    el.textContent = label;
   }
 
   // Cadence-aware timing: a scheduled/sparse resident within its check-in
@@ -132,8 +135,8 @@
     const aUngated = (auto && typeof auto.ungated === "number") ? auto.ungated : 0;
     const aWarn = aAtt > 0 || aStale || aUngated > 0 || aUnclassified > 0;
     // Three states the counters used to render alike, as a red "0 … stale":
-    //  - a census ran (numeric snapshot age) and registers nothing → "none
-    //    registered", neutrally;
+    //  - a current census ran (numeric snapshot age, not stale) and registers
+    //    nothing → "none registered", neutrally;
     //  - the server says no census has ever run (snapshot_age_seconds: null,
     //    a fresh install) → "no census yet", neutral: nothing established
     //    that there are none, and unknown is never green;
@@ -141,7 +144,8 @@
     //    no snapshot age at all), keeps the counters as before.
     const aCensusRan = !!auto && typeof auto.snapshot_age_seconds === "number";
     const aNoCensus = !!auto && auto.snapshot_age_seconds === null;
-    const aNone = aCensusRan && !(asum.total > 0) && aAtt === 0;
+    // A stale census cannot establish that none are registered now.
+    const aNone = aCensusRan && !aStale && !(asum.total > 0) && aAtt === 0;
     const autoSub = aNoCensus ? "no census yet"
       : aNone ? "none registered"
       : `${aAtt} attention · ${aUngated + aUnclassified} ungrounded`
@@ -420,10 +424,14 @@
     renderPulse(view);
   }
 
+  let lastHealthSource = "snapshot";
   function applyHealth(health) {
+    lastHealthSource = health.source;
     if (health.data) {
       const h = health.data;
       $("serverStat").innerHTML = `v<b>${h.version}</b> · up <b>${h.uptime}</b> · db <b>${h.db}</b>`;
+    } else {
+      $("serverStat").textContent = "server not answering";
     }
   }
   function footnote(anyLive) {
@@ -458,6 +466,12 @@
   // Heavy refresh (slow cadence) — the 7-tool headline batch; reuse the resident
   // model for fleet coherence rather than refetching it.
   async function refreshStats() {
+    // refresh() re-reads residents and health, but it runs only on stream
+    // events or while the stream is down. With the stream open and quiet (a
+    // fresh install, nothing checking in), one failed read of either was
+    // never retried and its fallback stayed on screen. Retry here, on the
+    // stats cadence, until both answer live.
+    if (lastSource !== "live" || lastHealthSource !== "live") await refresh();
     const [stats, auto] = await Promise.all([DATA.stats(), DATA.automationsSummary()]);
     if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
     renderStats(stats.data, viewResidents(), lastSource, auto.data);

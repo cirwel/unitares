@@ -85,6 +85,8 @@ describe("overview with no snapshot bundle", () => {
   });
 
   it("has a snapshot accessor that cannot throw", () => {
-    expect(dataSource).toMatch(/const S = \(\) => window\.SNAPSHOT \|\| \{\}/);
+    // Gated to offline/preview renders (see data.js), and still `|| {}` so a
+    // missing bundle can never make a fallback throw.
+    expect(dataSource).toMatch(/const S = \(\) => \(SNAPSHOT_FALLBACK && window\.SNAPSHOT\) \|\| \{\}/);
   });
 });

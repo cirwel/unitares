@@ -159,6 +159,16 @@ describe("landing on a fresh install", () => {
     expect(c.sub).toContain("attention");
   });
 
+  it("keeps a stale empty census visibly stale", async () => {
+    const { card } = await render({
+      automations: { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: true, snapshot_age_seconds: 200000 },
+    });
+    const c = card("Automations");
+    expect(c.sub).not.toContain("none registered");
+    expect(c.sub).toContain("stale");
+    expect(c.cls).toContain("down");
+  });
+
   it("keeps the counters when the census did not answer", async () => {
     const { card } = await render({ automations: null });
     const c = card("Automations");
@@ -222,5 +232,85 @@ describe("system health detail", () => {
   it("names unavailable and errored checks too", async () => {
     const c = await healthCard({ healthy: 9, warning: 0, degraded: 0, unavailable: 1, error: 1 }, "critical");
     expect(c.sub).toBe("9 ok · 0 warn · 1 unavailable · 1 err");
+  });
+});
+
+// The bundled snapshot is a capture of one deployment's fleet. On a page served
+// by a UNITARES server, a failed live read must not put that fleet on screen as
+// this server's (observed 2026-09-26: a fresh install showed the bundled
+// residents after one /v1/residents failed during a restart).
+describe("snapshot fallback on a served page", () => {
+  const dataSource = readFileSync(new URL("../redesign/data.js", import.meta.url), "utf8");
+  const BUNDLED = { residents: [{ name: "BundledResident", status: "healthy", coherence: 0.5, risk: 0.1, verdict: "proceed", silence: 10, silenceThreshold: 3600, eisv: { E: 0.7, I: 0.8, S: 0.2, V: 0 } }],
+                    health: { version: "0.0.0-bundled", uptime: "21h", db: "connected" } };
+
+  function boot(url, { failResidents = true, failHealth = true } = {}) {
+    const dom = new JSDOM(`
+      <div id="resSrc"></div><div id="residents"></div><div id="attn"></div>
+      <div id="stats"></div><div id="serverStat"></div>
+      <div id="pulseWho"></div><div id="pulseFresh"></div>
+      <div id="riskVal"></div><div id="riskFill"></div>
+      <div id="pulseVerdict"><span></span><span></span></div>
+      <div id="eisv"></div><div id="foot"></div>
+    `, { runScripts: "outside-only", url });
+    const state = { failResidents, failHealth, residentCalls: 0, healthCalls: 0 };
+    dom.window.fetch = async (u) => {
+      const s = String(u);
+      if (s.endsWith("/health")) {
+        state.healthCalls += 1;
+        if (state.failHealth) throw new Error("ERR_EMPTY_RESPONSE");
+      }
+      if (s.includes("/v1/residents")) {
+        state.residentCalls += 1;
+        if (state.failResidents) throw new Error("ERR_EMPTY_RESPONSE");
+      }
+      const body = s.endsWith("/health") ? { version: "9.9.9", uptime: { formatted: "2m" }, database: { status: "connected" } }
+        : s.includes("/health/deep") ? { status: "healthy", status_breakdown: {}, checks: {} }
+        : s.includes("/v1/residents") ? { residents: [] }
+        : s.includes("/api/automations") ? { summary: { total: 0, by_kind: {}, needs_attention: [] }, ungated: 0, unclassified: 0, stale: false, snapshot_age_seconds: 60 }
+        : { success: true };
+      return { ok: true, status: 200, json: async () => body };
+    };
+    dom.window.SNAPSHOT = BUNDLED;
+    dom.window.eval(dataSource);
+    dom.window.eval(landingSource);
+    return { dom, state };
+  }
+
+  it("does not show the bundled fleet when this server's reads fail", async () => {
+    const { dom } = boot("https://gov.example/dashboard");
+    await dom.window.Landing.render();
+    const D = dom.window.document;
+    expect(D.getElementById("residents").textContent).not.toContain("BundledResident");
+    expect(D.getElementById("serverStat").textContent).not.toContain("0.0.0-bundled");
+    expect(D.getElementById("serverStat").textContent).toBe("server not answering");
+    expect(D.getElementById("resSrc").textContent).toBe("unavailable");
+  });
+
+  it("still renders the bundled snapshot when opened from a file", async () => {
+    const { dom } = boot("file:///tmp/app.html");
+    await dom.window.Landing.render();
+    expect(dom.window.document.getElementById("residents").textContent).toContain("BundledResident");
+  });
+
+  it("renders the bundled snapshot for an explicit ?snapshot=1 preview", async () => {
+    const { dom } = boot("https://gov.example/dashboard?snapshot=1");
+    await dom.window.Landing.render();
+    expect(dom.window.document.getElementById("residents").textContent).toContain("BundledResident");
+  });
+
+  it("retries residents and health on the stats cadence until they answer live", async () => {
+    const { dom, state } = boot("https://gov.example/dashboard");
+    await dom.window.Landing.render();
+    const before = state.residentCalls;
+    state.failResidents = false; state.failHealth = false;   // the server is back
+    await dom.window.Landing.refreshStats();
+    expect(state.residentCalls).toBeGreaterThan(before);
+    expect(dom.window.document.getElementById("serverStat").textContent).toContain("9.9.9");
+    // Once both are live, the stats cadence stops re-reading health. (An
+    // empty roster is re-read every tick regardless — existing behaviour.)
+    const settled = state.healthCalls;
+    await dom.window.Landing.refreshStats();
+    expect(state.healthCalls).toBe(settled);
   });
 });
