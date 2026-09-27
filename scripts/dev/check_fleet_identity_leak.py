@@ -286,11 +286,6 @@ SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
         ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
         "design notes describing one deployment's own fleet",
     ),
-    "src/tool_descriptions.json": (
-        ("Lumen",) * 2,
-        "names Lumen in outcome_event's drawing outcome and an observe example; "
-        "#2490 rewrites this file, fix after it lands",
-    ),
 }
 
 _NAME_WORD = re.compile(
