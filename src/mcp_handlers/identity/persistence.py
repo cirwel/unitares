@@ -520,6 +520,62 @@ async def _find_agent_by_label(label: str) -> Optional[str]:
         return None
 
 
+def _recorded_auto_labels(
+    agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
+) -> set:
+    """Every label the server has recorded as its own choice for this agent.
+
+    ``auto_label`` is kept in two places. The mint writes it once to
+    ``core.identities.metadata`` and to the in-memory entry; a knowledge
+    write's ``Agent_<uuid8>`` name sets it in memory only. A claim can clear
+    the in-memory copy (``drop_stale_display_name``) while the persisted one
+    stands, and the cold-start loader restores the persisted one, so both
+    are read here.
+    """
+    recorded: set = set()
+    if isinstance(identity_metadata, dict):
+        value = identity_metadata.get("auto_label")
+        if isinstance(value, str) and value.strip():
+            recorded.add(value.strip())
+    try:
+        meta_map = getattr(mcp_server, "agent_metadata", None)
+        meta = meta_map.get(agent_uuid) if meta_map else None
+        value = getattr(meta, "auto_label", None) if meta is not None else None
+        if isinstance(value, str) and value.strip():
+            recorded.add(value.strip())
+    except Exception:
+        pass
+    return recorded
+
+
+async def _collision_label(
+    label: str, agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
+) -> str:
+    """The label a claim becomes when another agent already holds ``label``.
+
+    Ordinarily ``{label}_{uuid8}``. That is also how the server builds the
+    labels it assigns (the mint's ``<stem>_<uuid8>``, a knowledge write's
+    ``Agent_<uuid8>``), so a claim of the bare stem -- ``claude_code-opus``
+    while another agent holds it -- would become this agent's own
+    ``claude_code-opus_<uuid8>``, byte-identical to the label the server
+    recorded for it, and ``label_source_for`` would read ``auto`` for a name
+    the caller claimed. In that case the suffix is the first two groups of
+    the uuid instead. It ends in ``-`` and four hex digits, and every
+    recorded label ends in eight hex digits, so it cannot equal one. If
+    another agent holds even that, the whole uuid is used.
+    """
+    candidate = f"{label}_{agent_uuid[:8]}"
+    recorded = _recorded_auto_labels(agent_uuid, identity_metadata)
+    if candidate.strip() not in recorded:
+        return candidate
+    longer = f"{label}_{agent_uuid[:13]}"
+    if longer.strip() not in recorded:
+        holder = await _find_agent_by_label(longer)
+        if not holder or holder == agent_uuid:
+            return longer
+    return f"{label}_{agent_uuid}"
+
+
 def _broadcaster():
     """Lazy accessor for the shared broadcaster. Returns None when broadcaster
     isn't importable (e.g., unit tests without a live server). Kept as a
@@ -779,7 +835,11 @@ def drop_stale_display_name(meta, label: str) -> None:
     ``"Agent_<uuid8>"`` -- the same string ``_check_display_name_required``
     already wrote). The old guard read that coincidence as "nothing to
     clear" and left ``label_source`` reading ``auto`` for a name the caller
-    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27).
+    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27). A
+    collision rename no longer lands on that string (``_collision_label``
+    takes a longer suffix when ``{label}_{uuid8}`` equals a recorded auto
+    label), but a claim of the exact string ``Agent_<uuid8>`` still does, so
+    the clear stays unconditional.
 
     ``auto_label`` is cleared in the same branch, for the same reason.
     ``label_source_for`` (services/identity_payloads.py) reads ``auto``
@@ -857,7 +917,9 @@ async def set_agent_label_resolved(
         # Substrate-Earned Identity".
         existing = await _find_agent_by_label(label)
         if existing and existing != agent_uuid:
-            new_label = f"{label}_{agent_uuid[:8]}"
+            # {label}_{uuid8}, unless that reproduces a label the server
+            # recorded for this agent (then a longer suffix).
+            new_label = await _collision_label(label, agent_uuid, existing_metadata)
             existing_is_resident = await db.agent_has_tag(existing, "persistent")
 
             # Resolve new agent's declared lineage. existing_metadata above

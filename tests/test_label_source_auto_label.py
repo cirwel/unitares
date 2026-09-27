@@ -138,6 +138,89 @@ async def test_a_claimed_name_renamed_by_a_collision_still_reads_claimed(minted)
     assert signature["label_source"] == "claimed"
 
 
+def _held_by_another(*labels):
+    """find_agent_by_label for a registry where another agent holds ``labels``."""
+    held = set(labels)
+    return AsyncMock(
+        side_effect=lambda label: "another-agent-uuid" if label in held else None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_claim_of_the_bare_mint_stem_does_not_become_the_mint_label(minted):
+    """The mint named this agent ``claude_code-opus_<uuid8>``. Claiming the
+    bare stem while another agent holds it used to rename the claim to
+    ``claude_code-opus_<uuid8>`` -- this agent's own uuid8 appended, the mint's
+    construction -- so the claimed name was byte-identical to the recorded
+    ``auto_label`` and read "auto". The rename now takes the uuid's first two
+    groups."""
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+
+    result, meta = await _mint(minted)
+    agent_uuid = result["agent_uuid"]
+    assert result["label"] == f"claude_code-opus_{agent_uuid[:8]}"
+    minted.db.find_agent_by_label = _held_by_another("claude_code-opus")
+
+    applied = await set_agent_label_resolved(agent_uuid, "claude_code-opus")
+
+    assert applied == f"claude_code-opus_{agent_uuid[:13]}"
+    assert applied != result["label"]
+    minted.db.update_agent_fields.assert_awaited_with(agent_uuid, label=applied)
+    assert meta.label == applied
+    assert meta.auto_label == result["label"]
+    signature = _signature(agent_uuid)
+    assert signature["display_name"] == applied
+    assert signature["label_source"] == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_the_persisted_record_alone_is_enough_to_avoid_the_mint_label(minted):
+    """With no in-memory record (the entry was never loaded, or a claim
+    cleared it), the ``auto_label`` persisted in core.identities.metadata
+    still steers the rename: the cold-start loader restores that record, so
+    a label equal to it would read "auto" after the next restart."""
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+    from src.services.identity_payloads import label_source_for
+
+    result, _meta = await _mint(minted)
+    agent_uuid = result["agent_uuid"]
+    minted.registry.pop(agent_uuid)
+    minted.db.get_identity = AsyncMock(
+        return_value=SimpleNamespace(
+            identity_id="ident-1",
+            metadata={"label": result["label"], "auto_label": result["label"]},
+        )
+    )
+    minted.db.find_agent_by_label = _held_by_another("claude_code-opus")
+
+    applied = await set_agent_label_resolved(agent_uuid, "claude_code-opus")
+
+    assert applied == f"claude_code-opus_{agent_uuid[:13]}"
+    restored = label_source_for(
+        applied,
+        public_agent_id=result.get("public_agent_id"),
+        structured_id=None,
+        auto_label=result["label"],
+    )
+    assert restored == "claimed"
+
+
+@pytest.mark.asyncio
+async def test_the_longer_rename_falls_back_to_the_whole_uuid_when_it_is_held(minted):
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+
+    result, _meta = await _mint(minted)
+    agent_uuid = result["agent_uuid"]
+    minted.db.find_agent_by_label = _held_by_another(
+        "claude_code-opus", f"claude_code-opus_{agent_uuid[:13]}"
+    )
+
+    applied = await set_agent_label_resolved(agent_uuid, "claude_code-opus")
+
+    assert applied == f"claude_code-opus_{agent_uuid}"
+    assert _signature(agent_uuid)["label_source"] == "claimed"
+
+
 @pytest.mark.asyncio
 async def test_a_plain_claim_reads_claimed(minted):
     from src.mcp_handlers.identity.persistence import set_agent_label_resolved
