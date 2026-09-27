@@ -404,8 +404,10 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
-   a council/dialectic reviewer. It must end with the `VERDICT:` line.
-   Advisory `consult` output is still not a review.
+   a council/dialectic reviewer. It must end with the `VERDICT:` line, with
+   its reasoning before it: what was examined and verified. A bare verdict
+   (under about 25 words of reasoning) is not recorded, by `record` or by a
+   local reviewer run. Advisory `consult` output is still not a review.
 2. Push first. Then render the record with the tool, never by hand:
 
    ```bash
