@@ -35,6 +35,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
+from src.local_inference_env import default_local_model, ollama_openai_base_url
 
 from .host_backends import (
     HostReviewResult,
@@ -50,8 +51,11 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 # The model is asked for strict JSON, but local models fence it or add prose.
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
-DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
-OLLAMA_BASE_URL = os.getenv("UNITARES_OLLAMA_BASE_URL", "http://localhost:11434/v1")
+# Same resolution as the server's local lane (src/local_inference_env.py):
+# UNITARES_OLLAMA_BASE, or its alias UNITARES_OLLAMA_BASE_URL, with "/v1" added
+# exactly once for the OpenAI-compatible client.
+DEFAULT_MODEL = default_local_model()
+OLLAMA_BASE_URL = ollama_openai_base_url()
 SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
 REVIEWER_NAME = "DialecticReviewer"
 # Keep a rejecting reviewer available for the protocol's full synthesis-response
