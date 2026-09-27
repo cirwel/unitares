@@ -100,16 +100,19 @@ DEFAULT_DB_URL = os.environ.get(
 
 
 def _read_force_release_token() -> str | None:
-    """Read LEASE_FORCE_RELEASE_TOKEN from env or ~/.config/cirwel/secrets.env."""
+    """Read LEASE_FORCE_RELEASE_TOKEN from env or the secrets env file."""
     tok = os.environ.get("LEASE_FORCE_RELEASE_TOKEN")
     if tok:
         return tok
+    # UNITARES_SECRETS_ENV, else ~/.config/unitares/secrets.env, else the
+    # pre-2026-09 ~/.config/cirwel path when only that one exists.
     _env_override = os.environ.get("UNITARES_SECRETS_ENV")
-    secrets_path = (
-        Path(_env_override)
-        if _env_override
-        else Path.home() / ".config" / "cirwel" / "secrets.env"
-    )
+    secrets_path = Path.home() / ".config" / "unitares" / "secrets.env"
+    _legacy = Path.home() / ".config" / "cirwel" / "secrets.env"
+    if _env_override:
+        secrets_path = Path(_env_override).expanduser()
+    elif not secrets_path.exists() and _legacy.exists():
+        secrets_path = _legacy
     if not secrets_path.exists():
         return None
     for line in secrets_path.read_text().splitlines():

@@ -238,6 +238,45 @@ class TestTheGuardCoversWhatShips:
         assert not missing, f"shipped but unguarded: {sorted(missing)}"
 
 
+class TestTheDoctorExpectsNoResidents:
+    """The install doctor ships with no resident roster either.
+
+    Until 2026-09-27 ``scripts/dev/unitares_doctor.py`` carried a hardcoded
+    table of one operator's resident LaunchAgents and warned that they were
+    "not loaded" on every other install. Which residents a host runs is now
+    declared (``UNITARES_DOCTOR_RESIDENT_LAUNCHD``); with nothing declared the
+    check has nothing to expect.
+    """
+
+    @pytest.fixture
+    def doctor(self, monkeypatch):
+        import importlib.util
+        import sys
+        from pathlib import Path
+
+        name = "unitares_doctor_residentless"
+        script = Path(__file__).resolve().parents[1] / "scripts/dev/unitares_doctor.py"
+        spec = importlib.util.spec_from_file_location(name, script)
+        mod = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, mod)  # dataclasses resolve via sys.modules
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_no_resident_launchagent_is_declared_by_default(self, doctor, monkeypatch):
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        assert doctor.resident_launchd_slots() == ()
+
+    def test_a_launchd_host_with_no_roster_expects_no_residents(self, doctor, monkeypatch):
+        # Even on a real launchd deployment, an undeclared roster is SKIP, not
+        # a warning about somebody else's residents.
+        monkeypatch.delenv(doctor.RESIDENT_LAUNCHD_ENV, raising=False)
+
+        result = doctor.check_resident_agents({doctor.GOVERNANCE_LAUNCHD_LABEL})
+
+        assert result.status == doctor.Status.SKIP
+
+
 # --- the agent-first Overview (2026-09-27) ------------------------------------
 # The dashboard's Overview now leads with agents and hides its resident block
 # when the roster is empty (dashboard/tests/landing-agent-first.test.js). What
