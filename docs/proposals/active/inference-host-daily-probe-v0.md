@@ -65,7 +65,7 @@ row below:
 | Host state | Action | Quota spent |
 |---|---|---|
 | A previous probe's timed-out execution is still live (see *Hung calls*) | Stop it and raise the host's finding (see *Hung calls*); no new probe. | 0 |
-| Not enabled (flag off, CLI missing, or in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. | 0 |
+| Not enabled by the operator (`UNITARES_HOST_ADAPTER_ENABLED` off, or the host listed in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. An enabled host whose CLI has gone missing is not skipped: it is probed, fails at preflight at no quota cost, and is reported. | 0 |
 | In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
 | Otherwise | Probe once. | one call |
@@ -92,7 +92,7 @@ The probe reads the failure class that `delegate_inference` already returns:
 |---|---|---|
 | Success | none; log latency, tokens, model | |
 | Failure classified `quota` | none | `delegate_inference` records the cooldown itself, until the provider's stated reset or, when none is stated, on a backoff from 30 min doubling to 6 h. The limit resets, and failover covers it meanwhile. |
-| Failure classified `auth` | **high** | A logged-out CLI does not recover on its own; the operator has to log in. |
+| Failure classified `auth` | **high** | `delegate_inference` puts an auth failure into a cooldown too, on the 30 min to 6 h backoff, so a login that gets fixed is noticed within hours. Unlike a quota limit, though, a logged-out CLI does not recover on its own: the operator has to log in. |
 | Unclassified failure (malformed envelope, nonzero exit, spawn rejected, orchestrator down) | **medium** | The case nothing else records. |
 | Timeout (`possibly_running`) | **medium**, noted as possibly still running | See *Hung calls* below. |
 
