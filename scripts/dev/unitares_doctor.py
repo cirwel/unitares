@@ -3221,6 +3221,18 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
 
     seen = {r[0] for r in rows if r and r[0]}
+    if not seen:
+        # A database no producer has ever posted to is a fresh install, not a
+        # fleet of never-born producers: the declarations scanned above live
+        # in the reference residents (agents/) and one operator's control plane
+        # (scripts/ops/), which such an install does not run. Asking "which of
+        # these never fired" there only lists somebody else's fleet.
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no finding has ever been posted on this database; the "
+            f"{len(declared)} declared producer(s) are reference residents and "
+            f"operator scripts this install may not run",
+        )
     never = sorted(declared - seen)
     if not never:
         return CheckResult(

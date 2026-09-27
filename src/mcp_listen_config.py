@@ -326,7 +326,8 @@ def auth_gate_refusal(
         "UNITARES_OAUTH_REQUIRED is set but no auth gate was established for the "
         f"MCP route: {cause}, and UNITARES_MCP_BEARER_TOKENS is empty. Refusing "
         "to serve unauthenticated. Note this flag must be in the process "
-        "environment (LaunchAgent plist or shell export); ~/.env.mcp is loaded "
+        "environment (.env under Docker Compose, the plist on a launchd "
+        "install, or a shell export); ~/.env.mcp is loaded "
         "later and cannot reach it."
     )
 

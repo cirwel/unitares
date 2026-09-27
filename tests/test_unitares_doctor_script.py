@@ -1534,6 +1534,21 @@ def test_producer_never_reported_skips_with_no_declarations(
     assert result.status == doctor.Status.SKIP
 
 
+def test_producer_never_reported_skips_on_a_database_no_producer_posted_to(
+        doctor, monkeypatch, tmp_path):
+    """A fresh install: the declarations are the reference residents and one
+    operator's scripts, none of which it runs. Listing them as never-born would
+    report somebody else's fleet on every new install."""
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _write_producer(tmp_path, "scripts/ops/deploy_drift_doctor.py",
+                    'FINDING_KIND = "deploy_drift_finding"\n')
+    _mock_psql(doctor, monkeypatch, "")
+    result = doctor.check_producer_never_reported("postgresql://x/y", tmp_path)
+    assert result.status == doctor.Status.SKIP
+    assert "sentinel_finding" not in result.message
+
+
 # --- constraint_drift -------------------------------------------------------
 # The parser is the risky half: it must replay drop-then-re-add correctly and
 # must not read SQL comments as declarations. Both mistakes were live hazards —

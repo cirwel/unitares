@@ -394,7 +394,8 @@ async def main():
         print(
             "[FastMCP] ERROR: UNITARES_OAUTH_DYNAMIC_REGISTRATION=false was set after "
             "startup read it (e.g. in ~/.env.mcp); dynamic registration is still OPEN. "
-            "Set it in the LaunchAgent plist or process environment and restart.",
+            "Set it in the server's process environment (.env under Docker "
+            "Compose, the plist on a launchd install) and restart.",
             file=sys.stderr, flush=True,
         )
 
