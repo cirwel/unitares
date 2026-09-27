@@ -150,7 +150,7 @@ New tool: `skills(name?: string, since_version?: string)` → returns:
 
 Three flag-style options on the request:
 - `name=<skill-name>` returns single skill
-- `since_version=<date>` returns only skills updated since (cheap re-poll)
+- `since_version=<date>` returns only skills updated since (cheap re-poll). It reports additions and re-verifications, not removals: `registry_version` is the newest `last_verified`, so a removed skill leaves it unchanged, and the response carries no tombstone. `registry_hash` covers every served skill, so it moves on a removal. A client that caches the set compares `registry_hash` and, when it differs, re-reads the bare index and drops any skill no longer listed. The plugin adapter (`_fetch_skills.py`) fetches single skills by `name` with a short TTL cache and never requests a skill it does not name, so a removal needs nothing from it. `discord-bridge` was the first removal (2026-09-27; it moved to the bridge's own repository).
 - absent: returns an index, every skill's metadata without `content` (`content_omitted: true`). Until 2026-09-25 it returned the full bundle, 100 KB for seven skills. The plugin adapter (`_fetch_skills.py`) always fetches by `name`, so it is unaffected; other MCP clients could and did call it bare (an evaluation agent received all seven bodies, 93,821 chars, `docs/evaluations/accountability-journey/capture-stage-2168-unitares-arm.md`). A caller that wants every body passes `since_version` with an early date.
 
 ### 4.2. Canonical content location
