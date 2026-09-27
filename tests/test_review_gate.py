@@ -2074,7 +2074,7 @@ def test_an_unreadable_policy_warns_and_requires_nothing(monkeypatch, tmp_path, 
 def test_passing_families_counts_trusted_passing_records_only():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity")),
+        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
         _comment(rg.Record(k, "CLEAN", 0, False, "claude"), association="NONE"),  # untrusted
         _comment(rg.Record("x" * 64, "CLEAN", 0, False, "claude")),               # other diff
         _comment(rg.Record(k, "FINDINGS", 2, False, "claude")),                   # open findings
@@ -2154,7 +2154,7 @@ def test_a_fix_verification_receipt_is_not_a_family():
     it did not review the new lines; it must not complete two families."""
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity")),
+        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
         _comment(rg.Record(k, "CLEAN", 0, False, "fix-verify:claude")),
     ]
     assert rg.passing_families(comments, k) == {"google"}
@@ -2387,7 +2387,56 @@ def test_a_disposed_native_codex_review_counts_for_openai():
     comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude")),
                 _comment(disposition, text=body_text)]
     assert rg.passing_families(comments, k, native) == {"anthropic", "openai"}
-    # Citing a different review, or with the wrong count, earns nothing.
-    wrong = body_text.replace("review-9", "review-8")
-    comments[1] = _comment(disposition, text=wrong)
+    # Citing a review that IS in view but with a different count earns nothing.
+    native.append(rg.Record(k, "FINDINGS", 3, False, "codex-native",
+                            "https://github.com/o/r/pull/1#pullrequestreview-8"))
+    comments[1] = _comment(disposition, text=body_text.replace("review-9", "review-8"))
     assert rg.passing_families(comments, k, native) == {"anthropic"}
+
+
+def test_a_disposed_native_review_still_counts_after_a_base_only_merge():
+    """Claude on #2504 (P2): native evidence is head-bound, so a base merge
+    drops the review from view; its disposition still counts, as
+    latest_matching keeps it disposed."""
+    k = "k" * 64
+    body_text = ("dispositions for FINDINGS(2) — https://github.com/o/r/pull/1#pullrequestreview-9\n"
+                 "1. rebutted: x\n2. fixed in abc")
+    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude")),
+                _comment(rg.Record(k, "FINDINGS", 2, True, "codex-native"), text=body_text)]
+    assert rg.passing_families(comments, k, native=[]) == {"anthropic", "openai"}
+
+
+
+def test_an_antigravity_review_counts_by_the_model_it_ran():
+    """Claude on #2504 (P2): agy can run Claude or GPT-OSS models, so the
+    provider name alone does not say the family."""
+    k = "k" * 64
+    def fam(model):
+        return rg.passing_families(
+            [_comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model=model))], k)
+    assert fam("gemini-3.1-pro-high") == {"google"}
+    assert fam("claude-sonnet-4-6") == {"anthropic"}
+    assert fam("gpt-oss-120b-medium") == {"openai"}
+    assert fam("default") == {"google"}
+    assert fam("") == set()  # a record without its model counts as none
+    rec = rg.parse_record(rg.render_marker(
+        rg.Record(k, "CLEAN", 0, False, "antigravity", model="claude-sonnet-4-6")))
+    assert rec.model == "claude-sonnet-4-6"
+
+
+def test_the_local_candidate_family_follows_the_configured_agy_model(monkeypatch):
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-sonnet-4-6")
+    assert rg.provider_family("antigravity") == "anthropic"
+    monkeypatch.delenv("REVIEW_AGY_MODEL")
+    assert rg.provider_family("antigravity") == "google"
+
+
+def test_a_failed_comment_read_is_unreviewed_not_findings(monkeypatch):
+    """Claude on #2504 (P3): the comments read sat outside the try, so a
+    transient gh failure exited 1 ("findings") after a passing review."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"], families=set())
+    def boom(*a):
+        raise SystemExit("review_gate: gh api… failed")
+    monkeypatch.setattr(rg, "pr_comments", boom)
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
