@@ -91,6 +91,7 @@ def _fat_event(agent_id="a"):
     return {
         "type": "eisv_update",
         "agent_id": agent_id,
+        "agent_name": "agent-" + agent_id,
         "timestamp": "2026-08-28T00:00:00+00:00",
         "eisv": {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1},
         "coherence": 0.48,
@@ -135,7 +136,7 @@ def test_compact_keeps_every_field_the_chart_reads():
     body = _client().get("/v1/eisv/recent?fields=compact").json()
     assert body["fields"] == "compact"
     event = body["events"][0]
-    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+    for key in ("type", "timestamp", "agent_id", "agent_name", "eisv", "coherence", "risk"):
         assert key in event, key
     assert event["eisv"] == {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1}
     assert event["risk"] == 0.31
@@ -160,8 +161,11 @@ def test_compact_drops_the_payload_nothing_reads():
     http_api.broadcaster_instance.event_history.append(_fat_event())
 
     event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
-    for key in ("decision", "drift_trends", "inputs", "risk_reason"):
+    for key in ("drift_trends", "inputs", "risk_reason"):
         assert key not in event, f"{key} has zero consumers and must not be polled"
+    # The verdict is read (the Overview's recent-check-ins feed); the ~1.9 KB
+    # of reasoning around it is not.
+    assert event["decision"] == {"action": "guide"}
     # Telemetry is whitelisted, so a large diagnostic sub-object goes too.
     assert "derivation" not in event["eisv_telemetry"]
     # And the projection must actually be smaller, not merely reshaped.
@@ -190,3 +194,35 @@ def test_unknown_fields_value_falls_back_to_the_full_shape():
     body = _client().get("/v1/eisv/recent?fields=nonsense").json()
     assert body["fields"] == "full"
     assert "decision" in body["events"][0]
+
+
+# --- /api/activity coverage ---------------------------------------------------
+
+def test_activity_coverage_starts_at_process_start_inside_the_window():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 600  # restarted ten minutes ago
+    assert abs(b.activity_coverage_start(60) - b.started_at) < 1
+
+
+def test_activity_coverage_is_the_window_when_history_is_older():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    assert abs(b.activity_coverage_start(60) - (time.time() - 3600)) < 1
+
+
+def test_activity_coverage_moves_up_when_the_ring_is_full():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    oldest = time.time() - 300
+    for i in range(b.activity_history.maxlen):
+        b.activity_history.append((oldest + i * 0.1, "proceed"))
+    assert abs(b.activity_coverage_start(60) - oldest) < 1

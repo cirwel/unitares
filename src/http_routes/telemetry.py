@@ -57,9 +57,16 @@ def _compact_eisv_event(event: dict) -> dict:
     parses both.
     """
     out: dict = {}
-    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+    for key in ("type", "timestamp", "agent_id", "agent_name", "eisv", "coherence", "risk"):
         if key in event:
             out[key] = event[key]
+
+    # The verdict, without the ~1.9 KB of reasoning around it. Kept nested so
+    # the compact event stays a strict subset of the full one: the Overview's
+    # recent-check-ins feed reads `decision.action` from either shape.
+    decision = event.get("decision")
+    if isinstance(decision, dict) and "action" in decision:
+        out["decision"] = {"action": decision["action"]}
 
     telemetry = event.get("eisv_telemetry") or event.get("telemetry")
     if isinstance(telemetry, dict):
@@ -166,6 +173,47 @@ async def http_eisv_telemetry_health(request):
         logger.error("EISV telemetry health query failed: %s", exc)
         return JSONResponse(
             {"success": False, "error": "telemetry health query failed"},
+            status_code=500,
+        )
+
+
+_GOVERNANCE_TREND_CACHE_TTL_SECONDS = 600.0
+_governance_trend_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+
+
+async def http_governance_trend(request):
+    """GET /v1/governance/trend?days=60 — fleet risk and verdict pressure.
+
+    Trailing-7-day fleet-mean risk, guide and pause counts per day, computed
+    from core.agent_state (src/governance_trend.py). Any install can draw it;
+    it does not need the Chronicler resident. The query scans the window's
+    check-ins and the series move daily, so each window is cached for ten
+    minutes.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
+    from src.governance_trend import clamp_window, query_governance_trend
+
+    days = clamp_window(request.query_params.get("days", "60"))
+    now = time.monotonic()
+    cached = _governance_trend_cache.get(days)
+    if cached and now - cached[0] < _GOVERNANCE_TREND_CACHE_TTL_SECONDS:
+        return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=600"})
+
+    try:
+        from src.db import get_db
+
+        db = get_db()
+        async with db.acquire() as conn:
+            report = await query_governance_trend(conn, window_days=days)
+        _governance_trend_cache[days] = (now, report)
+        return JSONResponse(report, headers={"Cache-Control": "private, max-age=600"})
+    except Exception as exc:  # noqa: BLE001 — read-only operator surface
+        logger.error("Governance trend query failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "governance trend query failed"},
             status_code=500,
         )
 

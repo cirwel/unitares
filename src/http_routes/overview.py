@@ -559,7 +559,10 @@ async def http_activity(request):
             "success": True,
             "buckets": buckets,
             "window_minutes": window,
-            "bucket_minutes": bucket
+            "bucket_minutes": bucket,
+            # In-memory history: after a restart, or once the ring is full,
+            # the window is only partly covered. Epoch seconds.
+            "coverage_start": broadcaster_instance.activity_coverage_start(window),
         })
     except Exception as e:
         logger.error(f"Error fetching activity: {e}")

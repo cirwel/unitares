@@ -155,7 +155,9 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # 51 -> 52: /dashboard/ext/{file:path} serves a deployment's own dashboard
 # extensions. Gated (_check_http_auth), not in PUBLIC_BY_DESIGN: an extension
 # is operator code, unlike the static shell beside it.
-EXPECTED_GET_ROUTES = 52
+# 52 -> 53: /v1/governance/trend (fleet risk trend from core.agent_state, so
+# the Risk tab no longer needs the Chronicler resident). Gated.
+EXPECTED_GET_ROUTES = 53
 
 
 def test_route_registry_is_readable():
