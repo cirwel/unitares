@@ -95,7 +95,7 @@ The probe reads the failure class that `delegate_inference` already returns:
 
 | Result | Finding | Why |
 |---|---|---|
-| Success | none; log latency, tokens, model | |
+| Success: a validated answer whose text, trimmed and ignoring case, is `OK` | none; log latency, tokens, model | A call that `delegate_inference` reports as successful but whose text is anything else is an unclassified failure (`unexpected_answer`). That catches a CLI that exits 0 and returns an error message as its answer. |
 | Failure classified `quota` | none | `delegate_inference` records the cooldown itself, until the provider's stated reset or, when none is stated, on a backoff from 30 min doubling to 6 h. The limit resets, and failover covers it meanwhile. |
 | Failure classified `auth` | **high** | `delegate_inference` puts an auth failure into a cooldown too, on the 30 min to 6 h backoff, so a login that gets fixed is noticed within hours. Unlike a quota limit, though, a logged-out CLI does not recover on its own: the operator has to log in. |
 | Pre-CLI failure (preflight, spawn rejected, orchestrator down) | **medium** | Gov never reached the CLI. It is shared across hosts when two or more show it (below). |
@@ -177,7 +177,10 @@ caller's work is touched. A stopped or finished execution leaves the state
 file. A host whose hung call was found live is not probed again that run, so
 each host has at most one probe child alive at a time.
 
-If a stop fails, the id stays in the state file for the next pass, and the
+If the orchestrator cannot be reached for the snapshot, the pass changes
+nothing: the id stays, and any finding keyed to it stays as it is. Only a
+snapshot that says the execution is gone removes an id. If a stop fails, the
+id stays in the state file for the next pass, and the
 probe posts a **high** finding keyed to that execution id, with fingerprint
 `sha("hung-execution", id)`. The finding belongs to the execution, not to the
 host. It stays open, whether the host is enabled, switched off, or removed from
