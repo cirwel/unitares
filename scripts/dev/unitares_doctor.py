@@ -13,6 +13,10 @@ Modes:
                bring-up where the agent client spawns governance directly.
     operator   Adds HTTP/launchd checks: governance port listening, PID file,
                LaunchAgent loaded, resident-agent plists, cloudflared sidecar.
+               The launchd checks SKIP on a host with no UNITARES LaunchAgent
+               (Docker Compose, Linux, stdio). Resident LaunchAgents are
+               checked only when declared, e.g.
+               UNITARES_DOCTOR_RESIDENT_LAUNCHD="name,other|other-beam".
     all        local + operator. Default.
 
 Stdlib-only. Safe to run before `pip install -e .` finishes — used to verify
@@ -27,6 +31,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -43,13 +48,51 @@ from typing import Callable
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "uuid-ossp", "vector")
-RESIDENT_LAUNCHD_SLOTS = (
-    ("vigil", ("com.unitares.vigil",)),
-    ("sentinel", ("com.unitares.sentinel", "com.unitares.sentinel-beam")),
-    ("chronicler", ("com.unitares.chronicler",)),
-)
+# Which resident LaunchAgents this host is expected to run is deployment
+# configuration, not something the doctor can know: a fresh install has none.
+# Declare them as comma-separated slots; a slot may name alternatives with
+# "|" (e.g. a Python agent and its BEAM port), and each name expands to the
+# launchd label com.unitares.<name>. Unset means no resident is expected, and
+# resident_agents SKIPs rather than warning about agents nobody installed.
+RESIDENT_LAUNCHD_ENV = "UNITARES_DOCTOR_RESIDENT_LAUNCHD"
+LAUNCHD_LABEL_PREFIX = "com.unitares."
 ANCHOR_DIR = Path.home() / ".unitares"
-SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
+# Optional env file sourced by helper scripts (ship.sh, the BEAM start
+# scripts); the server itself reads only its own process environment.
+# UNITARES_SECRETS_ENV names it explicitly. Otherwise the neutral default is
+# used, falling back to the pre-2026-09 location when only that one exists so
+# an existing deployment keeps its file where its scripts look for it.
+SECRETS_ENV_VAR = "UNITARES_SECRETS_ENV"
+DEFAULT_SECRETS_FILE = Path.home() / ".config" / "unitares" / "secrets.env"
+LEGACY_SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
+
+
+def resolve_secrets_file(
+    environ: dict | None = None,
+    default: Path = DEFAULT_SECRETS_FILE,
+    legacy: Path = LEGACY_SECRETS_FILE,
+) -> Path:
+    """The secrets env file this install uses (see SECRETS_ENV_VAR above)."""
+    env = os.environ if environ is None else environ
+    override = (env.get(SECRETS_ENV_VAR) or "").strip()
+    if override:
+        return Path(override).expanduser()
+    if not default.exists() and legacy.exists():
+        return legacy
+    return default
+
+
+def resident_launchd_slots(
+    environ: dict | None = None,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Parse RESIDENT_LAUNCHD_ENV into (slot, (label, ...)) pairs."""
+    env = os.environ if environ is None else environ
+    slots: list[tuple[str, tuple[str, ...]]] = []
+    for part in (env.get(RESIDENT_LAUNCHD_ENV) or "").split(","):
+        names = [n.strip() for n in part.split("|") if n.strip()]
+        if names:
+            slots.append((names[0], tuple(LAUNCHD_LABEL_PREFIX + n for n in names)))
+    return tuple(slots)
 # Path to the port registry, as a module attribute so the degraded path can be
 # exercised. A fallback nothing can reach is a fallback nobody has tested.
 PORTS_CATALOG_PATH = Path(__file__).resolve().parent / "ports_catalog.py"
@@ -185,7 +228,9 @@ def check_postgres_running(db_url: str) -> CheckResult:
     if rc == 0:
         return CheckResult(name, mode, Status.PASS, f"reachable at {_redact(db_url)}")
     return CheckResult(name, mode, Status.FAIL,
-                       f"pg_isready failed (rc={rc}); try `brew services start postgresql@17`")
+                       f"pg_isready failed (rc={rc}); start PostgreSQL "
+                       f"(`docker compose up -d postgres-age`, or "
+                       f"`brew services start postgresql@17` on a Homebrew install)")
 
 
 def check_redis_continuity(redis_url: str) -> CheckResult:
@@ -1098,17 +1143,21 @@ def check_anchor_dir() -> CheckResult:
                        f"{ANCHOR_DIR} missing — first onboard() will create it")
 
 
-def check_secrets_file() -> CheckResult:
+def check_secrets_file(path: Path | None = None) -> CheckResult:
     name, mode = "secrets_file", "local"
-    if not SECRETS_FILE.exists():
-        return CheckResult(name, mode, Status.WARN,
-                           f"{SECRETS_FILE} not present (only needed if calling external providers)")
-    actual = stat.S_IMODE(SECRETS_FILE.stat().st_mode)
+    secrets_file = resolve_secrets_file() if path is None else path
+    if not secrets_file.exists():
+        # Optional: the server never reads this file, so its absence is not a
+        # finding. Only the mode of a file that exists is worth checking.
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{secrets_file} not present (optional; only helper "
+                           f"scripts source it — set {SECRETS_ENV_VAR} to relocate)")
+    actual = stat.S_IMODE(secrets_file.stat().st_mode)
     if actual == 0o600:
-        return CheckResult(name, mode, Status.PASS, f"{SECRETS_FILE} (0600)")
+        return CheckResult(name, mode, Status.PASS, f"{secrets_file} (0600)")
     return CheckResult(name, mode, Status.FAIL,
-                       f"{SECRETS_FILE} mode is {oct(actual)} — must be 0600",
-                       detail=f"chmod 600 {SECRETS_FILE}")
+                       f"{secrets_file} mode is {oct(actual)} — must be 0600",
+                       detail=f"chmod 600 {shlex.quote(str(secrets_file))}")
 
 
 # ---------------------------------------------------------------------------
@@ -1429,9 +1478,17 @@ def _pid_file_context(service_active: bool) -> str:
     return "server not running, or stdio mode"
 
 
-def check_pid_file(repo_root: Path, service_active: bool = False) -> CheckResult:
+def check_pid_file(
+    repo_root: Path, service_active: bool = False, launchd_host: bool = True,
+) -> CheckResult:
     name, mode = "pid_file", "operator"
     pid_file = repo_root / PID_FILE_REL
+    if not pid_file.exists() and not launchd_host:
+        # The PID file is written into the checkout the server runs from. A
+        # containerised server writes it inside the container, so a missing
+        # file on a host with no launchd deployment says nothing.
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{pid_file} missing; {_GOVERNANCE_NOT_LAUNCHD}")
     service_active = service_active or _http_health_available()
     if not pid_file.exists():
         return CheckResult(name, mode, Status.WARN,
@@ -1470,21 +1527,83 @@ def _launchctl_loaded() -> set[str]:
     return out
 
 
+# Where an installed LaunchAgent's plist lives. A module attribute so tests can
+# point it at an empty or populated directory.
+LAUNCH_AGENTS_DIR = Path.home() / "Library" / "LaunchAgents"
+
+
+def _launchd_deployment(loaded: set[str]) -> bool:
+    """Whether this host is a UNITARES launchd deployment.
+
+    True when any com.unitares.* label is loaded OR any com.unitares.* plist is
+    installed. The installed-plist half matters: a stopped server, a sole
+    unloaded LaunchAgent, or a failing ``launchctl list`` all produce an empty
+    loaded set, and those are exactly the states the launchd checks exist to
+    report. A Docker Compose, Linux or stdio install has neither, and launchd
+    checks on such a host can only report the absence of a deployment shape it
+    never chose, so they SKIP there instead of warning.
+    """
+    if any(label.startswith(LAUNCHD_LABEL_PREFIX) for label in loaded):
+        return True
+    try:
+        return any(LAUNCH_AGENTS_DIR.glob(f"{LAUNCHD_LABEL_PREFIX}*.plist"))
+    except OSError:
+        return False
+
+
+_NO_LAUNCHD = ("no UNITARES LaunchAgent loaded or installed on this host "
+               "(Docker Compose, Linux and stdio installs do not use launchd)")
+
+
+def _governance_under_launchd(loaded: set[str]) -> bool:
+    """Whether the governance server itself is launchd-managed on this host.
+
+    Narrower than _launchd_deployment on purpose: a host can run governance in
+    Docker or stdio next to auxiliary UNITARES LaunchAgents (lease plane,
+    dialectic-live, a watchdog), and those say nothing about how governance
+    runs. Loaded label OR installed plist, so a stopped server is still seen.
+    """
+    if GOVERNANCE_LAUNCHD_LABEL in loaded:
+        return True
+    try:
+        return (LAUNCH_AGENTS_DIR / f"{GOVERNANCE_LAUNCHD_LABEL}.plist").exists()
+    except OSError:
+        return False
+
+
+_GOVERNANCE_NOT_LAUNCHD = (f"{GOVERNANCE_LAUNCHD_LABEL} is neither loaded nor "
+                           "installed; governance is not launchd-managed on this "
+                           "host (Docker Compose, Linux and stdio installs)")
+
+
 def check_launchagent(loaded: set[str]) -> CheckResult:
     name, mode = "launchagent_loaded", "operator"
     label = GOVERNANCE_LAUNCHD_LABEL
     if label in loaded:
         return CheckResult(name, mode, Status.PASS, f"{label} loaded")
+    if not _governance_under_launchd(loaded):
+        return CheckResult(name, mode, Status.SKIP, _GOVERNANCE_NOT_LAUNCHD)
     return CheckResult(name, mode, Status.WARN,
-                       f"{label} not loaded — stdio mode is fine, "
-                       f"but `unitares` CLI / remote MCP clients need this")
+                       f"{label} is installed but not loaded — "
+                       f"the launchd-managed server is down")
 
 
-def check_resident_agents(loaded: set[str]) -> CheckResult:
+def check_resident_agents(
+    loaded: set[str],
+    slots: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
+) -> CheckResult:
     name, mode = "resident_agents", "operator"
+    slots = resident_launchd_slots() if slots is None else slots
+    if not slots:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"no resident LaunchAgents declared "
+                           f"({RESIDENT_LAUNCHD_ENV} unset)")
+    # A declared slot is itself the evidence that these LaunchAgents are
+    # expected, so no "is this a launchd host" test gates it: every resident
+    # down or deleted must reach the missing-slot warning, not a SKIP.
     missing: list[str] = []
     resolved: list[str] = []
-    for slot_name, labels in RESIDENT_LAUNCHD_SLOTS:
+    for slot_name, labels in slots:
         present = [label for label in labels if label in loaded]
         if present:
             resolved.append(f"{slot_name}={'+'.join(present)}")
@@ -3169,6 +3288,15 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
     its own intent to post.
     """
     declared: set[str] = set()
+    for events in finding_producer_files(repo_root).values():
+        declared.update(events)
+    return declared
+
+
+def finding_producer_files(repo_root: Path) -> dict[str, set[str]]:
+    """Each source file that declares a finding producer, relative to
+    repo_root, with the event types it declares."""
+    files: dict[str, set[str]] = {}
     for sub in ("agents", "scripts"):
         base = repo_root / sub
         if not base.is_dir():
@@ -3182,13 +3310,100 @@ def declared_finding_producers(repo_root: Path) -> set[str]:
             if any(x in rel for x in _PRODUCER_SCAN_EXCLUDE):
                 continue
             try:
-                declared.update(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
+                found = set(_PRODUCER_DECL.findall(path.read_text(errors="ignore")))
             except OSError:
                 continue
-    return declared
+            if found:
+                files[rel] = found
+    return files
 
 
-def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
+def _producer_label_stems(events: set[str]) -> set[str]:
+    """The label stem each declared event names: its first word.
+
+    ``sentinel_alarm_finding`` -> ``sentinel``, ``deploy_drift_finding`` ->
+    ``deploy``. A producer's LaunchAgent is labelled for what it runs, and a
+    runtime outside the scanned Python trees (a BEAM port launched by a shell
+    script) is only recognisable by that label.
+    """
+    stems = set()
+    for event in events:
+        head = event.removesuffix("_finding").split("_", 1)[0]
+        if head:
+            stems.add(head.replace("_", "-"))
+    return stems
+
+
+def _label_runs_producer(label: str, stems: set[str]) -> bool:
+    """Exact match only: ``com.unitares.<stem>``, or ``<stem>-beam`` for the
+    BEAM port of that producer. A prefix match is too loose: a maintenance
+    job named for the same resident (``<stem>-hygiene``) emits no findings.
+    Producers launched from a Python file are caught by ProgramArguments."""
+    if not label.startswith("com.unitares.") or label == GOVERNANCE_LAUNCHD_LABEL:
+        return False
+    slug = label[len("com.unitares."):]
+    return any(slug in (s, f"{s}-beam") for s in stems)
+
+
+def _producer_agents_present(
+    producer_files: set[str],
+    agents_dir: Path | None = None,
+    events: set[str] = frozenset(),
+    loaded: set[str] = frozenset(),
+) -> bool:
+    """Whether a LaunchAgent on this host runs one of the declared producers.
+
+    Evidence is specific on purpose. A UNITARES agent counts when:
+
+    - its label is exactly a declared event's stem, or that stem's BEAM port
+      (``com.unitares.sentinel-beam`` for ``sentinel_finding``), loaded or
+      installed, which is the only handle on a producer runtime outside the
+      scanned Python trees; or
+    - its installed plist's ProgramArguments name a file that declares a
+      finding producer, or, for a resident package under ``agents/``, any file
+      in that package (its own entry point).
+
+    ``scripts/ops/`` is one flat directory of unrelated jobs, so sharing it
+    proves nothing: a backup job there says nothing about producers and must
+    not turn a fresh install's empty history into a warning.
+    """
+    import plistlib
+
+    stems = _producer_label_stems(set(events))
+    if any(_label_runs_producer(label, stems) for label in loaded):
+        return True
+    directory = agents_dir if agents_dir is not None else (
+        Path.home() / "Library" / "LaunchAgents")
+    producer_dirs = {Path(rel).parent.as_posix() for rel in producer_files
+                     if rel.startswith("agents/")}
+    try:
+        plists = list(directory.glob("com.unitares.*.plist"))
+    except OSError:
+        return False
+    for plist in plists:
+        if _label_runs_producer(plist.name.removesuffix(".plist"), stems):
+            return True
+        try:
+            with plist.open("rb") as fh:
+                args = plistlib.load(fh).get("ProgramArguments") or []
+        except (OSError, ValueError, plistlib.InvalidFileException):
+            continue
+        for arg in args:
+            if not isinstance(arg, str):
+                continue
+            posix = arg.replace("\\", "/")
+            if any(posix == rel or posix.endswith("/" + rel) for rel in producer_files):
+                return True
+            parent = Path(posix).parent.as_posix()
+            if any(d and (parent == d or parent.endswith("/" + d))
+                   for d in producer_dirs):
+                return True
+    return False
+
+
+def check_producer_never_reported(
+    db_url: str, repo_root: Path, producers_expected: bool | None = None,
+) -> CheckResult:
     """WARN when source declares a finding producer that has NEVER posted once.
 
     ``finding_producer_live`` is self-relative: it judges a producer against its
@@ -3221,6 +3436,25 @@ def check_producer_never_reported(db_url: str, repo_root: Path) -> CheckResult:
         return CheckResult(name, mode, Status.SKIP, "audit.events not queryable")
 
     seen = {r[0] for r in rows if r and r[0]}
+    if not seen and producers_expected is None:
+        producers_expected = _producer_agents_present(
+            set(finding_producer_files(repo_root)), events=declared,
+            loaded=_launchctl_loaded())
+    if not seen and not producers_expected:
+        # No finding has ever been posted AND nothing on this host runs a
+        # producer: a fresh install, not a fleet of never-born producers. The
+        # declarations scanned above live in the reference residents (agents/)
+        # and one operator's control plane (scripts/ops/), which such an
+        # install does not run, so "which of these never fired" would only
+        # list somebody else's fleet. With producer agents present, an empty
+        # history is exactly the all-broken case this check exists for, and
+        # it falls through to the warning.
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no finding has ever been posted on this database and no installed "
+            f"LaunchAgent runs a declared producer; the {len(declared)} declared "
+            f"producer(s) are reference residents and operator scripts",
+        )
     never = sorted(declared - seen)
     if not never:
         return CheckResult(
@@ -3803,7 +4037,8 @@ def build_checks(
         Check("http_health", "operator", check_http_health),
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
         Check("pid_file", "operator",
-              lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded())),
+              lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded(),
+                                     launchd_host=_governance_under_launchd(loaded()))),
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),

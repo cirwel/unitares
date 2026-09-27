@@ -16,8 +16,11 @@ from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
 from . import host_availability
 from .host_adapter import (
+    HOST_ADAPTER_EXTENSION,
+    HOST_ADAPTER_EXTENSION_NOTE,
     codex_answer_region_located,
     host_adapter_disabled_hosts,
+    host_adapter_lane_configured,
     host_cli_env_var,
     invoke_host_adapter,
 )
@@ -187,6 +190,31 @@ async def run_delegated_inference(
                     "delegate_inference"
                 ),
                 "related_tools": ["list_inference_hosts"],
+            },
+        )
+
+    # A server that never set up the orchestrator extension has nothing to
+    # restore: say that, rather than listing flags as if one were missing.
+    if (
+        host.get("extension") == HOST_ADAPTER_EXTENSION
+        and not host_adapter_lane_configured()
+    ):
+        return InferenceOutcome.failed(
+            f"Inference host '{host_id}' needs the agent orchestrator "
+            "extension, which this server does not have configured",
+            code="INFERENCE_HOST_UNAVAILABLE",
+            category="system_error",
+            details={
+                "host": host,
+                "reason": "extension_not_configured",
+                "extension": HOST_ADAPTER_EXTENSION,
+            },
+            recovery={
+                "action": (
+                    "Use consult(effort='standard') or call_model for the "
+                    "local lane. " + HOST_ADAPTER_EXTENSION_NOTE
+                ),
+                "related_tools": ["consult", "call_model", "list_inference_hosts"],
             },
         )
 

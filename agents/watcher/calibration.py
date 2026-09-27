@@ -287,6 +287,24 @@ from typing import Iterable, Mapping
 # enum and have no consistent meaning).
 PRECISION_REASONS_TRUE_NEGATIVE = frozenset({"fp"})
 
+# The current revision of a pattern's detection rule. Every finding records
+# its pattern's revision when it is created (``Finding.rule_version``), and a
+# resolution grades the rule that produced the finding. So for a listed
+# pattern, only findings stamped with the revision below count toward its
+# precision: unstamped rows, and rows from a checkout running an older or a
+# newer rule, measure a different rule. Watcher state is shared across
+# worktrees and each checkout's hook runs its own ``agent.py``, so a wall-clock
+# cutoff would still count findings from a checkout that has not caught up.
+# Bump a pattern's revision (or add it) whenever a change alters what it flags.
+#
+# P006 at 1: #2424 and #2447 dropped handlers that already react (log,
+# re-raise, return an error). Every fp dismissal behind the P006 floor came
+# from one 2026-09-23/24 triage of the earlier rule, where most flagged
+# handlers were of exactly that kind.
+PATTERN_RULE_VERSIONS: dict[str, int] = {
+    "P006": 1,
+}
+
 
 @dataclass(frozen=True)
 class BucketStats:
@@ -314,6 +332,7 @@ def precision_by_pattern_and_class(
     half_life_days: float = 30.0,
     min_weighted_n: float = 10.0,
     true_negative_reasons: Iterable[str] = PRECISION_REASONS_TRUE_NEGATIVE,
+    rule_versions: Mapping[str, int] | None = None,
 ) -> dict[tuple[str, str], BucketStats]:
     """Aggregate findings into per-(pattern, file_class) precision stats.
 
@@ -323,12 +342,17 @@ def precision_by_pattern_and_class(
     with free-text reasons or no reason are excluded from the dismissed
     count — they don't represent a precision-relevant signal.
 
+    A row of a pattern listed in ``rule_versions`` (default
+    ``PATTERN_RULE_VERSIONS``) counts only when its ``rule_version`` equals
+    that pattern's entry.
+
     Returns ``{(pattern, file_class): BucketStats}``. Buckets with
     ``weighted_n < min_weighted_n`` carry ``ci_lower=None`` so callers
     can distinguish 'unmeasured' from 'measured-as-zero'.
     """
     reference = now or datetime.now(timezone.utc)
     tn_reasons = frozenset(true_negative_reasons)
+    versions = PATTERN_RULE_VERSIONS if rule_versions is None else rule_versions
 
     aggregates: dict[tuple[str, str], dict] = {}
 
@@ -356,6 +380,9 @@ def precision_by_pattern_and_class(
             reason = row.get("resolution_reason")
             if not isinstance(reason, str) or reason not in tn_reasons:
                 continue
+
+        if pattern in versions and row.get("rule_version") != versions[pattern]:
+            continue
 
         file_class = classify_file(file_path)
         key = (pattern, file_class)
