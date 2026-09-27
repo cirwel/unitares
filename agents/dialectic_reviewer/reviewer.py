@@ -933,6 +933,27 @@ class _GovernanceLink:
         await asyncio.gather(worker, return_exceptions=True)
 
 
+def _is_transport_loss(exc: BaseException) -> bool:
+    """True only for errors that say the call may never have arrived.
+
+    The SDK raises one class, GovernanceConnectionError, both for a transport
+    failure and for a tool that answered ``success: false``, so that class is
+    treated as an answer. A connection the link lost, a timeout and a 503 are
+    unambiguous; so is a bare ConnectionError or OSError from below the SDK.
+    """
+    if isinstance(exc, (GovernanceLinkLost, TimeoutError, asyncio.TimeoutError,
+                        ConnectionError, OSError)):
+        return True
+    try:
+        from unitares_sdk.errors import (  # type: ignore
+            GovernanceTimeoutError,
+            GovernanceUnavailableError,
+        )
+    except ImportError:
+        return False
+    return isinstance(exc, (GovernanceTimeoutError, GovernanceUnavailableError))
+
+
 async def continue_after_disagreement(
     client: Any,
     thesis: Thesis,
@@ -959,6 +980,11 @@ async def continue_after_disagreement(
     deadline = time.monotonic() + wait_s
     current_verdict = initial_verdict
     read_failures = 0
+    # A formed verdict whose filing was cut off, with the paused response it
+    # answers. It is re-filed as formed, never re-judged: a second model call
+    # can reach a different verdict, and a dropped connection must not be able
+    # to change a governance outcome.
+    unfiled: Optional[tuple[dict[str, Any], Verdict]] = None
 
     while True:
         remaining = deadline - time.monotonic()
@@ -1002,6 +1028,12 @@ async def continue_after_disagreement(
             paused_agent_id=paused_agent_id,
             reviewer_agent_id=reviewer_agent_id,
         )
+        if unfiled is not None and paused_response != unfiled[0]:
+            # The response it answered is no longer the pending one, so the
+            # cut-off filing landed after all: it is the standing verdict.
+            current_verdict, unfiled = unfiled[1], None
+            if current_verdict.agrees:
+                return current_verdict
         if paused_response is None:
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue
@@ -1009,24 +1041,27 @@ async def continue_after_disagreement(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return current_verdict
-        prompt = build_continuation_prompt(
-            thesis, current_verdict, paused_response, synthesis_round
-        )
-        try:
-            model_text = await asyncio.wait_for(
-                obtain_reviewer_text(prompt), timeout=remaining
+        if unfiled is not None:
+            next_verdict = unfiled[1]
+        else:
+            prompt = build_continuation_prompt(
+                thesis, current_verdict, paused_response, synthesis_round
             )
-        except asyncio.TimeoutError:
-            return current_verdict
-        except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
-            logger.warning("Dialectic continuation model failed: %r", exc)
-            return current_verdict
-        next_verdict = withhold_fallback_approval(
-            _verdict_with_ratified_conditions(
-                parse_reviewer_verdict(model_text), paused_response, current_verdict
-            ),
-            reviewer_backend_provenance(),
-        )
+            try:
+                model_text = await asyncio.wait_for(
+                    obtain_reviewer_text(prompt), timeout=remaining
+                )
+            except asyncio.TimeoutError:
+                return current_verdict
+            except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
+                logger.warning("Dialectic continuation model failed: %r", exc)
+                return current_verdict
+            next_verdict = withhold_fallback_approval(
+                _verdict_with_ratified_conditions(
+                    parse_reviewer_verdict(model_text), paused_response, current_verdict
+                ),
+                reviewer_backend_provenance(),
+            )
         if not next_verdict.judgment_formed:
             # Same rule as the initial verdict. Filing this would burn a
             # synthesis round and overwrite a REASONED standing rejection with
@@ -1054,14 +1089,22 @@ async def continue_after_disagreement(
                     "reasoning": next_verdict.reasoning,
                 },
             )
-        except Exception as exc:  # noqa: BLE001 — session state decides what is still owed
+        except Exception as exc:  # noqa: BLE001 — classified below
+            if not _is_transport_loss(exc):
+                # A refusal (the SDK raises for success=false) is an answer,
+                # not an outage; retrying it would re-file until the deadline.
+                logger.warning("Dialectic continuation synthesis was refused: %r", exc)
+                return current_verdict
             # Whether the write landed is unknown, and the next read settles
             # it: a synthesis that landed now follows the paused response, so
-            # nothing is pending; one that did not leaves the response pending,
-            # and it is answered again. Neither case files twice.
+            # nothing is pending; one that did not leaves the same response
+            # pending, and this same verdict is filed again. Neither case
+            # files twice or judges twice.
             logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
+            unfiled = (paused_response, next_verdict)
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue
+        unfiled = None
         if isinstance(result, dict) and result.get("success") is False:
             logger.warning("Dialectic continuation synthesis was refused: %s", result)
             return current_verdict
