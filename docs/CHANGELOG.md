@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.23.0] - 2026-09-27
+## [3.0.0] - 2026-09-27
 
-A minor release from master, following v2.22.1. It carries source changes
-merged since v2.22.0 on master, including the v2.22.1 maintenance history
-through its forward-merge. Deploy is continuous from master, so this tag is a
+A major release from master, following v2.22.1. It is major because the
+changes listed under Compatibility break existing installs and callers. It
+carries source changes merged since v2.22.0 on master, including the v2.22.1
+maintenance history through its forward-merge. Deploy is continuous from master, so this tag is a
 citation and rollback anchor rather than the first appearance of these
 changes on a running server.
 

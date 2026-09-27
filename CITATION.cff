@@ -4,7 +4,7 @@ message: >
   If you use this software or its underlying ideas, please cite both the
   software (this entry) and the paper (preferred-citation, below).
 type: software
-version: "2.23.0"
+version: "3.0.0"
 date-released: "2026-09-27"
 authors:
   - family-names: Wang
