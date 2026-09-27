@@ -122,6 +122,28 @@ decided by the child's release, not the server's.
 An existing install keeps working with no edits, except that one which relies
 on the implicit model must name it before step 4 (section 4).
 
+### 2.1.2 Every setting reaches every process that reads it
+
+The settings in this proposal are: the endpoint, model and key-name settings;
+the classifier's `UNITARES_MODEL_LOCAL_HOSTS` and `UNITARES_MODEL_PRIVACY`; the
+`UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in; the probe timeout; the same set
+under `UNITARES_MODEL_FALLBACK_*`; and the key value under its default name,
+`UNITARES_MODEL_API_KEY`. A setting that exists but does not reach the process
+that reads it is worse than none, because the install looks configured. So
+one list in `local_inference_env.py` names them all, and one test checks that
+every name on it is:
+
+- mapped for `governance-mcp` in `docker-compose.yml`;
+- present in the macOS LaunchAgent template, key value included as a
+  placeholder, because a launchd service inherits no shell environment;
+- forwarded by the reviewer dispatcher (2.6), except the key value, which is
+  never forwarded; the classifier settings are forwarded so the child reaches
+  the same `local` or `external` answer as the server.
+
+Each step below adds its names to that list, so the test fails until the
+step's Compose, plist and dispatcher entries exist. The steps no longer
+enumerate these mappings one by one.
+
 ### 2.2 One client
 
 A new `src/local_model_client.py` owns the only construction of an
@@ -294,8 +316,12 @@ release note says what to set first. One rule orders them: no step may let a req
    accepts only the `ollama` and `hf` provider kinds and forces
    `privacy='local'` on the Ollama branch) routing that host id to the primary
    endpoint whatever its kind, with privacy taken from the classification; and
-   the fallback endpoint with the Hugging Face default and its Compose and
-   LaunchAgent mappings.
+   the fallback endpoint with the Hugging Face default. Consult's route
+   postconditions (`_delivery_postcondition_error` in `consultation.py`, which
+   accepts only fixed Ollama and Hugging Face route tuples) change in the same
+   step to accept the resolved primary and fallback routes and to check the
+   privacy class the classification produced, or a successful call to a
+   non-Ollama endpoint is reported as a postcondition failure.
 4. **No implicit model.** Remove the `gemma4:latest` fallback (decision 7.2),
    one release after step 1, whose doctor check warns when no model is named.
    After it, an install that names no model has consult and the local reviewer
