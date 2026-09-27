@@ -298,8 +298,8 @@ before. `review.sh` adds the second review itself when a sensitive diff has
 only one family's pass, choosing a reviewer from a family that has not passed
 yet, and reports UNREVIEWED when no such reviewer is available (record an
 independent one with `review.sh record --independent`). CI reads the policy
-from the base branch, so a PR cannot remove itself from the list; the policy
-file and the review workflow are on it. Why: on PR #2486 the first reviewer
+as merged on the PR's base ref, never from the PR head, so a PR cannot remove
+itself from the list; the policy file and the review workflow are on it. Why: on PR #2486 the first reviewer
 returned a bare CLEAN and a second family then found two P2 defects; the
 `agy` isolation hole (standing grants in `~/.gemini`) was found by one family
 and would have shipped on another's pass.

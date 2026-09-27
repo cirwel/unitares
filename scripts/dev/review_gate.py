@@ -654,13 +654,15 @@ VERDICT: FINDINGS(<number of findings>)"""
 POLICY_FILE = Path(__file__).resolve().with_name("review_policy.json")
 
 
-def second_family_paths() -> list[str]:
+def second_family_paths(text: str | None = None) -> list[str]:
     """Globs whose diffs need passing reviews from two model families.
 
-    A missing file means no such paths. An unreadable one also means none,
-    and warns: failing closed would block every PR on a bad hand edit."""
+    ``text`` is the policy as merged on a PR's base ref (CI); otherwise the
+    file beside this script. A missing file means no such paths. An
+    unreadable one also means none, and warns: failing closed would block
+    every PR on a bad hand edit."""
     try:
-        raw = json.loads(POLICY_FILE.read_text())
+        raw = json.loads(text if text is not None else POLICY_FILE.read_text())
     except FileNotFoundError:
         return []
     except (OSError, ValueError) as exc:
@@ -669,6 +671,19 @@ def second_family_paths() -> list[str]:
         return []
     globs = raw.get("second_family_paths") if isinstance(raw, dict) else None
     return [g for g in globs if isinstance(g, str)] if isinstance(globs, list) else []
+
+
+def base_policy_paths(base: str) -> list[str]:
+    """The policy as merged on ``base`` (a fetched, trusted ref), never the PR
+    head. Falls back to the checked-out copy when the ref has none."""
+    try:
+        proc = _launch(["git", "show", f"{base}:scripts/dev/{POLICY_FILE.name}"],
+                       capture_output=True, text=True)
+    except Exception:  # noqa: BLE001 - fall back to the trusted checkout
+        return second_family_paths()
+    if proc.returncode != 0:
+        return second_family_paths()
+    return second_family_paths(proc.stdout)
 
 
 def sensitive_paths(paths: list[str], globs: list[str] | None = None) -> list[str]:
@@ -2063,7 +2078,10 @@ def cmd_ci(args) -> int:
     changed = changed_paths(f"origin/{base_ref}", head)
     # A diff whose paths cannot be read is treated as sensitive: this is the
     # gate, and "could not tell" must not pass with a single family.
-    sensitive = (sensitive_paths(changed) if changed is not None
+    # The policy as merged on this PR's own base ref: the workflow checks out
+    # the DEFAULT branch, which differs for a PR that targets another branch.
+    globs = base_policy_paths(f"origin/{base_ref}")
+    sensitive = (sensitive_paths(changed, globs) if changed is not None
                  else ["(changed paths unreadable)"])
     conclusion, desc = second_family_check(
         conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))

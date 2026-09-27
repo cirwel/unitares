@@ -2027,6 +2027,7 @@ def test_the_shipped_policy_covers_the_sensitive_surfaces():
                  "src/mcp_handlers/schemas/identity.py",
                  "src/services/mcp_transport_service.py", "src/mcp_listen_config.py",
                  "src/mcp_server.py", "src/dashboard_auth.py",
+                 "src/mcp_handlers/identity_bootstrap.py", "src/services/http_tool_service.py",
                  "src/mcp_handlers/identity/deep/x.py",  # "*" crosses "/"
                  "src/mcp_handlers/support/antigravity_cli_client.py",
                  "scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
@@ -2078,6 +2079,7 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
                                                     "base": {"ref": "master"}})
     monkeypatch.setattr(rg, "git", lambda *a, **k: "")
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     comments = [_comment(rg.Record("k", "CLEAN", 0, False, "antigravity"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
@@ -2215,6 +2217,7 @@ def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
                                                     "base": {"ref": "master"}})
     monkeypatch.setattr(rg, "git", lambda *a, **k: "")
     monkeypatch.setattr(rg, "changed_paths", lambda *a: None)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     comments = [_comment(rg.Record("k", "CLEAN", 0, False, "claude"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
@@ -2267,3 +2270,19 @@ def test_findings_from_the_second_family_go_back_to_the_author(monkeypatch):
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 1
     assert ran == ["codex"]
+
+
+
+def test_ci_reads_the_policy_from_the_prs_own_base_ref(repo, monkeypatch):
+    """Native Codex on #2504 (P2): the workflow checks out the DEFAULT branch,
+    so a PR to another branch must be judged by that branch's policy."""
+    (repo / "scripts" / "dev").mkdir(parents=True, exist_ok=True)
+    (repo / "scripts" / "dev" / "review_policy.json").write_text(
+        '{"second_family_paths": ["only/on/base.py"]}')
+    _git(repo, "add", "scripts/dev/review_policy.json")
+    _git(repo, "commit", "-q", "-m", "base policy")
+    assert rg.base_policy_paths("HEAD") == ["only/on/base.py"]
+    # A ref without the file falls back to the checked-out copy.
+    monkeypatch.setattr(rg, "second_family_paths",
+                        lambda text=None: ["fallback"] if text is None else ["parsed"])
+    assert rg.base_policy_paths("HEAD~1") == ["fallback"]
