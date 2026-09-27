@@ -162,7 +162,16 @@ def record_unavailable(
         # keeps its reason and detail too: "cooling after an auth failure
         # until the quota resets" would name the wrong cause.
         reason, detail, recorded_at = classified.get("reason"), detail[:200], now
-        if still_cooling and source == "backoff":
+        # Of two stated resets the later statement wins, by when each failure
+        # was seen, not when it got here: a call that saw its failure first
+        # can arrive second (its Redis read is awaited), and must not
+        # overwrite the newer statement. ``_adopt`` applies the same rule.
+        stale_statement = (
+            still_cooling and source == "provider"
+            and previous.get("retry_after_source") == "provider"
+            and now < previous.get("recorded_at", 0.0)
+        )
+        if (still_cooling and source == "backoff") or stale_statement:
             retry_after, source = previous["retry_after"], previous["retry_after_source"]
             reason, detail = previous["reason"], previous["detail"]
             recorded_at = previous.get("recorded_at", now)

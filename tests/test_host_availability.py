@@ -305,3 +305,46 @@ async def test_a_failed_delete_on_recovery_is_logged(monkeypatch, caplog):
     monkeypatch.setattr(ha, "_get_redis", _redis)
     await ha.clear_async("codex:host-adapter")
     assert "was not deleted" in caplog.text
+
+
+def test_an_older_stated_reset_arriving_late_does_not_replace_a_newer_one():
+    """Review round 3 (antigravity): the call that saw its failure first can
+    finish second; the later statement must still win."""
+    now = 1_000_000.0
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 600}, now=now + 10)
+    ha.record_unavailable("codex:host-adapter",
+                          {"reason": "quota", "stated_reset": now + 3600}, now=now + 5)
+    entry = ha._state["codex:host-adapter"]
+    assert entry["retry_after"] == now + 600 and entry["recorded_at"] == now + 10
+
+
+@pytest.mark.asyncio
+async def test_concurrent_stated_resets_keep_the_later_statement(monkeypatch):
+    """The same race end to end: the first caller's Redis read is slow."""
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    slow_once = {"left": 1}
+
+    class _SlowFirstRead:
+        def __getattr__(self, name):
+            return getattr(fake, name)
+
+        async def get(self, key):
+            if slow_once["left"]:
+                slow_once["left"] -= 1
+                await asyncio.sleep(0.05)
+            return await fake.get(key)
+
+    async def _redis():
+        return _SlowFirstRead()
+
+    monkeypatch.setattr(ha, "_get_redis", _redis)
+    now = 1_000_000.0
+    first = ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 3600}, now=now)
+    second = ha.record_unavailable_async(
+        "codex:host-adapter", {"reason": "quota", "stated_reset": now + 600}, now=now + 1)
+    await asyncio.gather(first, second)
+    assert ha._state["codex:host-adapter"]["retry_after"] == now + 600
+    stored = json.loads(await fake.get(ha.REDIS_KEY_PREFIX + "codex:host-adapter"))
+    assert stored["retry_after"] == now + 600
