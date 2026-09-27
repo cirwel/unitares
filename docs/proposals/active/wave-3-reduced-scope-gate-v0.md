@@ -696,7 +696,8 @@ created at or after the early check) and from the A2 report.
 whose cause precedes the sweeper's guarded commit and whose effect lands after it, within a
 **correlation bound of 6 hours** (a session id can be reused by a reopen); or that lands between the
 sweeper's decision read and its commit, so the sweeper acts on stale state. A write's cause is its
-attempt time (A12), or a saga's `created_at`. A BEAM resolve that meets an already-terminal row
+decision time (when its writer read the state it acts on, carried in its A12 attempt record), or a
+saga's `created_at`. A BEAM resolve that meets an already-terminal row
 returns `already_terminal` with no saga row, so collisions are measured from the A12 records and the
 pre-registered read-only report `scripts/ops/wave3_collision_report.py` (including a saga-versus-row
 status join), never from the session row alone, which a reap overwrites. "Observed continuously or
@@ -713,8 +714,9 @@ names the winner (`winner_status`, `winner_reason`).
 
 **A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
 classified once, in this order of precedence: **harm** (a collision under A2 with an adverse
-consequence: the sweeper overwrote or contradicted the other write's effect, or acted on state it
-had changed), then **contention-divergent** (the final status differs from the sweeper's intent) or
+consequence: the sweeper overwrote or contradicted the other write's effect or acted on state it had
+changed, or the other write invalidated the sweeper's committed effect, such as a message accepted on
+a session the sweeper had failed), then **contention-divergent** (the final status differs from the sweeper's intent) or
 **contention-benign** (it is the same, including same-value overlaps). A refusal is the terminal
 guard working and is never counted as harm by itself. The first clause of §6.5's reopen condition,
 and "collisions" in §7 step 4, mean an **adjudicated harm-class collision**. This narrows a clause of
@@ -784,5 +786,7 @@ started from Python over HTTP, emits an attempt record before its write and a re
 and the inventory test fails on any writer that does not; BEAM liveness only writes `failed`, so its
 outcomes are benign by construction. Each stream carries its own denominator (responses against
 attempts, the sweeper's per-write records against each cycle's `write_attempt_count`, cycle rows
-against `cycle_seq` within a boot). Completeness is 100%: any unmatched unit makes the reading
-inconclusive (A10), never a zero.
+against `cycle_seq` within a boot). Every failed emission is counted in-process and reported on the
+next cycle row. Completeness is 100%: any unmatched unit or reported emission failure makes the
+reading inconclusive (A10), never a zero. The stated residual: a process that dies between a failed
+emission and its next cycle row leaves only a boot change, which A5 already counts as a gap.
