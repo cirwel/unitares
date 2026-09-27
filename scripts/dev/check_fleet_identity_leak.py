@@ -232,10 +232,18 @@ def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
 #
 # - Dashboard CODE (.js, and <script> in .html) keeps the Python rule: a string
 #   literal that IS a name is a finding, a comment naming one is provenance.
+#   This half is BEST-EFFORT. It is a small scanner, not a JavaScript parser:
+#   it does not see unquoted object keys (`{ Lumen: ... }`) or names inside
+#   regex literals (`/^Lumen$/.test(label)`). Closing those means a tokenizer,
+#   for files that are mostly being removed: the one keyed dict is in
+#   snapshot.js, which is listed below and is being replaced with synthetic
+#   data. Review dashboard JS for label dispatch by eye; the guard catches
+#   the common form, a label compared or passed as a string.
 # - PROSE (served .md, SKILL.md, tool_descriptions.json, .css, and .html
 #   markup outside <script>) has no comments: every word is delivered. A
 #   resident name anywhere in it, in any case, is a finding; labels are
 #   compared case-insensitively, so `lumen` is the same leak as `Lumen`.
+#   This half is the strict one, and it covers what every agent is served.
 #
 # The operator domain fails everywhere, as above.
 
@@ -265,6 +273,12 @@ SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 # is a NEW leak and fails. A ratchet that only turns one way: fixing a
 # reference means deleting one entry from its file's tuple below, and the
 # last deletion removes the entry.
+#
+# The record is per name, not per location: moving an already-listed name
+# within an already-listed file passes. That is deliberate. Every listed file
+# is slated to be rewritten or removed, the record can only shrink, and a
+# location pin (line or surrounding text) breaks on every unrelated edit to
+# files that are still live.
 SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "dashboard/redesign/snapshot.js": (
         ("Sentinel",) * 6 + ("Watcher",) * 2 + ("Vigil",) * 2 + ("Lumen",) * 2
