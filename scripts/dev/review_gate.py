@@ -1450,6 +1450,8 @@ def cmd_review(args) -> int:
     args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
     deadline = time.monotonic() + args.budget
+    # One wall-clock budget for the whole command, second-family pass included.
+    args.review_deadline = deadline
     joined = False
     while True:
         with review_lock(key) as lock:
@@ -1533,6 +1535,10 @@ def cmd_review(args) -> int:
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
 
+#: A second-family attempt needs at least this much of the shared budget.
+SECOND_FAMILY_MIN_S = 120
+
+
 def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: int,
                        passed_by: str | None = None) -> int:
     """After a passing review of a security-sensitive diff, add a review from
@@ -1573,13 +1579,21 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     candidates = [p for p in reviewer_candidates(getattr(args, "branch", "") or "")
                   if reviewer_family(p) not in families
                   and p not in failed and not provider_cooldown(p)]
+    deadline = getattr(args, "review_deadline", None)
     for provider in candidates:
         if reviewer_family(provider) in families:
             continue
+        remaining = (deadline - time.monotonic()) if deadline is not None else None
+        if remaining is not None and remaining < SECOND_FAMILY_MIN_S:
+            print(f"[review] UNREVIEWED: the review budget is used up before a second model "
+                  f"family could review {sensitive[0]}; run review.sh again.")
+            return UNREVIEWED
         print(f"[review] {sensitive[0]} is security-sensitive: review by {provider} "
               f"(full-review families so far: {', '.join(sorted(families)) or 'none'})",
               flush=True)
         attempt = argparse.Namespace(**vars(args))
+        if remaining is not None:
+            attempt.budget = int(remaining)
         result = _review_locked(attempt, pr, key, provider)
         if result == UNREVIEWED:
             print(f"[review] {provider} did not complete; trying the next family", flush=True)
@@ -1965,11 +1979,24 @@ def cmd_sweep(args) -> int:
         key = diff_key(f"origin/{base}", head)
         comments = pr_comments(repo, n)
         try:
-            rec = current_record(repo, n, key, head, comments)
+            native = read_native(repo, n, key, head, comments).records
+            rec = latest_matching(comments, key, native)
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             continue  # cannot decide which findings remain open from partial evidence
-        if rec is not None and not (rec.verdict == "FAILED" and any(
+        # A passing record on a sensitive diff with one family is not done:
+        # review it again, which runs the second-family pass.
+        changed = changed_paths(f"origin/{base}", head)
+        needs_second = (
+            rec is not None and rec.status()[0] == "success"
+            and bool(changed)
+            and bool(sensitive_paths(changed, base_policy_paths(f"origin/{base}")))
+            and len(passing_families(comments, key, native)) < 2
+        )
+        if needs_second:
+            print(f"[sweep] PR #{n}: security-sensitive diff has one model family; "
+                  "starting the second")
+        elif rec is not None and not (rec.verdict == "FAILED" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":

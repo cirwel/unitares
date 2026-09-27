@@ -12,6 +12,12 @@
     "src/mcp_handlers/support/agent_auth.py",
     "src/agent_identity_auth.py",
     "src/effect_grant.py",
+    "src/http_routes/effects.py",
+    "src/lease_attestation.py",
+    "src/http_routes/lease_identity.py",
+    "src/identity/*",
+    "src/substrate/*",
+    "src/uds_listener.py",
     "src/mcp_handlers/schemas/identity.py",
     "src/mcp_handlers/identity_bootstrap.py",
     "src/mcp_handlers/updates/phases.py",
@@ -23,5 +29,5 @@
     "scripts/dev/review_policy.json",
     ".github/workflows/review-gate.yml"
   ],
-  "_boundary": "Listed: files whose main job is an authentication or authorisation decision, or the wiring that configures one (mcp_server.py, mcp_listen_config.py), plus the review gate itself. updates/phases.py is listed despite its size because it holds the main strict-identity write gate (the caller-proven check for sync_state and the no-implicit-identity refusal); it and mcp_server.py together touch about 9% of src commits (42 of 469 in the 60 days to 2026-09-27). Deliberately NOT listed: large multi-purpose files that contain a single check (http_routes/sentinel.py, mcp_server_std.py, dialectic_protocol.py, mcp_handlers/wave3a_probe.py, mcp_handlers/consolidated.py); listing them would put most of the codebase under the rule. Audited 2026-09-27 by grepping src/ for strict-identity refusals, compare_digest, CSRF, WebAuthn and trusted-network checks."
+  "_boundary": "Listed: files whose main job is an authentication or authorisation decision, or the wiring that configures one (mcp_server.py, mcp_listen_config.py), plus the review gate itself. updates/phases.py is listed despite its size because it holds the main strict-identity write gate (the caller-proven check for sync_state and the no-implicit-identity refusal); it and mcp_server.py together touch about 9% of src commits (42 of 469 in the 60 days to 2026-09-27). Deliberately NOT listed: large multi-purpose files that contain a single check (http_routes/sentinel.py, mcp_server_std.py, dialectic_protocol.py, mcp_handlers/wave3a_probe.py, mcp_handlers/consolidated.py); listing them would put most of the codebase under the rule. Also NOT listed: modules that sign records for integrity rather than gate access (dialectic_receipt.py, skill_attestations.py). Audited 2026-09-27 by grepping src/ for strict-identity refusals, compare_digest, CSRF, WebAuthn and trusted-network checks, then for signing, attestation, credential minting and verification, and reading each candidate's module docstring."
 }

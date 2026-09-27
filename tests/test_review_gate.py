@@ -353,6 +353,7 @@ def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch,
 
 
 def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
     def listing(*args):
         assert "labels" in args[-1]
@@ -824,6 +825,7 @@ def test_native_receipt_write_racing_a_push_cannot_complete_an_old_diff(monkeypa
 
 
 def test_sweep_records_native_clean_without_starting_another_review(repo, monkeypatch):
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
     monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
@@ -2304,3 +2306,45 @@ def test_the_local_helper_uses_the_base_refs_policy(monkeypatch):
     args = SimpleNamespace(base="origin/master", branch="x/y", budget=30)
     assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
     assert seen == ["origin/master"] and ran == ["codex"]
+
+
+
+def test_sweep_starts_the_second_family_on_a_quiet_sensitive_pr(monkeypatch, tmp_path):
+    """Native Codex on #2504 (P2): the sweep treated any passing record as done,
+    so a quiet sensitive PR with one family never got its second."""
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", created_at="2026-09-27T00:00:00Z")
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "review_lock", lambda key: SimpleNamespace(holder_alive=lambda: False))
+    launched = []
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda cmd, **kw: launched.append(cmd) or SimpleNamespace(returncode=0))
+    rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt")))
+    assert launched and launched[0][-1] == "review"
+
+
+def test_the_second_family_gets_only_the_remaining_budget(monkeypatch):
+    """Native Codex on #2504 (P2): each second-family attempt got a fresh full
+    budget, so a 40-minute review.sh could run 80-120 minutes."""
+    _second_family_env(monkeypatch, changed=["src/oauth_provider.py"],
+                       families={"google"}, candidates=("codex", "claude"))
+    budgets = []
+    monkeypatch.setattr(rg, "_review_locked",
+                        lambda a, pr, key, p: budgets.append(a.budget) or 0)
+    now = rg.time.monotonic()
+    args = SimpleNamespace(base="origin/master", branch="x/y", budget=2400,
+                           review_deadline=now + 500)
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == 0
+    assert budgets and 400 < budgets[0] <= 500
+
+    args.review_deadline = rg.time.monotonic() + 30  # under SECOND_FAMILY_MIN_S
+    budgets.clear()
+    assert rg.second_family_pass(args, "o/r", 1, "k", "h", 0) == rg.UNREVIEWED
+    assert budgets == []
