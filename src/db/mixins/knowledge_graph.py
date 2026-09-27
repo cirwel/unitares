@@ -208,6 +208,7 @@ class KnowledgeGraphMixin:
         order_by: str = "rank",
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        filters: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Full-text search using PostgreSQL tsvector.
 
@@ -251,6 +252,22 @@ class KnowledgeGraphMixin:
         if created_before:
             params.append(created_before)
             clauses.append(f"AND created_at < ${len(params)}")
+        # Row filters the caller would otherwise apply after the LIMIT. Under
+        # created_at order a burst of newer archived (or wrong-type) matches
+        # would fill the page and leave nothing to return, so newest-first
+        # reads send them here. Keys: agent_id, type, severity, status,
+        # exclude_archived, exclude_cold.
+        filters = filters or {}
+        for column in ("agent_id", "type", "severity", "status"):
+            value = filters.get(column)
+            if value:
+                params.append(value)
+                clauses.append(f"AND {column} = ${len(params)}")
+        if not filters.get("status"):
+            if filters.get("exclude_archived"):
+                clauses.append("AND status IS DISTINCT FROM 'archived'")
+            if filters.get("exclude_cold"):
+                clauses.append("AND status IS DISTINCT FROM 'cold'")
         filter_clause = " ".join(clauses)
         order_clause = (
             "created_at DESC" if order_by == "created_at" else "rank DESC, created_at DESC"

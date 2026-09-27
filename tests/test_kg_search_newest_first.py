@@ -200,6 +200,33 @@ class TestSearchHandlerNewestFirst:
         assert _ids(payload) == [NEW_WEAK.id, MID.id, OLD_STRONG.id]
 
     @pytest.mark.asyncio
+    async def test_newer_ineligible_matches_do_not_empty_the_page(self, seeded_db):
+        # Review finding (#2517): filters applied after the SQL LIMIT let a
+        # burst of newer archived matches fill the candidate page, so
+        # limit=1 came back empty although an active match existed.
+        for i in range(8):
+            node = _node(
+                f"archived-{i}",
+                age=timedelta(seconds=i + 1),
+                summary=f"coherence gate archived note {i}",
+            )
+            node.status = "archived"
+            await seeded_db.kg_add_discovery(node)
+        payload = await _search(seeded_db, query="coherence gate", limit=1, sort_by="created_at")
+        assert _ids(payload) == [NEW_WEAK.id]
+
+    @pytest.mark.asyncio
+    async def test_type_filter_applies_before_the_limit(self, seeded_db):
+        for i in range(8):
+            node = _node(f"bug-{i}", age=timedelta(seconds=i + 1), summary=f"coherence gate bug {i}")
+            node.type = "bug_found"
+            await seeded_db.kg_add_discovery(node)
+        payload = await _search(
+            seeded_db, query="coherence gate", limit=1, sort_by="created_at", discovery_type="note"
+        )
+        assert _ids(payload) == [NEW_WEAK.id]
+
+    @pytest.mark.asyncio
     async def test_what_is_new_since_without_a_query(self, seeded_db):
         since = NOW - timedelta(days=1)
         payload = await _search(seeded_db, created_after=since.isoformat(), limit=10)
@@ -297,6 +324,18 @@ class TestParseRecencyArguments:
     def test_unknown_sort_is_refused(self):
         with pytest.raises(_SearchParameterError, match="sort_by"):
             _parse_knowledge_search_request({"query": "x", "sort_by": "score"})
+
+    @pytest.mark.parametrize("flag", [True, "true"])
+    def test_newest_first_refuses_the_legacy_semantic_toggle(self, flag):
+        # Review finding (#2517): semantic=true was accepted and silently ran FTS.
+        with pytest.raises(_SearchParameterError, match="semantic=true"):
+            _parse_knowledge_search_request({"query": "x", "sort_by": "created_at", "semantic": flag})
+
+    def test_semantic_false_is_compatible_with_newest_first(self):
+        request = _parse_knowledge_search_request(
+            {"query": "x", "sort_by": "created_at", "semantic": False}
+        )
+        assert request.sort_by == "created_at"
 
     @pytest.mark.parametrize("mode", ["semantic", "hybrid"])
     def test_newest_first_refuses_similarity_modes(self, mode):

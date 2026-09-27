@@ -1815,6 +1815,12 @@ def _parse_knowledge_search_request(
         raise _SearchParameterError(
             f"Invalid sort_by {sort_by!r}; expected 'relevance' or 'created_at'"
         )
+    if sort_by == "created_at" and _optional_flag(arguments.get("semantic")) is True:
+        raise _SearchParameterError(
+            "sort_by='created_at' orders the query's full-text matches by time "
+            "and cannot be combined with semantic=true. Drop semantic, or use "
+            "sort_by='relevance'."
+        )
     if sort_by == "created_at" and search_mode in {"semantic", "hybrid"}:
         # Newest-first needs a match SET to order. The full-text query gives
         # one; similarity has no boundary short of the min_similarity knob, so
@@ -2171,6 +2177,16 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
     fts_kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
     if request.sort_by == "created_at":
         fts_kwargs["order_by"] = "created_at"
+        # The post-LIMIT filter below stays, but under time order it would
+        # leave a page of newer ineligible rows and nothing to return.
+        fts_kwargs["filters"] = {
+            "agent_id": request.agent_id,
+            "type": request.discovery_type,
+            "severity": request.severity,
+            "status": request.status,
+            "exclude_archived": not request.include_archived,
+            "exclude_cold": not request.include_cold,
+        }
     state.candidates = await state.graph.full_text_search(
         str(request.query_text),
         limit=candidate_limit,
