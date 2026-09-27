@@ -518,24 +518,26 @@ async def http_bootstrap_silent(request):
 # (observe(action='anomalies')); nothing schedules it. Until 2026-09-26 the
 # dashboard's Anomalies card called it on every refresh, so the feed looked
 # continuous; #2494 removed that card and with it the only regular producer.
+# Deliberately not a list of causes. An empty or old feed is consistent with a
+# producer that did not run, one that ran and found nothing new, one that
+# errored, and a finding whose audit write to PostgreSQL failed (the JSONL
+# record survives it; this endpoint reads PostgreSQL). Naming some of these
+# would imply the rest were ruled out.
+_ABSENCE_UNDETERMINED = (
+    "undetermined: this feed holds findings that reached the audit database, "
+    "not a record of runs, so an empty or old feed does not show that nothing "
+    "was found"
+)
 INCIDENT_PRODUCERS = {
     "anomaly_detected": {
         "cadence": "on_demand",
         "written_by": "detect_anomalies",
-        # Two states share an empty feed and this endpoint cannot tell them
-        # apart: nobody ran detect_anomalies, or a run found nothing new.
-        "absence_means": (
-            "undetermined: either no caller ran detect_anomalies, or a run "
-            "found no new anomaly; this feed records findings, not runs"
-        ),
+        "absence_means": _ABSENCE_UNDETERMINED,
     },
     "stuck_detected": {
         "cadence": "scheduled",
         "written_by": "detect_stuck_agents (5-minute background sweep)",
-        "absence_means": (
-            "no newly stuck agent was recorded; the sweep is scheduled, but "
-            "this feed records findings, not runs, so it cannot show a sweep ran"
-        ),
+        "absence_means": _ABSENCE_UNDETERMINED,
     },
 }
 
