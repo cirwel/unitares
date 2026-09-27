@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import re
 import secrets
+import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, Sequence
 from uuid import uuid4
@@ -151,6 +152,10 @@ class ConsultRequest:
     response_mode: str = "compact"
     # Derived from transport provenance by handle_consult, never caller input.
     thorough_host_id: str = "claude:host-adapter"
+    # The caller's eligible peers in preference order (never its own family);
+    # a thorough attempt that finds its provider unavailable fails over along
+    # this list. Empty = no failover (the pre-failover behaviour).
+    thorough_peers: tuple[str, ...] = ()
     consultation_id: str = field(default_factory=lambda: str(uuid4()))
 
 
@@ -238,6 +243,45 @@ def _thorough_host_for_caller() -> str:
             return host_id
     disabled = host_adapter_disabled_hosts()
     return next((host_id for host_id in peers if host_id not in disabled), peers[0])
+
+
+def _thorough_peers_for_caller() -> tuple[str, ...]:
+    return _THOROUGH_PEERS[_caller_family()]
+
+
+#: Failures that prove the chosen provider could not serve the call and that
+#: nothing is left running, so trying the next peer cannot duplicate work.
+_PREFLIGHT_UNAVAILABLE_CODES = frozenset({
+    "INFERENCE_HOST_NOT_FOUND",
+    "INFERENCE_HOST_UNREACHABLE",
+    "INFERENCE_HOST_UNAVAILABLE",
+})
+#: A failover attempt is started only while a full thorough attempt still fits
+#: inside the consult tool timeout.
+_THOROUGH_ATTEMPT_S = 240
+
+
+def _clock() -> float:
+    return time.monotonic()
+
+
+def _failover_reason(failure: InferenceFailure) -> str | None:
+    """Why the next peer may be tried, or None when it must not be."""
+    if failure.possibly_running:
+        return None
+    unavailable = failure.details.get("provider_unavailable")
+    if isinstance(unavailable, dict) and unavailable.get("reason"):
+        return str(unavailable["reason"])
+    if not failure.execution_started and failure.code in _PREFLIGHT_UNAVAILABLE_CODES:
+        return "host_unavailable"
+    return None
+
+
+def _next_peer(request: ConsultRequest, tried: list[str]) -> str | None:
+    for host_id in request.thorough_peers:
+        if host_id not in tried and host_adapter_available(host_id):
+            return host_id
+    return None
 
 
 def _safe_provenance(
@@ -486,8 +530,47 @@ async def _run_thorough(
         requesting_agent_uuid=request.requester_uuid,
         host_id=request.thorough_host_id,
         task_type=_THOROUGH_TASK_TYPES[request.purpose],
-        timeout_s=240,
+        timeout_s=_THOROUGH_ATTEMPT_S,
     ))
+
+
+async def _run_thorough_with_failover(
+    request: ConsultRequest,
+    prompt: str,
+) -> tuple[ConsultRequest, InferenceOutcome, list[dict[str, str]]]:
+    """Run the thorough lane, failing over to the next eligible peer when the
+    chosen provider is out (usage limit, logged out, preflight-unavailable).
+
+    Returns the request as actually served (its thorough_host_id is the host
+    that produced the outcome, so the route postcondition and the record name
+    the real destination), the final outcome, and each skipped attempt.
+    """
+    started = _clock()
+    tried = [request.thorough_host_id]
+    failovers: list[dict[str, str]] = []
+    current = request
+    while True:
+        outcome = await _guarded_inference(
+            "thorough", lambda: _run_thorough(current, prompt)
+        )
+        if outcome.ok or outcome.failure is None:
+            return current, outcome, failovers
+        reason = _failover_reason(outcome.failure)
+        elapsed = _clock() - started
+        if reason is None or (
+            elapsed + _THOROUGH_ATTEMPT_S > CONSULT_TIMEOUT_S - _CONSULT_CLEANUP_GRACE_S
+        ):
+            return current, outcome, failovers
+        nxt = _next_peer(current, tried)
+        if nxt is None:
+            return current, outcome, failovers
+        failovers.append({
+            "from_host_id": current.thorough_host_id,
+            "reason": reason,
+            "to_host_id": nxt,
+        })
+        tried.append(nxt)
+        current = dataclasses.replace(current, thorough_host_id=nxt)
 
 
 def _delivery_postcondition_error(
@@ -771,12 +854,11 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             prompt_hash=prompt_hash,
         )
 
-    thorough_outcome = await _guarded_inference(
-        "thorough",
-        lambda: _run_thorough(request, prompt),
+    request, thorough_outcome, failovers = await _run_thorough_with_failover(
+        request, prompt
     )
     if thorough_outcome.ok:
-        return _success(
+        served = _success(
             request,
             thorough_outcome,
             delivered_effort="thorough",
@@ -785,6 +867,9 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             brief_hash=brief_hash,
             prompt_hash=prompt_hash,
         )
+        if failovers and served.ok:
+            served.data["failover"] = failovers
+        return served
 
     primary_failure = thorough_outcome.failure
     assert primary_failure is not None
@@ -806,7 +891,10 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             recovery_action=_recovery_for_upstream(
                 primary_failure, lane="thorough"
             ),
-            failure_details={"upstream": _safe_failure(primary_failure)},
+            failure_details={
+                "upstream": _safe_failure(primary_failure),
+                **({"failover": failovers} if failovers else {}),
+            },
             diagnostics={"upstream": _failure_diagnostics(primary_failure)},
         )
 
@@ -1070,7 +1158,10 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         response_mode=str(arguments.get("response_mode", "compact")),
         # Only a thorough consult delegates; a standard one never probes hosts.
         **(
-            {"thorough_host_id": _thorough_host_for_caller()}
+            {
+                "thorough_host_id": _thorough_host_for_caller(),
+                "thorough_peers": _thorough_peers_for_caller(),
+            }
             if arguments.get("effort") == "thorough"
             else {}
         ),
