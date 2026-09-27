@@ -22,9 +22,10 @@ Paths in the server that call a local model (all in `src/mcp_handlers/`):
 | Check-in enrichments on guide or pause | `updates/enrichments.py` via `llm_delegation.py` | sync OpenAI client on Ollama `/v1` |
 | Knowledge synthesis and audit | `knowledge/synthesis.py`, `src/knowledge_graph_lifecycle.py` | `call_local_llm` or `call_model` |
 
-Outside the server, the orchestrated dialectic reviewer
-(`agents/dialectic_reviewer/`) opens its own async OpenAI client on the same
-Ollama base for its `local` backend. Its `external` backend
+Outside the server, two agent processes build their own clients on the same
+Ollama base with a hard-coded `"ollama"` key: the orchestrated dialectic
+reviewer's `local` backend (`agents/dialectic_reviewer/reviewer.py`) and the
+local resident runner (`agents/local_resident/runner.py`). Its `external` backend
 (`host_backends.py`) already talks to any OpenAI-compatible endpoint, configured
 by `UNITARES_DIALECTIC_EXTERNAL_BASE_URL`, `_MODEL` and `_API_KEY_ENV`. That
 backend runs only in the orchestrated reviewer, which a default install does
@@ -42,9 +43,10 @@ What this costs an installer:
 - **Two vocabularies for the same choice.** `call_model` takes
   `provider=auto|hf|ollama` and `privacy=local|auto|cloud`. `consult` takes
   `privacy=local|cloud_allowed`.
-- **Four client constructions.** One async, two sync (one of them run in an
-  executor), and one stdlib `urllib` call to `/api/chat`, plus the reviewer
-  process's own. Each has its own timeout handling.
+- **Six client constructions.** In the server: one async, two sync (one of
+  them run in an executor), and one stdlib `urllib` call to `/api/chat`. In the
+  agent processes: the reviewer's and the resident's. Each has its own timeout
+  handling, and every one sends the fixed key `"ollama"`.
 - **Many settings.** A survey of `origin/master` on 2026-09-27 counted about 41
   distinct inference environment variables across all lanes, of which the
   install manual names three. Most belong to the orchestrated reviewer and the
@@ -65,10 +67,13 @@ The local lane becomes one OpenAI-compatible endpoint:
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL including `/v1` | derived from `UNITARES_OLLAMA_BASE` if set, else `http://localhost:11434/v1` |
 | `UNITARES_MODEL` | Model id the endpoint serves | `UNITARES_LLM_MODEL` if set, else `gemma4:latest` (see 7.2) |
-| `UNITARES_MODEL_API_KEY` | Bearer for the endpoint, if it needs one | empty |
+| `UNITARES_MODEL_API_KEY_ENV` | Name of the variable that holds the endpoint's key, if it needs one | `UNITARES_MODEL_API_KEY` |
 
-Ollama, vLLM, LM Studio, llama.cpp's server, OpenRouter, OpenAI and the Hugging
-Face router all accept this shape. The existing names stay as aliases with the
+The key is named indirectly, as the orchestrated reviewer's `external` backend
+already does (`UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV`), so a process that must
+not carry the value (see 2.6) can be told which variable to read. Ollama,
+vLLM, LM Studio, llama.cpp's server, OpenRouter, OpenAI and the Hugging Face
+router all accept this shape. The existing names stay as aliases with the
 precedence and disagreement warning `local_inference_env.py` already applies to
 `UNITARES_OLLAMA_BASE_URL`. An existing install keeps working with no edits.
 
@@ -118,13 +123,28 @@ not a router: nothing chooses between providers by cost or load.
   instead of a socket probe on the Ollama port.
 - The doctor gains a check that the endpoint answers and lists the configured
   model.
-- `make setup-model` lists models from `{base}/models`, so it works for any
-  such server. Ollama instructions become one example in the manual.
+- `unitares model` (`cmd_model` in `scripts/unitares`, backed by
+  `scripts/install/choose_model.py`) lists models from `{base}/models`, so it
+  works for any such server. Ollama instructions become one example in the
+  manual.
 
-### 2.6 The orchestrated reviewer follows
+### 2.6 The agent processes follow, without carrying the key
 
-The reviewer's `local` backend uses `local_model_client.py` and the same
-settings. Its `external` backend stays, as the way to review with a different
+The reviewer's `local` backend and the local resident runner use
+`local_model_client.py` and the same settings.
+
+The orchestrated reviewer is started through a governed spawn whose
+environment becomes an audited effect record, so
+`orchestrator_dispatch.py` forwards configuration but never credential
+values. The same rule applies here: the dispatcher forwards
+`UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
+(the variable's name), and the key's value must be provisioned in the
+orchestrator service's own environment, which the child inherits. With the
+value only in the governance server's environment, server calls succeed and
+the reviewer's call fails authentication and falls back, which its provenance
+already records. The manual says this where it documents the key.
+
+The reviewer's `external` backend stays, as the way to review with a different
 model than the one that wrote the work, and inherits the primary endpoint's
 settings when its own are unset.
 
@@ -142,12 +162,17 @@ settings when its own are unset.
 
 Each step is its own pull request and preserves behavior until the last.
 
-1. **Settings.** Add the `UNITARES_MODEL_*` names and aliases in
-   `local_inference_env.py`, the doctor check, and the manual and `.env.example`
-   text. No client changes.
-2. **Client.** Add `local_model_client.py`, move the four constructions and the
-   reviewer's `local` backend onto it, and keep `/api/chat` behind Ollama
-   detection.
+1. **Settings.** Add `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` with their
+   aliases in `local_inference_env.py`, the doctor check, and the manual and
+   `.env.example` text. No client changes, and no key setting yet: every
+   client still sends a fixed key, so documenting one here would describe a
+   setting nothing reads.
+2. **Client and key.** Add `local_model_client.py` and
+   `UNITARES_MODEL_API_KEY_ENV` together. Move all six constructions onto the
+   client (the four in the server, the reviewer's `local` backend and the local
+   resident runner), forward the key's name to the orchestrated reviewer as
+   2.6 describes, and keep `/api/chat` behind Ollama detection. Only now does
+   the manual describe authenticated endpoints.
 3. **Privacy and fallback.** Endpoint classification and the `privacy='local'`
    refusal, the `/models` availability probe, and the fallback endpoint with the
    Hugging Face default.
