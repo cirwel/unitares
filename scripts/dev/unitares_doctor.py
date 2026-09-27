@@ -13,6 +13,10 @@ Modes:
                bring-up where the agent client spawns governance directly.
     operator   Adds HTTP/launchd checks: governance port listening, PID file,
                LaunchAgent loaded, resident-agent plists, cloudflared sidecar.
+               The launchd checks SKIP on a host with no UNITARES LaunchAgent
+               (Docker Compose, Linux, stdio). Resident LaunchAgents are
+               checked only when declared, e.g.
+               UNITARES_DOCTOR_RESIDENT_LAUNCHD="name,other|other-beam".
     all        local + operator. Default.
 
 Stdlib-only. Safe to run before `pip install -e .` finishes — used to verify
@@ -43,13 +47,51 @@ from typing import Callable
 DEFAULT_DB_URL = "postgresql://postgres:postgres@localhost:5432/governance"
 DEFAULT_REDIS_URL = "redis://localhost:6379/0"
 REQUIRED_PG_EXTENSIONS = ("age", "pgcrypto", "pg_trgm", "uuid-ossp", "vector")
-RESIDENT_LAUNCHD_SLOTS = (
-    ("vigil", ("com.unitares.vigil",)),
-    ("sentinel", ("com.unitares.sentinel", "com.unitares.sentinel-beam")),
-    ("chronicler", ("com.unitares.chronicler",)),
-)
+# Which resident LaunchAgents this host is expected to run is deployment
+# configuration, not something the doctor can know: a fresh install has none.
+# Declare them as comma-separated slots; a slot may name alternatives with
+# "|" (e.g. a Python agent and its BEAM port), and each name expands to the
+# launchd label com.unitares.<name>. Unset means no resident is expected, and
+# resident_agents SKIPs rather than warning about agents nobody installed.
+RESIDENT_LAUNCHD_ENV = "UNITARES_DOCTOR_RESIDENT_LAUNCHD"
+LAUNCHD_LABEL_PREFIX = "com.unitares."
 ANCHOR_DIR = Path.home() / ".unitares"
-SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
+# Optional env file sourced by helper scripts (ship.sh, the BEAM start
+# scripts); the server itself reads only its own process environment.
+# UNITARES_SECRETS_ENV names it explicitly. Otherwise the neutral default is
+# used, falling back to the pre-2026-09 location when only that one exists so
+# an existing deployment keeps its file where its scripts look for it.
+SECRETS_ENV_VAR = "UNITARES_SECRETS_ENV"
+DEFAULT_SECRETS_FILE = Path.home() / ".config" / "unitares" / "secrets.env"
+LEGACY_SECRETS_FILE = Path.home() / ".config" / "cirwel" / "secrets.env"
+
+
+def resolve_secrets_file(
+    environ: dict | None = None,
+    default: Path = DEFAULT_SECRETS_FILE,
+    legacy: Path = LEGACY_SECRETS_FILE,
+) -> Path:
+    """The secrets env file this install uses (see SECRETS_ENV_VAR above)."""
+    env = os.environ if environ is None else environ
+    override = (env.get(SECRETS_ENV_VAR) or "").strip()
+    if override:
+        return Path(override).expanduser()
+    if not default.exists() and legacy.exists():
+        return legacy
+    return default
+
+
+def resident_launchd_slots(
+    environ: dict | None = None,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Parse RESIDENT_LAUNCHD_ENV into (slot, (label, ...)) pairs."""
+    env = os.environ if environ is None else environ
+    slots: list[tuple[str, tuple[str, ...]]] = []
+    for part in (env.get(RESIDENT_LAUNCHD_ENV) or "").split(","):
+        names = [n.strip() for n in part.split("|") if n.strip()]
+        if names:
+            slots.append((names[0], tuple(LAUNCHD_LABEL_PREFIX + n for n in names)))
+    return tuple(slots)
 # Path to the port registry, as a module attribute so the degraded path can be
 # exercised. A fallback nothing can reach is a fallback nobody has tested.
 PORTS_CATALOG_PATH = Path(__file__).resolve().parent / "ports_catalog.py"
@@ -185,7 +227,9 @@ def check_postgres_running(db_url: str) -> CheckResult:
     if rc == 0:
         return CheckResult(name, mode, Status.PASS, f"reachable at {_redact(db_url)}")
     return CheckResult(name, mode, Status.FAIL,
-                       f"pg_isready failed (rc={rc}); try `brew services start postgresql@17`")
+                       f"pg_isready failed (rc={rc}); start PostgreSQL "
+                       f"(`docker compose up -d postgres-age`, or "
+                       f"`brew services start postgresql@17` on a Homebrew install)")
 
 
 def check_redis_continuity(redis_url: str) -> CheckResult:
@@ -1098,17 +1142,21 @@ def check_anchor_dir() -> CheckResult:
                        f"{ANCHOR_DIR} missing — first onboard() will create it")
 
 
-def check_secrets_file() -> CheckResult:
+def check_secrets_file(path: Path | None = None) -> CheckResult:
     name, mode = "secrets_file", "local"
-    if not SECRETS_FILE.exists():
-        return CheckResult(name, mode, Status.WARN,
-                           f"{SECRETS_FILE} not present (only needed if calling external providers)")
-    actual = stat.S_IMODE(SECRETS_FILE.stat().st_mode)
+    secrets_file = resolve_secrets_file() if path is None else path
+    if not secrets_file.exists():
+        # Optional: the server never reads this file, so its absence is not a
+        # finding. Only the mode of a file that exists is worth checking.
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{secrets_file} not present (optional; only helper "
+                           f"scripts source it — set {SECRETS_ENV_VAR} to relocate)")
+    actual = stat.S_IMODE(secrets_file.stat().st_mode)
     if actual == 0o600:
-        return CheckResult(name, mode, Status.PASS, f"{SECRETS_FILE} (0600)")
+        return CheckResult(name, mode, Status.PASS, f"{secrets_file} (0600)")
     return CheckResult(name, mode, Status.FAIL,
-                       f"{SECRETS_FILE} mode is {oct(actual)} — must be 0600",
-                       detail=f"chmod 600 {SECRETS_FILE}")
+                       f"{secrets_file} mode is {oct(actual)} — must be 0600",
+                       detail=f"chmod 600 {secrets_file}")
 
 
 # ---------------------------------------------------------------------------
@@ -1429,9 +1477,17 @@ def _pid_file_context(service_active: bool) -> str:
     return "server not running, or stdio mode"
 
 
-def check_pid_file(repo_root: Path, service_active: bool = False) -> CheckResult:
+def check_pid_file(
+    repo_root: Path, service_active: bool = False, launchd_host: bool = True,
+) -> CheckResult:
     name, mode = "pid_file", "operator"
     pid_file = repo_root / PID_FILE_REL
+    if not pid_file.exists() and not launchd_host:
+        # The PID file is written into the checkout the server runs from. A
+        # containerised server writes it inside the container, so a missing
+        # file on a host with no launchd deployment says nothing.
+        return CheckResult(name, mode, Status.SKIP,
+                           f"{pid_file} missing; {_NO_LAUNCHD}")
     service_active = service_active or _http_health_available()
     if not pid_file.exists():
         return CheckResult(name, mode, Status.WARN,
@@ -1470,21 +1526,47 @@ def _launchctl_loaded() -> set[str]:
     return out
 
 
+def _launchd_deployment(loaded: set[str]) -> bool:
+    """Whether this host runs any UNITARES LaunchAgent at all.
+
+    A Docker Compose, Linux or stdio install has none, and launchd checks on
+    such a host can only report the absence of a deployment shape it never
+    chose. Those checks SKIP there instead of warning.
+    """
+    return any(label.startswith(LAUNCHD_LABEL_PREFIX) for label in loaded)
+
+
+_NO_LAUNCHD = ("no UNITARES LaunchAgent on this host (Docker Compose, Linux "
+               "and stdio installs do not use launchd)")
+
+
 def check_launchagent(loaded: set[str]) -> CheckResult:
     name, mode = "launchagent_loaded", "operator"
     label = GOVERNANCE_LAUNCHD_LABEL
     if label in loaded:
         return CheckResult(name, mode, Status.PASS, f"{label} loaded")
+    if not _launchd_deployment(loaded):
+        return CheckResult(name, mode, Status.SKIP, _NO_LAUNCHD)
     return CheckResult(name, mode, Status.WARN,
-                       f"{label} not loaded — stdio mode is fine, "
-                       f"but `unitares` CLI / remote MCP clients need this")
+                       f"{label} not loaded while other UNITARES LaunchAgents are — "
+                       f"the launchd-managed server is down")
 
 
-def check_resident_agents(loaded: set[str]) -> CheckResult:
+def check_resident_agents(
+    loaded: set[str],
+    slots: tuple[tuple[str, tuple[str, ...]], ...] | None = None,
+) -> CheckResult:
     name, mode = "resident_agents", "operator"
+    slots = resident_launchd_slots() if slots is None else slots
+    if not slots:
+        return CheckResult(name, mode, Status.SKIP,
+                           f"no resident LaunchAgents declared "
+                           f"({RESIDENT_LAUNCHD_ENV} unset)")
+    if not _launchd_deployment(loaded):
+        return CheckResult(name, mode, Status.SKIP, _NO_LAUNCHD)
     missing: list[str] = []
     resolved: list[str] = []
-    for slot_name, labels in RESIDENT_LAUNCHD_SLOTS:
+    for slot_name, labels in slots:
         present = [label for label in labels if label in loaded]
         if present:
             resolved.append(f"{slot_name}={'+'.join(present)}")
@@ -3803,7 +3885,8 @@ def build_checks(
         Check("http_health", "operator", check_http_health),
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
         Check("pid_file", "operator",
-              lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded())),
+              lambda: check_pid_file(repo_root, GOVERNANCE_LAUNCHD_LABEL in loaded(),
+                                     launchd_host=_launchd_deployment(loaded()))),
         Check("launchagent_loaded", "operator", lambda: check_launchagent(loaded())),
         Check("resident_agents", "operator", lambda: check_resident_agents(loaded())),
         Check("ipv6_sidecar", "operator", lambda: check_ipv6_sidecar(loaded())),

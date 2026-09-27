@@ -2,9 +2,10 @@
 """Advanced bare-metal UNITARES setup assistant.
 
 Runs scripts/dev/unitares_doctor.py for diagnosis, prints remediation commands
-for any failing checks, scaffolds ~/.unitares/ and ~/.config/cirwel/secrets.env
-under --apply, and generates copy-pasteable stdio MCP snippets for detected
-clients (Claude Code, Codex, Gemini CLI, Copilot CLI).
+for any failing checks, scaffolds ~/.unitares/ and an optional secrets env file
+(~/.config/unitares/secrets.env, or $UNITARES_SECRETS_ENV) under --apply, and
+generates copy-pasteable stdio MCP snippets for detected clients (Claude Code,
+Codex, Gemini CLI, Copilot CLI).
 
 This is not the supported Tier-1 installer. The release-tagged Docker Compose
 quickstart in README.md is the default install path; this helper exists for
@@ -12,7 +13,7 @@ operators who deliberately choose the source-based macOS playbook.
 
 Setup PRINTS commands. It does NOT install postgres, run SQL, invoke brew, or
 modify MCP client config files. The two filesystem mutations under --apply are
-bounded exceptions: scaffolding ~/.unitares/ and ~/.config/cirwel/secrets.env.
+bounded exceptions: scaffolding ~/.unitares/ and the secrets env file.
 
 Usage:
     python3 scripts/install/setup.py            # interactive, dry-run
@@ -83,7 +84,7 @@ _REMEDIATIONS = {
         "psql \"${DB_POSTGRES_URL:-postgresql://localhost:5432/governance}\" "
         "-f db/postgres/init-extensions.sql",
     "secrets_file":  # mode-fail variant; the missing-file variant is phase 2
-        "chmod 600 ~/.config/cirwel/secrets.env",
+        "chmod 600 \"${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}\"",
     "anchor_directory":
         "mkdir -m 700 ~/.unitares",
 }
@@ -136,11 +137,32 @@ def _build_migrations_command() -> str:
 
 
 SECRETS_TEMPLATE = """\
-# UNITARES external secrets — mode 0600, never commit.
-# Used by handlers that call out to LLM providers.
-# ANTHROPIC_API_KEY=
-# OPENAI_API_KEY=
+# UNITARES helper-script secrets — mode 0600, never commit.
+# The governance server does NOT read this file: it reads its own process
+# environment (.env under Docker Compose, the plist on a launchd install).
+# Helper scripts that run beside it (scripts/dev/ship.sh, the BEAM start
+# scripts under elixir/) source it, e.g. for:
+# LEASE_PLANE_BEARER_TOKEN=
+# UNITARES_HTTP_API_TOKEN=
 """
+
+# Where the secrets env file lives. UNITARES_SECRETS_ENV wins; otherwise the
+# neutral default, unless only the pre-2026-09 location exists, in which case
+# that file is kept where its scripts already look. Mirrors
+# resolve_secrets_file() in scripts/dev/unitares_doctor.py.
+SECRETS_ENV_VAR = "UNITARES_SECRETS_ENV"
+
+
+def resolve_secrets_path(home: Path, environ: dict | None = None) -> Path:
+    env = os.environ if environ is None else environ
+    override = (env.get(SECRETS_ENV_VAR) or "").strip()
+    if override:
+        return Path(override).expanduser()
+    default = home / ".config" / "unitares" / "secrets.env"
+    legacy = home / ".config" / "cirwel" / "secrets.env"
+    if not default.exists() and legacy.exists():
+        return legacy
+    return default
 
 
 def ensure_anchor_dir(path: Path, apply: bool) -> PlanItem:
@@ -167,9 +189,9 @@ def ensure_anchor_dir(path: Path, apply: bool) -> PlanItem:
 
 
 def ensure_secrets_file(path: Path, apply: bool) -> PlanItem:
-    """Plan/apply scaffolding of ~/.config/cirwel/secrets.env.
+    """Plan/apply scaffolding of the secrets env file (resolve_secrets_path).
 
-    Creates parent directories if needed (e.g., ~/.config/cirwel/). Writes
+    Creates parent directories if needed (e.g., ~/.config/unitares/). Writes
     a commented template at mode 0o600. Never overwrites an existing file —
     the doctor flags wrong-mode separately, and we do not want to lose
     the user's keys.
@@ -334,14 +356,7 @@ def run_pipeline(
 
     # Phase 2: filesystem scaffolding.
     plan.append(ensure_anchor_dir(home / ".unitares", apply=apply))
-    # Secrets file location is overridable via UNITARES_SECRETS_ENV so a fresh
-    # operator can scaffold outside the default ~/.config/cirwel/ path.
-    _secrets_override = os.environ.get("UNITARES_SECRETS_ENV")
-    secrets_path = (
-        Path(_secrets_override).expanduser()
-        if _secrets_override
-        else home / ".config" / "cirwel" / "secrets.env"
-    )
+    secrets_path = resolve_secrets_path(home)
     plan.append(ensure_secrets_file(secrets_path, apply=apply))
 
     # Phase 3: client detection + snippet generation.
@@ -505,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Advanced bare-metal UNITARES setup assistant.",
     )
     parser.add_argument("--apply", action="store_true",
-                        help="Mutate ~/.unitares/ and ~/.config/cirwel/secrets.env if missing.")
+                        help="Create ~/.unitares/ and the secrets env file if missing.")
     parser.add_argument("--json", dest="json_out", action="store_true",
                         help="Emit machine-readable JSON; suppresses interactive prompts.")
     parser.add_argument("--non-interactive", action="store_true",

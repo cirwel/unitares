@@ -404,42 +404,150 @@ def test_main_returns_failure_when_check_fails(doctor, monkeypatch, capsys):
 # ---------- resident_agents ----------
 
 
-def test_resident_agents_accepts_python_sentinel(doctor):
-    loaded = {
-        "com.unitares.vigil",
-        "com.unitares.sentinel",
-        "com.unitares.chronicler",
-    }
+# A slot table in the shape UNITARES_DOCTOR_RESIDENT_LAUNCHD="a,b|b-beam,c"
+# parses to. The names are placeholders: which residents a host runs is
+# deployment configuration, and the doctor ships with none declared.
+_SLOTS_ENV = "alpha,bravo|bravo-beam,charlie"
 
-    result = doctor.check_resident_agents(loaded)
+
+def test_resident_launchd_slots_parse_alternatives(doctor):
+    slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
+
+    assert slots == (
+        ("alpha", ("com.unitares.alpha",)),
+        ("bravo", ("com.unitares.bravo", "com.unitares.bravo-beam")),
+        ("charlie", ("com.unitares.charlie",)),
+    )
+
+
+def test_resident_launchd_slots_empty_by_default(doctor):
+    assert doctor.resident_launchd_slots({}) == ()
+
+
+def test_resident_agents_accepts_first_alternative(doctor):
+    slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
+    loaded = {"com.unitares.alpha", "com.unitares.bravo", "com.unitares.charlie"}
+
+    result = doctor.check_resident_agents(loaded, slots)
 
     assert result.status == doctor.Status.PASS
-    assert "sentinel=com.unitares.sentinel" in result.message
+    assert "bravo=com.unitares.bravo" in result.message
 
 
-def test_resident_agents_accepts_beam_sentinel(doctor):
-    loaded = {
-        "com.unitares.vigil",
-        "com.unitares.sentinel-beam",
-        "com.unitares.chronicler",
-    }
+def test_resident_agents_accepts_second_alternative(doctor):
+    slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
+    loaded = {"com.unitares.alpha", "com.unitares.bravo-beam", "com.unitares.charlie"}
 
-    result = doctor.check_resident_agents(loaded)
+    result = doctor.check_resident_agents(loaded, slots)
 
     assert result.status == doctor.Status.PASS
-    assert "sentinel=com.unitares.sentinel-beam" in result.message
+    assert "bravo=com.unitares.bravo-beam" in result.message
 
 
 def test_resident_agents_reports_missing_slot_with_alternatives(doctor):
-    loaded = {
-        "com.unitares.vigil",
-        "com.unitares.chronicler",
-    }
+    slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
+    loaded = {"com.unitares.alpha", "com.unitares.charlie"}
 
-    result = doctor.check_resident_agents(loaded)
+    result = doctor.check_resident_agents(loaded, slots)
 
     assert result.status == doctor.Status.WARN
-    assert "sentinel (com.unitares.sentinel or com.unitares.sentinel-beam)" in result.message
+    assert "bravo (com.unitares.bravo or com.unitares.bravo-beam)" in result.message
+
+
+def test_resident_agents_skips_when_no_resident_declared(doctor):
+    # The fresh-install default: nobody declared a resident, so an unloaded
+    # one is not a finding. This used to warn about three named agents on
+    # every install that was not the original operator's.
+    result = doctor.check_resident_agents({"com.unitares.governance-mcp"}, ())
+
+    assert result.status == doctor.Status.SKIP
+    assert doctor.RESIDENT_LAUNCHD_ENV in result.message
+
+
+def test_resident_agents_skips_without_launchd_deployment(doctor):
+    slots = doctor.resident_launchd_slots({doctor.RESIDENT_LAUNCHD_ENV: _SLOTS_ENV})
+
+    result = doctor.check_resident_agents(set(), slots)
+
+    assert result.status == doctor.Status.SKIP
+
+
+# ---------- launchagent_loaded / pid_file on hosts without launchd ----------
+
+
+def test_launchagent_skips_on_host_without_launchd_deployment(doctor):
+    # Docker Compose, Linux (no launchctl -> empty set) and stdio installs.
+    result = doctor.check_launchagent(set())
+
+    assert result.status == doctor.Status.SKIP
+
+
+def test_launchagent_passes_when_loaded(doctor):
+    result = doctor.check_launchagent({doctor.GOVERNANCE_LAUNCHD_LABEL})
+
+    assert result.status == doctor.Status.PASS
+
+
+def test_launchagent_warns_when_other_unitares_agents_are_loaded(doctor):
+    result = doctor.check_launchagent({"com.unitares.some-sidecar"})
+
+    assert result.status == doctor.Status.WARN
+
+
+def test_check_pid_file_skips_missing_file_without_launchd(doctor, tmp_path):
+    result = doctor.check_pid_file(tmp_path, launchd_host=False)
+
+    assert result.status == doctor.Status.SKIP
+
+
+# ---------- secrets_file ----------
+
+
+def test_resolve_secrets_file_prefers_override(doctor, tmp_path):
+    target = tmp_path / "elsewhere.env"
+    resolved = doctor.resolve_secrets_file(
+        {doctor.SECRETS_ENV_VAR: str(target)},
+        default=tmp_path / "default.env", legacy=tmp_path / "legacy.env",
+    )
+    assert resolved == target
+
+
+def test_resolve_secrets_file_defaults_to_neutral_path(doctor, tmp_path):
+    default = tmp_path / "unitares" / "secrets.env"
+    resolved = doctor.resolve_secrets_file(
+        {}, default=default, legacy=tmp_path / "legacy" / "secrets.env",
+    )
+    assert resolved == default
+
+
+def test_resolve_secrets_file_keeps_existing_legacy_file(doctor, tmp_path):
+    legacy = tmp_path / "legacy" / "secrets.env"
+    legacy.parent.mkdir()
+    legacy.write_text("X=1\n")
+    resolved = doctor.resolve_secrets_file(
+        {}, default=tmp_path / "unitares" / "secrets.env", legacy=legacy,
+    )
+    assert resolved == legacy
+
+
+def test_default_secrets_path_carries_no_operator_name(doctor):
+    assert doctor.DEFAULT_SECRETS_FILE.parent.name == "unitares"
+
+
+def test_secrets_file_absent_is_skip_not_warn(doctor, tmp_path):
+    result = doctor.check_secrets_file(tmp_path / "missing.env")
+
+    assert result.status == doctor.Status.SKIP
+
+
+def test_secrets_file_wrong_mode_fails(doctor, tmp_path):
+    target = tmp_path / "secrets.env"
+    target.write_text("X=1\n")
+    target.chmod(0o644)
+
+    result = doctor.check_secrets_file(target)
+
+    assert result.status == doctor.Status.FAIL
 
 
 # ---------- elixir_deprecated_scheme_lint (RFC §7.11.8 — Phase B prep) ----------

@@ -213,6 +213,29 @@ def test_ensure_anchor_dir_apply_idempotent(setup_mod, tmp_path):
     assert item.applied is False
 
 
+def test_resolve_secrets_path_defaults_to_neutral_location(setup_mod, tmp_path):
+    assert setup_mod.resolve_secrets_path(tmp_path, {}) == (
+        tmp_path / ".config" / "unitares" / "secrets.env"
+    )
+
+
+def test_resolve_secrets_path_keeps_existing_legacy_file(setup_mod, tmp_path):
+    legacy = tmp_path / ".config" / "cirwel" / "secrets.env"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("X=1\n")
+    assert setup_mod.resolve_secrets_path(tmp_path, {}) == legacy
+
+
+def test_resolve_secrets_path_honours_override(setup_mod, tmp_path):
+    target = tmp_path / "custom.env"
+    env = {"UNITARES_SECRETS_ENV": str(target)}
+    assert setup_mod.resolve_secrets_path(tmp_path, env) == target
+
+
+def test_secrets_template_does_not_claim_the_server_reads_it(setup_mod):
+    assert "does NOT read this file" in setup_mod.SECRETS_TEMPLATE
+
+
 def test_ensure_secrets_file_dry_run_no_writes(setup_mod, tmp_path):
     target = tmp_path / "secrets.env"
     item = setup_mod.ensure_secrets_file(target, apply=False)
@@ -228,7 +251,7 @@ def test_ensure_secrets_file_apply_creates_with_mode_0600(setup_mod, tmp_path):
     actual = stat.S_IMODE(target.stat().st_mode)
     assert actual == 0o600, f"expected 0o600 got {oct(actual)}"
     content = target.read_text()
-    assert "ANTHROPIC_API_KEY" in content
+    assert content == setup_mod.SECRETS_TEMPLATE
     assert "mode 0600, never commit" in content
     assert item.applied is True
 
