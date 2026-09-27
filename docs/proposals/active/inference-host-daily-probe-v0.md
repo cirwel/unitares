@@ -59,12 +59,16 @@ Two placements were rejected:
 
 ### What it does, per host
 
-For each host in `list_inference_hosts`, the script takes the first matching
+Each run starts with a cleanup pass over the probe's own state file (see
+*Hung calls*). The pass stops every live execution the probe left behind,
+whether or not its host is still configured, so a host removed from the
+configuration cannot keep a hung call running. Then, for each host in
+`list_inference_hosts`, the script takes the first matching
 row below:
 
 | Host state | Action | Quota spent |
 |---|---|---|
-| A previous probe's timed-out execution is still live (see *Hung calls*) | Stop it and raise the host's finding (see *Hung calls*); no new probe. | 0 |
+| A previous probe's timed-out execution was still live (the cleanup pass stopped it) | If the host is still enabled, raise its finding to **high**; if the operator has since switched it off, treat it as the next row. No new probe either way. | 0 |
 | Not enabled by the operator (`UNITARES_HOST_ADAPTER_ENABLED` off, or the host listed in `UNITARES_HOST_ADAPTER_DISABLED_HOSTS`) | Log `skipped: not_enabled`. Operator choice, not a fault. An enabled host whose CLI has gone missing is not skipped: it is probed, fails at preflight at no quota cost, and is reported. | 0 |
 | In a cooldown (`cooldown` field set; `list_inference_hosts` fills it from `host_availability.cooldown()`, which returns nothing once `retry_after` has passed, so a lapsed window never shows) | Log `skipped: cooling until <retry_after>`. No finding: the failure is already known and consult already routes around it. | 0 |
 | A real call succeeded in the last 24 h (see *Passive evidence*) | Log `skipped: live <age>`. | 0 |
@@ -159,8 +163,18 @@ passive evidence. If they did, a probe at 04:15:05 would make the next day's
 04:15:00 run skip the host, and idle hosts would be probed only every other
 day. So after each successful probe, the probe reads that host's `last_ok`
 from `list_inference_hosts` and stores the exact value in its state file. It
-skips a host only when `last_ok` is under 24 h old **and** differs from the
-stored value, meaning some other caller has succeeded since. This works because
+skips a host only when all three of these hold:
+
+- `last_ok` is under 24 h old;
+- it differs from the stored value, meaning some other caller has succeeded
+  since;
+- it is later than the host's `last_failed`.
+
+`last_failed` is written the same way, on every failed call that reached a
+CLI, whether classified or not. Without the third condition, a success in
+the morning would hide an afternoon failure whose short cooldown had lapsed
+by the next run. A host with an open record is always probed, because closing
+a record needs evidence from after it opened. This works because
 `delegated_inference` awaits `clear_async` before it returns its response
 (it does today), so `last_ok` is already written when the probe reads it. The
 build keeps `last_ok` inside that awaited call, and a test asserts it: if the
@@ -228,8 +242,10 @@ nothing.
 
 ## Build plan once approved
 
-1. `last_ok` write-through in `host_availability.clear_async`, plus the field
-   in `list_inference_hosts`. Tests cover the 48 h TTL and Redis being down.
+1. `last_ok` write-through in `host_availability.clear_async` and
+   `last_failed` on every failed call that reached a CLI, both 48 h TTL, plus
+   both fields in `list_inference_hosts`. Tests cover the TTL and Redis being
+   down.
 2. `scripts/ops/inference_host_probe.py` with injectable I/O, as in
    `model_adjudicator.py`. Tests cover each row of both tables above, check
    that a cooling host and a `last_ok` host are never probed, and check that
