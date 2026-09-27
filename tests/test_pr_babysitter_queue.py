@@ -714,3 +714,25 @@ def test_a_pending_review_waits(tmp_path: Path) -> None:
 def test_required_checks_are_configurable(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_REQUIRED_CHECKS="")
     assert calls == [_arm(1)]
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE"])
+def test_a_script_armed_pr_whose_review_stops_passing_is_disarmed(tmp_path: Path, state: str) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("test"), _check("review", state, run=5)])
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert f"review={state} no longer passes" in out
+
+
+@pytest.mark.parametrize("checks", [[_check("test")], [_check("test"), _check("review", "", status="IN_PROGRESS")]])
+def test_a_review_being_reevaluated_after_a_base_update_keeps_the_arm(tmp_path: Path, checks: list) -> None:
+    # For about a minute after GitHub updates the branch, review is missing or pending.
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=checks)
+    calls, _ = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == []
+
+
+def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "NEUTRAL")])
+    calls, _ = _run(tmp_path, [pr, _pr(4)])
+    assert calls == []

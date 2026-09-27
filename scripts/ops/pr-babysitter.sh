@@ -183,6 +183,21 @@ still_approved() {  # <pr> <head>
 
 # Prints the latest label time, or nothing when there is no label event;
 # fails (2) when the timeline cannot be read, which is not the same thing.
+# <pr-json> -> space-separated "<check>=<state>" for each required check that
+# is not SUCCESS; empty when all passed. MISSING and PENDING are normal for
+# about a minute after a base update, while the review gate re-evaluates.
+unmet_required_checks() {
+  local check state unmet=""
+  for check in $REQUIRED_CHECKS; do
+    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
+             | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
+             | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
+               else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
+    [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
+  done
+  echo "${unmet# }"
+}
+
 latest_label_time() {
   local t
   t=$(approval_times "$1") || return 2
@@ -224,6 +239,11 @@ while read -r pr; do
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
     reason="its head changed since the approval"
+  elif concluded=$(unmet_required_checks "$pr" | tr ' ' '\n' | grep -vE '=(MISSING|PENDING)$' | tr '\n' ' ') \
+       && [ -n "${concluded// /}" ]; then
+    # A required check that has concluded without success (NEUTRAL means
+    # unreviewed); MISSING/PENDING only mean it is being re-evaluated.
+    reason="${concluded% } no longer passes"
   elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
@@ -404,16 +424,9 @@ while read -r _ n head; do
     continue
   fi
 
-  unmet=""
-  for check in $REQUIRED_CHECKS; do
-    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
-             | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
-             | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
-               else map(select(. != "SUCCESS")) | .[0] end' <<<"$pr")
-    [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
-  done
+  unmet=$(unmet_required_checks "$pr")
   if [ -n "$unmet" ]; then
-    log "#$n waiting on$unmet (must pass before arming); skipped"
+    log "#$n waiting on $unmet (must pass before arming); skipped"
     continue
   fi
 
