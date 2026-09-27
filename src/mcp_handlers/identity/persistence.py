@@ -523,26 +523,39 @@ async def _find_agent_by_label(label: str) -> Optional[str]:
 def _recorded_auto_labels(
     agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
 ) -> set:
-    """Every label the server has recorded as its own choice for this agent.
+    """Every name the server derived for this agent, which a claim must not become.
 
-    ``auto_label`` is kept in two places. The mint writes it once to
-    ``core.identities.metadata`` and to the in-memory entry; a knowledge
-    write's ``Agent_<uuid8>`` name sets it in memory only. A claim can clear
-    the in-memory copy (``drop_stale_display_name``) while the persisted one
-    stands, and the cold-start loader restores the persisted one, so both
-    are read here.
+    ``label_source_for`` reads a label as ``auto`` when it equals any of
+    these, so a collision rename that happened to reproduce one would report
+    a claimed name as server-assigned:
+
+    - ``auto_label``, kept in two places. The mint writes it once to
+      ``core.identities.metadata`` and to the in-memory entry; a knowledge
+      write's ``Agent_<uuid8>`` name sets it in memory only. A claim can clear
+      the in-memory copy (``drop_stale_display_name``) while the persisted one
+      stands, and the cold-start loader restores the persisted one, so both
+      are read here.
+    - ``structured_id`` and ``public_agent_id``. The structured id is
+      ``{interface}_{model}_{date}_{uuid8}``, the same ``<stem>_<uuid8>``
+      shape as a collision rename, so claiming its date-stamped stem while
+      another agent holds it would otherwise reproduce it. (An agent minted
+      before v2.5.0 gets its structured id only after the label is chosen;
+      that case is not covered.)
     """
     recorded: set = set()
+    keys = ("auto_label", "structured_id", "public_agent_id")
     if isinstance(identity_metadata, dict):
-        value = identity_metadata.get("auto_label")
-        if isinstance(value, str) and value.strip():
-            recorded.add(value.strip())
+        for key in keys:
+            value = identity_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
     try:
         meta_map = getattr(mcp_server, "agent_metadata", None)
         meta = meta_map.get(agent_uuid) if meta_map else None
-        value = getattr(meta, "auto_label", None) if meta is not None else None
-        if isinstance(value, str) and value.strip():
-            recorded.add(value.strip())
+        for key in keys:
+            value = getattr(meta, key, None) if meta is not None else None
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
     except Exception:
         pass
     return recorded

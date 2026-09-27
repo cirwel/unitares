@@ -174,6 +174,26 @@ async def test_a_claim_of_the_bare_mint_stem_does_not_become_the_mint_label(mint
 
 
 @pytest.mark.asyncio
+async def test_a_claim_of_the_structured_id_stem_does_not_become_the_structured_id(minted):
+    """The structured id has the rename's ``<stem>_<uuid8>`` shape, and
+    ``label_source_for`` reads it as ``auto``. Claiming its stem while another
+    agent holds it must not reproduce it."""
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+
+    result, meta = await _mint(minted)
+    agent_uuid = result["agent_uuid"]
+    stem = "claude_code_claude_20260927"
+    meta.structured_id = f"{stem}_{agent_uuid[:8]}"
+    minted.db.find_agent_by_label = _held_by_another(stem)
+
+    applied = await set_agent_label_resolved(agent_uuid, stem)
+
+    assert applied == f"{stem}_{agent_uuid[:13]}"
+    assert applied != meta.structured_id
+    assert _signature(agent_uuid)["label_source"] == "claimed"
+
+
+@pytest.mark.asyncio
 async def test_the_persisted_record_alone_is_enough_to_avoid_the_mint_label(minted):
     """With no in-memory record (the entry was never loaded, or a claim
     cleared it), the ``auto_label`` persisted in core.identities.metadata
