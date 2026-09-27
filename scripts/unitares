@@ -1226,7 +1226,7 @@ _rollback_code() {
     # scripts/ops/deploy-mcp.sh), while code left ahead of the running
     # containers would surface at the next restart.
     local root="$1" current="$2" current_sha="$3" target="$4"
-    echo "error: the stack did not come up on $target. Rolling the code back to ${current}…" >&2
+    echo "       Rolling the code back to ${current}…" >&2
     if git -C "$root" checkout --quiet --detach "$current_sha" && _compose up -d --build --wait >/dev/null 2>&1; then
         echo "       Back on $current and running. The database keeps the migrations that applied; they only add, so $current runs on them." >&2
     else
@@ -1367,7 +1367,7 @@ cmd_update() {
     fi
 
     echo "… Rebuilding and starting the stack"
-    _compose up -d --build --wait || { _rollback_code "$root" "$current" "$current_sha" "$target"; return 1; }
+    _compose up -d --build --wait || { echo "error: the stack did not come up on $target." >&2; _rollback_code "$root" "$current" "$current_sha" "$target"; return 1; }
 
     _report_health "Updated $current → $target."
 }
