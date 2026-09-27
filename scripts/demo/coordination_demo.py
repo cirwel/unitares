@@ -127,6 +127,64 @@ def governance_bearer_token(
     )
 
 
+# Where each side's port can come from, per service. The demo-specific names
+# come first because they are what the error hint and the install manual
+# tell people to set.
+_LEASE_PORT_VARS = ("UNITARES_COORDINATION_DEMO_PORT", "LEASE_PLANE_HOST_PORT")
+_GOVERNANCE_PORT_VARS = (
+    "UNITARES_COORDINATION_DEMO_GOVERNANCE_PORT",
+    "GOVERNANCE_HOST_PORT",
+)
+
+
+def port_pairing_problem(
+    environ: Mapping[str, str] | None = None,
+    dotenv_path: Path | None = None,
+) -> str | None:
+    """Refuse a half-remapped run before it touches any server.
+
+    The lease plane and the governance server are one stack, and the demo
+    registers two identities on the governance side before it acquires
+    anything. When the environment moves one of them off its default port
+    and says nothing at all about the other, the other falls back to its
+    default — which on a host running a second server is that server's port.
+    That happened with the install manual's own example, which remapped only
+    the lease plane, so the demo registered its participants on an unrelated
+    live server. A port stated anywhere (environment or .env, which Compose
+    reads too) or an explicit URL counts as saying something, so a real
+    one-sided remap still runs once the default side is stated.
+    """
+    env = os.environ if environ is None else environ
+    if env.get("UNITARES_COORDINATION_DEMO_URL") or env.get(
+        "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL"
+    ):
+        return None
+    dotenv = _dotenv_values(dotenv_path)
+
+    def env_remap(names: tuple[str, ...]) -> str | None:
+        return next((name for name in names if env.get(name)), None)
+
+    def stated(names: tuple[str, ...]) -> bool:
+        return any(env.get(name) or dotenv.get(name) for name in names)
+
+    for moved, silent, silent_default, silent_hint in (
+        (_LEASE_PORT_VARS, _GOVERNANCE_PORT_VARS, "8767", "GOVERNANCE_HOST_PORT"),
+        (_GOVERNANCE_PORT_VARS, _LEASE_PORT_VARS, "8788", "LEASE_PLANE_HOST_PORT"),
+    ):
+        name = env_remap(moved)
+        if name and not stated(silent):
+            return (
+                f"{name} moves one half of the stack, but nothing says where the "
+                f"other half is, so the demo would use port {silent_default} for "
+                "it and could talk to a different server there.\n"
+                f"Set {silent_hint} as well (to {silent_default} if that half "
+                "really is on its default port), for example:\n"
+                "    GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 "
+                "make coordination-demo"
+            )
+    return None
+
+
 class LeaseAPI:
     def __init__(self, base_url: str, bearer_token: str, timeout_s: float = 10.0):
         self.base_url = base_url.rstrip("/")
@@ -591,6 +649,10 @@ def print_receipt(result: DemoResult, base_url: str) -> None:
 
 
 def main() -> int:
+    problem = port_pairing_problem()
+    if problem:
+        print(f"Coordination demo not started.\n{problem}", file=sys.stderr)
+        return 2
     base_url = lease_base_url()
     api = LeaseAPI(base_url, lease_bearer_token())
     try:
@@ -608,8 +670,9 @@ def main() -> int:
             f"Coordination demo could not complete against {base_url}.\n"
             "Start the bundled stack first:\n"
             "    docker compose up -d --wait --build\n"
-            "If you changed the host port, run for example:\n"
-            "    UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo\n"
+            "If you changed the host ports, pass both of them, for example:\n"
+            "    GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 "
+            "make coordination-demo\n"
             f"\nError: {exc}",
             file=sys.stderr,
         )
