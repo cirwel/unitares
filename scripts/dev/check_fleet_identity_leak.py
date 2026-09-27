@@ -112,7 +112,9 @@ NOT_IDENTITIES: dict[str, str] = {
 KNOWN_COUPLINGS: dict[str, str] = {
     "src/http_routes/vigil.py":
         "resident-specific route module that dispatches on label.lower() == "
-        '"vigil"; a deployment without that resident gets a dead endpoint',
+        '"vigil"; mounted only with the reference-residents route pack '
+        "(src/http_routes/packs.py), so an install without it carries no "
+        "endpoint, but the name dispatch itself remains",
 }
 
 # Match only when the literal IS a name, not when it merely contains one.

@@ -192,6 +192,7 @@ additions merge cleanly. -->
 | `UNITARES_RESIDENT_SILENCE_SECONDS` | `''` | Parse ``label=seconds`` pairs from the environment | src/http_routes/residents.py |
 | `UNITARES_REST_STRICT` | `None (no reader fallback)` | True when the REST surface runs the strict posture (bearer or session) | src/mcp_listen_config.py |
 | `UNITARES_REVIEW_NUDGE` | `''` | Return the trigger reason when an in-flow review nudge is due, else None | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_ROUTE_PACKS` | `''` | Pack names from UNITARES_ROUTE_PACKS, in order, deduplicated | src/http_routes/packs.py |
 | `UNITARES_SCRIBE_DRY_RUN` | `'1'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SCRIBE_MAX_TOKENS` | `'1600'` | read by _job() | agents/triage_scribe/scribe.py |
 | `UNITARES_SENSOR_COUPLING` | `None (no reader fallback)` | Whether sensor-derived EISV spring-couples into the ODE | governance_core/parameters.py |
