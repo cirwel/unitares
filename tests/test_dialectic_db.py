@@ -1877,3 +1877,116 @@ class TestSagaProbeStatesMatchTheMigration:
         probe_states = self._states(inspect.getsource(DialecticDB.probe_inflight_saga))
         assert "pg_committed" not in probe_states
         assert "reverted" not in probe_states
+
+
+class TestRefusalNamesTheWinner:
+    """B3: a refused guarded write can say who won, without changing the refusal."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("method,args", [
+        ("update_session_status", ("sess-001", "failed")),
+        ("update_session_reviewer", ("sess-001", "reviewer-B")),
+        ("mark_awaiting_facilitation", ("sess-001",)),
+    ])
+    async def test_winner_status_and_reason_are_returned_to_the_caller(self, db, method, args):
+        instance, _pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "failed", "reason": "liveness_timeout"})
+
+        winner = {}
+        result = await getattr(instance, method)(*args, winner=winner)
+
+        assert result is False, "the refusal itself is unchanged"
+        assert winner == {"winner_status": "failed", "winner_reason": "liveness_timeout",
+                          "row_missing": False}
+        sql = conn.fetchrow.call_args[0][0]
+        assert "resolution_json->>'reason'" in sql
+
+    @pytest.mark.asyncio
+    async def test_missing_row_is_reported_as_missing(self, db):
+        instance, _pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value=None)
+
+        winner = {}
+        assert await instance.update_session_status("gone", "failed", winner=winner) is False
+        assert winner == {"winner_status": None, "winner_reason": None, "row_missing": True}
+
+    @pytest.mark.asyncio
+    async def test_a_successful_write_leaves_the_dict_untouched(self, db):
+        instance, _pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 1")
+
+        winner = {}
+        assert await instance.update_session_status("sess-001", "failed", winner=winner) is True
+        assert winner == {}
+
+    @pytest.mark.asyncio
+    async def test_callers_that_do_not_ask_are_unaffected(self, db):
+        """The winner dict is optional; the existing call shape still works."""
+        instance, _pool, conn = db
+        conn.execute = AsyncMock(return_value="UPDATE 0")
+        conn.fetchrow = AsyncMock(return_value={"status": "resolved", "reason": None})
+
+        assert await instance.update_session_reviewer("sess-001", "reviewer-B") is False
+
+
+class TestProbeSagaSince:
+    """B1: the overlap probe matches by creation time, not by state."""
+
+    @pytest.mark.asyncio
+    async def test_returns_the_row_whatever_its_state(self, db):
+        import datetime as _dt
+
+        instance, _pool, conn = db
+        since = _dt.datetime(2026, 9, 27, 12, 0, tzinfo=_dt.timezone.utc)
+        row = {"saga_id": "sg", "state": "pg_committed", "created_at": since,
+               "pg_committed_at": since, "reverted_at": None}
+        conn.fetchrow = AsyncMock(return_value=row)
+
+        assert await instance.probe_saga_since("s1", since) == row
+        sql, *params = conn.fetchrow.call_args[0]
+        assert params == ["s1", since]
+        # The time match is OR'd with the in-flight states, not AND'd, so a
+        # committed or reverted saga created in the window is returned.
+        assert re.search(r"\)\s*OR\s*\(\$2::timestamptz IS NOT NULL AND created_at >= \$2",
+                         sql), sql
+
+    @pytest.mark.asyncio
+    async def test_empty_result_is_an_observed_absence(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+        assert await instance.probe_saga_since("s1", None) == {}
+
+    @pytest.mark.asyncio
+    async def test_failure_is_none_not_absence(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=RuntimeError("relation absent"))
+        assert await instance.probe_saga_since("s1", None) is None
+
+    def test_state_match_is_kept_as_a_disjunct(self):
+        """A still-running saga is caught even if clocks disagree about its
+        creation time; the in-flight state list is the schema's (see
+        TestSagaProbeStatesMatchTheMigration)."""
+        import inspect
+
+        src = inspect.getsource(DialecticDB.probe_saga_since)
+        states = TestSagaProbeStatesMatchTheMigration._states(src)
+        assert states == TestSagaProbeStatesMatchTheMigration._states(
+            inspect.getsource(DialecticDB.probe_inflight_saga)
+        )
+
+
+class TestSessionTerminalState:
+    @pytest.mark.asyncio
+    async def test_reads_status_and_reason(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"status": "failed", "reason": "liveness_timeout"})
+        assert await instance.get_session_terminal_state("s1") == {
+            "status": "failed", "reason": "liveness_timeout"}
+
+    @pytest.mark.asyncio
+    async def test_missing_row_is_none(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=None)
+        assert await instance.get_session_terminal_state("s1") is None

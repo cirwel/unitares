@@ -8,11 +8,15 @@ facilitation; at SYNTHESIS it marks awaiting facilitation without reassigning
 extended inactivity (4+ hours total).
 """
 
+import asyncio
+import uuid
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
 from time import monotonic
-from typing import Dict, Any, Optional
+from typing import Awaitable, Callable, Dict, Any, List, Optional
 
 from src.dialectic_protocol import DialecticPhase
+from src.dialectic_session_writes import attempt_id_scope, session_write_via
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from .events import (
@@ -20,6 +24,7 @@ from .events import (
     ATTEMPT_REAP_FAILED,
     ATTEMPT_REVIEWER_REASSIGNMENT,
     emit_facilitation_needed,
+    emit_guarded_write,
     emit_reviewer_reassigned,
     emit_sweep_cycle,
     emit_write_refused,
@@ -36,7 +41,7 @@ from src.dialectic_db import (
     add_message_async,
     get_session_async,
     has_inflight_saga_async,
-    probe_inflight_saga_async,
+    probe_saga_since_async,
 )
 
 logger = get_logger(__name__)
@@ -51,6 +56,61 @@ FACILITATION_TIMEOUT = timedelta(hours=4)
 # Fetch one extra row so a full maintenance batch is distinguishable from the
 # complete active set. The overflow row is not processed in this cycle.
 SWEEP_BATCH_SIZE = 100
+
+
+@dataclass
+class _CycleCounts:
+    """Every count one resolver cycle reports, held outside the cycle's frame.
+
+    The counts live here rather than in `_auto_resolve_stuck_sessions`'s
+    locals so a cycle cut short by the periodic timeout still reports what it
+    had committed: the caller owns this object and reads it after the
+    cancellation, when the cycle's own frame is gone.
+
+    Two identities hold whenever no guarded write is mid-flight (see
+    `emit_sweep_cycle`); `_attempt_guarded_write` is the only code that moves
+    the write and probe counts, so it keeps them.
+    """
+
+    active_session_count: int = 0
+    active_session_batch_truncated: bool = False
+    stuck_session_count: int = 0
+    invalid_session_count: int = 0
+    saga_inflight_skip_count: int = 0
+    write_attempt_count: int = 0
+    write_succeeded_count: int = 0
+    write_error_count: int = 0
+    overlap_clean_count: int = 0
+    overlap_detected_count: int = 0
+    overlap_probe_failed_count: int = 0
+    resolved_count: int = 0
+    reassigned_count: int = 0
+    facilitation_count: int = 0
+    # Guarded writes the database refused; reported as write_refused_count.
+    skipped_count: int = 0
+    # Joins this cycle's row to its `dialectic_guarded_write` rows.
+    cycle_id: str = ""
+    # The per-write row owed but not yet written: set before every await that
+    # could be cancelled between a counted attempt and its row, cleared once
+    # the row is written. A cycle cut short emits it afterwards, so the
+    # per-write rows still sum to the cycle's counts. Not a count; never
+    # reported in the result.
+    pending_row: Optional[Dict[str, Any]] = field(default=None, repr=False, compare=False)
+
+    def as_result(
+        self,
+        details: List[Dict[str, Any]],
+        message: str,
+        error: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            f.name: getattr(self, f.name) for f in fields(self) if f.name != "pending_row"
+        }
+        result["details"] = details
+        result["message"] = message
+        if error is not None:
+            result["error"] = error
+        return result
 
 
 def _parse_timestamp(value) -> datetime | None:
@@ -164,47 +224,202 @@ async def _probe_write_overlap(
     session_id: str,
     attempted: str,
     paused_agent_id: Optional[str],
+    *,
+    early_check_ts: Optional[datetime] = None,
+    commit_ts: Optional[datetime] = None,
 ) -> str:
-    """Re-check for a saga immediately after a guarded write succeeded.
+    """Look for a saga on the session immediately after a guarded write landed.
 
     The early saga guard ran before `select_reviewer` and several DB round
-    trips. If a saga appears between that check and here, the sweeper wrote
-    first and BEAM is now acting on a row it did not own when the sweeper
-    decided -- the one dual-writer ordering neither the early skip count nor
-    the refusal event can see.
+    trips. If a saga began after that check, the sweeper wrote while BEAM was
+    also acting on the row -- the dual-writer ordering neither the early skip
+    count nor the refusal event can see.
+
+    ⛔Time-correlated, not state-matched (instrument v2; Wave 3 gate council
+    2026-09-27, finding B1). Sagas commit in milliseconds, so a probe that only
+    matches non-terminal states misses every saga that started and finished
+    between the early check and here. `probe_saga_since_async` returns any
+    saga created at or after ``early_check_ts``, whatever state it reached.
 
     Returns ``"detected"``, ``"clean"``, or ``"probe_failed"``. ⛔The third is
-    not the second: `probe_inflight_saga_async` returns None when it could not
-    look, and counting that as clean would turn an outage into evidence of a
-    collision-free system.
+    not the second: the probe returns None when it could not look, and counting
+    that as clean would turn an outage into evidence of a collision-free
+    system.
 
-    Never raises. A measurement failure must not fail a sweep whose write has
-    already committed.
+    Never raises an ``Exception``. A measurement failure must not fail a sweep
+    whose write has already committed.
     """
     try:
-        found = await probe_inflight_saga_async(session_id)
+        found = await probe_saga_since_async(session_id, early_check_ts)
     except Exception as exc:
         logger.warning(
             f"overlap probe raised for {session_id[:16]}...: {exc}"
         )
         return "probe_failed"
 
-    if found is None:
+    if not isinstance(found, dict):
+        # None is the probe's own "could not look"; anything else that is not
+        # a row is an answer this code cannot read, which is the same state.
         return "probe_failed"
     if not found:
         return "clean"
 
     logger.info(
-        f"Session {session_id[:16]} saga appeared AFTER a successful sweeper "
-        f"{attempted} write — sweeper-first overlap"
+        f"Session {session_id[:16]} saga {found.get('state')!r} seen after a "
+        f"successful sweeper {attempted} write (created at or after the early "
+        "check) — sweeper-first overlap"
     )
     await emit_write_overlap(
         session_id=session_id,
         attempted=attempted,
         paused_agent_id=paused_agent_id,
         source="sweeper",
+        saga=found,
+        early_check_ts=early_check_ts,
+        commit_ts=commit_ts,
     )
     return "detected"
+
+
+async def _attempt_guarded_write(
+    counts: _CycleCounts,
+    details: List[Dict[str, Any]],
+    *,
+    attempted: str,
+    session: Dict[str, Any],
+    write: Callable[[Dict[str, Any]], Awaitable[Any]],
+    decision_read_ts: Optional[datetime],
+    early_check_ts: Optional[datetime],
+    new_reviewer_agent_id: Optional[str] = None,
+) -> bool:
+    """Run one guarded write and account for it completely.
+
+    The single place the write and probe counts move, which is what makes
+    every cycle row balance (see `emit_sweep_cycle`):
+
+    * attempted = succeeded + refused + error, where "error" is a write that
+      raised -- an ``Exception`` or a cancellation from the periodic cycle
+      timeout. Its effect is unknown, so it is neither of the other two.
+    * succeeded = clean + detected + probe_failed: every write that landed is
+      probed exactly once, and an interrupted probe counts as failed.
+
+    It also owes one `dialectic_guarded_write` row per attempt, carrying the
+    state the sweeper read (``session``) and the times that place the write,
+    so those rows sum to the cycle row's counts. The row is written here,
+    except when a cancellation cuts the attempt short: then it is left in
+    ``counts.pending_row`` and `auto_resolve_stuck_sessions` writes it once
+    the cancellation has completed.
+
+    ``write`` receives a dict the DB helper fills with the refusing row's
+    status and reason (`DialecticDB._record_winner`); the helper's boolean
+    answer is unchanged.
+
+    Returns True only when this call performed the write. Re-raises whatever
+    the write raised, after counting it, so each call site keeps its own
+    recovery path.
+    """
+    session_id = session.get("session_id")
+    paused_agent_id = session.get("paused_agent_id")
+    # One id for this attempt, shared by the sweeper's own row and the
+    # `dialectic_session_write` pair the DB helper records for the same write.
+    attempt_id = str(uuid.uuid4())
+    record = dict(
+        session_id=session_id,
+        attempted=attempted,
+        attempt_id=attempt_id,
+        cycle_id=counts.cycle_id or None,
+        decision_read_ts=decision_read_ts,
+        early_check_ts=early_check_ts,
+        read_state=session,
+        paused_agent_id=paused_agent_id,
+        new_reviewer_agent_id=new_reviewer_agent_id,
+    )
+
+    async def _write_row(**outcome: Any) -> None:
+        # Owed before the await, cleared after: a cancellation inside the emit
+        # leaves the row for the cycle's caller to write (see `pending_row`).
+        counts.pending_row = {**record, **outcome}
+        await emit_guarded_write(**counts.pending_row)
+        counts.pending_row = None
+
+    counts.write_attempt_count += 1
+    winner: Dict[str, Any] = {}
+    # Until the write returns, its outcome is unknown: if the cycle is cut
+    # short here, the row it is owed says so.
+    counts.pending_row = {**record, "outcome": "error", "commit_ts": None,
+                          "error": "interrupted"}
+    try:
+        with attempt_id_scope(attempt_id):
+            written = await write(winner)
+    except Exception as exc:
+        counts.write_error_count += 1
+        await _write_row(
+            outcome="error",
+            commit_ts=datetime.now(timezone.utc),
+            error=type(exc).__name__,
+        )
+        raise
+    except BaseException:
+        # Cancellation (the periodic timeout) or interpreter exit. Counted so
+        # the row still balances; the per-write row stays pending and is
+        # written by the cycle's caller once the cancellation has completed,
+        # because awaiting an audit write mid-cancellation could hang the
+        # loop the timeout exists to free.
+        counts.write_error_count += 1
+        raise
+    commit_ts = datetime.now(timezone.utc)
+
+    if not written:
+        counts.skipped_count += 1
+        counts.pending_row = {
+            **record, "outcome": "refused", "commit_ts": commit_ts,
+            "winner_status": winner.get("winner_status"),
+            "winner_reason": winner.get("winner_reason"),
+        }
+        details.append({
+            "session_id": session_id,
+            "action": "write_refused",
+            "attempted": attempted,
+            "winner_status": winner.get("winner_status"),
+        })
+        await emit_write_refused(
+            session_id=session_id,
+            attempted=attempted,
+            paused_agent_id=paused_agent_id,
+            source="sweeper",
+            winner_status=winner.get("winner_status"),
+            winner_reason=winner.get("winner_reason"),
+        )
+        await _write_row(
+            outcome="refused",
+            commit_ts=commit_ts,
+            winner_status=winner.get("winner_status"),
+            winner_reason=winner.get("winner_reason"),
+        )
+        return False
+
+    counts.write_succeeded_count += 1
+    counts.pending_row = {**record, "outcome": "succeeded", "commit_ts": commit_ts,
+                          "probe_outcome": "probe_failed"}
+    try:
+        probe = await _probe_write_overlap(
+            session_id,
+            attempted,
+            paused_agent_id,
+            early_check_ts=early_check_ts,
+            commit_ts=commit_ts,
+        )
+    except BaseException:
+        counts.overlap_probe_failed_count += 1
+        raise
+    if probe == "detected":
+        counts.overlap_detected_count += 1
+    elif probe == "clean":
+        counts.overlap_clean_count += 1
+    else:
+        counts.overlap_probe_failed_count += 1
+    await _write_row(outcome="succeeded", commit_ts=commit_ts, probe_outcome=probe)
+    return True
 
 
 async def _synthesis_reviewer_owes_reply(
@@ -253,7 +468,9 @@ async def _synthesis_reviewer_owes_reply(
         return False
 
 
-async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
+async def _auto_resolve_stuck_sessions(
+    counts: Optional[_CycleCounts] = None,
+) -> Dict[str, Any]:
     """
     Handle sessions that are stuck/inactive.
 
@@ -263,59 +480,44 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
     3. If phase is SYNTHESIS: mark awaiting_facilitation, never reassign
     4. Only mark FAILED after extended inactivity (4+ hours)
 
+    ``counts`` is owned by the caller so a cycle cancelled by the periodic
+    timeout still reports what it committed (see `_CycleCounts`).
+
     Returns:
         Dict with counts of resolved/reassigned sessions and details
     """
-    active_session_count = 0
-    active_session_batch_truncated = False
-    stuck_session_count = 0
-    invalid_session_count = 0
-    saga_inflight_skip_count = 0
-    write_attempt_count = 0
-    overlap_detected_count = 0
-    overlap_probe_failed_count = 0
-    resolved_count = 0
-    reassigned_count = 0
-    facilitation_count = 0
-    skipped_count = 0
-    details = []
+    c = counts if counts is not None else _CycleCounts()
+    details: List[Dict[str, Any]] = []
 
     try:
         now = datetime.now(timezone.utc)
         threshold_time = now - STUCK_SESSION_THRESHOLD
         fail_time = now - FACILITATION_TIMEOUT
 
+        # The decision read: every per-session decision below is made on row
+        # state read by this call, so the time taken just before it is the
+        # lower bound of "the sweeper acted on stale state" (harm ordering (b)
+        # in the collision report). Recorded on every guarded write. Taken
+        # BEFORE the read, not after, so a competing write inside the read's
+        # own milliseconds is over-included as a harm candidate (adjudication
+        # removes it) rather than silently missed.
+        decision_read_ts = datetime.now(timezone.utc)
         active_sessions = await get_active_sessions_async(
             limit=SWEEP_BATCH_SIZE + 1,
             least_recently_updated_first=True,
         )
-        active_session_batch_truncated = len(active_sessions) > SWEEP_BATCH_SIZE
-        if active_session_batch_truncated:
+        c.active_session_batch_truncated = len(active_sessions) > SWEEP_BATCH_SIZE
+        if c.active_session_batch_truncated:
             active_sessions = active_sessions[:SWEEP_BATCH_SIZE]
             logger.warning(
                 "Dialectic sweep active-session batch truncated at %s rows; "
                 "least-recently-updated rows were prioritized",
                 SWEEP_BATCH_SIZE,
             )
-        active_session_count = len(active_sessions)
+        c.active_session_count = len(active_sessions)
 
         if not active_sessions:
-            return {
-                "resolved_count": 0,
-                "reassigned_count": 0,
-                "facilitation_count": 0,
-                "skipped_count": 0,
-                "active_session_count": 0,
-                "active_session_batch_truncated": False,
-                "stuck_session_count": 0,
-                "invalid_session_count": 0,
-                "saga_inflight_skip_count": 0,
-                "write_attempt_count": 0,
-                "overlap_detected_count": 0,
-                "overlap_probe_failed_count": 0,
-                "details": [],
-                "message": "No active sessions found"
-            }
+            return c.as_result([], "No active sessions found")
 
         # Filter to stuck sessions (inactive for >2 hours)
         stuck_sessions = []
@@ -323,25 +525,10 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             check_time = _parse_timestamp(session.get("updated_at") or session.get("created_at"))
             if check_time and check_time < threshold_time:
                 stuck_sessions.append(session)
-        stuck_session_count = len(stuck_sessions)
+        c.stuck_session_count = len(stuck_sessions)
 
         if not stuck_sessions:
-            return {
-                "resolved_count": 0,
-                "reassigned_count": 0,
-                "facilitation_count": 0,
-                "skipped_count": 0,
-                "active_session_count": active_session_count,
-                "active_session_batch_truncated": active_session_batch_truncated,
-                "stuck_session_count": 0,
-                "invalid_session_count": 0,
-                "saga_inflight_skip_count": 0,
-                "write_attempt_count": 0,
-                "overlap_detected_count": 0,
-                "overlap_probe_failed_count": 0,
-                "details": [],
-                "message": "No stuck sessions found"
-            }
+            return c.as_result([], "No stuck sessions found")
 
         for session in stuck_sessions:
             session_id = session.get("session_id")
@@ -351,7 +538,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             awaiting_facilitation = bool(session.get("awaiting_facilitation"))
 
             if not session_id:
-                invalid_session_count += 1
+                c.invalid_session_count += 1
                 continue
 
             # Saga-inflight guard (C1, council 2026-06-28): if a BEAM session
@@ -359,8 +546,13 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             # cycle. Marking it failed / reassigning its reviewer here would race
             # the saga and corrupt the outcome. Fail-open (no saga infra -> no
             # skip), so this is a no-op until BEAM begins writing sagas.
+            #
+            # `early_check_ts` is taken BEFORE the check so the post-write
+            # probe's "created at or after the early check" window cannot miss
+            # a saga that started while this query ran.
+            early_check_ts = datetime.now(timezone.utc)
             if await has_inflight_saga_async(session_id):
-                saga_inflight_skip_count += 1
+                c.saga_inflight_skip_count += 1
                 logger.info(
                     f"Skipping stuck-session sweep for {session_id[:16]}...: "
                     "resolution saga in flight (BEAM owns this transition)"
@@ -402,28 +594,26 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
                     if new_reviewer:
                         try:
-                            write_attempt_count += 1
-                            if not await update_session_reviewer_async(session_id, new_reviewer):
+                            if not await _attempt_guarded_write(
+                                c,
+                                details,
+                                attempted=ATTEMPT_REVIEWER_REASSIGNMENT,
+                                session=session,
+                                write=lambda winner: update_session_reviewer_async(
+                                    session_id, new_reviewer, winner=winner
+                                ),
+                                decision_read_ts=decision_read_ts,
+                                early_check_ts=early_check_ts,
+                                new_reviewer_agent_id=new_reviewer,
+                            ):
                                 # The guarded UPDATE wrote nothing — the row
                                 # is terminal (dual-writer TOCTOU during
-                                # reviewer selection) or gone; the DB-layer
-                                # log distinguishes which. Don't narrate a
+                                # reviewer selection) or gone; the refusal
+                                # event names the winner. Don't narrate a
                                 # reassignment that never happened.
                                 logger.info(
                                     f"Session {session_id[:16]} reviewer write refused "
                                     "(row terminal or missing); reassignment skipped"
-                                )
-                                skipped_count += 1
-                                details.append({
-                                    "session_id": session_id,
-                                    "action": "write_refused",
-                                    "attempted": ATTEMPT_REVIEWER_REASSIGNMENT,
-                                })
-                                await emit_write_refused(
-                                    session_id=session_id,
-                                    attempted=ATTEMPT_REVIEWER_REASSIGNMENT,
-                                    paused_agent_id=paused_agent_id,
-                                    source="sweeper",
                                 )
                                 continue
                             # ⛔EMIT IMMEDIATELY AFTER THE WRITE COMMITS, and
@@ -444,13 +634,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                             # stale reviewer. `persisted ⇒ recorded` is the
                             # direction this metric needs; the converse is
                             # already guaranteed by the refusal check above.
-                            _overlap = await _probe_write_overlap(
-                                session_id, ATTEMPT_REVIEWER_REASSIGNMENT, paused_agent_id
-                            )
-                            if _overlap == "detected":
-                                overlap_detected_count += 1
-                            elif _overlap == "probe_failed":
-                                overlap_probe_failed_count += 1
+                            # (The overlap probe ran inside
+                            # `_attempt_guarded_write`, before this emit.)
                             await emit_reviewer_reassigned(
                                 session_id=session_id,
                                 old_reviewer_id=reviewer_agent_id,
@@ -496,7 +681,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                                 reviewer_agent_id=new_reviewer,
                                 awaiting_facilitation=False,
                             )
-                            reassigned_count += 1
+                            c.reassigned_count += 1
                             details.append({
                                 "session_id": session_id,
                                 "paused_agent_id": paused_agent_id,
@@ -633,8 +818,17 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 and not awaiting_facilitation
             ):
                 try:
-                    write_attempt_count += 1
-                    recorded = await mark_awaiting_facilitation_async(session_id)
+                    recorded = await _attempt_guarded_write(
+                        c,
+                        details,
+                        attempted=ATTEMPT_AWAITING_FACILITATION,
+                        session=session,
+                        write=lambda winner: mark_awaiting_facilitation_async(
+                            session_id, winner=winner
+                        ),
+                        decision_read_ts=decision_read_ts,
+                        early_check_ts=early_check_ts,
+                    )
                 except Exception as e:
                     # Guarded like the neighbouring DB writes: this
                     # runs inside the per-session loop of a sweep that
@@ -656,27 +850,8 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                         f"Session {session_id[:16]} facilitation write refused "
                         "(row terminal or missing); request not recorded"
                     )
-                    skipped_count += 1
-                    details.append({
-                        "session_id": session_id,
-                        "action": "write_refused",
-                        "attempted": ATTEMPT_AWAITING_FACILITATION,
-                    })
-                    await emit_write_refused(
-                        session_id=session_id,
-                        attempted=ATTEMPT_AWAITING_FACILITATION,
-                        paused_agent_id=paused_agent_id,
-                        source="sweeper",
-                    )
                     continue
                 _sync_cached_session(session_id, awaiting_facilitation=True)
-                _overlap = await _probe_write_overlap(
-                    session_id, ATTEMPT_AWAITING_FACILITATION, paused_agent_id
-                )
-                if _overlap == "detected":
-                    overlap_detected_count += 1
-                elif _overlap == "probe_failed":
-                    overlap_probe_failed_count += 1
                 await emit_facilitation_needed(
                     session_id=session_id,
                     paused_agent_id=paused_agent_id,
@@ -694,7 +869,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                     # Narration only. The request is committed; do not
                     # unwind it, and do not fall through to the reap.
                     logger.warning(f"Could not add facilitation message for {session_id[:16]}: {e}")
-                facilitation_count += 1
+                c.facilitation_count += 1
                 details.append({
                     "session_id": session_id,
                     "paused_agent_id": paused_agent_id,
@@ -733,29 +908,26 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
 
             # Fall through: mark as FAILED (session too old or non-reassignable phase)
             try:
-                write_attempt_count += 1
-                if not await update_session_status_async(session_id, "failed"):
+                if not await _attempt_guarded_write(
+                    c,
+                    details,
+                    attempted=ATTEMPT_REAP_FAILED,
+                    session=session,
+                    write=lambda winner: update_session_status_async(
+                        session_id, "failed", winner=winner
+                    ),
+                    decision_read_ts=decision_read_ts,
+                    early_check_ts=early_check_ts,
+                ):
                     # The guarded UPDATE wrote nothing: another writer
                     # finished this session after our early saga/staleness
                     # checks (even one that also wrote 'failed' — that
                     # outcome is theirs, with their resolution payload), or
-                    # the row is gone. The DB-layer log distinguishes which.
+                    # the row is gone. The refusal event names the winner.
                     # Skip the failure narrative and the count.
                     logger.info(
                         f"Session {session_id[:16]} status write refused "
                         "(row terminal or missing); reap skipped"
-                    )
-                    skipped_count += 1
-                    details.append({
-                        "session_id": session_id,
-                        "action": "write_refused",
-                        "attempted": ATTEMPT_REAP_FAILED,
-                    })
-                    await emit_write_refused(
-                        session_id=session_id,
-                        attempted=ATTEMPT_REAP_FAILED,
-                        paused_agent_id=paused_agent_id,
-                        source="sweeper",
                     )
                     continue
                 # `update_session_status` writes status AND phase; mirror the
@@ -765,13 +937,6 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 # guarded reviewer write is then refused by the row it never
                 # reopened — the standing request answered in memory only.
                 _sync_cached_session(session_id, phase="failed")
-                _overlap = await _probe_write_overlap(
-                    session_id, ATTEMPT_REAP_FAILED, paused_agent_id
-                )
-                if _overlap == "detected":
-                    overlap_detected_count += 1
-                elif _overlap == "probe_failed":
-                    overlap_probe_failed_count += 1
                 failure_reason = _describe_reap(
                     phase=phase,
                     awaiting_facilitation=awaiting_facilitation,
@@ -787,7 +952,7 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
                 except Exception as msg_error:
                     logger.warning(f"Could not add failure message: {msg_error}")
 
-                resolved_count += 1
+                c.resolved_count += 1
                 details.append({
                     "session_id": session_id,
                     "paused_agent_id": paused_agent_id,
@@ -800,53 +965,27 @@ async def _auto_resolve_stuck_sessions() -> Dict[str, Any]:
             except Exception as e:
                 logger.warning(f"Could not resolve session {session_id}: {e}")
 
-        return {
-            "resolved_count": resolved_count,
-            "reassigned_count": reassigned_count,
-            "facilitation_count": facilitation_count,
-            "skipped_count": skipped_count,
-            "active_session_count": active_session_count,
-            "active_session_batch_truncated": active_session_batch_truncated,
-            "stuck_session_count": stuck_session_count,
-            "invalid_session_count": invalid_session_count,
-            "saga_inflight_skip_count": saga_inflight_skip_count,
-            "write_attempt_count": write_attempt_count,
-            "overlap_detected_count": overlap_detected_count,
-            "overlap_probe_failed_count": overlap_probe_failed_count,
-            "details": details,
-            "message": (
+        return c.as_result(
+            details,
+            (
                 f"Processed {len(stuck_sessions)} stuck session(s): "
-                f"{reassigned_count} reassigned, {facilitation_count} awaiting facilitation, "
-                f"{resolved_count} failed, {skipped_count} skipped (write refused)"
+                f"{c.reassigned_count} reassigned, {c.facilitation_count} awaiting facilitation, "
+                f"{c.resolved_count} failed, {c.skipped_count} skipped (write refused)"
             ),
-        }
+        )
 
     except Exception as e:
         logger.error(f"Error auto-resolving stuck sessions: {e}", exc_info=True)
-        return {
-            # Earlier iterations may already have committed. Preserve their
-            # outcome evidence instead of turning a partial cycle into an
-            # all-zero one because a later row aborted the scan.
-            "resolved_count": resolved_count,
-            "reassigned_count": reassigned_count,
-            "facilitation_count": facilitation_count,
-            "skipped_count": skipped_count,
-            "active_session_count": active_session_count,
-            "active_session_batch_truncated": active_session_batch_truncated,
-            "stuck_session_count": stuck_session_count,
-            "invalid_session_count": invalid_session_count,
-            "saga_inflight_skip_count": saga_inflight_skip_count,
-            "write_attempt_count": write_attempt_count,
-            "overlap_detected_count": overlap_detected_count,
-            "overlap_probe_failed_count": overlap_probe_failed_count,
-            "details": details,
-            "error": str(e),
-            "message": "Failed to auto-resolve stuck sessions"
-        }
+        # Earlier iterations may already have committed. Preserve their
+        # outcome evidence instead of turning a partial cycle into an
+        # all-zero one because a later row aborted the scan.
+        return c.as_result(details, "Failed to auto-resolve stuck sessions", error=str(e))
 
 
 async def auto_resolve_stuck_sessions(
-    *, trigger_source: str = "direct"
+    *,
+    trigger_source: str = "direct",
+    timeout_s: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Run one resolver cycle under the shared task-local reentrancy guard.
 
@@ -859,64 +998,97 @@ async def auto_resolve_stuck_sessions(
     Every real invocation emits one zero-inclusive cycle event. A nested call
     is suppressed rather than counted as a cycle because it did no scan and
     would corrupt the telemetry denominator.
+
+    ``timeout_s`` bounds the cycle (the periodic task passes
+    ``UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S``). A cycle that exceeds it is
+    cancelled and still emits its row, with ``error="timeout"`` and the counts
+    it had committed (Wave 3 gate council 2026-09-27, finding B5: the loop
+    awaited each cycle with no timeout and emitted only in ``finally``, so a
+    hung cycle and a lost audit write looked the same). An external
+    cancellation (shutdown) emits ``error="cancelled"``.
     """
     if AUTO_RESOLVE_IN_PROGRESS.get():
         logger.debug(
             "Dialectic stuck-session resolver re-entry suppressed (source=%s)",
             trigger_source,
         )
-        return {
-            "resolved_count": 0,
-            "reassigned_count": 0,
-            "facilitation_count": 0,
-            "skipped_count": 0,
-            "active_session_count": 0,
-            "active_session_batch_truncated": False,
-            "stuck_session_count": 0,
-            "invalid_session_count": 0,
-            "saga_inflight_skip_count": 0,
-            "write_attempt_count": 0,
-            "overlap_detected_count": 0,
-            "overlap_probe_failed_count": 0,
-            "details": [],
-            "reentrant_suppressed": True,
-            "message": "Resolver re-entry suppressed",
-        }
+        suppressed = _CycleCounts().as_result([], "Resolver re-entry suppressed")
+        suppressed["reentrant_suppressed"] = True
+        return suppressed
 
     token = AUTO_RESOLVE_IN_PROGRESS.set(True)
     started = monotonic()
+    counts = _CycleCounts(cycle_id=str(uuid.uuid4()))
     result: Dict[str, Any] | None = None
+    interrupted: Optional[str] = None
     try:
-        result = await _auto_resolve_stuck_sessions()
+        if timeout_s is not None and timeout_s > 0:
+            deadline = asyncio.timeout(timeout_s)
+            try:
+                async with deadline:
+                    with session_write_via("sweeper"):
+                        result = await _auto_resolve_stuck_sessions(counts)
+            except TimeoutError:
+                if not deadline.expired():
+                    raise
+                interrupted = "timeout"
+                logger.warning(
+                    "[DIALECTIC_SWEEP] %s cycle exceeded %.0fs and was cancelled; "
+                    "emitting its committed counts with error=timeout",
+                    trigger_source, timeout_s,
+                )
+                result = counts.as_result(
+                    [], f"Cycle timed out after {timeout_s:.0f}s", error="timeout"
+                )
+        else:
+            with session_write_via("sweeper"):
+                result = await _auto_resolve_stuck_sessions(counts)
         return result
+    except asyncio.CancelledError:
+        interrupted = "cancelled"
+        raise
     finally:
         elapsed_ms = max(0, round((monotonic() - started) * 1000))
-        cycle = result or {}
+        cycle = result if result is not None else counts.as_result(
+            [], "", error=interrupted
+        )
+
+        def _n(key: str) -> int:
+            return int(cycle.get(key, 0) or 0)
+
         try:
+            if counts.pending_row is not None:
+                # A write (or its row) was cut short. Its row is written now,
+                # after the cancellation, so the per-write rows still sum to
+                # this cycle's counts; a write whose outcome is unknown says
+                # why ("timeout" / "cancelled").
+                owed = dict(counts.pending_row)
+                counts.pending_row = None
+                if owed.get("error") == "interrupted":
+                    owed["error"] = interrupted or "interrupted"
+                await emit_guarded_write(**owed)
             await emit_sweep_cycle(
                 trigger_source=trigger_source,
-                active_session_count=int(cycle.get("active_session_count", 0) or 0),
+                active_session_count=_n("active_session_count"),
                 active_session_batch_truncated=bool(
                     cycle.get("active_session_batch_truncated", False)
                 ),
-                stuck_session_count=int(cycle.get("stuck_session_count", 0) or 0),
-                invalid_session_count=int(cycle.get("invalid_session_count", 0) or 0),
-                saga_inflight_skip_count=int(
-                    cycle.get("saga_inflight_skip_count", 0) or 0
-                ),
-                write_attempt_count=int(cycle.get("write_attempt_count", 0) or 0),
-                write_refused_count=int(cycle.get("skipped_count", 0) or 0),
-                overlap_detected_count=int(
-                    cycle.get("overlap_detected_count", 0) or 0
-                ),
-                overlap_probe_failed_count=int(
-                    cycle.get("overlap_probe_failed_count", 0) or 0
-                ),
-                resolved_count=int(cycle.get("resolved_count", 0) or 0),
-                reassigned_count=int(cycle.get("reassigned_count", 0) or 0),
-                facilitation_count=int(cycle.get("facilitation_count", 0) or 0),
+                stuck_session_count=_n("stuck_session_count"),
+                invalid_session_count=_n("invalid_session_count"),
+                saga_inflight_skip_count=_n("saga_inflight_skip_count"),
+                write_attempt_count=_n("write_attempt_count"),
+                write_succeeded_count=_n("write_succeeded_count"),
+                write_refused_count=_n("skipped_count"),
+                write_error_count=_n("write_error_count"),
+                overlap_clean_count=_n("overlap_clean_count"),
+                overlap_detected_count=_n("overlap_detected_count"),
+                overlap_probe_failed_count=_n("overlap_probe_failed_count"),
+                resolved_count=_n("resolved_count"),
+                reassigned_count=_n("reassigned_count"),
+                facilitation_count=_n("facilitation_count"),
                 duration_ms=elapsed_ms,
-                error=str(cycle["error"]) if cycle.get("error") else None,
+                error=str(cycle["error"]) if cycle.get("error") else interrupted,
+                cycle_id=counts.cycle_id,
             )
         finally:
             AUTO_RESOLVE_IN_PROGRESS.reset(token)
