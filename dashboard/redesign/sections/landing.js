@@ -1,5 +1,11 @@
 /*
- * Landing section — residents strip + stats grid + Pulse.
+ * Landing section — headline cards, latest check-ins, residents strip.
+ *
+ * Agent-first (2026-09-27): the page leads with what every install has —
+ * agents checking in and the verdicts they get — and shows the resident strip
+ * only when the deployment configures residents. Fleet Coherence left the
+ * headline row: it is a mean whose between-agent spread is ~0.008, so it could
+ * not move enough to say anything; the strip keeps each resident's value.
  * Composes kit primitives, reads the data layer (live-or-snapshot),
  * badges its own freshness. No fetch here; no styles here.
  */
@@ -66,7 +72,13 @@
   }
 
   function renderResidents(residents, source) {
+    // Residents are deployment configuration (UNITARES_RESIDENTS, empty by
+    // default). An install that runs none gets no resident block at all.
+    const block = $("resBlock");
+    if (block) block.hidden = !(residents && residents.length);
     badge($("resSrc"), source);
+    const summary = $("resSummary");
+    if (summary) summary.textContent = residents && residents.length ? "· " + fleetSummary(residents).sub : "";
     const part = partition(residents);
     // "dark" survives only as a CSS class here — it is not a status the server
     // ever emits (grep '"dark"' src/ → 0 hits).
@@ -111,17 +123,28 @@
     } else { attn.hidden = true; }
   }
 
-  function renderStats(stats, residents, source) {
-    const fleet = fleetSummary(residents);
-    // A null metric = its live source didn't answer this cycle. Show "—"
-    // (unavailable), never a stale snapshot value passed off as current.
-    const un = (v) => v == null;
-    // Every card here is one an operator of ANY install can read and act on.
-    // Agent attention, Automations, Calibration, Anomalies and Trust Tiers were
-    // removed 2026-09-26: they surfaced one deployment's instruments (its job
-    // census, its calibration research, a capped anomaly sample, identity
-    // churn) as if they were product state. An operator who wants them back
-    // adds them as a dashboard extension (dashboard/EXTENSIONS.md).
+  // Seconds of the last hour the server's in-memory check-in history covers.
+  // After a restart (or once its ring is full) the hour is only partly seen,
+  // and a total over it must say so rather than read as a quiet hour.
+  function coveredLabel(coverageStart, windowMin) {
+    if (typeof coverageStart !== "number") return "";
+    const covered = Date.now() / 1000 - coverageStart;
+    return covered < windowMin * 60 - 30 ? ` · history covers ${fmtSil(Math.max(0, Math.round(covered)))}` : "";
+  }
+
+  function agentsCard(stats, un) {
+    // Primary: agents with a check-in in the last hour, from the server's
+    // check-in ring. That is the question an operator of any install asks
+    // ("who is here?") and it needs no binding/lease or resident roster.
+    if (AGENTS_SRC !== "unavailable" && AMODEL) {
+      const cutoff = Date.now() - 3600 * 1000;
+      const n = AMODEL.filter((a) => a._ms != null && a._ms >= cutoff).length;
+      return { h: "Agents", id: "agents", num: n, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal,
+        sub: "checked in within the hour" + coveredLabel(AGENTS_COVERAGE, 60), href: "#agents",
+        title: `${n} agent${n === 1 ? "" : "s"} checked in during the last hour`
+          + (un(stats.agentsTotal) ? "." : `, of ${stats.agentsTotal} identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.`) };
+    }
+    // Fallback when the ring did not answer: the registry/presence reading.
     const hasAgentPresence = typeof stats.agentsLive === "number";
     const presenceUnknown = (stats.agentsPresenceUnknown || 0)
       + (stats.agentsPresenceUnavailable || 0);
@@ -138,35 +161,51 @@
       : hasAgentPresence
         ? `live binding/lease · 30d window${presenceUnknown ? ` · ${presenceUnknown} presence unknown` : ""}`
         : un(stats.agentsActive) ? "unavailable" : "registry active / total · 30d window";
+    return { h: "Agents", id: "agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents",
+      title: un(stats.agentsTotal) ? ""
+        : presenceBlind
+          ? `${agentHeadline} registry-active of ${stats.agentsTotal} identities seen in the last 30 days. None holds a live binding/lease, and presence is unknown for ${presenceUnknown}. The Agents tab reads a 14-day window, so its total is smaller.`
+          : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` };
+  }
+
+  function checkinsCard() {
+    if (!CHK) return { h: "Check-ins", id: "checkins", num: "—", sub: "unavailable", href: "#activity" };
+    // Pause here is a verdict PRODUCED, not an intervention delivered.
+    return { h: "Check-ins", id: "checkins", num: CHK.total, href: "#activity",
+      sub: `last hour · ${CHK.proceed} proceed · ${CHK.guide} guide · ${CHK.pause} pause` + coveredLabel(CHK.coverageStart, CHK.windowMin || 60),
+      cls: CHK.pause ? "warn" : "",
+      title: "State-writing check-ins in the last hour by the verdict produced. A pause verdict is produced, not necessarily delivered." };
+  }
+
+  function dialecticCard(stats, un) {
+    if (un(stats.dialectic)) return { h: "Dialectic", num: "—", sub: "unavailable", href: "#dialectic" };
+    const recent = typeof stats.dialecticRecent === "number" ? stats.dialecticRecent : 0;
+    const failed = typeof stats.dialecticFailed === "number" ? stats.dialecticFailed : 0;
+    // Failed reviews are the actionable part of this card, so they lead the
+    // subtitle and colour it; "0 open" alone read as all-quiet while most
+    // recent sessions had failed.
+    const failLine = failed ? `${failed} of ${recent} recent failed (${Math.round((failed / recent) * 100)}%)` : null;
+    const openLine = stats.dialectic ? "open sessions" : "none open";
+    return { h: "Dialectic", num: stats.dialectic, href: "#dialectic", cls: failed ? "warn" : "",
+      sub: failLine ? `${failLine} · ${openLine}` : (recent ? `${openLine} · ${recent} recent` : (stats.dialectic ? "open sessions" : "no open sessions")) };
+  }
+
+  let LAST_STATS = {};
+  function renderStats(stats) {
+    stats = stats || LAST_STATS || {};
+    LAST_STATS = stats;
+    // A null metric = its live source didn't answer this cycle. Show "—"
+    // (unavailable), never a stale snapshot value passed off as current.
+    const un = (v) => v == null;
+    // Every card here is one an operator of ANY install can read and act on.
+    // Agent attention, Automations, Calibration, Anomalies and Trust Tiers were
+    // removed 2026-09-26, Fleet Coherence 2026-09-27; see the header comment and
+    // dashboard/EXTENSIONS.md for deployment-specific panels.
     const cards = [
-      // Class DERIVED, not hardcoded. This was `cls: "up"` from the original
-      // redesign scaffold — the only card of nine that did not compute its own
-      // state — so it painted green unconditionally. Live on 2026-08-28 it read
-      // green while its own subtitle said "1 not checking in" and the attention
-      // band beside it said "Doctor past check-in threshold".
-      //
-      // Neutral (""), never green, is the honest default here: the number is a
-      // fleet mean of a metric whose between-agent sd is ~0.008, so it cannot
-      // move enough to earn a health colour, and eisv.js states the standing
-      // policy — "a neutral surface rather than converting observations into
-      // red/green verdicts". What CAN be stated is cadence, which the subtitle
-      // already computes: amber when a resident has stopped checking in.
-      { h: "Fleet Coherence", id: "fleetcoh", num: num(fleet.coh), sub: fleet.sub,
-        cls: fleet.part.down.length ? "down" : "", rule: true, href: "#eisv" },
-      // Name the denominator's window: this card reads a 30-day registry
-      // window and the Agents tab a 14-day one — two honest totals that read
-      // as a contradiction when unlabelled.
-      { h: "Agents", num: un(agentHeadline) ? "—" : agentHeadline, of: un(stats.agentsTotal) ? "" : "/ " + stats.agentsTotal, sub: agentSub, href: "#agents",
-        title: un(stats.agentsTotal) ? ""
-          : presenceBlind
-            ? `${agentHeadline} registry-active of ${stats.agentsTotal} identities seen in the last 30 days. None holds a live binding/lease, and presence is unknown for ${presenceUnknown}. The Agents tab reads a 14-day window, so its total is smaller.`
-            : `${agentHeadline} with a live binding/lease right now, of ${stats.agentsTotal} registry identities seen in the last 30 days. The Agents tab reads a 14-day window, so its total is smaller.` },
+      agentsCard(stats, un),
+      checkinsCard(),
+      dialecticCard(stats, un),
       { h: "Discoveries", num: un(stats.discoveries) ? "—" : stats.discoveries.toLocaleString(), sub: un(stats.discoveries) ? "unavailable" : (typeof stats.discoveriesToday === "number" ? "+" + stats.discoveriesToday + " today" : "knowledge graph"), href: "#discoveries" },
-      { h: "Dialectic", num: un(stats.dialectic) ? "—" : stats.dialectic, sub: un(stats.dialectic) ? "unavailable"
-          : (stats.dialectic ? "open sessions"
-            : typeof stats.dialecticRecent === "number" && stats.dialecticRecent
-              ? `none open · ${typeof stats.dialecticFailed === "number" && stats.dialecticFailed ? `${stats.dialecticFailed} of ${stats.dialecticRecent} recent failed` : `${stats.dialecticRecent} recent`}`
-              : "no open sessions"), href: "#dialectic" },
       { h: "System Health", num: un(stats.systemHealth) ? "—" : stats.systemHealth, sub: un(stats.systemHealth) ? "unavailable" : (stats.systemHealthDetail || "db · ws · reaper"), cls: un(stats.systemHealth) ? "" : (stats.systemHealth === "OK" ? "up" : "down") },
     ];
     const degradeBanner = stats.degraded > 0
@@ -183,36 +222,68 @@
     }).join("");
   }
 
-  function renderPulse(residents) {
-    // last check-in = smallest silence among reporting residents. Same
-    // partition as everything else on this page (was a fourth predicate,
-    // `r.eisv`); Pulse additionally needs the eisv payload it renders.
-    const reporting = partition(residents).reporting.filter((r) => r.eisv);
-    const last = reporting.sort((a, b) => (a.silence ?? 1e9) - (b.silence ?? 1e9))[0];
-    if (!last) return;
+  // Verdict → pill tone. approve/proceed are the calm case; guide is a nudge;
+  // anything else (pause, reject, a new hard stop) is a hard verdict.
+  const tone = (a) => !a || a === "proceed" || a === "approve" ? "" : a === "guide" ? " warn" : " danger";
+  const ago = (ms) => ms == null ? "—" : fmtSil(Math.max(0, Math.round((Date.now() - ms) / 1000))) + " ago";
+
+  // Latest check-in of ANY agent (not only residents), from the check-in ring.
+  function renderPulse() {
+    const last = AMODEL && AMODEL[0];
+    if (!last) {
+      $("pulseWho").textContent = AGENTS_SRC === "unavailable" ? "server not answering" : "no check-ins yet";
+      $("pulseFresh").textContent = "";
+      return;
+    }
     $("pulseWho").textContent = last.name;
-    $("pulseFresh").textContent = "checked in " + fmtSil(last.silence) + " ago";
+    $("pulseFresh").textContent = "checked in " + ago(last._ms);
 
     const risk = last.risk ?? 0;
     $("riskVal").textContent = num(risk);
     $("riskFill").style.width = Math.max(2, risk * 100) + "%";
-    const fill = $("riskFill");
-    fill.style.background = risk < 0.35 ? "var(--ok)" : risk < 0.6 ? "var(--warn)" : "var(--danger)";
+    $("riskFill").style.background = risk < 0.35 ? "var(--ok)" : risk < 0.6 ? "var(--warn)" : "var(--danger)";
 
     const v = $("pulseVerdict");
-    const verd = last.verdict || "—";
-    v.className = "verdict" + (verd === "proceed" ? "" : risk >= 0.7 ? " danger" : " warn");
-    v.querySelector("span:last-child").textContent = verd;
+    v.className = "verdict" + tone(last.action);
+    v.querySelector("span:last-child").textContent = last.action || "—";
 
     const E = last.eisv;
-    const rows = [["E", E.E, "e", false], ["I", E.I, "i", false], ["S", E.S, "s", false], ["V", E.V, "v", true]];
-    $("eisv").innerHTML = rows.map(([k, val, c, signed]) => {
+    $("eisv").innerHTML = !E ? "" : [["E", E.E, "e", false], ["I", E.I, "i", false], ["S", E.S, "s", false], ["V", E.V, "v", true]].map(([k, val, c, signed]) => {
       const w = signed ? Math.abs(val) * 50 : val * 100;
       const left = signed ? (val < 0 ? 50 - Math.abs(val) * 50 : 50) : 0;
       return `<div class="eisv-row"><span class="k">${k}</span>`
         + `<span class="bar ${signed ? "signed" : ""}"><i class="${c}" style="left:${left}%;width:${w}%"></i></span>`
         + `<span class="val">${num(val)}</span></div>`;
     }).join("");
+  }
+
+  // The agents behind the headline: most recent check-in per agent.
+  const RECENT_ROWS = 8;
+  function renderRecent() {
+    const el = $("recent");
+    if (!el) return;
+    const rows = (AMODEL || []).slice(0, RECENT_ROWS);
+    if (!rows.length) { el.innerHTML = ""; return; }
+    el.innerHTML = `<table class="tbl"><thead><tr><th>Agent</th><th>Verdict</th><th>Risk</th><th>Check-ins</th><th>Last</th></tr></thead><tbody>`
+      + rows.map((a) => `<tr><td>${esc(a.name)}</td>`
+        + `<td><span class="verdict${tone(a.action)}"><span class="pip"></span><span>${esc(a.action || "—")}</span></span></td>`
+        + `<td class="mono">${num(a.risk)}</td><td class="mono">${a.checkins || "—"}</td>`
+        + `<td class="mono">${ago(a._ms)}</td></tr>`).join("")
+      + `</tbody></table>`
+      + (AMODEL.length > RECENT_ROWS ? `<p style="margin-top:var(--space-2);font-size:var(--text-xs);color:var(--muted)">${AMODEL.length - RECENT_ROWS} more checked in since the server's check-in history began · <a href="#agents" style="color:var(--accent)">all agents</a></p>` : "");
+  }
+
+  // Agent model: /v1/eisv/agents rows plus an absolute `_ms`, so "ago"
+  // accrues between fetches and a pushed check-in can move an agent to the top.
+  let AMODEL = null, AGENTS_SRC = "snapshot", AGENTS_COVERAGE = null, CHK = null;
+  function seedAgents(r) {
+    AGENTS_SRC = r ? r.source : "unavailable";
+    const d = (r && r.data) || {};
+    AGENTS_COVERAGE = typeof d.coverageStart === "number" ? d.coverageStart : null;
+    AMODEL = (d.agents || []).map((a) => Object.assign({}, a, { _ms: a.ts ? Date.parse(a.ts) : null }));
+  }
+  function seedCheckins(r) {
+    CHK = r && r.data ? Object.assign({}, r.data) : null;
   }
 
   // In-memory resident model. Each entry is the DATA.residents() shape plus an
@@ -237,51 +308,52 @@
       silence: r._lastSeenMs != null ? Math.round((now - r._lastSeenMs) / 1000) : r.silence,
     }));
   }
-  // Recompute the Fleet Coherence card in place (a derived aggregate, so it
-  // shifts as residents report) without rebuilding the whole stats grid.
-  function updateFleetCoherence(residents) {
-    const el = document.querySelector('[data-card="fleetcoh"]');
-    if (!el) return;
-    const fleet = fleetSummary(residents);
-    const numEl = el.querySelector(".num"), subEl = el.querySelector(".sub");
-    if (numEl) numEl.textContent = num(fleet.coh);
-    if (subEl) {
-      subEl.textContent = fleet.sub; // same string renderStats produces
-      // and the same class rule — otherwise the 10s refresh updates the words
-      // while leaving the colour frozen at whatever the first render set.
-      subEl.className = "sub " + (fleet.part.down.length ? "down" : "");
-    }
-  }
-
-  // Apply one pushed eisv_update to the residents strip directly — no refetch.
-  // Returns true only when the event belongs to a known resident (matched by
-  // agent_name == label, the same rule the server uses); other agents' check-ins
-  // return false so the caller falls back to the doorbell refresh.
+  // Apply one pushed eisv_update directly — no refetch. Every agent's
+  // check-in moves it to the top of the feed and counts toward the check-ins
+  // card; a resident's also updates the strip (matched by agent_name == label,
+  // the same rule the server uses). Returns true: the view is current.
   function applyEvent(msg) {
-    if (!msg || msg.type !== "eisv_update" || !msg.agent_name) return false;
-    const r = RMODEL.find((x) => x.name === msg.agent_name);
-    if (!r) return false;
-    if (msg.eisv) r.eisv = msg.eisv;
-    if (typeof msg.coherence === "number") r.coherence = msg.coherence;
-    if (typeof msg.risk === "number") r.risk = msg.risk;
-    const act = msg.decision && msg.decision.action;
-    if (act) r.verdict = act;
-    r._lastSeenMs = Date.now(); // just checked in: not silent
-    if (r.status === "silent") r.status = "healthy"; // server vocabulary only
-    const view = viewResidents();
-    renderResidents(view, lastSource);
-    renderPulse(view);
-    updateFleetCoherence(view);
+    if (!msg || msg.type !== "eisv_update" || !msg.agent_id) return false;
+    const act = (msg.decision && msg.decision.action) || null;
+    if (AMODEL) {
+      const prev = AMODEL.find((a) => a.id === msg.agent_id);
+      const row = Object.assign(prev || { id: msg.agent_id, checkins: 0 }, {
+        name: msg.agent_name || (prev && prev.name) || msg.agent_id.slice(0, 8),
+        eisv: msg.eisv || (prev && prev.eisv) || null,
+        coherence: typeof msg.coherence === "number" ? msg.coherence : prev && prev.coherence,
+        risk: typeof msg.risk === "number" ? msg.risk : prev && prev.risk,
+        action: act || (prev && prev.action) || null,
+        _ms: Date.now(),
+      });
+      row.checkins = (row.checkins || 0) + 1;
+      AMODEL = [row].concat(AMODEL.filter((a) => a !== row));
+    }
+    if (CHK) {
+      const bucket = !act || act === "proceed" || act === "approve" ? "proceed" : act === "guide" ? "guide" : "pause";
+      CHK[bucket] += 1; CHK.total += 1;
+    }
+    const r = msg.agent_name && RMODEL.find((x) => x.name === msg.agent_name);
+    if (r) {
+      if (msg.eisv) r.eisv = msg.eisv;
+      if (typeof msg.coherence === "number") r.coherence = msg.coherence;
+      if (typeof msg.risk === "number") r.risk = msg.risk;
+      if (act) r.verdict = act;
+      r._lastSeenMs = Date.now(); // just checked in: not silent
+      if (r.status === "silent") r.status = "healthy"; // server vocabulary only
+      renderResidents(viewResidents(), lastSource);
+    }
+    renderPulse();
+    renderRecent();
+    renderStats();
     return true;
   }
 
-  // Re-render the strip from the model so silence visibly accrues during quiet
+  // Re-render from the models so "ago" and silence visibly accrue during quiet
   // periods (driven by app.html on a slow tick while the Overview is visible).
   function tickSilence() {
-    if (!RMODEL.length || !$("residents")) return;
-    const view = viewResidents();
-    renderResidents(view, lastSource);
-    renderPulse(view);
+    if (RMODEL.length && $("residents")) renderResidents(viewResidents(), lastSource);
+    renderPulse();
+    renderRecent();
   }
 
   let lastHealthSource = "snapshot";
@@ -303,40 +375,50 @@
         + "design system in <code>tokens.css</code> + <code>kit.css</code>. Toggle theme to reskin via one token swap.";
   }
 
-  // Full first render — light (residents/pulse/health) + heavy (stats) together.
+  // Optional accessors: a stubbed or older data layer without them renders the
+  // registry fallback rather than failing the page.
+  const recentAgents = () => (DATA.recentAgents ? DATA.recentAgents() : Promise.resolve(null));
+  const checkinActivity = () => (DATA.checkinActivity ? DATA.checkinActivity() : Promise.resolve(null));
+
+  // Full first render — light (agents/residents/health) + heavy (stats) together.
   async function render() {
-    const [health, residents, stats] = await Promise.all([DATA.health(), DATA.residents(), DATA.stats()]);
+    const [health, residents, stats, agents, checkins] = await Promise.all([
+      DATA.health(), DATA.residents(), DATA.stats(), recentAgents(), checkinActivity()]);
     seedResidents(residents.data, residents.source);
-    const view = viewResidents();
+    seedAgents(agents);
+    seedCheckins(checkins);
     applyHealth(health);
-    renderResidents(view, residents.source);
-    renderStats(stats.data, view, stats.source);
-    renderPulse(view);
-    footnote([residents, stats, health].some((r) => r.source === "live"));
+    renderStats(stats.data);
+    renderPulse();
+    renderRecent();
+    renderResidents(viewResidents(), residents.source);
+    footnote([residents, stats, health, agents].some((r) => r && r.source === "live"));
   }
 
-  // Light refresh (fast cadence) — the "is the fleet alive" glance only.
+  // Light refresh (fast cadence) — who is checking in, and is the server up.
   async function refresh() {
-    const [health, residents] = await Promise.all([DATA.health(), DATA.residents()]);
+    const [health, residents, agents, checkins] = await Promise.all([
+      DATA.health(), DATA.residents(), recentAgents(), checkinActivity()]);
     seedResidents(residents.data, residents.source);
-    const view = viewResidents();
+    seedAgents(agents);
+    seedCheckins(checkins);
     applyHealth(health);
-    renderResidents(view, residents.source);
-    renderPulse(view);
+    renderResidents(viewResidents(), residents.source);
+    renderPulse();
+    renderRecent();
+    renderStats();
   }
 
-  // Heavy refresh (slow cadence) — the headline batch; reuse the resident
-  // model for fleet coherence rather than refetching it.
+  // Heavy refresh (slow cadence) — the headline batch.
   async function refreshStats() {
     // refresh() re-reads residents and health, but it runs only on stream
     // events or while the stream is down. With the stream open and quiet (a
     // fresh install, nothing checking in), one failed read of either was
     // never retried and its fallback stayed on screen. Retry here, on the
     // stats cadence, until both answer live.
-    if (lastSource !== "live" || lastHealthSource !== "live") await refresh();
+    if (lastSource !== "live" || lastHealthSource !== "live" || AGENTS_SRC !== "live") await refresh();
     const stats = await DATA.stats();
-    if (!RMODEL.length) { const residents = await DATA.residents(); seedResidents(residents.data, residents.source); }
-    renderStats(stats.data, viewResidents(), lastSource);
+    renderStats(stats.data);
   }
 
   window.Landing = { render, refresh, refreshStats, applyEvent, tickSilence };

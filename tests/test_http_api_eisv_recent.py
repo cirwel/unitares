@@ -91,6 +91,7 @@ def _fat_event(agent_id="a"):
     return {
         "type": "eisv_update",
         "agent_id": agent_id,
+        "agent_name": "agent-" + agent_id,
         "timestamp": "2026-08-28T00:00:00+00:00",
         "eisv": {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1},
         "coherence": 0.48,
@@ -135,7 +136,7 @@ def test_compact_keeps_every_field_the_chart_reads():
     body = _client().get("/v1/eisv/recent?fields=compact").json()
     assert body["fields"] == "compact"
     event = body["events"][0]
-    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+    for key in ("type", "timestamp", "agent_id", "agent_name", "eisv", "coherence", "risk"):
         assert key in event, key
     assert event["eisv"] == {"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.1}
     assert event["risk"] == 0.31
@@ -160,8 +161,11 @@ def test_compact_drops_the_payload_nothing_reads():
     http_api.broadcaster_instance.event_history.append(_fat_event())
 
     event = _client().get("/v1/eisv/recent?fields=compact").json()["events"][0]
-    for key in ("decision", "drift_trends", "inputs", "risk_reason"):
+    for key in ("drift_trends", "inputs", "risk_reason"):
         assert key not in event, f"{key} has zero consumers and must not be polled"
+    # The verdict is read (the Overview's recent-check-ins feed); the ~1.9 KB
+    # of reasoning around it is not.
+    assert event["decision"] == {"action": "guide"}
     # Telemetry is whitelisted, so a large diagnostic sub-object goes too.
     assert "derivation" not in event["eisv_telemetry"]
     # And the projection must actually be smaller, not merely reshaped.
@@ -190,3 +194,66 @@ def test_unknown_fields_value_falls_back_to_the_full_shape():
     body = _client().get("/v1/eisv/recent?fields=nonsense").json()
     assert body["fields"] == "full"
     assert "decision" in body["events"][0]
+
+
+# --- /api/activity coverage ---------------------------------------------------
+
+def test_activity_coverage_starts_at_process_start_inside_the_window():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 600  # restarted ten minutes ago
+    assert abs(b.activity_coverage_start(60) - b.started_at) < 1
+
+
+def test_activity_coverage_is_the_window_when_history_is_older():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    assert abs(b.activity_coverage_start(60) - (time.time() - 3600)) < 1
+
+
+def test_activity_coverage_moves_up_when_the_ring_is_full():
+    import time
+    from src.broadcaster import EISVBroadcaster
+
+    b = EISVBroadcaster()
+    b.started_at = time.time() - 7200
+    oldest = time.time() - 300
+    for i in range(b.activity_history.maxlen):
+        b.activity_history.append((oldest + i * 0.1, "proceed"))
+    assert abs(b.activity_coverage_start(60) - oldest) < 1
+
+
+# --- /v1/eisv/agents: one row per agent, folded server-side ------------------
+
+def _agents_client():
+    from src.http_api import http_eisv_agents
+    app = Starlette(routes=[Route("/v1/eisv/agents", http_eisv_agents, methods=["GET"])])
+    return TestClient(app, client=("127.0.0.1", 50000))
+
+
+def test_agents_returns_latest_event_per_agent_newest_first():
+    h = http_api.broadcaster_instance.event_history
+    h.clear()
+    h.append(_make_event("a", 0.1, ts="2026-09-27T00:00:01+00:00"))
+    h.append(_make_event("b", 0.2, ts="2026-09-27T00:00:02+00:00"))
+    h.append({"type": "lifecycle_paused", "agent_id": "a"})
+    h.append(dict(_fat_event("a"), timestamp="2026-09-27T00:00:03+00:00"))
+
+    body = _agents_client().get("/v1/eisv/agents").json()
+    assert [r["agent_id"] for r in body["agents"]] == ["a", "b"]
+    a = body["agents"][0]
+    assert a["checkins"] == 2 and a["agent_name"] == "agent-a"
+    assert a["decision"] == {"action": "guide"}  # compact projection, not the full event
+    assert "drift_trends" not in a
+    assert isinstance(body["coverage_start"], float)
+
+
+def test_agents_is_empty_not_an_error_on_a_fresh_server():
+    http_api.broadcaster_instance.event_history.clear()
+    body = _agents_client().get("/v1/eisv/agents").json()
+    assert body["count"] == 0 and body["agents"] == []

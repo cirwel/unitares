@@ -27,6 +27,9 @@ source_files:
   - unitares/dashboard/tests/app-extensions.test.js
   - unitares/src/http_api.py
   - unitares/src/http_routes/dashboard.py
+  - unitares/src/http_routes/telemetry.py
+  - unitares/src/governance_trend.py
+  - unitares/dashboard/tests/landing-agent-first.test.js
   - unitares/src/dashboard_auth.py
 ---
 
@@ -43,12 +46,12 @@ classic dashboard and its allowlist / script-load-chain / `vite` build were
 `MetricColors`, or `Chart.defaults`. The redesign resolver constrains paths and
 file types and has no per-asset allowlist, but it does gate the assets that
 carry governance data rather than presentation: `_AUTHENTICATED_ONLY_FILES`
-holds `snapshot.js`, `preview.html` and `PLAN.md`, each served only to an
-authenticated caller. The test is the data class, not the extension — the
-latter two carry a real fleet capture and a description of the operator's own
-fleet, and were public until 2026-09-12 because the gate was a filename set
-and they landed beside the file it named. Only `snapshot.js` is loaded at
-runtime; the other two are reference artifacts. `auth/*.html` is 404 on this
+holds `snapshot.js` and `PLAN.md`, each served only to an authenticated
+caller. The test is the data class, not the extension. `snapshot.js` has been a
+synthetic fixture since 2026-09-27 and stays gated anyway; `PLAN.md` describes
+the operator's own fleet. `preview.html` (a literal fleet capture) was deleted
+then. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
+new offline data goes into the synthetic generator in `snapshot.js`. `auth/*.html` is 404 on this
 route (those pages are served via `/auth/*`). Files are read per request, so a restart is
 not needed for static edits. Entry HTML is `no-store`; relative assets receive
 an mtime version query to prevent stale browser bundles.
@@ -68,9 +71,17 @@ state rather than one deployment's instruments. Otherwise it is an
 
 The Residents, Automations, Adjudication, Telemetry, Metrics and Enforcement
 tabs moved out on 2026-09-26 on exactly this test. Their server endpoints stay;
-only the views left. The same test trimmed the Overview to five cards (Fleet
-Coherence, Agents, Discoveries, Dialectic, System Health). Adding a card back
-is the same decision.
+only the views left. The same test shaped the Overview (2026-09-27): it leads
+with agents, not residents — cards Agents (checked in within the hour),
+Check-ins (by verdict), Dialectic (failure rate first), Discoveries, System
+Health; a "Latest check-in" panel and feed over every agent from
+`/v1/eisv/agents`; and the resident strip only when the deployment configures
+residents. Fleet Coherence left the row: its between-agent spread is ~0.008, so
+it could not move. Risk's trend reads `/v1/governance/trend` (computed from
+`core.agent_state`, capped at 60 days by retention), not Chronicler's scrape,
+and its picker lists recent agents. Totals over the server's in-memory rings
+(`/api/activity`, `/v1/eisv/agents`) carry a `coverage_start` and say when the
+hour is only partly covered. Adding a card back is the same decision.
 
 An extension follows the section pattern below unchanged. It skips the
 checklist's `app.html` rows, because the manifest supplies nav, pane, mount,
@@ -123,9 +134,9 @@ returns its `snapFn` result tagged `snapshot`. The bundled `SNAPSHOT` backs
 that fallback only when there is no server to ask — the page opened from a
 file — or when a design preview passes `?snapshot=1` (`SNAPSHOT_FALLBACK` in
 `data.js`). On a page served by a UNITARES server, the `S` accessor returns `{}`: the bundle is
-a capture of one deployment's fleet, and a failed read there means this server
-blipped, so it must render "unavailable", never another deployment's
-residents, EISV or version (a fresh install showed the bundled fleet as its own
+example data (a real capture until 2026-09-27), and a failed read there means
+this server blipped, so it must render "unavailable", never example or another
+deployment's residents, EISV or version (a fresh install showed the bundled fleet as its own
 after one failed read, 2026-09-26). `authFetch` carries same-origin passkey
 session cookies and the optional bearer token. The `/ws/eisv` WebSocket
 connects cookie-first (a browser cannot set headers on a socket); only if that

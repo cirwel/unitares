@@ -22,6 +22,7 @@ class EISVBroadcaster:
         self._lock = asyncio.Lock()
         self.activity_history: deque = deque(maxlen=ACTIVITY_HISTORY_MAX)
         self.event_history: deque = deque(maxlen=EVENT_HISTORY_MAX)
+        self.started_at: float = time.time()
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -34,6 +35,19 @@ class EISVBroadcaster:
             if websocket in self.connections:
                 self.connections.remove(websocket)
         logger.info(f"[WS] Dashboard client disconnected")
+
+    def activity_coverage_start(self, window_minutes=60) -> float:
+        """Earliest time the activity buckets can be trusted to be complete.
+
+        The history is in memory: it starts empty at process start and, once
+        full, drops its oldest entries. A count over a window reaching past
+        either point undercounts, so a reader that shows a total ("N check-ins
+        in the last hour") needs to know how much of the window is covered.
+        """
+        start = self.started_at
+        if len(self.activity_history) == self.activity_history.maxlen:
+            start = max(start, self.activity_history[0][0])
+        return max(start, time.time() - window_minutes * 60)
 
     def get_activity_buckets(self, window_minutes=60, bucket_minutes=5):
         """Return check-in counts grouped by 5-min bucket + verdict for sparkline."""

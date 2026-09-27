@@ -57,9 +57,16 @@ def _compact_eisv_event(event: dict) -> dict:
     parses both.
     """
     out: dict = {}
-    for key in ("type", "timestamp", "agent_id", "eisv", "coherence", "risk"):
+    for key in ("type", "timestamp", "agent_id", "agent_name", "eisv", "coherence", "risk"):
         if key in event:
             out[key] = event[key]
+
+    # The verdict, without the ~1.9 KB of reasoning around it. Kept nested so
+    # the compact event stays a strict subset of the full one: the Overview's
+    # recent-check-ins feed reads `decision.action` from either shape.
+    decision = event.get("decision")
+    if isinstance(decision, dict) and "action" in decision:
+        out["decision"] = {"action": decision["action"]}
 
     telemetry = event.get("eisv_telemetry") or event.get("telemetry")
     if isinstance(telemetry, dict):
@@ -122,6 +129,58 @@ async def http_eisv_recent(request):
     })
 
 
+async def http_eisv_agents(request):
+    """Return the latest check-in of each agent in the EISV ring, newest first.
+
+    The Overview's "who checked in" feed and the Risk picker need one row per
+    agent, not the event stream: this folds the broadcaster's in-memory ring
+    (up to EVENT_HISTORY_MAX events) server-side, so a browser over a tunnel
+    receives a row per agent instead of hundreds of events. Each row is the
+    compact projection of that agent's newest event plus how many check-ins
+    it has in the ring. ``coverage_start`` is where the ring's memory begins
+    (process start, or its oldest retained event once full), because a count
+    "in the last hour" is only complete from there.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
+    latest: dict[str, dict] = {}
+    counts: dict[str, int] = {}
+    history = list(broadcaster_instance.event_history)
+    for event in history:
+        if not (isinstance(event, dict) and event.get("type") == "eisv_update"):
+            continue
+        agent_id = event.get("agent_id")
+        if not agent_id:
+            continue
+        latest[agent_id] = event
+        counts[agent_id] = counts.get(agent_id, 0) + 1
+
+    rows = []
+    for agent_id, event in latest.items():
+        row = _compact_eisv_event(event)
+        row["checkins"] = counts[agent_id]
+        rows.append(row)
+    rows.sort(key=lambda r: str(r.get("timestamp") or ""), reverse=True)
+
+    coverage_start = broadcaster_instance.started_at
+    if history and len(history) == broadcaster_instance.event_history.maxlen:
+        oldest = history[0].get("timestamp") if isinstance(history[0], dict) else None
+        if isinstance(oldest, str):
+            try:
+                from datetime import datetime
+                coverage_start = max(coverage_start, datetime.fromisoformat(oldest).timestamp())
+            except ValueError:
+                pass
+    return JSONResponse({
+        "type": "eisv_agents",
+        "count": len(rows),
+        "coverage_start": coverage_start,
+        "agents": rows,
+    })
+
+
 _EISV_TELEMETRY_HEALTH_CACHE_TTL_SECONDS = 30.0
 _eisv_telemetry_health_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 
@@ -166,6 +225,47 @@ async def http_eisv_telemetry_health(request):
         logger.error("EISV telemetry health query failed: %s", exc)
         return JSONResponse(
             {"success": False, "error": "telemetry health query failed"},
+            status_code=500,
+        )
+
+
+_GOVERNANCE_TREND_CACHE_TTL_SECONDS = 600.0
+_governance_trend_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+
+
+async def http_governance_trend(request):
+    """GET /v1/governance/trend?days=60 — fleet risk and verdict pressure.
+
+    Trailing-7-day fleet-mean risk, guide and pause counts per day, computed
+    from core.agent_state (src/governance_trend.py). Any install can draw it;
+    it does not need the Chronicler resident. The query scans the window's
+    check-ins and the series move daily, so each window is cached for ten
+    minutes.
+    """
+    http_api_token = os.getenv("UNITARES_HTTP_API_TOKEN")
+    if not access._check_http_auth(request, http_api_token=http_api_token):
+        return access._http_unauthorized()
+
+    from src.governance_trend import clamp_window, query_governance_trend
+
+    days = clamp_window(request.query_params.get("days", "60"))
+    now = time.monotonic()
+    cached = _governance_trend_cache.get(days)
+    if cached and now - cached[0] < _GOVERNANCE_TREND_CACHE_TTL_SECONDS:
+        return JSONResponse(cached[1], headers={"Cache-Control": "private, max-age=600"})
+
+    try:
+        from src.db import get_db
+
+        db = get_db()
+        async with db.acquire() as conn:
+            report = await query_governance_trend(conn, window_days=days)
+        _governance_trend_cache[days] = (now, report)
+        return JSONResponse(report, headers={"Cache-Control": "private, max-age=600"})
+    except Exception as exc:  # noqa: BLE001 — read-only operator surface
+        logger.error("Governance trend query failed: %s", exc)
+        return JSONResponse(
+            {"success": False, "error": "governance trend query failed"},
             status_code=500,
         )
 

@@ -3,11 +3,12 @@ import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
 // Risk section — the time axis risk previously lacked. Reads
-// DATA.riskTrend() (Chronicler's daily governance.* scrape), DATA.residents()
-// and DATA.agentHistory(). Series names and payload shapes verified against
-// the live governance MCP on 2026-08-27: governance.risk.mean.7d returned 46
-// daily points in [0.0103, 0.0698], governance.pause.7d 46 points topping out
-// at 33, and /v1/agents/{id}/history 202 decimated check-ins carrying `risk`.
+// DATA.riskTrend() (/v1/governance/trend: trailing-7-day series computed from
+// core.agent_state, the governance.*.7d definitions), DATA.recentAgents() (any
+// agent that checked in recently, not only residents) and DATA.agentHistory().
+// Shapes verified against the live server on 2026-09-27: 60 daily points,
+// fleet-mean risk ~0.034–0.058, guide ~8,000/week, pause single digits; the
+// history endpoint returned decimated check-ins carrying `risk`.
 //
 // These tests pin the render, the chart wiring that theme/adapter constraints
 // depend on, and — deliberately — the two honesty lines. A produced pause is
@@ -38,12 +39,12 @@ const TREND = {
   ],
 };
 
-const RESIDENTS = [
+const AGENTS = [
   { id: "uuid-lumen", name: "Lumen", risk: 0.2992, coherence: 0.4725 },
   { id: "uuid-watcher", name: "Watcher", risk: 0.3, coherence: 0.4853 },
   { id: "uuid-chron", name: "Chronicler", risk: 0.0, coherence: 0.4967 },
-  // Doctor is silent: no risk. Must be excluded from spread/highest, but still
-  // selectable, mirroring the live /v1/residents payload.
+  // An agent whose latest check-in carried no risk. Must be excluded from
+  // spread/highest, but still selectable.
   { id: "uuid-doctor", name: "Doctor", risk: null, coherence: null },
 ];
 
@@ -79,7 +80,7 @@ function mount(overrides = {}) {
       trendCalls.push(days);
       return { source: overrides.source || "live", data: overrides.trend !== undefined ? overrides.trend : TREND };
     },
-    residents: async () => ({ source: "live", data: overrides.residents || RESIDENTS }),
+    recentAgents: async () => ({ source: "live", data: { agents: overrides.agents || AGENTS, coverageStart: null } }),
     agentHistory: async (id, opts) => {
       historyCalls.push({ id, opts });
       return { source: "live", data: { points: overrides.history || HISTORY, total: 31715 } };
@@ -93,7 +94,7 @@ function mount(overrides = {}) {
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe("risk history section", () => {
-  it("renders the four stat cards from live trend + residents", async () => {
+  it("renders the four stat cards from live trend + recent agents", async () => {
     const m = mount();
     await m.win.Risk.load();
     const cards = [...m.el("risk-stats").querySelectorAll(".card")];
@@ -102,16 +103,16 @@ describe("risk history section", () => {
     const subOf = (l) => byLabel(l).querySelector(".sub").textContent;
 
     expect(cards).toHaveLength(4);
-    // Latest scrape, not the first or a mean of the window.
+    // Latest day, not the first or a mean of the window.
     expect(numOf("Fleet mean risk")).toBe("0.066");
     expect(numOf("Pause verdicts")).toBe("17");
     // Highest is Watcher (0.30) over Lumen (0.2992) — a naive string sort or a
     // reversed comparator would pick Lumen.
-    expect(numOf("Highest-risk resident")).toBe("0.300");
-    expect(subOf("Highest-risk resident")).toBe("Watcher");
+    expect(numOf("Highest-risk agent")).toBe("0.300");
+    expect(subOf("Highest-risk agent")).toBe("Watcher");
     // Doctor (null risk) is excluded from both the spread and the count.
-    expect(numOf("Resident spread")).toBe("0.00–0.30");
-    expect(subOf("Resident spread")).toBe("3 residents reporting");
+    expect(numOf("Agent spread")).toBe("0.00–0.30");
+    expect(subOf("Agent spread")).toBe("3 agents checked in recently");
   });
 
   it("labels the pause card as produced, never delivered", async () => {
@@ -200,10 +201,10 @@ describe("risk history section", () => {
     await m.win.Risk.load();
     expect(m.trendCalls).toEqual([60]);
     const sel = m.el("risk-window");
-    sel.value = "180";
+    sel.value = "14";
     sel.dispatchEvent(new m.win.Event("change"));
     await settle();
-    expect(m.trendCalls).toEqual([60, 180]);
+    expect(m.trendCalls).toEqual([60, 14]);
   });
 
   it("rebuilds every chart on retheme so tokens are re-read", async () => {
@@ -218,12 +219,12 @@ describe("risk history section", () => {
     expect(m.built.length).toBe(before + 3);
   });
 
-  it("shows an honest empty state when no scrape landed in the window", async () => {
+  it("shows an honest empty state when no check-in landed in the window", async () => {
     const m = mount({ trend: { windowDays: 60, risk: [], pause: [], guide: [] } });
     await m.win.Risk.load();
     expect(m.built).toHaveLength(0);
-    expect(m.el("risk-trend-empty").textContent).toMatch(/No risk scrapes in the last 60 days/);
-    expect(m.el("risk-pressure-empty").textContent).toMatch(/No verdict-pressure scrapes/);
+    expect(m.el("risk-trend-empty").textContent).toMatch(/No check-ins with a risk reading in the last 60 days/);
+    expect(m.el("risk-pressure-empty").textContent).toMatch(/No verdicts recorded/);
     // Cards still render, with em-dashes rather than fabricated zeros.
     expect(m.el("risk-stats").querySelectorAll(".card")).toHaveLength(4);
   });
@@ -236,8 +237,8 @@ describe("risk history section", () => {
     expect(badge.className).toBe("src-badge snapshot");
   });
 
-  it("escapes resident names in the picker", async () => {
-    const m = mount({ residents: [{ id: "x", name: '<img src=x onerror="boom">', risk: 0.1 }] });
+  it("escapes agent names in the picker", async () => {
+    const m = mount({ agents: [{ id: "x", name: '<img src=x onerror="boom">', risk: 0.1 }] });
     await m.win.Risk.load();
     const pick = m.el("risk-agent-pick");
     expect(pick.querySelectorAll("img")).toHaveLength(0);
