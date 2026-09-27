@@ -1115,7 +1115,7 @@ def test_parse_tools_reads_the_body_on_stdin_not_the_environment():
 # Fake `launchctl` and `docker` on PATH stand in for the host, so these run the
 # real script on any machine, including one with a launchd install.
 
-def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "governance-mcp", stop_fails: bool = False):
+def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "governance-mcp", stop_fails: bool = False, ps_fails: bool = False):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "docker.log"
@@ -1126,6 +1126,7 @@ def _fake_bin(tmp_path, *, launchd: bool, compose: bool, services: str = "govern
         f"[ \"$1 $2\" = \"compose version\" ] && exit {0 if compose else 1}\n"
         f"case \"$*\" in *\"ps -a --services\"*) printf '%s\\n' '{services}' ;; esac\n"
         f"case \"$*\" in *\" stop \"*) exit {1 if stop_fails else 0} ;; esac\n"
+        f"case \"$*\" in *\"ps --status running\"*) exit {1 if ps_fails else 0} ;; esac\n"
         "exit 0\n"
     )
     for f in bin_dir.iterdir():
@@ -1406,7 +1407,23 @@ def test_migrations_never_run_when_the_writers_did_not_stop(tmp_path):
     result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
                             env=env, capture_output=True, text=True, timeout=60)
     assert result.returncode == 1
-    assert "could not stop governance-mcp and lease-plane" in result.stderr
+    assert "could not confirm governance-mcp and lease-plane stopped" in result.stderr
     calls = log.read_text()
     assert " exec " not in calls                    # no migration, no backup
+    assert "up -d --build --wait postgres-age" not in calls
+
+
+
+def test_migrations_never_run_when_the_writer_check_itself_fails(tmp_path):
+    # The stop succeeds, but the status query errors: that proves nothing, so
+    # nothing may migrate.
+    env, log = _fake_bin(tmp_path, launchd=False, compose=True, ps_fails=True)
+    repo, remote = _checkout_on_release(tmp_path)
+    env["UNITARES_UPDATE_REMOTE"] = str(remote)
+    result = subprocess.run([str(repo / "scripts" / "unitares"), "update", "--to", "v1.0.0", "--yes"],
+                            env=env, capture_output=True, text=True, timeout=60)
+    assert result.returncode == 1
+    assert "could not confirm governance-mcp and lease-plane stopped" in result.stderr
+    calls = log.read_text()
+    assert " exec " not in calls
     assert "up -d --build --wait postgres-age" not in calls

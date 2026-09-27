@@ -1205,9 +1205,13 @@ _migrate_quiesced() {
     # The caller brings the stack back up, on success or failure.
     local target="$1" plan
     echo "… Stopping the server so nothing writes during migrations"
+    # Fail closed: migrate only when the stop succeeded AND a status query that
+    # itself succeeded shows neither writer running.
+    local running
     if ! _compose stop governance-mcp lease-plane >/dev/null 2>&1 \
-        || _compose ps --status running --services 2>/dev/null | grep -qx -e governance-mcp -e lease-plane; then
-        echo "error: could not stop governance-mcp and lease-plane, so nothing was migrated." >&2
+        || ! running=$(_compose ps --status running --services 2>/dev/null) \
+        || printf '%s\n' "$running" | grep -qx -e governance-mcp -e lease-plane; then
+        echo "error: could not confirm governance-mcp and lease-plane stopped, so nothing was migrated." >&2
         return 1
     fi
     echo "… Starting the database"
