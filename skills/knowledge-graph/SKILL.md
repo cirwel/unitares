@@ -249,7 +249,10 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   `fix_verified`, `window` and `instrument_check` for `unobserved`. Keep each
   evidence value to a short statement or a pointer (a commit, a build_sha, a
   query): evidence over 8 KiB as stored JSON is refused, and long material
-  such as a log excerpt belongs in `resolution_notes`. Both are
+  such as a log excerpt belongs in `resolution_notes`. Notes are appended to
+  the finding's details, and an update whose stored details would exceed 96
+  KiB is refused, so point to a file, commit or run rather than pasting a
+  whole log. Both are
   parameters of `update_finding` and `knowledge(action="update")`, are
   validated, and are stored. The response's `closure_class` is the value read
   back from the record. `knowledge(action="details")` returns the class and
