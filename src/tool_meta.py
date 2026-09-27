@@ -195,7 +195,7 @@ TOOL_META: Tuple[ToolMeta, ...] = (
     ToolMeta("call_model", category="inference", tier="common", operation="read", stability=BETA,
              related_to=('consult', 'list_inference_hosts', 'describe_inference_host', 'knowledge', 'dialectic')),
     # Strong advisory inference; returns an evidence artifact
-    ToolMeta("delegate_inference", category="inference", tier="common", operation="read", stability=BETA,
+    ToolMeta("delegate_inference", category="inference", tier="advanced", operation="read", stability=BETA,
              depends_on=('list_inference_hosts',),
              related_to=('consult', 'describe_inference_host', 'dialectic')),
     # -- Identity

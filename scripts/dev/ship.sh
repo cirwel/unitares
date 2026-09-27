@@ -467,6 +467,11 @@ case "$DELIVERY" in
                 echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
             else
                 review_rc=$?
+                if [[ "$review_rc" == "3" ]]; then
+                    echo "[ship] review passed, but this security-sensitive diff needs a second model family."
+                    echo "[ship] run one of the review.sh --fresh --reviewer commands printed above; keep the PR draft until CI is green."
+                    exit 3
+                fi
                 if [[ "$review_rc" == "2" ]]; then
                     echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
                     echo "[ship] report the blocker and next action explicitly; keep the PR draft."
