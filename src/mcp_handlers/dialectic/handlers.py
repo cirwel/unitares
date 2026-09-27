@@ -1412,6 +1412,37 @@ def _capture_pause_evidence(monitor: Any) -> Dict[str, Any]:
         evidence["risk_attribution"] = result["risk_attribution"]
     return evidence
 
+class AutomatedTrigger(str):
+    """A ``trigger_source`` that only code in this process can supply.
+
+    ``core.dialectic_sessions.trigger_source`` used to be guessed from
+    substrings of the free-text ``reason``: "auto-recovery" or "auto-triggered"
+    meant ``circuit_breaker``, "loop" meant ``loop_detection``. Both live
+    ``loop_detection`` rows were agents writing "loop" in a review request
+    (56bead4ed32ab6a5, "self-governance loop"; 755fe9368bb1c920, a PR
+    review), and the sustained-drift trigger's reason matched
+    "auto-triggered" first, so the one real ``drift_detection`` source was
+    recorded as ``circuit_breaker``. Taking the value from an argument
+    instead would not help: the params middleware passes unknown keys
+    through, so any caller could claim to be an automated trigger.
+
+    JSON cannot produce an instance of this class, so a value that arrives
+    through the MCP tool is never one. An in-process trigger passes
+    ``trigger_source=AutomatedTrigger("drift_detection")``; every other
+    request is recorded ``manual``, meaning only that a caller asked through
+    the tool. ``manual`` partitions nothing further: probe and organic
+    traffic both carry it, and they are separated by agent label
+    (``src/dialectic_outcomes.py``).
+    """
+
+
+def _recorded_trigger_source(arguments: Dict[str, Any]) -> str:
+    supplied = arguments.get("trigger_source")
+    if isinstance(supplied, AutomatedTrigger) and str(supplied):
+        return str(supplied)
+    return "manual"
+
+
 # register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 @mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=False)
@@ -1516,18 +1547,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     topic = arguments.get("topic") or arguments.get("issue_description") or reason
     reviewer_mode = arguments.get("reviewer_mode", "auto")  # auto|self|llm
     max_synthesis_rounds = arguments.get("max_synthesis_rounds", 5)
-    # Determine trigger source: explicit param > inferred from reason > "manual"
-    trigger_source = arguments.get("trigger_source")
-    if not trigger_source:
-        reason_lower = (reason or "").lower()
-        if "auto-recovery" in reason_lower or "auto-triggered" in reason_lower:
-            trigger_source = "circuit_breaker"
-        elif "loop" in reason_lower:
-            trigger_source = "loop_detection"
-        elif "drift" in reason_lower and "auto" in reason_lower:
-            trigger_source = "drift_detection"
-        else:
-            trigger_source = "manual"
+    trigger_source = _recorded_trigger_source(arguments)
 
     # LLM-assisted dialectic: delegate to synthetic reviewer
     if reviewer_mode == "llm":
@@ -1542,7 +1562,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             # same latent shape as the one-call-review launder below.
             "agent_id": agent_uuid,
         }
-        for key in ("client_session_id", "api_key", "session_type"):
+        for key in ("client_session_id", "api_key", "session_type", "trigger_source"):
             if key in arguments:
                 llm_args[key] = arguments[key]
         return await handle_llm_assisted_dialectic(llm_args)
@@ -4015,6 +4035,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     session_id = None
     try:
         from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg
+        trigger_source = _recorded_trigger_source(arguments)
         session = DialecticSession(
             paused_agent_id=agent_uuid,
             reviewer_agent_id="llm-synthetic-reviewer",
@@ -4023,6 +4044,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             max_synthesis_rounds=2,
             reason=root_cause,
             paused_agent_state=pause_evidence,
+            trigger_source=trigger_source,
         )
         session_id = session.session_id
 
@@ -4036,6 +4058,7 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
             max_synthesis_rounds=2,
             synthesis_round=0,
             paused_agent_state=pause_evidence,
+            trigger_source=trigger_source,
         )
 
         now = datetime.now(timezone.utc).isoformat()

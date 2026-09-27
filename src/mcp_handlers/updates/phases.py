@@ -1932,13 +1932,17 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
             if not already_in_session:
                 drift_vec = getattr(monitor, '_last_drift_vector', None)
                 drift_desc = f"||Δη||={drift_vec.norm:.3f}" if drift_vec else "sustained high drift"
-                from ..dialectic import handle_request_dialectic_review
+                from ..dialectic.handlers import (
+                    AutomatedTrigger,
+                    handle_request_dialectic_review,
+                )
                 await handle_request_dialectic_review({
                     'agent_id': agent_id,
                     'issue_description': f'Ethical drift threshold exceeded: {drift_desc}',
                     'reason': 'Auto-triggered by sustained drift (3+ consecutive high-drift updates)',
                     'session_type': 'recovery',
                     'reviewer_mode': 'auto',
+                    'trigger_source': AutomatedTrigger('drift_detection'),
                 })
                 monitor._consecutive_high_drift = 0  # Reset after triggering
                 logger.info(f"Drift-triggered dialectic review for {agent_id}")
