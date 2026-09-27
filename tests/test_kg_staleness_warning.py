@@ -183,3 +183,31 @@ def test_malformed_tags_do_not_break_the_warning():
         _discovery(days_old=90, type="note", tags=[{"legacy": "dict"}, "permanent"])
     )
     assert warning.startswith("Last written 90 days ago")
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["resolved", "closed", "wont_fix", "superseded", "archived", "cold"],
+)
+def test_closed_entries_never_warn_regardless_of_age(status):
+    """Regression: a CLOSED discovery (resolved/closed/wont_fix/superseded, or
+    a closed row later tiered to archived/cold for retention) that hasn't
+    been updated in a long time must not be flagged stale — the docstring's
+    own contract is "for an open entry", and the wording says "...and is
+    still open", which would contradict a closed entry's own recorded
+    status. Age alone (even the 90-day case that warns for an open entry with
+    the same shape) must not produce a warning once status is closed."""
+    assert _compute_staleness_warning(_discovery(days_old=90, status=status)) is None
+    assert _compute_staleness_warning(
+        _discovery(days_old=120, updated_days_ago=70, status=status)
+    ) is None
+    assert _compute_staleness(_discovery(days_old=90, status=status)) is None
+
+
+@pytest.mark.parametrize("status", ["open", "disputed"])
+def test_open_entries_still_warn_when_stale(status):
+    """Sanity check alongside the closed-status regression: an explicitly
+    open/disputed status keeps warning exactly as before."""
+    warning = _compute_staleness_warning(_discovery(days_old=90, status=status))
+    assert warning is not None
+    assert "90 days old and still open" in warning
