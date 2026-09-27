@@ -4,14 +4,15 @@ name: Promote Release
 # the already-published artifacts and records their evidence; `promote` waits for
 # a required reviewer on the release-promotion environment, then moves GHCR
 # latest to the verified server digest without rebuilding; `pin` pushes a branch
-# that advances PUBLISHED_VERSION, which also moves docker-compose.yml's
-# lease-plane image to the verified release tag. Merging that branch's PR stays a
-# human act, and GITHUB_TOKEN cannot open pull requests in this repository by
-# setting.
+# that advances PUBLISHED_VERSION. Merging that branch's PR stays a human act,
+# and GITHUB_TOKEN cannot open pull requests in this repository by setting.
 #
-# The lease-plane image is verified and pinned but never tagged `latest`:
-# Compose names an exact release, the doctor fails a floating tag, and a second
-# mutable pointer would need its own guard across the approval wait.
+# The lease-plane image is verified but never tagged `latest`. The tagged
+# docker-compose.yml already names it by the release tag (version_manager.py
+# moves that pin with VERSION when the release is prepared), so the install pins
+# that `pin` advances are what direct users to it. Compose names an exact
+# release, the doctor fails a floating tag, and a second mutable pointer would
+# need its own guard across the approval wait.
 
 on:
   workflow_dispatch:
@@ -191,6 +192,18 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > attestation.json
           jq -e 'length >= 1' attestation.json > /dev/null
+
+      - name: Require the tagged Compose file to pull this release's lease plane
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # A release checkout pulls whatever its own docker-compose.yml names, so
+          # the verified image must be the one the tagged tree asks for.
+          if ! git show "$RELEASE_TAG:docker-compose.yml" \
+            | grep -q "image: $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG\$"; then
+            echo "docker-compose.yml at $RELEASE_TAG does not pin $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG." >&2
+            exit 1
+          fi
 
       - name: Verify lease-plane provenance from the release tag
         env:
@@ -384,20 +397,14 @@ jobs:
           fi
           git switch -c "$branch"
           printf '%s\n' "$VERSION" > PUBLISHED_VERSION
-          # Moves every published pin, including docker-compose.yml's
-          # lease-plane image tag, to the verified release.
           python3 scripts/ops/version_manager.py --update
-          grep -q "image: $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG\$" docker-compose.yml || {
-            echo "docker-compose.yml does not pin $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG after the update." >&2
-            exit 1
-          }
           git config user.name "github-actions[bot]"
           git config user.email "41898+github-actions[bot]@users.noreply.github.com"
           git add PUBLISHED_VERSION
           git add -u
           git commit -m "chore(release): publish $RELEASE_TAG" \
             -m "Verified and promoted by the Promote Release workflow; GHCR latest serves $DIGEST." \
-            -m "docker-compose.yml pins the lease plane to $RELEASE_TAG, index digest $LEASE_PLANE_DIGEST."
+            -m "The release's Compose lease plane is $RELEASE_TAG, index digest $LEASE_PLANE_DIGEST."
           git push origin "$branch"
           {
             echo "Pushed \`$branch\`. Open its pull request so required checks run:"

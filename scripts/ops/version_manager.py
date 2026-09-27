@@ -74,6 +74,15 @@ VERSION_REFERENCES = [
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
+    # The lease-plane image Compose pulls. It follows the SOURCE version, not
+    # PUBLISHED_VERSION: the file ships inside the release tag, so the tag's own
+    # tree must name the image built from that tag. A pin moved only after
+    # promotion would leave every tagged tree pointing at the previous release.
+    # Promote Release checks the tagged file names the image it verified.
+    ("docker-compose.yml", [
+        (r'image: ghcr\.io/cirwel/unitares-lease-plane:v([\d.]+)',
+         r'image: ghcr.io/cirwel/unitares-lease-plane:v{version}'),
+    ]),
     ("docs/COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',
          r'| UNITARES server | `v{version}`'),
@@ -103,13 +112,6 @@ PUBLISHED_VERSION_REFERENCES = [
          r'unitares@v{version}#subdirectory=agents/sdk'),
         (r'Replace `@v([\d.]+)` with another server release tag',
          r'Replace `@v{version}` with another server release tag'),
-    ]),
-    # Compose pulls this verified lease-plane image on a release checkout and
-    # builds from source when it cannot. Promote Release verifies the image
-    # before its pin job runs --update.
-    ("docker-compose.yml", [
-        (r'image: ghcr\.io/cirwel/unitares-lease-plane:v([\d.]+)',
-         r'image: ghcr.io/cirwel/unitares-lease-plane:v{version}'),
     ]),
     ("docs/COMPATIBILITY.md", [
         (r'\| Published server/container \| `v([\d.]+)`',

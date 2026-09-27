@@ -70,14 +70,14 @@ services:
     restart: unless-stopped
 
   lease-plane:
-    # A release checkout pulls the lease-plane image published and verified for
-    # that release, so a fresh install does not fetch Hex packages or compile
-    # Elixir. Promote Release moves this tag with PUBLISHED_VERSION (see
-    # scripts/ops/version_manager.py); do not edit it by hand. If the tag cannot
-    # be pulled (a release that predates the image, or no registry access),
-    # Compose builds from the block below instead. On a master checkout the tag
-    # names the last release, not your source: run `docker compose up --build`
-    # to build what you have checked out.
+    # A release checkout pulls the lease-plane image published from that same
+    # release tag, so a fresh install does not fetch Hex packages or compile
+    # Elixir. `make version-bump` moves this tag with VERSION when a release is
+    # prepared (scripts/ops/version_manager.py); do not edit it by hand. If the
+    # tag cannot be pulled (a release that predates the image, a release not yet
+    # published, or no registry access), Compose builds from the block below
+    # instead. On a master checkout the tag names a release, not your source:
+    # run `docker compose up --build` to build what you have checked out.
     image: ghcr.io/cirwel/unitares-lease-plane:v2.22.1
     pull_policy: missing
     build:

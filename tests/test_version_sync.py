@@ -72,11 +72,14 @@ def test_preparing_release_keeps_install_pins_until_publication(tmp_path, monkey
     assert source.read_text() == "2.22.0\n"
 
 
-def test_publication_moves_the_compose_lease_plane_pin(tmp_path, monkeypatch):
-    """Promote Release's pin job runs --update; Compose must follow the verified release."""
-    import os
-    import subprocess
 
+def test_version_bump_moves_the_compose_lease_plane_pin(tmp_path, monkeypatch):
+    """The release tag's own tree must name the lease-plane image built from it.
+
+    The pin follows VERSION, which the release PR bumps before the tag exists.
+    Following PUBLISHED_VERSION instead would move it only after promotion, so
+    every tagged tree would pull the previous release's lease plane.
+    """
     import yaml
 
     import scripts.ops.version_manager as manager
@@ -84,46 +87,23 @@ def test_publication_moves_the_compose_lease_plane_pin(tmp_path, monkeypatch):
     source = tmp_path / "VERSION"
     published = tmp_path / "PUBLISHED_VERSION"
     compose = tmp_path / "docker-compose.yml"
-    source.write_text("2.23.0\n", encoding="utf-8")
-    published.write_text("2.23.0\n", encoding="utf-8")
-    real_compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
-    current = (PROJECT_ROOT / "PUBLISHED_VERSION").read_text().strip()
-    compose.write_text(real_compose.replace(f":v{current}", ":v2.22.99"))
+    current = (PROJECT_ROOT / "VERSION").read_text().strip()
+    source.write_text("2.22.99\n", encoding="utf-8")
+    published.write_text("2.22.99\n", encoding="utf-8")
+    compose.write_text(
+        (PROJECT_ROOT / "docker-compose.yml").read_text().replace(f":v{current}", ":v2.22.99")
+    )
     monkeypatch.setattr(manager, "PROJECT_ROOT", tmp_path)
     monkeypatch.setattr(manager, "VERSION_FILE", source)
     monkeypatch.setattr(manager, "PUBLISHED_VERSION_FILE", published)
     monkeypatch.setattr("sys.argv", ["version_manager.py", "--update"])
 
+    assert manager.bump_version("minor") == "2.23.0"
     manager.main()
 
     service = yaml.safe_load(compose.read_text())["services"]["lease-plane"]
     assert service["image"] == "ghcr.io/cirwel/unitares-lease-plane:v2.23.0"
     assert service["pull_policy"] == "missing"
     assert service["build"]["dockerfile"] == "elixir/lease_plane/Dockerfile"
-
-    # The pin job refuses to commit unless this exact check passes afterwards.
-    workflow = yaml.safe_load(
-        (PROJECT_ROOT / ".github/workflows/promote-release.yml").read_text()
-    )
-    pin = next(
-        step["run"]
-        for step in workflow["jobs"]["pin"]["steps"]
-        if step.get("name") == "Push a branch that advances PUBLISHED_VERSION"
-    )
-    check = next(line for line in pin.splitlines() if "grep -q" in line).strip()
-    check = check.removesuffix("{").strip().removesuffix("||").strip()
-    env = {
-        **os.environ,
-        "REGISTRY": "ghcr.io",
-        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
-        "RELEASE_TAG": "v2.23.0",
-    }
-    ok = subprocess.run(["bash", "-c", check], cwd=tmp_path, env=env, check=False)
-    assert ok.returncode == 0
-    stale = subprocess.run(
-        ["bash", "-c", check],
-        cwd=tmp_path,
-        env={**env, "RELEASE_TAG": "v2.24.0"},
-        check=False,
-    )
-    assert stale.returncode != 0
+    # Release preparation leaves the verified publication pin alone.
+    assert published.read_text() == "2.22.99\n"

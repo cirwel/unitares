@@ -55,7 +55,10 @@ branch does not deploy the master-only public Pages workflow.
    [`docs/CHANGELOG.md`](../CHANGELOG.md), update the `date-released` field in
    [`CITATION.cff`](../../CITATION.cff), and review every generated version
    change. `VERSION` remains the source-version authority. Leave
-   `PUBLISHED_VERSION` unchanged during release preparation.
+   `PUBLISHED_VERSION` unchanged during release preparation. The version bump
+   also moves the lease-plane `image:` tag in `docker-compose.yml` to the new
+   version, so the tagged tree pulls the lease-plane image published from its
+   own tag; until that image exists, Compose builds the lease plane from source.
    In the same commit as the changelog fold, prune the skill attestations:
    `python3 scripts/client/_check_freshness.py . .. --prune 3`, then
    `python3 scripts/client/_check_freshness.py . ..` must still report
@@ -117,22 +120,22 @@ branch does not deploy the master-only public Pages workflow.
    carries `linux/amd64` and `linux/arm64` with an SPDX SBOM for each, and that
    build provenance verifies against `publish-container.yml` at that tag and
    the tag's peeled source commit. It applies the same digest, platform, SBOM
-   and provenance checks to the lease-plane image at the same tag, and records
-   the evidence for both in the run summary.
+   and provenance checks to the lease-plane image at the same tag, requires the
+   tagged `docker-compose.yml` to name that image, and records the evidence for
+   both in the run summary.
    Approving the `release-promotion` environment runs `promote`, which re-reads
    every mutable release pointer, including the lease-plane tag, before moving
    the server's `latest` to the verified digest as described below. `pin`
    performs the same freshness check and re-verifies the published release page
    plus source-bound provenance for both images before pushing `publish/vX.Y.Z`
-   with `PUBLISHED_VERSION` and `version_manager.py --update` applied. That
-   update also moves the lease-plane `image:` tag in `docker-compose.yml`, so
-   Compose pulls the verified image on a release checkout; open the branch's
+   with `PUBLISHED_VERSION` and `version_manager.py --update` applied; open its
    pull request from the command in the run summary and merge it. Until that
-   merges, public installation examples and the Compose lease-plane pin continue
-   to name the previous verified release. The lease plane is never tagged
-   `latest`: Compose names an exact release, the doctor fails a floating image
-   tag, and a second mutable pointer would need its own guard across the
-   approval wait. Finish with clean closeout.
+   merges, public installation examples continue to name the previous verified
+   release, and so point at a tree whose Compose file pulls that release's lease
+   plane. The lease plane is never tagged `latest`: Compose names an exact
+   release, the doctor fails a floating image tag, and a second mutable pointer
+   would need its own guard across the approval wait. Finish with clean
+   closeout.
 
 ## Promoting a verified container
 

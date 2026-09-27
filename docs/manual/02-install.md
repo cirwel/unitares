@@ -23,8 +23,8 @@ make coordination-demo
 ```
 
 On a release checkout, Compose pulls the coordination lease plane as the image
-published and verified for that release (`ghcr.io/cirwel/unitares-lease-plane`)
-instead of compiling Elixir on your machine. If that image cannot be pulled, for
+published from that release tag (`ghcr.io/cirwel/unitares-lease-plane`) instead
+of compiling Elixir on your machine. If that image cannot be pulled, for
 example for a release that predates it, Compose prints a pull warning and builds
 the lease plane from source. On a `master` checkout, run
 `docker compose up -d --wait --build`: without `--build` the lease plane would

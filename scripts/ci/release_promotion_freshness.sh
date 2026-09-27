@@ -66,8 +66,8 @@ if [ "$tag_digest" != "$DIGEST" ]; then
   die "$RELEASE_TAG now resolves to $tag_digest, not verified digest $DIGEST."
 fi
 
-# The pin moves docker-compose.yml onto the lease-plane release tag, so that tag
-# must still name the image verified before approval.
+# The release's own docker-compose.yml pulls the lease-plane tag, and promotion
+# points users at that release, so the tag must still name the verified image.
 if ! lease_plane_digest=$(docker buildx imagetools inspect \
   "$REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' | jq -r .digest); then
   die "Could not resolve the current lease-plane digest for $RELEASE_TAG."

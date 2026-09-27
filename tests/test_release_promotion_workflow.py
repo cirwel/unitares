@@ -334,10 +334,48 @@ def test_lease_plane_is_pinned_by_version_never_tagged_latest():
     assert "LEASE_PLANE_IMAGE_NAME}:latest" not in text
     freshness = FRESHNESS_PATH.read_text()
     assert "LEASE_PLANE_IMAGE_NAME:latest" not in freshness
-    pin = _step("pin", "Push a branch that advances PUBLISHED_VERSION")["run"]
-    update = pin.index("version_manager.py --update")
-    check = pin.index('image: $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG')
-    assert update < check < pin.index("git commit")
+    names = [step.get("name") for step in JOBS["verify"]["steps"]]
+    tagged = "Require the tagged Compose file to pull this release's lease plane"
+    assert names.index(tagged) < names.index("Record release evidence")
+
+
+def _run_tagged_compose_check(tmp_path: Path, compose_tag: str) -> subprocess.CompletedProcess[str]:
+    repo = tmp_path / "compose-repo"
+    subprocess.run(
+        ["git", "init", "-b", "master", str(repo)], capture_output=True, text=True, check=True
+    )
+    _git(repo, "config", "user.name", "Release Test")
+    _git(repo, "config", "user.email", "release-test@example.com")
+    compose = (ROOT / "docker-compose.yml").read_text()
+    current = (ROOT / "VERSION").read_text().strip()
+    (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", f":{compose_tag}"))
+    _git(repo, "add", "docker-compose.yml")
+    _git(repo, "commit", "-m", "release")
+    _git(repo, "tag", "v2.23.0")
+    # A later master edit must not satisfy a check about the tagged tree.
+    (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", ":v2.23.0"))
+    script = _step("verify", "Require the tagged Compose file to pull this release's lease plane")["run"]
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v2.23.0",
+        "REGISTRY": "ghcr.io",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+    }
+    return subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", script],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+def test_tagged_compose_must_pull_the_verified_lease_plane(tmp_path: Path):
+    assert _run_tagged_compose_check(tmp_path / "ok", "v2.23.0").returncode == 0
+    stale = _run_tagged_compose_check(tmp_path / "stale", "v2.22.1")
+    assert stale.returncode != 0
+    assert "does not pin ghcr.io/cirwel/unitares-lease-plane:v2.23.0" in stale.stderr
 
 
 def test_an_existing_pin_branch_stops_the_run_before_approval():

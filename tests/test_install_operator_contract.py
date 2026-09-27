@@ -162,11 +162,14 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "redis:" in compose
     assert "lease-plane:" in compose
     assert 'dockerfile: elixir/lease_plane/Dockerfile' in compose
-    published = _read("PUBLISHED_VERSION").strip()
-    # A release checkout pulls the verified lease-plane image; the build block
-    # stays so a missing tag, or `--build`, compiles the checked-out source.
+    # A release checkout pulls the lease-plane image built from its own tag, so
+    # the pin follows VERSION; the build block stays so a missing tag, or
+    # `--build`, compiles the checked-out source.
     lease_plane = compose.split("\n  lease-plane:\n", 1)[1].split("\n  governance-mcp:\n", 1)[0]
-    assert f"    image: ghcr.io/cirwel/unitares-lease-plane:v{published}\n" in lease_plane
+    assert (
+        f"    image: ghcr.io/cirwel/unitares-lease-plane:v{_current_version()}\n"
+        in lease_plane
+    )
     assert "    pull_policy: missing\n" in lease_plane
     assert "    build:\n" in lease_plane
     assert ":latest" not in lease_plane
