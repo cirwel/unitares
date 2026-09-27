@@ -132,6 +132,27 @@ def test_handler_filters_by_since_version_past_returns_all():
     assert len(payload["skills"]) > 0
 
 
+def test_removing_a_skill_moves_registry_hash_not_registry_version():
+    """A removal is visible through registry_hash, never through since_version.
+
+    registry_version is the newest last_verified, so dropping a skill leaves it
+    unchanged and `since_version` has nothing to return and no tombstone. The
+    documented removal signal is registry_hash, which covers every served
+    skill; a client that sees it change re-reads the bare index and drops what
+    is no longer listed (docs/ontology/s15-server-side-skills.md §4.1).
+    """
+    from src.mcp_handlers.introspection import skills as mod
+
+    served = mod._load_all_skills()
+    assert len(served) >= 2
+    newest = max(served, key=lambda s: s.get("last_verified") or "")
+    oldest_other = next(s for s in served if s is not newest)
+    remaining = [s for s in served if s is not oldest_other]
+
+    assert mod._registry_version(remaining) == mod._registry_version(served)
+    assert mod._registry_hash(remaining) != mod._registry_hash(served)
+
+
 # ---------------------------------------------------------------------
 # Determinism
 # ---------------------------------------------------------------------

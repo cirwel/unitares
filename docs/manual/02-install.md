@@ -66,6 +66,14 @@ waiting for a peer or the operator. That also happens with a model when the
 thesis is about the review system itself (recusal), when the model runs past
 the review time budget, or when its synthesis does not approve.
 
+This model is the only one a default install uses. The tools also describe a
+stronger lane, `consult(effort='thorough')` and `delegate_inference`, which hand
+a brief to a Codex, Claude or Antigravity CLI. That lane is an operator
+extension: it runs through the agent orchestrator, which no Compose service
+starts, so on a default install those calls fail and say the extension is not
+configured. `list_inference_hosts` reports it under
+`extensions.agent_orchestrator`. Nothing in this manual needs it.
+
 The quickest way is to run, from the checkout, once Ollama is installed and has
 a model pulled:
 
