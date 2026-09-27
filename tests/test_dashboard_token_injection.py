@@ -97,26 +97,25 @@ def _redesign_client(peer):
 
 
 def test_snapshot_bundle_is_not_public():
-    """snapshot.js is a real capture — resident ids, EISV, verdicts — so it is
-    gated like the endpoints it mirrors, even though it is a .js file under the
-    otherwise-public shell."""
+    """snapshot.js stays gated although it is now synthetic (2026-09-27): it was
+    a real capture for months, and the gate keeps the rule simple if one is
+    ever bundled again. A .js file under the otherwise-public shell."""
     r = _redesign_client(("203.0.113.7", 44444)).get("/dashboard/redesign/snapshot.js")
     assert r.status_code == 401
     assert "SNAPSHOT" not in r.text
 
 
-@pytest.mark.parametrize("path", ["preview.html", "PLAN.md"])
+@pytest.mark.parametrize("path", ["PLAN.md"])
 def test_reference_artifacts_are_not_public(path):
-    """preview.html and PLAN.md are the same data class as snapshot.js: a
-    literal fleet capture and a description of the operator's own fleet. They
-    shipped public because the gate was a filename set and these landed beside
-    the file it named. Nothing loads either at runtime, so gating them takes no
-    rendering path with it."""
+    """PLAN.md describes the operator's own fleet. It shipped public (with
+    preview.html, a literal fleet capture since deleted) because the gate was a
+    filename set and these landed beside the file it named. Nothing loads it at
+    runtime, so gating it takes no rendering path with it."""
     r = _redesign_client(("203.0.113.7", 44444)).get(f"/dashboard/redesign/{path}")
     assert r.status_code == 401
 
 
-@pytest.mark.parametrize("path", ["preview.html", "PLAN.md"])
+@pytest.mark.parametrize("path", ["PLAN.md"])
 def test_reference_artifacts_served_to_trusted_caller(path):
     r = _redesign_client(("127.0.0.1", 50000)).get(f"/dashboard/redesign/{path}")
     assert r.status_code == 200
@@ -124,10 +123,10 @@ def test_reference_artifacts_served_to_trusted_caller(path):
 
 def test_gate_covers_every_reference_artifact_under_the_shell():
     """A filename set is only as good as its next reader. This pins the whole
-    set, so a file added beside these three fails here rather than shipping
+    set, so a file added beside these fails here rather than shipping
     public, which is exactly how preview.html and PLAN.md got out."""
     assert dashboard_routes._AUTHENTICATED_ONLY_FILES == {
-        "snapshot.js", "preview.html", "PLAN.md",
+        "snapshot.js", "PLAN.md",
     }
 
 

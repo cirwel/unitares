@@ -146,7 +146,44 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # (its advertised brief is unchanged, so only describe_tool shows that). No
 # parameter is added, removed, retyped or renamed; the two metrics input
 # digests and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.19.0"
+# 1.20.0 (2026-09-26), numbered after 1.19.0 (#2472): update_finding declares
+# closure_class and closure_evidence, with the knowledge router's
+# descriptions. The server now stores both (migration 071 lets a classified
+# row move to archived and cold); until now /mcp/ dropped them from an
+# update_finding call, and only knowledge(action='update') carried them to the
+# handler. Descriptions that lagged their handlers are corrected: knowledge
+# discovery_type says store defaults it to note (it said "Required"), promote
+# to insight, update retypes and search filters; observe
+# target_agent_id names the audit_events and outcome_evidence filters and says
+# they match the stored agent_id exactly without resolving labels (a UUID for
+# most agents; some audit writers are stored by name), until names
+# outcome_evidence, and agent_ids names the anomalies and aggregate scope;
+# dialectic issue_description names action=quick. On update_finding,
+# discovery_type says an omitted type keeps the stored one. closure_class says
+# a class may also be set alone on a finding that is already closed, and
+# closure_evidence states its 8 KiB bound. Nothing is removed, retyped or
+# renamed; the input digests of update_finding, knowledge, observe,
+# dialectic and request_review, and the surface digest, move.
+# 1.21.0 (2026-09-26), numbered after 1.20.0 (#2489): tool
+# descriptions only. check_working_state and get_governance_metrics no longer
+# promise that a binding the server merely inferred returns that agent's real
+# state marked identity_assurance.caller_proven=false: no pre-onboard
+# self-read binds to one any more (the sticky binding is not consulted for a
+# read, and agent_uuid / X-Agent-Id are not read proof), so such a read is
+# unbound, and both texts name the proof that reads your own state.
+# get_governance_metrics no longer offers "an explicit agent_id" as a way to
+# be sure the reading is yours: /mcp/ does not declare agent_id and drops it,
+# and it proves nothing about the caller. Both texts say where it names the
+# agent to read: check_working_state through use_tool or REST, and
+# get_governance_metrics through /mcp/'s use_tool, unless the caller is bound
+# as a different agent, which inject_identity refuses (identity_mismatch);
+# get_governance_metrics over REST, whose direct handler has no inject step,
+# answers it for any caller. check_working_state marks such a reading
+# caller_proven=false on an inferred session. identity's description names
+# client_session_id in the call that sets a display name. No parameter is
+# added, removed, retyped or renamed, and no input digest or the surface
+# digest moves.
+INTERFACE_CONTRACT_VERSION = "1.21.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

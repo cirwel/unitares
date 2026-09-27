@@ -119,14 +119,13 @@
   <main id="main">
     <!-- Overview (increment 1) -->
     <section class="section" data-pane="overview">
-      <div class="eyebrow">Resident Fleet <span class="src-badge" id="resSrc"></span></div>
-      <div class="residents" id="residents"></div>
-      <div class="attn-band" id="attn" hidden></div>
+      <!-- Agent-first: what any install has. Residents follow, and only when
+           the deployment configures some. -->
       <div class="grid" id="stats" style="margin-bottom:var(--space-7)"></div>
 
       <section class="panel">
         <div class="panel-head">
-          <h2>Pulse</h2><span class="who" id="pulseWho">—</span>
+          <h2>Latest check-in</h2><span class="who" id="pulseWho">—</span>
           <span class="spring"></span>
           <span class="verdict" id="pulseVerdict"><span class="pip"></span><span>—</span></span>
           <span class="fresh" id="pulseFresh"></span>
@@ -141,7 +140,14 @@
           </div>
           <div class="eisv" id="eisv"></div>
         </div>
+        <div id="recent" style="margin-top:var(--space-6)"></div>
       </section>
+
+      <div id="resBlock" hidden style="margin-top:var(--space-7)">
+        <div class="eyebrow">Residents <span class="src-badge" id="resSrc"></span> <span id="resSummary" style="text-transform:none;letter-spacing:0;font-weight:400"></span></div>
+        <div class="residents" id="residents"></div>
+        <div class="attn-band" id="attn" hidden></div>
+      </div>
     </section>
 
     <!-- Agents (increment 2) -->

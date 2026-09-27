@@ -70,7 +70,11 @@ echo "[deploy] verifying health"
 TOKEN="$(
   python3 - <<'PY'
 import os
-for line in open(os.environ.get("UNITARES_SECRETS_ENV", f"{os.environ['HOME']}/.config/cirwel/secrets.env")):
+home = os.environ["HOME"]
+path = os.environ.get("UNITARES_SECRETS_ENV") or f"{home}/.config/unitares/secrets.env"
+if not os.environ.get("UNITARES_SECRETS_ENV") and not os.path.exists(path) and os.path.exists(f"{home}/.config/cirwel/secrets.env"):
+    path = f"{home}/.config/cirwel/secrets.env"
+for line in open(path):
     line = line.strip()
     if line.startswith("export "):
         line = line[7:]

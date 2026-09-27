@@ -537,32 +537,69 @@
       }, () => { const e = S().eisv || {}; return { series: e.series || [], raw: e.raw || [], sourceLanes: e.sourceLanes || [], coherenceEq: e.coherenceEq ?? 0.5 }; });
     },
 
-    // Fleet risk history — Chronicler's daily governance.* scrape, three series
-    // in one round-trip so risk can be drawn against the verdict pressure of the
-    // same window without the view issuing its own fetches.
+    // Fleet risk history: fleet-mean risk plus guide and pause counts over the
+    // seven UTC calendar days ending on each day (the latest partial), computed server-side from core.agent_state
+    // (/v1/governance/trend). It used to read Chronicler's daily scrape, which
+    // left the Risk tab empty on any install without that resident. The server
+    // caps the window at 60 days, inside retained history.
     //
-    // The risk series is the headline: with no points there is nothing to draw,
-    // so return null and let withFallback serve the snapshot. `pause`/`guide`
-    // are companions and an empty array is legitimate live data for them (a
-    // scraper registered later, or a window with no hard interventions) — they
-    // must NOT trigger the whole panel into snapshot.
+    // A successful response is live even when `risk` is empty: that is "the
+    // producer ran and found no risk readings" (a fresh install), not an
+    // outage, and its pause/guide series may still carry verdicts. Only a
+    // failed or malformed response falls back.
     async riskTrend(days) {
-      const d = Number.isFinite(days) ? Math.max(7, Math.min(180, Math.round(days))) : 60;
+      const d = Number.isFinite(days) ? Math.max(7, Math.min(60, Math.round(days))) : 60;
       return withFallback(async () => {
-        const since = new Date(Date.now() - d * 86400 * 1000).toISOString();
-        const series = async (name) => {
-          const j = await authFetch("/v1/metrics/series?name=" + encodeURIComponent(name) +
-            "&since=" + encodeURIComponent(since));
-          return j && Array.isArray(j.points) ? j.points : [];
-        };
-        const [risk, pause, guide] = await Promise.all([
-          series("governance.risk.mean.7d"),
-          series("governance.pause.7d"),
-          series("governance.guide.7d"),
-        ]);
-        if (!risk.length) return null;
-        return { windowDays: d, risk, pause, guide };
-      }, () => S().riskTrend);
+        const j = await authFetch("/v1/governance/trend?days=" + d);
+        if (!j || !j.success || !Array.isArray(j.risk)) return null;
+        return { windowDays: j.window_days || d, risk: j.risk, pause: j.pause || [], guide: j.guide || [] };
+      }, () => S().riskTrend || { windowDays: d, risk: [], pause: [], guide: [] });
+    },
+
+    // Agents that checked in recently, newest first: one row per agent, the
+    // latest state of each in the server's in-memory EISV ring, folded
+    // server-side (/v1/eisv/agents). Any agent, not only residents, so the
+    // Overview and the Risk picker are useful on an install that runs none.
+    // `coverageStart` (epoch seconds) is where the ring's memory begins.
+    async recentAgents() {
+      return withFallback(async () => {
+        const r = await authFetch("/v1/eisv/agents");
+        if (!r || !Array.isArray(r.agents)) return null;
+        const agents = r.agents.filter((e) => e && e.agent_id).map((e) => ({
+          id: e.agent_id,
+          name: e.agent_name || e.agent_id.slice(0, 8),
+          ts: e.timestamp || null,
+          eisv: e.eisv || null,
+          coherence: typeof e.coherence === "number" ? e.coherence : null,
+          risk: typeof e.risk === "number" ? e.risk : null,
+          // The verdict is sub_action when present (a guided check-in is
+          // action "proceed", sub_action "guide"), the rule the server persists by.
+          action: (e.decision && (e.decision.sub_action || e.decision.action)) || null,
+          checkins: e.checkins || 0,
+        }));
+        return { agents, coverageStart: typeof r.coverage_start === "number" ? r.coverage_start : null };
+      }, () => S().recentAgents || { agents: [], coverageStart: null });
+    },
+
+    // Check-ins in the last hour by verdict, from the server's in-memory
+    // activity ring (/api/activity). `coverageStart` (epoch seconds) is where
+    // that ring's view of the window begins: after a restart, or once the ring
+    // is full, the hour is only partly covered and the total says so.
+    async checkinActivity() {
+      return withFallback(async () => {
+        const j = await authFetch("/api/activity?window=60&bucket=5");
+        if (!j || !j.success || !Array.isArray(j.buckets)) return null;
+        // Prefer the server's exact window totals: its buckets are aligned to
+        // bucket boundaries and can start up to one bucket inside the hour.
+        // Summing buckets is the fallback for an older server.
+        let t = j.totals && typeof j.totals.proceed === "number" ? { proceed: j.totals.proceed, guide: j.totals.guide || 0, pause: j.totals.pause || 0 } : null;
+        if (!t) {
+          t = { proceed: 0, guide: 0, pause: 0 };
+          j.buckets.forEach((b) => { t.proceed += b.proceed || 0; t.guide += b.guide || 0; t.pause += b.pause || 0; });
+        }
+        return { ...t, total: t.proceed + t.guide + t.pause, windowMin: j.window_minutes || 60,
+          coverageStart: typeof j.coverage_start === "number" ? j.coverage_start : null };
+      }, () => S().checkinActivity || null);
     },
 
     async agentHistory(id, opts) {

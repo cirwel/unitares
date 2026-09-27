@@ -63,6 +63,23 @@ is the merge gate.
   -> push -> draft PR is authorized. Do not stop for a second confirmation just
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
+- <a id="branch-ownership"></a>**A PR branch belongs to the session that
+  opened it.** Do not push commits to another session's PR branch, even to
+  fix something small. The `claude/` prefix does not tell sessions apart, and
+  neither does the commit author reliably: local sessions commit as the
+  operator, web sessions as `Claude`, and two web sessions look identical.
+  If it wasn't created in your session and its owner didn't hand it to you,
+  it isn't yours. To contribute, either comment on the PR with the change,
+  or branch from its head (`<author>/<topic>-on-<N>`), open your own draft
+  PR, and put "merge after #N" in its body. The owner or the operator can
+  hand a branch over explicitly in a PR comment; that comment is the
+  handover. If your own push is rejected because the remote has commits you
+  did not author, somebody else is on your branch: keep your work on a local
+  `backup/*` branch, build on the remote head, and ask who it is. Never
+  force-push over it (see *Git Rules*). Why (2026-09-26): on #2493 a web
+  session pushed a review-fix commit onto the branch while the local session
+  that owned it was still working. The owner's push was rejected, and only
+  its backup branch kept the two from overwriting each other.
 - **Do not** enable auto-merge by default.
 - A draft PR means "visible, not claiming merged." **Merging** is the
   operator's deliberate action. **Marking ready** is the working agent's:
@@ -387,8 +404,10 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
-   a council/dialectic reviewer. It must end with the `VERDICT:` line.
-   Advisory `consult` output is still not a review.
+   a council/dialectic reviewer. It must end with the `VERDICT:` line, with
+   its reasoning before it: what was examined and verified. A bare verdict
+   (under about 25 words of reasoning) is not recorded, by `record` or by a
+   local reviewer run. Advisory `consult` output is still not a review.
 2. Push first. Then render the record with the tool, never by hand:
 
    ```bash
