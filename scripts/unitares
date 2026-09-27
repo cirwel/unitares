@@ -1166,6 +1166,58 @@ _update_remote() {
     printf '%s' "${UNITARES_UPDATE_REMOTE:-origin}"
 }
 
+_db_schema_version() {
+    # Highest applied migration, read inside the database container; empty when
+    # the database does not answer.
+    _compose exec -T postgres-age psql "$(_migration_db_url)" -Atqc \
+        "SELECT COALESCE(MAX(version), 0) FROM core.schema_migrations" 2>/dev/null | tr -d '[:space:]'
+}
+
+_backup_db() {
+    # A gzipped plain-SQL dump of the stack's database (the format
+    # scripts/ops/backup_governance.sh uses), written outside the checkout.
+    # Sets BACKUP_FILE. A failed or empty dump is an error: nothing migrates
+    # without a backup.
+    local label dir file
+    label=$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')
+    dir="${UNITARES_BACKUP_DIR:-$HOME/.unitares/backups}"
+    mkdir -p "$dir" || return 1
+    file="$dir/unitares-$(date +%Y%m%d-%H%M%S)-before-${label}.sql.gz"
+    if _compose exec -T postgres-age pg_dump "$(_migration_db_url)" | gzip > "$file" && [ -s "$file" ]; then
+        BACKUP_FILE="$file"
+        echo "✓ Database backed up to $file"
+        return 0
+    fi
+    rm -f "$file"
+    echo "error: the database backup failed, so nothing was migrated." >&2
+    return 1
+}
+
+_backup_hint() {
+    [ -n "${BACKUP_FILE:-}" ] && echo "       The database as it was before these migrations is backed up at $BACKUP_FILE" >&2
+    return 0
+}
+
+_migrate_quiesced() {
+    # Apply this checkout's pending migrations with nothing else writing: stop
+    # the services that write to the database, start the database on this
+    # release's image, back it up when migrations are pending, then apply.
+    # The caller brings the stack back up, on success or failure.
+    local target="$1" plan
+    echo "… Stopping the server so nothing writes during migrations"
+    _compose stop governance-mcp lease-plane >/dev/null 2>&1
+    echo "… Starting the database"
+    _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
+    plan=$(_migrations) || { printf '%s\n' "$plan"; return 1; }
+    case "$plan" in
+        *"No pending migrations"*) echo "  No pending migrations."; return 0 ;;
+    esac
+    printf '%s\n' "$plan"
+    _backup_db "$target" || return 1
+    echo "… Applying database migrations"
+    _migrations --apply
+}
+
 _rollback_code() {
     # The new release's stack did not come up after its migrations applied.
     # Put the code back to the previous release and rebuild it, leaving the
@@ -1176,11 +1228,12 @@ _rollback_code() {
     local root="$1" current="$2" current_sha="$3" target="$4"
     echo "error: the stack did not come up on $target. Rolling the code back to ${current}…" >&2
     if git -C "$root" checkout --quiet --detach "$current_sha" && _compose up -d --build --wait >/dev/null 2>&1; then
-        echo "       Back on $current and running. The database stays migrated to $target, which $current runs on." >&2
+        echo "       Back on $current and running. The database keeps the migrations that applied; they only add, so $current runs on them." >&2
     else
         echo "       The rollback did not come up either. The code is at $current, the database at $target's schema." >&2
     fi
     echo "       Fix what 'unitares logs' shows, then re-run 'unitares update --to $target'." >&2
+    _backup_hint
 }
 
 cmd_update() {
@@ -1260,17 +1313,19 @@ cmd_update() {
         return 1
     fi
 
+    BACKUP_FILE=""
     if [ "$current_sha" = "$target_sha" ]; then
         echo "✓ Already on $target."
         _confirm "Apply any pending migrations, then rebuild and restart the stack on $target?"
         case $? in 0) ;; 2) return 1 ;; *) echo "Nothing changed."; return 0 ;; esac
-        echo "… Starting the database"
-        # --build: an existing install must run this release's database image
-        # before its migrations, as the move path does.
-        _compose up -d --build --wait postgres-age >/dev/null || { echo "error: the database did not start; see: unitares logs postgres-age" >&2; return 1; }
-        _migrations --apply || { echo "error: migrations did not complete; the stack was not restarted." >&2; return 1; }
+        if ! _migrate_quiesced "$target"; then
+            echo "error: migrations did not complete on $target. Restarting the stack as it was…" >&2
+            _compose up -d --wait >/dev/null 2>&1 || echo "       The stack did not restart either; see: unitares logs" >&2
+            _backup_hint
+            return 1
+        fi
         echo "… Rebuilding and starting the stack"
-        _compose up -d --build --wait || { echo "error: the stack did not come up on $target; its migrations are applied. Fix what 'unitares logs' shows and re-run 'unitares update --to $target'." >&2; return 1; }
+        _compose up -d --build --wait || { echo "error: the stack did not come up on $target; its migrations are applied. Fix what 'unitares logs' shows and re-run 'unitares update --to $target'." >&2; _backup_hint; return 1; }
         _report_health "On $target with migrations applied."
         return $?
     fi
@@ -1280,22 +1335,34 @@ cmd_update() {
     echo "… Fetching $target"
     # A tag is stored as a local tag, so the next update and `git describe`
     # recognise the release; a branch is checked out from FETCH_HEAD.
+    local fetched
     if git -C "$root" ls-remote --exit-code "$(_update_remote)" "refs/tags/$target" >/dev/null 2>&1; then
         git -C "$root" fetch --depth 1 --no-tags "$(_update_remote)" "+refs/tags/$target:refs/tags/$target" \
             || { echo "error: could not fetch $target" >&2; return 1; }
-        git -C "$root" checkout --quiet --detach "refs/tags/$target^{commit}" || return 1
+        fetched=$(git -C "$root" rev-parse "refs/tags/$target^{commit}") || return 1
     else
         git -C "$root" fetch --depth 1 "$(_update_remote)" "$target" || { echo "error: could not fetch $target" >&2; return 1; }
-        git -C "$root" checkout --quiet --detach FETCH_HEAD || return 1
+        fetched=$(git -C "$root" rev-parse FETCH_HEAD) || return 1
     fi
 
-    echo "… Starting the database"
-    _compose up -d --build --wait postgres-age || { echo "error: the database did not start; still on the new code, roll back with: git -C $root checkout $current_sha" >&2; return 1; }
+    # Refuse a downgrade before anything moves: a database whose schema is newer
+    # than the target's migrations belongs to a later release.
+    local db_version target_max
+    _compose up -d --wait postgres-age >/dev/null 2>&1
+    db_version=$(_db_schema_version)
+    target_max=$(git -C "$root" ls-tree --name-only "$fetched" -- db/postgres/migrations/ \
+        | sed -n 's|.*/\([0-9][0-9]*\)_[^/]*\.sql$|\1|p' | sort -n | tail -n 1)
+    if [ -n "$db_version" ] && [ -n "$target_max" ] && [ "$((10#$db_version))" -gt "$((10#$target_max))" ]; then
+        echo "error: the database is at schema $((10#$db_version)), newer than anything $target knows (up to $((10#$target_max)))." >&2
+        echo "       Moving to an older release is not supported; nothing was changed." >&2
+        return 1
+    fi
 
-    echo "… Applying database migrations"
-    if ! _migrations --apply; then
-        echo "error: migrations did not complete. The code is at $target and the database is where the output above stops." >&2
-        echo "       Fix the reported problem and re-run 'unitares update --to $target', or roll the code back with: git -C $root checkout $current_sha" >&2
+    git -C "$root" checkout --quiet --detach "$fetched" || return 1
+
+    if ! _migrate_quiesced "$target"; then
+        echo "error: migrations did not complete for $target." >&2
+        _rollback_code "$root" "$current" "$current_sha" "$target"
         return 1
     fi
 
