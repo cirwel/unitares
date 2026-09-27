@@ -573,11 +573,13 @@ the operator's machine is awake.
 
 - **The label is the merge decision made ahead of time**, so like arming it
   is the maintainer's, never an agent's. It approves the PR as it stood: the
-  script pins the head and a fingerprint of the PR's diff when it first
-  sees the label, keeps a later head covered only while that diff is
-  unchanged (a clean base update leaves it so; commit metadata is
-  author-controlled and proves nothing), and arms with `--match-head-commit`
-  on that head. A push after the label makes the approval stale, and the PR is
+  script pins the head and a fingerprint of what it changes when it first
+  sees the label (GitHub's compare of `master...<that SHA>`: per file the
+  patch without hunk headers, or the blob SHA where there is no patch, as for
+  a binary file). A later head stays covered only while the fingerprint is
+  unchanged, which a clean base update preserves; commit metadata is
+  author-controlled and proves nothing. It arms with `--match-head-commit` on
+  that head. A push after the label makes the approval stale, and the PR is
   skipped until the label is re-applied. A label is pinned only if the
   script sees it within 15 minutes of going on; an older label with no pin
   (the machine was asleep, or the script's state was lost) must be

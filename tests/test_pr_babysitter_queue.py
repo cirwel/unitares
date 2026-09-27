@@ -27,10 +27,6 @@ FAKE_GH = r"""#!/usr/bin/env bash
 d="$FAKE_GH_DIR"
 case "$1 $2" in
   "pr list") cat "$d/prs.json"; exit 0 ;;
-  "pr diff")
-    f="$d/diff_$3"
-    [ -f "$f" ] && { cat "$f"; exit 0; }
-    printf 'diff --git a/f b/f\n@@ -1 +1 @@\n+pr %s\n' "$3"; exit 0 ;;
   "pr view")
     f="$d/state_${5//\//_}_$3"
     [ -f "$f" ] && { cat "$f"; exit 0; }
@@ -41,6 +37,14 @@ if [ "$1" = "api" ]; then
     */pulls/*/commits*)
       n=$(sed -E 's#.*pulls/([0-9]+)/commits.*#\1#' <<<"$*")
       cat "$d/commits_$n.json" 2>/dev/null || echo '[]'
+      exit 0 ;;
+    */compare/*)
+      sha="${2##*...}"
+      echo "$2" >> "$d/compares.log"
+      f="$d/compare_$sha.json"
+      [ -f "$f" ] && { cat "$f"; exit 0; }
+      [ -f "$d/compare_default_missing" ] && exit 1
+      printf '{"files":[{"filename":"f","status":"modified","sha":"b%s","patch":"@@ -1 +1 @@\\n+%s"}]}' "$sha" "$sha"
       exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
@@ -136,7 +140,7 @@ def _run(
     base_idle_min: float = 1,
     states: dict[str, str] | None = None,
     fail: tuple[str, ...] = (),
-    diffs: dict[int, str | None] | None = None,
+    compares: dict[str, dict | None] | None = None,
     expect_rc: int = 0,
     **env: str,
 ) -> tuple[list[str], str]:
@@ -152,12 +156,10 @@ def _run(
     timelines = timelines or {}
     for pr in prs:
         (d / f"timeline_{pr['number']}.json").write_text(json.dumps(timelines.get(pr["number"], _timeline())))
-    for number, text in (diffs or {}).items():
-        target = d / f"diff_{number}"
-        if text is None:  # unreadable: gh prints nothing
-            target.write_text("")
-        else:
-            target.write_text(text)
+    for sha, payload in (compares or {}).items():
+        target = d / f"compare_{sha}.json"
+        # None: GitHub will not return it (unknown SHA, API error).
+        target.write_text("not json" if payload is None else json.dumps(payload))
     state_file = tmp_path / "state" / "approvals"
     for key, value in (states or {}).items():
         repo, number = key.split("#")
@@ -454,51 +456,76 @@ def test_first_sight_pins_the_head_and_arms_that_head(tmp_path: Path) -> None:
     assert pins[:2] == ["1", "aaa"] and len(pins) == 4
 
 
-DIFF_A = "diff --git a/f b/f\nindex 111..222 100644\n@@ -1,3 +1,3 @@\n ctx\n-old\n+new\n"
-# The same change after a clean base update: new blob ids and line numbers.
-DIFF_A_REBASED = "diff --git a/f b/f\nindex 333..444 100644\n@@ -40,3 +40,3 @@\n ctx\n-old\n+new\n"
-DIFF_B = "diff --git a/f b/f\nindex 111..555 100644\n@@ -1,3 +1,4 @@\n ctx\n-old\n+new\n+sneaky\n"
+def _files(*entries: tuple) -> dict:
+    return {"files": [dict(zip(("filename", "status", "sha", "patch"), e)) for e in entries]}
 
 
-def _two_ticks(tmp_path: Path, first_diff: str, second_diff: str | None, second_head: str = "bbb"):
-    # Tick 1: #3 (hand-armed) holds the slot, so #1 is only pinned.
+CHANGE_A = _files(("f", "modified", "blob1", "@@ -1,3 +1,3 @@ def g():\n ctx\n-old\n+new"))
+# The same change after a clean base update: new blob id and line numbers.
+CHANGE_A_REBASED = _files(("f", "modified", "blob9", "@@ -40,3 +40,3 @@ def g():\n ctx\n-old\n+new"))
+CHANGE_B = _files(("f", "modified", "blob2", "@@ -1,3 +1,4 @@ def g():\n ctx\n-old\n+new\n+sneaky"))
+BINARY_A = _files(("logo.png", "modified", "blobA", None))
+BINARY_B = _files(("logo.png", "modified", "blobB", None))
+
+
+def _two_ticks(tmp_path: Path, first: dict, second: dict | None):
+    # Tick 1: #3 (hand-armed) holds the slot, so #1 is only pinned at aaa.
     tl = _timeline(10, 20)
     _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, state="BLOCKED"), _pr(1, head="aaa")],
-         timelines={1: tl}, diffs={1: first_diff})
-    # Tick 2: the slot is free and #1's head has moved.
-    return _run(tmp_path, [_pr(1, head=second_head)], timelines={1: tl}, diffs={1: second_diff})
+         timelines={1: tl}, compares={"aaa": first})
+    # Tick 2: the slot is free and #1's head has moved to bbb.
+    return _run(tmp_path, [_pr(1, head="bbb")], timelines={1: tl}, compares={"aaa": first, "bbb": second})
 
 
 def test_a_clean_base_update_keeps_the_approval(tmp_path: Path) -> None:
-    calls, _ = _two_ticks(tmp_path, DIFF_A, DIFF_A_REBASED)
+    calls, _ = _two_ticks(tmp_path, CHANGE_A, CHANGE_A_REBASED)
     assert calls == [_arm(1, "bbb")]
 
 
 def test_a_changed_diff_makes_the_approval_stale(tmp_path: Path) -> None:
     # Whatever the new commit claims to be (committer "GitHub", "Merge branch"
     # subject), the change it carries is not the one approved.
-    calls, out = _two_ticks(tmp_path, DIFF_A, DIFF_B)
+    calls, out = _two_ticks(tmp_path, CHANGE_A, CHANGE_B)
     assert calls == []
     assert "#1 changed since its approval at aaa" in out
 
 
+def test_a_changed_binary_file_makes_the_approval_stale(tmp_path: Path) -> None:
+    # A binary diff has no patch; its content identity is the blob SHA.
+    calls, _ = _two_ticks(tmp_path, BINARY_A, BINARY_B)
+    assert calls == []
+
+
+def test_the_fingerprint_is_read_at_the_captured_head(tmp_path: Path) -> None:
+    # Never the PR's current ref, which can move between the list and the read.
+    _run(tmp_path, [_pr(1, head="aaa")])
+    assert (tmp_path / "gh" / "compares.log").read_text().split() == ["repos/o/r/compare/master...aaa"]
+
+
+def test_a_compare_that_may_be_truncated_approves_nothing(tmp_path: Path) -> None:
+    many = _files(*[(f"f{i}", "modified", f"b{i}", "+x") for i in range(300)])
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": many})
+    assert calls == []
+    assert "cannot record what was approved" in out
+
+
 def test_an_unreadable_diff_after_the_head_moved_approves_nothing(tmp_path: Path) -> None:
-    calls, out = _two_ticks(tmp_path, DIFF_A, None)
+    calls, out = _two_ticks(tmp_path, CHANGE_A, None)
     assert calls == []
     assert "diff unreadable" in out
 
 
 def test_an_unreadable_diff_at_first_sight_records_nothing(tmp_path: Path) -> None:
-    calls, out = _run(tmp_path, [_pr(1)], diffs={1: None})
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": None})
     assert calls == []
     assert "cannot record what was approved" in out
     assert not (tmp_path / "state" / "approvals").exists()
 
 
 def test_a_reapplied_label_pins_the_new_head(tmp_path: Path) -> None:
-    _two_ticks(tmp_path, DIFF_A, DIFF_B)  # stale after the change
+    _two_ticks(tmp_path, CHANGE_A, CHANGE_B)  # stale after the change
     # The maintainer re-applies the label: a newer label event pins afresh.
-    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: _timeline(2, 20)}, diffs={1: DIFF_B})
+    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: _timeline(2, 20)}, compares={"bbb": CHANGE_B})
     assert calls == [_arm(1, "bbb")]
 
 

@@ -153,12 +153,15 @@ approval_times() {
 }
 
 # What an approval covers. First sight of a label records the PR's head and a
-# fingerprint of its diff against the base (hunk line numbers and blob ids
-# dropped, so a clean base update leaves it unchanged). A later head stays
-# covered only while the fingerprint matches: commit metadata (committer name,
-# message, even a web-flow signature) is author-controlled or API-mintable, so
-# it cannot prove a commit was only a base update, but the content can. A
-# re-applied label (a newer label event) pins afresh.
+# fingerprint of what it changes against the base, read from GitHub's compare
+# of base...<that exact head SHA> (never the PR's current ref, which can move
+# mid-tick). Per file: name, status, previous name, and the patch with its
+# hunk headers dropped, so a clean base update leaves the fingerprint
+# unchanged; a file with no patch (binary, or too large) contributes its blob
+# SHA instead. A later head stays covered only while the fingerprint matches:
+# commit metadata (committer name, message, even a web-flow signature) is
+# author-controlled or API-mintable, so it cannot prove a commit was only a
+# base update, but the content can. A re-applied label pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
 pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
@@ -170,12 +173,15 @@ pin() {  # <pr> <sha> <labelled-at> <fingerprint>
   [ "$DRY_RUN" = "1" ] && return 0
   mkdir -p "$(dirname "$STATE_FILE")" && echo "$1 $2 $3 $4" >>"$STATE_FILE"
 }
-# A diff GitHub will not return (too large, API error) fails, and so does the
-# approval that depends on it.
+# <head-sha>. GitHub's compare lists at most 300 files; a list that long may
+# be cut short, so it fails, and so does the approval that depends on it.
 fingerprint() {
-  local diff
-  diff=$(gh pr diff "$1" -R "$REPO" 2>/dev/null) && [ -n "$diff" ] || return 1
-  grep -vE '^(index |@@)' <<<"$diff" | shasum -a 256 | cut -c1-64
+  gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null | jq -er '
+    if (.files | length) >= 300 then error("too many files") else . end
+    | [.files[] | {f: .filename, s: .status, prev: .previous_filename,
+                   p: (if .patch then (.patch | split("\n") | map(select(startswith("@@") | not)) | join("\n"))
+                       else .sha end)}]
+    | tojson' 2>/dev/null | shasum -a 256 | cut -c1-64
 }
 
 queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
@@ -207,12 +213,12 @@ while read -r pr; do
       log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
       continue
     fi
-    fp=$(fingerprint "$n") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
+    fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
     pin "$n" "$head" "$labelled_at" "$fp" || { log "#$n could not record its approval; skipped"; continue; }
   else
     read -r pinned_sha pinned_fp <<<"$pinned_line"
     if [ "$pinned_sha" != "$head" ]; then
-      fp=$(fingerprint "$n") || { log "#$n diff unreadable; skipped"; continue; }
+      fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
         log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
         continue
