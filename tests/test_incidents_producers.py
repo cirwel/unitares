@@ -67,3 +67,13 @@ async def test_a_single_type_query_describes_only_that_type(audit):
     body = json.loads((await http_incidents(_request(b"type=anomaly_detected"))).body)
 
     assert set(body["producers"]) == {"anomaly_detected"}
+
+
+@pytest.mark.asyncio
+async def test_a_zero_limit_does_not_blank_newest_at(audit):
+    """Review round 3 on #2535."""
+    from src.http_routes.overview import http_incidents
+
+    body = json.loads((await http_incidents(_request(b"limit=0"))).body)
+
+    assert body["producers"]["stuck_detected"]["newest_at"] == "2026-09-24T13:04:15+00:00"

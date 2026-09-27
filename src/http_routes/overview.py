@@ -552,7 +552,9 @@ async def http_incidents(request):
         from src.audit_db import query_audit_events_async
 
         event_type = request.query_params.get("type")  # "anomaly_detected" or "stuck_detected"
-        limit = min(int(request.query_params.get("limit", 200)), 500)
+        # At least 1: newest_at is read off the first row, so an empty page
+        # would report a type with rows as having none.
+        limit = max(1, min(int(request.query_params.get("limit", 200)), 500))
 
         # Query both types if none specified
         types_to_query = [event_type] if event_type else ["anomaly_detected", "stuck_detected"]
