@@ -108,21 +108,24 @@ re-alert backoff so a host that stays broken does not re-post daily.
 Recovery follows `doctor_findings.py`'s rule: a record is closed, and its
 backoff dropped, once a run shows the failure is gone, so a later failure of
 the same kind alerts at once. What a run shows depends on how far the call got.
-A call passes through four stages, and each record belongs to the stage where
+A call passes through five stages, and each record belongs to the stage where
 its failure happened:
 
 | Stage | Failures recorded there | Observations that reach it |
 |---|---|---|
 | 1. gov dispatch | preflight, spawn rejected, shared `gov-dispatch` | any call gov attempted |
-| 2. CLI ran | `auth` (the CLI reports itself logged out), unclassified, timeout | a call whose CLI ran to completion (`dispatch_phase == "terminal"`), or an `auth` cooldown |
-| 3. provider answered | `quota` | a quota failure, or a `quota` cooldown |
-| 4. success | none | a successful probe (passive evidence applies only to a host with no open record, so there is nothing for it to close) |
+| 2. CLI started | timeout (the CLI never finished) | any call that got past dispatch |
+| 3. CLI finished | `auth` (the CLI reports itself logged out), unclassified | a call whose CLI ran to completion (`dispatch_phase == "terminal"`), or an `auth` cooldown |
+| 4. provider answered | `quota` | a quota failure, or a `quota` cooldown |
+| 5. success | none | a successful probe (passive evidence applies only to a host with no open record, so there is nothing for it to close) |
 
 An observation that reached stage N closes every record from a stage before
 N, because those stages evidently worked. It reproduces a record of its own
 class, which stays open and is re-posted under the backoff. It leaves the
-host's other records at stage N or later untouched. Those records are neither
-proven fixed nor re-observed, so the host is probed again on the next run
+host's other records at stage N or later untouched. For example, an old
+unclassified record stays open beside a new `auth` one, since an `auth`
+failure says nothing about whether the earlier fault is gone. Those records
+are neither proven fixed nor re-observed, so the host is probed again on the next run
 that it is not cooling. A few consequences:
 
 - A quota cooldown closes an old `auth` record, since the provider answered,
@@ -136,7 +139,9 @@ that it is not cooling. A few consequences:
   hosts show that failure, and it closes when fewer do. A single host still
   failing then gets its own record, since the fault no longer looks shared.
 - A host the operator switches off has all its records closed, with reason
-  `not_enabled`.
+  `not_enabled`. The one exception is a hung call whose stop failed. That
+  record stays open at high until a later cleanup pass stops the call,
+  because the leaked process outlives the host's removal from rotation.
 
 A changed failure is covered the same way. A host that failed preflight
 yesterday and fails `auth` today closes the preflight record and opens an
