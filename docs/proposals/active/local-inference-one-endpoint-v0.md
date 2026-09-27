@@ -111,6 +111,14 @@ in the table, the dispatcher forwards both the new and the old name (2.6), so
 an older child still reads its model and a newer one reads the new name. A
 hard rename would break any pairing that straddles it.
 
+The server's own release cannot prove that the orchestrator service has caught
+up, so the spawn boundary does not follow the table's removal date. The
+dispatcher keeps forwarding an old name until the orchestrator reports a
+release at or past that name's removal release (its health response carries
+its release; step 1 adds that if it is missing), and forwards both whenever it
+cannot read one. Dropping an old name at the spawn boundary is therefore
+decided by the child's release, not the server's.
+
 An existing install keeps working with no edits, except that one which relies
 on the implicit model must name it before step 4 (section 4).
 
@@ -160,6 +168,12 @@ is normally a tailnet peer the operator runs.
 `UNITARES_MODEL_PRIVACY=local|external` overrides the classification for an
 operator whose own server sits on a public address. A `privacy='local'` request
 against an `external` endpoint is refused with a named error. It is never sent.
+
+An `external` endpoint that is given a key must use `https`. An `http` external
+URL with a key is refused before any request, with a named error, unless the
+operator sets `UNITARES_MODEL_ALLOW_INSECURE_HTTP=1`; otherwise the key would
+cross the network in plaintext on every call. A `local` endpoint may use `http`
+(Ollama on loopback does).
 
 ### 2.4 The cloud fallback is a second endpoint, not a provider
 
@@ -232,9 +246,12 @@ release note says what to set first. One rule orders them: no step may let a req
    - the endpoint classification and the `privacy='local'` refusal from 2.3,
      applied to every path that reads the setting, because this is the first
      step in which the base URL can name a machine the operator does not run;
-   - the two `docker-compose.yml` mappings for `governance-mcp`, beside the
+   - the `docker-compose.yml` mappings for `governance-mcp`, beside the
      existing `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and
-     `UNITARES_LLM_MODEL` lines, or `.env` values never reach the server;
+     `UNITARES_LLM_MODEL` lines: the two endpoint settings and the classifier's
+     `UNITARES_MODEL_LOCAL_HOSTS` and `UNITARES_MODEL_PRIVACY`, or `.env`
+     values never reach the server (a model reached by a Compose service name
+     such as `vllm` is `local` only when that name is listed);
    - `unitares model`: `scripts/install/choose_model.py` lists models from
      `{base}/models` instead of Ollama's `/api/tags`, writes the new names, and
      keeps its Ollama-only steps (pull hints, the `host.docker.internal`
@@ -246,14 +263,16 @@ release note says what to set first. One rule orders them: no step may let a req
      route's 60 s timeout before falling back;
    - the macOS LaunchAgent template
      (`scripts/ops/com.unitares.governance-mcp.plist`, which today carries
-     only `UNITARES_LLM_MODEL`) and its install instructions, with the two new
-     settings;
+     only `UNITARES_LLM_MODEL`) and its install instructions, with the two
+     endpoint settings and the two classifier settings;
    - the doctor check, and the manual and `.env.example` text.
 
    No client changes and no key setting yet: every client still sends a fixed
    key, so documenting one here would describe a setting nothing reads.
 2. **Client and key.** Add `local_model_client.py` and
-   `UNITARES_MODEL_API_KEY_ENV` together. Every request to the endpoint sends
+   `UNITARES_MODEL_API_KEY_ENV` together, with the `https` rule for credentialed
+   external endpoints and its `UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in (2.3).
+   Every request to the endpoint sends
    the key, including the model-listing requests of `unitares model`, the
    doctor check and (from step 3) the registry probe, or an authenticated
    endpoint answers inference but reads as down during setup and diagnosis.
@@ -269,8 +288,14 @@ release note says what to set first. One rule orders them: no step may let a req
    detection. Only now does the manual describe authenticated
    endpoints.
 3. **Discovery and fallback.** The `/models` availability probe for the
-   registry, sending the key as step 2 does, and the fallback endpoint with the Hugging Face default and its
-   Compose mappings.
+   registry, sending the key as step 2 does; the registry record for
+   `ollama:local` reporting the configured endpoint's kind, and in the same
+   change `call_model`'s host dispatch (`model_inference.py`, which today
+   accepts only the `ollama` and `hf` provider kinds and forces
+   `privacy='local'` on the Ollama branch) routing that host id to the primary
+   endpoint whatever its kind, with privacy taken from the classification; and
+   the fallback endpoint with the Hugging Face default and its Compose and
+   LaunchAgent mappings.
 4. **No implicit model.** Remove the `gemma4:latest` fallback (decision 7.2),
    one release after step 1, whose doctor check warns when no model is named.
    After it, an install that names no model has consult and the local reviewer
