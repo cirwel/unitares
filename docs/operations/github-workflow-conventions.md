@@ -562,22 +562,29 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Use `gh pr merge --auto <n>` instead of watching.** The repo now has
-"always suggest updating pull request branches" enabled, so with auto-merge set
-GitHub updates the branch itself when the base moves and merges as soon as
+**Use `gh pr merge --auto <n>` instead of watching, or queue it.** The repo has
+"always suggest updating pull request branches" enabled, and with auto-merge
+set GitHub updates the branch itself when the base moves and merges as soon as
 checks pass. This does **not** weaken the human merge gate: `--auto` is a
 deliberate per-PR act, and it says "this one is approved, land it when green" —
 you are giving up the waiting, not the decision. Draft PRs cannot take
-`--auto`, so mark ready first; that mark is the gate.
+`--auto`, so mark ready first; that mark is the gate. To approve several PRs at
+once, label them `approved-to-merge` instead (the queue, below); arming one by
+hand while the queue runs makes it the queue's in-flight PR until it lands.
 
-**Confirmed working end-to-end 2026-08-14.** Two armed PRs were fixed and left
-alone: #1653 merged at 09:45; #1658 went `BEHIND` the moment it did, and GitHub
-moved its head on its own about two minutes later, re-ran CI against the fresh
-base, and merged it at 10:08. No script and no human touched the branch in
-between. **So do not write or run an update-branch babysitter for this repo** —
-polling and pushing only races GitHub's own updater and burns a CI cycle per
-redundant update. `unitares-governance-plugin` is the exception that still needs
-manual `gh pr update-branch`, because auto-merge is disallowed there.
+**What GitHub's updater actually does.** On 2026-09-27 it updated armed #2524
+43 s after #2518 merged and 101 s after #2507 merged, with no script involved
+(the babysitter logs every update it makes, and has no line at either time).
+It did not update every armed PR: after the 08:41 merge #2507, also armed, was
+still `BEHIND` four minutes later and was updated by the babysitter. An earlier
+version of this section cited #1658 (2026-08-14) as proof of the native
+updater; the babysitter log shows `09:47:22Z update-branch #1658`, two seconds
+before that update, so it was the script. **Do not write or run an
+update-branch babysitter that updates every behind PR** — racing GitHub's
+updater burns a CI cycle per redundant update, and updating every armed PR is
+the N² cascade below. The one sanctioned exception is the queue script's
+single fallback update, described below. `unitares-governance-plugin` still
+needs manual `gh pr update-branch`, because auto-merge is disallowed there.
 
 A workflow that predates this, `.github/workflows/pr-queue-autoupdate.yml`, was
 removed in the same pass. It was a poor-man's queue added before the repo
@@ -585,6 +592,69 @@ setting existed, it required a PAT (`PR_AUTOUPDATE_TOKEN`) that was never
 created, and so every run since — on each push to master plus hourly — exited
 early having done nothing. Restoring it would put a second updater in a race
 with GitHub's native one.
+
+**Arming many PRs at once is its own cascade.** Every merge makes every armed
+PR stale; update them all and each merge re-runs CI on the other N−1, of which
+one wins: roughly N²/2 CI runs to land N PRs, all competing for the same
+Actions concurrency. The operator's queue avoids that. Label a ready PR
+`approved-to-merge`, and `scripts/ops/pr-babysitter.sh` (launchd, every five
+minutes) keeps exactly one PR armed, taking labelled PRs in the order the
+label went on. What it buys is the maintainer's attention and the wasted CI,
+not speed: one merge per CI cycle is still the ceiling under `strict`, and a
+hand-merging maintainer who is watching reaches it too. It runs only while
+the operator's machine is awake.
+
+- **The label is the merge decision made ahead of time**, so like arming it
+  is the maintainer's, never an agent's. It approves the PR as it stood: the
+  script pins the head and a fingerprint of what it changes when it first
+  sees the label (GitHub's compare of `master...<that SHA>`: per file the
+  added and removed lines, or the blob SHA where there is no patch, as for a
+  binary file). A later head stays covered only while the fingerprint is
+  unchanged, which a clean base update preserves; commit metadata is
+  author-controlled and proves nothing. It arms with `--match-head-commit` on
+  that head. A push after the label makes the approval stale, and the PR is
+  skipped until the label is re-applied. A label is pinned only if the
+  script sees it within 15 minutes of going on; an older label with no pin
+  (the machine was asleep, or the script's state was lost) must be
+  re-applied. The residual gap is a commit made before the label but pushed
+  before the script first sees it (normally the next five-minute tick, never
+  beyond those 15 minutes), which gets pinned as approved.
+- **What the pin is for.** It catches honest mistakes: a follow-up pushed
+  after approval, whether before arming or after (an armed, labelled PR whose
+  content no longer matches its pin is disarmed at the next tick), or a
+  branch changing under the label. It is not a boundary against a hostile
+  agent: every actor authenticates as the same account, so such an agent
+  could apply the label or run `gh pr merge --auto` itself. Forged history
+  (an edit moved to a spot with identical context, backdated or
+  GitHub-imitating commits) is out of scope for the same reason; the guard
+  there is who holds the credentials.
+- **It honours declared order.** A "merge after #N" (or
+  `owner/repo#N`) in the PR body holds the PR until N is merged or closed; an
+  unreadable dependency holds it too.
+- **It only queues PRs against `master`.** A stacked PR runs no CI (see
+  section 3), so arming it would merge it into its parent unchecked.
+- **Failed checks.** A queued PR whose checks failed on an up-to-date head
+  gets its failed Actions jobs re-run once, marked by the `merge-retried`
+  label (applied before the re-run, removed again if nothing started); after
+  that it is skipped until someone removes `merge-retried`. A failure on a
+  stale head is simply armed, since GitHub re-runs everything on update. A
+  check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
+  the silent-disarm gap for labelled PRs, and it means a flaky check shows up
+  as `merge-retried` on the PR and a line in the script's log.
+- **The slot.** Any armed PR holds it, including one armed by hand. The
+  script disarms only arms it made (it records each one): such a PR that
+  turns `CONFLICTING`, whose checks failed on its current head, or that has a
+  check parked for approval is disarmed so it stops holding the queue, and
+  its label stays. Removing the label withdraws the approval, and a PR the
+  script armed is disarmed at the next tick once the label is gone. A PR
+  armed by hand, labelled or not, is never disarmed by the script, so it
+  keeps the slot even while it conflicts (arming another would leave two
+  armed once the conflict is resolved); a hold longer than 90 minutes is
+  logged, and clearing it is the maintainer's call.
+- **The single fallback update.** If the armed PR is `BEHIND` and neither the
+  base nor its arming has moved for 10 minutes, GitHub's updater has not
+  acted and the script updates that one branch. The grace period is what
+  keeps this from racing the native updater.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
 `--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
@@ -683,6 +753,7 @@ this entirely).
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
 | A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
+| Maintainer approving several READY PRs at once | label them `approved-to-merge`; the queue arms one at a time (section 4) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |

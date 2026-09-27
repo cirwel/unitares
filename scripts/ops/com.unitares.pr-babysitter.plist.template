@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-    com.unitares.pr-babysitter - un-strand armed PRs every 5 minutes.
+    com.unitares.pr-babysitter - label-driven merge queue, every 5 minutes.
 
     See scripts/ops/pr-babysitter.sh for what it does and, more importantly,
     what it deliberately does not do (no readying drafts, no conflict
-    resolution, no arming). It only runs `gh pr update-branch` on PRs that a
-    session already armed and CI already likes.
+    resolution, no arming anything without the maintainer's
+    `approved-to-merge` label).
+    It keeps one queued PR armed at a time; GitHub updates and merges it.
 
     PATH must include the Homebrew bin dir: `gh` is /opt/homebrew/bin/gh and
     launchd's minimal PATH omits it. gh auth comes from ~/.config/gh under
