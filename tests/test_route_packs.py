@@ -78,3 +78,17 @@ def test_production_registrar_honours_the_env(monkeypatch, enabled):
     mounted = _paths(app) & set().union(*PACK_PATHS.values())
     assert mounted == (set().union(*PACK_PATHS.values()) if enabled else set())
     assert "/v1/residents" in _paths(app)  # core stays regardless
+
+
+def test_compose_forwards_the_opt_in_settings():
+    """The Compose service lists its environment explicitly, so a setting it
+    does not forward never reaches the container: route packs (and dashboard
+    extensions) would 404 for Compose users who set them in .env."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    compose = (root / "docker-compose.yml").read_text()
+    example = (root / ".env.example").read_text()
+    for var in ("UNITARES_ROUTE_PACKS", "UNITARES_DASHBOARD_EXT_DIR"):
+        assert f"{var}: ${{{var}:-}}" in compose, var
+        assert f"# {var}=" in example, var
