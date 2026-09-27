@@ -267,7 +267,7 @@ SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 # last deletion removes the entry.
 SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
     "dashboard/redesign/snapshot.js": (
-        ("Sentinel",) * 8 + ("Watcher",) * 2 + ("Vigil",) * 2 + ("Lumen",) * 2
+        ("Sentinel",) * 6 + ("Watcher",) * 2 + ("Vigil",) * 2 + ("Lumen",) * 2
         + ("Chronicler",) * 1,
         "a real capture of one deployment's fleet, bundled as the offline "
         "fallback; replace with synthetic data once #2492 stops served pages "
@@ -281,22 +281,12 @@ SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
         ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
         "design notes describing one deployment's own fleet",
     ),
-    "dashboard/redesign/data.js": (
-        ("Watcher",) * 2 + ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Chronicler",) * 1
-        + ("Lumen",) * 1 + ("watcher",) * 1 + ("sentinel",) * 1 + ("vigil",) * 1,
-        "gates the Watcher/Sentinel/Vigil summary panels on those labels "
-        "(inRoster); the panel set should come from roster capabilities",
-    ),
-    "dashboard/redesign/sections/residents.js": (
-        ("Watcher", "Sentinel", "Vigil", "Chronicler", "Lumen"),
-        "resident-specific panels keyed by label",
-    ),
     "skills/discord-bridge/SKILL.md": (
         ("Lumen",) * 8 + ("lumen",) * 3 + ("Sentinel",) * 1 + ("sentinel",) * 2 + ("LUMEN",) * 1,
         "one operator's Discord bridge (separate repo), served to every agent",
     ),
     "skills/unitares-dashboard/SKILL.md": (
-        ("sentinel",) * 2 + ("Sentinel",) * 1,
+        ("sentinel",) * 1 + ("Sentinel",) * 1,
         "describes the Sentinel adjudication panel and its route by resident name",
     ),
     "src/tool_descriptions.json": (

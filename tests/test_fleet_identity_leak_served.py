@@ -158,7 +158,7 @@ def test_served_files_cover_every_served_surface():
 
 
 def test_known_coupling_defers_up_to_its_known_occurrences():
-    rel = "dashboard/redesign/data.js"
+    rel = "dashboard/redesign/snapshot.js"
     approved = guard.SERVED_KNOWN_COUPLINGS[rel][0]
     at_budget = [
         f'  {rel}:{k}: hardcoded fleet identity "{name}" in a string literal'
@@ -177,7 +177,7 @@ def test_known_coupling_name_substitution_is_caught():
     # The bug this pins: removing one known reference and adding a DIFFERENT
     # name in the same file must not pass just because the total count is
     # unchanged — the old ceiling-only check let this through.
-    rel = "dashboard/redesign/data.js"
+    rel = "dashboard/redesign/snapshot.js"
     approved = list(guard.SERVED_KNOWN_COUPLINGS[rel][0])
     swapped = approved[:-1] + ["Steward"]  # a name never recorded for this file
     hits = [
