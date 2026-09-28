@@ -504,7 +504,7 @@ with the agent's current EISV snapshot. This enables correlation analysis:
 do EISV verdicts and phi values predict real outcomes?
 
 VALID OUTCOME TYPES:
-- drawing_completed: Lumen finished a drawing (score = satisfaction)
+- drawing_completed: an agent finished a drawing (score = satisfaction)
 - drawing_abandoned: Drawing was abandoned before completion
 - test_passed: A test or validation passed
 - test_failed: A test or validation failed
@@ -1208,7 +1208,7 @@ ACTIONS:
 
 ~~~text
 EXAMPLES:
-  observe(action="agent", target_agent_id="Lumen")
+  observe(action="agent", target_agent_id="my-agent")
   observe(action="audit_events", event_type="continuity_token_deprecated_accept", since="14d")
   observe(action="outcome_evidence", diagnostic="claim_only_task_completed", since="7d")
   observe(action="bridge", since="24h")
