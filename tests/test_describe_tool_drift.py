@@ -497,11 +497,6 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
         "login",
         "start",
         "state",
-        "quick_start",
-        "my_status",
-        "check_status",
-        "bind_identity",
-        "recall_identity",
     }
 
     referenced = set()
