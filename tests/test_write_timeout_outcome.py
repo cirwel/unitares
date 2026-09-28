@@ -430,6 +430,84 @@ def test_the_lookup_arguments_survive_the_knowledge_schema():
             assert key in KnowledgeParams.ACTION_FIELDS["search"], key
 
 
+SUPERSEDED_ID = "2026-09-01T00:00:00.000000+00:00"
+
+
+@pytest.mark.asyncio
+async def test_a_store_that_supersedes_names_the_second_write_its_list_does_not_show():
+    """Codex review on #2543: a store with supersedes commits its row, then
+    marks the old row superseded in a separate write. Timed out between the
+    two, the row is listed and the recovery said not to store again, leaving
+    the old row active. The recovery names that second write and how to
+    finish it without storing again."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    body = kg_handlers.handle_store_knowledge_graph.__wrapped__
+
+    async def _store(arguments):
+        return await body(arguments)
+
+    handler = mcp_tool("store_knowledge_graph", timeout=0.2, register=False)(_store)
+    old = replace(_discovery(), id=SUPERSEDED_ID, agent_id="agent-1")
+    saved: list[str] = []
+    marked: list[str] = []
+
+    class _SupersedeGraph:
+        async def get_discovery(self, discovery_id):
+            return old if discovery_id == SUPERSEDED_ID else None
+
+        async def find_similar(self, discovery, limit=3):
+            return []
+
+        async def add_discovery(self, discovery):
+            saved.append(discovery.id)
+
+        async def update_discovery(self, discovery_id, updates):
+            await asyncio.sleep(5)  # times out before the old row is marked
+            marked.append(discovery_id)
+
+    arguments = {
+        "action": "store", "agent_id": "agent-1", "summary": "replacement",
+        "discovery_type": "note", "supersedes": SUPERSEDED_ID,
+    }
+    with patch(
+        "src.mcp_handlers.utils.check_agent_can_operate", return_value=None
+    ), patch(
+        "src.mcp_handlers.knowledge.handlers._broadcast_knowledge_write",
+        new_callable=AsyncMock,
+    ):
+        payload = _payload(await _run_patched(handler, _SupersedeGraph(), arguments))
+
+    assert len(saved) == 1 and marked == [], "premise: row saved, old row not marked"
+    assert payload["outcome"] == "unknown"
+    steps = payload["recovery"]["workflow"]
+    assert len(steps) == 5
+    assert steps[4].startswith(f"5. This store also marks '{SUPERSEDED_ID}' superseded")
+    assert (
+        "knowledge(action='supersede', discovery_id=<your row's id>, "
+        f"supersedes_id='{SUPERSEDED_ID}')"
+    ) in steps[4]
+    assert steps[4].endswith("Do not store the row again for it")
+
+
+@pytest.mark.parametrize(
+    ("action", "arguments"),
+    [
+        ("store", {"summary": "s"}),
+        ("store", {"discoveries": [{"summary": "s", "discovery_type": "note"}],
+                   "supersedes": SUPERSEDED_ID}),
+        # The note handler takes no supersedes.
+        ("note", {"summary": "s", "supersedes": SUPERSEDED_ID}),
+    ],
+    ids=["no-supersedes", "batch", "note"],
+)
+def test_only_a_single_store_that_supersedes_gets_the_supersede_step(action, arguments):
+    recovery = _recovery_for("knowledge", action, arguments)
+
+    assert len(recovery["workflow"]) == 4
+    assert "supersede" not in json.dumps(recovery)
+
+
 def _batch(size: int) -> list[dict]:
     return [
         {"discovery_type": "note", "summary": f"item {index}"} for index in range(size)
@@ -634,8 +712,22 @@ def test_update_recovery_settles_on_this_calls_notes_block_not_on_updated_at():
     assert steps[2].startswith(
         "3. If you sent resolution_notes and no such block is in details"
     )
-    # The set fields are not left behind when the notes are found.
-    assert "send the update again without resolution_notes" in steps[3]
+    assert steps[3].startswith("4. If you sent no resolution_notes")
+
+
+def test_a_found_notes_block_sends_nothing_of_the_update_again():
+    """Codex review on #2543: after the notes block was found, a step had the
+    caller resend the update without resolution_notes for any field the row
+    did not show. The update writes every field in one statement, so the
+    block already shows it all landed, and a resend carrying the call's
+    details would overwrite the very block it found."""
+    recovery = _recovery_for("knowledge", "update")
+    found = recovery["workflow"][1]
+
+    assert "the whole update landed" in found and "one statement" in found
+    assert found.endswith("Do not send any of it again")
+    assert "the whole update landed" in recovery["action"]
+    assert "without resolution_notes" not in json.dumps(recovery)
 
 
 @pytest.mark.asyncio

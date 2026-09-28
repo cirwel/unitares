@@ -565,16 +565,33 @@ def _knowledge_store_recovery(
             f"is below {limit}, nothing was saved: store it again"
         )
 
+    workflow = [
+        f"1. Call {check}; search needs no bound identity",
+        found_step,
+        resend_step,
+        paging_step,
+    ]
+    supersedes = arguments.get("supersedes") if not batch else None
+    if call.tool == "knowledge" and call.action == "store" and supersedes:
+        # The store marks the old row superseded in a second write after its
+        # own row commits, which this list does not show. Marking it again
+        # sets a status and MERGEs an edge, so it adds nothing twice.
+        old = _call_literal(str(supersedes).strip(), "<supersedes>")
+        workflow.append(
+            f"5. This store also marks '{old}' superseded, a separate write "
+            "after the row is saved that this list does not show. If you "
+            "found your row, read knowledge(action='details', "
+            f"discovery_id='{old}'); if its status is not superseded, mark it "
+            "with knowledge(action='supersede', discovery_id=<your row's id>, "
+            f"supersedes_id='{old}'), which sets a status and an edge and so "
+            "adds nothing twice. Do not store the row again for it"
+        )
+
     return {
         "action": action,
         "check_before_retry": check,
         "check_arguments": lookup,
-        "workflow": [
-            f"1. Call {check}; search needs no bound identity",
-            found_step,
-            resend_step,
-            paging_step,
-        ],
+        "workflow": workflow,
         "related_tools": ["knowledge", "health_check"],
     }
 
@@ -594,7 +611,11 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
     details, not only at its end, since another writer can append after it.
     The read asks for MAX_UPDATED_DETAILS_LEN characters, the most an update
     stores, and the workflow pages on while has_more says a row is longer.
-    The set fields can always be sent again after settled_by.
+    The update writes all its fields in one statement, so a found block shows
+    the whole update landed and nothing of it is sent again: a partial resend
+    carrying the call's details would overwrite the block it just found. An
+    update without resolution_notes only sets fields, so it can be sent again
+    after settled_by.
 
     updated_at settles nothing: any writer's update moves it, and an update
     built before this call began can commit after it and set it back.
@@ -622,10 +643,10 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             f"with {check} and look anywhere in details, not only at its end, "
             f"for the notes block this call would have written: {block}. Your "
             "text alone proves nothing, since an earlier block can hold the "
-            "same words. If that block is there, your notes are stored. Only "
-            "its absence from the whole of details, read after settled_by, "
-            "shows they are not. updated_at settles nothing: any writer's "
-            "update moves it."
+            "same words. If that block is there, the whole update landed: it "
+            "writes all its fields in one statement. Only the block's absence "
+            "from the whole of details, read after settled_by, shows it did "
+            "not. updated_at settles nothing: any writer's update moves it."
         ),
         "check_before_retry": check,
         "check_arguments": lookup,
@@ -633,16 +654,16 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             f"1. After settled_by, call {check}. If pagination.has_more is "
             "true, read on from pagination.next_offset until it is false, so "
             "you have all of details",
-            f"2. Look anywhere in details for {block}. If it is there, your "
-            "notes are stored. Do not send them again",
+            f"2. If you sent resolution_notes, look anywhere in details for "
+            f"{block}. If it is there, the whole update landed: it writes all "
+            "its fields in one statement. Do not send any of it again",
             "3. If you sent resolution_notes and no such block is in details "
-            "on the read after settled_by, they are not stored: send the "
-            "update again with them",
-            "4. Every other field you sent is set, not added to, so sending it "
-            "again after settled_by stores no second copy, though it replaces "
-            "any change another writer made since. If step 2 found your notes "
-            "and the row does not show a field you set, send the update again "
-            "without resolution_notes",
+            "on the read after settled_by, your notes are not stored: send the "
+            "update again",
+            "4. If you sent no resolution_notes, every field you sent is set, "
+            "not added to, so sending the update again after settled_by "
+            "stores no second copy, though it replaces any change another "
+            "writer made since",
         ],
         "related_tools": ["knowledge", "health_check"],
     }
