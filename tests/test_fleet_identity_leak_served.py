@@ -497,44 +497,32 @@ def test_the_rule_reads_every_module_that_defines_served_schema_text():
 
 
 def test_built_schemas_carry_no_resident_name():
-    # The static rule reads the text where it is written. This reads it as
-    # built, from the schemas Pydantic generates and the alias overrides, so a
-    # text the static rule cannot follow (an imported constant, a computed
-    # string) is still caught here.
+    # The static rule reads the text where it is written, and only the forms
+    # it knows (keywords, defaults, docstrings). This reads the schemas as
+    # built, from Pydantic and the alias overrides, and reads ALL of them:
+    # every string, keys included, since property names, enum values, defaults
+    # of any construction and examples are all served. It is the complete
+    # check; the static rule is the early warning that runs without the
+    # project's dependencies.
     from src.alias_schema import ALIAS_SCHEMA_PROPERTY_OVERRIDES
     from src.tool_schemas import get_pydantic_schemas
 
-    texts: list[tuple[str, str]] = []
-
     def every_string(node):
-        # Structured examples ({"agent": ...} inside an examples list) are
-        # served too, so a served value is read to any depth.
         if isinstance(node, str):
             yield node
         elif isinstance(node, dict):
             for key, value in node.items():
                 yield from every_string(key)
                 yield from every_string(value)
-        elif isinstance(node, list):
+        elif isinstance(node, (list, tuple)):
             for value in node:
                 yield from every_string(value)
 
-    def walk(node, where: str) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if key in guard.SERVED_SCHEMA_KEYS:
-                    # Whatever its shape (a string, a list, or a mapping such
-                    # as examples={...}), every string in it is served.
-                    texts.extend((where, v) for v in every_string(value))
-                else:
-                    walk(value, where)
-        elif isinstance(node, list):
-            for value in node:
-                walk(value, where)
-
-    for tool, model in sorted(get_pydantic_schemas().items()):
-        walk(model.model_json_schema(), tool)
-    walk(ALIAS_SCHEMA_PROPERTY_OVERRIDES, "alias overrides")
-    assert len(texts) > 400  # the walk read the schemas, not nothing
+    texts = [
+        (tool, text)
+        for tool, model in sorted(get_pydantic_schemas().items())
+        for text in every_string(model.model_json_schema())
+    ] + [("alias overrides", text) for text in every_string(ALIAS_SCHEMA_PROPERTY_OVERRIDES)]
+    assert len(texts) > 5000  # the walk read the schemas, not nothing
     leaks = [(where, text) for where, text in texts if guard._NAME_WORD.search(text)]
     assert leaks == []

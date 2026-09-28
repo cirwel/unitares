@@ -206,8 +206,11 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
 # are not installed (the Repo Scope Guard workflow). It reads the text where it
 # is written. A bare name is followed to its module-level assignment, so
 # `description=_DESC` is read as the text `_DESC` holds; text imported from
-# another module is not followed. tests/test_fleet_identity_leak_served.py
-# cross-checks the rule against the schemas Pydantic actually builds.
+# another module is not followed. The rule covers the common authored forms
+# and is an early warning, not the complete check:
+# tests/test_fleet_identity_leak_served.py reads every string of the schemas
+# Pydantic actually builds (enum values, call-built defaults and imported text
+# included), so a form this rule does not model is caught there.
 SERVED_SCHEMA_GLOB = "src/mcp_handlers/schemas/*.py"
 SERVED_SCHEMA_FILES = ("src/alias_schema.py",)
 # Schema keywords whose text a caller reads: `description` (describe_tool,
