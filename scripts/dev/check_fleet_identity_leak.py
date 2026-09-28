@@ -234,20 +234,27 @@ def _is_field_call(node: ast.AST) -> bool:
     )
 
 
-def _module_bindings(tree: ast.AST) -> dict[str, ast.expr]:
-    """Top-level ``NAME = value`` and ``NAME: T = value``, by name."""
-    out: dict[str, ast.expr] = {}
+def _module_bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
+    """Every top-level ``NAME = value`` and ``NAME: T = value``, by name.
+
+    All of them, not just the last: a class body captures the value a name
+    holds when the class is defined, so a constant reassigned after a model
+    that uses it still serves the earlier text. Following every assignment
+    over-reads, never under-reads, which is the safe direction for a leak
+    guard.
+    """
+    out: dict[str, list[ast.expr]] = {}
     for stmt in getattr(tree, "body", []):
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
-                    out[target.id] = stmt.value
+                    out.setdefault(target.id, []).append(stmt.value)
         elif (
             isinstance(stmt, ast.AnnAssign)
             and stmt.value is not None
             and isinstance(stmt.target, ast.Name)
         ):
-            out[stmt.target.id] = stmt.value
+            out.setdefault(stmt.target.id, []).append(stmt.value)
     return out
 
 
@@ -294,7 +301,7 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
                 and sub.id not in followed
             ):
                 followed.add(sub.id)
-                roots.append(bindings[sub.id])
+                roots.extend(bindings[sub.id])
     return served
 
 

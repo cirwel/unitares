@@ -310,6 +310,20 @@ def test_schema_description_read_through_a_module_constant(tmp_path):
     assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0] and ":3:" in hits[0]
 
 
+def test_a_constant_reassigned_after_the_model_still_counts(tmp_path):
+    # The class body captured the first value; the later assignment does not
+    # change what the schema serves.
+    src = (
+        "from pydantic import BaseModel, Field\n"
+        '_DESC = "Ask Lumen"\n'
+        "class P(BaseModel):\n"
+        "    x: str = Field(description=_DESC)\n"
+        '_DESC = "safe"\n'
+    )
+    hits = _schema(tmp_path, src)
+    assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0] and ":2:" in hits[0]
+
+
 def test_schema_text_is_read_in_every_piece(tmp_path):
     src = (
         "from pydantic import Field\n"
