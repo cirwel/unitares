@@ -16,7 +16,7 @@ The clone pin below names the latest verified public release, which can lag
 the source version while a release is being prepared.
 
 ```bash
-git clone --branch v2.22.1 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.0.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
@@ -70,8 +70,13 @@ POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
   LEASE_PLANE_HOST_PORT=18788 \
   docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
-UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo
 ```
+
+The coordination demo talks to both the governance server and the lease plane,
+so give it both ports. With only the lease-plane port it falls back to the
+default governance port, 8767, and registers its demo agents on whatever server
+answers there.
 
 ### Choose a model (optional)
 

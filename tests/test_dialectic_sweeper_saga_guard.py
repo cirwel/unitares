@@ -12,7 +12,7 @@ such a session, or it races the saga and corrupts the outcome.
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 import pytest
 
@@ -29,7 +29,10 @@ def _old_time(hours: int) -> str:
 @pytest.fixture(autouse=True)
 def _no_cycle_audit_write():
     """Cycle telemetry is asserted separately; these tests isolate DB writes."""
-    with patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock):
+    with patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock), \
+         patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
+               new_callable=AsyncMock, return_value={}), \
+         patch(f"{AUTO_RESOLVE}.emit_guarded_write", new_callable=AsyncMock):
         yield
 
 
@@ -93,7 +96,7 @@ async def test_sweeper_proceeds_when_no_inflight_saga():
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
-    mock_update.assert_called_once_with("no-saga-1", "failed")
+    mock_update.assert_called_once_with("no-saga-1", "failed", winner=ANY)
     assert result["resolved_count"] == 1
     assert result["saga_inflight_skip_count"] == 0
     assert result["write_attempt_count"] == 1
@@ -125,7 +128,7 @@ async def test_sweeper_refused_reap_posts_no_failure_message():
         from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
         result = await auto_resolve_stuck_sessions()
 
-    mock_update.assert_called_once_with("won-by-other-writer-1", "failed")
+    mock_update.assert_called_once_with("won-by-other-writer-1", "failed", winner=ANY)
     mock_add_msg.assert_not_called()
     assert result["resolved_count"] == 0
     assert result["skipped_count"] == 1, (

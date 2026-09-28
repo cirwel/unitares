@@ -28,6 +28,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
+from src.dialectic_session_writes import session_write_via
 from .events import (
     emit_participant_abstained,
     emit_reviewer_abstained,
@@ -1231,7 +1232,9 @@ async def _apply_reviewer_reassignment(
                 )
         # BEAM owns the reviewer write when flagged; else Python. (Slice 2.3)
         if await beam_update_reviewer(session_id, new_reviewer_id) is None:
-            if not await pg_update_reviewer(session_id, new_reviewer_id):
+            with session_write_via("python_fallback", site="reassignment"):
+                _reviewer_written = await pg_update_reviewer(session_id, new_reviewer_id)
+            if not _reviewer_written:
                 # The guarded UPDATE refused (row terminal or missing) — the
                 # reassignment did NOT persist; do not report success on it.
                 raise RuntimeError(
@@ -2628,7 +2631,8 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                 # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
                 _beam_ph = await beam_update_phase(session_id, session.phase.value)
                 if _beam_ph is None:
-                    await pg_update_phase(session_id, session.phase.value)
+                    with session_write_via("python_fallback", site="thesis"):
+                        await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after thesis: {e}")
 
@@ -3095,7 +3099,8 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 try:
                     persisted = True
                     if await beam_update_reviewer(session_id, agent_id) is None:
-                        persisted = await pg_update_reviewer(session_id, agent_id)
+                        with session_write_via("python_fallback", site="first_responder"):
+                            persisted = await pg_update_reviewer(session_id, agent_id)
                     if persisted:
                         result["reviewer_auto_assigned"] = True
                         logger.info("Reviewer auto-assigned for dialectic session")
@@ -3154,7 +3159,8 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
                 _beam_ph = await beam_update_phase(session_id, session.phase.value)
                 if _beam_ph is None:
-                    await pg_update_phase(session_id, session.phase.value)
+                    with session_write_via("python_fallback", site="antithesis"):
+                        await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after antithesis: {e}")
 
@@ -3420,7 +3426,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     if not result.get("converged") and not _blocked:
                         _beam_ph = await beam_update_phase(session_id, session.phase.value)
                         if _beam_ph is None:
-                            await pg_update_phase(session_id, session.phase.value)
+                            with session_write_via("python_fallback", site="synthesis"):
+                                await pg_update_phase(session_id, session.phase.value)
                     # The facilitation flag must be durable, not in-memory only —
                     # otherwise the next process to load the session resolves it.
                     if _blocked:
@@ -3467,7 +3474,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             status="failed",
                         )
                         if beam_result is None:
-                            await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
+                            with session_write_via("python_fallback", site="hard_limit_block"):
+                                await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                 elif (
@@ -3652,7 +3660,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             )
                             written = beam_result is not None
                             if beam_result is None:
-                                written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
+                                with session_write_via("python_fallback", site="converged_resolution"):
+                                    written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
                             discard_receipt_unless_written(resolution, written=written, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
                             attach_attestation(result)
@@ -3676,7 +3685,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 status="failed",
                             )
                             if beam_result is None:
-                                await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
+                                with session_write_via("python_fallback", site="execution_failed"):
+                                    await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
                         except Exception as pg_e:
                             logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
     
