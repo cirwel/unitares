@@ -484,6 +484,14 @@ while read -r _ n head; do
     continue
   fi
 
+  # Before any wait (mergeability, review): a sensitive PR is never armed, so
+  # waiting on it would hold the order for a PR the queue will not take.
+  if why=$(sensitive_path "$head"); then
+    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
+    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
+  fi
+
   if dep=$(dependency_open "$pr"); then
     log "#$n waits on $dep (merge after); skipped"
     continue
@@ -557,11 +565,6 @@ while read -r _ n head; do
     esac
   fi
 
-  if why=$(sensitive_path "$head"); then
-    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
-    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
-    continue
-  fi
 
   if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
     # Update first, unarmed, and arm the updated head only once it has been
