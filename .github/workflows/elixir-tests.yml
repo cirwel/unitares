@@ -38,9 +38,9 @@ name: Elixir Tests
 #   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
 #   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
 #   db/postgres, tests/vectors, tests/vendored (cross-runtime fixtures the
-#   lease_plane suite reads), docker-compose.yml, Dockerfile, .dockerignore,
-#   .github/workflows/elixir-tests.yml, scripts/ci/elixir_paths_changed.py,
-#   scripts/ci/elixir_gate.py
+#   lease_plane suite reads), docker-compose.yml, docker-compose.admin.yml,
+#   Dockerfile, .dockerignore, .github/workflows/elixir-tests.yml,
+#   scripts/ci/elixir_paths_changed.py, scripts/ci/elixir_gate.py
 #
 # Break-glass: master has enforce_admins on, so a required elixir-gate that is
 # red on every branch (the 2026-08-01 audit-partition shape) is cleared by a
