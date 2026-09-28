@@ -1681,6 +1681,13 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
                                                 (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
+                # The second-family pass reads its policy from the caller's base
+                # ref (_resolve fetched origin/<base> before the review). CI reads
+                # the base as it is now, and a base advance may have added a
+                # sensitive path; move that ref forward to this snapshot, as a
+                # fetch would.
+                git("update-ref", f"refs/remotes/origin/{info['baseRefName']}",
+                    git("rev-parse", base_ref).strip())
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED

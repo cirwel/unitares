@@ -258,6 +258,10 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
     assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == (1 if native_finding else 0)
     assert rg.diff_key("master", "HEAD") == reviewed_key
     assert rg._CARRY[("o/r", 1)][1][-1] == (reviewed_key, merged["head"])
+    # Codex on #2568: the second-family pass reads its policy from origin/<base>,
+    # which must now be the base the handoff checked, as CI reads it.
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
+        _git(carry_repo, "rev-parse", "master")
 
 
 def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):
