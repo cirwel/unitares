@@ -164,3 +164,33 @@ def test_schema_declares_it_for_search():
     assert "recency_half_life_days" in KnowledgeParams.ACTION_FIELDS["search"]
     params = KnowledgeParams(action="search", query="x", recency_half_life_days="30")
     assert params.recency_half_life_days == 30.0
+
+
+def test_the_friendly_alias_envelope_keeps_the_order_echo():
+    # Review on #2564: search_shared_memory's envelope lifts a fixed list of
+    # search fields into state_summary and bounded modes omit raw_governance,
+    # so the echo (this PR's, and #2517's sort_by and window) was dropped.
+    from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
+
+    payload = {
+        "success": True,
+        "count": 1,
+        "search_mode_used": "fts_newest_first",
+        "discoveries": [{"id": "d1", "summary": "fresh"}],
+        "sort_by": "created_at",
+        "created_after": "2026-09-26T00:00:00+00:00",
+        "created_before": "2026-09-27T00:00:00+00:00",
+    }
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert env["state_summary"]["sort_by"] == "created_at"
+    assert env["state_summary"]["created_after"] == "2026-09-26T00:00:00+00:00"
+    assert env["state_summary"]["created_before"] == "2026-09-27T00:00:00+00:00"
+
+    weighted = {"success": True, "count": 1, "discoveries": [], "recency_half_life_days": 30.0}
+    env = build_experience_envelope("search_shared_memory", "knowledge", weighted)
+    assert env["state_summary"]["recency_half_life_days"] == 30.0
+
+    default = {"success": True, "count": 1, "discoveries": [{"id": "d1", "summary": "x"}]}
+    env = build_experience_envelope("search_shared_memory", "knowledge", default)
+    for key in ("sort_by", "created_after", "created_before", "recency_half_life_days"):
+        assert key not in env["state_summary"]
