@@ -1178,10 +1178,19 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         # No fill from the rest of the schema: on an alias
                         # that does not narrow its router's schema, the other
                         # properties belong to other actions.
+                        #
+                        # Forced: identity fields are common to every action
+                        # and never declared per action, so one an action
+                        # does declare is a deliberate statement that it is
+                        # that action's parameter. agent(action='get') names
+                        # its target in agent_id, and hiding it read as "this
+                        # call has no target".
                         for field_name in action_priorities:
                             if shown >= 5:
                                 break
-                            if field_name in properties and add_lite_field(field_name):
+                            if field_name in properties and add_lite_field(
+                                field_name, force=True
+                            ):
                                 shown += 1
                     else:
                         for field_name in properties:

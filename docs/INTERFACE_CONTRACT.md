@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.23.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.24.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -113,7 +113,7 @@ The two identifiers serve different jobs:
 
 - `unitares.interface-contract.v1` is the schema family. Its `v1` changes only
   for a breaking change to the contract document's shape.
-- `version: 1.23.0` is the negotiated interface release. Compatible additions
+- `version: 1.24.0` is the negotiated interface release. Compatible additions
   advance it without forcing clients to learn a new schema family (1.2.0,
   2026-09-07: `observe` and `describe_tool` declare parameters their handlers
   already read; 1.3.0, 2026-09-08: `describe_tool` takes `action` and answers
@@ -260,8 +260,25 @@ The two identifiers serve different jobs:
   default order is unchanged. `search_shared_memory` advertises shorter briefs
   for nine existing search parameters to stay inside the progressive-surface
   ratchet; their full descriptions are unchanged. The three input digests and
-  the surface digest move; 1.23.0, 2026-09-27, numbered after 1.22.0
-  (#2517): `dialectic` gains `action="consult"`, which files an outside
+  the surface digest move;
+  1.23.0, 2026-09-27, numbered after 1.22.0 (#2517): `agent(action='archive')`
+  and `agent(action='delete')` act only on the agent named in `agent_id`.
+  Behavior that changes for existing inputs: a call with no `agent_id` (or a
+  blank one) is refused with `TARGET_AGENT_REQUIRED` where it used to act on
+  the caller's own agent, because dispatch wrote the session's id in; a UUID
+  no agent holds is refused with `TARGET_AGENT_NOT_FOUND` where it used to
+  fall back to the caller; and an `agent_id` that is not a UUID (a label,
+  public id or legacy non-UUID key) is refused with
+  `TARGET_AGENT_UUID_REQUIRED` where it used to select the first cached holder
+  (public ids are shared by most identities that carry one). The legacy
+  `archive_agent` and `delete_agent` names follow; `get`, `update`, `resume`
+  and `release_presence` are unchanged. `agent`'s `agent_id` description says
+  it is the target's UUID, required for archive and delete, and names who get,
+  resume and update default to, and `describe_tool`'s lite view of archive and
+  delete lists `agent_id` (and delete's `confirm`) as required at call time.
+  No parameter is added, removed, retyped or renamed; `agent`'s input digest
+  and the surface digest move;
+  1.24.0, 2026-09-28, numbered after 1.23.0 (#2532): `dialectic` gains `action="consult"`, which files an outside
   verdict on any session as a transcript record with no authority. It needs
   no reviewer slot, never advances a phase, never counts as a verdict, and
   never refreshes the session's liveness clock. The route documented for an

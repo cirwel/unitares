@@ -237,7 +237,7 @@ handle_agent = action_router(
         "agent(action='list')",
         "agent(action='get', agent_id='claude-opus-20251215')",
         "agent(action='update', tags=['explorer', 'governance'])",
-        "agent(action='archive', agent_id='old-agent-id')",
+        "agent(action='archive', agent_id='<the target agent's UUID>')",
         "agent(action='resume', agent_id='stuck-agent-id')",
         "agent(action='release_presence')  # on clean exit, so a successor can declare this agent as parent",
     ],
