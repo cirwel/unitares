@@ -22,6 +22,14 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
+On a release checkout, Compose pulls the coordination lease plane as the image
+published from that release tag (`ghcr.io/cirwel/unitares-lease-plane`) instead
+of compiling Elixir on your machine. If that image cannot be pulled, for
+example for a release that predates it, Compose prints a pull warning and builds
+the lease plane from source. On a `master` checkout, run
+`docker compose up -d --wait --build`: without `--build` the lease plane would
+be the last release's image rather than the source you checked out.
+
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
 live coordination boundary by onboarding two participants, rejecting A's
@@ -32,6 +40,17 @@ The local proof uses one operator and a deployment-specific audience. This
 version intentionally permits one trusted issuer because lease rows do not yet
 persist issuer-qualified principals; it does not establish cross-operator trust
 or outcome benefit.
+
+The same lease plane protects files. With the
+[governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+installed, Claude Code and Codex take a lease on each file before editing it and
+release it afterwards, so a second agent editing the same file in the same
+checkout is refused instead of overwriting the first. With the Compose defaults
+this needs no setup: the plugin presents the stack's development bearer to the
+loopback lease plane. If you set your own `LEASE_PLANE_BEARER_TOKEN` in `.env`,
+put the same line in `~/.config/unitares/secrets.env` (or point
+`UNITARES_SECRETS_ENV` at a file that has it) so the plugin can present it. When
+leases are enabled but would not work, the plugin says so at session start.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
@@ -83,13 +102,14 @@ The quickest way is to run, from the checkout, once Ollama is installed and has
 a model pulled:
 
 ```bash
-make setup-model
+./scripts/unitares model
 ```
 
 It lists the models your Ollama has, writes your choice to `.env`, rebuilds the
 server, and checks that the server can reach the model. `--help` shows the
 non-interactive flags; `--no-docker` prints the two settings for a source
-install instead.
+install instead. To run it as plain `unitares`, link it onto your `PATH` once:
+`ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
 
 To do the same by hand, install Ollama on the Docker host, pull a model, and
 name both in `.env`:
@@ -114,6 +134,40 @@ alone keeps an image built before this step. If your `docker-compose.yml` has
 no `UNITARES_OLLAMA_BASE` line, the checkout predates this step. If it has one
 but `consult` reports a missing dependency, the image predates it; rebuild with
 `--build`.
+
+### Updating
+
+From the checkout, see whether a newer release is published, then move to it:
+
+```bash
+./scripts/unitares update --check
+./scripts/unitares update
+```
+
+`update` fetches the newest published release (or `--to <tag>`), starts the
+database, applies that release's migrations with
+`scripts/dev/apply_migrations.py` (run inside the database container, so no
+`psql` is needed on the host), rebuilds and restarts the stack, and reports deep
+health. It asks before changing anything; `--yes` skips the question. It
+refuses when tracked files in the checkout have local changes, and it manages
+only this checkout's Docker Compose stack. A checkout that is already on the
+target release only has its pending migrations checked and, on confirmation,
+applied.
+
+Releases before this command existed shipped a `scripts/unitares update` that
+posted a check-in instead. From one of those, move the code once by hand and
+let the new `update` do the rest:
+
+```bash
+git fetch --depth 1 --no-tags origin "+refs/tags/vX.Y.Z:refs/tags/vX.Y.Z"
+git checkout --detach vX.Y.Z
+docker compose up -d --build --wait postgres-age
+./scripts/unitares update --to vX.Y.Z
+```
+
+The database starts first so the new server never runs against the old
+schema; `update` then applies the release's migrations and rebuilds, restarts
+and health-checks the stack.
 
 ### Tool discovery (interface 1.13.0 and later)
 
