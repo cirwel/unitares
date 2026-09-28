@@ -233,6 +233,7 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
     # Codex on #2568: a base merge that touches only files outside the PR keeps
     # the key but moves the head, and CI reads native reviews of the new head.
     _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
     reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
     reviewed_key = rg.diff_key("master", "HEAD")
     merged = {}
@@ -259,7 +260,9 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
     assert rg.diff_key("master", "HEAD") == reviewed_key
     assert rg._CARRY[("o/r", 1)][1][-1] == (reviewed_key, merged["head"])
     # Codex on #2568: the second-family pass reads its policy from origin/<base>,
-    # which must now be the base the handoff checked, as CI reads it.
+    # which must now be the base the handoff checked, as CI reads it. (The
+    # remote here has no default fetch refspec, so git's opportunistic
+    # remote-tracking update cannot be what moved it.)
     assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
         _git(carry_repo, "rev-parse", "master")
 
