@@ -192,6 +192,9 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("dialectic", "request"),
     ("dialectic", "thesis"),
     ("dialectic", "antithesis"),
+    # consult files an outside verdict with no authority: no phase move, no
+    # verdict, no liveness refresh. Participation, not resolution.
+    ("dialectic", "consult"),
     # single-purpose: identity lifecycle + self-governance + reads
     ("bind_session", None),
     ("call_model", None),

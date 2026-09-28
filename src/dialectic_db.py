@@ -7,7 +7,7 @@ Provides storage for dialectic sessions with PostgreSQL.
 import json
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 
 
 from src.logging_utils import get_logger
@@ -766,6 +766,75 @@ class DialecticDB:
 
             return row["message_id"] if row else 0
 
+    async def add_bounded_message(
+        self,
+        session_id: str,
+        agent_id: str,
+        message_type: str,
+        max_of_type: int,
+        root_cause: str = None,
+        proposed_conditions: List[str] = None,
+        reasoning: str = None,
+        observed_metrics: Dict = None,
+        concerns: List[str] = None,
+        metrics_from_session: Optional[Callable[[Optional[Dict[str, Any]]], Dict]] = None,
+    ) -> Optional[int]:
+        """Insert a record-only message unless the session already holds
+        ``max_of_type`` of that type; return its id, or None when full.
+
+        The count and the insert run in one transaction under a per-session
+        advisory lock, so concurrent filers cannot each see room for one more
+        and overshoot the bound. The session row is not touched: a record-only
+        message is not protocol activity (add_message refreshes updated_at, which the sweeper reads as activity).
+
+        ``metrics_from_session``, when given, builds ``observed_metrics`` from
+        the session row (``phase``, ``paused_agent_id``, ``reviewer_agent_id``,
+        or None when there is no row) read ``FOR SHARE`` in the same
+        transaction, so what the message says about the session is its state
+        when the message was filed, not an earlier snapshot a phase move or a
+        reassignment has since overtaken. The share lock holds those writers
+        off until the insert commits; it takes no write lock of its own.
+        """
+        await self._ensure_pool()
+        async with self._pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    f"dialectic-bounded:{message_type}:{session_id}",
+                )
+                held = await conn.fetchval(
+                    "SELECT count(*) FROM core.dialectic_messages "
+                    "WHERE session_id = $1 AND message_type = $2",
+                    session_id, message_type,
+                )
+                if held >= max_of_type:
+                    return None
+                if metrics_from_session is not None:
+                    state = await conn.fetchrow(
+                        "SELECT phase, paused_agent_id, reviewer_agent_id "
+                        "FROM core.dialectic_sessions WHERE session_id = $1 FOR SHARE",
+                        session_id,
+                    )
+                    observed_metrics = metrics_from_session(dict(state) if state else None)
+                row = await conn.fetchrow("""
+                    INSERT INTO core.dialectic_messages (
+                        session_id, agent_id, message_type,
+                        root_cause, proposed_conditions, reasoning,
+                        observed_metrics, concerns, agrees, signature
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, NULL)
+                    RETURNING message_id
+                """,
+                    session_id,
+                    agent_id,
+                    message_type,
+                    root_cause,
+                    json.dumps(proposed_conditions) if proposed_conditions else None,
+                    reasoning,
+                    json.dumps(observed_metrics) if observed_metrics else None,
+                    json.dumps(concerns) if concerns else None,
+                )
+                return row["message_id"] if row else None
+
     async def is_agent_in_active_session(self, agent_id: str) -> bool:
         """Check if agent is in an active session.
 
@@ -1155,6 +1224,11 @@ async def _recorded_write(rec, write, *, winner: Optional[Dict[str, Any]] = None
     rec.respond(outcome=outcome(result, detail) if outcome else written_outcome(result),
                 effect_ts=detail.get("effect_ts"), **_winner_fields(winner))
     return result
+
+
+async def add_bounded_message_async(**kwargs) -> Optional[int]:
+    db = await get_dialectic_db()
+    return await db.add_bounded_message(**kwargs)
 
 
 async def update_session_phase_async(

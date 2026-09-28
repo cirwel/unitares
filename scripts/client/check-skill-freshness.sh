@@ -4,7 +4,9 @@
 # `--stamp NAME...` re-records a skill after its claims were re-checked. Set
 # SKILL_ATTESTATION_VERIFIER to who re-checked them; without it, only a person
 # at a terminal falls back to git user.name (if set), and any other stamp is
-# refused.
+# refused. A shell an agent harness or CI runner marks as its own (CLAUDECODE,
+# CODEX_THREAD_ID, CODEX_CI, AI_AGENT, CI; AGENT_ENV_MARKERS in
+# _check_freshness.py) is not a person's, even with a terminal on stdin.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
