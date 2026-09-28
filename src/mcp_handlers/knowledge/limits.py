@@ -47,3 +47,32 @@ MAX_CLOSURE_EVIDENCE_BYTES = 8 * 1024
 # above MAX_DETAILS_LEN, so a finding stored at that cap still has room for
 # notes, and well below the Cypher limit. Characters, as both of those are.
 MAX_UPDATED_DETAILS_LEN = 96 * 1024
+
+# The summary a knowledge update may store. A store keeps at most
+# MAX_SUMMARY_LEN characters and appends SUMMARY_TRUNCATION_MARKER when it cuts
+# a longer summary, so the update bound admits that marker: a stored summary
+# sent back unchanged is accepted. An update refuses a longer summary rather
+# than cutting it, since it replaces the caller's text. On AGE the summary is a
+# graph-node property interpolated into Cypher, where
+# GraphMixin._sanitize_cypher_param refuses a string over 128 KiB, and that
+# refusal fails the whole update, reported as "Discovery not found".
+SUMMARY_TRUNCATION_MARKER = "..."
+MAX_UPDATED_SUMMARY_LEN = MAX_SUMMARY_LEN + len(SUMMARY_TRUNCATION_MARKER)
+
+# Tags are short labels for search, filters and rollups, not a place for text.
+# Counted and measured after normalize_tags, which is what storage writes. On
+# AGE an update sends the whole list to Cypher as one JSON string, and a store
+# sends each tag as its own parameter (in the node's list and as the name of its
+# Tag node) and runs one MERGE per tag inside its transaction. A string over the
+# 128 KiB Cypher parameter limit fails the write. Both bounds sit far below it.
+MAX_TAGS = 50
+MAX_TAG_LEN = 128
+
+# The metadata a store writes on the AGE discovery node: related_files, the
+# provenance the call supplies (memory_context, task_label and the other
+# provenance fields, or a batch item's provenance object), the response_to
+# link, related_to and confidence. It is one Cypher parameter, which
+# GraphMixin._sanitize_cypher_param serializes with json.dumps and refuses over
+# 128 KiB, failing the whole store. Measured the same way, on the node as the
+# handler would store it.
+MAX_DISCOVERY_METADATA_LEN = 32 * 1024

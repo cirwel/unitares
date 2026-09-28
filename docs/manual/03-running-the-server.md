@@ -10,6 +10,8 @@ python src/mcp_server.py --port 8767
 
 Within a few seconds you should see a log line ending like `Uvicorn running on http://127.0.0.1:8767`. Under Docker, `docker compose up -d --wait` starts it for you.
 
+From a Docker checkout, `./scripts/unitares` wraps the same steps: `start` and `stop` bring the stack up and down, and `logs [service]` follows a service's log (the governance server by default). The same script picks the model (`model`, see [Choose a model](02-install.md#choose-a-model-optional)) and moves the install to a new release (`update`, see [Updating](02-install.md#updating)).
+
 **The server binds to `127.0.0.1` only by default** — it is not reachable from your LAN until you opt in (see [§3.5](#35-exposing-beyond-loopback)). That default is intentional: the threat model is internal fleet hygiene, not hostile external clients.
 
 ## 3.2 Ports and services
@@ -114,6 +116,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
+| `UNITARES_OLLAMA_BASE` / `UNITARES_LLM_MODEL` | Ollama root URL (no `/v1`) and model for `consult` and the local reviewer; `UNITARES_OLLAMA_BASE_URL` is read when the first is unset ([Choose a model](02-install.md#choose-a-model-optional)) |
 
 ## 3.7 Run at login (macOS LaunchAgent)
 
