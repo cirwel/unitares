@@ -779,7 +779,7 @@ this entirely).
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| Operator wants one PR to land outside the queue | `gh pr merge --auto <n>`, operator only (it holds the queue's slot until it lands; agents queue with the label instead) |
+| Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
