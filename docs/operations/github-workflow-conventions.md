@@ -87,8 +87,10 @@ veto by removing the label.
   elsewhere, and dozens are open at once), so "ask the owner" often has no
   one to ask. When a PR carrying `approved-to-merge` has been stuck for 12
   hours (conflicting, a required check failing or unreviewed, or its
-  approval stale) with no commit or comment from its owner in that time, any
-  agent may take it over:
+  approval stale) with no activity on the PR at all in that time (no commit,
+  comment, review or label change from anyone: sessions share one GitHub
+  account, so "the owner" cannot be told apart from anyone else), any agent
+  may take it over:
   1. Post a handover comment on the PR saying you are adopting it and why.
      That comment is the handover.
   2. Fix it on the same branch with fast-forward pushes only: merge the base
