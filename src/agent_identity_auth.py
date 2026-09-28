@@ -156,8 +156,8 @@ def require_explicit_agent_id(arguments: dict, reject_existing: bool = False) ->
             "suggestion": "\"agent_id\": \"your_unique_session_id\"",
             "recovery": {
                 "action": "Provide a unique agent_id in your request",
-                "related_tools": ["identity"],
-                "workflow": "1. Generate unique agent_id (e.g., timestamp-based) 2. Call start_session(force_new=true) and save uuid and client_session_id 3. Pass client_session_id on subsequent calls"
+                "related_tools": ["start_session"],
+                "workflow": "1. Call start_session(force_new=true) and save uuid and client_session_id 2. Pass client_session_id on subsequent calls"
             }
         }, indent=2)
         return None, TextContent(type="text", text=error_msg)
