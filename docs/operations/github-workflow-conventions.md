@@ -149,8 +149,8 @@ the test run one.
   This check replaces the legacy commit status; old heads may still show
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
-- Findings: fix and push (the new diff is reviewed, up to the
-  [round cap](#round-cap)), or post rebuttals with
+- Findings: fix and push (the new diff is reviewed; the
+  [round cap](#round-cap) is currently switched off), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -253,7 +253,14 @@ fallback validation.
 
 #### Round cap
 
-A PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
+> **Switched off since 2026-09-27 (operator decision).** `ROUND_CAP_ENABLED`
+> in `review_gate.py` is `False`: every round gets a full review however many
+> came before, and the `review` check shows only the count ("review round 4").
+> The rest of this section describes the mechanism as it works when the
+> switch is set back to `True`. It is kept, and its tests still run, so it can
+> be switched back on without being rebuilt.
+
+When enabled, a PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
 round is one completed native Codex run, counted by the distinct commits
 Codex names. Codex can post a result three ways: a submitted review, a clean
 comment, or a completed activity row. All three count. These don't count: a
@@ -433,9 +440,10 @@ operator's), the environment-independent path is a PR comment:
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
-   The [round cap](#round-cap) applies here too. After three rounds with only
-   P2s open, do not post `@codex review` again: hand the remaining findings
-   off for disposition the same way. A P1 fix still gets its request.
+   When the [round cap](#round-cap) is switched on, it applies here too: after
+   three rounds with only P2s open, do not post `@codex review` again; hand
+   the remaining findings off for disposition the same way. A P1 fix still
+   gets its request. The cap is currently switched off.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -670,16 +678,27 @@ the operator's machine is awake.
   check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
-- **The slot.** Any armed PR holds it, including one armed by hand. The
-  script disarms only arms it made (it records each one): such a PR that
-  turns `CONFLICTING`, whose checks failed on its current head, or that has a
-  check parked for approval is disarmed so it stops holding the queue, and
-  its label stays. Removing the label withdraws the approval, and a PR the
-  script armed is disarmed at the next tick once the label is gone. A PR
-  armed by hand, labelled or not, is never disarmed by the script, so it
-  keeps the slot even while it conflicts (arming another would leave two
-  armed once the conflict is resolved); a hold longer than 90 minutes is
-  logged, and clearing it is the maintainer's call.
+- **The slot, and who arms.** The queue owns arming. Any arm it did not
+  make is disarmed on the next tick, with a notice on the PR, and its label
+  stays, so the queue arms it in turn. Agents never arm by hand, and on
+  2026-09-27 seven hand-armed PRs, none of them mergeable, held the slot and
+  stalled the queue for hours. The one exception is the operator's: an arm
+  on a PR labelled `operator-armed` is left alone and holds the slot. The
+  queue never overrides the operator's own arms, so arming two such PRs at
+  once is the operator's choice, and it gives up the one-arm guarantee for
+  those two. A PR
+  the queue armed is disarmed when it turns `CONFLICTING`, when its checks
+  fail on its current head, when a check is parked for approval, when its
+  content changes, or when its label is removed; its label stays except in
+  the last case. A hold longer than 90 minutes is logged.
+- **Notices on the PR.** When the queue skips a labelled PR for a reason
+  that will not clear by itself (a conflict, an approval gone stale, a
+  required check that concluded without passing, a check parked for
+  approval, failures that survived the one re-run), it posts one comment on
+  the PR saying why and what fixes it, so whoever looks next (the owner, or
+  an agent adopting it) does not need this machine's log. A hidden marker
+  keeps it to one notice per reason and head. Transient waits (a pending
+  check, a dependency still open) post nothing.
 - **Updates: never armed across an unchecked head.** When the head of the
   queue is `BEHIND`, the script updates it unarmed and holds its place; a
   later tick arms the updated head once its content still matches the
@@ -687,9 +706,10 @@ the operator's machine is awake.
   on across a head nothing had re-checked, while `review` is not
   branch-protected. GitHub's own updater is not relied on: in the queue's
   first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
-  falls `BEHIND` later and GitHub has not updated it within 3 minutes, the
-  script disarms it, updates it, and re-arms it by the same rule; a PR armed
-  by hand is only updated. Only the one head-of-queue or armed PR is ever
+  falls `BEHIND` later, the script disarms it at once, updates it, and
+  re-arms it by the same rule (no grace: GitHub's updater can move the head
+  within a minute). A PR armed by hand is only updated, and only if GitHub
+  has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
@@ -792,7 +812,7 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
+| Review round 3 done, only P2s open | Fix and request another round; the [round cap](#round-cap) is switched off |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

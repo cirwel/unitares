@@ -29,7 +29,7 @@ async def test_cycle_maps_autoresolve_keys():
         summary = await _run_dialectic_auto_resolve_cycle()
 
     assert summary == {"failed": 2, "reassigned": 1, "facilitation": 3, "skipped": 1}
-    resolver.assert_awaited_once_with(trigger_source="periodic")
+    resolver.assert_awaited_once_with(trigger_source="periodic", timeout_s=300.0)
 
 
 @pytest.mark.asyncio

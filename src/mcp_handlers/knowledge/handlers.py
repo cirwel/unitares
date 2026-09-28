@@ -80,12 +80,14 @@ from src.knowledge_graph import (
     closure_evidence_to_json,
 )
 from src.knowledge_authority import (
+    CHANNEL_MESSAGE,
     GOVERNED_CLAIM,
     IMPORTED_CONTEXT,
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
-    has_imported_memory_marker,
+    channel_lanes,
+    is_lane_filter,
     rank_by_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
@@ -2198,7 +2200,11 @@ def _fts_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
 def _fts_page_size(state: _KnowledgeSearchState) -> int:
     request = state.request
     base_limit = int(min(max(request.limit * 5, request.limit), 500))
-    return max(base_limit, state.rerank_pool_size) if state.rerank_on else base_limit
+    return max(
+        base_limit,
+        state.rerank_pool_size if state.rerank_on else 0,
+        _authority_pool_size(request),
+    )
 
 
 async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
@@ -2327,14 +2333,29 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
 
     A source-tag query is already an explicit request to inspect the imported
     lane, so applying its default penalty there would only distort that lane's
-    own relevance order.
+    own relevance order. Only a filter made entirely of source-memory tags
+    counts: tags match any-of, so a mixed filter also returns ordinary
+    findings. A `channel-*` filter is honoured per row, in rank_by_authority,
+    because a channel- tag can also be an ordinary topic.
     """
     if request.authority_mode == "all":
         return False
     if request.sort_by == "created_at":
         # The caller asked for time order; an authority nudge would reorder it.
         return False
-    return not has_imported_memory_marker(request.tags)
+    return not is_lane_filter(request.tags)
+
+
+# Candidates authority ranking sees before the page is cut. Retrieval
+# windows widen to at least this when it is on, or a native finding just
+# below a page of down-ranked rows is never retrieved to be lifted. The
+# queryless listing is exempt: it is a newest-first read, and widening it
+# would pull older rows above newer ones rather than break close contests.
+AUTHORITY_POOL_SIZE = 50
+
+
+def _authority_pool_size(request: _KnowledgeSearchRequest) -> int:
+    return AUTHORITY_POOL_SIZE if _authority_ranking_enabled(request) else 0
 
 
 def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
@@ -2355,6 +2376,7 @@ def _rank_search_documents(
         documents,
         relevance_scores=_authority_score_map(state),
         enabled=_authority_ranking_enabled(state.request),
+        read_lanes=channel_lanes(state.request.tags),
     )
     state.authority_reranked = state.authority_reranked or changed
     return ranked
@@ -2377,7 +2399,15 @@ async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
         if state.search_mode in ("substring_scan", "substring_newest_first")
         else None
     )
-    filter_cap = state.rerank_pool_size if state.rerank_on else (50 if state.hybrid_on else request.limit)
+    # Authority ranking has to see more than the page it reorders: capped at
+    # `limit`, a native finding just below a page of down-ranked rows was
+    # dropped before its multiplier could lift it.
+    if state.rerank_on:
+        filter_cap = state.rerank_pool_size
+    elif state.hybrid_on or _authority_ranking_enabled(request):
+        filter_cap = max(request.limit, AUTHORITY_POOL_SIZE)
+    else:
+        filter_cap = request.limit
     filtered = []
     for document in state.candidates:
         if request.tags and not _matches_tags(document, request.tags):
@@ -2434,7 +2464,9 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
     request = state.request
     state.rerank_on = reranker_enabled()
     state.rerank_pool_size = 50 if state.rerank_on else 0
-    state.first_stage_limit = max(request.limit * 2, state.rerank_pool_size) if state.rerank_on else request.limit * 2
+    state.first_stage_limit = max(
+        request.limit * 2, state.rerank_pool_size, _authority_pool_size(request)
+    )
     state.hybrid_on = hybrid_enabled()
     state.graph_expand_on = graph_expansion_enabled()
 
@@ -2602,9 +2634,10 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             request.query_text,
         )
         primary_operator = request.operator_forced or "AND"
+        fallback_limit = max(request.limit * 2, _authority_pool_size(request))
         candidates = await state.graph.full_text_search(
             str(request.query_text),
-            limit=request.limit * 2,
+            limit=fallback_limit,
             operator=primary_operator,
             **_tag_kwargs(request),
             **_window_kwargs(request),
@@ -2620,7 +2653,7 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             if request.query_term_count <= 24:
                 candidates = await state.graph.full_text_search(
                     str(request.query_text),
-                    limit=request.limit * 2,
+                    limit=fallback_limit,
                     operator="OR",
                     **_tag_kwargs(request),
                     **_window_kwargs(request),
@@ -2640,8 +2673,12 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
                 continue
             if not _candidate_matches_semantic_fallback(document, request):
                 continue
+            if _label_excluded(document, request):
+                continue
             state.results.append(document)
-            if len(state.results) >= request.limit:
+            # The executor ranks and then cuts the page, so collect the
+            # whole authority pool here, not just `limit`.
+            if len(state.results) >= max(request.limit, _authority_pool_size(request)):
                 break
         if not state.results:
             return
@@ -2670,9 +2707,9 @@ def _candidate_matches_semantic_fallback(
         return False
     if request.severity and document.severity != request.severity:
         return False
-    if request.status and document.status != request.status:
-        return False
-    if not request.status and not request.include_archived and document.status == "archived":
+    # The same status predicate as the main path: this one used to check
+    # archived only, so a cold row could come back from a default search.
+    if not _candidate_status_visible(document, request):
         return False
     if request.tags and not any(tag in set(document.tags or []) for tag in request.tags):
         return False
@@ -2839,7 +2876,9 @@ def _attach_search_diagnostics(
         tier = assess_authority(document).tier
         authority_counts[tier] = authority_counts.get(tier, 0) + 1
     if authority_counts and (
-        IMPORTED_CONTEXT in authority_counts or GOVERNED_CLAIM in authority_counts
+        IMPORTED_CONTEXT in authority_counts
+        or CHANNEL_MESSAGE in authority_counts
+        or GOVERNED_CLAIM in authority_counts
     ):
         response["authority_policy"] = {
             "mode": state.request.authority_mode,
@@ -2847,8 +2886,8 @@ def _attach_search_diagnostics(
             "result_tiers": authority_counts,
             "note": (
                 "Authority affects close ranking contests; it is provenance-aware "
-                "retrieval, not a truth verdict. Filter by source tags or pass "
-                "authority_mode='all' to inspect raw relevance order."
+                "retrieval, not a truth verdict. Filter by source or channel tags "
+                "or pass authority_mode='all' to inspect raw relevance order."
             ),
         }
 

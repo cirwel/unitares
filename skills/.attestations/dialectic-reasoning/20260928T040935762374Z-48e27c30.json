@@ -1,0 +1,22 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-09-28T04:09:35Z",
+  "verified_date": "2026-09-28",
+  "verifier": "claude-opus-5-5 (adopting #2540 for the operator): re-checked against this PR merged with master; the PR adds a non-authoritative dialectic 'consult' action (handler plus route and example in consolidated.py). No skill claims the dialectic action list is complete, and the bind-before-submit gate text covers thesis/antithesis/synthesis only, which is unchanged; envelope_step.py and skills/unitares-dashboard/SKILL.md now equal master's and were stale only against this branch's pre-merge attestations",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "809729e4afadc9da",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "307c430fc62a752d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "00954912b5ee48ac",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "87cd7dbc224dc325",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "d8df1a60cefe2f96",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "c2e3ee6733917d94",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424"
+  },
+  "skill_digest": "56706d3723b19b29"
+}

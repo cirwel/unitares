@@ -47,11 +47,10 @@ classic dashboard and its allowlist / script-load-chain / `vite` build were
 `MetricColors`, or `Chart.defaults`. The redesign resolver constrains paths and
 file types and has no per-asset allowlist, but it does gate the assets that
 carry governance data rather than presentation: `_AUTHENTICATED_ONLY_FILES`
-holds `snapshot.js` and `PLAN.md`, each served only to an authenticated
-caller. The test is the data class, not the extension. `snapshot.js` has been a
-synthetic fixture since 2026-09-27 and stays gated anyway; `PLAN.md` describes
-the operator's own fleet. `preview.html` (a literal fleet capture) was deleted
-then. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
+holds `snapshot.js`, served only to an authenticated caller. The test is the
+data class, not the extension. `snapshot.js` has been a synthetic fixture since
+2026-09-27 and stays gated anyway. `preview.html` (a literal fleet capture) and
+`PLAN.md` (a design plan describing the operator's fleet) were deleted. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
 new offline data goes into the synthetic generator in `snapshot.js`. `auth/*.html` is 404 on this
 route (those pages are served via `/auth/*`). Files are read per request, so a restart is
 not needed for static edits. Entry HTML is `no-store`; relative assets receive
