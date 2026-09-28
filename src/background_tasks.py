@@ -424,6 +424,38 @@ async def stuck_agent_recovery_task():
 # Dialectic stuck-session sweep
 # ---------------------------------------------------------------------------
 
+# Upper bound on one periodic dialectic sweep cycle, in seconds. A normal cycle
+# takes milliseconds (pilot, 2026-08-29..09-27: periodic p50 6 ms, p99 31 ms,
+# n=3,596), so the bound only ever fires on a hung cycle. Before it existed the
+# loop awaited each cycle with no timeout, so a hung cycle emitted nothing and
+# stopped every later cycle too; its gap was indistinguishable from a lost audit
+# write (Wave 3 gate council 2026-09-27, finding B5). A timed-out cycle is
+# cancelled and still emits its `dialectic_sweep_cycle` row with
+# error="timeout". Overridable for an operator who needs a different bound;
+# a non-positive or unparseable value falls back to the default.
+DIALECTIC_SWEEP_CYCLE_TIMEOUT_ENV = "UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S"
+DIALECTIC_SWEEP_CYCLE_TIMEOUT_DEFAULT_S = 300.0
+
+
+def _dialectic_sweep_cycle_timeout_s() -> float:
+    import os
+
+    raw = os.environ.get(DIALECTIC_SWEEP_CYCLE_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return DIALECTIC_SWEEP_CYCLE_TIMEOUT_DEFAULT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "[DIALECTIC_SWEEP] %s=%r is not a number; using %.0fs",
+            DIALECTIC_SWEEP_CYCLE_TIMEOUT_ENV, raw, DIALECTIC_SWEEP_CYCLE_TIMEOUT_DEFAULT_S,
+        )
+        return DIALECTIC_SWEEP_CYCLE_TIMEOUT_DEFAULT_S
+    if value <= 0:
+        return DIALECTIC_SWEEP_CYCLE_TIMEOUT_DEFAULT_S
+    return value
+
+
 async def _run_dialectic_auto_resolve_cycle() -> dict[str, int]:
     """One sweep of stuck dialectic sessions, returning a flattened summary.
 
@@ -431,9 +463,17 @@ async def _run_dialectic_auto_resolve_cycle() -> dict[str, int]:
     unit-testable (mirrors the ``lineage_eval_sweeper`` extraction). Note the
     auto-resolve return key ``resolved_count`` actually counts sessions marked
     FAILED — the mapping here pins that naming so callers read ``failed``.
+
+    The cycle is bounded by ``_dialectic_sweep_cycle_timeout_s()``. The bound
+    is applied inside ``auto_resolve_stuck_sessions`` rather than by wrapping
+    this await, because only there can the cancellation be told apart from a
+    shutdown and reported as ``error="timeout"`` on the cycle row.
     """
     from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
-    result = await auto_resolve_stuck_sessions(trigger_source="periodic")
+    result = await auto_resolve_stuck_sessions(
+        trigger_source="periodic",
+        timeout_s=_dialectic_sweep_cycle_timeout_s(),
+    )
     return {
         "failed": int(result.get("resolved_count", 0) or 0),
         "reassigned": int(result.get("reassigned_count", 0) or 0),
