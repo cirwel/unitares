@@ -196,20 +196,24 @@ def _check_path1_fingerprint_sync(key: str, agent_uuid: Optional[str]) -> bool:
         mode,
     )
 
-    # Fire-and-forget broadcast. Sync context can't await; create_task on the
-    # running loop if there is one. Telemetry only — never load-bearing for
-    # the gate decision.
+    # Fire-and-forget broadcast. Sync context can't await; schedule it on the
+    # loop running in this thread, if there is one. create_tracked_task holds
+    # a strong reference to the task (the loop keeps only a weak one, so a
+    # bare create_task can be collected before it runs). Telemetry only —
+    # never load-bearing for the gate decision.
     try:
         import asyncio
         from .handlers import _broadcaster
         b = _broadcaster()
         if b is not None:
             try:
-                loop = asyncio.get_event_loop()
+                asyncio.get_running_loop()
+                in_loop = True
             except RuntimeError:
-                loop = None
-            if loop is not None and loop.is_running():
-                loop.create_task(
+                in_loop = False
+            if in_loop:
+                from src.background_tasks import create_tracked_task
+                create_tracked_task(
                     b.broadcast_event(
                         event_type="identity_hijack_suspected",
                         agent_id=agent_uuid,
@@ -220,7 +224,8 @@ def _check_path1_fingerprint_sync(key: str, agent_uuid: Optional[str]) -> bool:
                             "bind_fp_prefix": bound_fp[:8],
                             "current_fp_prefix": current_fp[:8],
                         },
-                    )
+                    ),
+                    name="identity_hijack_broadcast",
                 )
     except Exception as be:
         logger.warning(f"[PATH1_FINGERPRINT_MISMATCH] broadcast failed: {be}")

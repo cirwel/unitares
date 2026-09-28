@@ -654,16 +654,19 @@ the operator's machine is awake.
   check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
-- **The slot.** Any armed PR holds it, including one armed by hand. The
-  script disarms only arms it made (it records each one): such a PR that
-  turns `CONFLICTING`, whose checks failed on its current head, or that has a
-  check parked for approval is disarmed so it stops holding the queue, and
-  its label stays. Removing the label withdraws the approval, and a PR the
-  script armed is disarmed at the next tick once the label is gone. A PR
-  armed by hand, labelled or not, is never disarmed by the script, so it
-  keeps the slot even while it conflicts (arming another would leave two
-  armed once the conflict is resolved); a hold longer than 90 minutes is
-  logged, and clearing it is the maintainer's call.
+- **The slot, and who arms.** The queue owns arming. Any arm it did not
+  make is disarmed on the next tick, with a notice on the PR, and its label
+  stays, so the queue arms it in turn. Agents never arm by hand, and on
+  2026-09-27 seven hand-armed PRs, none of them mergeable, held the slot and
+  stalled the queue for hours. The one exception is the operator's: an arm
+  on a PR labelled `operator-armed` is left alone and holds the slot. The
+  queue never overrides the operator's own arms, so arming two such PRs at
+  once is the operator's choice, and it gives up the one-arm guarantee for
+  those two. A PR
+  the queue armed is disarmed when it turns `CONFLICTING`, when its checks
+  fail on its current head, when a check is parked for approval, when its
+  content changes, or when its label is removed; its label stays except in
+  the last case. A hold longer than 90 minutes is logged.
 - **Notices on the PR.** When the queue skips a labelled PR for a reason
   that will not clear by itself (a conflict, an approval gone stale, a
   required check that concluded without passing, a check parked for
