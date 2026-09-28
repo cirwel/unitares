@@ -1654,14 +1654,19 @@ def _advance_ref(ref: str, new: str) -> str:
     """Move `ref` forward to `new`, never back. Compare-and-swap, so a
     concurrent update wins; a lost swap re-reads and decides again.
 
-    "ok": `ref` now holds `new` or a descendant (another worktree fetched a
-    newer base). "diverged": it holds a commit on another line of history,
-    and which of the two is current cannot be told. "stuck": the update
-    failed for another reason (a held lock, a read-only repository)."""
+    "ok": `ref` now holds `new`. "ahead": it holds a descendant of `new`,
+    kept; that is a newer base only if the remote still advertises it
+    (another worktree fetched in between), and a stale one if the remote
+    rewound, so the caller must ask the remote again. "diverged": it holds a
+    commit on another line of history, and which of the two is current cannot
+    be told. "stuck": the update failed for another reason (a held lock, a
+    read-only repository)."""
     for _ in range(3):
         old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
-        if old == new or (old and _is_ancestor(new, old)):
+        if old == new:
             return "ok"
+        if old and _is_ancestor(new, old):
+            return "ahead"
         if old and not _is_ancestor(old, new):
             return "diverged"
         # An empty old value asserts the ref does not exist yet.
@@ -1684,9 +1689,9 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
     try:
         info = gh_json("pr", "view", str(pr), "--json", "baseRefName,state")
         require_open(pr, info)
+        base_refspec = f"+refs/heads/{info['baseRefName']}:{base_ref}"
         git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin",
-            f"+refs/heads/{info['baseRefName']}:{base_ref}",
-            f"+refs/pull/{pr}/head:{head_ref}")
+            base_refspec, f"+refs/pull/{pr}/head:{head_ref}")
         # The record is diff-bound: message amendments and base-only merges
         # remain valid. Use the fetched head, not an API SHA from before a push.
         # The second-family pass after this reads its policy from the caller's
@@ -1695,12 +1700,23 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # CI reads the base as it is now, and a base advance may have added a
         # sensitive path; move that ref forward to this snapshot, as a fetch
         # would, whether or not the head moved. Then check the diff against
-        # the base that ref holds (this snapshot, or a newer one another
-        # worktree fetched meanwhile), so the key and the policy come from the
-        # same base. A ref on another line of history may be stale or newer
-        # (a rewritten base); which one CI reads cannot be told, so refuse.
+        # the base that ref holds, so the key and the policy come from the
+        # same base. A ref ahead of this snapshot is newer only if the remote
+        # still advertises it (another worktree fetched in between); after a
+        # rewind it is stale. Ask the remote once more, and refuse if the ref
+        # is still ahead. A ref on another line of history may be stale or
+        # newer (a rewritten base); which one CI reads cannot be told, so
+        # refuse.
         tracking = f"refs/remotes/origin/{info['baseRefName']}"
         advanced = _advance_ref(tracking, git("rev-parse", base_ref).strip())
+        if advanced == "ahead":
+            git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin",
+                base_refspec)
+            advanced = _advance_ref(tracking, git("rev-parse", base_ref).strip())
+        if advanced == "ahead":
+            raise SystemExit(f"origin/{info['baseRefName']} is ahead of the base the remote "
+                             "advertises (was the base rewound?); fetch it and review "
+                             "the current diff")
         if advanced == "diverged":
             raise SystemExit(f"origin/{info['baseRefName']} and the fetched base are on "
                              "different lines of history (was the base rewritten?); "

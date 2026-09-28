@@ -321,13 +321,14 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
 
 
 @pytest.mark.parametrize("start,expected,status", [
-    (None, "new", "ok"), ("old", "new", "ok"), ("newer", "newer", "ok"),
+    (None, "new", "ok"), ("old", "new", "ok"), ("newer", "newer", "ahead"),
     ("side", "side", "diverged")])
 def test_the_base_ref_only_moves_forward(carry_repo, start, expected, status):
     # Codex on #2568: another worktree may fetch a newer base while the
     # handoff runs; the handoff must never roll the shared ref back. A value
-    # on another line of history (a rewritten base) is kept but reported:
-    # it may be stale or newer, and the handoff refuses rather than guess.
+    # ahead of ours or on another line of history is kept but reported: it
+    # may be stale (a rewound or rewritten base) or newer, and the handoff
+    # asks the remote again or refuses rather than guess.
     commits = {"old": _git(carry_repo, "rev-parse", "master")}
     _git(carry_repo, "checkout", "-q", "master")
     for name in ("new", "newer"):
@@ -363,7 +364,7 @@ def test_a_ref_that_cannot_be_updated_is_reported(carry_repo, monkeypatch, capsy
 
 
 @pytest.mark.parametrize("winner,status,final", [
-    ("newer", "ok", "newer"), ("side", "diverged", "side"),
+    ("newer", "ahead", "newer"), ("side", "diverged", "side"),
     # An older value on the same line: only a re-read moves the ref on to ours.
     ("mid", "ok", "new")])
 def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner, status, final):
@@ -398,34 +399,67 @@ def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner, statu
 
 
 @pytest.mark.parametrize("retained,said", [
-    ("merges_the_pr", "head or base diff changed"), ("rewritten", "different lines of history")])
+    ("merges_the_pr", "head or base diff changed"),
+    ("rewound", "ahead of the base the remote advertises"),
+    ("rewritten", "different lines of history")])
 def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatch, capsys,
                                                          retained, said):
     # Codex on #2568: another worktree may leave origin/<base> at a newer base
     # than the handoff fetched. The key is checked against that base, the one
     # the second-family pass and CI read, so a base that merged the PR's commit
-    # changes the diff (UNREVIEWED). A base on another line of history may be
-    # stale or newer, so the handoff refuses it outright.
+    # changes the diff (UNREVIEWED). A ref ahead of the fetched base is newer
+    # only while the remote still advertises it: after a rewind it is stale,
+    # and the handoff refuses. A base on another line of history may be stale
+    # or newer, so the handoff refuses it outright.
     _git(carry_repo, "remote", "add", "origin", str(carry_repo))
     _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
     head = _git(carry_repo, "rev-parse", "HEAD")
     key = rg.diff_key("master", "HEAD")
     _git(carry_repo, "checkout", "-q", "--detach", "master")
-    if retained == "merges_the_pr":
-        _git(carry_repo, "merge", "-q", "--no-edit", "feature")
-    else:
+    if retained == "rewritten":
         (carry_repo / "other.txt").write_text("rewritten\n")
         _git(carry_repo, "commit", "-q", "-am", "a rewritten base")
-    _git(carry_repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    else:
+        _git(carry_repo, "merge", "-q", "--no-edit", "feature")
+    retained_base = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", retained_base)
     if retained == "rewritten":
         _git(carry_repo, "checkout", "-q", "master")
         (carry_repo / "other.txt").write_text("the base as fetched here\n")
         _git(carry_repo, "commit", "-q", "-am", "base")
     _git(carry_repo, "checkout", "-q", "feature")
     _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    if retained == "merges_the_pr":
+        # The remote reaches the retained base after the handoff's first
+        # fetch: another worktree fetched it in between, so it is current.
+        real_git, fetches = rg.git, []
+
+        def git(*args, **kw):
+            out = real_git(*args, **kw)
+            if args[0] == "fetch" and not fetches:
+                fetches.append(args)
+                _git(carry_repo, "update-ref", "refs/heads/master", retained_base)
+            return out
+
+        monkeypatch.setattr(rg, "git", git)
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
     assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
     assert said in capsys.readouterr().out
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == retained_base
+
+
+def test_handoff_refuses_a_base_ref_it_could_not_move(carry_repo, monkeypatch, capsys):
+    # The independent review on #2568: a tracking ref that could not be moved
+    # still holds an older base, which is not the one CI reads.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    monkeypatch.setattr(rg, "_advance_ref", lambda ref, new: "stuck")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
+    assert "could not move origin/master" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])
