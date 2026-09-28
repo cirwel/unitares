@@ -91,12 +91,16 @@ def _pr(
     draft: bool = False,
     armed_min_ago: float | None = None,
     mergeable: str = "MERGEABLE",
-    state: str = "BEHIND",
+    state: str = "BLOCKED",
     base: str = "master",
     checks: list[dict] | None = None,
     body: str = "",
     head: str | None = None,
+    review: str | None = "SUCCESS",
 ) -> dict:
+    rollup = list(checks) if checks is not None else [_check("test")]
+    if review is not None:
+        rollup.append(_check("review", review, run=900))
     return {
         "number": number,
         "isDraft": draft,
@@ -107,7 +111,7 @@ def _pr(
         ),
         "baseRefName": base,
         "labels": [{"name": label} for label in labels],
-        "statusCheckRollup": checks if checks is not None else [_check("test")],
+        "statusCheckRollup": rollup,
         "body": body,
         "headRefOid": head or f"sha{number}",
     }
@@ -318,12 +322,6 @@ def test_failed_on_an_up_to_date_head_is_marked_then_rerun_once(tmp_path: Path) 
     ]
 
 
-def test_failed_on_a_behind_head_is_armed_for_a_fresh_run(tmp_path: Path) -> None:
-    # Re-running the stale head is wasted: GitHub re-runs everything on update.
-    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
-    assert calls == [_arm(9)]
-
-
 def test_failed_while_its_run_is_still_going_waits(tmp_path: Path) -> None:
     checks = [_check("smoke", "FAILURE", run=77), _check("shard", "", run=77, status="IN_PROGRESS")]
     calls, _ = _run(tmp_path, [_pr(9, state="BLOCKED", checks=checks)])
@@ -443,7 +441,7 @@ def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
 
 
 def test_behind_holder_is_left_to_github_inside_the_grace(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=5)
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=1)
     assert calls == []
 
 
@@ -680,3 +678,111 @@ def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1, head="aaa")])
     assert calls == [_arm(1, "aaa"), "pr merge 1 -R o/r --disable-auto"]
     assert "could not be recorded" in out
+
+
+
+# --- the review gate ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE", "ACTION_REQUIRED"])
+def test_a_pr_whose_review_did_not_pass_is_not_armed(tmp_path: Path, state: str) -> None:
+    # NEUTRAL is the review gate's "unreviewed"; review is not a required check,
+    # so without this an agent's label would merge an unreviewed PR.
+    calls, _ = _run(tmp_path, [_pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)]), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
+
+
+def test_a_pr_with_no_review_check_yet_holds_the_order(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, review=None), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == []
+    assert "#1 waiting on review=MISSING" in out
+
+
+def test_a_pending_review_holds_the_order(tmp_path: Path) -> None:
+    pending = _pr(1, review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, out = _run(tmp_path, [pending, _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == []
+    assert "review=PENDING" in out
+
+
+def test_required_checks_are_configurable(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1)]
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE"])
+def test_a_script_armed_pr_whose_review_stops_passing_is_disarmed(tmp_path: Path, state: str) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("test"), _check("review", state, run=5)])
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert f"review={state} is not passing" in out
+
+
+@pytest.mark.parametrize("checks", [[_check("test")], [_check("test"), _check("review", "", status="IN_PROGRESS")]])
+def test_a_review_not_yet_passing_disarms_but_keeps_the_pr_first(tmp_path: Path, checks: list) -> None:
+    # For about a minute after GitHub updates the branch, review is missing or
+    # pending. Disarm (review is not branch-protected), but arm nothing else.
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=checks)
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "nothing else armed this tick" in out
+
+
+def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "NEUTRAL")])
+    calls, _ = _run(tmp_path, [pr, _pr(4)])
+    assert calls == []
+
+
+
+def test_an_up_to_date_pr_is_only_armed(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, state="BLOCKED")])
+    assert calls == [_arm(1)]
+
+
+# --- update before arming ---------------------------------------------------------
+
+
+def test_a_behind_head_of_queue_is_updated_unarmed_and_keeps_its_place(tmp_path: Path) -> None:
+    # Arming first would leave auto-merge on across a head nothing has checked.
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "#1 updating before arming" in out
+
+
+def test_failed_on_a_behind_head_is_updated_for_a_fresh_run(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
+    assert calls == ["pr update-branch 9 -R o/r"]
+
+
+def test_a_failed_update_is_retried_next_tick(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)}, fail=("update-branch",))
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "retried next tick" in out
+
+
+def test_update_then_revalidate_then_arm(tmp_path: Path) -> None:
+    tl = _timeline(10, 20)
+    # Tick 1: behind, so it is updated, not armed.
+    calls, _ = _run(tmp_path, [_pr(1, head="aaa", state="BEHIND")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    # Tick 2: the update moved the head; review is being re-evaluated. Hold.
+    calls, out = _run(tmp_path, [_pr(1, head="bbb", review=None)], timelines={1: tl},
+                      compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == []
+    assert "review=MISSING" in out
+    # Tick 3: the new head's content matches the approval and review passed.
+    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == [_arm(1, "bbb")]
+
+
+def test_a_script_armed_holder_left_behind_is_disarmed_before_updating(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=20, arms={3: 30})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+    assert "disarming to update" in out
+

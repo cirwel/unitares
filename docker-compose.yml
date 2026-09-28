@@ -78,7 +78,7 @@ services:
     # published, or no registry access), Compose builds from the block below
     # instead. On a master checkout the tag names a release, not your source:
     # run `docker compose up --build` to build what you have checked out.
-    image: ghcr.io/cirwel/unitares-lease-plane:v2.22.1
+    image: ghcr.io/cirwel/unitares-lease-plane:v3.0.0
     pull_policy: missing
     build:
       context: .
@@ -175,6 +175,9 @@ services:
       # into this container, or the extension route has nothing to serve.
       UNITARES_ROUTE_PACKS: ${UNITARES_ROUTE_PACKS:-}
       UNITARES_DASHBOARD_EXT_DIR: ${UNITARES_DASHBOARD_EXT_DIR:-}
+      # Deployment metrics catalog (JSON path inside the container); empty
+      # registers only the product metrics. See .env.example.
+      UNITARES_METRICS_CATALOG_EXTRA: ${UNITARES_METRICS_CATALOG_EXTRA:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}
