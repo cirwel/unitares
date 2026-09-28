@@ -8,7 +8,7 @@ reviewer re-assignment and awaiting_facilitation behavior.
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import ANY, patch, AsyncMock, MagicMock
 from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +28,9 @@ def _no_inflight_saga():
     """
     with patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
                new_callable=AsyncMock, return_value=False), \
+         patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
+               new_callable=AsyncMock, return_value={}), \
+         patch(f"{AUTO_RESOLVE}.emit_guarded_write", new_callable=AsyncMock), \
          patch(f"{AUTO_RESOLVE}.emit_sweep_cycle", new_callable=AsyncMock):
         yield
 
@@ -135,7 +138,7 @@ async def test_resolves_stuck_thesis_session():
         result = await auto_resolve_stuck_sessions()
 
     assert result["resolved_count"] == 1
-    mock_update.assert_called_once_with("stuck-1", "failed")
+    mock_update.assert_called_once_with("stuck-1", "failed", winner=ANY)
 
 
 @pytest.mark.asyncio
@@ -169,7 +172,7 @@ async def test_antithesis_reassigns_reviewer_when_gone():
 
     assert result["reassigned_count"] == 1
     assert result["resolved_count"] == 0  # Not failed
-    mock_update_reviewer.assert_called_once_with("s1", "new-reviewer")
+    mock_update_reviewer.assert_called_once_with("s1", "new-reviewer", winner=ANY)
 
     # ⛔The (F) reassignment-rate baseline is computed from this event. The
     # sweeper emitted NOTHING until 2026-08-22 while handlers.py called the
@@ -265,7 +268,7 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     assert result["facilitation_count"] == 1
     assert result["resolved_count"] == 0  # NOT failed yet
     mock_update_status.assert_not_called()  # Should not mark as failed
-    mock_mark.assert_awaited_once_with("s1")
+    mock_mark.assert_awaited_once_with("s1", winner=ANY)
     # Every other writer of this flag announces it; a request nobody is told
     # about is one the operator has to go looking for.
     assert mock_emit.await_args.kwargs["session_id"] == "s1"
@@ -329,7 +332,15 @@ async def test_refused_facilitation_write_is_not_narrated():
     server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
 
     mock_add_msg = AsyncMock()
-    mock_mark = AsyncMock(return_value=False)
+
+    async def _refused_by_liveness(session_id, winner=None):
+        # What the DB helper reports on a refusal: the row's status and the
+        # reason its writer recorded (BEAM liveness here).
+        winner.update(winner_status="failed", winner_reason="liveness_timeout",
+                      row_missing=False)
+        return False
+
+    mock_mark = AsyncMock(side_effect=_refused_by_liveness)
     mock_emit_refused = AsyncMock()
 
     with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
@@ -352,6 +363,7 @@ async def test_refused_facilitation_write_is_not_narrated():
         "session_id": "s1",
         "action": "write_refused",
         "attempted": "awaiting_facilitation",
+        "winner_status": "failed",
     }]
     # The refusal must also reach the durable stream, not only the counter --
     # a skipped_count nobody can query cannot distinguish "no collision" from
@@ -362,6 +374,10 @@ async def test_refused_facilitation_write_is_not_narrated():
         "attempted": "awaiting_facilitation",
         "paused_agent_id": "a1",
         "source": "sweeper",
+        # B3: the refusal says who won, so contention-benign and
+        # contention-divergent can be told apart.
+        "winner_status": "failed",
+        "winner_reason": "liveness_timeout",
     }
 
 
@@ -393,7 +409,7 @@ async def test_antithesis_fails_after_facilitation_timeout():
         result = await auto_resolve_stuck_sessions()
 
     assert result["resolved_count"] == 1  # Should be FAILED now
-    mock_update_status.assert_called_once_with("s1", "failed")
+    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
 
 
 @pytest.mark.asyncio
@@ -422,7 +438,7 @@ async def test_antithesis_with_active_reviewer_not_reassigned():
 
     # Reviewer is present — this is a normal timeout, not a missing reviewer
     assert result["resolved_count"] == 1
-    mock_update_status.assert_called_once_with("s1", "failed")
+    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
 
 
 # --- SYNTHESIS stall (#2202) ---
@@ -480,7 +496,7 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
     assert result["resolved_count"] == 0, "the operator window has not opened yet"
     assert result["reassigned_count"] == 0
     mock_update_status.assert_not_called()
-    mock_mark.assert_awaited_once_with("s1")
+    mock_mark.assert_awaited_once_with("s1", winner=ANY)
     # Authority stays with the reviewer that formed the objection.
     mock_select.assert_not_awaited()
     mock_update_reviewer.assert_not_called()
@@ -565,7 +581,7 @@ async def test_synthesis_stall_owed_by_paused_agent_raises_no_flag():
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
     m["emit"].assert_not_awaited()
-    m["update_status"].assert_awaited_once_with("s1", "failed")
+    m["update_status"].assert_awaited_once_with("s1", "failed", winner=ANY)
 
 
 @pytest.mark.asyncio
@@ -578,7 +594,7 @@ async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag()
         paused="a1", reviewer="r1",
         transcript=_transcript(("a1", "thesis"), ("r1", "antithesis")))
     assert result["facilitation_count"] == 1
-    m["mark"].assert_awaited_once_with("s1")
+    m["mark"].assert_awaited_once_with("s1", winner=ANY)
     m["update_status"].assert_not_called()
 
 
@@ -624,7 +640,7 @@ async def test_synthesis_transcript_read_failure_raises_no_flag():
         paused="a1", reviewer="r1", transcript=RuntimeError("db down"))
     assert result["facilitation_count"] == 0
     m["mark"].assert_not_awaited()
-    m["update_status"].assert_awaited_once_with("s1", "failed")
+    m["update_status"].assert_awaited_once_with("s1", "failed", winner=ANY)
 
 
 @pytest.mark.asyncio
@@ -678,7 +694,7 @@ async def test_synthesis_stall_still_fails_after_facilitation_timeout():
     assert result["resolved_count"] == 1
     assert result["facilitation_count"] == 0
     mock_mark.assert_not_awaited()
-    mock_update_status.assert_called_once_with("s1", "failed")
+    mock_update_status.assert_called_once_with("s1", "failed", winner=ANY)
 
 
 @pytest.mark.asyncio
@@ -992,19 +1008,69 @@ class TestSweeperFirstOverlapProbe:
         from src.mcp_handlers.dialectic import auto_resolve as ar
 
         emit = AsyncMock()
-        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
-                   new_callable=AsyncMock, return_value=True), \
+        checked = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+        returned = checked + timedelta(milliseconds=40)
+        saga = {
+            "saga_id": "saga-1",
+            "state": "pg_committed",
+            "created_at": checked + timedelta(milliseconds=10),
+            "pg_committed_at": checked + timedelta(milliseconds=17),
+            "reverted_at": None,
+        }
+        probe = AsyncMock(return_value=saga)
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async", probe), \
              patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
-            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+            outcome = await ar._probe_write_overlap(
+                "s1", "reap_failed", "a1",
+                early_check_ts=checked, commit_ts=returned,
+            )
 
         assert outcome == "detected"
+        probe.assert_awaited_once_with("s1", checked)
         emit.assert_awaited_once()
         assert emit.await_args.kwargs == {
             "session_id": "s1",
             "attempted": "reap_failed",
             "paused_agent_id": "a1",
             "source": "sweeper",
+            "saga": saga,
+            "early_check_ts": checked,
+            "commit_ts": returned,
         }
+
+    @pytest.mark.asyncio
+    async def test_a_saga_that_already_committed_is_still_detected(self):
+        """B1: a saga that started and committed between the early check and
+        the probe is the case a state-only match could not see. The probe is
+        asked for sagas by creation time, so a committed one is an overlap."""
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        checked = datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc)
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
+                   new_callable=AsyncMock,
+                   return_value={"saga_id": "x", "state": "reverted",
+                                 "created_at": checked}), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", new_callable=AsyncMock):
+            outcome = await ar._probe_write_overlap(
+                "s1", "reap_failed", "a1", early_check_ts=checked,
+            )
+
+        assert outcome == "detected"
+
+    @pytest.mark.asyncio
+    async def test_an_unreadable_answer_is_a_failed_probe(self):
+        """Anything that is not a row or an empty result cannot be read as
+        absence -- it is the probe failing to look."""
+        from src.mcp_handlers.dialectic import auto_resolve as ar
+
+        emit = AsyncMock()
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
+                   new_callable=AsyncMock, return_value=True), \
+             patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
+            outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
+
+        assert outcome == "probe_failed"
+        emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_clean_does_not_emit(self):
@@ -1012,8 +1078,8 @@ class TestSweeperFirstOverlapProbe:
         from src.mcp_handlers.dialectic import auto_resolve as ar
 
         emit = AsyncMock()
-        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
-                   new_callable=AsyncMock, return_value=False), \
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
+                   new_callable=AsyncMock, return_value={}), \
              patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
             outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
 
@@ -1026,7 +1092,7 @@ class TestSweeperFirstOverlapProbe:
         from src.mcp_handlers.dialectic import auto_resolve as ar
 
         emit = AsyncMock()
-        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
                    new_callable=AsyncMock, return_value=None), \
              patch(f"{AUTO_RESOLVE}.emit_write_overlap", emit):
             outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
@@ -1039,7 +1105,7 @@ class TestSweeperFirstOverlapProbe:
         """A raise is the same epistemic state as None, not a clean read."""
         from src.mcp_handlers.dialectic import auto_resolve as ar
 
-        with patch(f"{AUTO_RESOLVE}.probe_inflight_saga_async",
+        with patch(f"{AUTO_RESOLVE}.probe_saga_since_async",
                    new_callable=AsyncMock, side_effect=RuntimeError("pool gone")), \
              patch(f"{AUTO_RESOLVE}.emit_write_overlap", new_callable=AsyncMock):
             outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
