@@ -1101,3 +1101,17 @@ def test_master_moving_mid_tick_arms_nothing(tmp_path: Path) -> None:
     assert calls == []
     assert "master moved during this tick" in out
 
+
+
+@pytest.mark.parametrize("stuck", ["unknown", "pending-review"])
+def test_a_sensitive_pr_never_holds_the_order(tmp_path: Path, stuck: str) -> None:
+    # It will never be armed, so neither an UNKNOWN mergeability nor a pending
+    # review on it may stall the PRs behind it.
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    if stuck == "unknown":
+        first = _pr(1, head="aaa", mergeable="UNKNOWN")
+    else:
+        first = _pr(1, head="aaa", review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, _ = _run(tmp_path, [first, _pr(2, head="bbb")], timelines={1: _timeline(12), 2: _timeline(8)},
+                    compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
+    assert calls == [_arm(2, "bbb")]

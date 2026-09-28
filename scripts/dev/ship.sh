@@ -446,8 +446,13 @@ create_or_show_pr() {
         # the PR carries operator-armed, so mark it before arming.
         local armed_label="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
         if gh pr edit "$pr_url" --add-label "$armed_label" >/dev/null 2>&1; then
-            gh pr merge --auto --squash "$pr_url" || \
+            if ! gh pr merge --auto --squash "$pr_url"; then
+                # Take the label back off: the queue never arms a PR carrying
+                # it, so a leftover would strand this PR outside the queue.
+                gh pr edit "$pr_url" --remove-label "$armed_label" >/dev/null 2>&1 || \
+                    echo "[ship] could not remove $armed_label; remove it by hand so the merge queue can take this PR"
                 echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
+            fi
         else
             # Without the label the queue would disarm this arm on its next tick.
             echo "[ship] could not add the $armed_label label, so auto-merge was NOT enabled (the merge queue would cancel it); PR is open"
