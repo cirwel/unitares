@@ -211,13 +211,42 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
     monkeypatch.setattr(rg, "gh_json", pr_info)
     # The real pr_comments, so the handoff's carry registration is what re-keys.
     monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
-    # _resolve registered the reviewed key's view; the second-family pass that
-    # follows the handoff still keys on it (Codex on #2568), so it must survive.
-    registered = (reviewed_key, [])
-    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): registered})
+    # _resolve registered the reviewed key's view. The second-family pass that
+    # follows the handoff still keys on it (Codex on #2568), so afterwards the
+    # view stays under that key and adds the merged head: CI counts a family
+    # recorded on either.
+    earlier = [("older", "c0ffee")]
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, earlier)})
     assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == expected
-    assert rg._CARRY == {("o/r", 1): registered}
+    if pr_edit:
+        assert rg._CARRY == {("o/r", 1): (reviewed_key, earlier)}
+    else:
+        merged = (rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD"))
+        assert rg._CARRY == {("o/r", 1): (reviewed_key, [*earlier, merged])}
     assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
+
+
+def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):
+    # Codex on #2568: a second family that reviewed the merged head during the
+    # handoff passes in CI, so the second-family pass after it must see it too.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    comments = [_record(reviewed_key, reviewer="claude", url="claude")]
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        comments.append(_record(rg.diff_key("master", "HEAD"), reviewer="codex-native",
+                                url="codex"))
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == 0
+    assert rg.passing_families(rg.pr_comments("o/r", 1), reviewed_key) == {"anthropic", "openai"}
 
 
 def test_no_earlier_record_means_nothing_decides(carry_repo):
