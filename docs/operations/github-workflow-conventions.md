@@ -82,9 +82,28 @@ veto by removing the label.
   session pushed a review-fix commit onto the branch while the local session
   that owned it was still working. The owner's push was rejected, and only
   its backup branch kept the two from overwriting each other.
+- <a id="adoption"></a>**A stuck queued PR may be adopted.** Sessions rarely
+  leave a trace that identifies them (most work through `git -C` from
+  elsewhere, and dozens are open at once), so "ask the owner" often has no
+  one to ask. When a PR carrying `approved-to-merge` has been stuck for 12
+  hours (conflicting, a required check failing or unreviewed, or its
+  approval stale) with no activity on the PR at all in that time (no commit,
+  comment, review or label change from anyone: sessions share one GitHub
+  account, so "the owner" cannot be told apart from anyone else), any agent
+  may take it over:
+  1. Post a handover comment on the PR saying you are adopting it and why.
+     That comment is the handover.
+  2. Fix it on the same branch with fast-forward pushes only: merge the base
+     in, never rebase or force-push.
+  3. Run the review, and renew the label (remove, then add) once validation
+     passes.
+  If the owner replies on the PR, stop and hand it back. Operator decision,
+  2026-09-27, after the first queue run left seven PRs stuck with no
+  findable owner.
 - **Do not** enable auto-merge by default.
-- A draft PR means "visible, not claiming merged." **Merging** is the
-  operator's deliberate action. **Marking ready** is the working agent's:
+- A draft PR means "visible, not claiming merged." **Merging** is the merge
+  queue's, entered by the owning agent's `approved-to-merge` label (section
+  4); arming by hand is the operator's. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
   actually passed — CI green, a completed review with findings addressed (see
   "Review workflow" below), and no collision with an in-flight branch. A
@@ -631,8 +650,13 @@ the operator's machine is awake.
   it when you mark your PR ready, on the same validation (CI green, `review`
   passing), and never on another agent's PR; the operator vetoes by removing
   it. The gate exists for coordination, which the queue does more reliably
-  than hand-merging (operator decision, 2026-09-27). It approves the PR as it
-  stood: the
+  than hand-merging (operator decision, 2026-09-27). The exception is a PR
+  labelled `governance-sensitive` (CI applies it to PRs touching enforcement
+  constants; see `docs/dev/GOVERNANCE_SENSITIVITY.md`), or whose diff the
+  queue itself finds touching that manifest, or that comes from a fork: the
+  queue never arms it, and the operator merges it by hand, because the threat model names the
+  human merge gate as the control for exactly those diffs. It approves the
+  PR as it stood: the
   script pins the head and a fingerprint of what it changes when it first
   sees the label (GitHub's compare of `master...<that SHA>`: per file the
   added and removed lines, or the blob SHA where there is no patch, as for a
@@ -668,16 +692,19 @@ the operator's machine is awake.
   check parked for approval (`ACTION_REQUIRED`) is never re-run. This closes
   the silent-disarm gap for labelled PRs, and it means a flaky check shows up
   as `merge-retried` on the PR and a line in the script's log.
-- **The slot.** Any armed PR holds it, including one armed by hand. The
-  script disarms only arms it made (it records each one): such a PR that
-  turns `CONFLICTING`, whose checks failed on its current head, or that has a
-  check parked for approval is disarmed so it stops holding the queue, and
-  its label stays. Removing the label withdraws the approval, and a PR the
-  script armed is disarmed at the next tick once the label is gone. A PR
-  armed by hand, labelled or not, is never disarmed by the script, so it
-  keeps the slot even while it conflicts (arming another would leave two
-  armed once the conflict is resolved); a hold longer than 90 minutes is
-  logged, and clearing it is the maintainer's call.
+- **The slot, and who arms.** The queue owns arming. Any arm it did not
+  make is disarmed on the next tick, with a notice on the PR, and its label
+  stays, so the queue arms it in turn. Agents never arm by hand, and on
+  2026-09-27 seven hand-armed PRs, none of them mergeable, held the slot and
+  stalled the queue for hours. The one exception is the operator's: an arm
+  on a PR labelled `operator-armed` is left alone and holds the slot. The
+  queue never overrides the operator's own arms, so arming two such PRs at
+  once is the operator's choice, and it gives up the one-arm guarantee for
+  those two. A PR
+  the queue armed is disarmed when it turns `CONFLICTING`, when its checks
+  fail on its current head, when a check is parked for approval, when its
+  content changes, or when its label is removed; its label stays except in
+  the last case. A hold longer than 90 minutes is logged.
 - **Notices on the PR.** When the queue skips a labelled PR for a reason
   that will not clear by itself (a conflict, an approval gone stale, a
   required check that concluded without passing, a check parked for
@@ -795,7 +822,7 @@ this entirely).
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| Operator wants one PR to land outside the queue | `gh pr merge --auto <n>`, operator only (it holds the queue's slot until it lands; agents queue with the label instead) |
+| Operator wants one PR to land outside the queue | label it `operator-armed`, then `gh pr merge --auto <n>`; operator only (without that label the queue disarms any arm it did not make, #2561; the arm holds the queue's slot until it lands) |
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |

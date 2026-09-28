@@ -156,8 +156,13 @@ the `gap_suppress` cadence window downgraded 195 of 218 recorded pauses (89.4%) 
 the 2026-08-06 audit, so widening one constant disarms most of the enforcement
 surface in a one-line diff with a plausible performance rationale. **No instance of
 this is known and nothing here implies intent; the claim is structural.** The
-control today is the human merge gate — every session lands a draft PR and a
-maintainer merges — plus CI gates aimed elsewhere (`unitares_doctor.py` for
+control today is the human merge gate for exactly these PRs: since 2026-09-27
+the merge queue lands most PRs on their owning agent's `approved-to-merge`
+label, but it never arms one that is governance-sensitive, which the
+operator merges by hand. It does not rely on CI's `governance-sensitive`
+label alone, which is best-effort (a fork's read-only token cannot apply it):
+before arming, it matches the diff against the same manifest itself and
+fails closed, and it never arms a PR from a fork. Around it sit CI gates aimed elsewhere (`unitares_doctor.py` for
 migration drift, `check-repo-scope.sh` for scope leakage). The latter is precedent
 rather than coverage: it exists because agent-authored config once stripped an
 accountability artifact past `.gitignore`, and its own rationale concluded that
@@ -168,7 +173,8 @@ inventory](dev/GOVERNANCE_SENSITIVITY.md) enumerates the constants and
 anti-gaming tests whose movement materially changes enforcement, and CI labels
 any PR touching them and asks for the expected effect on pause/verdict rates —
 conspicuousness, deliberately not a block, so the human merge gate stays the
-control rather than being routed around. **This binds hardest on cross-operator
+control rather than being routed around. That label is also what keeps such a
+PR out of the merge queue. **This binds hardest on cross-operator
 trust.** A
 partner governor calibrating a peer's telemetry has to model who authored that
 peer's thresholds; an operator who cannot answer that is asking to be trusted

@@ -72,6 +72,15 @@ Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
 This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
 coordination plane.
 
+From the checkout, `./scripts/unitares model` points the server at a model you
+run with Ollama, which turns on advisory `consult` answers and a first reviewer
+for dialectic reviews; without one, a review waits for a peer or the operator.
+`./scripts/unitares update` later moves the install to the newest release: it
+backs up the database before any migration, applies them, restarts, and checks health. See
+[Choose a model](docs/manual/02-install.md#choose-a-model-optional) and
+[Updating](docs/manual/02-install.md#updating), which also covers the one-time
+step for installs made before `update` existed.
+
 ## How it works
 
 An agent joins the operator's UNITARES deployment and receives a process
