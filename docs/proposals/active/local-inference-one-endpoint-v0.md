@@ -166,10 +166,10 @@ Today it is enforced as "the route was Ollama". Under this proposal the
 server classifies the configured endpoint from the URL alone, never from a DNS
 answer:
 
-- **An IP literal** is `local` when it is in the server's existing
-  trusted-network list (`_TRUSTED_NETWORKS` in `src/http_routes/access.py`:
-  loopback, 100.64.0.0/10 and the RFC 1918 ranges) or is an RFC 4193 private
-  address, and `external` otherwise.
+- **An IP literal** is `local` when it is in the server's trusted-network
+  list (`src/http_routes/access.py`: loopback and the RFC 1918 ranges by
+  default, plus any networks the operator lists in `UNITARES_TRUSTED_NETWORKS`)
+  or is an RFC 4193 private address, and `external` otherwise.
 - **A hostname** is `local` only when it is `localhost`,
   `host.docker.internal`, or a name the operator lists in
   `UNITARES_MODEL_LOCAL_HOSTS`. Every other hostname is `external`, even one
@@ -184,9 +184,12 @@ hostname becomes `local`. The failure mode is therefore a refusal that names
 the setting to change, never a silent send.
 
 Reusing that address list keeps one definition of "local" in the server: the
-dashboard and WebSocket access checks already trust the same ranges. Tailscale is not
-part of UNITARES setup; 100.64.0.0/10 is in the list because an address there
-is normally a tailnet peer the operator runs.
+REST and dashboard WebSocket access checks trust the same networks. #2560
+takes 100.64.0.0/10 out of that default. It is the range Tailscale assigns
+from, and some ISPs also use it for carrier-grade NAT, so an outside install
+must not inherit one operator's network layout. An operator whose model runs on
+a tailnet peer lists the range in `UNITARES_TRUSTED_NETWORKS`, and the same
+setting then makes that endpoint `local`.
 
 `UNITARES_MODEL_PRIVACY=local|external` overrides the classification for an
 operator whose own server sits on a public address. A `privacy='local'` request
@@ -368,9 +371,10 @@ in CI or a recorded manual run.
 - **Model-name heuristics.** `model_inference.py` estimates energy cost from the
   model family (llama, qwen, gemma). An unrecognized model id needs a neutral
   default, not an error.
-- **Private-address edge cases.** Docker bridges, Tailscale's 100.64.0.0/10 and
-  split-horizon DNS can make a local server look external or the reverse. The
-  override exists for that; the default list is a decision (7.3).
+- **Private-address edge cases.** Docker bridges, a tailnet and split-horizon
+  DNS can make a local server look external. The refusal names the setting to
+  change (`UNITARES_TRUSTED_NETWORKS` for an address, `UNITARES_MODEL_LOCAL_HOSTS`
+  for a name), and the default list is decision 7.3.
 - **Timeouts.** `llm_assisted_dialectic`, which `dialectic(reviewer_mode='llm')`
   reaches, has a 45 s tool timeout while one warm gemma4 call measures 43 to
   70 s (`model_inference.py`). That mismatch
@@ -392,5 +396,9 @@ in CI or a recorded manual run.
    with a doctor warning, so deployments that relied on it can name a model
    first.
 3. **Local addresses.** Tailscale is not part of UNITARES setup. The endpoint
-   check reuses the server's existing trusted-network list, which already
-   includes 100.64.0.0/10, rather than defining "local" a second way (2.3).
+   check reuses the server's trusted-network list rather than defining "local"
+   a second way (2.3). On the Tailscale range itself, the operator's answer in
+   #2560 applies here too: "are you asking me if outside users should inherit
+   my tailscale address by default?" So 100.64.0.0/10 is not local by default;
+   an operator adds it through `UNITARES_TRUSTED_NETWORKS`. Step 1 builds on
+   #2560, so #2560 lands first.
