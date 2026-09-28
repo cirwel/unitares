@@ -344,6 +344,33 @@ def test_detection_says_no_for_a_server_without_the_route(monkeypatch):
     monkeypatch.setattr(env.urllib.request, "urlopen", lambda url, timeout=0: _Resp(b'{"object": "x"}'))
     assert env.is_ollama_endpoint("http://other.lan:8000/v1") is False
 
+    def silent(url, timeout=0):
+        raise env.urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(env.urllib.request, "urlopen", silent)
+    assert env.is_ollama_endpoint("http://nobody.lan:8000/v1") is False
+
+
+def test_a_busy_ollama_that_misses_the_budget_stays_ollama(monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(env.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(env.urllib.request, "urlopen", lambda url, timeout=0: _Resp(b'{"version": "0.12.0"}'))
+    assert env.is_ollama_endpoint() is True
+
+    def silent(url, timeout=0):
+        raise env.urllib.error.URLError("timed out")
+
+    monkeypatch.setattr(env.urllib.request, "urlopen", silent)
+    clock[0] += 10  # past the cache
+    assert env.is_ollama_endpoint() is True
+
+    def not_found(url, timeout=0):
+        raise env.urllib.error.HTTPError(url, 404, "nf", {}, None)
+
+    monkeypatch.setattr(env.urllib.request, "urlopen", not_found)
+    clock[0] += 10
+    assert env.is_ollama_endpoint() is False  # an answer without the route is definitive
+
 
 @pytest.mark.asyncio
 async def test_structured_call_skips_api_chat_when_not_ollama(monkeypatch):

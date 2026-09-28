@@ -93,8 +93,9 @@ SETTING_ALIASES: tuple[SettingAlias, ...] = (
     SettingAlias("UNITARES_LLM_MODEL", MODEL_ENV, "3.2.0"),
 )
 
-# Pairs of (winning name, other name) already warned about, so a per-call
-# resolver does not repeat the same warning on every inference call.
+# (winning name, its value, other name, its value) disagreements already
+# warned about, so a per-call resolver does not repeat the same warning on
+# every inference call.
 _warned_disagreements: set[tuple[str, str, str, str]] = set()
 
 
@@ -357,23 +358,27 @@ _ollama_detect_cache: dict[str, tuple[float, bool]] = {}
 _ollama_detect_lock = threading.Lock()
 
 
-def _probe_ollama_version(root: str, timeout: float) -> bool:
+def _probe_ollama_version(root: str, timeout: float) -> bool | None:
+    """True/False for an answer that says Ollama or not; None for no answer."""
     try:
         with urllib.request.urlopen(root + "/api/version", timeout=timeout) as resp:
-            if getattr(resp, "status", 200) != 200:
-                return False
             payload = json.load(resp)
+    except urllib.error.HTTPError:
+        return False  # the server answered, without the route
     except (urllib.error.URLError, OSError, ValueError):
-        return False
+        return None
     return isinstance(payload, dict) and isinstance(payload.get("version"), str)
 
 
 def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_TIMEOUT_S) -> bool:
     """True when ``GET {root}/api/version`` answers like Ollama. Cached for 5 s.
 
-    ``root`` defaults to the configured endpoint's root. Any other answer, or
-    none within ``timeout``, reads as "not Ollama": the caller then uses the
-    OpenAI-compatible route every server offers.
+    ``root`` defaults to the configured endpoint's root. A server that answers
+    without the route, or with another body, is not Ollama: the caller then
+    uses the OpenAI-compatible route every server offers. No answer within
+    ``timeout`` keeps this root's previous result (a busy Ollama can miss a
+    0.5 s budget without having stopped being Ollama), or reads as "not
+    Ollama" when there is none.
     """
     root = normalize_ollama_base(root) if root is not None else ollama_base_url()
     now = time.monotonic()
@@ -381,7 +386,8 @@ def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_
         cached = _ollama_detect_cache.get(root)
         if cached is not None and (now - cached[0]) < _OLLAMA_DETECT_TTL_S:
             return cached[1]
-    result = _probe_ollama_version(root, timeout)
+    answer = _probe_ollama_version(root, timeout)
+    result = answer if answer is not None else bool(cached and cached[1])
     with _ollama_detect_lock:
         _ollama_detect_cache[root] = (time.monotonic(), result)
     return result
