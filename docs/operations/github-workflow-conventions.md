@@ -651,7 +651,10 @@ the operator's machine is awake.
   stays, so the queue arms it in turn. Agents never arm by hand, and on
   2026-09-27 seven hand-armed PRs, none of them mergeable, held the slot and
   stalled the queue for hours. The one exception is the operator's: an arm
-  on a PR labelled `operator-armed` is left alone and holds the slot. A PR
+  on a PR labelled `operator-armed` is left alone and holds the slot. The
+  queue never overrides the operator's own arms, so arming two such PRs at
+  once is the operator's choice, and it gives up the one-arm guarantee for
+  those two. A PR
   the queue armed is disarmed when it turns `CONFLICTING`, when its checks
   fail on its current head, when a check is parked for approval, when its
   content changes, or when its label is removed; its label stays except in
