@@ -18,14 +18,26 @@
   function make(onEvent, onStatus) {
     let ws = null, retry = 0, closed = false, generation = 0;
 
-    // A session cookie is implicit in the first handshake and keeps bearer
-    // material out of URLs. Browsers hide failed-handshake status codes, so an
-    // early close/error retries once with the legacy query token when one is
-    // available. Every later reconnect starts cookie-first again.
-    const url = (withToken) => {
+    // A session cookie is implicit in the first handshake. Browsers hide
+    // failed-handshake status codes, so an early close/error retries once with
+    // the break-glass token when one is available. Every later reconnect
+    // starts cookie-first again.
+    //
+    // The token rides in Sec-WebSocket-Protocol, never the URL: the server
+    // logs handshake request lines and the tunnel edge sees them, so a
+    // ?token= query leaked the bearer into the server log on every connect.
+    // Offered as the marker plus "<marker>.<base64url(token)>" (a subprotocol
+    // must be an RFC 7230 token); the server selects the marker.
+    const url = () => {
       const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+      return `${scheme}//${location.host}/ws/eisv`;
+    };
+    const protocols = (withToken) => {
       const t = withToken && window.DATA && window.DATA.apiToken && window.DATA.apiToken();
-      return `${scheme}//${location.host}/ws/eisv${t ? "?token=" + encodeURIComponent(t) : ""}`;
+      if (!t) return undefined;
+      const b64 = btoa(unescape(encodeURIComponent(t)))
+        .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      return ["unitares.bearer", "unitares.bearer." + b64];
     };
     const status = (s) => { try { onStatus(s); } catch { /* ignore */ } };
 
@@ -41,7 +53,10 @@
       const startedAt = Date.now();
       let opened = false, ended = false;
       status("connecting");
-      try { ws = new WebSocket(url(withToken)); }
+      try {
+        const p = protocols(withToken);
+        ws = p ? new WebSocket(url(), p) : new WebSocket(url());
+      }
       catch {
         if (!withToken && window.DATA && window.DATA.apiToken && window.DATA.apiToken()) {
           connect(true);

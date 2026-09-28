@@ -53,9 +53,22 @@
     // API helpers
     // ========================================================================
 
+    // A ?token=… page URL is a one-time handoff: persisted, then scrubbed
+    // from the address bar (same pattern as redesign/data.js).
     function getToken() {
-        return localStorage.getItem('unitares_api_token') ||
-            new URLSearchParams(window.location.search).get('token');
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var fromUrl = params.get('token');
+            if (fromUrl) {
+                localStorage.setItem('unitares_api_token', fromUrl);
+                params.delete('token');
+                var qs = params.toString();
+                history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+            }
+            return localStorage.getItem('unitares_api_token');
+        } catch (e) {
+            return null;
+        }
     }
 
     function callTool(name, args) {
@@ -565,10 +578,17 @@
         var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var url = protocol + '//' + window.location.host + '/ws/eisv';
         var token = getToken();
-        if (token) url += '?token=' + encodeURIComponent(token);
 
         try {
-            ws = new WebSocket(url);
+            // Bearer in Sec-WebSocket-Protocol, never the URL (the server logs
+            // handshake request lines). Same encoding as redesign/ws.js.
+            if (token) {
+                var b64 = btoa(unescape(encodeURIComponent(token)))
+                    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+                ws = new WebSocket(url, ['unitares.bearer', 'unitares.bearer.' + b64]);
+            } else {
+                ws = new WebSocket(url);
+            }
         } catch (e) {
             console.warn('[Phase] WebSocket not available');
             return;
