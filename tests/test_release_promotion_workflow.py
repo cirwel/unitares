@@ -577,3 +577,17 @@ def test_environment_with_a_reviewer_passes(tmp_path: Path):
         '"reviewers":[{"type":"User","reviewer":{"id":7,"login":"operator"}}]}]}'
     )
     assert _run_gate(tmp_path, response).returncode == 0
+
+
+def test_pin_regenerates_the_published_row_after_the_version_update():
+    """version_manager moves only the version cell of the published-server row.
+
+    The v3.0.0 pin carried v2.22.1's "maintenance release" prose onto a major
+    release, so the pin step must regenerate the whole row after it.
+    """
+    run = _step("pin", "Push a branch that advances PUBLISHED_VERSION")["run"]
+    update = run.index("scripts/ops/version_manager.py --update")
+    row = run.index("scripts/ci/compat_published_row.py")
+    assert update < row < run.index("git add -u")
+    assert "actions/runs/$GITHUB_RUN_ID" in run[row:]
+    assert "releases/tag/$RELEASE_TAG" in run[row:]
