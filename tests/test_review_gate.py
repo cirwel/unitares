@@ -320,13 +320,14 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
     assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
 
 
-@pytest.mark.parametrize("start,expected", [
-    (None, "new"), ("old", "new"), ("newer", "newer"), ("side", "side")])
-def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
+@pytest.mark.parametrize("start,expected,status", [
+    (None, "new", "ok"), ("old", "new", "ok"), ("newer", "newer", "ok"),
+    ("side", "side", "diverged")])
+def test_the_base_ref_only_moves_forward(carry_repo, start, expected, status):
     # Codex on #2568: another worktree may fetch a newer base while the
     # handoff runs; the handoff must never roll the shared ref back. A value
-    # on another line of history (a rewritten base) is kept too: the handoff
-    # validates against whatever the ref holds.
+    # on another line of history (a rewritten base) is kept but reported:
+    # it may be stale or newer, and the handoff refuses rather than guess.
     commits = {"old": _git(carry_repo, "rev-parse", "master")}
     _git(carry_repo, "checkout", "-q", "master")
     for name in ("new", "newer"):
@@ -340,19 +341,39 @@ def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
     ref = "refs/remotes/origin/master"
     if start:
         _git(carry_repo, "update-ref", ref, commits[start])
-    rg._advance_ref(ref, commits["new"])
+    assert rg._advance_ref(ref, commits["new"]) == status
     assert _git(carry_repo, "rev-parse", ref) == commits[expected]
 
 
-@pytest.mark.parametrize("winner", ["newer", "side"])
-def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner):
+def test_a_ref_that_cannot_be_updated_is_reported(carry_repo, monkeypatch, capsys):
+    # The independent review on #2568: a failed update that is not a lost
+    # race (a held lock, a read-only repository) is its own outcome, not a
+    # rewritten base.
+    ref = "refs/remotes/origin/master"
+    old = _git(carry_repo, "rev-parse", "master")
+    _git(carry_repo, "update-ref", ref, old)
+    new = _git(carry_repo, "rev-parse", "feature")
+    real_run = rg.subprocess.run
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, *a, **k: (
+        subprocess.CompletedProcess(cmd, 128, "", "fatal: cannot lock ref")
+        if cmd[:2] == ["git", "update-ref"] else real_run(cmd, *a, **k)))
+    assert rg._advance_ref(ref, new) == "stuck"
+    assert "cannot lock ref" in capsys.readouterr().err
+    assert _git(carry_repo, "rev-parse", ref) == old
+
+
+@pytest.mark.parametrize("winner,status,final", [
+    ("newer", "ok", "newer"), ("side", "diverged", "side"),
+    # An older value on the same line: only a re-read moves the ref on to ours.
+    ("mid", "ok", "new")])
+def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner, status, final):
     # Codex on #2568: another worktree may move the ref between the read and
     # the compare-and-swap. The lost swap re-reads and decides on what is there
     # now: a newer base or a rewritten one is kept, never overwritten.
     base = _git(carry_repo, "rev-parse", "master")
     _git(carry_repo, "checkout", "-q", "master")
     commits = {}
-    for name in ("new", "newer"):
+    for name in ("mid", "new", "newer"):
         (carry_repo / "other.txt").write_text(f"{name}\n")
         _git(carry_repo, "commit", "-q", "-am", name)
         commits[name] = _git(carry_repo, "rev-parse", "HEAD")
@@ -372,18 +393,19 @@ def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner):
         return real_run(cmd, *a, **k)
 
     monkeypatch.setattr(rg.subprocess, "run", racing_run)
-    rg._advance_ref(ref, commits["new"])
-    assert raced and _git(carry_repo, "rev-parse", ref) == commits[winner]
+    assert rg._advance_ref(ref, commits["new"]) == status
+    assert raced and _git(carry_repo, "rev-parse", ref) == commits[final]
 
 
-@pytest.mark.parametrize("retained,expected", [("merges_the_pr", 2), ("rewritten", 0)])
-def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatch,
-                                                         retained, expected):
-    # Codex on #2568: another worktree may leave origin/<base> at a newer or a
-    # rewritten base than the handoff fetched. The key is checked against that
-    # base, the one the second-family pass and CI read: a base that merged the
-    # PR's commit changes the diff (UNREVIEWED); a rewritten base that leaves
-    # the PR's diff alone does not.
+@pytest.mark.parametrize("retained,said", [
+    ("merges_the_pr", "head or base diff changed"), ("rewritten", "different lines of history")])
+def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatch, capsys,
+                                                         retained, said):
+    # Codex on #2568: another worktree may leave origin/<base> at a newer base
+    # than the handoff fetched. The key is checked against that base, the one
+    # the second-family pass and CI read, so a base that merged the PR's commit
+    # changes the diff (UNREVIEWED). A base on another line of history may be
+    # stale or newer, so the handoff refuses it outright.
     _git(carry_repo, "remote", "add", "origin", str(carry_repo))
     _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
     head = _git(carry_repo, "rev-parse", "HEAD")
@@ -402,7 +424,8 @@ def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatc
     _git(carry_repo, "checkout", "-q", "feature")
     _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
-    assert completed_review_exit("o/r", 1, key, head, 0) == expected
+    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
+    assert said in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])
@@ -1370,7 +1393,12 @@ def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, 
         assert completed_review_exit("o/r", pr, "k", "h", 0) == (2 if fetch_fails else 0)
     assert len(set(destinations)) == 6  # private base AND head, even for the same PR
     assert sorted(removed) == sorted(destinations)
-    assert compared == ([] if fetch_fails else destinations)
+    # The key is computed against the base the tracking ref holds (see
+    # test_handoff_validates_against_the_base_the_ref_holds) and this call's
+    # own private head.
+    heads = [d for d in destinations if d.endswith("/head")]
+    expected = [r for h in heads for r in ("refs/remotes/origin/master", h)]
+    assert compared == ([] if fetch_fails else expected)
 
 
 def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch):

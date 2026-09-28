@@ -1650,19 +1650,27 @@ def _is_ancestor(a: str, b: str) -> bool:
                           capture_output=True).returncode == 0
 
 
-def _advance_ref(ref: str, new: str) -> None:
-    """Move `ref` forward to `new`, never back: a newer value (another worktree
-    fetched meanwhile), or one on another line of history, is kept.
-    Compare-and-swap, so a concurrent update wins; a lost swap re-reads and
-    decides again. The caller validates against whatever `ref` then holds."""
+def _advance_ref(ref: str, new: str) -> str:
+    """Move `ref` forward to `new`, never back. Compare-and-swap, so a
+    concurrent update wins; a lost swap re-reads and decides again.
+
+    "ok": `ref` now holds `new` or a descendant (another worktree fetched a
+    newer base). "diverged": it holds a commit on another line of history,
+    and which of the two is current cannot be told. "stuck": the update
+    failed for another reason (a held lock, a read-only repository)."""
     for _ in range(3):
         old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
-        if old == new or (old and not _is_ancestor(old, new)):
-            return
+        if old == new or (old and _is_ancestor(new, old)):
+            return "ok"
+        if old and not _is_ancestor(old, new):
+            return "diverged"
         # An empty old value asserts the ref does not exist yet.
-        if subprocess.run(["git", "update-ref", ref, new, old],
-                          capture_output=True).returncode == 0:
-            return
+        swap = subprocess.run(["git", "update-ref", ref, new, old],
+                              capture_output=True, text=True)
+        if swap.returncode == 0:
+            return "ok"
+    print(f"[review] cannot update {ref}: {swap.stderr.strip()}", file=sys.stderr)
+    return "stuck"
 
 
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
@@ -1687,13 +1695,20 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # CI reads the base as it is now, and a base advance may have added a
         # sensitive path; move that ref forward to this snapshot, as a fetch
         # would, whether or not the head moved. Then check the diff against
-        # the base that ref holds (this snapshot, or a newer or rewritten one
-        # another worktree fetched meanwhile), so the key and the policy come
-        # from the same base.
+        # the base that ref holds (this snapshot, or a newer one another
+        # worktree fetched meanwhile), so the key and the policy come from the
+        # same base. A ref on another line of history may be stale or newer
+        # (a rewritten base); which one CI reads cannot be told, so refuse.
         tracking = f"refs/remotes/origin/{info['baseRefName']}"
-        _advance_ref(tracking, git("rev-parse", base_ref).strip())
-        checked_base = (tracking if git("rev-parse", "--verify", "--quiet", tracking,
-                                        check=False).strip() else base_ref)
+        advanced = _advance_ref(tracking, git("rev-parse", base_ref).strip())
+        if advanced == "diverged":
+            raise SystemExit(f"origin/{info['baseRefName']} and the fetched base are on "
+                             "different lines of history (was the base rewritten?); "
+                             "fetch it and review the current diff")
+        if advanced == "stuck":
+            raise SystemExit(f"could not move origin/{info['baseRefName']} to the fetched "
+                             "base; fetch it and review the current diff")
+        checked_base = tracking
         fetched_key = diff_key(checked_base, head_ref)
         fetched_head = git("rev-parse", head_ref).strip()
         current = fetched_key == key
