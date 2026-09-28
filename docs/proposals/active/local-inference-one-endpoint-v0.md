@@ -125,7 +125,11 @@ on the implicit model must name it before step 4 (section 4).
 ### 2.1.2 Every setting reaches every process that reads it
 
 The settings in this proposal are: the endpoint, model and key-name settings;
-the classifier's `UNITARES_MODEL_LOCAL_HOSTS` and `UNITARES_MODEL_PRIVACY`; the
+the classifier's `UNITARES_MODEL_LOCAL_HOSTS`, `UNITARES_MODEL_PRIVACY` and
+the `UNITARES_TRUSTED_NETWORKS` it shares with the access checks (#2560 left
+that one out of Compose because container traffic already arrives through the
+RFC 1918 bridge, but the classifier needs it for an IP-literal model on a
+tailnet peer, and mapping it changes nothing for the access checks); the
 `UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in; the probe timeout; the same set
 under `UNITARES_MODEL_FALLBACK_*`; and the key values under their default
 names, `UNITARES_MODEL_API_KEY` and `UNITARES_MODEL_FALLBACK_API_KEY`, so a
@@ -287,6 +291,13 @@ release note says what to set first. One rule orders them: no step may let a req
      attempt made only when it succeeds. Without this, a non-Ollama endpoint
      set in this step would make every structured review wait out the native
      route's 60 s timeout before falling back;
+   - the `provider` parameter's description in `call_model`'s schema: `ollama`
+     becomes "the configured local endpoint" and `hf` stays the Hugging Face
+     router. From this step on, `provider="ollama"` can reach a non-Ollama
+     server, so the published meaning changes with the behavior, not later.
+     This moves input-schema digests and bumps the interface contract, a
+     description-only change like 1.19.0; no value is added, removed or
+     renamed;
    - the macOS LaunchAgent template
      (`scripts/ops/com.unitares.governance-mcp.plist`, which today carries
      only `UNITARES_LLM_MODEL`) and its install instructions, with the two
@@ -354,8 +365,8 @@ release note says what to set first. One rule orders them: no step may let a req
    operator's deployment, which names none today. Agent processes that read
    the same resolver (the orchestrated reviewer's `local` backend, the local
    resident runner) follow the same rule.
-5. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy` and describe
-   `provider` as primary or fallback. This moves input-schema digests, so it
+5. **Contract.** Accept `cloud_allowed` in `call_model`'s `privacy`, and add a
+   `fallback` value to `provider` beside `hf`. This moves input-schema digests, so it
    waits for the next batched interface-contract release (see
    `interface-contract-release-batching-v0.md`, PR #2515, if accepted).
 
