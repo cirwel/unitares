@@ -137,9 +137,18 @@ def extra_trusted_networks() -> tuple:
             )
             continue
         nets.append(net)
-    # Judge coverage on the collapsed union, so split entries count as one.
+    # Judge coverage on the collapsed union, so split entries count as one. An
+    # IPv4-mapped IPv6 entry trusts the IPv4 callers it maps (_is_trusted_network
+    # matches both forms), so it counts toward the IPv4 union as well.
+    mapped_v4 = [
+        _ipaddress.ip_network((int(n.network_address) & 0xFFFFFFFF, n.prefixlen - 96))
+        for n in nets
+        if n.version == 6 and n.subnet_of(_IPV4_MAPPED)
+    ]
     for version in (4, 6):
         listed = [n for n in nets if n.version == version]
+        if version == 4:
+            listed += mapped_v4
         for net in _ipaddress.collapse_addresses(listed):
             if net.prefixlen == 0:
                 logger.warning(

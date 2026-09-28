@@ -135,6 +135,13 @@ def _www_authenticate_header(auth_settings: Any) -> str:
 #: Scope key the public listener stamps on every request it accepts.
 PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
 
+#: Peers whose X-Forwarded-For uvicorn applies: a reverse proxy on this host.
+#: Every form a loopback peer can take, IPv4-mapped on a dual-stack bind
+#: included, because the REST trusted-network check treats each of them as
+#: loopback. A proxy uvicorn did not recognise would pass its callers through
+#: that check with its own loopback address.
+FORWARDED_ALLOW_IPS = "127.0.0.1,::1,::ffff:127.0.0.1"
+
 
 def mark_public_listener(app: Any) -> AsgiCallable:
     """Wrap ``app`` so every request through it is stamped as public.
@@ -591,7 +598,7 @@ def build_transport_runtime(
         limit_concurrency=100,
         timeout_keep_alive=5,
         timeout_graceful_shutdown=10,
-        forwarded_allow_ips="127.0.0.1",
+        forwarded_allow_ips=FORWARDED_ALLOW_IPS,
         proxy_headers=True,
         ws="websockets-sansio",
     )
@@ -615,7 +622,7 @@ def build_transport_runtime(
                 limit_concurrency=100,
                 timeout_keep_alive=5,
                 timeout_graceful_shutdown=10,
-                forwarded_allow_ips="127.0.0.1",
+                forwarded_allow_ips=FORWARDED_ALLOW_IPS,
                 proxy_headers=True,
                 ws="websockets-sansio",
             ),
