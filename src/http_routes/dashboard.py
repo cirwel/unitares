@@ -26,11 +26,11 @@ logger = get_logger(__name__)
 # Since 2026-09-27 it is a synthetic fixture, and it stays gated anyway: the
 # gate costs nothing (app.html's same-origin <script src> carries the session
 # cookie) and it keeps the rule simple if a capture is ever bundled again.
-# preview.html carried the same capture and was deleted then. PLAN.md
-# describes the operator's own fleet. Neither file in this set is loaded at
-# runtime by anything except app.html's snapshot <script>, so gating takes no
-# rendering path with it.
-_AUTHENTICATED_ONLY_FILES = {"snapshot.js", "PLAN.md"}
+# preview.html carried the same capture and was deleted then; PLAN.md, the
+# original design plan describing the operator's own fleet, followed. Only
+# app.html's snapshot <script> loads this file, so gating takes no rendering
+# path with it.
+_AUTHENTICATED_ONLY_FILES = {"snapshot.js"}
 
 
 # Dashboard endpoint
