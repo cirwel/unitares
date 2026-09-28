@@ -1767,6 +1767,13 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
                                                 (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
+        elif current:
+            # The head did not move, but the base may have. CI decides this
+            # head with the carry computed against the base it reads now,
+            # which can carry less than _resolve's (a policy change on the
+            # base can make the diff second-family). Give the second-family
+            # pass that set.
+            _CARRY[(repo, pr)] = (key, base_merge_equivalents(checked_base, head_ref))
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED

@@ -542,6 +542,42 @@ def test_a_second_family_diff_is_never_carried(carry_repo, monkeypatch, policy, 
     assert (rec is not None) == bool(carried)
 
 
+@pytest.mark.parametrize("sensitive_now,families", [
+    (False, {"anthropic", "openai"}),
+    (True, {"anthropic"}),
+])
+def test_handoff_rereads_the_carry_when_only_the_base_policy_moved(
+        carry_repo, monkeypatch, sensitive_now, families):
+    # The independent review on #2581: _resolve registered the carry under the
+    # policy it read, but the base's policy can change during the review while
+    # the head stays put. CI then carries nothing for a second-family diff, so
+    # the second-family pass after the handoff must not count the family that
+    # only the old carry supplied.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    reviewed_key = rg.diff_key("master", "HEAD")  # Codex passed the pre-merge head
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", "master")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    head, key = _git(carry_repo, "rev-parse", "HEAD"), rg.diff_key("master", "HEAD")
+    comments = [_record(reviewed_key, reviewer="codex-native", url="codex"),
+                _record(key, reviewer="claude", url="claude")]
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 1),
+                        (key, rg.base_merge_equivalents("master", "HEAD")))
+    before, _ = rg.carry_records(comments, key, rg._CARRY[("o/r", 1)][1])
+    assert rg.passing_families(before, key) == {"anthropic", "openai"}
+    # The base's policy moves during the review; the head does not.
+    monkeypatch.setattr(rg, "base_policy_paths",
+                        lambda base: ["f.txt"] if sensitive_now else [])
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    assert completed_review_exit("o/r", 1, key, head, 0) == 0
+    carried, _ = rg.carry_records(comments, key, rg._CARRY[("o/r", 1)][1])
+    assert rg.passing_families(carried, key) == families
+
+
 def test_no_earlier_record_means_nothing_decides(carry_repo):
     _master_edits_next_to_the_pr(carry_repo)
     _git(carry_repo, "merge", "-q", "--no-edit", "master")
