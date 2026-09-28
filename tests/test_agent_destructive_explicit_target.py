@@ -12,8 +12,10 @@ handle could delete an arbitrary agent. describe_tool's lite view
 of both actions hid agent_id (LITE_IDENTITY_FIELDS), which is how a caller
 reading it came to send the call without one.
 
-Three pieces now hold the rule, and the last test here holds them together:
+Four pieces now hold the rule, and the tests here hold them together:
 - middleware/params_step.py _EXPLICIT_TARGET_CALLS: no injection for them;
+- http_routes/access.py _resolve_http_bound_agent: the REST prebind binds the
+  caller for the same set without writing it in as the target;
 - lifecycle/mutation.py: refuse a call that names no target, and accept only
   the target's own id (a UUID), never a label or public id;
 - AgentParams.ACTION_REQUIRED_FIELDS: lite lists agent_id as required at call
@@ -449,3 +451,93 @@ def test_the_router_examples_name_archive_targets_by_uuid():
         assert target, example
         value = target.group(1)
         assert value.startswith("<") or re.fullmatch(r"[0-9a-f-]{36}", value), example
+
+
+# ---------------------------------------------------------------------------
+# REST: the prebind binds the caller and leaves the target unnamed
+# ---------------------------------------------------------------------------
+
+
+def _rest_prebind(name: str, arguments: dict, path: str, monkeypatch) -> tuple[str | None, dict]:
+    """Run the real REST prebind with the caller resolved on one path.
+
+    The operator path runs as written, with only the operator lookup stubbed.
+    The sticky and session paths are stood in for by fakes that stamp the way
+    the real ones do, through _preserve_explicit_target (the structural lock
+    in test_http_prebind_preserves_target.py keeps every path on that helper).
+    """
+    import src.http_routes.access as access
+
+    async def operator(_signals):
+        return {"agent_uuid": CALLER} if path == "operator" else None
+
+    async def sticky(args, _signals):
+        if path != "sticky":
+            return None, None
+        access._preserve_explicit_target(args, CALLER)
+        return CALLER, None
+
+    async def session(_tool_name, args, _signals, _consult):
+        access._preserve_explicit_target(args, CALLER)
+        return CALLER
+
+    monkeypatch.setattr(
+        "src.mcp_handlers.identity.operator.resolve_operator_identity", operator
+    )
+    monkeypatch.setattr(access, "_consult_http_sticky_binding", sticky)
+    monkeypatch.setattr(access, "_resolve_http_session_binding", session)
+    sent = dict(arguments)
+    bound = asyncio.run(access._resolve_http_bound_agent(name, sent, object()))
+    return bound, sent
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("agent", {"action": "delete", "confirm": True}),
+        ("agent", {"op": "delete", "confirm": True}),
+        ("delete_agent", {"confirm": True}),
+        ("agent", {"action": "archive"}),
+        ("archive_agent", {}),
+        ("agent", {"action": "archive", "agent_id": ""}),
+    ],
+)
+def test_rest_prebind_does_not_name_the_caller_as_the_target(name, arguments, path, monkeypatch):
+    """Every REST prebind path stamps the resolved caller into an omitted
+    agent_id. For archive and delete that brought back, over REST, the default
+    #2532 removed on /mcp/: agent(action='delete', confirm=true) with no
+    agent_id deleted the caller. The caller is still bound; the call still
+    names no target, and is refused."""
+    bound_to, sent = _rest_prebind(name, arguments, path, monkeypatch)
+    assert bound_to == CALLER, "the prebind still binds the caller"
+    assert not sent.get("agent_id"), f"the prebind named the caller as the target: {sent}"
+    with _Bound() as bound:
+        _dispatched, payload = asyncio.run(_dispatch(name, sent))
+        assert payload.get("error_code") == "TARGET_AGENT_REQUIRED", payload
+        assert bound.archived() == [] and bound.deleted() == []
+        assert bound.server.agent_metadata[CALLER].status == "active"
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+def test_rest_prebind_keeps_a_named_target(path, monkeypatch):
+    _bound_to, sent = _rest_prebind(
+        "agent", {"action": "archive", "agent_id": TARGET}, path, monkeypatch
+    )
+    assert sent["agent_id"] == TARGET
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("agent", {"action": "get"}),
+        ("agent", {"action": "resume"}),
+        ("get_governance_metrics", {}),
+    ],
+)
+def test_rest_prebind_still_defaults_other_calls_to_the_caller(name, arguments, path, monkeypatch):
+    """Regression guard: a self-scoped call keeps the session default."""
+    _bound_to, sent = _rest_prebind(name, arguments, path, monkeypatch)
+    assert sent["agent_id"] == CALLER
+
