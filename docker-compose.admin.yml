@@ -1,0 +1,29 @@
+# UNITARES — Admin/debug overlay: publish Postgres and Redis on localhost
+#
+# The base docker-compose.yml intentionally does NOT publish Postgres (5432)
+# or Redis (6379) to the host: Postgres carries a default credential
+# (postgres/postgres) and Redis has no auth at all, so publishing either means
+# ANY other local process or user account on the machine can reach it —
+# 127.0.0.1 is a machine boundary, not a user boundary. governance-mcp and
+# lease-plane already reach both over the internal Compose network without
+# this file; nothing about the running stack needs it.
+#
+# Opt in only when you need direct host access for local debugging (psql,
+# redis-cli, a GUI client):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.admin.yml up
+#
+# Rotate POSTGRES_PASSWORD in .env before using this on a shared machine, and
+# do not use it on a host reachable by anyone you don't trust with both
+# databases.
+
+services:
+  postgres-age:
+    ports:
+      # Override the host-side port via POSTGRES_HOST_PORT in .env if 5432
+      # is already taken on your machine (e.g., by a Homebrew Postgres).
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
