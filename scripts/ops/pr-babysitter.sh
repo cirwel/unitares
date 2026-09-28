@@ -128,6 +128,10 @@ minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | f
 
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
+# Pin the base before reading the PRs, so the rules, the diffs and the PRs'
+# merge states all describe the same base commit; arming re-checks it.
+tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tick_base_sha=""
+
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
   --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
@@ -252,7 +256,7 @@ load_manifest() {
   else
     # Pin the base once, so a merge mid-tick cannot pair new rules with an
     # old diff or the reverse.
-    base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || base_sha=""
+    base_sha="$tick_base_sha"
     [ -n "$base_sha" ] \
       && manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
       && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
@@ -568,6 +572,14 @@ while read -r _ n head; do
     # no help anyway: it acted for 1 of 16 queue arms on 2026-09-27.
     log "#$n updating before arming (head of queue)"
     act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; retried next tick"
+    exit 0
+  fi
+
+  # The PR data describes the base as it stood when the tick began; if master
+  # has moved since, this PR may be BEHIND now. Leave it to the next tick.
+  now_base=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || now_base=""
+  if [ -z "$tick_base_sha" ] || [ "$now_base" != "$tick_base_sha" ]; then
+    log "#$n: $BASE moved during this tick; nothing armed"
     exit 0
   fi
 
