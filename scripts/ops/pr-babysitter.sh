@@ -295,6 +295,11 @@ armed=$(q -c --arg b "$BASE" \
 
 disarmed=" "
 hold_order=0
+# An operator's arm takes the slot: any queue arm alongside it is disarmed (it
+# keeps its label and returns in turn), so there is never more than one arm.
+operator_arm=$(jq -rs --arg l "$OPERATOR_ARMED_LABEL" \
+  '[.[] | select(any(.labels[]?; .name == $l)) | .number] | first // empty' <<<"$armed") \
+  || { log "could not read the armed PRs; nothing done"; exit 1; }
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
@@ -313,6 +318,8 @@ while read -r pr; do
   if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
     reason="it was armed outside the queue"
     hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+  elif [ -n "$operator_arm" ]; then
+    reason="the operator armed #$operator_arm, which takes the slot"
   elif held_by=$(operator_only "$pr"); then
     reason="it is labelled $held_by, which only the operator merges"
   elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then

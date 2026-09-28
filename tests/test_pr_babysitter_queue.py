@@ -1018,3 +1018,13 @@ def test_a_queue_arm_that_turns_out_sensitive_is_disarmed(tmp_path: Path) -> Non
                       compares={"aaa": CHANGE_A})
     assert calls == ["pr merge 3 -R o/r --disable-auto"]
     assert "governance-sensitive surface (f)" in out
+
+
+def test_an_operator_arm_takes_the_slot_from_a_queue_arm(tmp_path: Path) -> None:
+    # Two arms at once would let GitHub update and merge the queue's without
+    # re-running review; the queue's yields and keeps its label.
+    queue_armed = _pr(3, armed_min_ago=20)
+    operator = _pr(4, labels=("operator-armed",), armed_min_ago=2)
+    calls, out = _run(tmp_path, [queue_armed, operator], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "the operator armed #4, which takes the slot" in out
