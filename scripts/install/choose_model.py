@@ -229,6 +229,49 @@ def server_reaches_model(env_file: Path, settings: dict[str, str]) -> bool:
     return compose(["exec", "-T", "governance-mcp", "python", "-c", probe], env_file, settings).returncode == 0
 
 
+_CLASSIFIER_KEYS = ("UNITARES_MODEL_LOCAL_HOSTS", "UNITARES_MODEL_PRIVACY", "UNITARES_TRUSTED_NETWORKS")
+
+
+def endpoint_is_local(base: str, env_values: dict[str, str | None]) -> tuple[bool, str]:
+    """Classify ``base`` the way the server will, from the given settings.
+
+    Uses the server's own classifier (``src/local_inference_env.py``, stdlib
+    only) with the classifier settings the server will read, not this shell's.
+    Returns (is_local, the setting that would change the answer).
+    """
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from src import local_inference_env
+
+    saved = {key: os.environ.get(key) for key in _CLASSIFIER_KEYS}
+    try:
+        for key in _CLASSIFIER_KEYS:
+            value = env_values.get(key)
+            if value:
+                os.environ[key] = value
+            else:
+                os.environ.pop(key, None)
+        verdict = local_inference_env.classify_endpoint(base)
+        return verdict.is_local, verdict.reason
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+def print_privacy_note(base: str, env_values: dict[str, str | None]) -> bool:
+    """Warn when the endpoint will classify external; True when it is local."""
+    is_local, reason = endpoint_is_local(base, env_values)
+    if not is_local:
+        print(f"⚠ The server will treat {base} as external, not the operator's own machine.")
+        print("  consult with the default privacy='local', and the dialectic reviewer, refuse an external endpoint;")
+        print("  only consult(privacy='cloud_allowed') and call_model with privacy='auto' or 'cloud' will use it.")
+        print(f"  Why: {reason}.")
+    return is_local
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--model", help="model to use (must be one the server lists)")
@@ -283,6 +326,7 @@ def main(argv: list[str] | None = None) -> int:
         print("✓ Source install: set these in the server's environment (shell, or the launchd plist), then restart it:")
         print(f"  {BASE_KEY}={base}")
         print(f"  {MODEL_KEY}={model}")
+        print_privacy_note(base, {key: os.environ.get(key) for key in _CLASSIFIER_KEYS})
         return 0
 
     server_base = container_base(base)
@@ -295,6 +339,9 @@ def main(argv: list[str] | None = None) -> int:
     alias = read_env_value(before, ALIAS_KEY)
     if alias:
         print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}. {BASE_KEY} takes precedence; remove the other line to avoid confusion.")
+    endpoint_local = print_privacy_note(
+        server_base, {key: read_env_value(before, key) for key in _CLASSIFIER_KEYS}
+    )
 
     if args.no_rebuild:
         print("  Rebuild to apply: docker compose up -d --build governance-mcp")
@@ -313,7 +360,10 @@ def main(argv: list[str] | None = None) -> int:
         return result.returncode or 1
 
     if server_reaches_model(env_file, settings):
-        print(f"✓ The server reaches {model}. consult and dialectic reviews will use it.")
+        if endpoint_local:
+            print(f"✓ The server reaches {model}. consult and dialectic reviews will use it.")
+        else:
+            print(f"✓ The server reaches {model}, for cloud-allowed consults only (see the note above).")
         return 0
     print(f"✗ The server cannot reach {model} at {server_base}.")
     if ollama and sys.platform.startswith("linux"):

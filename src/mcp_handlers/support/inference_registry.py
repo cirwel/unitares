@@ -201,10 +201,19 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "generation", "analysis"],
             models=[ollama_model],
             implementation_status="active",
-            accepts_host_id_from=["call_model"],
+            # host_id="ollama:local" forces privacy='local', so an endpoint
+            # that classifies external cannot be selected by host id; the
+            # record says so instead of advertising a call that is refused.
+            accepts_host_id_from=["call_model"] if local_route_is_local else [],
             notes=(
                 "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
+                if local_route_is_local
+                else "The configured model endpoint classifies external, so "
+                "host_id='ollama:local' (which requests local privacy) is refused. "
+                "Reach it with call_model(provider='ollama', privacy='auto' or "
+                "'cloud') or consult(privacy='cloud_allowed'), or reclassify it "
+                "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
             ),
         ),
         InferenceHost(

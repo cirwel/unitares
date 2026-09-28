@@ -481,6 +481,9 @@ def test_discovery_reports_an_external_endpoint_as_external(external_endpoint, m
     host = inference_registry.get_inference_host("ollama:local")
     assert host["privacy_class"] == "external"
     assert host["cost_class"] == "unknown"
+    # Not advertised as a call_model host_id: that call forces local privacy.
+    assert host["accepts_host_id_from"] == []
+    assert "privacy='auto'" in host["notes"]
 
 
 def test_discovery_keeps_the_default_endpoint_local(monkeypatch):
@@ -532,3 +535,22 @@ def test_availability_probe_reaches_an_ipv6_endpoint(monkeypatch):
         assert inference_registry._probe_ollama_socket() is True
     finally:
         listener.close()
+
+
+def test_installer_warns_when_the_endpoint_will_classify_external(capsys):
+    import sys as _sys
+
+    _sys.path.insert(0, "scripts/install")
+    import choose_model
+
+    assert choose_model.print_privacy_note("http://host.docker.internal:11434/v1", {}) is True
+    assert "external" not in capsys.readouterr().out
+
+    assert choose_model.print_privacy_note("http://vllm:8000/v1", {}) is False
+    out = capsys.readouterr().out
+    assert "treat http://vllm:8000/v1 as external" in out
+    assert "UNITARES_MODEL_LOCAL_HOSTS" in out
+
+    assert choose_model.print_privacy_note(
+        "http://vllm:8000/v1", {"UNITARES_MODEL_LOCAL_HOSTS": "vllm"}
+    ) is True
