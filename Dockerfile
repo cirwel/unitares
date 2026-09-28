@@ -37,10 +37,15 @@ RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 # in 2026-04-24 (was previously a separate compiled wheel) — no wheel install.
 COPY src/ src/
 COPY governance_core/ governance_core/
-COPY agents/ agents/
 # The server imports unitares_sdk (src/lease_plane re-exports its lease-plane
-# client). It ships in agents/sdk; install it so the import resolves. Its
-# dependencies (httpx, mcp, pydantic) are already installed above.
+# client). It ships in agents/sdk, a standalone package with no path
+# dependency on its agents/ siblings; install it so the import resolves.
+# Its dependencies (httpx, mcp, pydantic) are already installed above.
+# Only agents/sdk is copied — the reference residents (chronicler, vigil,
+# sentinel, watcher, ...) are not imported by src/ or governance_core/ at
+# runtime, and their deployment-specific defaults (GITHUB_SCRAPE_ORG,
+# VIGIL_STALLED_PR_OWNER, ...) have no reason to ship in this image.
+COPY agents/sdk/ agents/sdk/
 RUN pip install --no-cache-dir --no-deps ./agents/sdk
 COPY config/ config/
 COPY dashboard/ dashboard/
