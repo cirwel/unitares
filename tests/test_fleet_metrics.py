@@ -2,13 +2,37 @@
 
 from __future__ import annotations
 
+import importlib
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.fleet_metrics.catalog import Metric, catalog as _catalog, register, require
+from src.fleet_metrics.catalog import (
+    Metric,
+    catalog as _catalog,
+    load_extra_catalog,
+    register,
+    require,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CHRONICLER_EXTRA_CATALOG = REPO_ROOT / "agents" / "chronicler" / "metrics_catalog.json"
+
+# Metric names that name one operator's repo, GitHub org or reference
+# resident. They belong to Chronicler's extra catalog, never the core layer.
+OPERATOR_METRICS = (
+    "tokei.unitares.src.code",
+    "tests.unitares.count",
+    "governance.sentinel.findings.7d",
+    "github.cirwel.traffic.views.14d",
+    "github.cirwel.traffic.views.uniques.14d",
+    "github.cirwel.traffic.clones.14d",
+    "github.cirwel.traffic.clones.uniques.14d",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -18,11 +42,11 @@ from src.fleet_metrics.catalog import Metric, catalog as _catalog, register, req
 
 class TestCatalog:
     def test_initial_entry_present(self):
-        """The module registers tokei.unitares.src.code on import."""
-        assert "tokei.unitares.src.code" in _catalog
-        entry = _catalog["tokei.unitares.src.code"]
-        assert entry.unit == "lines"
-        assert "unitares" in entry.description
+        """The module registers the core product metrics on import."""
+        assert "kg.entries.count" in _catalog
+        entry = _catalog["kg.entries.count"]
+        assert entry.unit == "entries"
+        assert "knowledge graph" in entry.description
 
     def test_db_backed_metrics_registered(self):
         """Chronicler's DB-backed scrapers have catalog entries so the server
@@ -38,24 +62,28 @@ class TestCatalog:
             "governance.risk.mean.7d",
             "governance.guide.7d",
             "governance.pause.7d",
-            "governance.sentinel.findings.7d",
         ):
             assert name in _catalog, f"{name} missing from catalog"
 
     def test_every_scraper_has_a_catalog_entry(self):
-        """Invariant: every name Chronicler scrapes must be catalog-registered.
+        """Invariant: every name Chronicler scrapes must be catalog-registered
+        once its deployment loads Chronicler's extra catalog.
 
         The POST endpoint validates against the catalog, so any SCRAPERS name
-        without an entry is a silent 404 each daily run. This subset check
-        guards all current and future scrapers at once, rather than relying on
-        per-name lists drifting in step."""
+        in neither the core layer nor Chronicler's metrics_catalog.json is a
+        silent 404 each daily run. This subset check guards all current and
+        future scrapers at once, rather than relying on per-name lists
+        drifting in step."""
         from agents.chronicler.scrapers import SCRAPERS
 
-        missing = sorted(name for name in SCRAPERS if name not in _catalog)
+        extra = {m["name"] for m in json.loads(CHRONICLER_EXTRA_CATALOG.read_text())["metrics"]}
+        missing = sorted(
+            name for name in SCRAPERS if name not in _catalog and name not in extra
+        )
         assert not missing, f"scrapers missing catalog entries (will 404): {missing}"
 
     def test_require_known_name_returns_entry(self):
-        entry = require("tokei.unitares.src.code")
+        entry = require("kg.entries.count")
         assert isinstance(entry, Metric)
 
     def test_require_unknown_name_raises_keyerror(self):
@@ -104,8 +132,6 @@ class TestCatalog:
         `.error` twins so their failure-visibility path actually lands rows
         in metrics.series instead of 404ing."""
         for base in (
-            "tokei.unitares.src.code",
-            "tests.unitares.count",
             "agents.active.7d",
             "kg.entries.count",
             "checkins.7d",
@@ -136,6 +162,123 @@ class TestCatalog:
 
 
 # ---------------------------------------------------------------------------
+# Deployment extra catalog (UNITARES_METRICS_CATALOG_EXTRA)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def restore_catalog():
+    """Put the process-wide catalog back after a test registers extras."""
+    catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+    saved = dict(_catalog)
+    saved_progress = set(catalog_module.progress_series)
+    try:
+        yield
+    finally:
+        _catalog.clear()
+        _catalog.update(saved)
+        catalog_module.progress_series.clear()
+        catalog_module.progress_series.update(saved_progress)
+
+
+def _write(tmp_path, doc) -> Path:
+    path = tmp_path / "extra.json"
+    path.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+    return path
+
+
+class TestExtraCatalog:
+    def test_core_layer_names_no_operator_metric(self):
+        """The suite leaves UNITARES_METRICS_CATALOG_EXTRA unset, so the
+        imported catalog is the core layer every install ships."""
+        leaked = sorted(
+            n for n in _catalog
+            if n.removesuffix(".error") in OPERATOR_METRICS or "cirwel" in n
+        )
+        assert not leaked, f"operator metrics in the core catalog: {leaked}"
+
+    def test_chronicler_file_declares_exactly_the_operator_metrics(
+        self, restore_catalog
+    ):
+        loaded = load_extra_catalog(CHRONICLER_EXTRA_CATALOG)
+        assert sorted(m.name for m in loaded) == sorted(OPERATOR_METRICS)
+        for name in OPERATOR_METRICS:
+            assert name in _catalog
+            assert f"{name}.error" in _catalog, f"missing .error twin for {name}"
+
+    def test_env_var_names_the_file(self, restore_catalog, monkeypatch):
+        monkeypatch.setenv("UNITARES_METRICS_CATALOG_EXTRA", str(CHRONICLER_EXTRA_CATALOG))
+        assert "tokei.unitares.src.code" not in _catalog
+        load_extra_catalog()
+        assert require("tokei.unitares.src.code").unit == "lines"
+
+    def test_unset_or_blank_env_registers_nothing(self, restore_catalog, monkeypatch):
+        before = dict(_catalog)
+        monkeypatch.delenv("UNITARES_METRICS_CATALOG_EXTRA", raising=False)
+        assert load_extra_catalog() == []
+        monkeypatch.setenv("UNITARES_METRICS_CATALOG_EXTRA", "  ")
+        assert load_extra_catalog() == []
+        assert _catalog == before
+
+    @pytest.mark.parametrize(
+        "doc",
+        ["{not json", '["a"]', '{"metrics": {"name": "x"}}', "{}"],
+        ids=["unparseable", "array", "metrics-not-list", "no-metrics"],
+    )
+    def test_bad_file_registers_nothing(self, restore_catalog, tmp_path, caplog, doc):
+        before = dict(_catalog)
+        assert load_extra_catalog(_write(tmp_path, doc)) == []
+        assert _catalog == before
+        assert "metrics extra catalog" in caplog.text
+
+    def test_missing_file_registers_nothing(self, restore_catalog, tmp_path, caplog):
+        assert load_extra_catalog(tmp_path / "absent.json") == []
+        assert "not found" in caplog.text
+
+    def test_malformed_entry_is_skipped_and_the_rest_load(
+        self, restore_catalog, tmp_path, caplog
+    ):
+        path = _write(tmp_path, {"metrics": [
+            {"name": "ext.good", "description": "fine", "unit": "things"},
+            {"name": "ext.no_description"},
+            {"name": 7, "description": "numeric name"},
+            {"name": "  ", "description": "blank name"},
+            "not an object",
+            {"name": "ext.default_unit", "description": "unit omitted"},
+        ]})
+        loaded = load_extra_catalog(path)
+        assert [m.name for m in loaded] == ["ext.good", "ext.default_unit"]
+        assert _catalog["ext.default_unit"].unit == ""
+        assert caplog.text.count("is malformed") == 4
+
+    def test_extra_entry_never_overrides_a_core_entry(
+        self, restore_catalog, tmp_path, caplog
+    ):
+        core = _catalog["kg.entries.count"]
+        path = _write(tmp_path, {"metrics": [
+            {"name": "kg.entries.count", "description": "hijacked", "unit": "x"},
+        ]})
+        assert load_extra_catalog(path) == []
+        assert _catalog["kg.entries.count"] == core
+        assert "is malformed" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_write_gate_follows_the_extra_catalog(self, restore_catalog):
+        """Without the extra catalog an operator metric is refused at the
+        write gate; with it, the write reaches the table."""
+        from src.fleet_metrics import record
+
+        db, conn = _make_db_mock()
+        with patch("src.agent_storage.get_db", return_value=db):
+            with pytest.raises(KeyError, match="UNITARES_METRICS_CATALOG_EXTRA"):
+                await record("github.cirwel.traffic.views.14d", 3.0)
+            load_extra_catalog(CHRONICLER_EXTRA_CATALOG)
+            await record("github.cirwel.traffic.views.14d", 3.0)
+        conn.execute.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
 # Storage
 # ---------------------------------------------------------------------------
 
@@ -162,12 +305,12 @@ class TestRecord:
 
         db, conn = _make_db_mock()
         with patch("src.agent_storage.get_db", return_value=db):
-            await record("tokei.unitares.src.code", 70000.0)
+            await record("kg.entries.count", 70000.0)
 
         conn.execute.assert_awaited_once()
         args = conn.execute.await_args.args
         assert "INSERT INTO metrics.series (name, value)" in args[0]
-        assert args[1] == "tokei.unitares.src.code"
+        assert args[1] == "kg.entries.count"
         assert args[2] == 70000.0
 
     @pytest.mark.asyncio
@@ -177,12 +320,12 @@ class TestRecord:
         db, conn = _make_db_mock()
         ts = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
         with patch("src.agent_storage.get_db", return_value=db):
-            await record("tokei.unitares.src.code", 1.5, ts=ts)
+            await record("kg.entries.count", 1.5, ts=ts)
 
         args = conn.execute.await_args.args
         assert "INSERT INTO metrics.series (ts, name, value)" in args[0]
         assert args[1] == ts
-        assert args[2] == "tokei.unitares.src.code"
+        assert args[2] == "kg.entries.count"
         assert args[3] == 1.5
 
     @pytest.mark.asyncio
@@ -201,7 +344,7 @@ class TestRecord:
 
         db, conn = _make_db_mock()
         with patch("src.agent_storage.get_db", return_value=db):
-            await record("tokei.unitares.src.code", 42)
+            await record("kg.entries.count", 42)
         args = conn.execute.await_args.args
         assert isinstance(args[2], float)
         assert args[2] == 42.0
@@ -220,7 +363,7 @@ class TestQuery:
             {"ts": ts2, "value": 101.5},
         ]
         with patch("src.agent_storage.get_db", return_value=db):
-            points = await query("tokei.unitares.src.code")
+            points = await query("kg.entries.count")
         assert len(points) == 2
         assert points[0].ts == ts1
         assert points[0].value == 100.0
@@ -271,3 +414,37 @@ class TestQuery:
         with patch("src.agent_storage.get_db", return_value=db):
             result = await query("no.such.metric")
         assert result == []
+
+
+class TestProgressSeriesFlag:
+    def test_unset_marks_nothing(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.unset", "description": "d"},
+            {"name": "test.progress.false", "description": "d", "progress": False},
+        ]}))
+        assert catalog_module.progress_series == set()
+
+    def test_true_marks_the_series(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.yes", "description": "d", "progress": True},
+        ]}))
+        assert catalog_module.progress_series == {"test.progress.yes"}
+
+    def test_non_boolean_progress_skips_the_entry(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        loaded = load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.bad", "description": "d", "progress": "yes"},
+            {"name": "test.progress.ok", "description": "d"},
+        ]}))
+        assert [m.name for m in loaded] == ["test.progress.ok"]
+        assert "test.progress.bad" not in _catalog
+        assert catalog_module.progress_series == set()
+

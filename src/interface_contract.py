@@ -193,7 +193,35 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # search_shared_memory advertises shorter briefs for nine existing search
 # parameters (their full descriptions, served by describe_tool, are
 # unchanged). The three input digests and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.22.0"
+# 1.23.0 (2026-09-27), numbered after 1.22.0 (#2517): agent(action='archive')
+# and agent(action='delete') act only on the agent named in agent_id. Behavior
+# that changes for existing inputs: a call with no agent_id (or a blank one)
+# is refused with TARGET_AGENT_REQUIRED where it used to act on the caller's
+# own agent, because dispatch wrote the session's id in; a UUID no agent
+# holds is refused with TARGET_AGENT_NOT_FOUND where it used to fall back to
+# the caller; and an agent_id that is not a UUID (a label, public id or
+# legacy non-UUID key) is refused with TARGET_AGENT_UUID_REQUIRED where it
+# used to select the first cached holder (public ids are shared by most
+# identities that carry one). The legacy
+# archive_agent and delete_agent names follow. get, update, resume and
+# release_presence are unchanged. agent's agent_id description says it is the
+# target's UUID, required for archive and delete, and names who get, resume
+# and update default to; describe_tool's
+# lite view of archive and delete lists agent_id (and delete's confirm) as
+# required at call time, and of get and resume lists agent_id. No parameter is
+# added, removed, retyped or renamed; agent's input_schema_sha256 and the
+# surface digest move.
+# 1.24.0 (2026-09-28), numbered after 1.23.0 (#2532): dialectic gains action="consult", which files an
+# outside verdict on any session as a transcript record with no authority:
+# it needs no reviewer slot, never advances a phase, never counts as a
+# verdict, and never refreshes the session's liveness clock. The documented
+# route for an outside consult (an antithesis with
+# reviewer_kind='external_consult') needed the reviewer slot, which the
+# orchestrated reviewer takes within about a minute, so it had never been
+# used. The action enum and descriptions grow; nothing is removed, retyped or
+# renamed. The input digests of dialectic and request_review, and the
+# surface digest, move.
+INTERFACE_CONTRACT_VERSION = "1.24.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

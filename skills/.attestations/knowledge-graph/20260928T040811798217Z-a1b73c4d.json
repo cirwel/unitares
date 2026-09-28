@@ -1,0 +1,33 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-09-28T04:08:11Z",
+  "verified_date": "2026-09-28",
+  "verifier": "claude-opus-5-5 (adopting #2532 for the operator): re-checked knowledge-graph against this PR's diff to consolidated.py and tool_descriptions.json; it changes only the agent tool's archive/delete wording and example, which the skill does not describe",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "fedb9bb095f91ffb",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "14ca01da11026c91",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "bf81a9d562c54997",
+    "unitares/src/mcp_handlers/consolidated.py": "b54302450e37c29d",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "f78dc470a6169877",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "f33e76c5d5364ce9",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "3dcff3cee850f677",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "196fec644feab35a",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "c4f33d12a062c18d",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
+    "unitares/src/storage/knowledge_graph_age.py": "1d0e9944d42698c7",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "7eea825e26d69207"
+  },
+  "skill_digest": "e183a6dc8b828355",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/consolidated.py": [
+      "1dceedc26c4a3144"
+    ],
+    "unitares/src/tool_descriptions.json": [
+      "c0f9f04d41c2a36b"
+    ]
+  }
+}

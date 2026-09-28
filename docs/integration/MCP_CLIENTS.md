@@ -303,7 +303,7 @@ Three things make a lockout harder than it needs to be:
 - **`/mcp` has no loopback or UDS bypass, by design.** `check_mcp_bearer` has no
   trusted-network branch, because a hosted server sees only its proxy's address;
   every request to `/mcp` authenticates, over UDS as much as over TCP. The
-  loopback, RFC1918 and Tailscale bypass exists on the REST surface only — and
+  loopback, RFC1918 and `UNITARES_TRUSTED_NETWORKS` bypass exists on the REST surface only — and
   setting `UNITARES_MCP_BEARER_TOKENS` flips REST into strict posture, which
   removes it there too. So the break-glass is a credential you kept, not a
   network position; for REST specifically, `UNITARES_REST_STRICT=0` restores the
@@ -353,7 +353,7 @@ envelope (`response_shape: "routine"` marks the trimmed lifecycle ones). Read
 the new identity's uuid from `agent_uuid`. A plain fresh `start_session` carries
 no `raw_governance_hint`; pass `response_mode="full"` on the mint to keep the
 payload. On the others, `raw_governance_hint` names the route to more:
-`response_mode="full"` on `sync_state` and `search_shared_memory`,
+`response_mode="full"` on `search_shared_memory` and on the next `sync_state`,
 `verbosity="full"` on `check_working_state`, and for `record_result`, which has
 no read by outcome id, one of two routes. An outcome recorded with a
 `prediction_id` can be replayed: the identical call repeated under the same
@@ -373,7 +373,12 @@ that `knowledge` action, and its response keeps the payload under
 `raw_governance`, since it is that action's answer rather than a write ack;
 its `next_action` names the action that ran. No read returns the omitted payload (the outcome
 replay is a repeat of the write, safe only under the conditions above), so
-these three write acks do not set `raw_governance_available`.
+these three write acks do not set `raw_governance_available`. Neither does a
+bounded `sync_state`: its omitted payload is that check-in's decision (reason,
+margin, policy gates, enforcement), which no read returns, and
+`check_working_state(verbosity="full")` reports the current state rather than
+what the check-in decided, so `response_mode="full"` applies to the next
+check-in, which writes one. Only the two read aliases set the flag.
 Write-time warnings and a bounded `related_discoveries` snapshot are kept in
 the ack itself: the read does not return the warnings or the snapshot's summary
 previews, while the snapshot's ids are the stored record's `related_to`, so a

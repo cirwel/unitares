@@ -1,7 +1,7 @@
 """Primary-workflow parameter normalization for friendly aliases.
 
 Raw implementation tools stay strict: process_agent_update rejects complexity
-outside 0-1. The workflow tools (checkin/log/update/sync_state) absorb common agent
+outside 0-1. The sync_state workflow alias absorbs common agent
 vocabulary by normalizing it BEFORE schema validation, and the dispatch
 envelope discloses every transform via ``normalized_parameters``.
 

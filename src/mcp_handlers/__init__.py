@@ -33,7 +33,7 @@ from .lifecycle.handlers import (
     handle_resume_agent,
     handle_delete_agent,
     handle_archive_old_test_agents,
-    # handle_get_agent_api_key REMOVED Dec 2025 - aliased to identity()
+    # handle_get_agent_api_key REMOVED Dec 2025; its identity() alias went 2026-09-28
     handle_mark_response_complete,
     handle_self_recovery_review,  # Added per SELF_RECOVERY_SPEC.md
     handle_detect_stuck_agents,

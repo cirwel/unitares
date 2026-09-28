@@ -128,26 +128,39 @@ dialectic(
 
 ### Stamp where the verdict came from
 
-If the review was produced **outside the server** — a Codex or other-model
-consult, a subagent council, any reviewer that is not this MCP — file it with
-`reviewer_provenance` so it becomes a governed record rather than an untracked
-opinion:
+If the review was produced **outside the server** (a Codex or other-model
+consult, a subagent council seat, any reviewer that is not this MCP), file it
+with `dialectic(action="consult")` so it becomes a governed record rather than an
+untracked opinion. A consult needs no reviewer slot, so any bound agent can file
+one on any session, open or closed, the paused agent included:
 
 ```
 dialectic(
-  action: "antithesis",
+  action: "consult",
   session_id: "<session-id>",
-  reasoning: "<the counter-perspective or observations; required>",
+  reasoning: "<the outside reviewer's argument; required>",
+  agrees: false,                          # the position it takes; optional
+  proposed_conditions: ["<one per condition>"],
   concerns: ["<one per finding>"],
-  observed_metrics: {},
-  reviewer_provenance: {
-    reviewer_kind: "external_consult",   # see the caution below
+  reviewer_provenance: {                  # required
     backend: "codex-cli",
     model_used: "<model>",
     consult_source: "<what invoked it>"
   }
 )
 ```
+
+A consult has **no authority**. It never advances the phase, never counts as a
+verdict (`agrees` stays NULL on the row; the position is kept in
+`observed_metrics.consult.position`), and never refreshes the session's
+liveness clock, so it cannot overturn a standing rejection or hold a stalled
+session open. The server stamps `reviewer_kind: "external_consult"` whatever you
+send, and records whether you filed it as the paused agent, the reviewer or a
+third party. A session keeps at most 8 consults.
+
+If you ARE the assigned reviewer, your own verdict still goes through
+`antithesis` and `synthesis`, and `reviewer_provenance` there says which
+backend produced it:
 
 ⛔**A misspelled `reviewer_kind` silently becomes `agent_submitted`** — the
 server falls back rather than erroring (`handlers.py`,
@@ -162,22 +175,26 @@ truncated at 200 characters. Useful ones beyond the example: `model_requested`,
 `models_used`, `tokens_used`, `cost_usd`, `latency_ms`, `finish_reason`,
 `fallback_from`, `warnings`, `consulted_at`.
 
-**Why this matters, measured 2026-08-28.** The unitares README records "Benefit
-from review and coordination — **Untested**", and names `reviewer_provenance` as
-how outside review becomes countable. Across all 669 recorded dialectic
-messages, 3 carry `agent_submitted` and **0 carry `external_consult`** — the
-path has never been used. Review sessions themselves are routine (136), so this
-is not a missing mechanism: it is an optional field nobody fills in. Every
-unfiled outside review leaves the record unable to move, however much review
-actually happens.
+**Why this matters.** The unitares README records "Benefit from review and
+coordination: **Untested**", and names `reviewer_provenance` as how outside
+review becomes countable. Measured 2026-08-28: across 669 dialectic messages, 3
+carried `agent_submitted` and **0** carried `external_consult`. That zero was
+first read as an optional field nobody filled in. It was a missing seat: the
+only documented route was an antithesis, which needs the reviewer slot, and the
+orchestrated reviewer takes it within about a minute of the request. `consult`
+(interface contract 1.24.0, 2026-09-28) is that seat.
 
 - **Stamp it, don't infer it.** The field is descriptive, not identity proof.
   Record the backend and model that actually ran.
 - **Mark failures as failures.** Set `degraded: true` when the consult errored
   or timed out but still reached a judgment you are filing. A failed pass filed
   as a clean one is worse than no row at all.
-- **If no judgment was reached, do not file one.** When the consult returned
-  nothing you could read as a verdict, pass `judgment_formed: false` instead.
+- **If no judgment was reached, do not file one.** For a `consult`, simply
+  don't call it: an outside run that returned nothing you could read as a
+  verdict is not a consult, and `consult` refuses `judgment_formed: false`
+  without recording anything (`NO_JUDGMENT`). If you are the assigned reviewer
+  and your own backend reached no judgment, pass `judgment_formed: false` on
+  the antithesis instead.
   The server records an abstention without claiming or changing reviewer-slot
   ownership; the slot is OPEN only when no reviewer was already assigned. It does
   not file a rejection. `degraded` describes the BACKEND, `judgment_formed`

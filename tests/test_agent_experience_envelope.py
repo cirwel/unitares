@@ -69,7 +69,7 @@ def test_experience_flag_inventory():
 
 def test_canonical_names_are_not_experience_aliases():
     for name in ("onboard", "process_agent_update", "get_governance_metrics",
-                 "knowledge", "outcome_event", "dialectic", "status", "checkin"):
+                 "knowledge", "outcome_event", "dialectic", "list_agents"):
         assert not is_experience_alias(name), name
 
 
@@ -89,11 +89,11 @@ async def test_canonical_invocation_passes_through_byte_identical():
 
 @pytest.mark.asyncio
 async def test_legacy_alias_passes_through():
-    """Pre-existing intuitive aliases (status, checkin) keep their raw
-    shape - only experience aliases opt in."""
+    """Legacy dispatch aliases (list_agents) keep their raw shape - only
+    experience aliases opt in."""
     raw = _result({"success": True})
     out = await apply_experience_envelope(
-        "get_governance_metrics", {}, _ctx("status"), raw
+        "agent", {}, _ctx("list_agents"), raw
     )
     assert out is raw
 
@@ -1085,7 +1085,9 @@ def test_routine_sync_state_omits_duplicate_raw_payload_and_stays_bounded():
     )
 
     assert "raw_governance" not in env
-    assert env["raw_governance_available"] is True
+    # No read returns a check-in's payload; the hint names the next check-in.
+    assert "raw_governance_available" not in env
+    assert "next sync_state" in env["raw_governance_hint"]
     assert "response_options" not in env
     assert "legacy_diagnostics" not in env
     assert "_response_size" not in env
@@ -1216,10 +1218,120 @@ def test_agent_summary_modes_stay_small_with_large_audit_gates(
     wire_bytes = len(json.dumps(env, ensure_ascii=False).encode("utf-8"))
     assert wire_bytes < wire_limit
     assert "raw_governance" not in env
-    assert env["raw_governance_available"] is True
+    assert "raw_governance_available" not in env
     assert "policy_evaluation" not in formatted
     assert "enforcement" not in formatted
     assert "response_mode='full'" in formatted["_raw_available"]
+
+
+def _checkin_source() -> dict:
+    return {
+        "success": True,
+        "status": "healthy",
+        "health_status": "healthy",
+        "decision": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "reason": "Low risk.",
+            "margin": "comfortable",
+            "nearest_edge": None,
+        },
+        "metrics": {
+            "E": 0.6,
+            "I": 0.7,
+            "S": 0.2,
+            "V": -0.1,
+            "coherence": 0.49,
+            "risk_score": 0.08,
+            "verdict": "safe",
+        },
+        "policy_evaluation": {
+            "action": "proceed",
+            "sub_action": "approve",
+            "inputs": {"verdict": "safe", "risk_score": 0.08},
+        },
+        "prediction_id": "p-1",
+    }
+
+
+@pytest.mark.parametrize(
+    ("mode", "resolved"),
+    (
+        ("auto", "compact"),
+        ("compact", "compact"),
+        ("mirror", "mirror"),
+        ("standard", "standard"),
+        ("minimal", "minimal"),
+    ),
+)
+def test_bounded_sync_state_does_not_claim_a_read_returns_its_payload(
+    mode: str, resolved: str
+):
+    """raw_governance_available promises a re-call that only reads.
+
+    A bounded check-in omits this check-in's decision payload, and no read
+    returns it: the metrics read reports the agent's current state, not the
+    decision, reason, policy gates or prediction_id of one check-in. The one
+    route to that payload is response_mode='full' on the next sync_state,
+    which is another check-in, so the flag is not set and the hint names that
+    next call instead.
+    """
+    formatted = format_response(_checkin_source(), {"response_mode": mode})
+    assert formatted["_mode"] == resolved
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": mode},
+    )
+
+    assert "raw_governance" not in env
+    assert "raw_governance_available" not in env
+    hint = env["raw_governance_hint"]
+    assert "response_mode='full' on the next sync_state" in hint
+    assert "check_working_state" not in hint
+
+
+def test_full_sync_state_keeps_payload_without_the_availability_flag():
+    formatted = format_response(_checkin_source(), {"response_mode": "full"})
+
+    env = build_experience_envelope(
+        "sync_state",
+        "process_agent_update",
+        formatted,
+        {"response_mode": "full"},
+    )
+
+    assert env["raw_governance"] is formatted
+    assert "raw_governance_available" not in env
+    assert "raw_governance_hint" not in env
+
+
+@pytest.mark.parametrize(
+    ("friendly", "canonical", "payload"),
+    (
+        (
+            "check_working_state",
+            "get_governance_metrics",
+            {"success": True, "E": 0.7, "verdict": "proceed", "status": "healthy"},
+        ),
+        (
+            "search_shared_memory",
+            "knowledge",
+            {"success": True, "count": 1, "discoveries": [{"id": "d1", "summary": "s"}]},
+        ),
+    ),
+)
+def test_bounded_read_aliases_still_offer_the_fuller_read(
+    friendly: str, canonical: str, payload: dict
+):
+    """The flag stays on the reads, whose hint names a fuller tier of the same read."""
+    env = build_experience_envelope(friendly, canonical, payload)
+
+    assert "raw_governance" not in env
+    assert env["raw_governance_available"] is True
+    assert f"{friendly}(" in env["raw_governance_hint"]
 
 
 def test_search_envelope_full_escape_hatch_preserves_raw_payload():

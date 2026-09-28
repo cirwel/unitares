@@ -82,6 +82,15 @@
              /PATH/TO/UNITARES/config/resident_progress.example.json. -->
         <key>UNITARES_RESIDENT_PROGRESS_MANIFEST</key>
         <string></string>
+        <!-- Extra metrics catalog (JSON). Registers the metric names a
+             deployment-specific scraper writes, on top of the product
+             catalog, so POST /v1/metrics accepts them and
+             /v1/metrics/catalog lists them. Empty (the default) registers
+             none. Set it only if you run the reference Chronicler; see
+             docs/operations/resident-roster.md.
+             Example: /PATH/TO/UNITARES/agents/chronicler/metrics_catalog.json -->
+        <key>UNITARES_METRICS_CATALOG_EXTRA</key>
+        <string></string>
         <key>UNITARES_BIND_ALL_INTERFACES</key>
         <string>1</string>
         <!-- Host/Origin allowlist (DNS-rebinding protection, on by default).
@@ -162,6 +171,13 @@
         <string>GENERATE_YOUR_OWN_TOKEN</string>
         <key>UNITARES_CONTINUITY_TOKEN_SECRET</key>
         <string>GENERATE_YOUR_OWN_SECRET</string>
+        <!-- Networks, beyond loopback and the RFC1918 private ranges, whose
+             callers skip auth in local posture (comma-separated CIDRs).
+             Empty trusts nothing extra. A host whose callers reach it over a
+             Tailscale tailnet sets 100.64.0.0/10, as the reference
+             deployment does. -->
+        <key>UNITARES_TRUSTED_NETWORKS</key>
+        <string></string>
         <!-- Local model id for call_model (e.g. an Ollama tag on this host).
              Set to a model you actually have pulled, or omit this key to fall
              back to the server default. -->

@@ -1752,5 +1752,5 @@ async def handle_bridge_summary(arguments: Dict[str, Any]) -> Sequence[TextConte
     return success_response(payload)
 
 
-# REMOVED: handle_get_status - redundant with status alias → get_governance_metrics
-# Use status() or get_governance_metrics() instead
+# REMOVED: handle_get_status - redundant with get_governance_metrics
+# Use check_working_state() or get_governance_metrics() instead

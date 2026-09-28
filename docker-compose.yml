@@ -10,15 +10,32 @@
 # is built from the tree you have (see the lease-plane service below).
 #
 # This brings up:
-#   - postgres-age      Postgres 18 + Apache AGE + pgvector  (port 5432)
-#   - redis             De-facto primary session store + locks (port 6379)
+#   - postgres-age      Postgres 18 + Apache AGE + pgvector  (internal only)
+#   - redis             De-facto primary session store + locks (internal only)
 #   - lease-plane       Exclusive surface leases + handoffs   (port 8788)
 #   - governance-mcp    UNITARES governance server            (port 8767)
 #
-# All ports bind to 127.0.0.1 only. Override credentials via .env (copy
-# .env.example to .env). For the Pi/Lumen embodiment side (anima-mcp on
-# port 8766), see https://github.com/CIRWEL/anima-mcp — the governance
-# server runs standalone without it.
+# Published ports bind to 127.0.0.1 only. Postgres and Redis carry a default
+# credential (postgres/postgres) and no auth at all, so they are NOT published
+# to the host by default: on Docker Desktop (macOS/Windows), where the VM
+# hides the container bridge network from the host, this is a real boundary
+# against another local process or OS account. On a native Linux Docker host
+# it is weaker than that phrasing implies — the bridge network is directly
+# routable from the host's own network namespace, so another local account
+# can still reach a container's bridge IP even unpublished (no firewall rule
+# stops it by default); un-publishing there mainly removes discovery via a
+# well-known port, not access. See docs/DEPLOYMENT_SECURITY.md for the full
+# caveat. governance-mcp and lease-plane reach both over the internal Compose
+# network regardless of any of this. For direct host access (psql, redis-cli,
+# a GUI client) during local debugging, opt in with the admin overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.admin.yml up
+#
+# See docs/DEPLOYMENT_SECURITY.md for the rest of this deployment's hardening
+# posture and known gaps. Override credentials via .env (copy .env.example to
+# .env). For the Pi/Lumen embodiment side (anima-mcp on port 8766), see
+# https://github.com/CIRWEL/anima-mcp — the governance server runs standalone
+# without it.
 
 services:
   postgres-age:
@@ -30,10 +47,12 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-governance}
-    ports:
-      # Override the host-side port via POSTGRES_HOST_PORT in .env if 5432
-      # is already taken on your machine (e.g., by a Homebrew Postgres).
-      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    # No host port by default — default credentials, internal-network only.
+    # See docker-compose.admin.yml to opt in for local debugging.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       # PG18+ official images store data in a major-version subdir and require
       # the persistent mount at /var/lib/postgresql (not .../data, which the
@@ -57,8 +76,28 @@ services:
     # procedure in docs/operations/cloud-deploy-runbook.md.
     image: redis:8-alpine
     container_name: unitares-redis
-    ports:
-      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"
+    # No host port by default — no auth at all, internal-network only. See
+    # docker-compose.admin.yml to opt in for local debugging.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # The image's docker-entrypoint.sh only drops from root to the `redis`
+    # user (matching the ownership baked into its /data dir) when it has
+    # CAP_SETUID + CAP_SETGID; without them, cap_drop: ALL makes it fall
+    # through to running redis-server AS root against a non-root-owned
+    # volume, which then fails to create appendonlydir (verified 2026-09-28).
+    # Its own perm-fixup step (fix_perms_and_owner in docker-entrypoint.sh)
+    # chowns a file to `redis` and then chmods it while still root — after
+    # the chown, root no longer owns the file, so that chmod needs CAP_FOWNER
+    # too, or it silently no-ops on a volume carrying stale ownership/modes
+    # from a prior run (a fresh volume doesn't hit this: fix_data_dir_perms
+    # only walks existing files).
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - FOWNER
     volumes:
       - redis-data:/data
     command: redis-server --appendonly yes
@@ -88,6 +127,10 @@ services:
       # The container listens on its private Compose network; publication stays
       # loopback-only. Override the host side if 8788 is already occupied.
       - "127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       UNITARES_LEASE_PLANE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-age:5432/${POSTGRES_DB:-governance}
       UNITARES_LEASE_PLANE_HTTP_IP: 0.0.0.0
@@ -130,6 +173,10 @@ services:
     ports:
       # Override via GOVERNANCE_HOST_PORT in .env if 8767 is busy on the host.
       - "127.0.0.1:${GOVERNANCE_HOST_PORT:-8767}:8767"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DB_POSTGRES_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres-age:5432/${POSTGRES_DB:-governance}
       DB_BACKEND: postgres
@@ -175,6 +222,9 @@ services:
       # into this container, or the extension route has nothing to serve.
       UNITARES_ROUTE_PACKS: ${UNITARES_ROUTE_PACKS:-}
       UNITARES_DASHBOARD_EXT_DIR: ${UNITARES_DASHBOARD_EXT_DIR:-}
+      # Deployment metrics catalog (JSON path inside the container); empty
+      # registers only the product metrics. See .env.example.
+      UNITARES_METRICS_CATALOG_EXTRA: ${UNITARES_METRICS_CATALOG_EXTRA:-}
       # Development-only signing key so onboard() can issue the identity proof
       # exercised by the coordination demo. Override on shared/non-loopback hosts.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}

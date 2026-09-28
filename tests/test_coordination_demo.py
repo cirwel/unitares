@@ -271,3 +271,81 @@ def test_governance_onboarding_errors_never_echo_identity_proof(monkeypatch) -> 
 
     assert PROOF_A not in str(error.value)
     assert "identity_proof=present" in str(error.value)
+
+
+def test_half_remapped_ports_are_refused_before_any_network_call(tmp_path) -> None:
+    """The install manual's remap example once set only the lease-plane port.
+
+    The governance side then fell back to :8767 and the demo registered its two
+    participants on an unrelated server already running there. A remap that
+    moves one side and says nothing about the other is refused up front.
+    """
+    missing = tmp_path / "missing.env"
+    for env in (
+        {"UNITARES_COORDINATION_DEMO_PORT": "18788"},
+        {"LEASE_PLANE_HOST_PORT": "18788"},
+        {"GOVERNANCE_HOST_PORT": "18767"},
+        {"UNITARES_COORDINATION_DEMO_GOVERNANCE_PORT": "18767"},
+        # an explicit URL for one half says nothing about the other
+        {"UNITARES_COORDINATION_DEMO_URL": "http://lease.example:8788"},
+        {"UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"},
+    ):
+        problem = coordination_demo.port_pairing_problem(env, missing)
+        assert problem, env
+        assert "GOVERNANCE_HOST_PORT" in problem or "LEASE_PLANE_HOST_PORT" in problem
+
+
+def test_stated_ports_urls_and_defaults_are_not_refused(tmp_path) -> None:
+    missing = tmp_path / "missing.env"
+    both = tmp_path / "both.env"
+    both.write_text("GOVERNANCE_HOST_PORT=18767\n")
+    for env, dotenv in (
+        ({}, missing),  # quickstart defaults on both sides
+        ({"GOVERNANCE_HOST_PORT": "18767", "LEASE_PLANE_HOST_PORT": "18788"}, missing),
+        # a genuine one-sided remap, with the default side stated
+        ({"LEASE_PLANE_HOST_PORT": "18788", "GOVERNANCE_HOST_PORT": "8767"}, missing),
+        # a variable that states a default is not a move
+        ({"LEASE_PLANE_HOST_PORT": "8788"}, missing),
+        ({"GOVERNANCE_HOST_PORT": "8767"}, missing),
+        ({"UNITARES_COORDINATION_DEMO_URL": "http://127.0.0.1:8788/"}, missing),
+        # the other side stated in .env, which Compose reads as well
+        ({"UNITARES_COORDINATION_DEMO_PORT": "18788"}, both),
+        # an explicit URL states its own half
+        ({"UNITARES_COORDINATION_DEMO_URL": "http://lease.example:8788",
+          "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"}, missing),
+        ({"LEASE_PLANE_HOST_PORT": "18788",
+          "UNITARES_COORDINATION_DEMO_GOVERNANCE_URL": "http://gov.example:8767"}, missing),
+    ):
+        assert coordination_demo.port_pairing_problem(env, dotenv) is None, env
+
+
+def test_dotenv_only_remap_is_consistent_with_compose(tmp_path) -> None:
+    # .env is read by Compose and the demo alike, so a one-sided remap there
+    # describes the stack Compose actually started.
+    dotenv = tmp_path / ".env"
+    dotenv.write_text("LEASE_PLANE_HOST_PORT=19788\n")
+    assert coordination_demo.port_pairing_problem({}, dotenv) is None
+
+
+def test_main_refuses_a_half_remap_without_contacting_anything(monkeypatch, capsys) -> None:
+    monkeypatch.delenv("GOVERNANCE_HOST_PORT", raising=False)
+    monkeypatch.delenv("UNITARES_COORDINATION_DEMO_GOVERNANCE_PORT", raising=False)
+    monkeypatch.delenv("UNITARES_COORDINATION_DEMO_URL", raising=False)
+    monkeypatch.delenv("UNITARES_COORDINATION_DEMO_GOVERNANCE_URL", raising=False)
+    monkeypatch.setenv("UNITARES_COORDINATION_DEMO_PORT", "18788")
+    monkeypatch.setattr(coordination_demo, "_dotenv_values", lambda path=None: {})
+
+    def no_network(*_args, **_kwargs):
+        raise AssertionError("the demo contacted a server")
+
+    monkeypatch.setattr(coordination_demo.urllib.request, "urlopen", no_network)
+    assert coordination_demo.main() == 2
+    err = capsys.readouterr().err
+    assert "not started" in err
+    assert "GOVERNANCE_HOST_PORT" in err
+
+
+def test_failure_hint_names_both_ports() -> None:
+    source = Path(coordination_demo.__file__).read_text()
+    assert "UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo" not in source
+    assert "GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788" in source

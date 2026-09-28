@@ -19,6 +19,7 @@ from .wait_assessment import assess_wait, suggests_facilitation
 # Import type definitions
 
 from src.dialectic_protocol import (
+    NON_PROTOCOL_PHASES,
     DialecticSession,
     DialecticMessage,
     DialecticPhase,
@@ -28,6 +29,7 @@ from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
 from ..support.coerce import LimitError, coerce_bool, parse_limit, resolve_agent_uuid
 from .auth import resolve_dialectic_agent_id
+from src.dialectic_session_writes import session_write_via
 from .events import (
     emit_participant_abstained,
     emit_reviewer_abstained,
@@ -162,6 +164,7 @@ from src.dialectic_db import (
     update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
     reopen_session_async as pg_reopen_session,
     add_message_async as pg_add_message,
+    add_bounded_message_async as pg_add_bounded_message,
     resolve_session_async as pg_resolve_session,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
 )
@@ -630,6 +633,13 @@ def _last_activity_age_s(session_data: Dict[str, Any]) -> Optional[float]:
     transcript = session_data.get("transcript") or session_data.get("messages") or []
     newest = None
     for message in transcript:
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        if phase in NON_PROTOCOL_PHASES:
+            continue  # a consult is not activity on the review
         stamp = (
             message.get("timestamp")
             if isinstance(message, dict)
@@ -662,6 +672,15 @@ def _has_orchestrated_reviewer_budget(session_data: Dict[str, Any], reviewer_id:
     for message in reversed(transcript):
         agent_id = message.get("agent_id") if isinstance(message, dict) else getattr(message, "agent_id", None)
         if agent_id != reviewer_id:
+            continue
+        phase = (
+            message.get("phase") or message.get("message_type") or message.get("role")
+            if isinstance(message, dict)
+            else getattr(message, "phase", None)
+        )
+        if phase in NON_PROTOCOL_PHASES:
+            # A consult the reviewer files carries an external_consult stamp;
+            # it must not reclassify the reviewer's own assignment.
             continue
         metrics = message.get("observed_metrics") if isinstance(message, dict) else getattr(message, "observed_metrics", None)
         if not isinstance(metrics, dict):
@@ -1231,7 +1250,9 @@ async def _apply_reviewer_reassignment(
                 )
         # BEAM owns the reviewer write when flagged; else Python. (Slice 2.3)
         if await beam_update_reviewer(session_id, new_reviewer_id) is None:
-            if not await pg_update_reviewer(session_id, new_reviewer_id):
+            with session_write_via("python_fallback", site="reassignment"):
+                _reviewer_written = await pg_update_reviewer(session_id, new_reviewer_id)
+            if not _reviewer_written:
                 # The guarded UPDATE refused (row terminal or missing) — the
                 # reassignment did NOT persist; do not report success on it.
                 raise RuntimeError(
@@ -2265,6 +2286,213 @@ def _merge_caller_reviewer_provenance(
     return merged
 
 
+CONSULT_PHASE = "consult"
+# Bounds transcript growth from one session's outside filings. A consult does
+# not touch the liveness clock, so this is about size, not about holding a
+# session open.
+MAX_CONSULTS_PER_SESSION = 8
+
+
+def _consult_list(value: Any) -> List[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+# register=False: reached through dialectic(action='consult') only.
+@mcp_tool("submit_consult", timeout=10.0, register=False)
+async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
+    """File an outside verdict on a review as a record with no authority.
+
+    The documented way to file a review produced outside this server was an
+    antithesis carrying ``reviewer_provenance={"reviewer_kind":
+    "external_consult", ...}``. An antithesis needs the reviewer slot, and the
+    orchestrated reviewer takes it within about a minute of the request, with
+    takeover reserved to an operator. So an agent holding an outside model's
+    verdict had nowhere to put it, and ``external_consult`` counted zero rows.
+
+    A consult needs no slot. Any bound agent, including the paused agent or
+    the assigned reviewer, may file one on any session, open or closed. It is
+    stored as a ``consult`` transcript entry stamped
+    ``reviewer_kind='external_consult'``, with the filer's role and the phase
+    at filing. It has no authority: it never advances a phase, never counts as
+    a verdict (``agrees`` stays NULL; the position it states lives in
+    ``observed_metrics.consult.position``), and never refreshes the session's
+    liveness clock. The per-session bound is enforced atomically in
+    PostgreSQL (``add_bounded_message``), not on a loaded transcript.
+    """
+    try:
+        session_id = arguments.get("session_id")
+        if not session_id:
+            return [error_response(
+                "session_id is required",
+                recovery=missing_session_id_recovery(),
+            )]
+
+        agent_id, agent_error = await _resolve_dialectic_agent_id(
+            arguments, enforce_session_ownership=True, require_bound_caller=True,
+        )
+        if agent_error:
+            return agent_error
+
+        session = await load_session(session_id)
+        if session:
+            ACTIVE_SESSIONS[session_id] = session
+        else:
+            session = ACTIVE_SESSIONS.get(session_id)
+            if not session:
+                return [error_response(
+                    f"Session '{session_id}' not found",
+                    recovery=session_not_found_recovery(),
+                )]
+
+        reasoning = str(arguments.get("reasoning") or "").strip()
+        if not reasoning:
+            return [error_response(
+                "reasoning is required: a consult files the outside reviewer's argument",
+                error_code="MISSING_PARAM",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        # A consult with no judgment is not filed: the record exists to count
+        # outside verdicts, and an abstention is not one.
+        if arguments.get("judgment_formed") is not None and not _judgment_was_formed(
+            arguments.get("judgment_formed")
+        ):
+            return [error_response(
+                "No judgment was formed, so there is no consult to file. Nothing was recorded.",
+                error_code="NO_JUDGMENT",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        provenance = arguments.get("reviewer_provenance")
+        # The stamp keeps only known keys, so a mapping of misspelt or
+        # irrelevant keys would file an external_consult row that names no
+        # source at all. At least one of these must say where it came from.
+        named_source = isinstance(provenance, dict) and any(
+            isinstance(provenance.get(key), str) and provenance.get(key).strip()
+            for key in ("backend", "model_used", "consult_source")
+        )
+        if not named_source:
+            return [error_response(
+                "reviewer_provenance must name where the verdict came from: at least "
+                "one of backend, model_used or consult_source",
+                error_code="MISSING_PARAM",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+
+        position = None
+        raw_agrees = arguments.get("agrees")
+        if raw_agrees is not None:
+            # Only unambiguous spellings. coerce_bool's default would turn a
+            # typo or "approve" into a recorded disagreement.
+            spelled = str(raw_agrees).strip().lower() if not isinstance(raw_agrees, bool) else raw_agrees
+            if spelled in (True, "true"):
+                position = "agrees"
+            elif spelled in (False, "false"):
+                position = "disagrees"
+            else:
+                return [error_response(
+                    f"agrees must be true or false, not {raw_agrees!r}; omit it to state no position",
+                    error_code="INVALID_PARAM",
+                    error_category="validation_error",
+                    arguments=arguments,
+                )]
+        # The kind is forced: whatever the caller wrote, this route files an
+        # outside verdict, and a record of one must say so.
+        backend_stamp = _reviewer_provenance_stamp(
+            provenance,
+            kind="external_consult",
+            degraded=bool(provenance.get("degraded")),
+        )
+        filed = {}
+
+        def metrics_at_filing(row):
+            # Built from the session row read inside the insert transaction,
+            # so a phase move or reassignment racing this consult cannot leave
+            # the record describing the state before it. The raw phase is kept:
+            # the loaded session folds phases such as awaiting_thesis into
+            # THESIS. The snapshot is only the fallback for a session with no
+            # row.
+            if row is not None:
+                phase = row.get("phase")
+                paused, reviewer = row.get("paused_agent_id"), row.get("reviewer_agent_id")
+            else:
+                phase = session.phase.value
+                paused, reviewer = session.paused_agent_id, session.reviewer_agent_id
+            if agent_id == paused:
+                filed["filer_role"] = "paused_agent"
+            elif agent_id == reviewer:
+                filed["filer_role"] = "reviewer"
+            else:
+                filed["filer_role"] = "third_party"
+            filed["observed_metrics"] = {
+                "reviewer_backend": backend_stamp,
+                "consult": {
+                    "position": position,
+                    "filer_role": filed["filer_role"],
+                    "session_phase_at_filing": phase,
+                },
+            }
+            return filed["observed_metrics"]
+        proposed_conditions = _consult_list(
+            arguments.get("proposed_conditions") or arguments.get("conditions")
+        )
+        concerns = _consult_list(arguments.get("concerns"))
+        root_cause = arguments.get("root_cause")
+
+        message_id = await pg_add_bounded_message(
+            session_id=session_id,
+            agent_id=agent_id,
+            message_type=CONSULT_PHASE,
+            max_of_type=MAX_CONSULTS_PER_SESSION,
+            root_cause=root_cause,
+            proposed_conditions=proposed_conditions or None,
+            reasoning=reasoning,
+            concerns=concerns or None,
+            metrics_from_session=metrics_at_filing,
+        )
+        if message_id is None:
+            return [error_response(
+                f"This session already holds {MAX_CONSULTS_PER_SESSION} consults, "
+                "the most one session keeps. Nothing was recorded.",
+                error_code="CONSULT_LIMIT",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        session.transcript.append(DialecticMessage(
+            phase=CONSULT_PHASE,
+            agent_id=agent_id,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            root_cause=root_cause,
+            observed_metrics=filed["observed_metrics"],
+            proposed_conditions=proposed_conditions or None,
+            reasoning=reasoning,
+            agrees=None,
+            concerns=concerns or None,
+        ))
+
+        return success_response({
+            "success": True,
+            "session_id": session_id,
+            "message_id": message_id,
+            "recorded_as": CONSULT_PHASE,
+            "reviewer_kind": "external_consult",
+            "filer_role": filed["filer_role"],
+            "position": position,
+            "authority": (
+                "none: a consult is a record beside the review. It does not "
+                "advance the phase, count as a verdict, or refresh the "
+                "session's liveness clock."
+            ),
+        })
+    except Exception as e:
+        return [error_response(f"Error submitting consult: {str(e)}")]
+
+
 def _synthetic_review_approves(
     synthesis: Dict[str, Any],
     antithesis: Optional[Dict[str, Any]] = None,
@@ -2612,7 +2840,8 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                 # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
                 _beam_ph = await beam_update_phase(session_id, session.phase.value)
                 if _beam_ph is None:
-                    await pg_update_phase(session_id, session.phase.value)
+                    with session_write_via("python_fallback", site="thesis"):
+                        await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after thesis: {e}")
 
@@ -3079,7 +3308,8 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 try:
                     persisted = True
                     if await beam_update_reviewer(session_id, agent_id) is None:
-                        persisted = await pg_update_reviewer(session_id, agent_id)
+                        with session_write_via("python_fallback", site="first_responder"):
+                            persisted = await pg_update_reviewer(session_id, agent_id)
                     if persisted:
                         result["reviewer_auto_assigned"] = True
                         logger.info("Reviewer auto-assigned for dialectic session")
@@ -3138,7 +3368,8 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                 # BEAM owns the phase write when flagged; else Python. (Slice 2.2)
                 _beam_ph = await beam_update_phase(session_id, session.phase.value)
                 if _beam_ph is None:
-                    await pg_update_phase(session_id, session.phase.value)
+                    with session_write_via("python_fallback", site="antithesis"):
+                        await pg_update_phase(session_id, session.phase.value)
             except Exception as e:
                 logger.warning(f"Could not update PostgreSQL after antithesis: {e}")
 
@@ -3404,7 +3635,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     if not result.get("converged") and not _blocked:
                         _beam_ph = await beam_update_phase(session_id, session.phase.value)
                         if _beam_ph is None:
-                            await pg_update_phase(session_id, session.phase.value)
+                            with session_write_via("python_fallback", site="synthesis"):
+                                await pg_update_phase(session_id, session.phase.value)
                     # The facilitation flag must be durable, not in-memory only —
                     # otherwise the next process to load the session resolves it.
                     if _blocked:
@@ -3451,7 +3683,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             status="failed",
                         )
                         if beam_result is None:
-                            await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
+                            with session_write_via("python_fallback", site="hard_limit_block"):
+                                await pg_resolve_session(session_id=session_id, resolution=_block, status="failed")
                     except Exception as e:
                         logger.warning(f"Could not resolve session in PostgreSQL: {e}")
                 elif (
@@ -3636,7 +3869,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                             )
                             written = beam_result is not None
                             if beam_result is None:
-                                written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
+                                with session_write_via("python_fallback", site="converged_resolution"):
+                                    written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
                             discard_receipt_unless_written(resolution, written=written, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
                             attach_attestation(result)
@@ -3660,7 +3894,8 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 status="failed",
                             )
                             if beam_result is None:
-                                await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
+                                with session_write_via("python_fallback", site="execution_failed"):
+                                    await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
                         except Exception as pg_e:
                             logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
     
