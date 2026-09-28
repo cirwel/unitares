@@ -383,10 +383,9 @@ defmodule UnitaresSentinel.LeaseStarvation do
       param takes `all` or exactly one value — there is no `{high, info}` view —
       so the operator's default backlog query still shows the open
       `sentinel_lease_starved` rows for the episode.
-    * Actually retiring a finding is an operator action:
-      `POST /v1/sentinel/adjudicate {fingerprint, status, reason?}`
-      (`src/http_api.py:3100`), operator-credential gated and idempotent per
-      fingerprint.
+    * Nothing here retires a finding; the backlog shows it until it ages out
+      of the query window. (The operator adjudication route that once did was
+      removed 2026-09-27.)
 
   `info` is deliberate anyway: a closure is not an alarm, and promoting it to
   `high` would pollute the very backlog it exists to make readable.
@@ -691,7 +690,7 @@ defmodule UnitaresSentinel.LeaseStarvation do
     Logger.warning(
       "#{tracker.lease_blocked_resident}: lease-starvation closure undelivered after " <>
         "#{attempts} attempts — dropping it (the open sentinel_lease_starved " <>
-        "findings stay in the backlog and need /v1/sentinel/adjudicate)"
+        "findings stay in the backlog)"
     )
 
     forget_closure(tracker)

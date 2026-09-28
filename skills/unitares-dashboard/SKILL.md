@@ -253,10 +253,10 @@ badge). The WS plumbing lives in `ws.js`.
 ## Mostly read-only — explicit authenticated write surfaces
 
 The redesign sends the read bearer token everywhere; core sections are
-read-only except one area. (A finding-adjudication write endpoint, with
-`X-Unitares-Csrf: 1`, is served only when the `reference-residents` route pack
-is mounted via `UNITARES_ROUTE_PACKS`, and its view is an extension. An
-extension that calls a pack route needs that pack enabled on the server.)
+read-only except one area. (Operator and model adjudication of findings, with
+its queue and verdict routes, was removed 2026-09-27. An extension that calls a
+route-pack route needs that pack enabled on the server via
+`UNITARES_ROUTE_PACKS`.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the

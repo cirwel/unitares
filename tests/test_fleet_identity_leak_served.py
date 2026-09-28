@@ -453,9 +453,11 @@ def test_schema_modules_are_recognized_by_path():
 def test_served_schema_text_is_never_deferred_by_a_name_exemption():
     # NOT_IDENTITIES and KNOWN_COUPLINGS are about what code does with a word;
     # prose has no such job to point to, so neither defers it.
+    # KNOWN_COUPLINGS is empty after resident route relocation; fall back to a
+    # plain src path so the loop still exercises the same triage invariant.
     for rel in (
         next(iter(guard.NOT_IDENTITIES)),
-        next(iter(guard.KNOWN_COUPLINGS)),
+        next(iter(guard.KNOWN_COUPLINGS), "src/http_api.py"),
         "src/mcp_handlers/schemas/core.py",
     ):
         hit = f'  {rel}:1: fleet identity "Sentinel" in served schema text'
