@@ -144,15 +144,19 @@ the test run one.
 - The record is keyed on the diff (path + blob of every changed file against
   the merge base), not the commit, so a base merge that leaves the PR's files
   alone — including `draft-base-refresh.yml`'s — keeps it.
-- A base merge that does touch the PR's files still moves the key. When the
-  PR's own added and removed lines are unchanged, the gate carries the
-  earlier key's records across it (`effective_key` in `review_gate.py`). That
+- A base merge that does touch the PR's files still moves the key. The gate
+  treats the earlier key as the same diff when every merge since it was a
+  clean automatic merge of the base (`git merge-tree` reproduces its tree
+  with no conflict) and the PR's own added and removed lines are unchanged
+  (`base_merge_equivalents` and `carry_records` in `review_gate.py`). That
   covers GitHub's "update branch" for auto-merge and a plain merge of the
-  base, where master only edited text next to the PR's lines. The `review`
-  check then says "carried across a base merge from `<sha>`". Findings and
-  dispositions carry with the review, and so do its model families. A
-  conflict resolution, a new commit, or any edit to an added or removed line
-  stops the carry, and the diff needs its own review.
+  base, where master only edited text next to the PR's lines. Records on the
+  earlier key then count as the head's: a review, its findings, its
+  dispositions and its model families. An open finding stays open until
+  disposed, and a later CLEAN does not clear it. The `review` check says
+  "carried across a base merge from `<sha>`" when a carried record decides.
+  A conflict resolution, any edit made in a merge, a new commit, or any
+  change to an added or removed line stops the carry.
 - The gate proves a review was recorded, not that it was honest: every agent
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own

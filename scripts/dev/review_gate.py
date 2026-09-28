@@ -27,9 +27,10 @@ prefixes and other local config cannot make the laptop and the runner
 disagree.
 
 A base merge that DOES touch the PR's files moves the key even when the PR's
-own lines are unchanged. `effective_key` carries the earlier key's records
-across such a merge while `patch_fingerprint` (the added and removed lines
-alone) is unchanged; see its docstring for exactly what stops the carry.
+own lines are unchanged. `base_merge_equivalents` finds the earlier keys that
+describe the same PR change (clean automatic base merges with an unchanged
+`patch_fingerprint`), and `carry_records` reads their records as the head's;
+see their docstrings for exactly what stops the carry.
 
 The record
 ----------
@@ -208,7 +209,7 @@ def diff_key(base: str, head: str) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-#: How many consecutive base merges `effective_key` walks back through.
+#: How many consecutive base merges `base_merge_equivalents` walks back through.
 CARRY_MAX_BASE_MERGES = 20
 
 
@@ -227,11 +228,20 @@ def patch_fingerprint(base: str, head: str) -> str:
         ["git", "diff", "--no-color", "--no-ext-diff", "--no-renames", "--unified=0",
          "--full-index", mb, head], capture_output=True, check=True).stdout
     h = hashlib.sha256()
+    in_header = False  # between `diff --git` and the file's first `@@`
     for line in patch.split(b"\n"):
-        if line.startswith((b"diff --git ", b"new file mode", b"deleted file mode",
-                            b"old mode", b"new mode", b"Binary files ")):
+        if line.startswith(b"diff --git "):
+            in_header = True
             h.update(line + b"\n")
-        elif line[:1] in (b"+", b"-") and not line.startswith((b"+++ ", b"--- ")):
+        elif in_header and line.startswith(b"@@"):
+            in_header = False
+        elif in_header:
+            # `---`/`+++` file names are header, not content; a content line
+            # that itself begins "-- " or "++ " reads the same and must count.
+            if line.startswith((b"new file mode", b"deleted file mode", b"old mode",
+                                b"new mode", b"Binary files ")):
+                h.update(line + b"\n")
+        elif line[:1] in (b"+", b"-"):
             h.update(line + b"\n")
     numstat = subprocess.run(
         ["git", "diff", "--numstat", "--no-renames", "-z", mb, head],
@@ -247,28 +257,40 @@ def patch_fingerprint(base: str, head: str) -> str:
     return h.hexdigest()
 
 
-def effective_key(base: str, head: str, comments: list[dict]) -> tuple[str, str]:
-    """The diff key whose records decide `head`, and the commit it was carried
-    from ("" when none was).
+def _clean_auto_merge(merge: str, pr_side: str, base_side: str) -> bool:
+    """True when `merge` is exactly what git's own merge of its two parents
+    produces, conflict-free: no hand resolution, nothing added. GitHub's
+    "update branch" can only make such a merge (it refuses on conflict)."""
+    proc = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
+                           pr_side, base_side], capture_output=True, text=True)
+    if proc.returncode != 0:  # 1 = conflicts; anything else = cannot tell
+        return False
+    auto_tree = proc.stdout.split("\n", 1)[0].strip()
+    return bool(auto_tree) and auto_tree == git("rev-parse", f"{merge}^{{tree}}").strip()
 
-    Normally `diff_key(base, head)`. A base merge that touches a file the PR
-    also touches moves that key even when the PR's own lines are unchanged,
-    which voided finished reviews (#2499 twice, #2519 when GitHub updated its
-    branch for auto-merge). So when no trusted record matches the head's key,
-    walk back through merge commits whose second parent is already on `base`
-    — GitHub's "update branch" and a plain `git merge origin/<base>` both make
-    one — and, while `patch_fingerprint` is unchanged, use the first earlier
-    key that has a record. Its findings, dispositions and families carry with
-    it, so an open finding is not dropped by a base merge either.
 
-    What this accepts: a review of the PR's lines stays valid when only the
-    base text around them changed. A conflict resolution, a new commit or any
-    edit to an added or removed line stops the walk, and the diff needs its
-    own review.
+def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
+    """Earlier diff keys that describe the same PR change as `head`, newest
+    first, as (key, commit) pairs.
+
+    A base merge that touches a file the PR also touches moves the diff key
+    even when the PR's own lines are unchanged, which voided finished reviews
+    (#2499 twice, #2519 when GitHub updated its branch for auto-merge). This
+    walks back through merge commits that are all of:
+
+    - two-parent, with the second parent already on `base` (GitHub's "update
+      branch" and a plain `git merge origin/<base>` both make one);
+    - a clean automatic merge of those parents (`_clean_auto_merge`), so a
+      conflict resolution, or any edit made in the merge, stops the walk even
+      where it would leave the changed lines' text the same (moving an edit
+      between two identical lines, for example);
+    - equal in `patch_fingerprint`, the PR's own added and removed lines.
+
+    It stops at the first commit that is not such a merge. A new commit or an
+    edit to the PR's lines needs its own review. History that cannot be read
+    yields no equivalents: the head's own key then decides alone.
     """
-    key = diff_key(base, head)
-    if latest_matching(comments, key) is not None:
-        return key, ""
+    out: list[tuple[str, str]] = []
     try:
         fingerprint = None  # computed only once a base merge is found
         cur = head
@@ -280,17 +302,41 @@ def effective_key(base: str, head: str, comments: list[dict]) -> tuple[str, str]
             if subprocess.run(["git", "merge-base", "--is-ancestor", base_side, base],
                               capture_output=True).returncode != 0:
                 break
+            if not _clean_auto_merge(cur, pr_side, base_side):
+                break
             if fingerprint is None:
                 fingerprint = patch_fingerprint(base, head)
             if patch_fingerprint(base, pr_side) != fingerprint:
                 break
-            earlier = diff_key(base, pr_side)
-            if latest_matching(comments, earlier) is not None:
-                return earlier, pr_side
+            out.append((diff_key(base, pr_side), pr_side))
             cur = pr_side
     except (subprocess.CalledProcessError, SystemExit):
-        pass  # history unreadable (git() raises SystemExit): no carry; the head's key decides
-    return key, ""
+        return []  # history unreadable (git() raises SystemExit): no carry
+    return out
+
+
+def carry_records(comments: list[dict], key: str,
+                  equivalents: list[tuple[str, str]]) -> tuple[list[dict], dict[str, str]]:
+    """`comments` with every record made for an equivalent earlier key re-keyed
+    to `key`, and {record url: commit it was carried from}.
+
+    The equivalent keys are treated as ONE diff, not as fallbacks: a record on
+    the head's own key does not hide them. So `latest_matching`'s rule holds
+    across a base merge. An open finding from before the merge stays open
+    until it is disposed, and a later CLEAN on the new key does not clear it.
+    Dispositions and model families carry the same way.
+    """
+    if not equivalents:
+        return comments, {}
+    origin = {k: commit for k, commit in equivalents if k != key}
+    out, carried = [], {}
+    for c in comments:
+        rec = parse_record(c.get("body", ""))
+        if rec is not None and rec.key in origin:
+            c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1)}
+            carried[c.get("html_url", "")] = origin[rec.key]
+        out.append(c)
+    return out, carried
 
 
 def diff_text(base: str, head: str) -> str:
@@ -417,8 +463,16 @@ def latest_matching(comments: list[dict], key: str,
     return open_findings[-1] if open_findings else completed or found
 
 
+#: (repo, pr) -> (head key, base-merge equivalents). Set where a command has
+#: resolved a PR's head (`_resolve`, `cmd_sweep`), so every later
+#: `pr_comments` read of that PR sees the records CI decides with.
+_CARRY: dict[tuple[str, int], tuple[str, list[tuple[str, str]]]] = {}
+
+
 def pr_comments(repo: str, pr: int) -> list[dict]:
-    return api_pages(f"repos/{repo}/issues/{pr}/comments")
+    comments = api_pages(f"repos/{repo}/issues/{pr}/comments")
+    carry = _CARRY.get((repo, pr))
+    return carry_records(comments, *carry)[0] if carry else comments
 
 
 def api_pages(endpoint: str) -> list[dict]:
@@ -1565,7 +1619,12 @@ def _resolve(args) -> tuple[int, str, str, str]:
         if not known or diff_key(args.base, pushed) != key:
             raise SystemExit("review_gate: local HEAD differs from the PR head — push first, "
                              "or the record would describe a diff CI never sees")
-    return info["number"], repo_slug(), key, info["headRefName"]
+    repo = repo_slug()
+    # Read the PR's records as CI does: a review or open finding carried across
+    # a base merge is this diff's, so `dispose` can answer it and `review` does
+    # not start over as if it were absent.
+    _CARRY[(repo, info["number"])] = (key, base_merge_equivalents(args.base, head))
+    return info["number"], repo, key, info["headRefName"]
 
 
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
@@ -2215,10 +2274,11 @@ def cmd_sweep(args) -> int:
             f"+refs/pull/{n}/head:refs/review-gate/pr-{n}")
         if git("rev-parse", f"refs/review-gate/pr-{n}").strip() != head:
             continue  # pushed since the listing; next run
+        key = diff_key(f"origin/{base}", head)
+        # The same records CI decides with, so the sweep does not re-review a
+        # PR whose review carried across a base merge.
+        _CARRY[(repo, n)] = (key, base_merge_equivalents(f"origin/{base}", head))
         comments = pr_comments(repo, n)
-        # The same key CI decides with, so the sweep does not re-review a PR
-        # whose review carried across a base merge.
-        key, _ = effective_key(f"origin/{base}", head, comments)
         try:
             rec = current_record(repo, n, key, head, comments)
         except SystemExit as exc:
@@ -2327,8 +2387,9 @@ def cmd_ci(args) -> int:
     git("fetch", "--quiet", "--no-tags", "origin",
         f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}",
         f"+refs/pull/{pr}/head:refs/review-gate/head")
-    comments = pr_comments(repo, pr)
-    key, carried_from = effective_key(f"origin/{base_ref}", head, comments)
+    key = diff_key(f"origin/{base_ref}", head)
+    comments, carried = carry_records(
+        pr_comments(repo, pr), key, base_merge_equivalents(f"origin/{base_ref}", head))
     try:
         snapshot = read_native(repo, pr, key, head, comments)
         rec = latest_matching(comments, key, snapshot.records)
@@ -2353,8 +2414,8 @@ def cmd_ci(args) -> int:
                  else ["(changed paths unreadable)"])
     conclusion, desc = second_family_check(
         conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
-    if carried_from and rec is not None:
-        desc += f" · carried across a base merge from {carried_from[:7]}"
+    if rec is not None and rec.url in carried:
+        desc += f" · carried across a base merge from {carried[rec.url][:7]}"
     desc += round_note(snapshot.rounds)
     print(f"PR #{pr} head {head[:12]} key {key[:12]}: {conclusion} — {desc}")
     if conclusion == "neutral":
