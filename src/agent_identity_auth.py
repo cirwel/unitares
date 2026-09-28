@@ -270,7 +270,7 @@ def require_agent_auth(agent_id: str, arguments: dict, enforce: bool = False) ->
                     "error": "API key required for authentication",
                     "details": f"Agent '{agent_id}' requires an API key for updates. This is a security requirement to prevent impersonation.",
                     "migration": "This agent was created before authentication was added.",
-                    "suggestion": "API keys are no longer issued, so this legacy key check cannot pass for this agent; write through the session-bound path with the client_session_id from start_session."
+                    "suggestion": "This agent has no API key on record; write through the session-bound path with the client_session_id from start_session."
                 }, indent=2)
             )
         else:
