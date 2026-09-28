@@ -13,6 +13,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 _GUARD = Path(__file__).resolve().parents[1] / "scripts/dev/check_fleet_identity_leak.py"
 _spec = importlib.util.spec_from_file_location("check_fleet_identity_leak_served", _GUARD)
 guard = importlib.util.module_from_spec(_spec)
@@ -276,6 +278,17 @@ def test_schema_brief_naming_a_resident_is_flagged(tmp_path):
     )
     hits = _schema(tmp_path, src)
     assert len(hits) == 1 and 'fleet identity "Watcher" in served schema text' in hits[0]
+
+
+@pytest.mark.parametrize("source, name", [
+    ("x = Field(None, json_schema_extra=dict(brief='Ask Lumen first.'))\n", "Lumen"),
+    ("model_config = ConfigDict(title='Watcher findings')\n", "Watcher"),
+])
+def test_schema_text_built_by_a_constructor_call_is_flagged(tmp_path, source, name):
+    """Review on #2536: dict(brief=...) and ConfigDict(title=...) build the
+    same served text as the literal forms, so they are read the same way."""
+    hits = _schema(tmp_path, "from pydantic import ConfigDict, Field\n" + source)
+    assert len(hits) == 1 and f'fleet identity "{name}" in served schema text' in hits[0]
 
 
 def test_schema_model_docstring_is_served_other_docstrings_are_not(tmp_path):

@@ -226,16 +226,6 @@ def is_served_schema_module(rel: str) -> bool:
     return any(path.match(p) for p in (SERVED_SCHEMA_GLOB, *SERVED_SCHEMA_FILES))
 
 
-def _is_field_call(node: ast.AST) -> bool:
-    """``Field(...)`` or ``pydantic.Field(...)``."""
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    return (isinstance(func, ast.Name) and func.id == "Field") or (
-        isinstance(func, ast.Attribute) and func.attr == "Field"
-    )
-
-
 def _module_bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
     """Every top-level ``NAME = value`` and ``NAME: T = value``, by name.
 
@@ -263,7 +253,11 @@ def _module_bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
 def served_schema_nodes(tree: ast.AST) -> set[int]:
     """ids() of the str Constant nodes whose text a served schema delivers.
 
-    - the value of a ``Field(...)`` keyword in ``SERVED_SCHEMA_KEYS``;
+    - the value of a keyword in ``SERVED_SCHEMA_KEYS`` on any call: not only
+      ``Field(...)`` but the constructor forms that build the same schema
+      text, such as ``json_schema_extra=dict(brief=...)`` and
+      ``ConfigDict(title=...)``. Any call, rather than a list of known ones,
+      over-reads where a list would miss the next wrapper;
     - the value of a dict-literal entry keyed by one of them, which covers
       ``json_schema_extra={"brief": ...}`` and the alias overrides;
     - a class docstring, which Pydantic serves as the model's description.
@@ -275,7 +269,7 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
     bindings = _module_bindings(tree)
     roots: list[ast.AST] = []
     for node in ast.walk(tree):
-        if _is_field_call(node):
+        if isinstance(node, ast.Call):
             roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
         elif isinstance(node, ast.Dict):
             roots += [
