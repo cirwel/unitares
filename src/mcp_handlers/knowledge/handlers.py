@@ -80,16 +80,19 @@ from src.knowledge_graph import (
     closure_evidence_to_json,
 )
 from src.knowledge_authority import (
+    CHANNEL_MESSAGE,
     GOVERNED_CLAIM,
     IMPORTED_CONTEXT,
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
-    has_imported_memory_marker,
+    channel_lanes,
+    is_lane_filter,
     rank_by_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
     MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_SUMMARY_LEN,
+    MAX_UPDATED_DETAILS_LEN,
 )
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -258,6 +261,9 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "search_degraded_message",
             "limit_clamped_from",
             "_more_available",
+            "sort_by",
+            "created_after",
+            "created_before",
         )
         if payload.get(key) is not None
     }
@@ -1088,6 +1094,10 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
 
 _ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
 _ANONYMOUS_WRITER_FALLBACK_KEY = secrets.token_bytes(32)
+_ANONYMOUS_WRITER_PREFIX = "anonkg_"
+# The pseudonym of a session with no identifying signal; every such caller
+# shares it. A derived pseudonym ends in a hex digest instead.
+_ANONYMOUS_WRITER_SHARED_SUFFIX = "_local"
 
 
 def _pseudonymize_anonymous_writer_source(source: str) -> str:
@@ -1131,8 +1141,8 @@ def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
 
     if source:
         digest = _pseudonymize_anonymous_writer_source(str(source))
-        return f"anonkg_{client_hint}_{digest}"
-    return f"anonkg_{client_hint}_local"
+        return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}_{digest}"
+    return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}{_ANONYMOUS_WRITER_SHARED_SUFFIX}"
 
 
 def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Optional[TextContent], bool]:
@@ -1189,12 +1199,16 @@ class _KnowledgeStoreState:
     similar_discoveries: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
+    """A high or critical store must come from a registered agent."""
+    return str(arguments.get("severity", "low")).lower() in {"high", "critical"}
+
+
 def _resolve_store_writer(
     arguments: Dict[str, Any],
 ) -> tuple[str, Optional[TextContent], Optional[str], bool]:
     """Resolve the writer using the severity-dependent identity policy."""
-    raw_severity = str(arguments.get("severity", "low")).lower()
-    if raw_severity not in {"high", "critical"}:
+    if not _store_needs_registered_writer(arguments):
         agent_id, error, is_anonymous = _resolve_low_friction_writer(arguments)
         return agent_id, error, None, is_anonymous
 
@@ -1203,6 +1217,73 @@ def _resolve_store_writer(
         return agent_id, error, None, False
     display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
     return agent_id, display_name_error, display_name_warning, False
+
+
+@dataclass(frozen=True)
+class KnowledgeWriteAuthor:
+    """The agent_id a knowledge store or note records, and who else can use it.
+
+    kind says whether only this caller writes under agent_id:
+
+    - "bound": the identity bound to this session. Calls bound to it write
+      under it; so can a call that reaches the handler unbound and passes it
+      as agent_id on a low or medium write, which no ownership check stops
+      (only high and critical stores verify ownership).
+    - "anonymous": the low-friction pseudonym derived from this session's
+      signals. An anonymous caller whose session yields the same signals
+      (the last fallback is an IP and user-agent fingerprint) writes under
+      it too.
+    - "anonymous_shared": the pseudonym for a session with no identifying
+      signal (``anonkg_<client>_local``), which every such caller shares.
+    - "named": an agent_id the call passed that is not this session's
+      binding. Any caller can pass it.
+    """
+
+    agent_id: str
+    kind: str
+
+
+def resolve_knowledge_write_author(
+    arguments: Dict[str, Any], *, store: bool
+) -> Optional[KnowledgeWriteAuthor]:
+    """The author a knowledge store (``store``) or note records for this call.
+
+    For the recovery of a timed-out write: it runs the writer resolution the
+    handler runs (the store's severity-dependent policy, or the note's
+    low-friction one) on a copy, so the caller's arguments stay as sent. The
+    display-name check the store also runs is skipped; it can relabel an
+    agent but never changes the author. None when the handler would refuse
+    the writer or the resolution fails, which it logs.
+    """
+    from ..context import get_context_agent_id
+
+    candidate = dict(arguments)
+    try:
+        if store and _store_needs_registered_writer(candidate):
+            agent_id, error = require_registered_agent(candidate)
+        else:
+            agent_id, error, _ = _resolve_low_friction_writer(candidate)
+        bound = get_context_agent_id()
+    except Exception:
+        logger.warning(
+            "Could not resolve the author of a timed-out knowledge write",
+            exc_info=True,
+        )
+        return None
+    if error is not None or not agent_id:
+        return None
+    agent_id = str(agent_id)
+    if bound and agent_id == bound:
+        kind = "bound"
+    elif agent_id.startswith(_ANONYMOUS_WRITER_PREFIX):
+        kind = (
+            "anonymous_shared"
+            if agent_id.endswith(_ANONYMOUS_WRITER_SHARED_SUFFIX)
+            else "anonymous"
+        )
+    else:
+        kind = "named"
+    return KnowledgeWriteAuthor(agent_id=agent_id, kind=kind)
 
 
 def _parse_single_store_request(
@@ -1676,6 +1757,12 @@ class _KnowledgeSearchRequest:
     # Set when the caller over-asked and the limit was clamped down — surfaced
     # in the response so truncation is distinguishable from "that was all".
     limit_clamped_from: Optional[int] = None
+    # "relevance" or "created_at". created_at orders the query's full-text
+    # matches newest first; see _run_newest_first_text_search.
+    sort_by: str = "relevance"
+    # Exclusive, timezone-aware bounds on created_at.
+    created_after: Optional[datetime] = None
+    created_before: Optional[datetime] = None
 
     @property
     def query_terms(self) -> list[str]:
@@ -1767,6 +1854,31 @@ def _resolve_detail_inclusion(
     return auto, bool(requested) or auto
 
 
+def _parse_search_timestamp(name: str, value: Any) -> Optional[datetime]:
+    """Parse a created_after/created_before bound into an aware UTC datetime.
+
+    A value without an offset is read as UTC, the zone every discovery id and
+    created_at is written in. An unparseable value is refused rather than
+    dropped: a window the caller wrote must not silently become no window.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        text = str(value).strip()
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            raise _SearchParameterError(
+                f"{name} {value!r} is not an ISO 8601 timestamp; "
+                "pass e.g. '2026-09-26T00:00:00Z' or '2026-09-26'."
+            ) from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def _parse_knowledge_search_request(
     arguments: Dict[str, Any],
 ) -> _KnowledgeSearchRequest:
@@ -1774,6 +1886,42 @@ def _parse_knowledge_search_request(
     if search_mode not in {"auto", "fts", "semantic", "hybrid"}:
         raise _SearchParameterError(
             f"Invalid search_mode {search_mode!r}; expected one of: auto, fts, semantic, hybrid"
+        )
+
+    sort_by = str(arguments.get("sort_by") or "relevance").lower()
+    if sort_by not in {"relevance", "created_at"}:
+        raise _SearchParameterError(
+            f"Invalid sort_by {sort_by!r}; expected 'relevance' or 'created_at'"
+        )
+    if sort_by == "created_at" and _optional_flag(arguments.get("semantic")) is True:
+        raise _SearchParameterError(
+            "sort_by='created_at' orders the query's full-text matches by time "
+            "and cannot be combined with semantic=true. Drop semantic, or use "
+            "sort_by='relevance'."
+        )
+    if sort_by == "created_at" and search_mode in {"semantic", "hybrid"}:
+        # Newest-first needs a match SET to order. The full-text query gives
+        # one; similarity has no boundary short of the min_similarity knob, so
+        # "newest semantic match" would be "newest row above an arbitrary
+        # cutoff" — mostly unrelated rows on this corpus.
+        raise _SearchParameterError(
+            f"sort_by='created_at' orders the query's full-text matches by time "
+            f"and cannot be combined with search_mode={search_mode!r}. Use "
+            "search_mode='auto' or 'fts', or omit the query to list the newest "
+            "entries by filter."
+        )
+    created_after = _parse_search_timestamp("created_after", arguments.get("created_after"))
+    created_before = _parse_search_timestamp("created_before", arguments.get("created_before"))
+    query_present = bool(arguments.get("query") or arguments.get("text"))
+    if not query_present and (created_after or created_before) and not arguments.get("sort_by"):
+        # A queryless read with a date window is "what is new since T": the
+        # listing is already newest first, and the authority nudge that a
+        # default listing gets would move an imported row out of time order.
+        sort_by = "created_at"
+    if created_after and created_before and created_after >= created_before:
+        raise _SearchParameterError(
+            f"created_after ({created_after.isoformat()}) must be earlier than "
+            f"created_before ({created_before.isoformat()})."
         )
 
     authority_mode = str(arguments.get("authority_mode") or "prefer_governed").lower()
@@ -1882,6 +2030,9 @@ def _parse_knowledge_search_request(
         include_archived=arguments.get("include_archived", False),
         include_cold=arguments.get("include_cold", False),
         authority_mode=authority_mode,
+        sort_by=sort_by,
+        created_after=created_after,
+        created_before=created_before,
     )
 
 
@@ -2030,12 +2181,14 @@ async def _retrieve_hybrid_candidates(
             limit=fetch_limit,
             min_similarity=state.min_similarity,
             **tag_kwargs,
+            **_window_kwargs(request),
         ),
         state.graph.full_text_search(
             str(request.query_text),
             limit=fetch_limit,
             operator=fts_operator,
             **tag_kwargs,
+            **_window_kwargs(request),
         ),
     )
     state.fts_operator_used = fts_operator
@@ -2085,6 +2238,7 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         limit=state.first_stage_limit,
         min_similarity=state.min_similarity,
         **_tag_kwargs(request),
+        **_window_kwargs(request),
     )
     if isinstance(semantic_results, tuple) and len(semantic_results) == 2 and isinstance(semantic_results[1], dict):
         state.search_degraded_warning = (
@@ -2101,16 +2255,43 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
     state.search_mode = "semantic"
 
 
-async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
+def _fts_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    kwargs = {**_tag_kwargs(request), **_window_kwargs(request)}
+    if request.sort_by == "created_at":
+        kwargs["order_by"] = "created_at"
+        # The post-LIMIT filter stays, but under time order it would leave a
+        # page of newer ineligible rows and nothing to return.
+        kwargs["filters"] = {
+            "agent_id": request.agent_id,
+            "type": request.discovery_type,
+            "severity": request.severity,
+            "status": request.status,
+            "exclude_archived": not request.include_archived,
+            "exclude_cold": not request.include_cold,
+        }
+    return kwargs
+
+
+def _fts_page_size(state: _KnowledgeSearchState) -> int:
     request = state.request
     base_limit = int(min(max(request.limit * 5, request.limit), 500))
-    candidate_limit = max(base_limit, state.rerank_pool_size) if state.rerank_on else base_limit
+    return max(
+        base_limit,
+        state.rerank_pool_size if state.rerank_on else 0,
+        _authority_pool_size(request),
+    )
+
+
+async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
+    request = state.request
+    candidate_limit = _fts_page_size(state)
     primary_operator = request.operator_forced or "AND"
+    fts_kwargs = _fts_kwargs(request)
     state.candidates = await state.graph.full_text_search(
         str(request.query_text),
         limit=candidate_limit,
         operator=primary_operator,
-        **_tag_kwargs(request),
+        **fts_kwargs,
     )
     state.fts_operator_used = primary_operator
 
@@ -2125,7 +2306,7 @@ async def _retrieve_fts_candidates(state: _KnowledgeSearchState) -> None:
                 str(request.query_text),
                 limit=candidate_limit,
                 operator="OR",
-                **_tag_kwargs(request),
+                **fts_kwargs,
             )
             if state.candidates:
                 state.fts_operator_used = "OR"
@@ -2165,7 +2346,49 @@ def _candidate_matches_search(
         return False
     if request.tags and not _matches_tags(document, request.tags):
         return False
+    return _within_window(document, request)
+
+
+def _document_created_at(document: Any) -> Optional[datetime]:
+    raw = getattr(document, "timestamp", None) or getattr(document, "created_at", None)
+    if isinstance(raw, datetime):
+        parsed = raw
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _within_window(document: Any, request: _KnowledgeSearchRequest) -> bool:
+    """Apply created_after/created_before to a candidate already in hand.
+
+    The SQL paths filter inside the query; semantic retrieval cannot, so its
+    candidates are held to the window here. A row whose creation time cannot
+    be read is outside any window: it cannot be shown to be inside one.
+    """
+    if not (request.created_after or request.created_before):
+        return True
+    created = _document_created_at(document)
+    if created is None:
+        return False
+    if request.created_after and created <= request.created_after:
+        return False
+    if request.created_before and created >= request.created_before:
+        return False
     return True
+
+
+def _window_kwargs(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    # Sent only when a window was asked for, so an unwindowed search makes
+    # exactly the backend call it made before.
+    kwargs: dict[str, Any] = {}
+    if request.created_after:
+        kwargs["created_after"] = request.created_after
+    if request.created_before:
+        kwargs["created_before"] = request.created_before
+    return kwargs
 
 
 def _matches_tags(document: Any, tags: list[str]) -> bool:
@@ -2185,11 +2408,29 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
 
     A source-tag query is already an explicit request to inspect the imported
     lane, so applying its default penalty there would only distort that lane's
-    own relevance order.
+    own relevance order. Only a filter made entirely of source-memory tags
+    counts: tags match any-of, so a mixed filter also returns ordinary
+    findings. A `channel-*` filter is honoured per row, in rank_by_authority,
+    because a channel- tag can also be an ordinary topic.
     """
     if request.authority_mode == "all":
         return False
-    return not has_imported_memory_marker(request.tags)
+    if request.sort_by == "created_at":
+        # The caller asked for time order; an authority nudge would reorder it.
+        return False
+    return not is_lane_filter(request.tags)
+
+
+# Candidates authority ranking sees before the page is cut. Retrieval
+# windows widen to at least this when it is on, or a native finding just
+# below a page of down-ranked rows is never retrieved to be lifted. The
+# queryless listing is exempt: it is a newest-first read, and widening it
+# would pull older rows above newer ones rather than break close contests.
+AUTHORITY_POOL_SIZE = 50
+
+
+def _authority_pool_size(request: _KnowledgeSearchRequest) -> int:
+    return AUTHORITY_POOL_SIZE if _authority_ranking_enabled(request) else 0
 
 
 def _authority_score_map(state: _KnowledgeSearchState) -> dict[str, float]:
@@ -2210,6 +2451,7 @@ def _rank_search_documents(
         documents,
         relevance_scores=_authority_score_map(state),
         enabled=_authority_ranking_enabled(state.request),
+        read_lanes=channel_lanes(state.request.tags),
     )
     state.authority_reranked = state.authority_reranked or changed
     return ranked
@@ -2227,14 +2469,28 @@ def _candidate_status_visible(
 
 async def _filter_and_rerank_candidates(state: _KnowledgeSearchState) -> None:
     request = state.request
-    substring_terms = str(request.query_text).lower().split() if state.search_mode == "substring_scan" else None
-    filter_cap = state.rerank_pool_size if state.rerank_on else (50 if state.hybrid_on else request.limit)
+    substring_terms = (
+        str(request.query_text).lower().split()
+        if state.search_mode in ("substring_scan", "substring_newest_first")
+        else None
+    )
+    # Authority ranking has to see more than the page it reorders: capped at
+    # `limit`, a native finding just below a page of down-ranked rows was
+    # dropped before its multiplier could lift it.
+    if state.rerank_on:
+        filter_cap = state.rerank_pool_size
+    elif state.hybrid_on or _authority_ranking_enabled(request):
+        filter_cap = max(request.limit, AUTHORITY_POOL_SIZE)
+    else:
+        filter_cap = request.limit
     filtered = []
     for document in state.candidates:
         if request.tags and not _matches_tags(document, request.tags):
             state.tag_filter_dropped += 1
             continue
-        if _candidate_matches_search(document, state, substring_terms):
+        if _candidate_matches_search(document, state, substring_terms) and not _label_excluded(
+            document, request
+        ):
             filtered.append(document)
             if len(filtered) >= filter_cap:
                 break
@@ -2283,11 +2539,16 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
     request = state.request
     state.rerank_on = reranker_enabled()
     state.rerank_pool_size = 50 if state.rerank_on else 0
-    state.first_stage_limit = max(request.limit * 2, state.rerank_pool_size) if state.rerank_on else request.limit * 2
+    state.first_stage_limit = max(
+        request.limit * 2, state.rerank_pool_size, _authority_pool_size(request)
+    )
     state.hybrid_on = hybrid_enabled()
     state.graph_expand_on = graph_expansion_enabled()
 
     has_semantic, has_fts = _validate_search_backend(state)
+    if request.sort_by == "created_at":
+        await _run_newest_first_text_search(state, has_fts=has_fts)
+        return
     _select_search_modes(state, has_semantic=has_semantic, has_fts=has_fts)
     if state.hybrid_path:
         await _retrieve_hybrid_candidates(
@@ -2309,18 +2570,114 @@ async def _run_text_search(state: _KnowledgeSearchState) -> None:
     state.fields_searched = ["summary", "details", "tags"]
 
 
+async def _run_newest_first_text_search(
+    state: _KnowledgeSearchState, *, has_fts: bool
+) -> None:
+    """sort_by=created_at: the query's full-text matches, newest first.
+
+    The tsquery is the membership test and the database does the ordering, so
+    a match written a minute ago comes first however weakly it ranks.
+    Re-sorting a relevance page instead would only reorder rows that already
+    ranked in, which is the failure this exists for. No reranker, no
+    semantic leg, no authority reorder: each would put relevance back.
+    """
+    state.rerank_on = False
+    state.hybrid_on = False
+    if has_fts:
+        await _retrieve_fts_candidates(state)
+        state.search_mode = "fts_newest_first"
+    else:
+        # query() is already newest first; the substring filter runs below.
+        await _retrieve_substring_candidates(state)
+        state.search_mode = "substring_newest_first"
+    await _filter_and_rerank_candidates(state)
+    if has_fts:
+        await _continue_newest_first_pages(state)
+    state.operator_used = state.fts_operator_used or "N/A"
+    state.fields_searched = ["summary", "details", "tags"]
+
+
+# Rows newest-first continuation may read in total, the same ceiling as one
+# full-text candidate page. Pages double, so a long run of excluded writers
+# is crossed in a few queries rather than cut off after a fixed page count.
+NEWEST_FIRST_SCAN_CEILING = 500
+
+
+async def _continue_newest_first_pages(state: _KnowledgeSearchState) -> None:
+    """Read older pages while filters the SQL cannot express leave the page short.
+
+    Everything the database can filter already sits in the ordered query.
+    Writer-label exclusion cannot (a label is resolved from provenance or
+    agent metadata), so a run of newer matches from excluded writers can
+    fill a whole page. Keyset continuation reads the next older page from
+    the oldest row seen, doubling the page each time, until the limit fills,
+    the matches run out, or NEWEST_FIRST_SCAN_CEILING rows have been read.
+    """
+    request = state.request
+    page_size = _fts_page_size(state)
+    page = state.candidates
+    pool = list(page)
+    while len(pool) < NEWEST_FIRST_SCAN_CEILING:
+        if len(state.results) >= request.limit or len(page) < page_size:
+            return
+        page_size = min(page_size * 2, NEWEST_FIRST_SCAN_CEILING - len(pool))
+        oldest = _document_created_at(page[-1])
+        if oldest is None:
+            return
+        kwargs = _fts_kwargs(request)
+        kwargs["before"] = (oldest, page[-1].id)
+        page = await state.graph.full_text_search(
+            str(request.query_text),
+            limit=page_size,
+            operator=state.fts_operator_used or request.operator_forced or "AND",
+            **kwargs,
+        )
+        if not page:
+            return
+        if state.fts_anchor_ids is not None:
+            state.fts_anchor_ids.update(document.id for document in page)
+        pool.extend(page)
+        state.candidates = pool
+        state.tag_filter_dropped = 0
+        await _filter_and_rerank_candidates(state)
+
+
 async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
     request = state.request
-    state.results = await state.graph.query(
-        agent_id=request.agent_id,
-        tags=request.tags,
-        type=request.discovery_type,
-        severity=request.severity,
-        status=request.status,
-        limit=request.limit,
-        exclude_archived=not request.status and not request.include_archived,
-        exclude_cold=not request.status and not request.include_cold,
-    )
+
+    async def _read(limit: int) -> list[Any]:
+        return await state.graph.query(
+            agent_id=request.agent_id,
+            tags=request.tags,
+            type=request.discovery_type,
+            severity=request.severity,
+            status=request.status,
+            limit=limit,
+            exclude_archived=not request.status and not request.include_archived,
+            exclude_cold=not request.status and not request.include_cold,
+            **_window_kwargs(request),
+        )
+
+    if not request.exclude_labels:
+        state.results = await _read(request.limit)
+    else:
+        # Writer-label exclusion cannot run in the query, so reading exactly
+        # `limit` rows let excluded writers take the page. Re-read with a
+        # doubling limit until the visible page fills, the rows run out, or
+        # the same row ceiling newest-first continuation uses is reached.
+        fetch_limit = min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+        while True:
+            rows = await _read(fetch_limit)
+            state.results = [
+                document for document in rows if not _label_excluded(document, request)
+            ]
+            if (
+                len(state.results) >= request.limit
+                or len(rows) < fetch_limit
+                or fetch_limit >= NEWEST_FIRST_SCAN_CEILING
+            ):
+                break
+            fetch_limit = min(fetch_limit * 2, NEWEST_FIRST_SCAN_CEILING)
     state.search_mode = "indexed_filters"
     state.fields_searched = [
         name
@@ -2352,11 +2709,13 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             request.query_text,
         )
         primary_operator = request.operator_forced or "AND"
+        fallback_limit = max(request.limit * 2, _authority_pool_size(request))
         candidates = await state.graph.full_text_search(
             str(request.query_text),
-            limit=request.limit * 2,
+            limit=fallback_limit,
             operator=primary_operator,
             **_tag_kwargs(request),
+            **_window_kwargs(request),
         )
         fallback_operator = primary_operator
         used_or_retry = False
@@ -2369,9 +2728,10 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
             if request.query_term_count <= 24:
                 candidates = await state.graph.full_text_search(
                     str(request.query_text),
-                    limit=request.limit * 2,
+                    limit=fallback_limit,
                     operator="OR",
                     **_tag_kwargs(request),
+                    **_window_kwargs(request),
                 )
                 if candidates:
                     fallback_operator = "OR"
@@ -2388,8 +2748,12 @@ async def _apply_semantic_fts_fallback(state: _KnowledgeSearchState) -> None:
                 continue
             if not _candidate_matches_semantic_fallback(document, request):
                 continue
+            if _label_excluded(document, request):
+                continue
             state.results.append(document)
-            if len(state.results) >= request.limit:
+            # The executor ranks and then cuts the page, so collect the
+            # whole authority pool here, not just `limit`.
+            if len(state.results) >= max(request.limit, _authority_pool_size(request)):
                 break
         if not state.results:
             return
@@ -2418,25 +2782,35 @@ def _candidate_matches_semantic_fallback(
         return False
     if request.severity and document.severity != request.severity:
         return False
-    if request.status and document.status != request.status:
+    # The same status predicate as the main path: this one used to check
+    # archived only, so a cold row could come back from a default search.
+    if not _candidate_status_visible(document, request):
         return False
-    if not request.status and not request.include_archived and document.status == "archived":
+    if request.tags and not any(tag in set(document.tags or []) for tag in request.tags):
         return False
-    if request.tags:
-        return any(tag in set(document.tags or []) for tag in request.tags)
-    return True
+    return _within_window(document, request)
+
+
+def _label_excluded(document: Any, request: _KnowledgeSearchRequest) -> bool:
+    """True when the writer's display label is one the caller excluded.
+
+    Checked while candidates are collected, not only after the page is cut:
+    otherwise an excluded writer's row can take a slot under the limit and
+    leave the page short, or empty at limit=1 under newest-first order.
+    """
+    if not request.exclude_labels:
+        return False
+    display = _resolve_agent_display(document.agent_id)
+    display_name = display.get("display_name", document.agent_id) or ""
+    return str(display_name).strip().lower() in request.exclude_labels
 
 
 def _exclude_search_labels(state: _KnowledgeSearchState) -> None:
     if not state.request.exclude_labels:
         return
-    filtered = []
-    for document in state.results:
-        display = _resolve_agent_display(document.agent_id)
-        display_name = display.get("display_name", document.agent_id) or ""
-        if str(display_name).strip().lower() not in state.request.exclude_labels:
-            filtered.append(document)
-    state.results = filtered
+    state.results = [
+        document for document in state.results if not _label_excluded(document, state.request)
+    ]
 
 
 def _serialize_search_discoveries(
@@ -2531,7 +2905,20 @@ def _base_search_response(
         "discoveries": discoveries,
         "count": len(state.results),
         "message": f"Found {len(state.results)} discovery(ies){detail_suffix}",
+        **_search_order_echo(request),
     }
+
+
+def _search_order_echo(request: _KnowledgeSearchRequest) -> dict[str, Any]:
+    """Say how the list is ordered and windowed, only when it differs from default."""
+    echo: dict[str, Any] = {}
+    if request.sort_by != "relevance":
+        echo["sort_by"] = request.sort_by
+    if request.created_after:
+        echo["created_after"] = request.created_after.isoformat()
+    if request.created_before:
+        echo["created_before"] = request.created_before.isoformat()
+    return echo
 
 
 def _attach_search_diagnostics(
@@ -2564,7 +2951,9 @@ def _attach_search_diagnostics(
         tier = assess_authority(document).tier
         authority_counts[tier] = authority_counts.get(tier, 0) + 1
     if authority_counts and (
-        IMPORTED_CONTEXT in authority_counts or GOVERNED_CLAIM in authority_counts
+        IMPORTED_CONTEXT in authority_counts
+        or CHANNEL_MESSAGE in authority_counts
+        or GOVERNED_CLAIM in authority_counts
     ):
         response["authority_policy"] = {
             "mode": state.request.authority_mode,
@@ -2572,8 +2961,8 @@ def _attach_search_diagnostics(
             "result_tiers": authority_counts,
             "note": (
                 "Authority affects close ranking contests; it is provenance-aware "
-                "retrieval, not a truth verdict. Filter by source tags or pass "
-                "authority_mode='all' to inspect raw relevance order."
+                "retrieval, not a truth verdict. Filter by source or channel tags "
+                "or pass authority_mode='all' to inspect raw relevance order."
             ),
         }
 
@@ -3426,6 +3815,70 @@ def _apply_update_text_fields(
         )
 
 
+def _refuse_oversized_details(
+    request: _KnowledgeUpdateRequest, updates: dict[str, Any]
+) -> None:
+    """Refuse an update whose details value is over MAX_UPDATED_DETAILS_LEN.
+
+    Measured on the value storage would write, so the stored details (earlier
+    notes included) or the details this call sends count along with the new
+    notes block. On AGE a value over the Cypher parameter limit fails the
+    whole update and reads back as "Discovery not found"; refusing here
+    names the real cause and changes nothing.
+    """
+    details = updates.get("details")
+    if details is None or len(details) <= MAX_UPDATED_DETAILS_LEN:
+        return
+
+    size = len(details)
+    limit = f"the limit is {MAX_UPDATED_DETAILS_LEN:,}. Nothing was changed."
+    elsewhere = (
+        "Put long material such as logs in the repository, a PR or a new "
+        "finding that responds to this one (response_to={'discovery_id': "
+        f"'{request.discovery_id}', 'response_type': 'elaboration'}}) and "
+        "point to it."
+    )
+    if request.resolution_note is None:
+        message = f"details is {size:,} characters; {limit}"
+        action = (
+            f"Send details of at most {MAX_UPDATED_DETAILS_LEN:,} characters. "
+            f"{elsewhere}"
+        )
+    else:
+        message = (
+            "details with these resolution_notes appended would be "
+            f"{size:,} characters; {limit}"
+        )
+        room = MAX_UPDATED_DETAILS_LEN - (size - len(request.resolution_note))
+        if room > 0:
+            action = (
+                f"Shorten resolution_notes to at most {room:,} characters: "
+                "what closed the finding, with pointers (a commit, a PR, a "
+                f"finding id) to the rest. {elsewhere}"
+            )
+        else:
+            held_by = (
+                "The details this call sends leave"
+                if request.details is not None
+                else "This finding's stored details leave"
+            )
+            action = (
+                f"{held_by} no room for a notes block. Send the update "
+                "without resolution_notes and record the notes as a new "
+                "finding that responds to this one (response_to="
+                f"{{'discovery_id': '{request.discovery_id}', "
+                "'response_type': 'elaboration'})."
+            )
+    raise _UpdateResponseError(
+        error_response(
+            message,
+            error_code="INVALID_PARAM",
+            error_category="validation_error",
+            recovery={"action": action, "related_tools": ["knowledge"]},
+        )
+    )
+
+
 def _apply_update_metadata_fields(
     request: _KnowledgeUpdateRequest, updates: dict[str, Any]
 ) -> None:
@@ -3835,6 +4288,7 @@ def _build_discovery_updates(
         updates["closure_evidence"] = None
 
     _apply_update_text_fields(request, discovery, updates)
+    _refuse_oversized_details(request, updates)
     _apply_update_metadata_fields(request, updates)
     return updates, normalized_status
 

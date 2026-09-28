@@ -1698,6 +1698,114 @@ def test_producer_never_reported_skips_with_no_declarations(
     assert result.status == doctor.Status.SKIP
 
 
+def test_producer_never_reported_skips_on_a_database_no_producer_posted_to(
+        doctor, monkeypatch, tmp_path):
+    """A fresh install: the declarations are the reference residents and one
+    operator's scripts, none of which it runs. Listing them as never-born would
+    report somebody else's fleet on every new install."""
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _write_producer(tmp_path, "scripts/ops/deploy_drift_doctor.py",
+                    'FINDING_KIND = "deploy_drift_finding"\n')
+    _mock_psql(doctor, monkeypatch, "")
+    result = doctor.check_producer_never_reported(
+        "postgresql://x/y", tmp_path, producers_expected=False)
+    assert result.status == doctor.Status.SKIP
+    assert "sentinel_finding" not in result.message
+
+
+def test_producer_never_reported_warns_when_every_producer_is_never_born(
+        doctor, monkeypatch, tmp_path):
+    """Producer agents run here, yet nothing has ever posted: every producer
+    broke before its first post (a shared import or scheduling failure). That
+    is the case this check exists for, so an empty history must still warn."""
+    _write_producer(tmp_path, "agents/sentinel/agent.py",
+                    'post(event_type="sentinel_finding")\n')
+    _mock_psql(doctor, monkeypatch, "")
+    result = doctor.check_producer_never_reported(
+        "postgresql://x/y", tmp_path, producers_expected=True)
+    assert result.status == doctor.Status.WARN
+    assert "sentinel_finding" in result.message
+
+
+def _write_agent_plist(directory, label, args):
+    import plistlib
+    with (directory / f"{label}.plist").open("wb") as fh:
+        plistlib.dump({"Label": label, "ProgramArguments": args}, fh)
+
+
+def test_producer_agents_present_matches_only_plists_that_run_a_producer(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    producers = {"agents/sentinel/agent.py", "scripts/ops/doctor_findings.py"}
+    # Governance and an unrelated UNITARES job (backups) are not producers.
+    _write_agent_plist(agents, doctor.GOVERNANCE_LAUNCHD_LABEL,
+                       ["/usr/bin/python3", "/opt/u/src/mcp_server.py"])
+    _write_agent_plist(agents, "com.unitares.governance-backup",
+                       ["/bin/bash", "/opt/u/scripts/ops/backup_governance.sh"])
+    assert not doctor._producer_agents_present(producers, agents)
+    # A plist that runs a declaring file is.
+    _write_agent_plist(agents, "com.unitares.doctor-findings",
+                       ["/usr/bin/python3", "/opt/u/scripts/ops/doctor_findings.py"])
+    assert doctor._producer_agents_present(producers, agents)
+
+
+def test_producer_agents_present_matches_a_residents_own_directory(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.some-resident",
+                       ["/usr/bin/python3", "/opt/u/agents/sentinel/run.py"])
+    assert doctor._producer_agents_present({"agents/sentinel/agent.py"}, agents)
+
+
+def test_producer_agents_present_recognises_a_beam_producer_by_its_label(doctor, tmp_path):
+    """A BEAM port launched by a shell script names no Python producer file;
+    its label (the event's stem) is the only handle on it."""
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.sentinel-beam",
+                       ["/opt/u/elixir/sentinel/scripts/start.sh"])
+    events = {"sentinel_finding", "sentinel_alarm_finding"}
+    assert doctor._producer_agents_present(set(), agents, events=events)
+    # Loaded but with no plist in the directory counts too.
+    assert doctor._producer_agents_present(
+        set(), tmp_path / "absent", events=events,
+        loaded={"com.unitares.sentinel-beam"})
+
+
+def test_producer_label_stems_do_not_match_unrelated_jobs(doctor):
+    stems = doctor._producer_label_stems(
+        {"deploy_drift_finding", "vigil_finding", "sentinel_alarm_finding"})
+    assert stems == {"deploy", "vigil", "sentinel"}
+    assert doctor._label_runs_producer("com.unitares.sentinel", stems)
+    assert doctor._label_runs_producer("com.unitares.sentinel-beam", stems)
+    assert doctor._label_runs_producer("com.unitares.vigil", stems)
+    # Same resident, different job: a maintenance agent emits no findings.
+    assert not doctor._label_runs_producer("com.unitares.vigil-hygiene", stems)
+    # Script producers are matched by ProgramArguments, not by label prefix.
+    assert not doctor._label_runs_producer("com.unitares.deploy-drift-doctor", stems)
+    assert not doctor._label_runs_producer("com.unitares.governance-backup", stems)
+    assert not doctor._label_runs_producer("com.unitares.dep-sweep", stems)
+    assert not doctor._label_runs_producer(doctor.GOVERNANCE_LAUNCHD_LABEL, stems)
+
+
+def test_producer_agents_present_ignores_a_same_named_maintenance_job(doctor, tmp_path):
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    _write_agent_plist(agents, "com.unitares.vigil-hygiene",
+                       ["/usr/bin/python3", "/opt/u/agents/vigil_hygiene/agent.py"])
+    assert not doctor._producer_agents_present(
+        {"agents/vigil/agent.py"}, agents, events={"vigil_finding"})
+
+
+def test_producer_agents_present_tolerates_missing_dir_and_bad_plists(doctor, tmp_path):
+    assert not doctor._producer_agents_present({"agents/x/a.py"}, tmp_path / "absent")
+    agents = tmp_path / "LaunchAgents"
+    agents.mkdir()
+    (agents / "com.unitares.broken.plist").write_text("not a plist")
+    assert not doctor._producer_agents_present({"agents/x/a.py"}, agents)
+
+
 # --- constraint_drift -------------------------------------------------------
 # The parser is the risky half: it must replay drop-then-re-add correctly and
 # must not read SQL comments as declarations. Both mistakes were live hazards —

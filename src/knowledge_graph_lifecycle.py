@@ -31,11 +31,84 @@ Storage tiers:
 """
 
 import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import logging
-from typing import List, Dict, Any, Optional, Set
+from typing import List, Dict, Any, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
+
+# How many failed ids one warning or one summary entry names. The count beside
+# them is always exact; the ids are a sample, so a sweep in which every update
+# fails (the database gone mid-run) cannot put a thousand ids in one log line
+# or one tool response.
+FAILED_ID_SAMPLE_LIMIT = 20
+
+# An exception's text can carry a whole query; the warning keeps the start.
+_FAILURE_REASON_LIMIT = 200
+
+
+@dataclass
+class PassOutcome:
+    """What one lifecycle pass did.
+
+    ``changed`` holds the ids whose update the backend confirmed. In a dry run
+    nothing is written, so it holds the ids the pass would change. ``failed``
+    holds the ids whose update the backend refused (``update_discovery``
+    returned a falsy value) or raised on; it is always empty in a dry run.
+    ``skipped_permanent`` is counted by the resolved -> archived pass only.
+    """
+
+    changed: List[str] = field(default_factory=list)
+    failed: List[str] = field(default_factory=list)
+    skipped_permanent: int = 0
+
+
+async def _apply_update(graph, discovery_id: str, updates: Dict[str, Any]) -> Optional[str]:
+    """Apply one update through the backend. Return None, or why it failed.
+
+    Both backends return False for an update they did not make: the Postgres
+    backend when no row has the id, the AGE backend when its query fails (it
+    logs the error and rolls back). The Postgres backend lets a database error
+    raise, and so does the AGE backend's no-graph path. Either way that one
+    row did not change, so the error is that row's failure and the rest of
+    the pass still runs, as it already did on the AGE graph path.
+    """
+    try:
+        ok = await graph.update_discovery(discovery_id, updates)
+    except Exception as exc:  # noqa: BLE001 — one row's failure must not end the pass
+        return f"{type(exc).__name__}: {exc}"[:_FAILURE_REASON_LIMIT]
+    return None if ok else "the backend reported no update"
+
+
+def _warn_failed_updates(
+    action: str, failed: List[str], attempted: int, first_reason: Optional[str]
+) -> None:
+    """One warning per pass that had failures, naming a bounded sample of ids."""
+    if not failed:
+        return
+    sample = failed[:FAILED_ID_SAMPLE_LIMIT]
+    more = len(failed) - len(sample)
+    logger.warning(
+        "KG lifecycle: %d of %d %s failed and were left as they were; ids: %s%s; first reason: %s",
+        len(failed),
+        attempted,
+        action,
+        ", ".join(sample),
+        f" (and {more} more)" if more else "",
+        first_reason,
+    )
+
+
+def _failed_suffix(outcome: PassOutcome) -> str:
+    return f" ({len(outcome.failed)} failed)" if outcome.failed else ""
+
+
+def _failed_update_total(summary: Dict[str, Any]) -> int:
+    """How many updates a cleanup summary reports as failed, across its passes."""
+    failed = summary.get("failed_updates") or {}
+    return sum(int(entry.get("count", 0)) for entry in failed.values())
+
 
 # Best-effort in-process lifecycle health tracking for operator diagnostics.
 _KG_LIFECYCLE_STATUS: Dict[str, Any] = {
@@ -188,6 +261,13 @@ class KnowledgeGraphLifecycle:
         Returns summary of what was archived/moved to cold.
         Set dry_run=True to see what would happen without making changes.
 
+        Each count is of updates the backend confirmed. An update it refused
+        or raised on is left out of the count and reported under
+        ``failed_updates``, keyed by the count it is missing from, with its
+        exact number and a sample of ids; the row keeps its old status and the
+        next run tries it again. ``failed_updates`` is empty when nothing
+        failed, and always empty in a dry run.
+
         NOTE: This NEVER deletes. It only moves between tiers.
         """
         now = datetime.now()
@@ -200,9 +280,18 @@ class KnowledgeGraphLifecycle:
             "tags_canonicalized": 0,
             "skipped_permanent": 0,
             "discoveries_deleted": 0,  # Always 0 - we don't delete
+            "failed_updates": {},
             "philosophy": "Never delete. Archive forever.",
             "errors": []
         }
+
+        def record(counter: str, outcome: PassOutcome) -> None:
+            summary[counter] = len(outcome.changed)
+            if outcome.failed:
+                summary["failed_updates"][counter] = {
+                    "count": len(outcome.failed),
+                    "ids": outcome.failed[:FAILED_ID_SAMPLE_LIMIT],
+                }
 
         try:
             graph = await self._get_graph()
@@ -211,21 +300,18 @@ class KnowledgeGraphLifecycle:
             # Formatting fragmentation is fixed at write time by normalize_tags;
             # this catches the semantic residue (db→database, auth→identity) on
             # the active corpus, where the rewrite is visible and auditable.
-            canonicalized = await self._canonicalize_tags(now, dry_run)
-            summary["tags_canonicalized"] = len(canonicalized)
+            record("tags_canonicalized", await self._canonicalize_tags(now, dry_run))
 
             # Step 1: Archive ephemeral discoveries (fastest deprecation)
-            ephemeral = await self._archive_ephemeral(now, dry_run)
-            summary["ephemeral_archived"] = len(ephemeral)
+            record("ephemeral_archived", await self._archive_ephemeral(now, dry_run))
 
             # Step 2: Auto-archive old resolved discoveries (respecting permanent policy)
-            archived, skipped = await self._archive_old_resolved(now, dry_run)
-            summary["discoveries_archived"] = len(archived)
-            summary["skipped_permanent"] = skipped
+            archived = await self._archive_old_resolved(now, dry_run)
+            record("discoveries_archived", archived)
+            summary["skipped_permanent"] = archived.skipped_permanent
 
             # Step 3: Move very old archived to cold storage
-            cold = await self._move_to_cold(now, dry_run)
-            summary["discoveries_to_cold"] = len(cold)
+            record("discoveries_to_cold", await self._move_to_cold(now, dry_run))
 
             # Step 4: NO DELETION - memories persist forever
             summary["discoveries_deleted"] = 0
@@ -238,35 +324,54 @@ class KnowledgeGraphLifecycle:
 
     async def _batch_update_status(
         self, graph, discovery_ids: List[str], new_status: str, now: datetime
-    ):
-        """Update status through the active KG backend and canonical PG table."""
-        updated_at = now.isoformat()
+    ) -> Tuple[List[str], List[str]]:
+        """Update status through the active KG backend.
 
-        # Update the selected KG backend.
+        Returns ``(moved, failed)``: the ids whose move the backend confirmed,
+        and the ids it refused or raised on, each in the order given. The
+        moves used to be awaited and their result dropped, so a move the
+        backend refused was counted, logged and returned as done. Migration
+        071's tests record one such case: before 071 the AGE backend refused
+        every archive of a row carrying a closure class, and each run reported
+        those rows archived while they stayed resolved. A failed row keeps its
+        status, and the next run takes it as a candidate again.
+
+        The backend's update_discovery writes knowledge.discoveries itself, so
+        there is no second write here. The Postgres backend updates the row
+        directly. The AGE backend sets the graph node and syncs the row in the
+        same transaction (_sync_updated_discovery_row), or updates the row alone
+        when the node is missing or the graph is unavailable.
+
+        A "PG sync" block used to follow this loop. It imported
+        get_postgres_backend from src.db.postgres_backend, which has never
+        existed, and swallowed the ImportError at debug level, so it never
+        ran. It dates from when the AGE update set only the graph node. Made to
+        work now, it would be a second write of the same row, and when the AGE
+        update failed and rolled back it would still write the row, leaving
+        the row and the graph node disagreeing.
+        """
+        updated_at = now.isoformat()
+        moved: List[str] = []
+        failed: List[str] = []
+        first_reason: Optional[str] = None
+
         for discovery_id in discovery_ids:
-            await graph.update_discovery(discovery_id, {
+            reason = await _apply_update(graph, discovery_id, {
                 "status": new_status,
                 "updated_at": updated_at,
             })
+            if reason is None:
+                moved.append(discovery_id)
+            else:
+                failed.append(discovery_id)
+                first_reason = first_reason or reason
 
-        # Keep the canonical PG table aligned when an alternate backend is active.
-        try:
-            from src.db.postgres_backend import get_postgres_backend
-            db = await get_postgres_backend()
-            async with db.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE knowledge.discoveries
-                    SET status = $1, updated_at = now()
-                    WHERE id = ANY($2::text[])
-                    """,
-                    new_status,
-                    discovery_ids,
-                )
-        except Exception as e:
-            logger.debug(f"PG sync skipped for lifecycle update: {e}")
+        _warn_failed_updates(
+            f"moves to {new_status}", failed, len(discovery_ids), first_reason
+        )
+        return moved, failed
 
-    async def _canonicalize_tags(self, now: datetime, dry_run: bool) -> List[str]:
+    async def _canonicalize_tags(self, now: datetime, dry_run: bool) -> PassOutcome:
         """Apply the curated semantic synonym map to the active corpus.
 
         Scans open + resolved discoveries and rewrites tags whose canonical
@@ -275,13 +380,16 @@ class KnowledgeGraphLifecycle:
         ``normalize_tags`` deliberately does not merge synonyms. Never deletes;
         only rewrites the ``tags`` list in place.
 
-        Returns the list of discovery IDs whose tags changed.
+        Returns the ids whose tags the backend rewrote (in a dry run, the ids
+        it would rewrite), and the ids whose rewrite it refused or raised on.
         """
         from src.knowledge_graph import normalize_tags
         from src.knowledge_ontology import apply_semantic_synonyms
 
         graph = await self._get_graph()
-        changed: List[str] = []
+        outcome = PassOutcome()
+        attempted = 0
+        first_reason: Optional[str] = None
 
         # Active corpus only — archived/cold rows are not re-queried.
         candidates = []
@@ -295,21 +403,29 @@ class KnowledgeGraphLifecycle:
             canonical = apply_semantic_synonyms(normalize_tags(current))
             if canonical == current:
                 continue
-            changed.append(discovery.id)
-            if not dry_run:
-                await graph.update_discovery(discovery.id, {
-                    "tags": canonical,
-                    "updated_at": now.isoformat(),
-                })
+            if dry_run:
+                outcome.changed.append(discovery.id)
+                continue
+            attempted += 1
+            reason = await _apply_update(graph, discovery.id, {
+                "tags": canonical,
+                "updated_at": now.isoformat(),
+            })
+            if reason is None:
+                outcome.changed.append(discovery.id)
+            else:
+                outcome.failed.append(discovery.id)
+                first_reason = first_reason or reason
 
+        _warn_failed_updates("tag rewrites", outcome.failed, attempted, first_reason)
         logger.info(
             "%s tags on %d discoveries via semantic synonym map",
             "[DRY RUN] Would canonicalize" if dry_run else "Canonicalized",
-            len(changed),
+            len(outcome.changed),
         )
-        return changed
+        return outcome
 
-    async def _archive_ephemeral(self, now: datetime, dry_run: bool) -> List[str]:
+    async def _archive_ephemeral(self, now: datetime, dry_run: bool) -> PassOutcome:
         """Archive ephemeral discoveries older than threshold."""
         graph = await self._get_graph()
         cutoff = now - timedelta(days=self.EPHEMERAL_ARCHIVE_DAYS)
@@ -329,13 +445,24 @@ class KnowledgeGraphLifecycle:
             if discovery.timestamp and discovery.timestamp < cutoff_iso:
                 to_archive.append(discovery.id)
 
-        if not dry_run and to_archive:
-            await self._batch_update_status(graph, to_archive, "archived", now)
+        outcome = await self._move_candidates(graph, to_archive, "archived", now, dry_run)
 
-        logger.info(f"{'[DRY RUN] Would archive' if dry_run else 'Archived'} {len(to_archive)} ephemeral discoveries")
-        return to_archive
+        logger.info(
+            f"{'[DRY RUN] Would archive' if dry_run else 'Archived'} "
+            f"{len(outcome.changed)} ephemeral discoveries{_failed_suffix(outcome)}"
+        )
+        return outcome
 
-    async def _archive_old_resolved(self, now: datetime, dry_run: bool) -> tuple[List[str], int]:
+    async def _move_candidates(
+        self, graph, candidates: List[str], new_status: str, now: datetime, dry_run: bool
+    ) -> PassOutcome:
+        """Move the candidates, or in a dry run report them as the would-be moves."""
+        if dry_run or not candidates:
+            return PassOutcome(changed=list(candidates))
+        moved, failed = await self._batch_update_status(graph, candidates, new_status, now)
+        return PassOutcome(changed=moved, failed=failed)
+
+    async def _archive_old_resolved(self, now: datetime, dry_run: bool) -> PassOutcome:
         """Archive resolved discoveries older than threshold, respecting permanent policy."""
         graph = await self._get_graph()
         cutoff = now - timedelta(days=self.RESOLVED_TO_ARCHIVED_DAYS)
@@ -358,13 +485,17 @@ class KnowledgeGraphLifecycle:
             if discovery.resolved_at and discovery.resolved_at < cutoff_iso:
                 to_archive.append(discovery.id)
 
-        if not dry_run and to_archive:
-            await self._batch_update_status(graph, to_archive, "archived", now)
+        outcome = await self._move_candidates(graph, to_archive, "archived", now, dry_run)
+        outcome.skipped_permanent = skipped
 
-        logger.info(f"{'[DRY RUN] Would archive' if dry_run else 'Archived'} {len(to_archive)} old resolved discoveries (skipped {skipped} permanent)")
-        return to_archive, skipped
+        logger.info(
+            f"{'[DRY RUN] Would archive' if dry_run else 'Archived'} "
+            f"{len(outcome.changed)} old resolved discoveries{_failed_suffix(outcome)} "
+            f"(skipped {skipped} permanent)"
+        )
+        return outcome
 
-    async def _move_to_cold(self, now: datetime, dry_run: bool) -> List[str]:
+    async def _move_to_cold(self, now: datetime, dry_run: bool) -> PassOutcome:
         """Move very old archived discoveries to cold storage tier.
 
         Respects permanent policy for symmetry with ``_archive_old_resolved``:
@@ -391,11 +522,13 @@ class KnowledgeGraphLifecycle:
             if discovery.updated_at and discovery.updated_at < cutoff_iso:
                 to_cold.append(discovery.id)
 
-        if not dry_run and to_cold:
-            await self._batch_update_status(graph, to_cold, "cold", now)
+        outcome = await self._move_candidates(graph, to_cold, "cold", now, dry_run)
 
-        logger.info(f"{'[DRY RUN] Would move to cold' if dry_run else 'Moved to cold'} {len(to_cold)} very old archived discoveries")
-        return to_cold
+        logger.info(
+            f"{'[DRY RUN] Would move to cold' if dry_run else 'Moved to cold'} "
+            f"{len(outcome.changed)} very old archived discoveries{_failed_suffix(outcome)}"
+        )
+        return outcome
 
     async def _embedding_coverage(self) -> Optional[Dict[str, Any]]:
         """Coverage of the active embeddings table over all discoveries.
@@ -551,8 +684,19 @@ async def run_kg_lifecycle_cleanup(dry_run: bool = False) -> Dict[str, Any]:
     lifecycle = KnowledgeGraphLifecycle()
     result = await lifecycle.run_cleanup(dry_run=dry_run)
     errors = result.get("errors") or []
+    failed = _failed_update_total(result)
     if errors:
         _record_kg_lifecycle_status(status="error", last_error=str(errors[0]))
+    elif failed:
+        # The run finished, but some rows it meant to change are unchanged.
+        by_pass = ", ".join(
+            f"{counter} {entry['count']}"
+            for counter, entry in result["failed_updates"].items()
+        )
+        _record_kg_lifecycle_status(
+            status="degraded",
+            last_error=f"{failed} lifecycle updates failed ({by_pass})",
+        )
     else:
         _record_kg_lifecycle_status(status="healthy")
     await _refresh_knowledge_nodes_gauge()
@@ -748,10 +892,12 @@ async def kg_lifecycle_background_task(interval_hours: float = 24.0):
 
             archived = result.get("ephemeral_archived", 0) + result.get("discoveries_archived", 0)
             cold = result.get("discoveries_to_cold", 0)
-            if archived > 0 or cold > 0:
+            failed = _failed_update_total(result)
+            if archived > 0 or cold > 0 or failed > 0:
                 logger.info(
                     f"KG lifecycle: archived {archived} entries, "
                     f"moved {cold} to cold"
+                    + (f", {failed} updates failed" if failed else "")
                 )
             else:
                 logger.debug("KG lifecycle: nothing to clean up")

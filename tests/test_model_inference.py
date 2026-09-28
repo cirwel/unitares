@@ -1384,6 +1384,41 @@ class TestErrorHandling:
 # Tests: Routing via detection
 # =============================================================================
 
+class TestFailureLogging:
+    """A classified failure logs one warning line; only an unclassified one
+    carries a traceback at ERROR."""
+
+    @staticmethod
+    async def _call_failing(side_effect):
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.side_effect = side_effect
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            return _parse_text_content(await handle_call_model({"prompt": "test", "provider": "ollama"}))
+
+    @pytest.mark.asyncio
+    async def test_unreachable_provider_logs_one_warning_without_traceback(self, caplog):
+        with caplog.at_level("WARNING", logger="src.mcp_handlers.support.model_inference"):
+            parsed = await self._call_failing(Exception("Connection error."))
+        assert parsed.get("error_code") == "MODEL_PROVIDER_UNAVAILABLE"
+        records = [r for r in caplog.records if r.name == "src.mcp_handlers.support.model_inference"
+                   and "Model inference failed" in r.getMessage()]
+        assert [r.levelname for r in records] == ["WARNING"]
+        assert records[0].exc_info is None
+        assert "MODEL_PROVIDER_UNAVAILABLE" in records[0].getMessage()
+
+    @pytest.mark.asyncio
+    async def test_unclassified_failure_keeps_the_traceback(self, caplog):
+        with caplog.at_level("WARNING", logger="src.mcp_handlers.support.model_inference"):
+            parsed = await self._call_failing(Exception("something nobody anticipated"))
+        assert parsed.get("error_code") == "INFERENCE_ERROR"
+        records = [r for r in caplog.records if r.name == "src.mcp_handlers.support.model_inference"
+                   and "Model inference failed" in r.getMessage()]
+        assert [r.levelname for r in records] == ["ERROR"]
+        assert records[0].exc_info is not None
+
+
 class TestRoutingViaDetection:
     """Tests for routed_via field detection in response."""
 

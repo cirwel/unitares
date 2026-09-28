@@ -51,7 +51,7 @@ additions merge cleanly. -->
 | `UNITARES_AUTO_DIALECTIC_RECOVERY` | `'1'` | Process governance update with authentication enforcement (async version) | src/agent_loop_detection.py |
 | `UNITARES_BASELINE_CACHE_MAXLEN` | `'1000'` | — | governance_core/ethical_drift.py |
 | `UNITARES_BIND_ALL_INTERFACES` | `False (via env_truthy)` | Return the default socket bind address | src/mcp_listen_config.py |
-| `UNITARES_BUILD_SHA` | `''` | Best-effort short commit SHA of the running build (``git rev-parse``) | src/versioning.py |
+| `UNITARES_BUILD_SHA` | `''` | The git commit of the checkout this process runs from, and how it was known | src/mcp_handlers/dialectic/events.py, src/versioning.py |
 | `UNITARES_CALIBRATION_ALLOW_SCRAPED_CONFIDENCE` | `''` | Shared body for outcome_event recording | src/mcp_handlers/observability/outcome_events.py |
 | `UNITARES_CALIBRATION_BACKEND` | `'postgres'` | Initialize calibration checker with confidence bins | src/calibration.py |
 | `UNITARES_CALIBRATION_STATE` | `None (no reader fallback)` | — | src/calibration.py |
@@ -79,6 +79,7 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_CONTINUATION_POLL_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `DEFAULT_CONTINUATION_POLL_S` (agents/dialectic_reviewer/reviewer.py) | Run bounded objection → response → reconsideration rounds | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:85); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:174); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `None (no reader fallback)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
+| `UNITARES_DIALECTIC_EMIT_FAILURE_LEDGER` | `''` | The append-only emit-failure ledger: env override, else data/dialectic/. | src/dialectic_session_writes.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY` | `''` | Default variable holding the external reviewer's API key | agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_EXTERNAL_BASE_URL` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (agents/dialectic_reviewer/host_backends.py) | Run the review on an operator-configured OpenAI-compatible endpoint | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
@@ -93,11 +94,12 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_REVIEWER_TIMEOUT` | `None (no reader fallback)` | Timeout budget for a structured dialectic reviewer call | src/mcp_handlers/support/llm_delegation.py |
 | `UNITARES_DIALECTIC_REVIEW_BUDGET` | `None (no reader fallback)` | Wall-clock cap for the inline synthetic review (antithesis + synthesis) | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_REVIEW_MAX_TOKENS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'1024'` (agents/dialectic_reviewer/reviewer.py) | Run the local heterogeneous model in THIS process (not via the server's call_model tool, whose 30s timeout is shorter than gemma4's 43–70s b | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S` | `''` | read by _dialectic_sweep_cycle_timeout_s() | src/background_tasks.py |
 | `UNITARES_DIALECTIC_SYNTHETIC_REVIEWER` | `'1'` | Whether submit_thesis auto-completes a no-live-reviewer session via the local synthetic reviewer instead of leaving it to hang at awaiting_f | src/mcp_handlers/dialectic/handlers.py |
 | `UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT` | `'1'` | — | src/mcp_handlers/dialectic/session.py |
 | `UNITARES_DISABLE_PLUGINS` | `None (no reader fallback)` | True when this process must not load or import plugin packages | src/plugin_loader.py |
 | `UNITARES_DOCTOR_ANCHOR` | `str(Path.home() / '.unitares' / 'anchors' / 'doctor.json')` | — | agents/common/findings.py |
-| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py); `''` (agents/vigil/agent.py) | Derive a config tag matching baseline filename suffix from env vars | src/embeddings.py, agents/vigil/agent.py |
+| `UNITARES_EMBEDDING_MODEL` | varies: `'minilm'` (src/embeddings.py:49); `''` (src/embeddings.py:253, agents/vigil/agent.py) | True when the operator named a model, asking for semantic search | src/embeddings.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL` | `''` | Return whether automated agent archival may mutate lifecycle state | src/agent_lifecycle.py |
 | `UNITARES_ENABLE_GRAPH_EXPANSION` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when 1-hop typed-edge expansion should run | src/retrieval.py, agents/vigil/agent.py |
 | `UNITARES_ENABLE_HYBRID` | varies: `False` (src/retrieval.py); `''` (agents/vigil/agent.py) | True when hybrid RRF retrieval should run | src/retrieval.py, agents/vigil/agent.py |
@@ -150,6 +152,7 @@ additions merge cleanly. -->
 | `UNITARES_MCP_HOST` | `''` | Return the default socket bind address | src/mcp_listen_config.py |
 | `UNITARES_METADATA_BACKEND` | `'postgres'` | — | src/agent_metadata_persistence.py |
 | `UNITARES_METADATA_WRITE_JSON_SNAPSHOT` | `'0'` | — | src/agent_metadata_persistence.py |
+| `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |

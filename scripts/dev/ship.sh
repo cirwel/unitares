@@ -441,8 +441,22 @@ create_or_show_pr() {
     echo "$pr_url"
 
     if [[ "$pr_kind" == "auto_merge" ]]; then
-        gh pr merge --auto --squash "$pr_url" || \
-            echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
+        # --auto-merge is the operator's explicit request. The merge queue
+        # (scripts/ops/pr-babysitter.sh) disarms any arm it did not make unless
+        # the PR carries operator-armed, so mark it before arming.
+        local armed_label="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
+        if gh pr edit "$pr_url" --add-label "$armed_label" >/dev/null 2>&1; then
+            if ! gh pr merge --auto --squash "$pr_url"; then
+                # Take the label back off: the queue never arms a PR carrying
+                # it, so a leftover would strand this PR outside the queue.
+                gh pr edit "$pr_url" --remove-label "$armed_label" >/dev/null 2>&1 || \
+                    echo "[ship] could not remove $armed_label; remove it by hand so the merge queue can take this PR"
+                echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
+            fi
+        else
+            # Without the label the queue would disarm this arm on its next tick.
+            echo "[ship] could not add the $armed_label label, so auto-merge was NOT enabled (the merge queue would cancel it); PR is open"
+        fi
     fi
 }
 
@@ -467,6 +481,11 @@ case "$DELIVERY" in
                 echo "[ship] review joined; check CI and mark your own PR ready when validation passes."
             else
                 review_rc=$?
+                if [[ "$review_rc" == "3" ]]; then
+                    echo "[ship] review passed, but this security-sensitive diff needs a second model family."
+                    echo "[ship] run one of the review.sh --fresh --reviewer commands printed above; keep the PR draft until CI is green."
+                    exit 3
+                fi
                 if [[ "$review_rc" == "2" ]]; then
                     echo "[ship] WARNING: delivered but UNREVIEWED — reviewers unavailable."
                     echo "[ship] report the blocker and next action explicitly; keep the PR draft."

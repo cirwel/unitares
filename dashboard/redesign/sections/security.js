@@ -105,9 +105,31 @@
       render();
       message("");
     } catch (error) {
-      message("Passkey management requires an active dashboard session: " + String(error.message || error), "error");
       document.querySelectorAll("#security-mount button").forEach((button) => { button.disabled = true; });
+      // A server with no passkey relying party refuses every session call too,
+      // so the 403 above says nothing about this browser. Ask the server which
+      // case this is before calling it a failure: "not configured" is a setup
+      // state, not an error, and it has a named fix.
+      const config = window.DATA.passkeyConfig ? await window.DATA.passkeyConfig() : null;
+      if (config && config.configured === false) {
+        notConfigured(config.fix);
+        return;
+      }
+      message("Passkey management requires an active dashboard session: " + String(error.message || error), "error");
     }
+  }
+
+  function notConfigured(fix) {
+    document.querySelector("#credentialCount").textContent = "";
+    document.querySelector("#sessionCount").textContent = "";
+    document.querySelector("#credentialList").innerHTML = '<div class="empty">Passkeys are not configured on this server.</div>';
+    document.querySelector("#sessionList").innerHTML = '<div class="empty">No dashboard sessions without passkeys.</div>';
+    const enroll = document.querySelector('#security-mount a[href^="/auth/signin"]');
+    if (enroll) enroll.hidden = true;
+    document.querySelector("#operatorHint").textContent = "";
+    message("Passkey sign-in is off on this server. To turn it on, "
+      + (fix || "set UNITARES_DASHBOARD_RP_ID to the domain the dashboard is served from")
+      + ", then restart the server.");
   }
 
   async function mintCode(button) {

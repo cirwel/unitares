@@ -8,10 +8,10 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v2.22.1` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
-| Published server/container | `v2.22.1` | Verified maintenance release. It restores the Compose tool-mode forwarding correction while preserving the v2.22.0 runtime APIs and skills. Tag, release page, linux/amd64 and linux/arm64 manifests, SPDX SBOMs, and source-bound provenance were verified before GHCR `latest` promotion in [Promote Release run 35761842401](https://github.com/cirwel/unitares/actions/runs/35761842401). The v2.22.0 historical errata remains at [releases/2.22.0-errata.md](releases/2.22.0-errata.md). |
-| `unitares-governance` plugin | `v0.4.17` | Historical bundle evidence: all seven skill files and `SKILLS_MANIFEST.sha256` match server tag `v2.22.0` (`b1360809`). Current master has since changed the skills in #2095 and #2097; this is not current-tree parity. This establishes bundle parity at that tag, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. |
-| `unitares-sdk` | `0.3.0` | Published Python client for resident and custom integrations. This is the first release that completes the documented fresh-resident onboarding flow against the current identity contract. It also preserves server identity guidance as typed errors, refuses an unregistered persistent mint rather than running an unprotected resident, stops templated cycle and heartbeat check-ins from inventing agent confidence or authorship, accepts optional MCP bearer credentials, and carries identity-bound lease/effect helpers. This is a behavioral minor release: `GovernanceAgent` subclasses should review the new confidence, epistemic-class, and resident-registration defaults. Install it with `pip install unitares-sdk==0.3.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
+| UNITARES server | `v3.0.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
+| Published server/container | `v3.0.0` | Verified major release; its breaking changes and upgrade steps are in the compatibility policy below and the [v3.0.0 changelog entry](CHANGELOG.md). Tag, release page, the server and lease-plane images for linux/amd64 and linux/arm64, SPDX SBOMs, and source-bound provenance were verified before GHCR `latest` promotion in [Promote Release run 36342029506](https://github.com/cirwel/unitares/actions/runs/36342029506). The v2.22.0 historical errata remains at [releases/2.22.0-errata.md](releases/2.22.0-errata.md). |
+| `unitares-governance` plugin | `v0.4.18` | Carries the skills bundle for server `v3.0.0`, plus three skill edits merged after that tag (#2527, #2530, #2533): its `skills/` mirrors master at `c3a634f2`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.18). |
+| `unitares-sdk` | `0.4.0` | Published Python client for resident and custom integrations, released with server v3.0.0. A behavioral minor release: `checkin` reads the verdict from the response envelope, so `GovernanceAgent`'s pause and reject handling (`VerdictError`) can now fire where every verdict used to parse as proceed; `get_metrics().action` is the policy action; `audit_knowledge` no longer requests a model by default; and the async `GovernanceClient` raises `GovernanceToolRefused`, a subclass of `GovernanceConnectionError`, when a tool answers `success: false`. It adds an optional NeMo Relay integration (`unitares-sdk[nemo-relay]`). Install it with `pip install unitares-sdk==0.4.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
 | `unitares-host-adapter` | `0.3` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.1`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
 
@@ -35,7 +35,7 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v2.23.0 preserves lifecycle envelopes; it does not preserve the registered
+- v3.0.0 preserves lifecycle envelopes; it does not preserve the registered
   callable names, the `dialectic` wire schema, or the database schema.
   `direct_resume_if_safe`, deprecated 2026-01-29 and advertised only in `full`
   mode, is removed with no alias (#2093); the old name now returns
@@ -75,9 +75,12 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   class properties; earlier code does not read them, but after a later roll
   forward those findings read as classified again until they are next
   reopened or reclassified. Discovery profiles are gone
-  (#2137): every transport advertises one complete catalog — every registered
-  tool plus the primary workflow aliases — so a client that selected tools from
-  discovery on v2.22.0 sees additional names, and no removals beyond
+  (#2137), and the initial listing is progressive (#2328): `tools/list` starts
+  with the workflow tools plus `list_tools`, `describe_tool` and `use_tool`,
+  and the rest of the catalog stays callable and reachable through them. A
+  client that took its tools from a v2.22.0 `lite` or `full` listing therefore
+  sees fewer names in the initial list; set `UNITARES_TOOL_ADVERTISEMENT=full`
+  to advertise every schema up front. The only callable removed is
   `direct_resume_if_safe`, which only `full` mode advertised. Legacy
   `GOVERNANCE_TOOL_MODE` settings and REST `mode` query parameters are accepted
   but ignored, `minimal` included, so that value no longer restores the v2.22.0

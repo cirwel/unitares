@@ -10,6 +10,17 @@ diagnosis and operator recovery, not as the primary architecture reference.
 
 ## Quick Diagnostics
 
+> **Which install is this?** Commands below that use `launchctl`,
+> `~/Library/LaunchAgents/` or `data/logs/` are for a launchd source install
+> on macOS. Under the Docker Compose quickstart, the equivalents are:
+>
+> | Launchd source install | Docker Compose |
+> | --- | --- |
+> | `tail -f data/logs/mcp_server.log` | `docker compose logs -f governance-mcp` |
+> | `launchctl unload …` then `launchctl load …` | `docker compose restart governance-mcp` |
+> | `launchctl print gui/$(id -u)/com.unitares.governance-mcp` | `docker compose ps governance-mcp` |
+> | environment in the plist | `.env` for a variable `docker-compose.yml` passes through; any other variable goes in the `governance-mcp` `environment:` block. Then `docker compose up -d` |
+
 ### Check Server Status
 ```bash
 # Health check
@@ -213,7 +224,7 @@ If the agent is absent from the API response but `observe()` works, check whethe
 ```bash
 curl http://127.0.0.1:8767/health
 lsof -nP -iTCP:8767 -sTCP:LISTEN
-launchctl print gui/501/com.unitares.governance-mcp
+launchctl print gui/$(id -u)/com.unitares.governance-mcp
 ```
 
 Also verify the shell token matches the running service token. Launchd deployments may use the token from `~/Library/LaunchAgents/com.unitares.governance-mcp.plist`, not the repo-local `.env`.
@@ -251,6 +262,60 @@ The only place to "allow all" for the injected server is the **environment's per
 4. **Report it upstream** via `/feedback` in your Claude Code client — it is a transport-layer bug (approval handshake unsupported over streamable HTTP), not specific to this repo.
 
 **Note on governance coverage:** because of this, agents working in web/streamable-HTTP sessions **cannot complete check-ins through the MCP tool** and will run ungoverned unless they fall back to REST or a local transport. Onboard in-conversation (there is no plugin hook to auto-onboard a server-only/web session — that is the expected default), and use a REST/local path for the check-in loop.
+
+
+---
+
+### Issue 9: `consult` Says "Standard advisory consultation is unavailable"
+
+**Symptoms:**
+- `consult` fails with `Standard advisory consultation is unavailable` and the code `MODEL_PROVIDER_UNAVAILABLE`.
+- `request_review` records the thesis, but no reviewer takes it.
+
+**Cause:** No model is reachable. UNITARES bundles none; `consult` and the local reviewer use the Ollama server and model named by `UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL`. On a fresh install neither is set, which is expected: reviews then wait for a peer or the operator.
+
+**Solutions:**
+
+1. From a Docker checkout, run `./scripts/unitares model`. It lists the models your Ollama has, writes the choice to `.env`, rebuilds the server, and checks that the server reaches the model.
+2. If the model is set but still unreachable from Docker on Linux, Ollama is listening only on 127.0.0.1: set `OLLAMA_HOST=0.0.0.0` for the Ollama service and allow port 11434 from the Docker bridge only.
+3. If `consult` reports a missing dependency instead, the image predates the model client: `docker compose up -d --build governance-mcp`.
+
+See [Choose a model](../manual/02-install.md#choose-a-model-optional).
+
+---
+
+### Issue 10: The Hermes Plugin Logs "the UNITARES server refused Host … (HTTP 421)"
+
+**Symptoms:**
+- The Hermes log shows `UNITARES Hermes <step> failed (ServerRejectedHostError: the UNITARES server refused Host '<host>' (HTTP 421); add it to the server's UNITARES_MCP_ALLOWED_HOSTS)`.
+- Nothing from Hermes reaches the server, although `curl http://localhost:8767/health` from the server's own machine succeeds.
+
+**Cause:** Hermes reaches the server under a hostname the server does not list. The server answers only the Host names in its allowlist, and the default stack lists loopback only, so a server addressed from another machine or container (for example `http://host.docker.internal:8767/mcp/` or a LAN name) is refused.
+
+**Solutions:**
+
+1. Add that host to `UNITARES_MCP_ALLOWED_HOSTS` in the server's `.env` and recreate the server: `docker compose up -d governance-mcp`.
+2. A server reachable beyond loopback should also require a token: set `UNITARES_MCP_BEARER_TOKENS` on the server and `UNITARES_BEARER` in Hermes. See [Exposing beyond loopback](../manual/03-running-the-server.md#35-exposing-beyond-loopback).
+
+If the reason is `MissingServerURLError` instead, `UNITARES_MCP_URL` is unset: set it to the server's endpoint, for example `http://localhost:8767/mcp/`.
+
+---
+
+### Issue 11: `unitares update` Refuses, or Rolls Back
+
+**Symptoms and fixes:**
+
+| Message | What to do |
+|---|---|
+| `has local changes to tracked files` | Commit or discard them (`git status` shows them), then re-run. |
+| `untracked files under db/postgres would reach the database` | Move or delete the listed files; the database container reads that directory. |
+| `the database is at schema N, newer than anything vX.Y.Z knows` | You asked for an older release. Moving back is not supported; choose the current or a newer release. |
+| `this machine runs UNITARES as a launchd service` | The LaunchAgent install (§3.7) updates through its own procedure, not this command. |
+| `could not reach` the repository, or `could not read the published version` | Check the network, or name the release with `--to vX.Y.Z`. |
+| `not a terminal; re-run with --yes to proceed` | No terminal was attached to answer the question; pass `--yes`. |
+| `migrations did not complete` or `the stack did not come up`, followed by a rollback | The previous release's code is back and rebuilt. Migrations that applied stay applied, and the message names the backup taken before them. Read `./scripts/unitares logs` for the cause, fix it, then re-run `update`. |
+
+A run that ends with a deep-health result other than healthy or moderate exits non-zero even though the update itself completed; `./scripts/unitares logs` shows why the server reports it.
 
 ---
 

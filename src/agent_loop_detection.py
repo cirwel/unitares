@@ -484,7 +484,10 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
     await asyncio.sleep(2)
 
     try:
-        from src.mcp_handlers.dialectic.handlers import handle_request_dialectic_review
+        from src.mcp_handlers.dialectic.handlers import (
+            AutomatedTrigger,
+            handle_request_dialectic_review,
+        )
         from src.mcp_handlers.dialectic.reviewer import select_reviewer
 
         logger.info(f"Auto-initiating dialectic recovery for paused agent '{agent_id}'")
@@ -510,6 +513,7 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
                 "agent_id": agent_id,
                 "reason": f"Auto-recovery: {reason}",
                 "api_key": api_key,
+                "trigger_source": AutomatedTrigger("circuit_breaker"),
                 "reviewer_mode": "auto",
             })
             logger.info(f"Peer dialectic initiated for '{agent_id}'")
@@ -532,6 +536,7 @@ async def _auto_initiate_dialectic_recovery(agent_id: str, reason: str) -> None:
             "agent_id": agent_id,
             "reason": f"Auto-recovery: {reason}",
             "api_key": api_key,
+            "trigger_source": AutomatedTrigger("circuit_breaker"),
             "reviewer_mode": "llm",
             "root_cause": reason,
             "proposed_conditions": proposed_conditions,

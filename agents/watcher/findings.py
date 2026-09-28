@@ -27,6 +27,7 @@ from agents.watcher._util import (
     watcher_state_dir,
 )
 from agents.watcher.calibration import (
+    PATTERN_RULE_VERSIONS,
     classify_file,
     probe_rate_for_n,
     should_probe,
@@ -93,10 +94,17 @@ class Finding:
     # retained on the strength of its snapshot. Display-only: it tells the
     # reader "this code is gone" so they judge the snippet, not the path.
     path_gone: bool = False
+    # Revision of the pattern's detection rule in the checkout that produced
+    # this finding (``calibration.PATTERN_RULE_VERSIONS``); 0 when the pattern
+    # is not listed. Calibration counts a listed pattern's resolutions only
+    # at the current revision.
+    rule_version: int = 0
 
     def __post_init__(self) -> None:
         if not self.fingerprint:
             self.fingerprint = self.compute_fingerprint()
+        if not self.rule_version:
+            self.rule_version = PATTERN_RULE_VERSIONS.get(self.pattern, 0)
 
     def compute_fingerprint(self) -> str:
         """Stable identifier combining pattern, file, line, and (optionally)

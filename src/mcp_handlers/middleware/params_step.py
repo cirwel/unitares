@@ -47,6 +47,18 @@ _OPERATOR_TARGET_CALLS = call_set(
     },
 )
 
+# Agent actions that end or remove an agent: the caller must name the target in
+# agent_id, and the session's own id is never written in for them. Injecting it
+# turned agent(action='delete', confirm=true) with no agent_id into a deletion
+# of the caller's own agent. The handlers refuse a call that names no target
+# (lifecycle/mutation.py, _require_named_target), and AgentParams declares
+# agent_id required at call time for the same actions;
+# tests/test_agent_destructive_explicit_target.py holds the three together.
+_EXPLICIT_TARGET_CALLS = call_set(
+    "inject_identity.explicit_target",
+    actions={("agent", "archive"), ("agent", "delete")},
+)
+
 
 # Reserved dispatch metadata must never be trusted merely because a caller used
 # the right private-looking key. ``validate_params`` strips these values and
@@ -259,7 +271,11 @@ async def inject_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 # bind_session handles its own identity resolution — injecting
                 # the middleware-resolved agent_id overwrites its validation.
                 identity_internal_tools = {"bind_session"}
-                if not is_browsable and name not in identity_internal_tools:
+                if (
+                    not is_browsable
+                    and name not in identity_internal_tools
+                    and not _EXPLICIT_TARGET_CALLS.matches(name, arguments)
+                ):
                     arguments["agent_id"] = bound_id
                     logger.debug(f"Injected session-bound agent_id: {bound_id}")
             elif provided_id != bound_id:

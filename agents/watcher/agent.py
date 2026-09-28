@@ -3031,7 +3031,9 @@ def _is_inside_get_or_create_monitor(
 # rule, so `# noqa: BLE001` (or a bare `# noqa`) on the clause is the author
 # recording that decision. False-positive sweep 2026-09-24: of 39 lifetime P006
 # findings none was confirmed, and three flagged clauses already carried
-# `# noqa: BLE001`.
+# `# noqa: BLE001`. A change to what P006 flags bumps its entry in
+# `calibration.PATTERN_RULE_VERSIONS`, so the demotion floor stops counting
+# resolutions of the old rule.
 _P006_EXCEPT_CLAUSE = re.compile(r"^(\s*)except\b")
 _P006_ACKNOWLEDGED = re.compile(r"#\s*noqa(?!\s*:)|#\s*noqa:[^#\n]*\bBLE001\b")
 _P006_RAISE = re.compile(r"^\s*raise\b")

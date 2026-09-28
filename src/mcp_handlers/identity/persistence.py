@@ -520,15 +520,159 @@ async def _find_agent_by_label(label: str) -> Optional[str]:
         return None
 
 
-def _broadcaster():
-    """Lazy accessor for the shared broadcaster. Returns None when broadcaster
-    isn't importable (e.g., unit tests without a live server). Kept as a
-    module-level function so tests can patch persistence._broadcaster."""
+def _recorded_auto_labels(
+    agent_uuid: str, identity_metadata: Optional[Dict[str, Any]]
+) -> set:
+    """Every name the server derived for this agent, which a claim must not become.
+
+    ``label_source_for`` reads a label as ``auto`` when it equals any of
+    these, so a collision rename that happened to reproduce one would report
+    a claimed name as server-assigned:
+
+    - ``auto_label``, kept in two places. The mint writes it once to
+      ``core.identities.metadata`` and to the in-memory entry; a knowledge
+      write's ``Agent_<uuid8>`` name sets it in memory only. A claim can clear
+      the in-memory copy (``drop_stale_display_name``) while the persisted one
+      stands, and the cold-start loader restores the persisted one, so both
+      are read here.
+    - ``structured_id`` and ``public_agent_id``. The structured id is
+      ``{interface}_{model}_{date}_{uuid8}``, the same ``<stem>_<uuid8>``
+      shape as a collision rename, so claiming its date-stamped stem while
+      another agent holds it would otherwise reproduce it. A fresh mint has
+      no structured id yet; ``_ensure_structured_id`` generates it (or, for
+      a lazily minted agent with no in-memory entry, predicts it) before the
+      rename is chosen, and the rename avoids it.
+    """
+    recorded: set = set()
+    keys = ("auto_label", "structured_id", "public_agent_id")
+    if isinstance(identity_metadata, dict):
+        for key in keys:
+            value = identity_metadata.get(key)
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
     try:
-        from src.broadcaster import broadcaster as _b
-        return _b
+        meta_map = getattr(mcp_server, "agent_metadata", None)
+        meta = meta_map.get(agent_uuid) if meta_map else None
+        for key in keys:
+            value = getattr(meta, key, None) if meta is not None else None
+            if isinstance(value, str) and value.strip():
+                recorded.add(value.strip())
+    except Exception:
+        pass
+    return recorded
+
+
+def _ensure_structured_id(agent_uuid: str) -> Optional[str]:
+    """The structured id this agent has, or is about to be given.
+
+    A fresh mint registers the agent without one and the label setter
+    generates it, so the collision rename must see it first: the structured
+    id is ``{interface}_{model}_{date}_{uuid8}``, the rename's own shape, and
+    ``label_source_for`` reads a label equal to it as ``auto``. With an
+    in-memory entry, the id is generated onto it now (the setter then finds
+    it set). A lazily minted agent has no entry yet, and the setter builds
+    one after the rename, so the id it will generate is predicted instead:
+    with the uuid given, ``generate_structured_id`` is deterministic.
+    """
+    try:
+        # Inside the try: the lazy server can fail to load, and a label
+        # write must not fail over a structured id.
+        meta_map = getattr(mcp_server, "agent_metadata", None)
+        meta = meta_map.get(agent_uuid) if meta_map else None
+        current = getattr(meta, "structured_id", None) if meta is not None else None
+        if current:
+            return current
+        from ..support.naming_helpers import detect_interface_context, generate_structured_id
+        from ..context import get_context_client_hint
+        existing_ids = [
+            getattr(m, "structured_id", None)
+            for m in (meta_map or {}).values()
+            if getattr(m, "structured_id", None)
+        ]
+        generated = generate_structured_id(
+            context=detect_interface_context(),
+            existing_ids=existing_ids,
+            client_hint=get_context_client_hint(),
+            agent_uuid=agent_uuid,
+        )
+        if meta is not None:
+            meta.structured_id = generated
+            logger.info(f"Generated structured_id: {generated}")
+        return generated
+    except Exception as e:
+        logger.debug(f"Could not generate structured_id: {e}")
+        return None
+
+
+async def _collision_label(
+    label: str,
+    agent_uuid: str,
+    identity_metadata: Optional[Dict[str, Any]],
+    also_avoid: Optional[str] = None,
+) -> str:
+    """The label a claim becomes when another agent already holds ``label``.
+
+    Ordinarily ``{label}_{uuid8}``. That is also how the server builds the
+    labels it assigns (the mint's ``<stem>_<uuid8>``, a knowledge write's
+    ``Agent_<uuid8>``), so a claim of the bare stem -- ``claude_code-opus``
+    while another agent holds it -- would become this agent's own
+    ``claude_code-opus_<uuid8>``, byte-identical to the label the server
+    recorded for it, and ``label_source_for`` would read ``auto`` for a name
+    the caller claimed. In that case the suffix is the first two groups of
+    the uuid instead. It ends in ``-`` and four hex digits, and every
+    recorded label ends in eight hex digits, so it cannot equal one. If
+    another agent holds even that, the whole uuid is used.
+    """
+    candidate = f"{label}_{agent_uuid[:8]}"
+    recorded = _recorded_auto_labels(agent_uuid, identity_metadata)
+    if also_avoid:
+        recorded.add(also_avoid.strip())
+    if candidate.strip() not in recorded:
+        return candidate
+    longer = f"{label}_{agent_uuid[:13]}"
+    if longer.strip() not in recorded:
+        holder = await _find_agent_by_label(longer)
+        if not holder or holder == agent_uuid:
+            return longer
+    return f"{label}_{agent_uuid}"
+
+
+class _ScheduledBroadcaster:
+    """What the identity accessors hand out: ``broadcast_event`` schedules the
+    real broadcast as a tracked background task and returns at once.
+
+    ``EISVBroadcaster.broadcast_event`` awaits the WebSocket fan-out, up to 2 s
+    per stalled client plus 2 s to close it, and identity resolution runs
+    inside tight budgets (the REST csid corroboration lookup allows 0.5 s). An
+    awaited telemetry event could time that lookup out, and the cancelled
+    fan-out would never cull the stalled client, so every later lookup would
+    stall on it too. Identity events are telemetry: they must never decide
+    whether a resolution finishes."""
+
+    def __init__(self, target):
+        self._target = target
+
+    async def broadcast_event(self, event_type, agent_id=None, payload=None):
+        from src.background_tasks import create_tracked_task
+        create_tracked_task(
+            self._target.broadcast_event(
+                event_type=event_type, agent_id=agent_id, payload=payload
+            ),
+            name=f"identity_broadcast:{event_type}",
+        )
+
+
+def _broadcaster():
+    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``),
+    wrapped so the caller never waits on the fan-out (``_ScheduledBroadcaster``).
+    Returns None only when src.broadcaster fails to import. Kept as a
+    module-level function so tests can patch persistence._broadcaster. The
+    import name is held by tests/test_identity_broadcaster_accessor.py."""
+    try:
+        from src.broadcaster import broadcaster_instance as _b
     except Exception:
         return None
+    return _ScheduledBroadcaster(_b)
 
 # =============================================================================
 # LAZY CREATION HELPERS (v2.4.1+)
@@ -779,7 +923,11 @@ def drop_stale_display_name(meta, label: str) -> None:
     ``"Agent_<uuid8>"`` -- the same string ``_check_display_name_required``
     already wrote). The old guard read that coincidence as "nothing to
     clear" and left ``label_source`` reading ``auto`` for a name the caller
-    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27).
+    just claimed (2026-09-27 review finding 2 -- fixed 2026-09-27). A
+    collision rename no longer lands on that string (``_collision_label``
+    takes a longer suffix when ``{label}_{uuid8}`` equals a recorded auto
+    label), but a claim of the exact string ``Agent_<uuid8>`` still does, so
+    the clear stays unconditional.
 
     ``auto_label`` is cleared in the same branch, for the same reason.
     ``label_source_for`` (services/identity_payloads.py) reads ``auto``
@@ -806,7 +954,8 @@ async def set_agent_label(agent_uuid: str, label: str, session_key: Optional[str
     """Set display name for an agent. ``True`` iff the write succeeded.
 
     ⛔The label written may DIFFER from the one requested: a collision with
-    another active agent renames this one to ``{label}_{uuid8}``. A bool cannot
+    another active agent renames this one, ordinarily to ``{label}_{uuid8}``
+    and sometimes to a longer uuid suffix (``_collision_label``). A bool cannot
     express that, and callers that read "success" as "I got the name I asked
     for" reported the requested label back to the agent while the database
     held the renamed one. Use ``set_agent_label_resolved`` when the answer
@@ -855,9 +1004,17 @@ async def set_agent_label_resolved(
         # restarts log at INFO and rename silently. The rename still happens
  # (can't block onboard). "Pattern —
         # Substrate-Earned Identity".
+        structured: Optional[str] = None
         existing = await _find_agent_by_label(label)
         if existing and existing != agent_uuid:
-            new_label = f"{label}_{agent_uuid[:8]}"
+            # The structured id is generated below when missing (a fresh mint
+            # has none yet); settle it first, so the rename can avoid it.
+            structured = _ensure_structured_id(agent_uuid)
+            # {label}_{uuid8}, unless that reproduces a label the server
+            # recorded for this agent (then a longer suffix).
+            new_label = await _collision_label(
+                label, agent_uuid, existing_metadata, also_avoid=structured
+            )
             existing_is_resident = await db.agent_has_tag(existing, "persistent")
 
             # Resolve new agent's declared lineage. existing_metadata above
@@ -961,26 +1118,7 @@ async def set_agent_label_resolved(
                     meta.label = label
                     drop_stale_display_name(meta, label)
 
-                    # Generate structured_id if missing (migration for pre-v2.5.0 agents)
-                    if not getattr(meta, 'structured_id', None):
-                        try:
-                            from ..support.naming_helpers import detect_interface_context, generate_structured_id
-                            from ..context import get_context_client_hint
-                            context = detect_interface_context()
-                            existing_ids = [
-                                getattr(m, 'structured_id', None)
-                                for m in mcp_server.agent_metadata.values()
-                                if getattr(m, 'structured_id', None)
-                            ]
-                            meta.structured_id = generate_structured_id(
-                                context=context,
-                                existing_ids=existing_ids,
-                                client_hint=get_context_client_hint(),
-                                agent_uuid=agent_uuid
-                            )
-                            logger.info(f"Migrated structured_id: {meta.structured_id}")
-                        except Exception as e:
-                            logger.debug(f"Could not generate structured_id: {e}")
+                    _ensure_structured_id(agent_uuid)
 
                     structured_id = getattr(meta, "structured_id", None)
                     if not public_agent_id:
@@ -1015,7 +1153,10 @@ async def set_agent_label_resolved(
                             for m in mcp_server.agent_metadata.values()
                             if getattr(m, 'structured_id', None)
                         ]
-                        meta.structured_id = generate_structured_id(
+                        # Reuse the id the rename avoided, if one was
+                        # predicted: the generator reads the date, so a
+                        # second call can differ across midnight.
+                        meta.structured_id = structured or generate_structured_id(
                             context=context,
                             existing_ids=existing_ids,
                             client_hint=get_context_client_hint(),
