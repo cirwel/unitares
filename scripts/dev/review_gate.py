@@ -1655,10 +1655,23 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             f"+refs/pull/{pr}/head:{head_ref}")
         # The record is diff-bound: message amendments and base-only merges
         # remain valid. Use the fetched head, not an API SHA from before a push.
-        current = diff_key(base_ref, head_ref) == key
-        # A base merge GitHub made during the review is the same PR change,
-        # as CI's carry decides it; the reviewed diff is still the current one.
-        current = current or key in {k for k, _ in base_merge_equivalents(base_ref, head_ref)}
+        fetched_key = diff_key(base_ref, head_ref)
+        current = fetched_key == key
+        open_finding = None
+        if not current:
+            # A base merge GitHub made during the review is the same PR change,
+            # as CI's carry decides it; the reviewed diff is still the current
+            # one. CI then decides the merged head's key, so read it as CI
+            # does: a finding posted there meanwhile keeps the PR blocked.
+            equivalents = base_merge_equivalents(base_ref, head_ref)
+            current = key in {k for k, _ in equivalents}
+            if current:
+                _CARRY[(repo, pr)] = (fetched_key, equivalents)
+                latest = current_record(repo, pr, fetched_key,
+                                        git("rev-parse", head_ref).strip(),
+                                        pr_comments(repo, pr))
+                if latest and latest.verdict == "FINDINGS" and not latest.disposed:
+                    open_finding = latest
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED
@@ -1668,6 +1681,9 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
     if not current:
         print("[review] UNREVIEWED: the PR head or base diff changed during review; push/join the current diff again")
         return UNREVIEWED
+    if open_finding:
+        print(f"[review] {open_finding.status()[1]}\n{open_finding.url}\n{open_finding.text}")
+        return 1
     return 0
 
 
