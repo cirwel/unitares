@@ -192,8 +192,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "(local, codex, claude, antigravity, or external, alias gemini), and "
         "a failure there degrades to local inference and records the "
         "fallback. request_review is the "
-        "one-call alias for request; consult advises without opening a "
-        "record."
+        "one-call alias for request. The separate consult tool advises "
+        "without opening a record; dialectic(action='consult') is different: "
+        "it files an outside verdict on an existing session as a "
+        "non-authoritative transcript record."
     ),
 }
 

@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.23.0",
+  "version": "1.25.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "1795a425d91761d06e26f32f5e13123b441c1116de93f412cbb189e15bcffe48",
+  "surface_sha256": "92876465a8fc6fb2ccb52731e194b0acda8fcc7798f6216b490d6d28800c39d3",
   "capabilities": [
     {
       "name": "start_session",
@@ -103,7 +103,7 @@
       "name": "request_review",
       "implementation": "dialectic",
       "kind": "workflow_alias",
-      "input_schema_sha256": "7126bb7bf56f2e8099b660483fdaf1098816f9bc6019188286830226851c1d33",
+      "input_schema_sha256": "4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3",
       "transport_names": {
         "mcp_streamable_http": "request_review",
         "rest_v1_tools": "request_review",
@@ -411,7 +411,7 @@
       "name": "agent",
       "implementation": "agent",
       "kind": "canonical_tool",
-      "input_schema_sha256": "5939a6f0a74a3a71c5814702da7e38b8ca1600973bbbfcab2cee7520ad5cf3c9",
+      "input_schema_sha256": "d410a1b12b271a1e6accaba6d878a05387e9391d37cf2c9fd0635db0607055ca",
       "transport_names": {
         "mcp_streamable_http": "agent",
         "rest_v1_tools": "agent",
@@ -499,7 +499,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "19bd41713c63a3aa8b0af95624cf2c711ceaba936f91f0110d4c0b93bfbbdc19",
+      "input_schema_sha256": "246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",

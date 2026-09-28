@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (54 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (55 actions) · 46 aliases.**
 
 ## Content-addressed snapshots
 
@@ -67,7 +67,7 @@ note for why the raw rendering is not.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:e98aac66989d2ec35f3967d026e28574c41b03ac1362e8095849da9b2a034870` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 9 | — | `sha256:c02a1b955af911197f07316783b159b54af92963880c323893f8db6044761b7f` |
+| `request_review` | `dialectic` | 9 | — | `sha256:c92d4a95a1c30fe39616cd66bd4f3d0caad871ae20fc861549bf058cd99b3820` |
 | `search_shared_memory` | `knowledge` | 25 | — | `sha256:c16aa9a40b7b30b649c9a67fb42a25cf34775df82df4e832e646cbcc50da904a` |
 | `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
@@ -191,6 +191,7 @@ runs (`from→to`, filled only when the destination is absent).
 | Action | Delegate | Remaps |
 |---|---|---|
 | `antithesis` | `src/mcp_handlers/dialectic/handlers.py handle_submit_antithesis` | — |
+| `consult` | `src/mcp_handlers/dialectic/handlers.py handle_submit_consult` | — |
 | `get` | `src/mcp_handlers/dialectic/handlers.py handle_get_dialectic_session` | — |
 | `list` | `src/mcp_handlers/dialectic/handlers.py handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py handle_quick_dialectic` | — |
@@ -248,13 +249,9 @@ the caller had passed it.
 |---|---|---|---|
 | `aggregate_metrics` | `observe` | `aggregate` | consolidated |
 | `archive_agent` | `agent` | `archive` | consolidated |
-| `authenticate` | `identity` | — | consolidated |
 | `backfill_calibration_from_dialectic` | `calibration` | `backfill` | consolidated |
-| `bind_identity` | `identity` | — | consolidated |
 | `check_calibration` | `calibration` | `check` | consolidated |
-| `check_status` | `get_governance_metrics` | — | intuitive_alias |
 | `check_working_state` | `get_governance_metrics` | — | intuitive_alias |
-| `checkin` | `process_agent_update` | — | intuitive_alias |
 | `cleanup_knowledge_graph` | `knowledge` | `cleanup` | consolidated |
 | `cleanup_stale_locks` | `admin` | `cleanup_locks` | consolidated |
 | `compare_agents` | `observe` | `compare` | consolidated |
@@ -263,54 +260,34 @@ the caller had passed it.
 | `delete_agent` | `agent` | `delete` | consolidated |
 | `detect_anomalies` | `observe` | `anomalies` | consolidated |
 | `export_to_file` | `export` | `file` | consolidated |
-| `find_similar_discoveries_graph` | `search_knowledge_graph` | — | consolidated |
-| `get_agent_api_key` | `identity` | — | deprecated |
 | `get_agent_metadata` | `agent` | `get` | consolidated |
 | `get_connection_status` | `admin` | `connections` | consolidated |
 | `get_dialectic_session` | `dialectic` | `get` | consolidated |
 | `get_discovery_details` | `knowledge` | `details` | consolidated |
 | `get_knowledge_graph` | `knowledge` | `get` | consolidated |
 | `get_lifecycle_stats` | `knowledge` | `stats` | consolidated |
-| `get_related_discoveries_graph` | `knowledge` | — | consolidated |
-| `get_response_chain_graph` | `knowledge` | — | consolidated |
 | `get_server_info` | `admin` | `server_info` | consolidated |
 | `get_system_history` | `export` | `history` | consolidated |
 | `get_telemetry_metrics` | `admin` | `telemetry` | consolidated |
 | `get_tool_usage_stats` | `admin` | `tool_usage` | consolidated |
-| `hello` | `identity` | — | consolidated |
-| `init` | `onboard` | — | intuitive_alias |
 | `list_agents` | `agent` | `list` | consolidated |
 | `list_dialectic_sessions` | `dialectic` | `list` | consolidated |
 | `list_knowledge_graph` | `knowledge` | `list` | consolidated |
-| `log` | `process_agent_update` | — | intuitive_alias |
-| `login` | `onboard` | — | intuitive_alias |
-| `metrics` | `get_governance_metrics` | — | intuitive_alias |
-| `my_status` | `get_governance_metrics` | — | intuitive_alias |
 | `observe_agent` | `observe` | `agent` | consolidated |
-| `quick_start` | `identity` | — | consolidated |
 | `reassign_reviewer` | `dialectic` | `reassign` | consolidated |
 | `rebuild_calibration` | `calibration` | `rebuild` | consolidated |
-| `recall_identity` | `identity` | — | consolidated |
 | `record_result` | `outcome_event` | — | intuitive_alias |
-| `register` | `onboard` | — | intuitive_alias |
-| `reply_to_question` | `knowledge` | — | consolidated |
 | `request_dialectic_review` | `dialectic` | `request` | consolidated |
-| `request_exploration_session` | `dialectic` | `get` | consolidated |
 | `request_review` | `dialectic` | `request` | intuitive_alias |
 | `reset_monitor` | `admin` | `reset_monitor` | consolidated |
 | `search_shared_memory` | `knowledge` | `search` | intuitive_alias |
-| `session` | `identity` | — | consolidated |
-| `start` | `onboard` | — | intuitive_alias |
 | `start_session` | `onboard` | — | intuitive_alias |
-| `state` | `get_governance_metrics` | — | intuitive_alias |
-| `status` | `get_governance_metrics` | — | intuitive_alias |
 | `store_finding` | `knowledge` | `store` | intuitive_alias |
 | `store_knowledge_graph` | `knowledge` | `store` | consolidated |
 | `submit_antithesis` | `dialectic` | `antithesis` | consolidated |
 | `submit_synthesis` | `dialectic` | `synthesis` | consolidated |
 | `submit_thesis` | `dialectic` | `thesis` | consolidated |
 | `sync_state` | `process_agent_update` | — | intuitive_alias |
-| `update` | `process_agent_update` | — | intuitive_alias |
 | `update_agent_metadata` | `agent` | `update` | consolidated |
 | `update_calibration_ground_truth` | `calibration` | `update` | consolidated |
 | `update_discovery_status_graph` | `knowledge` | `update` | consolidated |

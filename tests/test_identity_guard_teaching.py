@@ -209,7 +209,7 @@ def test_session_injection_membership_is_the_decided_eight():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("alias", ["start_session", "authenticate", "bind_identity"])
+@pytest.mark.parametrize("alias", ["start_session"])
 async def test_aliases_of_onboard_and_identity_do_not_take_middleware_path0(alias, monkeypatch):
     """Keyed on the invoked name on purpose (council, 2026-09-13).
 

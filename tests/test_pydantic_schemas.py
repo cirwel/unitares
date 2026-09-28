@@ -112,7 +112,7 @@ class TestPydanticSchemas:
         # Unparseable string rejects instead of silently becoming 0.5
         with pytest.raises(ValidationError) as exc:
             ProcessAgentUpdateParams(complexity="medium", response_text="T")
-        assert "checkin" in str(exc.value)  # error teaches the alias path
+        assert "sync_state" in str(exc.value)  # error teaches the alias path
 
         # Same for confidence
         with pytest.raises(ValidationError):

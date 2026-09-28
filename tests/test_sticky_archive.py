@@ -166,7 +166,7 @@ class TestManualArchiveMarker:
         """After handle_archive_agent, meta.notes must contain 'user requested'."""
         from types import SimpleNamespace
 
-        agent_uuid = "test-uuid-manual-stamp"
+        agent_uuid = "cccccccc-0000-4000-8000-000000000169"
         meta = SimpleNamespace(
             agent_id=agent_uuid,
             status="active",
@@ -231,7 +231,7 @@ class TestManualArchiveMarker:
         """
         from types import SimpleNamespace
 
-        agent_uuid = "test-uuid-persist-fail"
+        agent_uuid = "cccccccc-0000-4000-8000-000000000234"
         meta = SimpleNamespace(
             agent_id=agent_uuid,
             status="active",
