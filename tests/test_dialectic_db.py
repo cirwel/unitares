@@ -974,6 +974,88 @@ class TestAddMessage:
         conn.fetchrow.assert_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("held, expect_insert", [(7, True), (8, False)])
+    async def test_a_bounded_message_counts_under_a_lock_and_never_touches_the_session(
+        self, db, held, expect_insert,
+    ):
+        """Review round 1 on #2540: the bound on consults is enforced in one
+        transaction under a per-session advisory lock, so concurrent filers
+        cannot overshoot it."""
+        from contextlib import asynccontextmanager
+        instance, pool, conn = db
+
+        class DictRecord(dict):
+            def __getitem__(self, key):
+                return dict.__getitem__(self, key)
+
+        @asynccontextmanager
+        async def transaction():
+            yield
+        conn.transaction = transaction
+        conn.execute = AsyncMock(return_value="SELECT 1")
+        conn.fetchval = AsyncMock(return_value=held)
+        conn.fetchrow = AsyncMock(return_value=DictRecord({"message_id": 5}))
+
+        result = await instance.add_bounded_message(
+            session_id="sess-001", agent_id="agent-X", message_type="consult",
+            max_of_type=8, reasoning="outside view",
+        )
+
+        lock_sql = conn.execute.await_args_list[0].args[0]
+        assert "pg_advisory_xact_lock" in lock_sql
+        # The only execute is the lock: no UPDATE of dialectic_sessions.
+        assert all("dialectic_sessions" not in c.args[0] for c in conn.execute.await_args_list)
+        if expect_insert:
+            assert result == 5
+            conn.fetchrow.assert_awaited_once()
+        else:
+            assert result is None
+            conn.fetchrow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [
+        {"phase": "awaiting_thesis", "paused_agent_id": "p", "reviewer_agent_id": "r"},
+        None,
+    ])
+    async def test_a_bounded_message_builds_its_metrics_from_the_row_it_locks(self, db, state):
+        """Review round 7 on #2540: the session row is read FOR SHARE inside
+        the insert transaction, and what is built from it is what is written."""
+        from contextlib import asynccontextmanager
+        instance, pool, conn = db
+
+        class DictRecord(dict):
+            def __getitem__(self, key):
+                return dict.__getitem__(self, key)
+
+        @asynccontextmanager
+        async def transaction():
+            yield
+        conn.transaction = transaction
+        conn.execute = AsyncMock(return_value="SELECT 1")
+        conn.fetchval = AsyncMock(return_value=0)
+        conn.fetchrow = AsyncMock(side_effect=[
+            DictRecord(state) if state else None, DictRecord({"message_id": 5}),
+        ])
+        seen = []
+
+        def build(row):
+            seen.append(row)
+            return {"consult": {"session_phase_at_filing": (row or {}).get("phase")}}
+
+        result = await instance.add_bounded_message(
+            session_id="sess-001", agent_id="agent-X", message_type="consult",
+            max_of_type=8, reasoning="outside view", metrics_from_session=build,
+        )
+
+        assert result == 5
+        assert seen == [state]
+        read_sql, read_arg = conn.fetchrow.await_args_list[0].args
+        assert "FOR SHARE" in read_sql and "core.dialectic_sessions" in read_sql
+        assert read_arg == "sess-001"
+        written = conn.fetchrow.await_args_list[1].args[7]
+        assert json.loads(written) == build(state)
+
+    @pytest.mark.asyncio
     async def test_add_message_minimal_args(self, db):
         """add_message with only required args, optional are None."""
         instance, pool, conn = db

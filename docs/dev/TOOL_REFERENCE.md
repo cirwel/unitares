@@ -504,7 +504,7 @@ with the agent's current EISV snapshot. This enables correlation analysis:
 do EISV verdicts and phi values predict real outcomes?
 
 VALID OUTCOME TYPES:
-- drawing_completed: Lumen finished a drawing (score = satisfaction)
+- drawing_completed: an agent finished a drawing (score = satisfaction)
 - drawing_abandoned: Drawing was abandoned before completion
 - test_passed: A test or validation passed
 - test_failed: A test or validation failed
@@ -1208,7 +1208,7 @@ ACTIONS:
 
 ~~~text
 EXAMPLES:
-  observe(action="agent", target_agent_id="Lumen")
+  observe(action="agent", target_agent_id="my-agent")
   observe(action="audit_events", event_type="continuity_token_deprecated_accept", since="14d")
   observe(action="outcome_evidence", diagnostic="claim_only_task_completed", since="7d")
   observe(action="bridge", since="24h")
@@ -1734,11 +1734,12 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
+Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request. The separate consult tool advises without opening a record; dialectic(action='consult') is different: it files an outside verdict on an existing session as a non-authoritative transcript record.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `antithesis` | required | 10s | `submit_antithesis` |
+| `consult` | required | 10s | — |
 | `get` | pre_onboard | 10s | `get_dialectic_session`, `request_exploration_session` |
 | `list` (default) | pre_onboard | 15s | `list_dialectic_sessions` |
 | `quick` | required | 10s | — |

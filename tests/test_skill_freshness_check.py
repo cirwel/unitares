@@ -11,6 +11,7 @@ run the checker the way CI does, as a subprocess against a throwaway layout.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -23,6 +24,18 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CHECKER = REPO_ROOT / "scripts/client/_check_freshness.py"
+
+
+def _agent_marker_names() -> list[str]:
+    spec = importlib.util.spec_from_file_location("_check_freshness", CHECKER)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return [name for name, _ in module.AGENT_ENV_MARKERS]
+
+
+# The suite itself runs inside agent harnesses and on CI (CI=true), so every
+# run starts from an environment without these; a test sets one to mean it.
+AGENT_MARKERS = _agent_marker_names()
 
 
 def _day(days_ago: int) -> str:
@@ -68,9 +81,12 @@ class Layout:
     def run(self, *args: str, stdin=subprocess.DEVNULL,
             **env: str | None) -> subprocess.CompletedProcess:
         """Runs without a terminal, as CI and agent shells do, with a named
-        verifier so a stamp is accepted; pass SKILL_ATTESTATION_VERIFIER=None
-        to unset it and stdin= a terminal to run as a person would."""
-        merged = {**os.environ, "SKILL_FRESHNESS_FLOOR_DAYS": "30",
+        verifier so a stamp is accepted and no agent-harness marker set; pass
+        SKILL_ATTESTATION_VERIFIER=None to unset it, stdin= a terminal to run
+        as a person would, and a marker (CLAUDECODE="1") to run as a harness."""
+        inherited = {key: value for key, value in os.environ.items()
+                     if key not in AGENT_MARKERS}
+        merged = {**inherited, "SKILL_FRESHNESS_FLOOR_DAYS": "30",
                   "SKILL_ATTESTATION_VERIFIER": "test", **env}
         return subprocess.run(
             [sys.executable, str(CHECKER), str(self.repo), str(self.projects), *args],
@@ -218,6 +234,7 @@ def test_a_stamp_without_a_verifier_or_a_terminal_is_refused(layout: Layout, uns
     assert "REFUSED" in result.stderr
     assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr      # how to set it
     assert "--stamp demo" in result.stderr                      # the command to re-run
+    assert "stdin is not a terminal" in result.stderr           # why it is not a person
     assert "Operator Name" not in result.stdout + result.stderr
 
 
@@ -266,15 +283,79 @@ def test_a_terminal_stamp_with_no_git_user_is_refused(layout: Layout, tmp_path: 
     assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr
 
 
+# A terminal on stdin is not a person when a harness gave the agent's command
+# a pseudo-terminal (Codex exec_command with tty, Hermes' terminal tool with
+# pty). Until 2026-09-27 such a stamp still recorded the git user. Each value
+# below is one a harness was seen setting on the operator's machine.
+@pytest.mark.parametrize("marker, value", [
+    ("CLAUDECODE", "1"),
+    ("AI_AGENT", "claude-code_2-1-283_agent"),
+    ("AI_AGENT", "hermes-agent"),
+    ("CODEX_THREAD_ID", "019db8d2-da62-7bf2-8a80-efd3516f2979"),
+    ("CODEX_CI", "1"),
+    ("CI", "true"),
+])
+def test_an_agent_harness_at_a_terminal_is_refused(layout: Layout, marker, value):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    before = layout.skill_file.read_bytes()
+
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER=None, **{marker: value})
+
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert not (layout.repo / "skills" / ".attestations").exists()
+    assert layout.skill_file.read_bytes() == before
+    assert "REFUSED" in result.stderr
+    assert f"{marker} is set" in result.stderr                  # why it is not a person
+    assert "stdin is not a terminal" not in result.stderr       # it was one
+    assert "SKILL_ATTESTATION_VERIFIER=" in result.stderr
+    assert "--stamp demo" in result.stderr
+    assert "Operator Name" not in result.stdout + result.stderr
+
+
+def test_a_harness_without_a_terminal_names_both_reasons(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    result = layout.run("--stamp", "demo", SKILL_ATTESTATION_VERIFIER=None, CLAUDECODE="1")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "CLAUDECODE is set (Claude Code sets it" in result.stderr
+    assert "stdin is not a terminal" in result.stderr
+
+
+def test_a_harness_that_names_its_verifier_stamps_at_a_terminal(layout: Layout):
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    result = _stamp_at_a_terminal(layout, CODEX_THREAD_ID="019db8d2",
+                                  SKILL_ATTESTATION_VERIFIER="Codex (re-checked demo)")
+    assert result.returncode == 0, result.stdout + result.stderr
+    [path] = _attestations(layout)
+    assert json.loads(path.read_text())["verifier"] == "Codex (re-checked demo)"
+
+
+@pytest.mark.parametrize("value", ["", "0", "false", "FALSE", "  "])
+def test_a_marker_switched_off_keeps_the_terminal_fallback(layout: Layout, value):
+    # `CI=false` is how a person turns CI behaviour off in their own terminal.
+    layout.source("x = 1\n")
+    layout.skill(last_verified=_day(1), digest=None)
+    _git_user(layout, "Operator Name")
+    result = _stamp_at_a_terminal(layout, SKILL_ATTESTATION_VERIFIER=None, CI=value)
+    assert result.returncode == 0, result.stdout + result.stderr
+    [path] = _attestations(layout)
+    assert json.loads(path.read_text())["verifier"] == "Operator Name"
+
+
 def test_only_the_stamp_needs_a_verifier(layout: Layout):
     # The check CI runs, and the release-cut prune, record no verifier and
     # run without a terminal, so the refusal must not reach them.
     layout.source("x = 1\n")
     layout.skill(last_verified=_day(1), digest=None)
     layout.run("--stamp", "demo")
-    check = layout.run(SKILL_ATTESTATION_VERIFIER=None)
+    check = layout.run(SKILL_ATTESTATION_VERIFIER=None, CI="true")
     assert check.returncode == 0, check.stdout + check.stderr
-    prune = layout.run("--prune", "3", SKILL_ATTESTATION_VERIFIER=None)
+    prune = layout.run("--prune", "3", SKILL_ATTESTATION_VERIFIER=None, CI="true")
     assert prune.returncode == 0, prune.stdout + prune.stderr
 
 
