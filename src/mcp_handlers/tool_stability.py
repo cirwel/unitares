@@ -128,8 +128,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # went with them. None was ever advertised in tools/list, so the absence
     # of calls in audit.tool_usage since 2026-07-31 is telemetry about what
     # was surfaced, not evidence about value. A caller of a removed name gets
-    # tool_not_found_error with the difflib suggestion. who_am_i was removed
-    # earlier and is not aliased either.
+    # tool_not_found_error, whose difflib suggestion is a name match and
+    # usually not the replacement; docs/CHANGELOG.md lists the replacements.
+    # who_am_i was removed earlier and is not aliased either.
 
     # Recovery tools - consolidated recovery hierarchy (Jan 2026)
     #

@@ -55,4 +55,4 @@ logger = get_logger(__name__)
 
 # REMOVED: get_agent_api_key (Dec 2025)
 # API keys deprecated - UUID-based session auth is now primary.
-# Its identity() alias was removed on 2026-09-28 (unused since 2026-07-31).
+# Its identity() alias was removed on 2026-09-28 (see tool_stability.py).

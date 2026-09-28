@@ -482,22 +482,10 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
     }
 
     # Tokens that look like tool names but aren't (markdown words, status
-    # values, action names that live behind a consolidated tool).
-    not_tools = {
-        "status",
-        "metrics",
-        "checkin",
-        "log",
-        "update",
-        "register",
-        "init",
-        "session",
-        "hello",
-        "authenticate",
-        "login",
-        "start",
-        "state",
-    }
+    # values, action names that live behind a consolidated tool). Empty since
+    # the 2026-09-28 alias cut: every former entry was a retired alias word,
+    # and exempting one would hide a stale reference to it.
+    not_tools: set[str] = set()
 
     referenced = set()
     # Tool references in SEE ALSO / RELATED TOOLS / ALTERNATIVES blocks are

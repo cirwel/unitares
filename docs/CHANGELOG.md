@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **24 unadvertised tool aliases** (compatibility: callable names removed).
   Names that only redirected a guessed or pre-consolidation name to a tool
-  that keeps its canonical name now return `tool_not_found_error` with the
-  usual suggestion: `status`, `my_status`, `check_status`, `metrics`, `state`
+  that keeps its canonical name now return `tool_not_found_error`. Its
+  suggestions are fuzzy name matches and usually do not name the
+  replacement, so the replacements are listed here: `status`, `my_status`, `check_status`, `metrics`, `state`
   (use `check_working_state` or `get_governance_metrics`); `start`, `init`,
   `register`, `login` (use `start_session` or `onboard`); `checkin`, `log`,
   `update` (use `sync_state` or `process_agent_update`); `authenticate`,
