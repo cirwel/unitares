@@ -656,6 +656,14 @@ the operator's machine is awake.
   keeps the slot even while it conflicts (arming another would leave two
   armed once the conflict is resolved); a hold longer than 90 minutes is
   logged, and clearing it is the maintainer's call.
+- **Notices on the PR.** When the queue skips a labelled PR for a reason
+  that will not clear by itself (a conflict, an approval gone stale, a
+  required check that concluded without passing, a check parked for
+  approval, failures that survived the one re-run), it posts one comment on
+  the PR saying why and what fixes it, so whoever looks next (the owner, or
+  an agent adopting it) does not need this machine's log. A hidden marker
+  keeps it to one notice per reason and head. Transient waits (a pending
+  check, a dependency still open) post nothing.
 - **Updates: never armed across an unchecked head.** When the head of the
   queue is `BEHIND`, the script updates it unarmed and holds its place; a
   later tick arms the updated head once its content still matches the
@@ -663,9 +671,10 @@ the operator's machine is awake.
   on across a head nothing had re-checked, while `review` is not
   branch-protected. GitHub's own updater is not relied on: in the queue's
   first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
-  falls `BEHIND` later and GitHub has not updated it within 3 minutes, the
-  script disarms it, updates it, and re-arms it by the same rule; a PR armed
-  by hand is only updated. Only the one head-of-queue or armed PR is ever
+  falls `BEHIND` later, the script disarms it at once, updates it, and
+  re-arms it by the same rule (no grace: GitHub's updater can move the head
+  within a minute). A PR armed by hand is only updated, and only if GitHub
+  has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
   updated, so there is nothing to race.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
