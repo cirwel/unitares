@@ -137,6 +137,7 @@ def extra_trusted_networks() -> tuple:
             )
             continue
         nets.append(net)
+    # Judge coverage on the collapsed union, so split entries count as one.
     for version in (4, 6):
         listed = [n for n in nets if n.version == version]
         for net in _ipaddress.collapse_addresses(listed):
@@ -146,13 +147,13 @@ def extra_trusted_networks() -> tuple:
                     "auth is effectively off",
                     net,
                 )
-    for net in nets:
-        if net.version == 6 and net.prefixlen and _IPV4_MAPPED.subnet_of(net):
-            logger.warning(
-                "UNITARES_TRUSTED_NETWORKS: %s trusts every caller over IPv4 on a "
-                "dual-stack bind (::ffff:0:0/96); local-posture auth is effectively off",
-                net,
-            )
+            elif version == 6 and _IPV4_MAPPED.subnet_of(net):
+                logger.warning(
+                    "UNITARES_TRUSTED_NETWORKS: %s trusts every caller over IPv4 on a "
+                    "dual-stack bind (::ffff:0:0/96); local-posture auth is "
+                    "effectively off",
+                    net,
+                )
     _extra_networks_cache = (raw, tuple(nets))
     return _extra_networks_cache[1]
 
@@ -176,9 +177,16 @@ def _is_trusted_network(request) -> bool:
         return False
     try:
         addr = _ipaddress.ip_address(client_ip)
-        return any(addr in net for net in (*_TRUSTED_NETWORKS, *extra_trusted_networks()))
     except ValueError:
         return False
+    # A dual-stack bind reports an IPv4 peer as ::ffff:a.b.c.d. Match the IPv4
+    # address it carries against the IPv4 networks too, or a listed IPv4 range
+    # (and the built-in ones) would never match on such a socket.
+    candidates = [addr]
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        candidates.append(addr.ipv4_mapped)
+    networks = (*_TRUSTED_NETWORKS, *extra_trusted_networks())
+    return any(a in net for a in candidates for net in networks)
 
 
 def _http_unauthorized():

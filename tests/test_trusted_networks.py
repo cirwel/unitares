@@ -86,6 +86,8 @@ def test_a_cidr_with_host_bits_is_refused_not_masked_wider(monkeypatch):
     ("::/1,8000::/1", "2001:db8::1"),
     # A dual-stack bind reports every IPv4 caller from this range.
     ("::ffff:0:0/96", "::ffff:8.8.8.8"),
+    # ...and these two halves collapse to it.
+    ("::ffff:0:0/97,::ffff:8000:0/97", "::ffff:8.8.8.8"),
 ])
 def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog, listed, caller):
     import logging
@@ -103,3 +105,33 @@ def test_an_ordinary_range_is_not_logged_as_a_catch_all(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         assert _is_trusted_network(_request("100.101.102.103")) is True
     assert "trusts every caller" not in caplog.text
+
+
+@pytest.mark.parametrize("listed,caller,trusted", [
+    # A dual-stack bind reports an IPv4 peer in its IPv4-mapped form.
+    ("100.64.0.0/10", "::ffff:100.101.102.103", True),
+    ("", "::ffff:127.0.0.1", True),
+    ("", "::ffff:192.168.1.5", True),
+    ("", "::ffff:8.8.8.8", False),
+    ("100.64.0.0/10", "::ffff:8.8.8.8", False),
+    # An IPv6 range still matches the IPv6 address itself.
+    ("fd7a:115c:a1e0::/48", "fd7a:115c:a1e0::1", True),
+])
+def test_an_ipv4_mapped_peer_matches_the_ipv4_networks(monkeypatch, listed, caller, trusted):
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", listed)
+    assert _is_trusted_network(_request(caller)) is trusted
+
+
+def test_the_setting_is_parsed_and_logged_once_per_value(monkeypatch, caplog):
+    # Every REST and WebSocket request checks trust; a catch-all must not log
+    # a warning on each one.
+    import logging
+
+    from src.http_routes import access
+
+    monkeypatch.setattr(access, "_extra_networks_cache", ("", ()))
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "0.0.0.0/0")
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            assert _is_trusted_network(_request("8.8.8.8")) is True
+    assert sum("trusts every caller" in r.getMessage() for r in caplog.records) == 1
