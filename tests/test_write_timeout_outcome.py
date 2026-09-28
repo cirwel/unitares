@@ -302,8 +302,8 @@ def _store_lookup_payload(arguments: dict, *, bound: str | None = None) -> dict:
 def _assert_window_lookup(
     payload: dict, writer: str | None, *, batch: bool = False
 ) -> dict:
-    """The check lists the writer's rows created in the call's own window; a
-    batch's check also carries each row's full details."""
+    """The check lists the writer's rows created in the call's own window,
+    each with its full details, for a single store as for a batch."""
     from src.mcp_handlers.error_helpers import _render_call
 
     recovery = payload["recovery"]
@@ -321,8 +321,7 @@ def _assert_window_lookup(
             "limit": 100,
         }
     )
-    if batch:
-        expected["include_details"] = True
+    expected["include_details"] = True
     assert lookup == expected
     assert "query" not in lookup, "a relevance query would rank and cut the page"
     assert recovery["check_before_retry"] == _render_call("knowledge", lookup)
@@ -488,6 +487,10 @@ async def test_a_store_that_supersedes_names_the_second_write_its_list_does_not_
         f"supersedes_id='{SUPERSEDED_ID}')"
     ) in steps[4]
     assert steps[4].endswith("Do not store the row again for it")
+    # A timeout between the status write and the edge write leaves the status
+    # set and the edge missing, so the repair must not wait on the status.
+    assert "whatever" in steps[4] and "repairs a missing edge" in steps[4]
+    assert "if its status is not superseded" not in steps[4]
 
 
 @pytest.mark.parametrize(
@@ -521,6 +524,10 @@ def test_a_single_store_timeout_speaks_of_one_row():
     assert "batch" not in json.dumps(recovery)
     assert recovery["action"].startswith("Do not store this again yet")
     assert recovery["workflow"][2].endswith("nothing was saved: store it again")
+    # The same bound identity can store two rows with one summary in the
+    # window; only summary and details together say which one is this call's.
+    assert "your summary and details" in recovery["workflow"][1]
+    assert "a row with your summary but other details is not this call's" in recovery["workflow"][1]
 
 
 @pytest.mark.parametrize(

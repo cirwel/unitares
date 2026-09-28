@@ -448,16 +448,21 @@ def _knowledge_store_recovery(
     )
     batch_size = _store_batch_size(call, arguments)
     batch = batch_size is not None
-    if batch:
-        # Items are compared by their full content, details included; without
-        # this a page of more than a few rows carries a 500-character preview.
-        lookup["include_details"] = True
+    # Rows are compared by their full content, details included, for a single
+    # store as for a batch: the same writer can store two rows with the same
+    # summary in the window, and without this a page of more than a few rows
+    # carries a 500-character preview.
+    lookup["include_details"] = True
     check = _render_call("knowledge", lookup)
     limit = _WINDOW_LOOKUP_LIMIT
     # What a row of this call's would carry.
-    match = "an item's content" if batch else "your summary"
-    same = "the same item" if batch else "the same summary"
-    yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
+    match = "an item's content" if batch else "your summary and details"
+    same = "the same item" if batch else "the same summary and details"
+    yours = (
+        "your summary and details, both stored as sent except that a long one "
+        "is cut short (for a note, its text); a row with your summary but "
+        "other details is not this call's"
+    )
     matching = (
         "Compare each item you sent with the rows by its summary and details "
         "together, not by summary alone. Both are stored as sent, except that "
@@ -579,12 +584,13 @@ def _knowledge_store_recovery(
         old = _call_literal(str(supersedes).strip(), "<supersedes>")
         workflow.append(
             f"5. This store also marks '{old}' superseded, a separate write "
-            "after the row is saved that this list does not show. If you "
-            "found your row, read knowledge(action='details', "
-            f"discovery_id='{old}'); if its status is not superseded, mark it "
-            "with knowledge(action='supersede', discovery_id=<your row's id>, "
-            f"supersedes_id='{old}'), which sets a status and an edge and so "
-            "adds nothing twice. Do not store the row again for it"
+            "after the row is saved that this list does not show; a timeout "
+            "between the two can leave its status set and its edge missing. "
+            "If you found your row, run knowledge(action='supersede', "
+            f"discovery_id=<your row's id>, supersedes_id='{old}') whatever "
+            f"'{old}' shows: it sets a status and merges an edge, so it adds "
+            "nothing twice and repairs a missing edge. Do not store the row "
+            "again for it"
         )
 
     return {
