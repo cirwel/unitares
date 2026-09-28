@@ -227,6 +227,29 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
     assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
 
 
+def test_handoff_refreshes_the_base_ref_when_only_the_base_moved(carry_repo, monkeypatch):
+    # The independent review on #2568: a base advance with no merge into the PR
+    # leaves the head alone, yet CI reads the new base's policy, so the
+    # second-family pass after the handoff must too.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+
+    def pr_info(*args):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("y\n")
+        _git(carry_repo, "commit", "-q", "-am", "master moves on")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    assert completed_review_exit("o/r", 1, key, head, 0) == 0
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
+        _git(carry_repo, "rev-parse", "master")
+
+
 @pytest.mark.parametrize("native_finding", [False, True])
 def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_repo, monkeypatch,
                                                                        native_finding):
@@ -297,13 +320,38 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
     assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
 
 
-def test_a_base_merge_git_cannot_check_is_refused_and_reported(monkeypatch, capsys):
+@pytest.mark.parametrize("start,expected", [
+    (None, "new"), ("old", "new"), ("newer", "newer"), ("side", "side")])
+def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
+    # Codex on #2568: another worktree may fetch a newer base while the
+    # handoff runs; the handoff must never roll the shared ref back.
+    commits = {"old": _git(carry_repo, "rev-parse", "master")}
+    _git(carry_repo, "checkout", "-q", "master")
+    for name in ("new", "newer"):
+        (carry_repo / "other.txt").write_text(f"{name}\n")
+        _git(carry_repo, "commit", "-q", "-am", name)
+        commits[name] = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", commits["old"])
+    (carry_repo / "other.txt").write_text("side\n")
+    _git(carry_repo, "commit", "-q", "-am", "side")
+    commits["side"] = _git(carry_repo, "rev-parse", "HEAD")
+    ref = "refs/remotes/origin/master"
+    if start:
+        _git(carry_repo, "update-ref", ref, commits[start])
+    rg._advance_ref(ref, commits["new"])
+    assert _git(carry_repo, "rev-parse", ref) == commits[expected]
+
+
+@pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])
+def test_a_base_merge_git_cannot_check_is_refused_and_reported(monkeypatch, capsys,
+                                                               exit_code, reported):
     # git older than 2.38 has no merge-tree --write-tree (exit 129): nothing is
-    # carried, and the author is told CI may see what this machine cannot.
+    # carried, and the author is told CI may see what this machine cannot. An
+    # ordinary conflict (exit 1) is refused quietly: nothing is being missed.
     monkeypatch.setattr(rg.subprocess, "run",
-                        lambda *a, **k: subprocess.CompletedProcess(a, 129, "", "usage"))
+                        lambda *a, **k: subprocess.CompletedProcess(a, exit_code, "", ""))
     assert rg._clean_auto_merge("abc123", "p", "b") is False
-    assert "needs git 2.38+" in capsys.readouterr().err
+    assert ("needs git 2.38+" in capsys.readouterr().err) is reported
 
 
 def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):

@@ -1645,6 +1645,17 @@ def _resolve(args) -> tuple[int, str, str, str]:
     return info["number"], repo, key, info["headRefName"]
 
 
+def _advance_ref(ref: str, new: str) -> None:
+    """Move `ref` forward to `new`, never back: a newer value (another worktree
+    fetched meanwhile) is kept. Compare-and-swap, so a concurrent update wins."""
+    old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
+    if old and (old == new or subprocess.run(
+            ["git", "merge-base", "--is-ancestor", old, new], capture_output=True).returncode):
+        return
+    # An empty old value asserts the ref does not exist yet.
+    git("update-ref", ref, new, old, check=False)
+
+
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
     """A completed review must still describe the PR we are handing back."""
     if result:
@@ -1661,6 +1672,14 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             f"+refs/pull/{pr}/head:{head_ref}")
         # The record is diff-bound: message amendments and base-only merges
         # remain valid. Use the fetched head, not an API SHA from before a push.
+        # The second-family pass after this reads its policy from the caller's
+        # base ref, which _resolve fetched before the review (the default
+        # --base, origin/<base>; a custom --base is the caller's to refresh).
+        # CI reads the base as it is now, and a base advance may have added a
+        # sensitive path; move that ref forward to this snapshot, as a fetch
+        # would, whether or not the head moved.
+        _advance_ref(f"refs/remotes/origin/{info['baseRefName']}",
+                     git("rev-parse", base_ref).strip())
         fetched_key = diff_key(base_ref, head_ref)
         fetched_head = git("rev-parse", head_ref).strip()
         current = fetched_key == key
@@ -1687,13 +1706,6 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
                                                 (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
-                # The second-family pass reads its policy from the caller's base
-                # ref (_resolve fetched origin/<base> before the review). CI reads
-                # the base as it is now, and a base advance may have added a
-                # sensitive path; move that ref forward to this snapshot, as a
-                # fetch would.
-                git("update-ref", f"refs/remotes/origin/{info['baseRefName']}",
-                    git("rev-parse", base_ref).strip())
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED
