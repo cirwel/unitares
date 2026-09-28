@@ -303,7 +303,7 @@ Three things make a lockout harder than it needs to be:
 - **`/mcp` has no loopback or UDS bypass, by design.** `check_mcp_bearer` has no
   trusted-network branch, because a hosted server sees only its proxy's address;
   every request to `/mcp` authenticates, over UDS as much as over TCP. The
-  loopback, RFC1918 and Tailscale bypass exists on the REST surface only — and
+  loopback, RFC1918 and `UNITARES_TRUSTED_NETWORKS` bypass exists on the REST surface only — and
   setting `UNITARES_MCP_BEARER_TOKENS` flips REST into strict posture, which
   removes it there too. So the break-glass is a credential you kept, not a
   network position; for REST specifically, `UNITARES_REST_STRICT=0` restores the

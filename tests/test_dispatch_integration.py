@@ -218,10 +218,10 @@ class TestResolveAlias:
     async def test_known_alias_resolves(self):
         """Known alias maps to correct tool name."""
         ctx = _make_ctx()
-        name, args, ctx_out = await resolve_alias("status", {}, ctx)
+        name, args, ctx_out = await resolve_alias("check_working_state", {}, ctx)
         assert name == "get_governance_metrics"
         assert ctx_out.migration_note is not None
-        assert ctx_out.original_name == "status"
+        assert ctx_out.original_name == "check_working_state"
 
     @pytest.mark.asyncio
     async def test_unknown_tool_passthrough(self):
@@ -248,17 +248,17 @@ class TestResolveAlias:
     async def test_multiple_aliases_for_same_target(self):
         """Multiple aliases can map to the same target tool."""
         ctx1 = _make_ctx()
-        name1, _, _ = await resolve_alias("start", {}, ctx1)
+        name1, _, _ = await resolve_alias("list_agents", {}, ctx1)
 
         ctx2 = _make_ctx()
-        name2, _, _ = await resolve_alias("init", {}, ctx2)
+        name2, _, _ = await resolve_alias("get_agent_metadata", {}, ctx2)
 
         ctx3 = _make_ctx()
-        name3, _, _ = await resolve_alias("register", {}, ctx3)
+        name3, _, _ = await resolve_alias("archive_agent", {}, ctx3)
 
-        assert name1 == "onboard"
-        assert name2 == "onboard"
-        assert name3 == "onboard"
+        assert name1 == "agent"
+        assert name2 == "agent"
+        assert name3 == "agent"
 
     @pytest.mark.asyncio
     async def test_consolidated_alias_with_action(self):
@@ -517,18 +517,18 @@ class TestResolveToolAlias:
     """Direct unit tests for resolve_tool_alias function."""
 
     def test_known_alias(self):
-        actual, alias_info = resolve_tool_alias("status")
+        actual, alias_info = resolve_tool_alias("check_working_state")
         assert actual == "get_governance_metrics"
         assert alias_info is not None
-        assert alias_info.old_name == "status"
+        assert alias_info.old_name == "check_working_state"
 
     def test_unknown_tool(self):
         actual, alias_info = resolve_tool_alias("completely_unknown")
         assert actual == "completely_unknown"
         assert alias_info is None
 
-    def test_start_maps_to_onboard(self):
-        actual, alias_info = resolve_tool_alias("start")
+    def test_start_session_maps_to_onboard(self):
+        actual, alias_info = resolve_tool_alias("start_session")
         assert actual == "onboard"
 
     def test_list_agents_maps_to_agent(self):
@@ -658,18 +658,18 @@ class TestDispatchToolIntegration:
         """Alias resolution works end-to-end through dispatch_tool."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        # "status" is an alias for "get_governance_metrics"
-        _require_registered("get_governance_metrics", TOOL_HANDLERS)
+        # "list_agents" is an alias for agent(action="list")
+        _require_registered("agent", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{"resolved": "via_alias"}')]
-        original = TOOL_HANDLERS["get_governance_metrics"]
-        TOOL_HANDLERS["get_governance_metrics"] = AsyncMock(return_value=expected)
+        original = TOOL_HANDLERS["agent"]
+        TOOL_HANDLERS["agent"] = AsyncMock(return_value=expected)
         try:
-            result = await dispatch_tool("status", {})
+            result = await dispatch_tool("list_agents", {})
             assert result == expected
         finally:
-            TOOL_HANDLERS["get_governance_metrics"] = original
+            TOOL_HANDLERS["agent"] = original
 
     @pytest.mark.asyncio
     async def test_kwargs_unwrapping_end_to_end(self, mock_identity_pipeline, mock_track_patterns, clean_rate_limit):
@@ -842,7 +842,7 @@ class TestInjectIdentity:
     async def test_no_binding_no_id_identity_tools_ok(self):
         """Identity tools work without any binding or agent_id."""
         from src.mcp_handlers.middleware import inject_identity
-        identity_tools = ["status", "list_tools", "health_check", "onboard", "identity"]
+        identity_tools = ["check_working_state", "list_tools", "health_check", "onboard", "identity"]
         for tool_name in identity_tools:
             ctx = _make_ctx()
             with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
