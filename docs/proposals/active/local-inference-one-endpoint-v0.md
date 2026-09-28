@@ -298,6 +298,12 @@ release note says what to set first. One rule orders them: no step may let a req
 2. **Client and key.** Add `local_model_client.py` and
    `UNITARES_MODEL_API_KEY_ENV` together, with the `https` rule for credentialed
    external endpoints and its `UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in (2.3).
+   When no key is configured, the client passes the fixed placeholder
+   `not-required`, as the orchestrated reviewer's `external` backend already
+   does. The OpenAI SDK refuses to build a client without a key, which is why
+   today's call sites pass `"ollama"`, and an explicit value also stops the SDK
+   from reading an `OPENAI_API_KEY` left in the environment and sending it to a
+   non-OpenAI endpoint. A keyless Ollama or vLLM install is unchanged.
    Every request to the endpoint sends
    the key, including the model-listing requests of `unitares model`, the
    doctor check and (from step 3) the registry probe, or an authenticated
@@ -322,7 +328,11 @@ release note says what to set first. One rule orders them: no step may let a req
    accepts only the `ollama` and `hf` provider kinds and forces
    `privacy='local'` on the Ollama branch) routing that host id to the primary
    endpoint whatever its kind, with privacy taken from the classification; and
-   the fallback endpoint with the Hugging Face default. Consult's route
+   the fallback endpoint with the Hugging Face default. Until step 5, an
+   explicit `call_model(provider="hf")` keeps meaning the Hugging Face router,
+   exactly as its published schema says; only the automatic fallback
+   (`provider="auto"`, `privacy='auto'|'cloud'`, `consult` with
+   `cloud_allowed`) uses a configured non-Hugging-Face fallback endpoint. Consult's route
    postconditions (`_delivery_postcondition_error` in `consultation.py`, which
    accepts only fixed Ollama and Hugging Face route tuples) change in the same
    step to accept the resolved primary and fallback routes and to check the
