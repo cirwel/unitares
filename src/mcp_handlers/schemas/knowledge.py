@@ -629,11 +629,13 @@ class KnowledgeParams(AgentIdentityMixin):
     )
     recency_half_life_days: Optional[float] = Field(
         None,
+        gt=0,
+        le=36500,
         description=(
             "Opt-in recency weight for action=search with a query: each result's "
             "relevance is multiplied by 0.5 ** (age_days / this), so a result this "
-            "many days old keeps half its score. Off by default. Not combinable "
-            "with sort_by='created_at'."
+            "many days old keeps half its score. Above 0, at most 36500. Off by "
+            "default. Not combinable with sort_by='created_at'."
         ),
         json_schema_extra={"brief": "search: score halves per N days of age."},
     )

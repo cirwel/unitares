@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "f70d917fb162d13b50ea906022aa4e3a59dfb43ec5d933df63eb2e7f21e04157",
+  "surface_sha256": "1795a425d91761d06e26f32f5e13123b441c1116de93f412cbb189e15bcffe48",
   "capabilities": [
     {
       "name": "start_session",
@@ -59,7 +59,7 @@
       "name": "search_shared_memory",
       "implementation": "knowledge",
       "kind": "workflow_alias",
-      "input_schema_sha256": "c3a6e277f9802bde57a5a6d79939cbb959877d386a630d36b449b704b88d42bb",
+      "input_schema_sha256": "ef69a34671ec48b6c25dd7a7b8f22b694b999d558764d9d183c9121a9a112bf6",
       "transport_names": {
         "mcp_streamable_http": "search_shared_memory",
         "rest_v1_tools": "search_shared_memory",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "dd51150ecade4d8184b6148c2129cf385936ddf3d8d1addbb0e9edb87722a167",
+      "input_schema_sha256": "694f9e2c3fa55eee3e25ee09aaaadc947186dd1f48defa2eaf6b5570b39e95c3",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",

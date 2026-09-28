@@ -230,7 +230,7 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "Force retrieval mode for action=search. 'semantic' and 'hybrid' "
                 "fail honestly when unsupported by the active backend."
             ),
-            "brief": "auto, or force fts/semantic/hybrid (refused if unsupported).",
+            "brief": "auto, or force fts/semantic/hybrid.",
         },
         "agent_id_filter": {
             "description": (
