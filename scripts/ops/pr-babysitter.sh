@@ -302,8 +302,11 @@ while read -r pr; do
   # none mergeable, stalled the queue for hours). Its label stays, so the
   # queue arms it in turn. The operator keeps a way to land a PR outside the
   # queue: an arm on a PR labelled $OPERATOR_ARMED_LABEL is left alone.
+  # The operator's label is checked before arm attribution: an operator who
+  # re-arms a PR moments after the queue armed it would otherwise match the
+  # queue's own arm record (within its 120 s tolerance) and be disarmed.
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
   if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
-    jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
     reason="it was armed outside the queue"
     hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
   elif held_by=$(operator_only "$pr"); then

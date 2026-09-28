@@ -995,3 +995,11 @@ def test_a_sensitive_pr_with_a_pending_review_does_not_hold_the_order(tmp_path: 
     calls, _ = _run(tmp_path, [pending, _pr(2, head="bbb")], timelines={1: _timeline(12), 2: _timeline(8)},
                     compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
     assert calls == [_arm(2, "bbb")]
+
+
+def test_an_operator_armed_pr_is_left_alone_even_right_after_a_queue_arm(tmp_path: Path) -> None:
+    # The queue's arm record would match within its tolerance; the label wins.
+    pr = _pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=0.5, review=None,
+             checks=[_check("review", "NEUTRAL")])
+    calls, _ = _run(tmp_path, [pr], arms={3: 0.5})
+    assert calls == []
