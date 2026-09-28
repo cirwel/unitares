@@ -561,13 +561,15 @@ def _knowledge_store_recovery(
         action = (
             "Do not store this again yet. It may already be saved, and every "
             "store adds a new row, so a second call leaves two findings. "
-            f"{listing} A list with no row carrying your summary proves nothing "
+            f"{listing} A list with no row carrying your summary and details "
+            "together proves nothing "
             "was saved, but only when it was read after settled_by and its "
             f"count is below {limit}."
         )
         resend_step = (
-            "3. If no row has your summary on a read after settled_by and count "
-            f"is below {limit}, nothing was saved: store it again"
+            "3. If no row has your summary and details together on a read after "
+            f"settled_by and count is below {limit}, nothing was saved: store it "
+            "again. A row with your summary but other details is not this call's"
         )
 
     workflow = [
@@ -634,6 +636,25 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
         "length": MAX_UPDATED_DETAILS_LEN,
     }
     check = _render_call("knowledge", lookup)
+    # superseded_by is recorded after the fields commit, as a separate write
+    # the details read does not show; a timeout between the two leaves the
+    # edge missing. supersede sets a status and merges an edge, so running it
+    # once the update's fields are confirmed adds nothing twice.
+    superseded_by = arguments.get("superseded_by")
+    supersede_step = []
+    if superseded_by:
+        new = _call_literal(str(superseded_by).strip(), "<superseded_by>")
+        old = lookup["discovery_id"]
+        supersede_step = [
+            f"5. This update also records '{new}' as superseding '{old}', a "
+            "separate write after its fields commit that details does not "
+            "show; a timeout between the two can leave the edge missing. Once "
+            "step 2 or 4 shows the update's fields landed, run "
+            f"knowledge(action='supersede', discovery_id='{new}', "
+            f"supersedes_id='{old}') whatever the row shows: it sets a status "
+            "and merges an edge, so it adds nothing twice and repairs a missing "
+            "edge"
+        ]
     block = (
         "a line 'Resolution notes (<time>):' with a time at or after "
         "call_started_at, followed by the text of your resolution_notes "
@@ -662,7 +683,8 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             "you have all of details",
             f"2. If you sent resolution_notes, look anywhere in details for "
             f"{block}. If it is there, the whole update landed: it writes all "
-            "its fields in one statement. Do not send any of it again",
+            "its fields in one statement. Do not send any of it again"
+            + (" (for superseded_by, see step 5)" if superseded_by else ""),
             "3. If you sent resolution_notes and no such block is in details "
             "on the read after settled_by, your notes are not stored: send the "
             "update again",
@@ -670,7 +692,7 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             "not added to, so sending the update again after settled_by "
             "stores no second copy, though it replaces any change another "
             "writer made since",
-        ],
+        ] + supersede_step,
         "related_tools": ["knowledge", "health_check"],
     }
 

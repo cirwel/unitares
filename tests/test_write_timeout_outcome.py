@@ -523,7 +523,11 @@ def test_a_single_store_timeout_speaks_of_one_row():
     recovery = _assert_window_lookup(payload, BOUND_UUID)
     assert "batch" not in json.dumps(recovery)
     assert recovery["action"].startswith("Do not store this again yet")
-    assert recovery["workflow"][2].endswith("nothing was saved: store it again")
+    assert "nothing was saved: store it again" in recovery["workflow"][2]
+    # The resend predicate uses the same pair as the found check: a row with
+    # the summary but other details does not withhold the retry.
+    assert "your summary and details together" in recovery["workflow"][2]
+    assert "your summary and details together" in recovery["action"]
     # The same bound identity can store two rows with one summary in the
     # window; only summary and details together say which one is this call's.
     assert "your summary and details" in recovery["workflow"][1]
@@ -1549,3 +1553,32 @@ async def test_a_windowed_semantic_read_failure_degrades_instead_of_failing_the_
     payload = json.loads(result[0].text)
     assert payload.get("success") is True, payload.get("error")
     assert payload.get("count") == 1
+
+
+
+def test_an_update_with_superseded_by_repairs_the_edge_its_notes_do_not_prove():
+    """The update commits its fields, notes included, then records the
+    supersession edge in a separate write. A timeout between the two leaves the
+    notes present and the edge missing, so a found notes block must not end
+    the recovery: supersede, which is idempotent, repairs the edge."""
+    from src.mcp_handlers.error_helpers import _knowledge_update_recovery
+
+    with_edge = _knowledge_update_recovery({
+        "discovery_id": "2026-01-01T00:00:00+00:00",
+        "superseded_by": "2026-02-02T00:00:00+00:00",
+        "resolution_notes": "fixed",
+    })
+    steps = with_edge["workflow"]
+    assert len(steps) == 5
+    assert steps[1].endswith("(for superseded_by, see step 5)")
+    assert (
+        "knowledge(action='supersede', discovery_id='2026-02-02T00:00:00+00:00', "
+        "supersedes_id='2026-01-01T00:00:00+00:00')"
+    ) in steps[4]
+    assert "whatever the row shows" in steps[4] and "repairs a missing edge" in steps[4]
+
+    plain = _knowledge_update_recovery(
+        {"discovery_id": "2026-01-01T00:00:00+00:00", "resolution_notes": "fixed"}
+    )
+    assert len(plain["workflow"]) == 4
+    assert "superseded_by" not in " ".join(plain["workflow"])
