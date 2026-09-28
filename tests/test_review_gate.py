@@ -179,10 +179,13 @@ def test_a_base_merge_next_to_the_pr_moves_the_raw_key_but_carries_the_review(ca
     assert carried == {"reviewed": reviewed_head}
 
 
-@pytest.mark.parametrize("pr_edit,finding_on_merged_head,expected",
-                         [(False, False, 0), (True, False, 2), (False, True, 1)])
+@pytest.mark.parametrize("pr_edit,finding_on,expected", [
+    (False, None, 0), (True, None, 2),
+    # A finding on either key keeps CI red: the merged head's own, or the
+    # reviewed key's, which CI carries to the merged head.
+    (False, "merged", 1), (False, "reviewed", 1)])
 def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeypatch, pr_edit,
-                                                             finding_on_merged_head, expected):
+                                                             finding_on, expected):
     # Codex on #2568: CI carries the review across GitHub's base merge, so the
     # local handoff must not report the same diff UNREVIEWED. The fresh Claude
     # review: nor report it done while CI, deciding the merged head's key,
@@ -199,14 +202,15 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
             (carry_repo / "f.txt").write_text(
                 "ONE on master\ntwo\nTHREE edited again\nfour\nfive\n")
             _git(carry_repo, "commit", "-q", "-am", "unreviewed edit")
-        if finding_on_merged_head:
-            comments.append(_record(rg.diff_key("master", "HEAD"), "FINDINGS", 1,
-                                    reviewer="claude"))
+        if finding_on:
+            key = rg.diff_key("master", "HEAD") if finding_on == "merged" else reviewed_key
+            comments.append(_record(key, "FINDINGS", 1, reviewer="claude"))
         _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"baseRefName": "master", "state": "OPEN"}
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
-    monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
+    # The real pr_comments, so the handoff's carry registration is what re-keys.
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
     # _resolve registered the reviewed key's view; the second-family pass that
     # follows the handoff still keys on it (Codex on #2568), so it must survive.
     registered = (reviewed_key, [])
