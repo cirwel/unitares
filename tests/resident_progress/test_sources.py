@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import timedelta
 
 import pytest
@@ -10,7 +11,8 @@ from src.resident_progress.sources import (
     EISVSyncSource,
     MetricsSeriesSource,
     CheckinSource,
-    CHRONICLER_SERIES_NAMES,
+    PRODUCT_PROGRESS_SERIES,
+    progress_series_names,
 )
 
 
@@ -98,29 +100,75 @@ async def test_eisv_sync_source_filters_by_event_type(test_db):
     assert out == {"33333333-0000-0000-0000-000000000003": 0}
 
 
-def test_chronicler_series_names_includes_tokei():
-    assert "tokei.unitares.src.code" in CHRONICLER_SERIES_NAMES
+@pytest.fixture
+def restore_progress_catalog():
+    catalog = importlib.import_module("src.fleet_metrics.catalog")
+
+    saved = dict(catalog.catalog)
+    saved_progress = set(catalog.progress_series)
+    try:
+        yield catalog
+    finally:
+        catalog.catalog.clear()
+        catalog.catalog.update(saved)
+        catalog.progress_series.clear()
+        catalog.progress_series.update(saved_progress)
 
 
-def test_chronicler_series_names_are_all_backed_by_a_scraper():
-    """Every name in CHRONICLER_SERIES_NAMES must be a key Chronicler actually
-    writes (a SCRAPERS entry). The two lists are hand-kept in sync via a comment
-    in sources.py; without this guard a rename/removal on the Chronicler side
-    leaves MetricsSeriesSource querying a series name nobody writes, which
-    returns 0 forever with no error — the silent-zero failure the comment warns
-    about.
+def test_product_progress_series_are_core_catalog_metrics():
+    """Each shipped name is a product metric every install can produce."""
+    from src.fleet_metrics.catalog import catalog
 
-    Subset, not equality: SCRAPERS also contains the github.* traffic series,
-    which are deliberately excluded from CHRONICLER_SERIES_NAMES (they're
-    repo-traffic signals, not resident-progress signals).
+    missing = [n for n in PRODUCT_PROGRESS_SERIES if n not in catalog]
+    assert not missing, f"not in the core catalog: {missing}"
+
+
+def test_residentless_install_counts_only_product_series(restore_progress_catalog):
+    restore_progress_catalog.progress_series.clear()
+    assert progress_series_names() == PRODUCT_PROGRESS_SERIES
+
+
+def test_reference_catalog_keeps_the_five_series_the_verdict_was_built_on(
+    restore_progress_catalog,
+):
+    """With the reference Chronicler's extra catalog loaded, the source counts
+    exactly the five series it counted when the list was a constant in this
+    module, so the progress verdict for that deployment is unchanged. The
+    github.* traffic series stay out: they measure the repo, not the resident.
     """
+    from pathlib import Path
+
+    catalog = restore_progress_catalog
+    catalog.progress_series.clear()
+    ref = Path(__file__).resolve().parents[2] / "agents/chronicler/metrics_catalog.json"
+    catalog.load_extra_catalog(ref)
+    assert set(progress_series_names()) == {
+        "tokei.unitares.src.code",
+        "tests.unitares.count",
+        "agents.active.7d",
+        "kg.entries.count",
+        "checkins.7d",
+    }
+
+
+def test_progress_series_are_all_backed_by_a_scraper(restore_progress_catalog):
+    """Every counted name must be a key Chronicler actually writes (a SCRAPERS
+    entry). Without this guard a rename on the Chronicler side leaves
+    MetricsSeriesSource querying a series nobody writes, which returns 0
+    forever with no error.
+    """
+    from pathlib import Path
+
     from agents.chronicler.scrapers import SCRAPERS
 
-    orphans = sorted(n for n in CHRONICLER_SERIES_NAMES if n not in SCRAPERS)
+    catalog = restore_progress_catalog
+    catalog.progress_series.clear()
+    ref = Path(__file__).resolve().parents[2] / "agents/chronicler/metrics_catalog.json"
+    catalog.load_extra_catalog(ref)
+    orphans = sorted(n for n in progress_series_names() if n not in SCRAPERS)
     assert not orphans, (
-        f"CHRONICLER_SERIES_NAMES entries with no backing scraper: {orphans}. "
-        "A series name here must match a key in agents/chronicler/scrapers.py "
-        "SCRAPERS, or MetricsSeriesSource will silently count zero for it."
+        f"progress series with no backing scraper: {orphans}. A counted name "
+        "must match a key in agents/chronicler/scrapers.py SCRAPERS."
     )
 
 
