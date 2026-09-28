@@ -468,21 +468,30 @@ def _knowledge_store_recovery(
 
         # _split_note_text: a note up to MAX_SUMMARY_LEN is stored whole as
         # the summary; a longer one is split at a nearby sentence or word
-        # boundary, its start in summary and the rest in details, both
-        # trimmed. Only the two joined give back the text that was sent.
-        pair = "your note's text (the row's summary and details joined)"
+        # boundary, or at the limit inside a word when none is near, its
+        # start in summary and the rest in details, both trimmed. The trim
+        # drops whatever whitespace the split fell on (a newline, a run of
+        # spaces) and a cut inside a word had none, so no single joiner
+        # gives back the text sent; only a whitespace-blind compare does.
+        pair = (
+            "your note's text (its summary and details compared with "
+            "whitespace ignored)"
+        )
         match = "your note's text"
         same = "the same note"
         yours = (
             f"your note's text: a note up to {MAX_SUMMARY_LEN} characters is "
             "stored whole as the summary, and a longer one is split at a "
-            "nearby sentence or word boundary, its start in summary and the "
-            "rest in details, both trimmed, so join a row's summary and "
-            "details and compare that with your text. A note over "
+            "nearby sentence or word boundary, or inside a word when none is "
+            "near, its start in summary and the rest in details, both "
+            "trimmed. The split drops the whitespace it falls on, so compare "
+            "with whitespace ignored: remove every whitespace character from "
+            "your text and from the row's summary followed by its details, "
+            "and compare the two. A note over "
             f"{note_total} characters is first cut to its first {note_total} "
             "characters followed by '... [truncated]', and that is what the "
-            "joined text holds. A row whose joined text differs is not this "
-            "call's"
+            "row holds. A row whose text differs by more than whitespace is "
+            "not this call's"
         )
     else:
         pair = "your summary and details together"
