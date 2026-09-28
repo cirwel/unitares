@@ -264,6 +264,12 @@ def _clean_auto_merge(merge: str, pr_side: str, base_side: str) -> bool:
     proc = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
                            pr_side, base_side], capture_output=True, text=True)
     if proc.returncode != 0:  # 1 = conflicts; anything else = cannot tell
+        if proc.returncode != 1:
+            # Fail closed, but say so: CI (a recent git) may carry a review or
+            # an open finding that this machine cannot see.
+            print(f"[review] cannot check base merge {merge[:12]} (git merge-tree "
+                  f"exit {proc.returncode}; needs git 2.38+): no review is carried "
+                  "across it here, though CI may carry one", file=sys.stderr)
         return False
     auto_tree = proc.stdout.split("\n", 1)[0].strip()
     return bool(auto_tree) and auto_tree == git("rev-parse", f"{merge}^{{tree}}").strip()
@@ -1677,7 +1683,7 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
                     # The caller's later checks (the second-family pass) key on
                     # `key`. Give them CI's own set under it: the fetched head's
                     # chain and the fetched head itself.
-                    _CARRY[(repo, pr)] = (key, [*((k, c) for k, c in equivalents if k != key),
+                    _CARRY[(repo, pr)] = (key, [*((k, c) for k, c in equivalents if c != head),
                                                 (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest

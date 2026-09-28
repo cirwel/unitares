@@ -267,6 +267,45 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
         _git(carry_repo, "rev-parse", "master")
 
 
+def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, monkeypatch):
+    # The independent review on #2568: the reviewed head H is itself a base
+    # merge over H0 with the same key. CI at the new head M1 reads native
+    # reviews of H and H0, so the view after the handoff drops only H (read by
+    # the caller directly), never H0.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    h0 = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "other.txt").write_text("y\n")
+    _git(carry_repo, "commit", "-q", "-am", "master edits a file the PR does not")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    h = _git(carry_repo, "rev-parse", "HEAD")
+    assert rg.diff_key("master", "HEAD") == key
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (key, [(key, h0)])})
+    assert completed_review_exit("o/r", 1, key, h, 0) == 0
+    m1 = (rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD"))
+    assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
+
+
+def test_a_base_merge_git_cannot_check_is_refused_and_reported(monkeypatch, capsys):
+    # git older than 2.38 has no merge-tree --write-tree (exit 129): nothing is
+    # carried, and the author is told CI may see what this machine cannot.
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, 129, "", "usage"))
+    assert rg._clean_auto_merge("abc123", "p", "b") is False
+    assert "needs git 2.38+" in capsys.readouterr().err
+
+
 def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):
     # Codex on #2568: a second family that reviewed the merged head during the
     # handoff passes in CI, so the second-family pass after it must see it too.
