@@ -30,6 +30,7 @@ from .inference_registry import (
     sha256_text as _sha256_text,
 )
 from src.local_inference_env import (
+    no_redirect_http_client,
     ENDPOINT_NOT_LOCAL,
     classify_endpoint,
     local_refusal_message,
@@ -557,6 +558,9 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             api_key=api_key,
             timeout=request.timeout_s,
             max_retries=0,
+            # Never follow a redirect: the prompt would go to a host nothing
+            # classified (see no_redirect_http_client).
+            http_client=no_redirect_http_client(),
         )
         try:
             async with asyncio.timeout(request.timeout_s):

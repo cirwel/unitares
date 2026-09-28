@@ -554,3 +554,137 @@ def test_installer_warns_when_the_endpoint_will_classify_external(capsys):
     assert choose_model.print_privacy_note(
         "http://vllm:8000/v1", {"UNITARES_MODEL_LOCAL_HOSTS": "vllm"}
     ) is True
+
+
+# --- redirects never carry a local prompt to an unclassified host -------------
+
+
+class _RedirectHarness:
+    """A local server that 307s every POST to a second server, which records hits."""
+
+    def __init__(self):
+        import http.server
+        import threading
+
+        harness = self
+        self.target_hits = 0
+
+        class Target(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                harness.target_hits += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *a):
+                pass
+
+        self.target = http.server.HTTPServer(("127.0.0.1", 0), Target)
+        target_url = f"http://127.0.0.1:{self.target.server_address[1]}"
+
+        class Redirector(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(length)
+                self.send_response(307)
+                self.send_header("Location", target_url + self.path)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        self.redirector = http.server.HTTPServer(("127.0.0.1", 0), Redirector)
+        self.base = f"http://127.0.0.1:{self.redirector.server_address[1]}/v1"
+        self.threads = [
+            threading.Thread(target=s.serve_forever, daemon=True)
+            for s in (self.target, self.redirector)
+        ]
+        for t in self.threads:
+            t.start()
+
+    def close(self):
+        for s in (self.target, self.redirector):
+            s.shutdown()
+            s.server_close()
+
+
+@pytest.mark.asyncio
+async def test_a_redirect_from_a_local_endpoint_is_not_followed(monkeypatch):
+    from src.mcp_handlers.support import model_inference
+
+    harness = _RedirectHarness()
+    try:
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", harness.base)
+        outcome = await model_inference.run_model_inference(
+            model_inference.CallModelRequest(
+                prompt="secret", requesting_agent_uuid=None, provider="ollama", privacy="local",
+                timeout_s=5,
+            )
+        )
+        assert not outcome.ok
+        assert harness.target_hits == 0
+    finally:
+        harness.close()
+
+
+def test_every_local_route_client_refuses_redirects():
+    from src.local_inference_env import no_redirect_http_client
+
+    assert no_redirect_http_client().follow_redirects is False
+    assert no_redirect_http_client(asynchronous=False).follow_redirects is False
+    for path in (
+        "src/mcp_handlers/support/model_inference.py",
+        "src/mcp_handlers/support/llm_delegation.py",
+        "agents/dialectic_reviewer/reviewer.py",
+        "agents/local_resident/runner.py",
+    ):
+        with open(path, encoding="utf-8") as fh:
+            assert "http_client=no_redirect_http_client(" in fh.read(), path
+
+
+def test_installer_classifies_with_the_settings_compose_will_pass(monkeypatch):
+    """A classifier setting exported in the shell outranks the env file in
+    Compose, so the installer's check must read it the same way."""
+    import sys as _sys
+
+    _sys.path.insert(0, "scripts/install")
+    import choose_model
+
+    env_text = "UNITARES_MODEL_PRIVACY=local\n"
+    monkeypatch.delenv("UNITARES_MODEL_PRIVACY", raising=False)
+    assert choose_model.composed_classifier_values(env_text)["UNITARES_MODEL_PRIVACY"] == "local"
+    monkeypatch.setenv("UNITARES_MODEL_PRIVACY", "external")
+    values = choose_model.composed_classifier_values(env_text)
+    assert values["UNITARES_MODEL_PRIVACY"] == "external"
+    assert choose_model.endpoint_is_local("http://host.docker.internal:11434/v1", values)[0] is False
+
+
+def test_the_availability_probe_has_one_budget_across_addresses(monkeypatch):
+    import time as _time
+
+    from src.mcp_handlers.support import inference_registry
+
+    addresses = [(2, 1, 6, "", (f"10.0.0.{i}", 11434)) for i in range(1, 9)]
+    monkeypatch.setattr(inference_registry.socket, "getaddrinfo", lambda *a, **k: addresses)
+
+    class SlowSocket:
+        def __init__(self, *a):
+            self.timeout = None
+
+        def settimeout(self, t):
+            self.timeout = t
+
+        def connect_ex(self, _addr):
+            _time.sleep(self.timeout)
+            return 1
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(inference_registry.socket, "socket", SlowSocket)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://models.internal:11434/v1")
+    started = _time.monotonic()
+    assert inference_registry._probe_ollama_socket() is False
+    assert _time.monotonic() - started < 0.9

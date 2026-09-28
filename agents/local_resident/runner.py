@@ -18,7 +18,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-from src.local_inference_env import default_local_model, model_base_url, require_local_endpoint
+from src.local_inference_env import (
+    default_local_model,
+    model_base_url,
+    no_redirect_http_client,
+    require_local_endpoint,
+)
 
 # Localhost Ollama's OpenAI-compatible endpoint. Not the server's `call_model`
 # tool: that carries a 30s timeout, and a small local model routinely needs
@@ -76,7 +81,12 @@ async def call_local_model(
     # EndpointNotLocalError, before any request, when the endpoint does not
     # classify local (see src/local_inference_env.classify_endpoint).
     require_local_endpoint(OLLAMA_BASE_URL)
-    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    client = AsyncOpenAI(
+        base_url=OLLAMA_BASE_URL,
+        api_key="ollama",
+        # A redirect would re-send the prompt to an unclassified host.
+        http_client=no_redirect_http_client(),
+    )
     resp = await client.chat.completions.create(
         model=model or DEFAULT_MODEL,
         messages=[{"role": "user", "content": prompt}],

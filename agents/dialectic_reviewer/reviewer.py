@@ -36,6 +36,7 @@ from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
 from src.local_inference_env import (
+    no_redirect_http_client,
     EndpointNotLocalError,
     default_local_model,
     model_base_url,
@@ -750,7 +751,12 @@ async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
     # privacy='local' by nature: raises EndpointNotLocalError, before any
     # request, when the endpoint does not classify local.
     require_local_endpoint(OLLAMA_BASE_URL)
-    client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
+    client = AsyncOpenAI(
+        base_url=OLLAMA_BASE_URL,
+        api_key="ollama",
+        # A redirect would re-send the thesis to an unclassified host.
+        http_client=no_redirect_http_client(),
+    )
     kwargs: dict[str, Any] = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],

@@ -125,6 +125,9 @@ _OLLAMA_PROBE_TTL_S = 5.0
 _ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": False}
 
 
+_OLLAMA_PROBE_BUDGET_S = 0.5
+
+
 def _probe_ollama_socket() -> bool:
     """True when a TCP connection to the configured endpoint succeeds.
 
@@ -134,17 +137,23 @@ def _probe_ollama_socket() -> bool:
     whether the endpoint is local is decided from its URL, never from DNS.
     """
     host, port = _ollama_host_port()
+    # One budget for the whole probe, not per address: a name with several
+    # A/AAAA records must not stretch it to 0.5 s x the record count.
+    deadline = time.monotonic() + _OLLAMA_PROBE_BUDGET_S
     try:
         addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except Exception:
         return False
     for family, socktype, proto, _canon, sockaddr in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
         try:
             sock = socket.socket(family, socktype, proto)
         except Exception:
             continue
         try:
-            sock.settimeout(0.5)
+            sock.settimeout(remaining)
             if sock.connect_ex(sockaddr) == 0:
                 return True
         except Exception:

@@ -323,6 +323,23 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
+def no_redirect_http_client(asynchronous: bool = True):
+    """An httpx client that does not follow redirects, for the OpenAI SDK.
+
+    The SDK follows redirects by default and re-sends the POST, prompt
+    included, to the new location. The endpoint was classified from its own
+    URL, so a 307 or 308 to another host would carry a local-privacy prompt
+    somewhere nothing checked. An OpenAI-compatible server has no reason to
+    redirect a completion call; with this client the redirect is returned as
+    an error instead. httpx is imported here so this module stays importable
+    without it.
+    """
+    import httpx
+
+    cls = httpx.AsyncClient if asynchronous else httpx.Client
+    return cls(follow_redirects=False)
+
+
 class EndpointNotLocalError(RuntimeError):
     """A privacy='local' request met an endpoint the server does not call local."""
 

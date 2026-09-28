@@ -261,6 +261,16 @@ def endpoint_is_local(base: str, env_values: dict[str, str | None]) -> tuple[boo
                 os.environ[key] = value
 
 
+def composed_classifier_values(env_text: str) -> dict[str, str | None]:
+    """The classifier settings the container will get, as ``compose()`` runs it:
+    a variable exported in this shell outranks the env file, as in Compose."""
+    values: dict[str, str | None] = {}
+    for key in _CLASSIFIER_KEYS:
+        exported = os.environ.get(key)
+        values[key] = exported if exported is not None else read_env_value(env_text, key)
+    return values
+
+
 def print_privacy_note(base: str, env_values: dict[str, str | None]) -> bool:
     """Warn when the endpoint will classify external; True when it is local."""
     is_local, reason = endpoint_is_local(base, env_values)
@@ -339,9 +349,7 @@ def main(argv: list[str] | None = None) -> int:
     alias = read_env_value(before, ALIAS_KEY)
     if alias:
         print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}. {BASE_KEY} takes precedence; remove the other line to avoid confusion.")
-    endpoint_local = print_privacy_note(
-        server_base, {key: read_env_value(before, key) for key in _CLASSIFIER_KEYS}
-    )
+    endpoint_local = print_privacy_note(server_base, composed_classifier_values(before))
 
     if args.no_rebuild:
         print("  Rebuild to apply: docker compose up -d --build governance-mcp")

@@ -46,6 +46,7 @@ from .inference_registry import (
     sha256_text,
 )
 from src.local_inference_env import (
+    no_redirect_http_client,
     classify_endpoint,
     is_ollama_endpoint,
     local_refusal_message,
@@ -68,7 +69,9 @@ def _get_ollama_client() -> Optional[Any]:
         # The endpoint's OpenAI-compatible API, same base as call_model's local route
         return OpenAI(
             base_url=model_base_url(),
-            api_key="ollama"  # Required by SDK but ignored by Ollama
+            api_key="ollama",  # Required by SDK but ignored by Ollama
+            # A redirect would re-send the prompt to an unclassified host.
+            http_client=no_redirect_http_client(asynchronous=False),
         )
     except Exception as e:
         logger.debug(f"Ollama client not available: {e}")
