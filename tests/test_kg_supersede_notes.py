@@ -206,6 +206,9 @@ async def test_an_edit_that_lands_while_the_edge_is_created_is_kept(handler_env)
     [
         (_old(details="b" * MAX_UPDATED_DETAILS_LEN), "no longer leave room"),
         (None, "could not be read again"),
+        # Codex on #2569: low on the first read, critical by the flip; the
+        # caller is not its owner, so the owner rule applies as it stands then.
+        (_old(severity="critical"), "raised to high or critical"),
     ],
 )
 async def test_notes_that_no_longer_fit_leave_the_flip_and_say_so(
@@ -221,6 +224,24 @@ async def test_notes_that_no_longer_fit_leave_the_flip_and_say_so(
     warning = data["resolution_notes_warning"]
     assert "were not appended" in warning and reason in warning
     assert "'response_type': 'supersedes'" in warning
+
+
+@pytest.mark.asyncio
+async def test_the_owner_keeps_its_notes_when_the_finding_is_raised_meanwhile(handler_env):
+    """The re-check on the fresh read refuses only a non-owner."""
+    calls: list[str] = []
+    graph = _graph_with_reads(_old(), _old(severity="critical"), calls=calls)
+    with (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("owner-1", None),
+        ),
+        patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True),
+    ):
+        data = await _supersede(graph, resolution_notes="why")
+    assert calls == ["read", "edge", "read", "flip"]
+    assert data["resolution_notes_appended_to"] == "old-1"
+    assert "resolution_notes_warning" not in data
 
 
 # ---------------------------------------------------------------------------

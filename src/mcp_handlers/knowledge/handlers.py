@@ -5458,6 +5458,39 @@ def _supersede_notes_block_details(
     return updates["details"]
 
 
+def _authorize_supersede_notes(
+    request: _KnowledgeUpdateRequest, finding: DiscoveryNode, old_id: str
+) -> None:
+    """Refuse notes on a high or critical finding from anyone but its owner.
+
+    Run on the first read, before the supersede writes anything, and again on
+    the read taken just before the flip: a finding raised to high or critical
+    in between is held to the rule as it stands then. Raises
+    _UpdateResponseError.
+    """
+    agent_id = _resolve_update_writer(request, finding)
+    if _effective_update_severity(request, finding) in _GATED_SEVERITIES:
+        _require_owned_binding(request, agent_id)
+        if finding.agent_id != agent_id:
+            raise _UpdateResponseError(
+                error_response(
+                    f"Permission denied on high-severity discovery '{old_id}': "
+                    "a supersede appends resolution_notes to its details, and "
+                    "only its owner may add notes while superseding it. "
+                    "Nothing was changed.",
+                    recovery={
+                        "action": (
+                            "Record your correction and its rationale as a "
+                            "finding that responds to this one (response_to={"
+                            f"'discovery_id': '{old_id}', 'response_type': "
+                            "'supersedes'})."
+                        ),
+                        "related_tools": ["knowledge", "search_knowledge_graph"],
+                    },
+                )
+            )
+
+
 async def _prepare_supersede_notes(
     arguments: Dict[str, Any], graph: Any, new_id: str, old_id: str, note: str
 ) -> Optional[_KnowledgeUpdateRequest]:
@@ -5494,27 +5527,7 @@ async def _prepare_supersede_notes(
         tags=None,
         superseded_by=new_id,
     )
-    agent_id = _resolve_update_writer(request, old)
-    if _effective_update_severity(request, old) in _GATED_SEVERITIES:
-        _require_owned_binding(request, agent_id)
-        if old.agent_id != agent_id:
-            raise _UpdateResponseError(
-                error_response(
-                    f"Permission denied on high-severity discovery '{old_id}': "
-                    "a supersede appends resolution_notes to its details, and "
-                    "only its owner may add notes while superseding it. "
-                    "Nothing was changed.",
-                    recovery={
-                        "action": (
-                            "Record your correction and its rationale as a "
-                            "finding that responds to this one (response_to={"
-                            f"'discovery_id': '{old_id}', 'response_type': "
-                            "'supersedes'})."
-                        ),
-                        "related_tools": ["knowledge", "search_knowledge_graph"],
-                    },
-                )
-            )
+    _authorize_supersede_notes(request, old, old_id)
     _supersede_notes_block_details(request, old)
     return request
 
@@ -5526,14 +5539,22 @@ async def _supersede_flip_details(
 
     Read after the edge is created and just before the flip, so the window
     in which a concurrent edit can be overwritten is the read-then-write gap
-    an update has, not that gap plus the edge work. The bound is checked
-    again on the fresh read: if the details grew past it meanwhile, or the
-    finding is gone, the flip goes ahead without notes and ``problem`` says
-    why.
+    an update has, not that gap plus the edge work. The bound and the owner
+    rule are checked again on the fresh read: if the details grew past the
+    bound meanwhile, the finding was raised to high or critical and the
+    caller is not its owner, or the finding is gone, the flip goes ahead
+    without notes and ``problem`` says why.
     """
     latest = await graph.get_discovery(old_id)
     if latest is None:
         return None, f"'{old_id}' could not be read again before the flip."
+    try:
+        _authorize_supersede_notes(request, latest, old_id)
+    except _UpdateResponseError:
+        return None, (
+            f"'{old_id}' was raised to high or critical while the supersede "
+            "ran, and only its owner may add notes to it now."
+        )
     try:
         return _supersede_notes_block_details(request, latest), None
     except _UpdateResponseError:
