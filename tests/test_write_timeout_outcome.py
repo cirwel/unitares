@@ -1618,3 +1618,33 @@ def test_a_note_is_matched_on_its_text_as_the_split_stores_it():
     assert "split at a nearby sentence or word boundary" in recovery["workflow"][1]
     assert f"up to {MAX_SUMMARY_LEN} characters" in recovery["workflow"][1]
     assert joined in recovery["workflow"][2]
+
+
+
+def test_an_oversized_note_is_matched_on_its_truncated_text():
+    """A note over the combined limit is cut to it and marked before the
+    split, so its joined summary and details never equal the text sent; the
+    recovery names that transformation, or a saved note reads as absent."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+    from src.mcp_handlers.knowledge.handlers import (
+        _NOTE_TOTAL_LEN,
+        _split_note_text,
+        _truncate_note_text,
+    )
+
+    text = ("Word " * (_NOTE_TOTAL_LEN // 5 + 50)).strip()
+    stored = _truncate_note_text(text)
+    summary, details = _split_note_text(stored)
+    assert " ".join([summary, details]) == text[:_NOTE_TOTAL_LEN] + "... [truncated]"
+
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND_UUID):
+        recovery = _unknown_outcome_recovery(
+            CallOperation(operation="write", tool="knowledge", action="note"),
+            {"action": "note", "summary": "s"},
+            call_started_at="2026-09-27T00:00:00+00:00",
+            settled_by="2026-09-27T00:00:40+00:00",
+        )
+    step = recovery["workflow"][1]
+    assert f"A note over {_NOTE_TOTAL_LEN} characters is first cut" in step
+    assert "'... [truncated]'" in step

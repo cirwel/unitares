@@ -460,7 +460,11 @@ def _knowledge_store_recovery(
         call.tool == "knowledge" and call.action == "note"
     )
     if is_note:
-        from .knowledge.limits import MAX_SUMMARY_LEN
+        from .knowledge.limits import MAX_DETAILS_LEN, MAX_SUMMARY_LEN
+
+        # _truncate_note_text runs first: a note over the combined limit is
+        # cut to it and marked, and only then split.
+        note_total = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
 
         # _split_note_text: a note up to MAX_SUMMARY_LEN is stored whole as
         # the summary; a longer one is split at a nearby sentence or word
@@ -474,8 +478,11 @@ def _knowledge_store_recovery(
             "stored whole as the summary, and a longer one is split at a "
             "nearby sentence or word boundary, its start in summary and the "
             "rest in details, both trimmed, so join a row's summary and "
-            "details and compare that with your text; a row whose joined text "
-            "differs is not this call's"
+            "details and compare that with your text. A note over "
+            f"{note_total} characters is first cut to its first {note_total} "
+            "characters followed by '... [truncated]', and that is what the "
+            "joined text holds. A row whose joined text differs is not this "
+            "call's"
         )
     else:
         pair = "your summary and details together"
