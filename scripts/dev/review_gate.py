@@ -1656,6 +1656,9 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # The record is diff-bound: message amendments and base-only merges
         # remain valid. Use the fetched head, not an API SHA from before a push.
         current = diff_key(base_ref, head_ref) == key
+        # A base merge GitHub made during the review is the same PR change,
+        # as CI's carry decides it; the reviewed diff is still the current one.
+        current = current or key in {k for k, _ in base_merge_equivalents(base_ref, head_ref)}
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED

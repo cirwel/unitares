@@ -179,6 +179,30 @@ def test_a_base_merge_next_to_the_pr_moves_the_raw_key_but_carries_the_review(ca
     assert carried == {"reviewed": reviewed_head}
 
 
+@pytest.mark.parametrize("pr_edit,expected", [(False, 0), (True, 2)])
+def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeypatch,
+                                                             pr_edit, expected):
+    # Codex on #2568: CI carries the review across GitHub's base merge, so the
+    # local handoff must not report the same diff UNREVIEWED.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        if pr_edit:
+            (carry_repo / "f.txt").write_text(
+                "ONE on master\ntwo\nTHREE edited again\nfour\nfive\n")
+            _git(carry_repo, "commit", "-q", "-am", "unreviewed edit")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == expected
+    assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
+
+
 def test_no_earlier_record_means_nothing_decides(carry_repo):
     _master_edits_next_to_the_pr(carry_repo)
     _git(carry_repo, "merge", "-q", "--no-edit", "master")
