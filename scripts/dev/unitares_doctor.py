@@ -228,9 +228,12 @@ def check_postgres_running(db_url: str) -> CheckResult:
     if rc == 0:
         return CheckResult(name, mode, Status.PASS, f"reachable at {_redact(db_url)}")
     return CheckResult(name, mode, Status.FAIL,
-                       f"pg_isready failed (rc={rc}); start PostgreSQL "
-                       f"(`docker compose up -d postgres-age`, or "
-                       f"`brew services start postgresql@17` on a Homebrew install)")
+                       f"pg_isready failed (rc={rc}) against {_redact(db_url)}; if this is a "
+                       f"`docker compose up` install, its postgres-age container doesn't publish "
+                       f"a host port by default (see docs/DEPLOYMENT_SECURITY.md) — check "
+                       f"`docker compose ps` instead of this probe, or use "
+                       f"docker-compose.admin.yml to make it reachable here too. Otherwise, "
+                       f"`brew services start postgresql@17` on a Homebrew install")
 
 
 def check_redis_continuity(redis_url: str) -> CheckResult:

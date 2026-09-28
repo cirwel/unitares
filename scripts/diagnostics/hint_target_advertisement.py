@@ -43,10 +43,10 @@ a baseline can be rubber-stamped green. Do not broaden the surface to clear a
 finding either.
 
 Two of those 37 were not renames and are worth knowing about, because they are
-the shape a blind replacement gets wrong. `get_agent_api_key` has no handler
-at all -- it is an alias entry pointing at `identity`, which returns a uuid and
-has no API-key parameter -- so two hints were instructing a call that cannot
-dispatch, for a credential the alias's own migration note calls deprecated.
+the shape a blind replacement gets wrong. `get_agent_api_key` had no handler
+at all -- it was an alias entry pointing at `identity`, which returns a uuid and
+has no API-key parameter, and the alias itself was removed on 2026-09-28 --
+so two hints were instructing a call that could not dispatch, for a credential the alias's own migration note calls deprecated.
 Those needed the guidance corrected to the current UUID-is-auth model, not the
 name swapped.
 

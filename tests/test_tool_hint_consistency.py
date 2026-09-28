@@ -3,7 +3,6 @@ from pathlib import Path
 from src.mcp_handlers.support.tool_hints import (
     KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW,
     KNOWLEDGE_SEARCH_SUGGESTION,
-    KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE,
     KNOWLEDGE_SEARCH_TOOL,
 )
 
@@ -12,7 +11,6 @@ def test_canonical_knowledge_hint_strings_are_stable():
     assert KNOWLEDGE_SEARCH_TOOL == "knowledge"
     assert "knowledge(action='search')" in KNOWLEDGE_SEARCH_SUGGESTION
     assert "knowledge(action='search'" in KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW
-    assert "semantic=true" in KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
 
 
 def test_no_legacy_search_guidance_strings_in_key_handlers():

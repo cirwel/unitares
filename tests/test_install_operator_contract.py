@@ -362,3 +362,56 @@ def test_published_sdk_and_rest_envelope_are_current() -> None:
     assert "Until its first PyPI release" not in compatibility
     assert "-d '{\"name\":\"<tool_name>\"" in manual
     assert "-d '{\"tool\":\"<tool_name>\"" not in manual
+
+
+def _compose_service_block(compose: str, name: str, next_name: str) -> str:
+    return compose.split(f"\n  {name}:\n", 1)[1].split(f"\n  {next_name}:\n", 1)[0]
+
+
+def test_compose_hardening_stays_applied() -> None:
+    """Regression guard for docker-compose.yml's container hardening.
+
+    Pins the properties that don't fail loudly if they regress: a re-added
+    `ports:` on postgres-age/redis silently republishes a default-credential
+    database, and a dropped `cap_drop`/`security_opt` silently loosens
+    container privileges. Neither breaks `docker compose up`, so nothing
+    else would catch either regression.
+    """
+    compose = _read("docker-compose.yml")
+    postgres = _compose_service_block(compose, "postgres-age", "redis")
+    redis = _compose_service_block(compose, "redis", "lease-plane")
+    lease_plane = compose.split("\n  lease-plane:\n", 1)[1].split(
+        "\n  governance-mcp:\n", 1
+    )[0]
+    governance_mcp = compose.split("\n  governance-mcp:\n", 1)[1].split(
+        "\nvolumes:\n", 1
+    )[0]
+
+    for name, block in (
+        ("postgres-age", postgres),
+        ("redis", redis),
+        ("lease-plane", lease_plane),
+        ("governance-mcp", governance_mcp),
+    ):
+        assert "security_opt:" in block, f"{name} lost security_opt"
+        assert "no-new-privileges:true" in block, f"{name} lost no-new-privileges"
+        assert "cap_drop:" in block, f"{name} lost cap_drop"
+        assert "- ALL" in block, f"{name} lost cap_drop: ALL"
+
+    # postgres-age and redis must not publish a host port from the base file —
+    # that's the whole point of the admin overlay.
+    assert "ports:" not in postgres, "postgres-age republishes a host port"
+    assert "ports:" not in redis, "redis republishes a host port"
+    # lease-plane and governance-mcp are meant to keep publishing.
+    assert '"127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"' in lease_plane
+    assert '"127.0.0.1:${GOVERNANCE_HOST_PORT:-8767}:8767"' in governance_mcp
+
+    # redis needs these specific capabilities back to drop its own privileges
+    # correctly (see the comment above cap_add in docker-compose.yml); losing
+    # any of them regresses to running redis-server as root.
+    for cap in ("SETUID", "SETGID", "CHOWN", "FOWNER"):
+        assert f"- {cap}" in redis, f"redis lost cap_add: {cap}"
+
+    admin_overlay = _read("docker-compose.admin.yml")
+    assert '"127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"' in admin_overlay
+    assert '"127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"' in admin_overlay

@@ -108,8 +108,12 @@ def test_mcp_can_be_closed_without_locking_out_loopback(monkeypatch):
     and CLI on this machine keep working exactly as before."""
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", BEARER)
     monkeypatch.setenv("UNITARES_REST_STRICT", "0")
+    # A tailnet is trusted only when the operator lists it (not built in).
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
     assert _check_http_auth(_Req(ip="127.0.0.1"), http_api_token=LOCAL_TOKEN) is True
-    assert _check_http_auth(_Req(ip="100.96.201.46"), http_api_token=LOCAL_TOKEN) is True
+    assert _check_http_auth(_Req(ip="100.101.102.103"), http_api_token=LOCAL_TOKEN) is True
+    monkeypatch.delenv("UNITARES_TRUSTED_NETWORKS")
+    assert _check_http_auth(_Req(ip="100.101.102.103"), http_api_token=LOCAL_TOKEN) is False
 
 
 def test_decoupled_rest_still_denies_the_public_internet(monkeypatch):

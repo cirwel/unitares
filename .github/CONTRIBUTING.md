@@ -17,7 +17,7 @@ lease plane to the release image named by `VERSION` and pulls it when it is
 missing, so without `--build` you would run that release's lease plane rather
 than the code in your tree. CI's Docker quickstart job always builds from source.
 
-If you already have services on `5432`, `6379`, or `8767`, either skip Compose when a local UNITARES server is already live, or set `POSTGRES_HOST_PORT`, `REDIS_HOST_PORT`, `GOVERNANCE_HOST_PORT`, and `UNITARES_DEMO_PORT` to use alternate host ports.
+If you already have a service on `8767`, either skip Compose when a local UNITARES server is already live, or set `GOVERNANCE_HOST_PORT` and `UNITARES_DEMO_PORT` to an alternate host port. Postgres and Redis aren't published to the host by default (see `docs/DEPLOYMENT_SECURITY.md`), so a `5432`/`6379` collision can't happen on a plain `docker compose up`; `POSTGRES_HOST_PORT`/`REDIS_HOST_PORT` only matter if you're using the opt-in `docker-compose.admin.yml` overlay.
 
 Bare-metal install (Homebrew Postgres + native Python) is in [`docs/install/PLAYBOOK.md`](../docs/install/PLAYBOOK.md). Architecture overview is in [`docs/UNIFIED_ARCHITECTURE.md`](../docs/UNIFIED_ARCHITECTURE.md).
 
