@@ -8,6 +8,8 @@ layout. An operator on such a network now lists it in UNITARES_TRUSTED_NETWORKS.
 
 from __future__ import annotations
 
+import ipaddress
+
 import pytest
 from starlette.requests import Request
 
@@ -91,6 +93,9 @@ def test_a_cidr_with_host_bits_is_refused_not_masked_wider(monkeypatch):
     # One half as IPv4-mapped IPv6, the other as IPv4: every IPv4 caller.
     ("::ffff:0:0/97,128.0.0.0/1", "::ffff:200.1.1.1"),
     ("0.0.0.0/1,::ffff:128.0.0.0/97", "::ffff:200.1.1.1"),
+    # Everything outside the built-in 10.0.0.0/8: with it, every IPv4 caller.
+    (",".join(str(n) for n in ipaddress.ip_network("0.0.0.0/0")
+              .address_exclude(ipaddress.ip_network("10.0.0.0/8"))), "8.8.8.8"),
 ])
 def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog, listed, caller):
     import logging

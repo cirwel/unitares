@@ -145,8 +145,11 @@ def extra_trusted_networks() -> tuple:
         for n in nets
         if n.version == 6 and n.subnet_of(_IPV4_MAPPED)
     ]
+    # The built-in networks are trusted too, so they count toward the union:
+    # listing everything outside 10.0.0.0/8 trusts every caller. They never
+    # cover a family on their own, so an empty setting still logs nothing.
     for version in (4, 6):
-        listed = [n for n in nets if n.version == version]
+        listed = [n for n in (*_TRUSTED_NETWORKS, *nets) if n.version == version]
         if version == 4:
             listed += mapped_v4
         for net in _ipaddress.collapse_addresses(listed):
