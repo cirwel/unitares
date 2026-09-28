@@ -509,7 +509,9 @@ def test_built_schemas_carry_no_resident_name():
     def walk(node, where: str) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in guard.SERVED_SCHEMA_KEYS and isinstance(value, (str, list)):
+                if key in guard.SERVED_SCHEMA_KEYS:
+                    # Whatever its shape (a string, a list, or a mapping such
+                    # as examples={...}), every string in it is served.
                     texts.extend((where, v) for v in every_string(value))
                 else:
                     walk(value, where)
