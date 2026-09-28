@@ -75,6 +75,12 @@ _FINDING_THE_UUID = (
 )
 
 
+# The agent actions whose target never defaults to the caller. The REST
+# prebind (http_routes/access.py) reads this set too, so that an omitted
+# agent_id still reaches _require_named_target as omitted there.
+NAMED_TARGET_ACTIONS = frozenset({"archive", "delete"})
+
+
 def _require_named_target(
     arguments: Dict[str, Any], action: str,
 ) -> Tuple[Optional[str], Optional[TextContent]]:

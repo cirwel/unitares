@@ -865,12 +865,44 @@ async def _resolve_http_bound_agent(
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
     from src.mcp_handlers.context import set_unbound_resolution
-    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     # Each prebind, nested ones included, starts with no resolver result.
     set_unbound_resolution(None)
     if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
+
+    # Every path below stamps the resolved caller into an omitted agent_id.
+    # For a call that must name its own target, that turns "no target" into
+    # "the caller", the default agent archive and delete refuse on /mcp/.
+    # Whether the caller named one is read here, before any path writes it,
+    # and the stamp is taken off again once the caller is bound. A missing
+    # key and an empty one both mean no target to the handler.
+    if _requires_named_target(tool_name, arguments) and not arguments.get("agent_id"):
+        try:
+            return await _resolve_http_bound_caller(arguments, signals, tool_name)
+        finally:
+            arguments.pop("agent_id", None)
+    return await _resolve_http_bound_caller(arguments, signals, tool_name)
+
+
+def _requires_named_target(tool_name: str, arguments: dict) -> bool:
+    """Whether this call must name its target itself: agent archive and
+    delete, invoked directly, through an alias that injects the action, or
+    nested under use_tool (whose target name arrives here)."""
+    from src.mcp_handlers.lifecycle.mutation import NAMED_TARGET_ACTIONS
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    canonical, alias = resolve_tool_alias(tool_name)
+    if canonical != "agent":
+        return False
+    action = arguments.get("action") or (alias.inject_action if alias else None)
+    return isinstance(action, str) and action.strip().lower() in NAMED_TARGET_ACTIONS
+
+
+async def _resolve_http_bound_caller(
+    arguments: dict, signals, tool_name: str,
+) -> str | None:
+    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     explicit_agent_id = await _bind_explicit_http_agent(arguments)
     if explicit_agent_id:
