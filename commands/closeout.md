@@ -36,8 +36,9 @@ and use the ship helper:
   do not ask for a second confirmation just to push or open the draft PR.
 - `./scripts/dev/ship.sh --plan "commit message"` previews the delivery route
 - `./scripts/dev/ship.sh "commit message"` is the default route: a **draft PR for
-  every change**, per `docs/operations/github-workflow-conventions.md` (the
-  operator is the merge gate). Runtime/detached work mints a fresh agent-prefixed
+  every change**, per `docs/operations/github-workflow-conventions.md`. Once CI is
+  green and the review passes, mark it ready and apply `approved-to-merge` (the
+  merge queue lands it; a `governance-sensitive` PR waits for the operator). Runtime/detached work mints a fresh agent-prefixed
   branch; non-runtime work on a named branch opens the draft PR on that branch
 - `./scripts/dev/ship.sh --direct "commit message"` opts out for docs/tests-only
   pushes where you knowingly skip the PR
