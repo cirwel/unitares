@@ -35,3 +35,15 @@ DETAILS_PREVIEW_CHARS = 500
 # to details. Measured on closure_evidence_to_json's output, the text storage
 # writes (ASCII, so characters and bytes agree).
 MAX_CLOSURE_EVIDENCE_BYTES = 8 * 1024
+
+# The details value a knowledge update may store. resolution_notes are appended
+# to details as a timestamped block, so each closing note grows the field and
+# nothing else stops it: on AGE, details is a graph-node property interpolated
+# into Cypher, where GraphMixin._sanitize_cypher_param refuses a string over
+# 128 KiB, and that refusal fails the whole update, status included, reported
+# as "Discovery not found". The handler measures the value it would store (the
+# stored details or the details the call sends, earlier notes included, plus
+# the new block) and refuses the update when it is over this bound. It sits
+# above MAX_DETAILS_LEN, so a finding stored at that cap still has room for
+# notes, and well below the Cypher limit. Characters, as both of those are.
+MAX_UPDATED_DETAILS_LEN = 96 * 1024

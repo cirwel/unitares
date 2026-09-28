@@ -46,15 +46,28 @@ if [ "$1" = "api" ]; then
       [ -f "$d/compare_default_missing" ] && exit 1
       printf '{"files":[{"filename":"f","status":"modified","sha":"b%s","patch":"@@ -1 +1 @@\\n+%s"}]}' "$sha" "$sha"
       exit 0 ;;
+    */issues/*/comments*)
+      n=$(sed -E 's#.*issues/([0-9]+)/comments.*#\1#' <<<"$*")
+      [ -f "$d/comments_$n.fail" ] && exit 1
+      cat "$d/comments_$n.txt" 2>/dev/null
+      exit 0 ;;
+    */contents/*)
+      [ -f "$d/manifest_remote.tsv" ] || exit 1
+      base64 < "$d/manifest_remote.tsv" | tr -d '\n'; echo
+      exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       [ -f "$d/timeline_$n.fail" ] && exit 1
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
       exit 0 ;;
-    */commits/*) cat "$d/base_date"; exit 0 ;;
+    */commits/*)
+      # A later read in the same tick may see master moved (base_moved).
+      if [ -f "$d/base_moved" ] && [ -f "$d/base_read_once" ]; then cat "$d/base_moved"; else cat "$d/base_date"; fi
+      : > "$d/base_read_once"
+      exit 0 ;;
   esac
 fi
-echo "$*" >> "$d/calls.log"
+printf '%s\n' "${*//$'\n'/ }" >> "$d/calls.log"
 if [ -f "$d/fail" ]; then
   while IFS= read -r pattern; do
     [ -n "$pattern" ] && [[ "$*" == *"$pattern"* ]] && exit 1
@@ -91,12 +104,17 @@ def _pr(
     draft: bool = False,
     armed_min_ago: float | None = None,
     mergeable: str = "MERGEABLE",
-    state: str = "BEHIND",
+    state: str = "BLOCKED",
     base: str = "master",
     checks: list[dict] | None = None,
     body: str = "",
     head: str | None = None,
+    review: str | None = "SUCCESS",
+    fork: bool = False,
 ) -> dict:
+    rollup = list(checks) if checks is not None else [_check("test")]
+    if review is not None:
+        rollup.append(_check("review", review, run=900))
     return {
         "number": number,
         "isDraft": draft,
@@ -107,9 +125,10 @@ def _pr(
         ),
         "baseRefName": base,
         "labels": [{"name": label} for label in labels],
-        "statusCheckRollup": checks if checks is not None else [_check("test")],
+        "statusCheckRollup": rollup,
         "body": body,
         "headRefOid": head or f"sha{number}",
+        "isCrossRepository": fork,
     }
 
 
@@ -133,6 +152,13 @@ def _timeline(labelled_min_ago: float | None = 10, pushed_min_ago: float | None 
     return events
 
 
+def _empty_manifest(tmp_path: Path) -> Path:
+    path = tmp_path / "manifest.tsv"
+    if not path.exists():
+        path.write_text("# path<TAB>symbol_regex<TAB>why\n")
+    return path
+
+
 def _run(
     tmp_path: Path,
     prs: list[dict],
@@ -153,6 +179,7 @@ def _run(
     gh.write_text(FAKE_GH)
     gh.chmod(0o755)
     (d / "prs.json").write_text(json.dumps(prs))
+    (d / "base_read_once").unlink(missing_ok=True)
     (d / "base_date").write_text(_iso(base_idle_min) + "\n")
     (d / "calls.log").write_text("")
     (d / "fail").write_text("\n".join(fail) + "\n")
@@ -185,7 +212,16 @@ def _run(
             "FAKE_GH_DIR": str(d),
             "PR_BABYSITTER_REPO": "o/r",
             "PR_QUEUE_STATE_FILE": str(state_file),
+            "PR_QUEUE_NOTIFY": "0",
+            "PR_QUEUE_SENSITIVITY_MANIFEST": str(_empty_manifest(tmp_path)),
             **env,
+        } if "PR_QUEUE_SENSITIVITY_MANIFEST_UNSET" not in env else {
+            **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
+            "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_DIR": str(d),
+            "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_STATE_FILE": str(state_file),
+            "PR_QUEUE_NOTIFY": "0",
         },
         text=True,
         capture_output=True,
@@ -234,7 +270,7 @@ def test_a_push_after_approval_makes_it_stale(tmp_path: Path) -> None:
         timelines={1: _timeline(labelled_min_ago=10, pushed_min_ago=5), 2: _timeline(8)},
     )
     assert calls == [_arm(2)]
-    assert "#1 has a commit from" in out and "re-apply approved-to-merge" in out
+    assert "#1 has a commit from" in out and "remove and re-add approved-to-merge" in out
 
 
 def test_base_update_merges_do_not_make_approval_stale(tmp_path: Path) -> None:
@@ -316,12 +352,6 @@ def test_failed_on_an_up_to_date_head_is_marked_then_rerun_once(tmp_path: Path) 
         # The retrying PR does not hold up the rest of the queue.
         _arm(10),
     ]
-
-
-def test_failed_on_a_behind_head_is_armed_for_a_fresh_run(tmp_path: Path) -> None:
-    # Re-running the stale head is wasted: GitHub re-runs everything on update.
-    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
-    assert calls == [_arm(9)]
 
 
 def test_failed_while_its_run_is_still_going_waits(tmp_path: Path) -> None:
@@ -443,7 +473,7 @@ def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
 
 
 def test_behind_holder_is_left_to_github_inside_the_grace(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=5)
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=1)
     assert calls == []
 
 
@@ -517,7 +547,8 @@ def test_a_changed_binary_file_makes_the_approval_stale(tmp_path: Path) -> None:
 def test_the_fingerprint_is_read_at_the_captured_head(tmp_path: Path) -> None:
     # Never the PR's current ref, which can move between the list and the read.
     _run(tmp_path, [_pr(1, head="aaa")])
-    assert (tmp_path / "gh" / "compares.log").read_text().split() == ["repos/o/r/compare/master...aaa"]
+    reads = (tmp_path / "gh" / "compares.log").read_text().split()
+    assert reads and set(reads) == {"repos/o/r/compare/master...aaa"}
 
 
 def test_a_compare_that_may_be_truncated_approves_nothing(tmp_path: Path) -> None:
@@ -642,7 +673,9 @@ def test_gh_list_failure_does_nothing(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 1
-    assert (d / "calls.log").read_text() == ""
+    mutations = [c for c in (d / "calls.log").read_text().splitlines()
+                 if c.startswith(("pr merge", "pr edit", "pr comment", "pr update-branch", "run rerun"))]
+    assert mutations == []
 
 
 # --- withdrawn approval -------------------------------------------------------
@@ -680,3 +713,309 @@ def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1, head="aaa")])
     assert calls == [_arm(1, "aaa"), "pr merge 1 -R o/r --disable-auto"]
     assert "could not be recorded" in out
+
+
+
+# --- the review gate ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE", "ACTION_REQUIRED"])
+def test_a_pr_whose_review_did_not_pass_is_not_armed(tmp_path: Path, state: str) -> None:
+    # NEUTRAL is the review gate's "unreviewed"; review is not a required check,
+    # so without this an agent's label would merge an unreviewed PR.
+    calls, _ = _run(tmp_path, [_pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)]), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
+
+
+def test_a_pr_with_no_review_check_yet_holds_the_order(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, review=None), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == []
+    assert "#1 waiting on review=MISSING" in out
+
+
+def test_a_pending_review_holds_the_order(tmp_path: Path) -> None:
+    pending = _pr(1, review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, out = _run(tmp_path, [pending, _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == []
+    assert "review=PENDING" in out
+
+
+def test_required_checks_are_configurable(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1)]
+
+
+@pytest.mark.parametrize("state", ["NEUTRAL", "FAILURE"])
+def test_a_script_armed_pr_whose_review_stops_passing_is_disarmed(tmp_path: Path, state: str) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("test"), _check("review", state, run=5)])
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert f"review={state} is not passing" in out
+
+
+@pytest.mark.parametrize("checks", [[_check("test")], [_check("test"), _check("review", "", status="IN_PROGRESS")]])
+def test_a_review_not_yet_passing_disarms_but_keeps_the_pr_first(tmp_path: Path, checks: list) -> None:
+    # For about a minute after GitHub updates the branch, review is missing or
+    # pending. Disarm (review is not branch-protected), but arm nothing else.
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=checks)
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "nothing else armed this tick" in out
+
+
+def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path) -> None:
+    pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "NEUTRAL")])
+    calls, _ = _run(tmp_path, [pr, _pr(4)])
+    assert calls == []
+
+
+
+def test_an_up_to_date_pr_is_only_armed(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, state="BLOCKED")])
+    assert calls == [_arm(1)]
+
+
+# --- update before arming ---------------------------------------------------------
+
+
+def test_a_behind_head_of_queue_is_updated_unarmed_and_keeps_its_place(tmp_path: Path) -> None:
+    # Arming first would leave auto-merge on across a head nothing has checked.
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "#1 updating before arming" in out
+
+
+def test_failed_on_a_behind_head_is_updated_for_a_fresh_run(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(9, state="BEHIND", checks=[_check("test", "FAILURE")])])
+    assert calls == ["pr update-branch 9 -R o/r"]
+
+
+def test_a_failed_update_is_retried_next_tick(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, state="BEHIND"), _pr(2, state="BLOCKED")],
+                      timelines={1: _timeline(12), 2: _timeline(8)}, fail=("update-branch",))
+    assert calls == ["pr update-branch 1 -R o/r"]
+    assert "retried next tick" in out
+
+
+def test_update_then_revalidate_then_arm(tmp_path: Path) -> None:
+    tl = _timeline(10, 20)
+    # Tick 1: behind, so it is updated, not armed.
+    calls, _ = _run(tmp_path, [_pr(1, head="aaa", state="BEHIND")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A})
+    assert calls == ["pr update-branch 1 -R o/r"]
+    # Tick 2: the update moved the head; review is being re-evaluated. Hold.
+    calls, out = _run(tmp_path, [_pr(1, head="bbb", review=None)], timelines={1: tl},
+                      compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == []
+    assert "review=MISSING" in out
+    # Tick 3: the new head's content matches the approval and review passed.
+    calls, _ = _run(tmp_path, [_pr(1, head="bbb")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A, "bbb": CHANGE_A_REBASED})
+    assert calls == [_arm(1, "bbb")]
+
+
+def test_a_script_armed_holder_left_behind_is_disarmed_before_updating(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=20, arms={3: 30})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+    assert "disarming to update" in out
+
+
+# --- notices on the PR -------------------------------------------------------------
+
+
+def _notices(calls: list[str]) -> list[str]:
+    return [c for c in calls if c.startswith("pr comment")]
+
+
+def test_a_conflicting_queued_pr_gets_one_notice(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="aaa")], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert len(notices) == 1
+    assert "<!-- pr-queue-notice conflicting aaa -->" in notices[0]
+    assert "remove the `approved-to-merge` label, then add it" in notices[0]
+
+
+def test_a_notice_already_on_the_pr_is_not_repeated(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.txt").write_text("<!-- pr-queue-notice conflicting aaa -->\n**Merge queue:** skipped\n")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="aaa")], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []
+
+
+def test_a_new_head_gets_a_fresh_notice(tmp_path: Path) -> None:
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.txt").write_text("<!-- pr-queue-notice conflicting aaa -->\n")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING", head="bbb")], PR_QUEUE_NOTIFY="1")
+    assert len(_notices(calls)) == 1
+
+
+def test_an_unreviewed_pr_is_told_to_run_the_review(tmp_path: Path) -> None:
+    state = "NEUTRAL"
+    pr = _pr(1, review=None, checks=[_check("test"), _check("review", state, run=5)])
+    calls, _ = _run(tmp_path, [pr], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "review.sh" in notices[0] and f"review={state}" in notices[0]
+
+
+def test_retries_exhausted_names_the_failing_checks(tmp_path: Path) -> None:
+    pr = _pr(9, labels=(LABEL, RETRIED), checks=[_check("smoke", "FAILURE")])
+    calls, _ = _run(tmp_path, [pr], PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "smoke still failing" in notices[0] and "merge-retried" in notices[0]
+
+
+def test_a_changed_approval_is_told_to_renew(tmp_path: Path) -> None:
+    tl = _timeline(10, 20)  # one timeline for both ticks: the pin is keyed on the label time
+    # Tick 1: #3 holds the slot, so #1 is only pinned at aaa.
+    _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5), _pr(1, head="aaa")],
+         timelines={1: tl}, compares={"aaa": CHANGE_A})
+    # Tick 2: #1's content changed.
+    calls, _ = _run(tmp_path, [_pr(1, head="ccc")], timelines={1: tl},
+                    compares={"aaa": CHANGE_A, "ccc": CHANGE_B}, PR_QUEUE_NOTIFY="1")
+    notices = _notices(calls)
+    assert notices and "remove the `approved-to-merge` label, then add it" in notices[0]
+
+
+def test_transient_waits_post_no_notice(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []
+
+
+def test_an_unreadable_comment_list_posts_nothing(tmp_path: Path) -> None:
+    # Without the existing comments the dedupe cannot work: post nothing
+    # rather than risk a notice on every tick.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "comments_1.fail").write_text("")
+    calls, _ = _run(tmp_path, [_pr(1, mergeable="CONFLICTING")], PR_QUEUE_NOTIFY="1")
+    assert _notices(calls) == []
+
+
+# --- operator-only PRs --------------------------------------------------------------
+
+
+def test_a_governance_sensitive_pr_is_never_armed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, labels=(LABEL, "governance-sensitive")), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)}, PR_QUEUE_NOTIFY="1")
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
+    notices = _notices(calls)
+    assert len(notices) == 1 and "operator merges it by hand" in notices[0]
+
+
+def test_a_script_armed_pr_that_becomes_governance_sensitive_is_disarmed(tmp_path: Path) -> None:
+    pr = _pr(3, labels=(LABEL, "governance-sensitive"), armed_min_ago=20)
+    calls, out = _run(tmp_path, [pr, _pr(4)], arms={3: 20})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
+    assert "only the operator merges" in out
+
+
+def test_operator_only_labels_are_configurable(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(1, labels=(LABEL, "governance-sensitive"))], PR_QUEUE_OPERATOR_ONLY_LABELS="")
+    assert calls == [_arm(1)]
+
+
+# --- sensitivity, checked by the queue itself ------------------------------------------
+
+
+def _manifest(tmp_path: Path, *rows: str) -> None:
+    (tmp_path / "manifest.tsv").write_text("# header\n" + "".join(r + "\n" for r in rows))
+
+
+def test_a_whole_file_sensitive_entry_is_never_armed_even_unlabelled(tmp_path: Path) -> None:
+    # CI's label is best-effort (a fork's token cannot apply it); the queue checks itself.
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa"), _pr(2, head="bbb")],
+                      timelines={1: _timeline(12), 2: _timeline(8)},
+                      compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
+    assert calls == [_arm(2, "bbb")]
+    assert "#1 touches a governance-sensitive surface (f)" in out
+
+
+def test_a_symbol_entry_matches_only_changed_lines(tmp_path: Path) -> None:
+    hit = _files(("f", "modified", "b1", "@@ -1 +1 @@\n-RISK_APPROVE_THRESHOLD = 0.3\n+RISK_APPROVE_THRESHOLD = 0.9"))
+    # The symbol only in an unchanged context line does not count, as in CI.
+    miss = _files(("f", "modified", "b2", "@@ -9 +9 @@\n ctx RISK_APPROVE_THRESHOLD\n-a\n+b"))
+    for sub, compare, expected in (("hit", hit, []), ("miss", miss, [_arm(1, "aaa")])):
+        d = tmp_path / sub
+        d.mkdir()
+        _manifest(d, "f\tRISK_APPROVE_THRESHOLD\trisk line")
+        calls, _ = _run(d, [_pr(1, head="aaa")], compares={"aaa": compare})
+        assert calls == expected, sub
+
+
+def test_a_sensitive_file_with_no_patch_fails_closed(tmp_path: Path) -> None:
+    _manifest(tmp_path, "f\tSOME_CONSTANT\twhy")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": _files(("f", "modified", "b1", None))})
+    assert calls == []
+    assert "no patch to check" in out
+
+
+def test_a_missing_manifest_fails_closed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST=str(tmp_path / "gone.tsv"))
+    assert calls == []
+    assert "manifest could not be read" in out
+
+
+def test_a_fork_pr_is_never_armed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1, fork=True), _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == [_arm(2)]
+    assert "#1 is labelled a fork" in out or "a fork" in out
+
+
+
+def test_a_script_armed_pr_is_disarmed_the_moment_it_is_seen_behind(tmp_path: Path) -> None:
+    # No grace: GitHub's updater can move the head within a minute, and the
+    # arm must not outlive the head it validated.
+    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=0, arms={3: 30})
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+
+
+def test_a_hand_armed_pr_just_behind_is_left_inside_the_grace(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=30, state="BEHIND")], base_idle_min=0)
+    assert calls == []
+
+
+def test_by_default_the_manifest_is_read_from_the_base_branch(tmp_path: Path) -> None:
+    # The deploy checkout can lag master; CI judges against master's manifest.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "manifest_remote.tsv").write_text("# rules\nf\t-\tanti-gaming test\n")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": CHANGE_A},
+                      PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1")
+    assert calls == []
+    assert "governance-sensitive surface (f)" in out
+
+
+def test_an_unreadable_remote_manifest_fails_closed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1")
+    assert calls == []
+    assert "manifest could not be read" in out
+
+
+def test_master_moving_mid_tick_arms_nothing(tmp_path: Path) -> None:
+    # The PR data describes the base as it stood when the tick began.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "base_moved").write_text("newbase\n")
+    calls, out = _run(tmp_path, [_pr(1)])
+    assert calls == []
+    assert "master moved during this tick" in out
+
+
+
+@pytest.mark.parametrize("stuck", ["unknown", "pending-review"])
+def test_a_sensitive_pr_never_holds_the_order(tmp_path: Path, stuck: str) -> None:
+    # It will never be armed, so neither an UNKNOWN mergeability nor a pending
+    # review on it may stall the PRs behind it.
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    if stuck == "unknown":
+        first = _pr(1, head="aaa", mergeable="UNKNOWN")
+    else:
+        first = _pr(1, head="aaa", review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, _ = _run(tmp_path, [first, _pr(2, head="bbb")], timelines={1: _timeline(12), 2: _timeline(8)},
+                    compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
+    assert calls == [_arm(2, "bbb")]
