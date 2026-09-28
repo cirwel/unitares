@@ -1655,14 +1655,18 @@ def _advance_ref(ref: str, new: str) -> bool:
     fetched meanwhile) is kept. Compare-and-swap, so a concurrent update wins.
     False when `ref` holds a value on another line of history (the base was
     rewritten): the caller then cannot say which base CI will read."""
-    old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
-    if old == new or (old and _is_ancestor(new, old)):
-        return True
-    if old and not _is_ancestor(old, new):
-        return False
-    # An empty old value asserts the ref does not exist yet.
-    git("update-ref", ref, new, old, check=False)
-    return True
+    for _ in range(3):
+        old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
+        if old == new or (old and _is_ancestor(new, old)):
+            return True
+        if old and not _is_ancestor(old, new):
+            return False
+        # An empty old value asserts the ref does not exist yet. A lost race
+        # (the ref moved since the read) re-reads and decides again.
+        if subprocess.run(["git", "update-ref", ref, new, old],
+                          capture_output=True).returncode == 0:
+            return True
+    return False
 
 
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:

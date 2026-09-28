@@ -345,6 +345,33 @@ def test_the_base_ref_only_moves_forward(carry_repo, start, expected, consistent
     assert _git(carry_repo, "rev-parse", ref) == commits[expected]
 
 
+def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch):
+    # Codex on #2568: another worktree may move the ref between the read and
+    # the compare-and-swap. The lost swap must re-read and decide on what is
+    # there now, here a rewritten base, never report success.
+    base = _git(carry_repo, "rev-parse", "master")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "other.txt").write_text("new\n")
+    _git(carry_repo, "commit", "-q", "-am", "new")
+    new = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", base)
+    (carry_repo / "other.txt").write_text("side\n")
+    _git(carry_repo, "commit", "-q", "-am", "side")
+    side = _git(carry_repo, "rev-parse", "HEAD")
+    ref = "refs/remotes/origin/master"
+    _git(carry_repo, "update-ref", ref, base)
+    real_run = rg.subprocess.run
+
+    def racing_run(cmd, *a, **k):
+        if cmd[:2] == ["git", "update-ref"]:
+            _git(carry_repo, "update-ref", ref, side)  # the other worktree wins
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(rg.subprocess, "run", racing_run)
+    assert rg._advance_ref(ref, new) is False
+    assert _git(carry_repo, "rev-parse", ref) == side
+
+
 def test_handoff_refuses_when_the_base_was_rewritten(carry_repo, monkeypatch, capsys):
     # Codex on #2568: if origin/<base> moved to another line of history during
     # the review, the reviewed key was checked against a base CI no longer reads.
