@@ -235,9 +235,10 @@ Tags are how future agents find your contributions. Be intentional:
   make it permanent, and permanence wins on tie. A durable finding *about* the
   test suite must not carry the `test` tag.
 - **Permanent means retained, not unchangeable**: it stops automatic archival.
-  Superseding an entry deliberately is gated on the permanent TAGS only, so an
-  architectural decision can still be replaced by its next revision — which is
-  that category's normal lifecycle.
+  `store(..., supersedes=<older>)` refuses to supersede an entry only when it
+  carries a permanent TAG, so an architectural decision can still be replaced
+  by its next revision — which is that category's normal lifecycle.
+  `knowledge(action="supersede")` does not check the tags.
 
 ## Closing the Loop
 

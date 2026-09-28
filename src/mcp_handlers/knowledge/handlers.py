@@ -5506,9 +5506,8 @@ async def _prepare_supersede_notes(
                     "Nothing was changed.",
                     recovery={
                         "action": (
-                            "Supersede without resolution_notes, and record the "
-                            "rationale in the newer finding or as a finding "
-                            f"that responds to this one (response_to={{"
+                            "Record your correction and its rationale as a "
+                            "finding that responds to this one (response_to={"
                             f"'discovery_id': '{old_id}', 'response_type': "
                             "'supersedes'})."
                         ),

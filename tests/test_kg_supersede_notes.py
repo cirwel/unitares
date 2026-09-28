@@ -283,7 +283,11 @@ class TestHighSeverityGate:
             data = await _supersede(graph, resolution_notes="why")
         assert data["success"] is False
         assert "Permission denied on high-severity discovery 'old-1'" in data["error"]
-        assert "Supersede without resolution_notes" in data["recovery"]["action"]
+        action = data["recovery"]["action"]
+        assert "response_to={'discovery_id': 'old-1'" in action
+        # The refusal must not steer a non-owner to the notes-free flip.
+        assert "without resolution_notes" not in action
+        assert "Supersede" not in action
         _nothing_written(graph)
 
     @pytest.mark.asyncio
@@ -318,7 +322,9 @@ class TestHighSeverityGate:
     @pytest.mark.asyncio
     async def test_without_notes_the_supersede_is_not_gated(self, handler_env):
         """The gate covers the notes only; a bare supersede keeps its
-        existing behaviour."""
+        existing behaviour. This pins today's behaviour, not a settled rule:
+        whether the status flip itself gets update's ownership gate is an
+        open operator decision (follow-up item z1)."""
         graph = _graph(_old(severity="critical", agent_id="owner-1"))
         data = await _supersede(graph)
         assert data["success"] is True
