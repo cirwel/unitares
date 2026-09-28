@@ -736,7 +736,12 @@ def test_a_found_notes_block_sends_nothing_of_the_update_again():
     found = recovery["workflow"][1]
 
     assert "the whole update landed" in found and "one statement" in found
-    assert found.endswith("Do not send any of it again")
+    assert "do not send any of it again" in found
+    # A block in the window can be another call's that sent the same notes, so
+    # the whole update counts as landed only with the other fields matching.
+    assert "unless another call to this discovery sent the same notes" in found
+    assert "every other field you sent shows the value you sent" in found
+    assert found.endswith("do not resend blind")
     assert "the whole update landed" in recovery["action"]
     assert "without resolution_notes" not in json.dumps(recovery)
 
@@ -1570,7 +1575,7 @@ def test_an_update_with_superseded_by_repairs_the_edge_its_notes_do_not_prove():
     })
     steps = with_edge["workflow"]
     assert len(steps) == 5
-    assert steps[1].endswith("(for superseded_by, see step 5)")
+    assert "(for superseded_by, see step 5)" in steps[1]
     assert (
         "knowledge(action='supersede', discovery_id='2026-02-02T00:00:00+00:00', "
         "supersedes_id='2026-01-01T00:00:00+00:00')"
@@ -1582,3 +1587,34 @@ def test_an_update_with_superseded_by_repairs_the_edge_its_notes_do_not_prove():
     )
     assert len(plain["workflow"]) == 4
     assert "superseded_by" not in " ".join(plain["workflow"])
+
+
+
+def test_a_note_is_matched_on_its_text_as_the_split_stores_it():
+    """A note longer than the summary limit is split at a nearby boundary:
+    its start becomes the summary and the rest the details, both trimmed. A
+    caller comparing its text with a shortened summary would miss its own
+    row and store a duplicate, so the recovery says to join the two."""
+    from src.mcp_handlers.knowledge.handlers import _split_note_text
+    from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN
+
+    text = ("First sentence. " * 400).strip()
+    summary, details = _split_note_text(text)
+    assert details, "premise: a long note is split"
+    assert " ".join([summary, details]) == text
+
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND_UUID):
+        recovery = _unknown_outcome_recovery(
+            CallOperation(operation="write", tool="knowledge", action="note"),
+            {"action": "note", "summary": text},
+            call_started_at="2026-09-27T00:00:00+00:00",
+            settled_by="2026-09-27T00:00:40+00:00",
+        )
+    joined = "summary and details joined"
+    assert joined in recovery["action"]
+    assert "split at a nearby sentence or word boundary" in recovery["workflow"][1]
+    assert f"up to {MAX_SUMMARY_LEN} characters" in recovery["workflow"][1]
+    assert joined in recovery["workflow"][2]

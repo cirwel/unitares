@@ -456,13 +456,36 @@ def _knowledge_store_recovery(
     check = _render_call("knowledge", lookup)
     limit = _WINDOW_LOOKUP_LIMIT
     # What a row of this call's would carry.
-    match = "an item's content" if batch else "your summary and details"
-    same = "the same item" if batch else "the same summary and details"
-    yours = (
-        "your summary and details, both stored as sent except that a long one "
-        "is cut short (for a note, its text); a row with your summary but "
-        "other details is not this call's"
+    is_note = call.tool == "leave_note" or (
+        call.tool == "knowledge" and call.action == "note"
     )
+    if is_note:
+        from .knowledge.limits import MAX_SUMMARY_LEN
+
+        # _split_note_text: a note up to MAX_SUMMARY_LEN is stored whole as
+        # the summary; a longer one is split at a nearby sentence or word
+        # boundary, its start in summary and the rest in details, both
+        # trimmed. Only the two joined give back the text that was sent.
+        pair = "your note's text (the row's summary and details joined)"
+        match = "your note's text"
+        same = "the same note"
+        yours = (
+            f"your note's text: a note up to {MAX_SUMMARY_LEN} characters is "
+            "stored whole as the summary, and a longer one is split at a "
+            "nearby sentence or word boundary, its start in summary and the "
+            "rest in details, both trimmed, so join a row's summary and "
+            "details and compare that with your text; a row whose joined text "
+            "differs is not this call's"
+        )
+    else:
+        pair = "your summary and details together"
+        match = "an item's content" if batch else "your summary and details"
+        same = "the same item" if batch else "the same summary and details"
+        yours = (
+            "your summary and details, both stored as sent except that a long "
+            "one is cut short; a row with your summary but other details is "
+            "not this call's"
+        )
     matching = (
         "Compare each item you sent with the rows by its summary and details "
         "together, not by summary alone. Both are stored as sent, except that "
@@ -561,15 +584,14 @@ def _knowledge_store_recovery(
         action = (
             "Do not store this again yet. It may already be saved, and every "
             "store adds a new row, so a second call leaves two findings. "
-            f"{listing} A list with no row carrying your summary and details "
-            "together proves nothing "
+            f"{listing} A list with no row carrying {pair} proves nothing "
             "was saved, but only when it was read after settled_by and its "
             f"count is below {limit}."
         )
         resend_step = (
-            "3. If no row has your summary and details together on a read after "
-            f"settled_by and count is below {limit}, nothing was saved: store it "
-            "again. A row with your summary but other details is not this call's"
+            f"3. If no row has {pair} on a read after settled_by and count is "
+            f"below {limit}, nothing was saved: store it again. A row that "
+            "matches only in part is not this call's"
         )
 
     workflow = [
@@ -670,8 +692,11 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             f"with {check} and look anywhere in details, not only at its end, "
             f"for the notes block this call would have written: {block}. Your "
             "text alone proves nothing, since an earlier block can hold the "
-            "same words. If that block is there, the whole update landed: it "
-            "writes all its fields in one statement. Only the block's absence "
+            "same words, and a block in the window can be another call's that "
+            "sent the same notes since call_started_at. If that block is there "
+            "and every other field you sent shows the value you sent, the whole "
+            "update landed: it writes all its fields in one statement. Only "
+            "the block's absence "
             "from the whole of details, read after settled_by, shows it did "
             "not. updated_at settles nothing: any writer's update moves it."
         ),
@@ -682,9 +707,15 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             "true, read on from pagination.next_offset until it is false, so "
             "you have all of details",
             f"2. If you sent resolution_notes, look anywhere in details for "
-            f"{block}. If it is there, the whole update landed: it writes all "
-            "its fields in one statement. Do not send any of it again"
-            + (" (for superseded_by, see step 5)" if superseded_by else ""),
+            f"{block}. If it is there, notes like yours landed in the window: "
+            "this call's, unless another call to this discovery sent the same "
+            "notes since call_started_at. If every other field you sent shows "
+            "the value you sent, the whole update landed (it writes all its "
+            "fields in one statement): do not send any of it again"
+            + (" (for superseded_by, see step 5)" if superseded_by else "")
+            + ". If you sent only the notes, or a field shows another value, "
+            "the block cannot be told apart from another caller's: do not "
+            "resend blind",
             "3. If you sent resolution_notes and no such block is in details "
             "on the read after settled_by, your notes are not stored: send the "
             "update again",
