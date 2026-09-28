@@ -769,8 +769,8 @@ async def test_describe_reports_a_legacy_alias_own_narrower_operation():
     assert legacy["operation"] == "read"  # the agent router it dispatches through is write
     router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
     assert router["operation"] == "write"
-    workflow = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": True}))[0].text)
-    assert workflow["operation"] == "write"  # no override: process_agent_update's class
+    legacy_write = json.loads((await handle_describe_tool({"tool_name": "submit_thesis", "lite": True}))[0].text)
+    assert legacy_write["operation"] == "write"  # no override: dialectic's class
 
 
 @pytest.mark.asyncio

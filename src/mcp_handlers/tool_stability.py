@@ -94,7 +94,7 @@ _SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 
 # deprecated_since: when a consolidated or deprecated old name stopped being
 # canonical, read as the commit that added its alias (git log -S, 2026-09-07).
-# Intuitive aliases (start, status, the workflow names) carry no date: those
+# Intuitive aliases (the workflow names) carry no date: those
 # names were never canonical, so nothing was deprecated. The repository's
 # history opens with a full-state import on 2026-01-13, so that date is a
 # floor ("on or before"), not a day.
