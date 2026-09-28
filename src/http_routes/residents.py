@@ -286,8 +286,11 @@ def _resident_label_claim(label: Optional[str], agent_id: object) -> Optional[st
     label from 2026-04-19 to 2026-06-14, invisible to this route and to the
     tag audit for nearly two months.
 
-    Only the exact ``_{own uuid8}`` suffix counts. Stripping any trailing
-    ``_xxxxxxxx`` would capture deliberately distinct names (a
+    Only a suffix built from the row's OWN uuid counts: its first eight
+    characters, or the longer ``uuid[:13]`` / whole-uuid forms the rename
+    falls back to when the eight-character one would equal a label the server
+    recorded (``_collision_label`` in ``identity/persistence.py``). Stripping
+    any trailing ``_xxxxxxxx`` would capture deliberately distinct names (a
     ``Sentinel_backup``-style label) and merge two real agents into one row.
     """
     if not label:
@@ -295,7 +298,8 @@ def _resident_label_claim(label: Optional[str], agent_id: object) -> Optional[st
     prefix, sep, suffix = label.rpartition("_")
     if not sep or not prefix:
         return None
-    if suffix and suffix == str(agent_id or "")[:8]:
+    uuid = str(agent_id or "")
+    if suffix and uuid and suffix in (uuid[:8], uuid[:13], uuid):
         return prefix
     return None
 
