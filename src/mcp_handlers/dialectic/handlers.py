@@ -2401,26 +2401,43 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
                     error_category="validation_error",
                     arguments=arguments,
                 )]
-        if agent_id == session.paused_agent_id:
-            filer_role = "paused_agent"
-        elif agent_id == session.reviewer_agent_id:
-            filer_role = "reviewer"
-        else:
-            filer_role = "third_party"
-        observed_metrics = {
-            # The kind is forced: whatever the caller wrote, this route files
-            # an outside verdict, and a record of one must say so.
-            "reviewer_backend": _reviewer_provenance_stamp(
-                provenance,
-                kind="external_consult",
-                degraded=bool(provenance.get("degraded")),
-            ),
-            "consult": {
-                "position": position,
-                "filer_role": filer_role,
-                "session_phase_at_filing": session.phase.value,
-            },
-        }
+        # The kind is forced: whatever the caller wrote, this route files an
+        # outside verdict, and a record of one must say so.
+        backend_stamp = _reviewer_provenance_stamp(
+            provenance,
+            kind="external_consult",
+            degraded=bool(provenance.get("degraded")),
+        )
+        filed = {}
+
+        def metrics_at_filing(row):
+            # Built from the session row read inside the insert transaction,
+            # so a phase move or reassignment racing this consult cannot leave
+            # the record describing the state before it. The raw phase is kept:
+            # the loaded session folds phases such as awaiting_thesis into
+            # THESIS. The snapshot is only the fallback for a session with no
+            # row.
+            if row is not None:
+                phase = row.get("phase")
+                paused, reviewer = row.get("paused_agent_id"), row.get("reviewer_agent_id")
+            else:
+                phase = session.phase.value
+                paused, reviewer = session.paused_agent_id, session.reviewer_agent_id
+            if agent_id == paused:
+                filed["filer_role"] = "paused_agent"
+            elif agent_id == reviewer:
+                filed["filer_role"] = "reviewer"
+            else:
+                filed["filer_role"] = "third_party"
+            filed["observed_metrics"] = {
+                "reviewer_backend": backend_stamp,
+                "consult": {
+                    "position": position,
+                    "filer_role": filed["filer_role"],
+                    "session_phase_at_filing": phase,
+                },
+            }
+            return filed["observed_metrics"]
         proposed_conditions = _consult_list(
             arguments.get("proposed_conditions") or arguments.get("conditions")
         )
@@ -2435,8 +2452,8 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
             root_cause=root_cause,
             proposed_conditions=proposed_conditions or None,
             reasoning=reasoning,
-            observed_metrics=observed_metrics,
             concerns=concerns or None,
+            metrics_from_session=metrics_at_filing,
         )
         if message_id is None:
             return [error_response(
@@ -2451,7 +2468,7 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
             agent_id=agent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
             root_cause=root_cause,
-            observed_metrics=observed_metrics,
+            observed_metrics=filed["observed_metrics"],
             proposed_conditions=proposed_conditions or None,
             reasoning=reasoning,
             agrees=None,
@@ -2464,7 +2481,7 @@ async def handle_submit_consult(arguments: Dict[str, Any]) -> Sequence[TextConte
             "message_id": message_id,
             "recorded_as": CONSULT_PHASE,
             "reviewer_kind": "external_consult",
-            "filer_role": filer_role,
+            "filer_role": filed["filer_role"],
             "position": position,
             "authority": (
                 "none: a consult is a record beside the review. It does not "

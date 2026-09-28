@@ -1013,6 +1013,49 @@ class TestAddMessage:
             conn.fetchrow.assert_not_awaited()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("state", [
+        {"phase": "awaiting_thesis", "paused_agent_id": "p", "reviewer_agent_id": "r"},
+        None,
+    ])
+    async def test_a_bounded_message_builds_its_metrics_from_the_row_it_locks(self, db, state):
+        """Review round 7 on #2540: the session row is read FOR SHARE inside
+        the insert transaction, and what is built from it is what is written."""
+        from contextlib import asynccontextmanager
+        instance, pool, conn = db
+
+        class DictRecord(dict):
+            def __getitem__(self, key):
+                return dict.__getitem__(self, key)
+
+        @asynccontextmanager
+        async def transaction():
+            yield
+        conn.transaction = transaction
+        conn.execute = AsyncMock(return_value="SELECT 1")
+        conn.fetchval = AsyncMock(return_value=0)
+        conn.fetchrow = AsyncMock(side_effect=[
+            DictRecord(state) if state else None, DictRecord({"message_id": 5}),
+        ])
+        seen = []
+
+        def build(row):
+            seen.append(row)
+            return {"consult": {"session_phase_at_filing": (row or {}).get("phase")}}
+
+        result = await instance.add_bounded_message(
+            session_id="sess-001", agent_id="agent-X", message_type="consult",
+            max_of_type=8, reasoning="outside view", metrics_from_session=build,
+        )
+
+        assert result == 5
+        assert seen == [state]
+        read_sql, read_arg = conn.fetchrow.await_args_list[0].args
+        assert "FOR SHARE" in read_sql and "core.dialectic_sessions" in read_sql
+        assert read_arg == "sess-001"
+        written = conn.fetchrow.await_args_list[1].args[7]
+        assert json.loads(written) == build(state)
+
+    @pytest.mark.asyncio
     async def test_add_message_minimal_args(self, db):
         """add_message with only required args, optional are None."""
         instance, pool, conn = db

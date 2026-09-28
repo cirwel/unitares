@@ -26,8 +26,21 @@ def _session(phase=DialecticPhase.SYNTHESIS):
     return session
 
 
-async def _consult(session, caller="agent-outside", insert_returns=77, **arguments):
-    add_message = AsyncMock(return_value=insert_returns)
+def _row(session):
+    return {"phase": session.phase.value, "paused_agent_id": session.paused_agent_id,
+            "reviewer_agent_id": session.reviewer_agent_id}
+
+
+async def _consult(session, caller="agent-outside", insert_returns=77, row=..., **arguments):
+    """``row`` is the session row the insert transaction reads; it defaults to
+    the loaded session's own state, and None means no row."""
+    async def insert(**kwargs):
+        # Like PostgreSQL: over the bound, nothing is built or written.
+        if insert_returns is not None:
+            add_message.built = kwargs["metrics_from_session"](_row(session) if row is ... else row)
+        return insert_returns
+
+    add_message = AsyncMock(side_effect=insert)
     h.ACTIVE_SESSIONS[session.session_id] = session
     try:
         with patch(f"{DIALECTIC}._resolve_dialectic_agent_id",
@@ -57,10 +70,10 @@ async def test_a_third_party_files_a_consult_without_the_reviewer_slot():
     assert kwargs["max_of_type"] == h.MAX_CONSULTS_PER_SESSION
     # The bounded insert writes agrees NULL and never touches the session row.
     assert "agrees" not in kwargs
-    stamp = kwargs["observed_metrics"]["reviewer_backend"]
+    stamp = add_message.built["reviewer_backend"]
     assert stamp["reviewer_kind"] == "external_consult"
     assert stamp["backend"] == "codex-cli"
-    assert kwargs["observed_metrics"]["consult"] == {
+    assert add_message.built["consult"] == {
         "position": "disagrees",
         "filer_role": "third_party",
         "session_phase_at_filing": "synthesis",
@@ -77,7 +90,7 @@ async def test_the_kind_is_forced_whatever_the_caller_claims():
         reviewer_provenance={**PROVENANCE, "reviewer_kind": "orchestrated"},
     )
     assert data["success"] is True
-    stamp = add_message.await_args.kwargs["observed_metrics"]["reviewer_backend"]
+    stamp = add_message.built["reviewer_backend"]
     assert stamp["reviewer_kind"] == "external_consult"
 
 
@@ -111,6 +124,32 @@ async def test_the_paused_agent_may_file_one_and_is_labelled():
     data, _ = await _consult(_session(), caller="agent-paused", reasoning="council seat 2",
                              reviewer_provenance=PROVENANCE)
     assert data["filer_role"] == "paused_agent"
+
+
+@pytest.mark.asyncio
+async def test_role_and_phase_are_read_when_the_consult_is_filed():
+    """Review round 7 on #2540: the record describes the session row read in
+    the insert transaction, not the earlier snapshot. The reviewer here was
+    reassigned after the load, and the row's phase is one the loaded session
+    folds into THESIS."""
+    session = _session(DialecticPhase.THESIS)
+    data, add_message = await _consult(
+        session, caller="agent-new-reviewer", reasoning="r", reviewer_provenance=PROVENANCE,
+        row={"phase": "awaiting_thesis", "paused_agent_id": "agent-paused",
+             "reviewer_agent_id": "agent-new-reviewer"},
+    )
+    assert data["filer_role"] == "reviewer"
+    assert add_message.built["consult"]["filer_role"] == "reviewer"
+    assert add_message.built["consult"]["session_phase_at_filing"] == "awaiting_thesis"
+    assert session.transcript[-1].observed_metrics == add_message.built
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_no_row_falls_back_to_the_loaded_state():
+    data, add_message = await _consult(_session(), caller="agent-reviewer", row=None,
+                                       reasoning="r", reviewer_provenance=PROVENANCE)
+    assert data["filer_role"] == "reviewer"
+    assert add_message.built["consult"]["session_phase_at_filing"] == "synthesis"
 
 
 @pytest.mark.asyncio
