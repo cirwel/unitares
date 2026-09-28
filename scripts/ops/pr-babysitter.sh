@@ -619,6 +619,28 @@ while read -r _ n head; do
     exit 0
   fi
 
+  # Re-read live state just before arming: the tick's snapshot is minutes
+  # old, and an operator arm (ship.sh --auto-merge labels, then arms) may have
+  # started since. Any arm on the base, or a fresh operator-armed label, and
+  # this tick arms nothing.
+  live=$(gh pr list -R "$REPO" --state open --limit 500 --base "$BASE" \
+    --json number,autoMergeRequest,labels) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
+  # PRs this tick just disarmed can still read as armed for a moment.
+  if other=$(jq -r --arg skip "$disarmed" '[.[] | select(.autoMergeRequest != null)
+                 | select(.number as $x | $skip | contains(" \($x) ") | not) | .number] | first // empty' <<<"$live") \
+     && [ -n "$other" ]; then
+    log "#$other was armed since this tick began; nothing armed"
+    exit 0
+  fi
+  for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
+    at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
+    if [ -z "$at" ] || [ "$(minutes_since "$at")" -lt "${PR_QUEUE_OPERATOR_RESERVE_MIN:-10}" ]; then
+      log "#$m was just labelled $OPERATOR_ARMED_LABEL; nothing armed"
+      exit 0
+    fi
+  done
+
   log "#$n arming (head of queue)"
   # The repo deletes merged branches itself, so no --delete-branch: gh would
   # also try to delete a local branch in whatever directory this runs from.

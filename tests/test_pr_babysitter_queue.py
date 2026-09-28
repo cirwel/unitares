@@ -26,7 +26,11 @@ RETRIED = "merge-retried"
 FAKE_GH = r"""#!/usr/bin/env bash
 d="$FAKE_GH_DIR"
 case "$1 $2" in
-  "pr list") cat "$d/prs.json"; exit 0 ;;
+  "pr list")
+    # A later read in the same tick may see a changed world (prs_live.json).
+    if [ -f "$d/prs_live.json" ] && [ -f "$d/listed_once" ]; then cat "$d/prs_live.json"; else cat "$d/prs.json"; fi
+    : > "$d/listed_once"
+    exit 0 ;;
   "pr view")
     f="$d/state_${5//\//_}_$3"
     [ -f "$f" ] && { cat "$f"; exit 0; }
@@ -175,6 +179,8 @@ def _run(
     gh.write_text(FAKE_GH)
     gh.chmod(0o755)
     (d / "prs.json").write_text(json.dumps(prs))
+    for stale in ("listed_once",):
+        (d / stale).unlink(missing_ok=True)
     (d / "base_date").write_text(_iso(base_idle_min) + "\n")
     (d / "calls.log").write_text("")
     (d / "fail").write_text("\n".join(fail) + "\n")
@@ -1068,4 +1074,14 @@ def test_a_fresh_operator_armed_label_reserves_the_slot(tmp_path: Path) -> None:
                       timelines={1: fresh, 2: _timeline(8)})
     assert calls == []
     assert "holding the slot for the operator" in out
+
+
+def test_an_arm_that_appears_mid_tick_stops_the_queue_arming(tmp_path: Path) -> None:
+    # The operator (or ship.sh) armed #9 after this tick took its snapshot.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "prs_live.json").write_text(json.dumps([_pr(9, labels=("operator-armed",), armed_min_ago=0.1)]))
+    calls, out = _run(tmp_path, [_pr(1)])
+    assert calls == []
+    assert "#9 was armed since this tick began" in out
 
