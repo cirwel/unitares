@@ -657,8 +657,6 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         )
         
     except Exception as e:
-        logger.error(f"Model inference failed: {e}", exc_info=True)
-        
         # Provide helpful error message
         error_msg = str(e)
         if isinstance(e, TimeoutError):
@@ -698,6 +696,17 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         else:
             error_code = "INFERENCE_ERROR"
             recovery_hint = "Check provider configuration and model availability"
+
+        # A classified failure (provider unreachable, model not pulled, timeout,
+        # rate limit) is an expected operating condition, reported to the caller
+        # with its code and recovery hint: one warning line, no traceback. On an
+        # install with no model configured every consult lands here, and a
+        # chained traceback per call buried the server log. Only an unclassified
+        # failure keeps the traceback, where it is the evidence.
+        if error_code == "INFERENCE_ERROR":
+            logger.error(f"Model inference failed: {e}", exc_info=True)
+        else:
+            logger.warning(f"Model inference failed ({error_code}): {e}")
         
         # Registry route facts for the attempt, so a failed call still says
         # whether it was tried locally or off-box. Only for a resolved
