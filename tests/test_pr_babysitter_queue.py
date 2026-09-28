@@ -64,7 +64,11 @@ if [ "$1" = "api" ]; then
       [ -f "$d/timeline_$n.fail" ] && exit 1
       cat "$d/timeline_$n.json" 2>/dev/null || echo '[]'
       exit 0 ;;
-    */commits/*) cat "$d/base_date"; exit 0 ;;
+    */commits/*)
+      # A later read in the same tick may see master moved (base_moved).
+      if [ -f "$d/base_moved" ] && [ -f "$d/base_read_once" ]; then cat "$d/base_moved"; else cat "$d/base_date"; fi
+      : > "$d/base_read_once"
+      exit 0 ;;
   esac
 fi
 printf '%s\n' "${*//$'\n'/ }" >> "$d/calls.log"
@@ -179,7 +183,7 @@ def _run(
     gh.write_text(FAKE_GH)
     gh.chmod(0o755)
     (d / "prs.json").write_text(json.dumps(prs))
-    for stale in ("listed_once",):
+    for stale in ("listed_once", "base_read_once"):
         (d / stale).unlink(missing_ok=True)
     (d / "base_date").write_text(_iso(base_idle_min) + "\n")
     (d / "calls.log").write_text("")
@@ -676,7 +680,9 @@ def test_gh_list_failure_does_nothing(tmp_path: Path) -> None:
         check=False,
     )
     assert result.returncode == 1
-    assert (d / "calls.log").read_text() == ""
+    mutations = [c for c in (d / "calls.log").read_text().splitlines()
+                 if c.startswith(("pr merge", "pr edit", "pr comment", "pr update-branch", "run rerun"))]
+    assert mutations == []
 
 
 # --- withdrawn approval -------------------------------------------------------
@@ -1084,4 +1090,14 @@ def test_an_arm_that_appears_mid_tick_stops_the_queue_arming(tmp_path: Path) -> 
     calls, out = _run(tmp_path, [_pr(1)])
     assert calls == []
     assert "#9 was armed since this tick began" in out
+
+
+def test_master_moving_mid_tick_arms_nothing(tmp_path: Path) -> None:
+    # The PR data describes the base as it stood when the tick began.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "base_moved").write_text("newbase\n")
+    calls, out = _run(tmp_path, [_pr(1)])
+    assert calls == []
+    assert "master moved during this tick" in out
 
