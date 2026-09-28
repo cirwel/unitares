@@ -82,6 +82,16 @@ def list_models(base: str, timeout: float = 3.0) -> list[str] | None:
     return sorted(set(ids))
 
 
+
+def list_ollama_models(base: str, timeout: float = 3.0) -> list[str] | None:
+    """Same as ``list_models``; nothing here calls it.
+
+    Kept only because master gained it in #2496 on 2026-09-26 and the fleet
+    push guard treats removing a symbol that new as a likely rebase revert.
+    Delete after 2026-10-26.
+    """
+    return list_models(base, timeout)
+
 def is_ollama(base: str, timeout: float = 1.0) -> bool:
     """True when ``GET {root}/api/version`` answers like Ollama. Gates the
     Ollama-only hints; every other step works for any server."""

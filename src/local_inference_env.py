@@ -176,6 +176,16 @@ def model_base_url() -> str:
     return _resolve(MODEL_BASE_URL_ENV, _normalize_base_setting) or DEFAULT_MODEL_BASE_URL
 
 
+def _alias_ollama_base() -> str:
+    """``UNITARES_OLLAMA_BASE_URL`` reduced to its root; nothing here calls it.
+
+    Kept only because master gained it in #2495 on 2026-09-26 and the fleet
+    push guard treats removing a symbol that new as a likely rebase revert.
+    ``SETTING_ALIASES`` is the real alias path. Delete after 2026-10-26.
+    """
+    return normalize_ollama_base(os.getenv("UNITARES_OLLAMA_BASE_URL", ""))
+
+
 def ollama_base_url() -> str:
     """The endpoint's root: ``model_base_url()`` without its trailing ``/v1``.
 
