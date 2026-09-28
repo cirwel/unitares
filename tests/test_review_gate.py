@@ -665,6 +665,38 @@ def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeyp
     assert "no reviews to start" not in output
 
 
+def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
+    # Independent review on #2568: nothing failed if the sweep stopped
+    # registering the base-merge equivalents that pr_comments reads through.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: [])
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    monkeypatch.setattr(rg, "api_pages", lambda *a: [])
+    monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=True)) == 0
+    assert rg._CARRY[("cirwel/repo", 3)] == ("k", [("old", "c0ffee")])
+
+
+def test_local_commands_read_a_prs_records_as_ci_does(monkeypatch):
+    # _resolve serves review, record and dispose; it must register the
+    # equivalents so a carried finding can be disposed and is not re-rolled.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "current_pr", lambda: {
+        "number": 5, "headRefOid": "h", "headRefName": "b", "baseRefName": "master",
+        "state": "OPEN"})
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    assert rg._resolve(SimpleNamespace(pr=None, base=None)) == (5, "o/r", "k", "b")
+    assert rg._CARRY[("o/r", 5)] == ("k", [("old", "c0ffee")])
+
+
 def test_review_lock_is_exclusive_and_releases(repo):
     with rg.review_lock("k" * 64) as first:
         assert first.held
