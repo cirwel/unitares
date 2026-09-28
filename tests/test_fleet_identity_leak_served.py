@@ -159,10 +159,24 @@ def test_served_files_cover_every_served_surface():
     assert not any("/.attestations/" in r for r in rels)
 
 
-def test_known_coupling_defers_up_to_its_known_occurrences():
-    # Any still-listed entry works. Earlier examples (snapshot.js, PLAN.md)
-    # left the list when their files stopped naming residents.
-    rel = "src/tool_descriptions.json"
+# SERVED_KNOWN_COUPLINGS is empty since 2026-09-27 (the last served file that
+# named a resident, src/tool_descriptions.json, was fixed). The ratchet's rules
+# must still hold for whatever is listed next, so these tests use a fixture
+# entry rather than sampling the live table.
+_FIXTURE_REL = "src/example_served.json"
+
+
+@pytest.fixture
+def fixture_coupling(monkeypatch):
+    monkeypatch.setitem(
+        guard.SERVED_KNOWN_COUPLINGS, _FIXTURE_REL,
+        (("Lumen", "Lumen", "Sentinel"), "test fixture"),
+    )
+    return _FIXTURE_REL
+
+
+def test_known_coupling_defers_up_to_its_known_occurrences(fixture_coupling):
+    rel = fixture_coupling
     approved = guard.SERVED_KNOWN_COUPLINGS[rel][0]
     at_budget = [
         f'  {rel}:{k}: hardcoded fleet identity "{name}" in a string literal'
@@ -177,13 +191,11 @@ def test_known_coupling_defers_up_to_its_known_occurrences():
     assert guard.triage_served(rel, over) == (over, [])
 
 
-def test_known_coupling_name_substitution_is_caught():
+def test_known_coupling_name_substitution_is_caught(fixture_coupling):
     # The bug this pins: removing one known reference and adding a DIFFERENT
     # name in the same file must not pass just because the total count is
     # unchanged — the old ceiling-only check let this through.
-    # Any still-listed entry works. Earlier examples (snapshot.js, PLAN.md)
-    # left the list when their files stopped naming residents.
-    rel = "src/tool_descriptions.json"
+    rel = fixture_coupling
     approved = list(guard.SERVED_KNOWN_COUPLINGS[rel][0])
     swapped = approved[:-1] + ["Steward"]  # a name never recorded for this file
     hits = [
@@ -194,8 +206,8 @@ def test_known_coupling_name_substitution_is_caught():
     assert failing == hits and deferred == []
 
 
-def test_domain_is_never_deferred_by_a_known_coupling():
-    rel = next(iter(guard.SERVED_KNOWN_COUPLINGS))
+def test_domain_is_never_deferred_by_a_known_coupling(fixture_coupling):
+    rel = fixture_coupling
     approved_name = guard.SERVED_KNOWN_COUPLINGS[rel][0][0]
     name_hit = f'  {rel}:1: fleet identity "{approved_name}" in served text'
     domain_hit = f'  {rel}:2: operator domain "cirwel.org" in served text'

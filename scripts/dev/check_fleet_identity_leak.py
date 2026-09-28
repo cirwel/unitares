@@ -465,13 +465,9 @@ SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 # is slated to be rewritten or removed, the record can only shrink, and a
 # location pin (line or surrounding text) breaks on every unrelated edit to
 # files that are still live.
-SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
-    "src/tool_descriptions.json": (
-        ("Lumen",) * 2,
-        "names Lumen in outcome_event's drawing outcome and an observe example; "
-        "#2490 rewrites this file, fix after it lands",
-    ),
-}
+# Empty since 2026-09-27: the last entry, src/tool_descriptions.json, had its
+# two example mentions replaced with generic ones.
+SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {}
 
 _SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\b[^>]*>)", re.S | re.I)
 _HIT_VALUE = re.compile(r'"([^"]*)"')
