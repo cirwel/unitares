@@ -26,6 +26,7 @@ read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
 require_open = rg.require_open
 real_disabled_providers = rg.disabled_providers
+_REAL_READ_NATIVE = rg.read_native  # no_cloud_reads stubs it; carry tests opt in
 shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
@@ -227,6 +228,37 @@ def test_local_reads_see_carried_records(carry_repo, monkeypatch):
     rec = rg.latest_matching(rg.pr_comments("o/r", 7), own)
     assert rec is not None and rec.verdict == "FINDINGS"
     assert rg.latest_matching(rg.pr_comments("o/r", 8), own) is None  # other PRs untouched
+
+
+def test_a_native_finding_on_the_pre_merge_head_carries(carry_repo, monkeypatch):
+    # Codex P1 on #2568: native reviews are bound to a commit, not a key, so
+    # read_native must read the equivalent earlier head's reviews too; else a
+    # later CLEAN on the merged head hides the native finding.
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    own = rg.diff_key("master", "HEAD")
+    review = {"id": 5, "user": {"login": rg.CODEX_BOT, "type": "Bot"},
+              "commit_id": reviewed_head, "state": "COMMENTED",
+              "submitted_at": "2026-09-28T06:00:00Z", "body": "",
+              "html_url": "native-review"}
+    finding = {"id": 50, "pull_request_review_id": 5,
+               "user": {"login": rg.CODEX_BOT, "type": "Bot"},
+               "path": "f.txt", "line": 3, "body": "[P1] bug", "html_url": "inline"}
+    pages = {"reviews": [review], "pulls/7/comments": [finding], "events": [], "reactions": []}
+    monkeypatch.setattr(rg, "api_pages",
+                        lambda ep: next((v for k, v in pages.items() if ep.endswith(k)), []))
+    later_clean = _record(own, url="rerun")
+    later_clean["created_at"] = "2026-09-28T07:00:00Z"
+    monkeypatch.setitem(rg._CARRY, ("o/r", 7), (own, rg.base_merge_equivalents("master", "HEAD")))
+    snapshot = _REAL_READ_NATIVE("o/r", 7, own, head, [later_clean])
+    assert snapshot.carried == {"native-review": reviewed_head}
+    rec = rg.latest_matching([later_clean], own, snapshot.records)
+    assert rec.verdict == "FINDINGS" and not rec.disposed
+    monkeypatch.delitem(rg._CARRY, ("o/r", 7))  # without the carry, the finding is gone
+    assert rg.latest_matching([later_clean], own, _REAL_READ_NATIVE(
+        "o/r", 7, own, head, [later_clean]).records).verdict == "CLEAN"
 
 
 def test_an_edit_to_the_prs_lines_after_the_merge_stops_the_carry(carry_repo):

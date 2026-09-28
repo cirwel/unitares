@@ -151,8 +151,9 @@ the test run one.
   (`base_merge_equivalents` and `carry_records` in `review_gate.py`). That
   covers GitHub's "update branch" for auto-merge and a plain merge of the
   base, where master only edited text next to the PR's lines. Records on the
-  earlier key then count as the head's: a review, its findings, its
-  dispositions and its model families. An open finding stays open until
+  earlier key then count as the head's, and so do native Codex reviews of
+  the earlier head: a review, its findings, its dispositions and its model
+  families. An open finding stays open until
   disposed, and a later CLEAN does not clear it. The `review` check says
   "carried across a base merge from `<sha>`" when a carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any

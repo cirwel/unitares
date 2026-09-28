@@ -503,6 +503,8 @@ class NativeReview:
     unavailable_reason: str = ""
     completed: bool = False
     rounds: CodexRounds | None = None
+    #: record url -> earlier head it was carried from (see `read_native`)
+    carried: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -707,6 +709,16 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                   in (c.get("body") or "") for c in comments)
     reactions = api_pages(f"repos/{repo}/issues/{pr}/reactions") if summary else []
     snapshot = native_records(comments, reviews, inline, events, key, head, reactions)
+    # Native evidence is bound to the reviewed commit, not to a key, so a base
+    # merge would drop it the same way it dropped comment records. Read each
+    # equivalent earlier head's native reviews as this key's too, so a native
+    # finding stays open across the merge until it is fixed or disposed.
+    carry = _CARRY.get((repo, pr))
+    if carry and carry[0] == key:
+        for _earlier_key, commit in carry[1]:
+            earlier = native_records(comments, reviews, inline, events, key, commit, reactions)
+            snapshot.records.extend(earlier.records)
+            snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
     snapshot.rounds = codex_rounds(comments, reviews, inline, events)
     return snapshot
 
@@ -2388,8 +2400,9 @@ def cmd_ci(args) -> int:
         f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}",
         f"+refs/pull/{pr}/head:refs/review-gate/head")
     key = diff_key(f"origin/{base_ref}", head)
-    comments, carried = carry_records(
-        pr_comments(repo, pr), key, base_merge_equivalents(f"origin/{base_ref}", head))
+    equivalents = base_merge_equivalents(f"origin/{base_ref}", head)
+    comments, carried = carry_records(pr_comments(repo, pr), key, equivalents)
+    _CARRY[(repo, pr)] = (key, equivalents)  # after the read: read_native carries native evidence
     try:
         snapshot = read_native(repo, pr, key, head, comments)
         rec = latest_matching(comments, key, snapshot.records)
@@ -2414,6 +2427,7 @@ def cmd_ci(args) -> int:
                  else ["(changed paths unreadable)"])
     conclusion, desc = second_family_check(
         conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
+    carried = {**carried, **snapshot.carried}
     if rec is not None and rec.url in carried:
         desc += f" · carried across a base merge from {carried[rec.url][:7]}"
     desc += round_note(snapshot.rounds)
