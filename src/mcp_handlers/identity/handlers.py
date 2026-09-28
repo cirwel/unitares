@@ -2678,7 +2678,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             logger.debug(f"[PROCESS_BINDING] onboard scheduling failed (non-fatal): {e}")
 
     # TRAJECTORY IDENTITY: Store genesis signature if provided (optional, non-blocking)
-    # Agents from anima-mcp can include trajectory_signature in their onboard call
+    # An agent whose runtime computes a trajectory signature (an embodied
+    # runtime such as anima-mcp, for one) can include it in its onboard call.
     trajectory_result = None
     trajectory_signature = arguments.get("trajectory_signature")
     if trajectory_signature and isinstance(trajectory_signature, dict):
@@ -3032,7 +3033,7 @@ async def handle_verify_trajectory_identity(arguments: Dict[str, Any]) -> Sequen
         return error_response(
             "trajectory_signature is required",
             recovery={
-                "action": "Include your trajectory signature from anima-mcp",
+                "action": "Include the trajectory signature your runtime computed (a TrajectorySignature dict)",
                 "example": "verify_trajectory_identity(trajectory_signature={...})"
             }
         )
