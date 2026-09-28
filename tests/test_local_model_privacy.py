@@ -511,3 +511,24 @@ async def test_host_id_ollama_local_refuses_before_the_availability_probe(extern
     assert not outcome.ok
     assert outcome.failure.code == "MODEL_ENDPOINT_NOT_LOCAL"
     assert client.call_count == 0
+
+
+def test_availability_probe_reaches_an_ipv6_endpoint(monkeypatch):
+    """The probe must not assume IPv4: a local model on [::1] is available."""
+    import socket as _socket
+
+    from src.mcp_handlers.support import inference_registry
+
+    listener = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+    try:
+        listener.bind(("::1", 0))
+    except OSError:
+        listener.close()
+        pytest.skip("no IPv6 loopback on this host")
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", f"http://[::1]:{port}/v1")
+        assert inference_registry._probe_ollama_socket() is True
+    finally:
+        listener.close()

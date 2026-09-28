@@ -126,14 +126,32 @@ _ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": 
 
 
 def _probe_ollama_socket() -> bool:
+    """True when a TCP connection to the configured endpoint succeeds.
+
+    Family-neutral: an IPv6 endpoint (``http://[::1]:11434/v1``, an RFC 4193
+    address) is probed over IPv6, and a name that resolves to both families
+    is tried on each address in turn. This is an availability probe only;
+    whether the endpoint is local is decided from its URL, never from DNS.
+    """
+    host, port = _ollama_host_port()
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        result = sock.connect_ex(_ollama_host_port())
-        sock.close()
-        return result == 0
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except Exception:
         return False
+    for family, socktype, proto, _canon, sockaddr in addresses:
+        try:
+            sock = socket.socket(family, socktype, proto)
+        except Exception:
+            continue
+        try:
+            sock.settimeout(0.5)
+            if sock.connect_ex(sockaddr) == 0:
+                return True
+        except Exception:
+            pass
+        finally:
+            sock.close()
+    return False
 
 
 def _ollama_available() -> bool:
