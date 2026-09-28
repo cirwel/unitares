@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **24 unadvertised tool aliases** (compatibility: callable names removed).
+  Names that only redirected a guessed or pre-consolidation name to a tool
+  that keeps its canonical name now return `tool_not_found_error` with the
+  usual suggestion: `status`, `my_status`, `check_status`, `metrics`, `state`
+  (use `check_working_state` or `get_governance_metrics`); `start`, `init`,
+  `register`, `login` (use `start_session` or `onboard`); `checkin`, `log`,
+  `update` (use `sync_state` or `process_agent_update`); `authenticate`,
+  `session`, `quick_start`, `recall_identity`, `bind_identity`, `hello`,
+  `get_agent_api_key` (use `identity`); `request_exploration_session` (use
+  `dialectic(action="get")`); `find_similar_discoveries_graph`,
+  `get_related_discoveries_graph`, `get_response_chain_graph`,
+  `reply_to_question` (use `knowledge` with the matching action). No
+  capability is removed, the eight advertised workflow aliases are unchanged,
+  and the advertised surface digest does not move. Hints that still named
+  `get_agent_api_key` or `reply_to_question` now name `identity()` and
+  `knowledge(action="store", response_to={...})`.
+
 ## [3.0.0] - 2026-09-27
 
 A major release from master, following v2.22.1. It is major because the

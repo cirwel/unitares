@@ -497,11 +497,6 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
         "login",
         "start",
         "state",
-        "quick_start",
-        "my_status",
-        "check_status",
-        "bind_identity",
-        "recall_identity",
     }
 
     referenced = set()
@@ -786,8 +781,8 @@ async def test_describe_reports_a_legacy_alias_own_narrower_operation():
     assert legacy["operation"] == "read"  # the agent router it dispatches through is write
     router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
     assert router["operation"] == "write"
-    guess = json.loads((await handle_describe_tool({"tool_name": "checkin", "lite": True}))[0].text)
-    assert guess["operation"] == "write"  # no override: process_agent_update's class
+    workflow = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": True}))[0].text)
+    assert workflow["operation"] == "write"  # no override: process_agent_update's class
 
 
 @pytest.mark.asyncio

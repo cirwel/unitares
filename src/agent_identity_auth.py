@@ -156,8 +156,8 @@ def require_explicit_agent_id(arguments: dict, reject_existing: bool = False) ->
             "suggestion": "\"agent_id\": \"your_unique_session_id\"",
             "recovery": {
                 "action": "Provide a unique agent_id in your request",
-                "related_tools": ["get_agent_api_key", "list_agents"],
-                "workflow": "1. Generate unique agent_id (e.g., timestamp-based) 2. Call get_agent_api_key to get/create agent 3. Use agent_id and api_key in subsequent calls"
+                "related_tools": ["identity"],
+                "workflow": "1. Generate unique agent_id (e.g., timestamp-based) 2. Call identity() to see your agent_uuid 3. Pass client_session_id on subsequent calls"
             }
         }, indent=2)
         return None, TextContent(type="text", text=error_msg)
@@ -269,8 +269,8 @@ def require_agent_auth(agent_id: str, arguments: dict, enforce: bool = False) ->
                     "success": False,
                     "error": "API key required for authentication",
                     "details": f"Agent '{agent_id}' requires an API key for updates. This is a security requirement to prevent impersonation.",
-                    "migration": "This agent was created before authentication was added. Generate a key using get_agent_api_key tool.",
-                    "suggestion": "Use get_agent_api_key tool to retrieve or generate your API key"
+                    "migration": "This agent was created before authentication was added.",
+                    "suggestion": "API keys are deprecated: the agent UUID is the credential. Call identity() to see your agent_uuid."
                 }, indent=2)
             )
         else:
@@ -284,7 +284,7 @@ def require_agent_auth(agent_id: str, arguments: dict, enforce: bool = False) ->
                 "error": "API key required",
                 "details": f"Agent '{agent_id}' requires an API key for authentication. This prevents impersonation and protects your identity.",
                 "why_this_matters": "Without authentication, anyone could update your agent's state, corrupt your history, and manipulate your governance record.",
-                "suggestion": "Include 'api_key' parameter in your request. Use get_agent_api_key tool to retrieve your key."
+                "suggestion": "Include 'api_key' parameter in your request. API keys are deprecated: the agent UUID is the credential. Call identity() to see your agent_uuid."
             }, indent=2)
         )
 

@@ -193,7 +193,7 @@ class TestEphemeralIdentityMarking:
 
     @pytest.mark.asyncio
     async def test_read_only_alias_session_miss_does_not_auto_mint(self, mock_db):
-        """Read-only aliases like status() must share the no-mint policy."""
+        """Read-only aliases like check_working_state() must share the no-mint policy."""
         identity_result = {
             "resume_failed": True,
             "error": "session_resolve_miss",
@@ -212,7 +212,7 @@ class TestEphemeralIdentityMarking:
             p.start()
         try:
             ctx = DispatchContext()
-            await resolve_identity("status", {"client_session_id": "agent-missing"}, ctx)
+            await resolve_identity("check_working_state", {"client_session_id": "agent-missing"}, ctx)
         finally:
             for p in reversed(patches):
                 p.stop()

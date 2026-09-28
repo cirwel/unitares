@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (55 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (55 actions) · 46 aliases.**
 
 ## Content-addressed snapshots
 
@@ -249,13 +249,9 @@ the caller had passed it.
 |---|---|---|---|
 | `aggregate_metrics` | `observe` | `aggregate` | consolidated |
 | `archive_agent` | `agent` | `archive` | consolidated |
-| `authenticate` | `identity` | — | consolidated |
 | `backfill_calibration_from_dialectic` | `calibration` | `backfill` | consolidated |
-| `bind_identity` | `identity` | — | consolidated |
 | `check_calibration` | `calibration` | `check` | consolidated |
-| `check_status` | `get_governance_metrics` | — | intuitive_alias |
 | `check_working_state` | `get_governance_metrics` | — | intuitive_alias |
-| `checkin` | `process_agent_update` | — | intuitive_alias |
 | `cleanup_knowledge_graph` | `knowledge` | `cleanup` | consolidated |
 | `cleanup_stale_locks` | `admin` | `cleanup_locks` | consolidated |
 | `compare_agents` | `observe` | `compare` | consolidated |
@@ -264,54 +260,34 @@ the caller had passed it.
 | `delete_agent` | `agent` | `delete` | consolidated |
 | `detect_anomalies` | `observe` | `anomalies` | consolidated |
 | `export_to_file` | `export` | `file` | consolidated |
-| `find_similar_discoveries_graph` | `search_knowledge_graph` | — | consolidated |
-| `get_agent_api_key` | `identity` | — | deprecated |
 | `get_agent_metadata` | `agent` | `get` | consolidated |
 | `get_connection_status` | `admin` | `connections` | consolidated |
 | `get_dialectic_session` | `dialectic` | `get` | consolidated |
 | `get_discovery_details` | `knowledge` | `details` | consolidated |
 | `get_knowledge_graph` | `knowledge` | `get` | consolidated |
 | `get_lifecycle_stats` | `knowledge` | `stats` | consolidated |
-| `get_related_discoveries_graph` | `knowledge` | — | consolidated |
-| `get_response_chain_graph` | `knowledge` | — | consolidated |
 | `get_server_info` | `admin` | `server_info` | consolidated |
 | `get_system_history` | `export` | `history` | consolidated |
 | `get_telemetry_metrics` | `admin` | `telemetry` | consolidated |
 | `get_tool_usage_stats` | `admin` | `tool_usage` | consolidated |
-| `hello` | `identity` | — | consolidated |
-| `init` | `onboard` | — | intuitive_alias |
 | `list_agents` | `agent` | `list` | consolidated |
 | `list_dialectic_sessions` | `dialectic` | `list` | consolidated |
 | `list_knowledge_graph` | `knowledge` | `list` | consolidated |
-| `log` | `process_agent_update` | — | intuitive_alias |
-| `login` | `onboard` | — | intuitive_alias |
-| `metrics` | `get_governance_metrics` | — | intuitive_alias |
-| `my_status` | `get_governance_metrics` | — | intuitive_alias |
 | `observe_agent` | `observe` | `agent` | consolidated |
-| `quick_start` | `identity` | — | consolidated |
 | `reassign_reviewer` | `dialectic` | `reassign` | consolidated |
 | `rebuild_calibration` | `calibration` | `rebuild` | consolidated |
-| `recall_identity` | `identity` | — | consolidated |
 | `record_result` | `outcome_event` | — | intuitive_alias |
-| `register` | `onboard` | — | intuitive_alias |
-| `reply_to_question` | `knowledge` | — | consolidated |
 | `request_dialectic_review` | `dialectic` | `request` | consolidated |
-| `request_exploration_session` | `dialectic` | `get` | consolidated |
 | `request_review` | `dialectic` | `request` | intuitive_alias |
 | `reset_monitor` | `admin` | `reset_monitor` | consolidated |
 | `search_shared_memory` | `knowledge` | `search` | intuitive_alias |
-| `session` | `identity` | — | consolidated |
-| `start` | `onboard` | — | intuitive_alias |
 | `start_session` | `onboard` | — | intuitive_alias |
-| `state` | `get_governance_metrics` | — | intuitive_alias |
-| `status` | `get_governance_metrics` | — | intuitive_alias |
 | `store_finding` | `knowledge` | `store` | intuitive_alias |
 | `store_knowledge_graph` | `knowledge` | `store` | consolidated |
 | `submit_antithesis` | `dialectic` | `antithesis` | consolidated |
 | `submit_synthesis` | `dialectic` | `synthesis` | consolidated |
 | `submit_thesis` | `dialectic` | `thesis` | consolidated |
 | `sync_state` | `process_agent_update` | — | intuitive_alias |
-| `update` | `process_agent_update` | — | intuitive_alias |
 | `update_agent_metadata` | `agent` | `update` | consolidated |
 | `update_calibration_ground_truth` | `calibration` | `update` | consolidated |
 | `update_discovery_status_graph` | `knowledge` | `update` | consolidated |

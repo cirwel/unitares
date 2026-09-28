@@ -11,7 +11,6 @@ Reduces friction from constant tool churn by:
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
-from .support.tool_hints import KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
 from .support.param_normalization import (
     ParamNormalizer,
     normalize_compact_search_details,
@@ -122,143 +121,15 @@ _SINCE_ADMIN_ROUTER = datetime(2026, 6, 29)            # ebc30169, admin router 
 # Guarded by ALIAS_SHADOWS_REGISTERED_TOOL in scripts/dev/tool_edge_index.py and
 # by test_no_alias_name_is_also_a_registered_tool.
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
-    # Identity tools - all point to identity() (the primary identity tool)
-    # NOTE: who_am_i no longer exists: no handler, not registered, not aliased,
-    # so a call to it is an unknown tool. identity() replaced it; see the
-    # tool-registry entry in docs/CHANGELOG.md. (An earlier note here said it
-    # had its own handler in admin.py; no such handler exists.)
-    #
-    # Common intuitive aliases for agent "status" checking
-    "status": ToolAlias(
-        old_name="status",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note="Use get_governance_metrics() for EISV status. Use identity() for who you are."
-    ),
-    "my_status": ToolAlias(
-        old_name="my_status",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note="Use get_governance_metrics() for EISV status"
-    ),
-    "check_status": ToolAlias(
-        old_name="check_status",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note="Use get_governance_metrics() for EISV status"
-    ),
-    "metrics": ToolAlias(
-        old_name="metrics",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note="Use get_governance_metrics() for EISV status"
-    ),
-    "state": ToolAlias(
-        old_name="state",
-        new_name="get_governance_metrics",
-        reason="intuitive_alias",
-        migration_note="Use get_governance_metrics() for EISV state"
-    ),
-    # Onboarding aliases - common first-call guesses
-    "start": ToolAlias(
-        old_name="start",
-        new_name="onboard",
-        reason="intuitive_alias",
-        migration_note="Use onboard() to start - creates identity and returns templates"
-    ),
-    "init": ToolAlias(
-        old_name="init",
-        new_name="onboard",
-        reason="intuitive_alias",
-        migration_note="Use onboard() to initialize - creates identity and returns templates"
-    ),
-    "register": ToolAlias(
-        old_name="register",
-        new_name="onboard",
-        reason="intuitive_alias",
-        migration_note="Use onboard() to register - creates identity and returns templates"
-    ),
-    "login": ToolAlias(
-        old_name="login",
-        new_name="onboard",
-        reason="intuitive_alias",
-        migration_note="Use onboard() - auto-creates identity, no login needed"
-    ),
-    # Logging work aliases. All carry the complexity normalizer: the friendly
-    # surface accepts named levels and {'value', 'scale'} objects while the
-    # canonical tool stays strict 0-1.
-    "checkin": ToolAlias(
-        old_name="checkin",
-        new_name="process_agent_update",
-        reason="intuitive_alias",
-        migration_note="Use process_agent_update() to check in your work",
-        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
-    ),
-    "log": ToolAlias(
-        old_name="log",
-        new_name="process_agent_update",
-        reason="intuitive_alias",
-        migration_note="Use process_agent_update() to log your work",
-        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
-    ),
-    "update": ToolAlias(
-        old_name="update",
-        new_name="process_agent_update",
-        reason="intuitive_alias",
-        migration_note="Use process_agent_update() to log your work",
-        param_normalizer=_CHECKIN_COMPLEXITY_NORMALIZER,
-    ),
-    "authenticate": ToolAlias(
-        old_name="authenticate",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - auto-creates on first call"
-    ),
-    "session": ToolAlias(
-        old_name="session",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - auto-creates on first call"
-    ),
-    "quick_start": ToolAlias(
-        old_name="quick_start",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - auto-creates on first call"
-    ),
-    "recall_identity": ToolAlias(
-        old_name="recall_identity",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - shows bound identity"
-    ),
-    "bind_identity": ToolAlias(
-        old_name="bind_identity",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - auto-creates on first call"
-    ),
-    "hello": ToolAlias(
-        old_name="hello",
-        new_name="identity",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use identity() - auto-creates on first call"
-    ),
-    "get_agent_api_key": ToolAlias(
-        old_name="get_agent_api_key",
-        new_name="identity",
-        reason="deprecated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="API keys deprecated - UUID is now auth. Use identity() to see your agent_uuid."
-    ),
-    # NOTE: who_am_i is not aliased because it no longer exists; see the note
-    # at the top of this table.
+    # REMOVED 2026-09-28 (operator direction: too many aliases): 24 names
+    # that only redirected a guessed or pre-consolidation name to a tool that
+    # keeps its canonical name (status, start, checkin, log, update, hello,
+    # bind_identity, get_agent_api_key, reply_to_question, ...). No capability
+    # went with them. None was ever advertised in tools/list, so the absence
+    # of calls in audit.tool_usage since 2026-07-31 is telemetry about what
+    # was surfaced, not evidence about value. A caller of a removed name gets
+    # tool_not_found_error with the difflib suggestion. who_am_i was removed
+    # earlier and is not aliased either.
 
     # Recovery tools - consolidated recovery hierarchy (Jan 2026)
     #
@@ -276,15 +147,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     # (ALIAS_TARGET_MISSING at error severity); that history is why this note
     # exists.
 
-    # Dialectic tools - legacy creation remains archived (except request_dialectic_review restored)
-    "request_exploration_session": ToolAlias(
-        old_name="request_exploration_session",
-        new_name="dialectic",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use dialectic(action='get') to view sessions",
-        inject_action="get"
-    ),
     # Dialectic write tools → dialectic(action='...')  (Apr 2026 consolidation)
     "request_dialectic_review": ToolAlias(
         old_name="request_dialectic_review", new_name="dialectic", reason="consolidated",
@@ -306,36 +168,6 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
         old_name="reassign_reviewer", new_name="dialectic", reason="consolidated",
         deprecated_since=_SINCE_TOOL_MODE_ENFORCEMENT,
         migration_note="Use dialectic(action='reassign', session_id='...')", inject_action="reassign"),
-    
-    # Knowledge graph tools
-    "find_similar_discoveries_graph": ToolAlias(
-        old_name="find_similar_discoveries_graph",
-        new_name="search_knowledge_graph",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note=KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE
-    ),
-    "get_related_discoveries_graph": ToolAlias(
-        old_name="get_related_discoveries_graph",
-        new_name="knowledge",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use knowledge(action='details') - includes related discoveries"
-    ),
-    "get_response_chain_graph": ToolAlias(
-        old_name="get_response_chain_graph",
-        new_name="knowledge",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use knowledge(action='details') - includes response chain"
-    ),
-    "reply_to_question": ToolAlias(
-        old_name="reply_to_question",
-        new_name="knowledge",
-        reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use knowledge(action='store', response_to=question_id) to reply"
-    ),
 
     # ==========================================================================
     # Feb 2026 Tool Consolidation - removed tools map to consolidated versions

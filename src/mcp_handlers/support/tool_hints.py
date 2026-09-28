@@ -14,7 +14,4 @@ KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW = (
     "1. knowledge(action='search', discovery_type='question', status='open') "
     "2. Use the discovery_id in response_to"
 )
-KNOWLEDGE_SEARCH_SIMILARITY_MIGRATION_NOTE = (
-    "Use knowledge(action='search', semantic=true) for similarity search"
-)
 
