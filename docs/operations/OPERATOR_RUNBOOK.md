@@ -72,9 +72,12 @@ The `health_check()` tool now also returns `operator_summary`:
 - `overall_status`
 - `failing_checks`
 - `degraded_checks`
+- `not_configured_checks`
 - `first_action`
 
 Use `first_action` as the initial remediation hint instead of reading every component block first.
+
+`not_configured_checks` lists components that are neither healthy nor failing, and they do not move `overall_status`. A check reports `not_configured` when an optional part is not set up, for example no embedder installed and no `UNITARES_EMBEDDING_MODEL` named, so knowledge search uses Postgres full-text search. It reports `no_data_yet` when there is nothing to read yet, for example an audit log that no event has written. An embedder that was asked for and is missing is still `degraded`, and an audit log whose directory cannot be written is still a `warning`.
 
 For a deeper live read from the running server, call `health_check()` through MCP or the REST tool API. The shell script is meant to answer "is the local instance up at all?" while `health_check()` is the better source for component-level diagnosis, such as Redis, calibration DB, the knowledge graph and the lease plane. It does **not** report Pi connectivity — the Mac→Pi coupling was retired by operator decision (#2189). The authoritative list is whatever `get_health_check_data` in `src/services/runtime_queries.py` assembles into `checks[...]`; read it there rather than trusting an enumeration in prose.
 

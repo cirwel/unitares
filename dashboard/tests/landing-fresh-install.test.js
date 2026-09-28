@@ -151,6 +151,15 @@ describe("system health detail", () => {
     const c = await healthCard({ healthy: 9, warning: 0, degraded: 0, unavailable: 1, error: 1 }, "critical");
     expect(c.sub).toBe("9 ok · 0 warn · 1 unavailable · 1 err");
   });
+
+  // A default install has no embedder and has written no audit event yet. The
+  // server reports those as not_configured / no_data_yet, which leave the
+  // overall status alone; the card names them without counting them as ok.
+  it("names not-configured checks under an OK headline without counting them ok", async () => {
+    const c = await healthCard({ healthy: 9, warning: 0, degraded: 0, unavailable: 0, error: 0, not_configured: 1, no_data_yet: 1 }, "healthy");
+    expect(c.num).toBe("OK");
+    expect(c.sub).toBe("9 ok · 0 warn · 1 not configured · 1 no data yet");
+  });
 });
 
 // The bundled snapshot is a capture of one deployment's fleet. On a page served
@@ -231,5 +240,45 @@ describe("snapshot fallback on a served page", () => {
     const settled = state.healthCalls;
     await dom.window.Landing.refreshStats();
     expect(state.healthCalls).toBe(settled);
+  });
+});
+
+// The footer is on every tab. It says where the data comes from, in terms any
+// install can read, and never carries development notes.
+describe("footer", () => {
+  const dataSource = readFileSync(new URL("../redesign/data.js", import.meta.url), "utf8");
+  async function footFor(url, fetchImpl) {
+    const dom = new JSDOM(`
+      <div id="resSrc"></div><div id="residents"></div><div id="attn"></div>
+      <div id="stats"></div><div id="serverStat"></div>
+      <div id="pulseWho"></div><div id="pulseFresh"></div>
+      <div id="riskVal"></div><div id="riskFill"></div>
+      <div id="pulseVerdict"><span></span><span></span></div>
+      <div id="eisv"></div><div id="foot"></div>
+    `, { runScripts: "outside-only", url });
+    dom.window.fetch = fetchImpl;
+    dom.window.SNAPSHOT = {};
+    dom.window.eval(dataSource);
+    dom.window.eval(landingSource);
+    await dom.window.Landing.render();
+    return dom.window.document.getElementById("foot").textContent;
+  }
+  const live = async (u) => ({ ok: true, status: 200, json: async () => (String(u).includes("/health") ? { status: "healthy", version: "t", uptime: "1h" } : String(u).includes("/v1/residents") ? { residents: [] } : { success: true }) });
+  const down = async () => { throw new TypeError("Failed to fetch"); };
+
+  it("says live without development notes", async () => {
+    const text = await footFor("https://gov.example/", live);
+    expect(text).toMatch(/^Live from this server/);
+    expect(text).not.toMatch(/Redesign|tokens\.css|kit\.css/);
+  });
+
+  it("stays honest when the server is not answering", async () => {
+    expect(await footFor("https://gov.example/", down)).toMatch(/Server not answering/);
+  });
+
+  it("calls an offline render a synthetic example", async () => {
+    const text = await footFor("file:///tmp/app.html", down);
+    expect(text).toMatch(/Offline preview/);
+    expect(text).toMatch(/synthetic example/);
   });
 });
