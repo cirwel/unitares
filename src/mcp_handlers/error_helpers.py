@@ -445,7 +445,10 @@ def _knowledge_store_recovery(
     yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
     matching = (
         "Match each item you sent to its own row in it by summary (a long one "
-        "is stored cut short; two items with the same summary need two rows)"
+        "is stored cut short) and, where two items share a summary, by "
+        "details_preview too; if the preview cannot tell them apart, open each "
+        "candidate row with knowledge(action='details', discovery_id=...) and "
+        "compare its details, type and tags with what you sent"
     )
 
     if writer and author.kind == "bound":
@@ -516,8 +519,9 @@ def _knowledge_store_recovery(
             "commits each item on its own, so some items may be saved and "
             "others not. Every store adds a new row, so resending the whole "
             "batch leaves a second finding for every item that landed. "
-            f"{listing} Compare each item you sent, by its summary, against "
-            "those rows and send only the items with no row again. An item "
+            f"{listing} Compare each item you sent against those rows, by "
+            "summary and, for items that share one, by their details, and send "
+            "only the items with no row again. An item "
             "with no row is proven unsaved only when the list was read after "
             f"settled_by and its count is below {limit}."
         )
@@ -680,10 +684,11 @@ def _unknown_outcome_recovery(
                 "been written since this call began. Read again after "
                 "settled_by; if it is still earlier, send the update again",
                 "3. If updated_at is at or after call_started_at, look for what "
-                "you sent: the status you set, and your resolution_notes at the "
-                "end of details (read the tail with offset near "
-                "pagination.total_length). If they are there, the update was "
-                "saved. Do not send it again",
+                "you sent: the status you set, and your resolution_notes in "
+                "details. Another writer may have appended after them, so read "
+                "every page (raise offset until it reaches "
+                "pagination.total_length), not only the tail. If they are "
+                "there, the update was saved. Do not send it again",
                 "4. If the row changed but your fields are still missing on a "
                 "read after settled_by, another writer changed it: send your "
                 "update again",
@@ -710,7 +715,8 @@ def _unknown_outcome_recovery(
         "action": (
             f"Do not call {call_shape} again yet: it may already have taken "
             "effect. Read the state it changes with a read-only tool, and call it "
-            "again only if the change is still missing after settled_by. "
+            "again only if the change is still missing after settled_by and "
+            "repeating it is harmless. "
             f"describe_tool(tool_name='{tool}') lists the related tools."
         ),
         "check_before_retry": f"describe_tool(tool_name='{tool}')",
@@ -718,10 +724,12 @@ def _unknown_outcome_recovery(
             "1. Read the state this call changes with a read-only tool; "
             "describe_tool lists the related tools",
             "2. If the change is there, the call succeeded. Do not send it again",
-            "3. If it is still missing on a read after settled_by, send the call "
-            "again. A statement still running at the timeout has finished by "
-            "then; work the tool handed to a background task can land later. If "
-            "timeouts repeat, call health_check",
+            "3. If it is still missing on a read after settled_by, no database "
+            "statement from this call is still running. settled_by does not "
+            "bound work the tool does outside the database, such as a file write "
+            "or a background task, which can still land later. If repeating it "
+            "is harmless, or a later read still shows no change, send the call "
+            "again. If timeouts repeat, call health_check",
         ],
         "related_tools": list(dict.fromkeys(related)),
     }

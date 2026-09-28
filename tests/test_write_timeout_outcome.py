@@ -438,7 +438,9 @@ def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, share
     assert "send only the items with no row again" in action
     match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
     assert match_step.startswith("2. Match each item you sent to its own row")
-    assert "two items with the same summary need two rows" in match_step
+    # Review round 6: a shared summary cannot say which item landed.
+    assert "where two items share a summary, by details_preview" in match_step
+    assert "knowledge(action='details', discovery_id=...)" in match_step
     assert ("may be another caller's" in match_step) is shared
     assert "after settled_by" in resend_step
     assert "send only those items again" in resend_step
@@ -534,7 +536,9 @@ def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
     steps = " ".join(recovery["workflow"])
     assert "by this call or another" in recovery["action"]
     assert "earlier than call_started_at" in steps
-    assert "your resolution_notes at the end of details" in steps
+    # Review round 6: a later writer's note can push this one out of the tail.
+    assert "your resolution_notes in details" in steps
+    assert "read every page" in steps and "not only the tail" in steps
     assert "pagination.total_length" in steps
     assert "another writer changed it" in steps
 
@@ -568,6 +572,21 @@ def test_no_recovery_resends_before_the_running_statement_has_settled(call):
     for step in resend_steps:
         assert "after settled_by" in step, step
     assert "few seconds" not in json.dumps(recovery)
+
+
+def test_the_generic_resend_does_not_claim_settled_by_bounds_work_outside_the_database():
+    """Review round 6: settled_by bounds a running statement, not a file write
+    or background task the tool handed off, so the resend is conditional."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    recovery = _unknown_outcome_recovery(
+        CallOperation(operation="write", tool="export", action="file"), {},
+    )
+    step = recovery["workflow"][2]
+    assert "settled_by does not bound work the tool does outside the database" in step
+    assert "If repeating it is harmless, or a later read still shows no change" in step
+    assert "repeating it is harmless" in recovery["action"]
 
 
 @pytest.mark.asyncio
