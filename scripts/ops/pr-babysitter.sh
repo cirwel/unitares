@@ -249,7 +249,7 @@ load_manifest() {
     if [ -z "$PR_QUEUE_SENSITIVITY_MANIFEST" ]; then manifest_state="off"; return 0; fi
     manifest_rows=$(cat "$PR_QUEUE_SENSITIVITY_MANIFEST" 2>/dev/null) && manifest_state="ok" || manifest_state="unreadable"
   else
-    manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$BASE" --jq .content 2>/dev/null | base64 --decode 2>/dev/null) \
+    manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$BASE" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
       && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
   fi
 }
