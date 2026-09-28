@@ -25,6 +25,13 @@ false high-risk verdicts on Lumen 2026-05-08" is the reason a constant has the
 value it has. Stripping that provenance would make the code less honest without
 making it more portable. Docstrings are skipped for the same reason.
 
+The exception is Python text the server delivers verbatim. Tool input schemas
+are built from Pydantic models, so a ``Field``'s ``description=``, its
+``json_schema_extra`` ``"brief"`` and the model's docstring reach every agent
+that connects. That text is prose, not code, and gets the served-prose rule: a
+resident name anywhere in it, as a word, is a finding. See "Served schema
+text" below.
+
 Names live in ``FLEET_IDENTITIES`` below, which is the one place in the repo
 they are allowed to appear — the guard has to know what it is looking for, the
 same way a secret scanner carries patterns.
@@ -51,7 +58,7 @@ import ast
 import re
 import sys
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -133,6 +140,16 @@ KNOWN_COUPLINGS: dict[str, str] = {
 # was real; whole-literal matching flags the real ones.
 _NAMES_LOWER = frozenset(n.lower() for n in FLEET_IDENTITIES)
 
+# The served-prose rule: a name anywhere in the text, as a whole word, in any
+# case. Prose has no comments, so every word reaches a reader, and labels are
+# compared case-insensitively, so `lumen` is the same leak as `Lumen`. Word
+# boundaries keep ordinary English out: "Sentinels", "vigilant", "watchers"
+# and "stewardship" are not names. Used for served schema text (below) and
+# for the served non-Python files (further below).
+_NAME_WORD = re.compile(
+    r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
+)
+
 
 def _identity_literal(value: str) -> str | None:
     """Return the identity if the literal IS one, else None."""
@@ -167,7 +184,157 @@ def _docstring_nodes(tree: ast.AST) -> set[int]:
     return out
 
 
-def scan_file(path: Path) -> list[str]:
+# ---------------------------------------------------------------------------
+# Served schema text
+# ---------------------------------------------------------------------------
+# Some string literals in shipped Python are not code at all: they are the
+# tool input schemas every connecting agent is served. src/tool_schemas.py
+# builds each schema from a Pydantic model in these modules. A Field's
+# description= reaches the caller whole through describe_tool, and its first
+# sentence, or its authored json_schema_extra "brief", through tools/list. The
+# model's docstring becomes the schema's own description on both.
+# src/alias_schema.py replaces some of those texts for the workflow aliases.
+#
+# The literal rule only fires on a literal that IS a name, so a name inside a
+# longer description passed it. A Codex review on #2489 caught one the guard
+# had passed: observe's target_agent_id said some audit writers are "stored
+# by name (e.g. system, sentinel)". Those literals are prose, so they get the
+# served-prose rule (_NAME_WORD) instead of the literal rule, and, like the
+# operator domain, no name exemption defers a hit in them.
+#
+# The rule is static, because the guard runs where the project's dependencies
+# are not installed (the Repo Scope Guard workflow). It reads the text where it
+# is written. A bare name is followed to its module-level assignment, so
+# `description=_DESC` is read as the text `_DESC` holds; text imported from
+# another module is not followed. The rule covers the common authored forms
+# and is an early warning, not the complete check:
+# tests/test_fleet_identity_leak_served.py reads every string of the schemas
+# Pydantic actually builds (enum values, call-built defaults and imported text
+# included), so a form this rule does not model is caught there.
+SERVED_SCHEMA_GLOB = "src/mcp_handlers/schemas/*.py"
+SERVED_SCHEMA_FILES = ("src/alias_schema.py",)
+# Schema keywords whose text a caller reads: `description` (describe_tool,
+# and tools/list unless a brief replaces it), `brief` (the authored tools/list
+# short form, in json_schema_extra and in alias overrides), `examples`
+# (advertised as data) and `title` (served when
+# UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep preserves property titles) and
+# `default` (a non-null default is kept in the advertised input schema).
+# Field(...) takes these as keywords (and its default positionally too); the
+# rest are dict entries.
+SERVED_SCHEMA_KEYS = frozenset({"description", "brief", "examples", "title", "default"})
+
+
+def is_served_schema_module(rel: str) -> bool:
+    """True for a module whose literals include served tool-schema text."""
+    path = PurePosixPath(rel)
+    return any(path.match(p) for p in (SERVED_SCHEMA_GLOB, *SERVED_SCHEMA_FILES))
+
+
+def _module_bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
+    """Every ``NAME = value`` and ``NAME: T = value`` at module level or in a
+    class body, by name.
+
+    All of them, not just the last: a class body captures the value a name
+    holds when the class is defined, so a constant reassigned after a model
+    that uses it still serves the earlier text. A class-scoped constant
+    (``_DESC = ...`` then ``Field(description=_DESC)``) is served the same
+    way. Scopes are merged, so a name bound in two places follows both:
+    that over-reads, never under-reads, which is the safe direction for a
+    leak guard.
+    """
+    out: dict[str, list[ast.expr]] = {}
+    bodies = [getattr(tree, "body", [])] + [
+        node.body for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    ]
+    for stmt in (stmt for body in bodies for stmt in body):
+        if isinstance(stmt, ast.Assign):
+            for target in stmt.targets:
+                if isinstance(target, ast.Name):
+                    out.setdefault(target.id, []).append(stmt.value)
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and stmt.value is not None
+            and isinstance(stmt.target, ast.Name)
+        ):
+            out.setdefault(stmt.target.id, []).append(stmt.value)
+    return out
+
+
+def served_schema_nodes(tree: ast.AST) -> set[int]:
+    """ids() of the str Constant nodes whose text a served schema delivers.
+
+    - the value of a keyword in ``SERVED_SCHEMA_KEYS`` on any call: not only
+      ``Field(...)`` but the constructor forms that build the same schema
+      text, such as ``json_schema_extra=dict(brief=...)`` and
+      ``ConfigDict(title=...)``. Any call, rather than a list of known ones,
+      over-reads where a list would miss the next wrapper, and the same
+      keywords on a class statement, where Pydantic also takes model config;
+    - the value of a dict-literal entry keyed by one of them, which covers
+      ``json_schema_extra={"brief": ...}`` and the alias overrides;
+    - a class docstring, which Pydantic serves as the model's description;
+    - a field's default: ``Field``'s first positional argument, and a class
+      attribute's plain value (``x: str = "..."``), which the advertised
+      schema keeps when it is not null.
+
+    Every string inside such a value counts (implicit concatenation, ``+``,
+    f-string parts), and a bare name in it is followed, transitively, to its
+    module-level assignment.
+    """
+    bindings = _module_bindings(tree)
+    roots: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
+            func = node.func
+            is_field = (isinstance(func, ast.Name) and func.id == "Field") or (
+                isinstance(func, ast.Attribute) and func.attr == "Field"
+            )
+            if is_field and node.args:
+                roots.append(node.args[0])  # Field(default, ...)
+        elif isinstance(node, ast.Dict):
+            roots += [
+                value for key, value in zip(node.keys, node.values)
+                if isinstance(key, ast.Constant) and key.value in SERVED_SCHEMA_KEYS
+            ]
+        elif isinstance(node, ast.ClassDef):
+            # Pydantic takes model config as class keywords too:
+            # class P(BaseModel, title=...) serves that title.
+            roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
+            roots += [
+                stmt.value for stmt in node.body
+                if isinstance(stmt, ast.AnnAssign) and stmt.value is not None
+                and not isinstance(stmt.value, ast.Call)  # Field(...) is read above
+            ]
+            first = node.body[0] if node.body else None
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                roots.append(first.value)
+
+    served: set[int] = set()
+    followed: set[str] = set()
+    while roots:
+        for sub in ast.walk(roots.pop()):
+            if isinstance(sub, ast.Constant) and isinstance(sub.value, str):
+                served.add(id(sub))
+            elif (
+                isinstance(sub, ast.Name)
+                and sub.id in bindings
+                and sub.id not in followed
+            ):
+                followed.add(sub.id)
+                roots.extend(bindings[sub.id])
+    return served
+
+
+def scan_file(path: Path, *, served_schema: bool | None = None) -> list[str]:
+    """Findings for one Python file.
+
+    ``served_schema`` says whether the file holds served tool-schema text;
+    left unset, it is decided by the file's path (``is_served_schema_module``).
+    """
     try:
         source = path.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source)
@@ -179,12 +346,16 @@ def scan_file(path: Path) -> list[str]:
         rel = path.relative_to(REPO_ROOT).as_posix()
     except ValueError:
         rel = path.as_posix()
+    if served_schema is None:
+        served_schema = is_served_schema_module(rel)
+    served = served_schema_nodes(tree) if served_schema else set()
     findings: list[str] = []
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
             continue
-        if id(node) in exempt:
+        # A model's docstring is served, so it is not exempt as provenance.
+        if id(node) in exempt and id(node) not in served:
             continue
         domain = _operator_domain_in(node.value)
         if domain:
@@ -192,6 +363,15 @@ def scan_file(path: Path) -> list[str]:
                 f'  {rel}:{node.lineno}: hardcoded operator domain "{domain}" '
                 f"in a string literal"
             )
+        if id(node) in served:
+            # As in served prose, the domain and every name are each reported.
+            for name in dict.fromkeys(_NAME_WORD.findall(node.value)):
+                findings.append(
+                    f'  {rel}:{node.lineno}: fleet identity "{name}" in served '
+                    f"schema text"
+                )
+            continue
+        if domain:
             continue
         found = _identity_literal(node.value)
         if not found:
@@ -207,16 +387,20 @@ def triage(rel: str, hits: list[str]) -> tuple[list[str], list[str]]:
     """Split one file's hits into (failing, known-but-deferred).
 
     ``NOT_IDENTITIES`` and ``KNOWN_COUPLINGS`` are exemptions for resident
-    NAMES — homonyms, and couplings not yet fixed. Neither covers the
-    operator's domain, so a domain hit fails the build in every file.
+    NAMES in code — homonyms, and couplings not yet fixed. Neither covers the
+    operator's domain, so a domain hit fails the build in every file. Nor do
+    they cover served schema text: a homonym argument is about what code does
+    with a word, and a reader of prose cannot tell which job it is doing.
     """
-    domain = [h for h in hits if "operator domain" in h]
-    names = [h for h in hits if "operator domain" not in h]
+    always = [h for h in hits if "operator domain" in h or "served schema text" in h]
+    names = [
+        h for h in hits if "operator domain" not in h and "served schema text" not in h
+    ]
     if rel in NOT_IDENTITIES:
-        return domain, []
+        return always, []
     if rel in KNOWN_COUPLINGS:
-        return domain, names
-    return domain + names, []
+        return always, names
+    return always + names, []
 
 
 # ---------------------------------------------------------------------------
@@ -281,11 +465,10 @@ SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 # is slated to be rewritten or removed, the record can only shrink, and a
 # location pin (line or surrounding text) breaks on every unrelated edit to
 # files that are still live.
+# Empty since 2026-09-27: the last entry, src/tool_descriptions.json, had its
+# two example mentions replaced with generic ones.
 SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {}
 
-_NAME_WORD = re.compile(
-    r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
-)
 _SCRIPT_BLOCK = re.compile(r"(<script\b[^>]*>)(.*?)(</script\b[^>]*>)", re.S | re.I)
 _HIT_VALUE = re.compile(r'"([^"]*)"')
 
@@ -591,7 +774,10 @@ def main() -> int:
         "(src/grounding/class_indicator.py), never name a resident, and must "
         "read hostnames from configuration, never name the operator's domain.\n"
         "Provenance in a COMMENT is fine and is not flagged — only string "
-        "literals in executable code are.\n"
+        "literals in executable code are. Tool-schema text (a Field's "
+        "description or brief, a schema model's docstring) is served to every "
+        "agent, so a resident name anywhere in it is flagged: describe the "
+        "behavior without naming one.\n"
         "See docs/operations/resident-roster.md."
     )
     return 1
