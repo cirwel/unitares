@@ -4,21 +4,32 @@ Writing to `metrics.series` requires the name to be registered here.
 A leaked bearer token therefore cannot inject arbitrary names into the
 time-series — it can only write values for catalog-defined series.
 
-New metrics are added by registering a `Metric` instance at import time.
-Scrape implementations (in scrapers/ modules or the Chronicler agent) are
-separate from catalog entries so the catalog stays a lightweight schema.
+The catalog has two layers. The core layer below is registered at import
+time and ships to every install: it names only product metrics, the ones any
+deployment can produce. A deployment that runs its own producer (a reference
+resident, an operator's scraper) declares that producer's metrics in a JSON
+file named by ``UNITARES_METRICS_CATALOG_EXTRA``; unset, the catalog is the
+core layer alone. Scrape implementations live with their producer, not here,
+so the catalog stays a lightweight schema.
 """
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
+from pathlib import Path
+
+from src.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
 class Metric:
     """A catalog entry for a time-series metric.
 
-    The name is dotted (`tokei.unitares.src.code`) for readability; Postgres
+    The name is dotted (`governance.risk.mean.7d`) for readability; Postgres
     indexes it as plain TEXT, so there is no structural meaning to dots.
 
     `description` shows up in the catalog GET endpoint and dashboard so that
@@ -67,29 +78,21 @@ def require(name: str) -> Metric:
     except KeyError as exc:
         raise KeyError(
             f"Metric {name!r} is not in the catalog. Register it in "
-            f"src/fleet_metrics/catalog.py before writing."
+            f"src/fleet_metrics/catalog.py, or declare it in the file named "
+            f"by {EXTRA_CATALOG_ENV}, before writing."
         ) from exc
 
 
 # ---------------------------------------------------------------------------
-# Initial catalog
+# Core catalog
 # ---------------------------------------------------------------------------
 #
-# Every metric defined here is one that answers a question the operator will
+# Every metric defined here ships to every install, so it must be one any
+# deployment can produce: nothing that names one operator's repos, org or
+# residents. Those go in the deployment's extra catalog file (see
+# load_extra_catalog below). Each entry answers a question an operator will
 # actually ask monthly. New entries should meet the same bar — if nobody will
 # read the resulting chart, it pollutes the surface area without paying rent.
-
-register(Metric(
-    name="tokei.unitares.src.code",
-    description="Lines of code (excluding comments/blanks) in unitares/src/ — Python only.",
-    unit="lines",
-))
-
-register(Metric(
-    name="tests.unitares.count",
-    description="Number of `test_*.py` files in unitares/tests/ — rough proxy for test-surface breadth.",
-    unit="files",
-))
 
 register(Metric(
     name="agents.active.7d",
@@ -113,7 +116,8 @@ register(Metric(
 # time. Live state has always exposed these, but they were never historized,
 # so "is the fleet trending healthier or worse this month?" had no chart. Each
 # is a trailing-7-day aggregate over core.agent_state or audit.events, scraped
-# daily by Chronicler.
+# daily by whichever scraper the deployment runs (the reference one is
+# agents/chronicler/).
 register(Metric(
     name="governance.coherence.mean.7d",
     description="Fleet-mean compatibility coherence over the last 7 days (non-synthetic check-ins). Stratify by producer before interpretation; mixed or legacy_tanh_v rows are not a health trend.",
@@ -133,40 +137,6 @@ register(Metric(
     name="governance.pause.7d",
     description="Hard governance interventions in the last 7 days — actions other than approve/guide (cirs_block, pause, reject). Open-ended so new hard-stop actions fold in.",
     unit="verdicts",
-))
-register(Metric(
-    name="governance.sentinel.findings.7d",
-    description="Sentinel findings (incl. forced-release alarms) in the last 7 days, from durable audit.events. Tracks how much the analytical resident is flagging over time.",
-    unit="findings",
-))
-
-# GitHub traffic for the org the scraper is pointed at (GITHUB_SCRAPE_ORG in
-# agents/chronicler/scrapers.py). The github.cirwel.* names stay as stable keys
-# because renaming a metric orphans its stored series; the org they measure is
-# configuration. The GitHub traffic API only exposes a
-# rolling 14-day window, so daily snapshots overlap heavily by design — the
-# longitudinal value is the trend curve, not point-in-time deltas. Aggregated
-# across all non-archived repos because per-repo series would mean ~64 entries
-# in this catalog before any of them earned their rent.
-register(Metric(
-    name="github.cirwel.traffic.views.14d",
-    description="GitHub page-view count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
-    unit="views",
-))
-register(Metric(
-    name="github.cirwel.traffic.views.uniques.14d",
-    description="GitHub unique-visitor count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
-    unit="visitors",
-))
-register(Metric(
-    name="github.cirwel.traffic.clones.14d",
-    description="GitHub clone count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
-    unit="clones",
-))
-register(Metric(
-    name="github.cirwel.traffic.clones.uniques.14d",
-    description="GitHub unique-cloner count summed across the non-archived repos of the configured org (GITHUB_SCRAPE_ORG). GitHub traffic API rolling 14-day window; not daily delta.",
-    unit="cloners",
 ))
 
 # Numpy ODE step wall-clock — the load-bearing unknown from
@@ -203,3 +173,97 @@ register(Metric(
     description="p99 wall-clock for lease.acquire RPC. Tracks substrate-tax tail at the lease boundary (BEAM↔Python).",
     unit="ms",
 ))
+
+
+# ---------------------------------------------------------------------------
+# Deployment extra catalog
+# ---------------------------------------------------------------------------
+#
+# A JSON file of the shape
+#
+#   {"metrics": [{"name": "...", "description": "...", "unit": "..."}]}
+#
+# whose entries are registered on top of the core layer, `.error` twins
+# included. The reference resident's file is
+# agents/chronicler/metrics_catalog.json. Unset (the default) registers
+# nothing, so an install that runs no such producer advertises only product
+# metrics and a POST of any other name is still refused.
+EXTRA_CATALOG_ENV = "UNITARES_METRICS_CATALOG_EXTRA"
+
+# Everything one malformed entry can raise while being built or registered:
+# KeyError (name or description absent), TypeError (a field is not a string),
+# ValueError (an empty name, or a name already registered with different
+# fields — a core entry is never overridden).
+_ENTRY_ERRORS = (KeyError, TypeError, ValueError)
+
+
+def _metric_from_entry(entry: object) -> Metric:
+    """Build one Metric from an extra-catalog entry, raising on bad input."""
+    if not isinstance(entry, dict):
+        raise TypeError(f"entry must be an object, got {type(entry).__name__}")
+    name = entry["name"]
+    description = entry["description"]
+    unit = entry.get("unit", "")
+    for key, value in (("name", name), ("description", description), ("unit", unit)):
+        if not isinstance(value, str):
+            raise TypeError(f"{key} must be a string, got {type(value).__name__}")
+    if not name.strip():
+        raise ValueError("name must not be empty")
+    return Metric(name=name, description=description, unit=unit)
+
+
+def load_extra_catalog(path: str | Path | None = None) -> list[Metric]:
+    """Register the metrics declared in a deployment's extra catalog file.
+
+    Reads ``path`` if given, else ``UNITARES_METRICS_CATALOG_EXTRA``. Unset or
+    empty registers nothing: the user-agnostic default. A file that is missing,
+    unreadable, unparseable or not of the documented shape registers nothing
+    and logs a WARNING naming it; a malformed or conflicting entry is skipped
+    with a WARNING naming it and the rest still load. It degrades rather than
+    raising because the catalog is imported lazily from inside a running
+    server (the metrics routes and background persistence), where a raise
+    could not stop the start it would need to stop — the same reasoning as the
+    resident-progress manifest loader. Returns the metrics it registered.
+    """
+    raw = str(path) if path is not None else os.environ.get(EXTRA_CATALOG_ENV, "")
+    if not raw.strip():
+        return []
+    catalog_path = Path(raw)
+    try:
+        doc = json.loads(catalog_path.read_text())
+    except FileNotFoundError:
+        logger.warning(
+            "metrics extra catalog %s not found; registering no extra metrics",
+            catalog_path,
+        )
+        return []
+    except (OSError, ValueError, RecursionError) as e:
+        logger.warning(
+            "metrics extra catalog %s unreadable (%s: %s); "
+            "registering no extra metrics",
+            catalog_path, type(e).__name__, e,
+        )
+        return []
+    entries = doc.get("metrics") if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        logger.warning(
+            "metrics extra catalog %s has no \"metrics\" list; "
+            "registering no extra metrics",
+            catalog_path,
+        )
+        return []
+    loaded: list[Metric] = []
+    for index, entry in enumerate(entries):
+        try:
+            loaded.append(register(_metric_from_entry(entry)))
+        except _ENTRY_ERRORS as e:
+            label = entry.get("name") if isinstance(entry, dict) else None
+            logger.warning(
+                "metrics extra catalog %s entry %d (%r) is malformed "
+                "(%s: %s); skipping it",
+                catalog_path, index, label, type(e).__name__, e,
+            )
+    return loaded
+
+
+load_extra_catalog()

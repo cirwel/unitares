@@ -22,6 +22,14 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
+On a release checkout, Compose pulls the coordination lease plane as the image
+published from that release tag (`ghcr.io/cirwel/unitares-lease-plane`) instead
+of compiling Elixir on your machine. If that image cannot be pulled, for
+example for a release that predates it, Compose prints a pull warning and builds
+the lease plane from source. On a `master` checkout, run
+`docker compose up -d --wait --build`: without `--build` the lease plane would
+be the last release's image rather than the source you checked out.
+
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
 live coordination boundary by onboarding two participants, rejecting A's
@@ -32,6 +40,17 @@ The local proof uses one operator and a deployment-specific audience. This
 version intentionally permits one trusted issuer because lease rows do not yet
 persist issuer-qualified principals; it does not establish cross-operator trust
 or outcome benefit.
+
+The same lease plane protects files. With the
+[governance plugin](https://github.com/cirwel/unitares-governance-plugin)
+installed, Claude Code and Codex take a lease on each file before editing it and
+release it afterwards, so a second agent editing the same file in the same
+checkout is refused instead of overwriting the first. With the Compose defaults
+this needs no setup: the plugin presents the stack's development bearer to the
+loopback lease plane. If you set your own `LEASE_PLANE_BEARER_TOKEN` in `.env`,
+put the same line in `~/.config/unitares/secrets.env` (or point
+`UNITARES_SECRETS_ENV` at a file that has it) so the plugin can present it. When
+leases are enabled but would not work, the plugin says so at session start.
 
 Run `make demo` next to send six warmup check-ins and print the real governance
 API response shape. It verifies identity and telemetry wiring; it does not
@@ -51,8 +70,13 @@ POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
   LEASE_PLANE_HOST_PORT=18788 \
   docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
-UNITARES_COORDINATION_DEMO_PORT=18788 make coordination-demo
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo
 ```
+
+The coordination demo talks to both the governance server and the lease plane,
+so give it both ports. With only the lease-plane port it falls back to the
+default governance port, 8767, and registers its demo agents on whatever server
+answers there.
 
 ### Choose a model (optional)
 
