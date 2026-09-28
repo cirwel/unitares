@@ -253,13 +253,18 @@ unmet_required_checks() {
 MANIFEST_PATH_IN_REPO="scripts/dev/governance_sensitivity_manifest.tsv"
 manifest_rows=""
 manifest_state=""  # "", "ok" or "unreadable"
+base_sha=""        # the base's commit this tick judges against, for rules and diff alike
 load_manifest() {
   [ -n "$manifest_state" ] && return 0
   if [ -n "${PR_QUEUE_SENSITIVITY_MANIFEST+set}" ]; then
     if [ -z "$PR_QUEUE_SENSITIVITY_MANIFEST" ]; then manifest_state="off"; return 0; fi
     manifest_rows=$(cat "$PR_QUEUE_SENSITIVITY_MANIFEST" 2>/dev/null) && manifest_state="ok" || manifest_state="unreadable"
   else
-    manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$BASE" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
+    # Pin the base once, so a merge mid-tick cannot pair new rules with an
+    # old diff or the reverse.
+    base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || base_sha=""
+    [ -n "$base_sha" ] \
+      && manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
       && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
   fi
 }
@@ -268,7 +273,7 @@ sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when i
   [ "$manifest_state" = "off" ] && return 1
   [ "$manifest_state" = "ok" ] || { echo "the sensitivity manifest could not be read"; return 0; }
   local cmp path symbol why file patch
-  cmp=$(gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null) \
+  cmp=$(gh api "repos/$REPO/compare/${base_sha:-$BASE}...$1" 2>/dev/null) \
     && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
     || { echo "its diff could not be checked"; return 0; }
   while IFS=$'\t' read -r path symbol why; do
