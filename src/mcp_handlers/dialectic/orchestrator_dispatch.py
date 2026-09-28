@@ -35,6 +35,14 @@ from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
+# Classifier inputs the reviewer child must see exactly as this server does
+# (literal names, listed again in reviewer_config for the flag catalog).
+_CLASSIFIER_SETTINGS = (
+    "UNITARES_MODEL_LOCAL_HOSTS",
+    "UNITARES_MODEL_PRIVACY",
+    "UNITARES_TRUSTED_NETWORKS",
+)
+
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -187,6 +195,14 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         value = os.environ.get(name)
         if value:
             env[name] = value
+
+    # The classifier inputs are forwarded even when empty. The orchestrator
+    # merges this env OVER its own inherited environment, so an omitted key
+    # would let the child keep a stale value (say UNITARES_MODEL_PRIVACY=local)
+    # and classify the endpoint differently from this server. An empty value
+    # reads as unset in local_inference_env, which is what this server used.
+    for name in _CLASSIFIER_SETTINGS:
+        env[name] = os.environ.get(name, "")
 
     # Local model endpoint and model: forward what THIS server resolved
     # (src/local_inference_env.py) under the new name, rather than raw values.

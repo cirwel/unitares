@@ -41,7 +41,12 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from src.local_inference_env import default_local_model, ollama_base_url
+from src.local_inference_env import (
+    classify_endpoint,
+    default_local_model,
+    model_base_url,
+    ollama_base_url,
+)
 
 from . import host_availability
 from .host_adapter import (
@@ -71,9 +76,19 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_SCHEME_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
 def _ollama_host_port() -> tuple[str, int]:
+    """Host and port the configured local endpoint's requests go to.
+
+    A URL with no port uses its scheme's default, the port the OpenAI client
+    will actually connect to (443 for https). 11434 is only the fallback for
+    a URL whose scheme names no default.
+    """
     parsed = urlparse(ollama_base_url())
-    return parsed.hostname or "localhost", parsed.port or 11434
+    port = parsed.port or _SCHEME_DEFAULT_PORTS.get((parsed.scheme or "").lower(), 11434)
+    return parsed.hostname or "localhost", port
 
 
 @dataclass(frozen=True)
@@ -151,6 +166,9 @@ def _hf_token_present() -> bool:
 def _base_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
     hf_configured = _hf_token_present()
+    # The record describes the configured endpoint, not the loopback default:
+    # an endpoint that classifies external is neither local nor free.
+    local_route_is_local = classify_endpoint(model_base_url()).is_local
     return [
         InferenceHost(
             host_id="ollama:local",
@@ -159,8 +177,8 @@ def _base_hosts() -> list[InferenceHost]:
             transport="openai_compatible_http",
             configured=True,
             available=_ollama_available(),
-            privacy_class="local",
-            cost_class="local_free",
+            privacy_class="local" if local_route_is_local else "external",
+            cost_class="local_free" if local_route_is_local else "unknown",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "generation", "analysis"],
             models=[ollama_model],

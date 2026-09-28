@@ -436,3 +436,57 @@ async def test_antithesis_goes_straight_to_the_openai_route_when_not_ollama(monk
     result = await llm_delegation.generate_antithesis({"root_cause": "r"})
     assert result["_degraded"] is True and result["counter_reasoning"] == "a critical antithesis"
     prose.assert_awaited_once()
+
+
+# --- the spawn boundary and discovery follow the classification ---------------
+
+
+def test_reviewer_spawn_blanks_classifier_settings_the_server_leaves_unset(monkeypatch):
+    """The orchestrator merges the spawn env over its own; an omitted key would
+    let the child keep a stale UNITARES_MODEL_PRIVACY=local and classify an
+    external endpoint as local where this server refuses."""
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    for name in od._CLASSIFIER_SETTINGS:
+        monkeypatch.delenv(name, raising=False)
+    spec = od._build_spec("s", {"root_cause": "r", "proposed_conditions": [], "reasoning": ""}, None)
+    for name in od._CLASSIFIER_SETTINGS:
+        assert spec["env"][name] == ""
+
+    monkeypatch.setenv("UNITARES_MODEL_LOCAL_HOSTS", "vllm")
+    spec = od._build_spec("s", {"root_cause": "r", "proposed_conditions": [], "reasoning": ""}, None)
+    assert spec["env"]["UNITARES_MODEL_LOCAL_HOSTS"] == "vllm"
+
+
+@pytest.mark.parametrize(
+    "base, expected",
+    [
+        ("https://models.example.com/v1", ("models.example.com", 443)),
+        ("http://models.internal/v1", ("models.internal", 80)),
+        ("http://localhost:11434/v1", ("localhost", 11434)),
+        ("http://10.0.0.5:8000/v1", ("10.0.0.5", 8000)),
+    ],
+)
+def test_availability_probe_uses_the_port_requests_go_to(monkeypatch, base, expected):
+    from src.mcp_handlers.support import inference_registry
+
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", base)
+    assert inference_registry._ollama_host_port() == expected
+
+
+def test_discovery_reports_an_external_endpoint_as_external(external_endpoint, monkeypatch):
+    from src.mcp_handlers.support import inference_registry
+
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["privacy_class"] == "external"
+    assert host["cost_class"] == "unknown"
+
+
+def test_discovery_keeps_the_default_endpoint_local(monkeypatch):
+    from src.mcp_handlers.support import inference_registry
+
+    monkeypatch.setattr(inference_registry, "_ollama_available", lambda: False)
+    host = inference_registry.get_inference_host("ollama:local")
+    assert host["privacy_class"] == "local"
+    assert host["cost_class"] == "local_free"
