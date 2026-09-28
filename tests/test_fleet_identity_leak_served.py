@@ -298,6 +298,19 @@ def test_schema_text_in_class_keywords_is_flagged(tmp_path):
     assert len(hits) == 1 and 'fleet identity "Lumen" in served schema text' in hits[0]
 
 
+@pytest.mark.parametrize("body", [
+    "    x: str = Field(default='Ask Lumen first')\n",
+    "    x: str = Field('Ask Lumen first')\n",
+    "    x: str = 'Ask Lumen first'\n",
+    "    _DESC = 'Ask Lumen first'\n    x: str = Field(None, description=_DESC)\n",
+])
+def test_defaults_and_class_scoped_constants_are_served_text(tmp_path, body):
+    """Review on #2536: a non-null default is kept in the advertised schema,
+    and a class-scoped constant reaches it as a module one does."""
+    hits = _schema(tmp_path, "from pydantic import BaseModel, Field\nclass P(BaseModel):\n" + body)
+    assert len(hits) == 1 and 'fleet identity "Lumen" in served schema text' in hits[0]
+
+
 def test_schema_model_docstring_is_served_other_docstrings_are_not(tmp_path):
     # Pydantic serves a model's docstring as the schema's description. A
     # module docstring, a validator's docstring and a comment are not served.

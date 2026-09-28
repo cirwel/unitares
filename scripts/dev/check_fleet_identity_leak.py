@@ -214,10 +214,11 @@ SERVED_SCHEMA_FILES = ("src/alias_schema.py",)
 # and tools/list unless a brief replaces it), `brief` (the authored tools/list
 # short form, in json_schema_extra and in alias overrides), `examples`
 # (advertised as data) and `title` (served when
-# UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep preserves property titles).
-# Field(...) takes description=, examples= and title= as keywords; the rest
-# are dict entries.
-SERVED_SCHEMA_KEYS = frozenset({"description", "brief", "examples", "title"})
+# UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep preserves property titles) and
+# `default` (a non-null default is kept in the advertised input schema).
+# Field(...) takes these as keywords (and its default positionally too); the
+# rest are dict entries.
+SERVED_SCHEMA_KEYS = frozenset({"description", "brief", "examples", "title", "default"})
 
 
 def is_served_schema_module(rel: str) -> bool:
@@ -227,16 +228,22 @@ def is_served_schema_module(rel: str) -> bool:
 
 
 def _module_bindings(tree: ast.AST) -> dict[str, list[ast.expr]]:
-    """Every top-level ``NAME = value`` and ``NAME: T = value``, by name.
+    """Every ``NAME = value`` and ``NAME: T = value`` at module level or in a
+    class body, by name.
 
     All of them, not just the last: a class body captures the value a name
     holds when the class is defined, so a constant reassigned after a model
-    that uses it still serves the earlier text. Following every assignment
-    over-reads, never under-reads, which is the safe direction for a leak
-    guard.
+    that uses it still serves the earlier text. A class-scoped constant
+    (``_DESC = ...`` then ``Field(description=_DESC)``) is served the same
+    way. Scopes are merged, so a name bound in two places follows both:
+    that over-reads, never under-reads, which is the safe direction for a
+    leak guard.
     """
     out: dict[str, list[ast.expr]] = {}
-    for stmt in getattr(tree, "body", []):
+    bodies = [getattr(tree, "body", [])] + [
+        node.body for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+    ]
+    for stmt in (stmt for body in bodies for stmt in body):
         if isinstance(stmt, ast.Assign):
             for target in stmt.targets:
                 if isinstance(target, ast.Name):
@@ -261,7 +268,10 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
       keywords on a class statement, where Pydantic also takes model config;
     - the value of a dict-literal entry keyed by one of them, which covers
       ``json_schema_extra={"brief": ...}`` and the alias overrides;
-    - a class docstring, which Pydantic serves as the model's description.
+    - a class docstring, which Pydantic serves as the model's description;
+    - a field's default: ``Field``'s first positional argument, and a class
+      attribute's plain value (``x: str = "..."``), which the advertised
+      schema keeps when it is not null.
 
     Every string inside such a value counts (implicit concatenation, ``+``,
     f-string parts), and a bare name in it is followed, transitively, to its
@@ -272,6 +282,12 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
+            func = node.func
+            is_field = (isinstance(func, ast.Name) and func.id == "Field") or (
+                isinstance(func, ast.Attribute) and func.attr == "Field"
+            )
+            if is_field and node.args:
+                roots.append(node.args[0])  # Field(default, ...)
         elif isinstance(node, ast.Dict):
             roots += [
                 value for key, value in zip(node.keys, node.values)
@@ -281,6 +297,11 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
             # Pydantic takes model config as class keywords too:
             # class P(BaseModel, title=...) serves that title.
             roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
+            roots += [
+                stmt.value for stmt in node.body
+                if isinstance(stmt, ast.AnnAssign) and stmt.value is not None
+                and not isinstance(stmt.value, ast.Call)  # Field(...) is read above
+            ]
             first = node.body[0] if node.body else None
             if (
                 isinstance(first, ast.Expr)
