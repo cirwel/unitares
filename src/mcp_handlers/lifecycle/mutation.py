@@ -4,7 +4,8 @@ Lifecycle mutation handlers — write operations for agent metadata, archiving, 
 Extracted from handlers.py for maintainability.
 """
 
-from typing import Dict, Any, Sequence
+import uuid as _uuid
+from typing import Dict, Any, Optional, Sequence, Tuple
 from mcp.types import TextContent
 from datetime import datetime, timezone
 
@@ -50,6 +51,130 @@ PRIVILEGED_TAGS = frozenset({
     "pioneer",
     "anima",
 })
+
+
+def _canonical_uuid(value: Any) -> Optional[str]:
+    """``value`` as a canonical lowercase UUID string, or None if it is not one."""
+    try:
+        return str(_uuid.UUID(str(value)))
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+# Where a caller gets a target's UUID, for the refusals below. agent(action=
+# 'list') alone is not an answer: it shows another agent's UUID only to an
+# operator caller and gives anyone else a public handle for that row
+# (lifecycle/query.py _visible_agent_identifier), which _require_named_target
+# refuses. A caller's own row keeps its UUID.
+_FINDING_THE_UUID = (
+    "Your own UUID is the uuid start_session returned. agent(action='list') "
+    "shows other agents' UUIDs only to operator callers (X-Unitares-Operator "
+    "header); anyone else gets public handles there, which archive and delete "
+    "refuse, so without operator credentials name your own UUID or one you "
+    "were given."
+)
+
+
+def _require_named_target(
+    arguments: Dict[str, Any], action: str,
+) -> Tuple[Optional[str], Optional[TextContent]]:
+    """The UUID a destructive action names in ``agent_id``, or a refusal.
+
+    archive and delete act on another agent as readily as on the caller, so
+    they never fall back to the caller's own identity: dispatch does not inject
+    the session's id for them (middleware/params_step.py), and a call that
+    names no target is refused here before anything resolves one. Until
+    2026-09-27 agent(action='delete', confirm=true) with no agent_id deleted
+    the caller, and describe_tool's lite view of both actions hid agent_id.
+
+    Only a UUID names a target. A label is self-claimed, public_agent_id is
+    shared by most identities that carry one (src/mcp_handlers/dialectic/
+    auth.py), and require_registered_agent resolves either to the first
+    cached holder, so delete(agent_id='<shared handle>') could delete an
+    arbitrary agent. A metadata key is no better: legacy rows are keyed by
+    their old non-UUID agent_id, which can equal another agent's handle.
+    The UUID is returned canonical and written back to ``agent_id``; the
+    handler then requires the resolved agent to be exactly it.
+    """
+    named = arguments.get("agent_id")
+    if isinstance(named, str):
+        named = named.strip()
+    if not named:
+        example = (
+            "agent(action='delete', agent_id='<agent UUID>', confirm=true)"
+            if action == "delete"
+            else f"agent(action='{action}', agent_id='<agent UUID>')"
+        )
+        return None, error_response(
+            f"agent(action='{action}') needs agent_id, the UUID of the agent to "
+            f"{action}. It never defaults to your own agent.",
+            error_code="TARGET_AGENT_REQUIRED",
+            error_category="validation_error",
+            details={
+                "error_type": "target_agent_required",
+                "action": action,
+                "parameter": "agent_id",
+            },
+            recovery={
+                "action": (
+                    f"Pass agent_id: the UUID of the agent to {action}. "
+                    + _FINDING_THE_UUID
+                ),
+                "related_tools": ["agent"],
+                "example": example,
+            },
+        )
+    canonical = _canonical_uuid(named)
+    if canonical is None:
+        return None, error_response(
+            f"agent_id '{named}' is not an agent UUID, so nothing was "
+            f"{_DONE[action]}. {action} takes the target's UUID: labels and "
+            "public ids are shared by many agents and never select one to "
+            "archive or delete.",
+            error_code="TARGET_AGENT_UUID_REQUIRED",
+            error_category="validation_error",
+            details={
+                "error_type": "target_agent_uuid_required",
+                "action": action,
+                "agent_id": str(named),
+            },
+            recovery={
+                "action": "Pass the agent's UUID as agent_id. " + _FINDING_THE_UUID,
+                "related_tools": ["agent"],
+            },
+        )
+    arguments["agent_id"] = canonical
+    return canonical, None
+
+
+_DONE = {"archive": "archived", "delete": "deleted"}
+
+
+def _target_not_found_error(named: str, action: str) -> TextContent:
+    """The named UUID did not resolve to that agent.
+
+    require_registered_agent resolves an id it cannot find to the session's
+    bound agent, which is right for a caller naming itself and wrong for a
+    target: archive(agent_id='<unknown UUID>') archived the caller.
+    """
+    return error_response(
+        f"agent_id '{named}' names no registered agent, so nothing was "
+        f"{_DONE[action]}. {action} never falls back to your own agent.",
+        error_code="TARGET_AGENT_NOT_FOUND",
+        error_category="validation_error",
+        details={
+            "error_type": "target_agent_not_found",
+            "action": action,
+            "agent_id": named,
+        },
+        recovery={
+            "action": (
+                "Pass the UUID of a registered agent as agent_id. "
+                + _FINDING_THE_UUID
+            ),
+            "related_tools": ["agent"],
+        },
+    )
 
 
 @mcp_tool("update_agent_metadata", timeout=10.0, register=False)
@@ -215,8 +340,13 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 
     No ownership check -- dashboard and operator agents need to archive
     other agents. HTTP Bearer token auth is sufficient for admin actions.
-    Mirrors handle_resume_agent pattern.
+    Mirrors handle_resume_agent pattern. The target is always named: see
+    _require_named_target.
     """
+    named, missing = _require_named_target(arguments, "archive")
+    if missing:
+        return [missing]
+
     # SECURITY FIX: Require registered agent_id (prevents phantom agent_ids)
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -234,6 +364,9 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         return agent_not_found_error(agent_id)
 
     meta = mcp_server.agent_metadata[agent_uuid]
+
+    if agent_uuid != named:
+        return [_target_not_found_error(named, "archive")]
 
     if meta.status == "archived":
         return [error_response(
@@ -347,8 +480,13 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     No ownership check -- dashboard and operator agents need to manage
     other agents. HTTP Bearer token auth is sufficient for admin actions.
-    Still requires confirm=true and pioneer protection.
+    Still requires confirm=true and pioneer protection. The target is always
+    named: see _require_named_target.
     """
+    named, missing = _require_named_target(arguments, "delete")
+    if missing:
+        return [missing]
+
     # SECURITY FIX: Require registered agent_id (prevents phantom agent_ids)
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -369,6 +507,9 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         return agent_not_found_error(agent_id)
 
     meta = mcp_server.agent_metadata[agent_uuid]
+
+    if agent_uuid != named:
+        return [_target_not_found_error(named, "delete")]
 
     # Check if agent is a pioneer (protected)
     if "pioneer" in meta.tags:

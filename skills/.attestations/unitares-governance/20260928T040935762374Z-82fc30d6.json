@@ -1,0 +1,29 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-09-28T04:09:35Z",
+  "verified_date": "2026-09-28",
+  "verifier": "claude-opus-5-5 (adopting #2540 for the operator): re-checked against this PR merged with master; the PR adds a non-authoritative dialectic 'consult' action (handler plus route and example in consolidated.py). No skill claims the dialectic action list is complete, and the bind-before-submit gate text covers thesis/antithesis/synthesis only, which is unchanged; envelope_step.py and skills/unitares-dashboard/SKILL.md now equal master's and were stale only against this branch's pre-merge attestations",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "56706d3723b19b29",
+    "unitares/skills/governance-fundamentals/SKILL.md": "5aec85ceeac4aa52",
+    "unitares/skills/governance-lifecycle/SKILL.md": "724d8ac3660ecc1f",
+    "unitares/skills/knowledge-graph/SKILL.md": "e183a6dc8b828355",
+    "unitares/skills/unitares-dashboard/SKILL.md": "4270bc06ca300d3d",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "36cb632881613e42",
+    "unitares/src/mcp_handlers/identity/handlers.py": "ccd5919013452344",
+    "unitares/src/mcp_handlers/identity/session.py": "f2639212259aa5c7",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "d2aa474fae0e4368",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "3dcff3cee850f677",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "cce173b777ca01c3"
+  },
+  "skill_digest": "5d75aa508232f1f9"
+}

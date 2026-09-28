@@ -54,7 +54,7 @@ async def _sweep(sessions):
     """Run the sweeper over `sessions`, capturing terminal writes."""
     failed: list[str] = []
 
-    async def _fake_status(session_id, status):
+    async def _fake_status(session_id, status, winner=None):
         failed.append(session_id)
         return True
 
@@ -62,6 +62,8 @@ async def _sweep(sessions):
          patch(f"{AUTO}.update_session_status_async", new=_fake_status), \
          patch(f"{AUTO}.add_message_async", new_callable=AsyncMock), \
          patch(f"{AUTO}.has_inflight_saga_async", new_callable=AsyncMock, return_value=False), \
+         patch(f"{AUTO}.probe_saga_since_async", new_callable=AsyncMock, return_value={}), \
+         patch(f"{AUTO}.emit_guarded_write", new_callable=AsyncMock), \
          patch(f"{AUTO}.emit_sweep_cycle", new_callable=AsyncMock):
         await auto_resolve.auto_resolve_stuck_sessions()
     return failed

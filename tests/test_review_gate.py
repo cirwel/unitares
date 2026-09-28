@@ -26,6 +26,7 @@ read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
 require_open = rg.require_open
 real_disabled_providers = rg.disabled_providers
+shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +37,10 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
     # The tracked provider switch reflects today's outages; unit tests pin it.
     monkeypatch.setattr(rg, "disabled_providers", lambda: {})
+    # The round cap is switched off in the shipped config (ROUND_CAP_ENABLED);
+    # the cap tests pin it on so the mechanism stays tested for re-enabling.
+    # The tests of the shipped default set it off explicitly.
+    monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", True)
     # Whether the agy CLI is installed must not change unit behaviour.
     monkeypatch.setattr(rg, "optional_cli_installed", lambda p: p not in rg.OPTIONAL_CLI)
 
@@ -1221,6 +1226,24 @@ def test_check_description_shows_the_round():
     assert rg.round_note(None) == "" and rg.round_note(rg.CodexRounds()) == ""
     assert rg.round_note(rg.CodexRounds(2)) == " · review round 2 of 3"
     assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
+
+
+def test_round_cap_ships_switched_off():
+    # Operator decision, 2026-09-27: every round gets a full review.
+    assert shipped_round_cap_enabled is False
+
+
+def test_switched_off_cap_never_caps_a_p2_fix_loop(monkeypatch):
+    monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", False)
+    specs = [(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z") for i in range(1, 5)]
+    specs.append((5, "5" * 40, "2026-09-23T05:00:00Z", ["P2", "P2"]))
+    rounds = rg.codex_rounds([], *_rounds(*specs))
+    assert rounds.count == 5 and not rounds.capped()
+
+
+def test_switched_off_cap_shows_the_round_without_a_limit(monkeypatch):
+    monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", False)
+    assert rg.round_note(rg.CodexRounds(4)) == " · review round 4"
 
 
 def _capped(repo, monkeypatch, verifier="", answers=()):

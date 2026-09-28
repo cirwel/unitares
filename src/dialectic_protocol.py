@@ -198,6 +198,14 @@ class ResolutionAction(Enum):
     COOLDOWN = "cooldown"      # Pause and retry later
 
 
+#: Transcript entries that are records, not protocol moves. A consult is an
+#: outside verdict filed beside the review (dialectic action='consult'): it
+#: never advances a phase, is never a verdict, and never resets a clock. Every
+#: protocol scan already selects thesis/antithesis/synthesis by name; the one
+#: place that read "the last message" unfiltered is get_last_update_timestamp.
+NON_PROTOCOL_PHASES = frozenset({"consult"})
+
+
 @dataclass
 class DialecticMessage:
     """
@@ -658,7 +666,9 @@ class DialecticSession:
         self.session_type = session_type  # "review", "recovery", "dispute", or "exploration"
         self.topic = topic  # Optional topic/theme for exploration sessions
         self.reason = reason  # Why the session was created (human-readable)
-        self.trigger_source = trigger_source  # "circuit_breaker", "manual", "loop_detection", etc.
+        # "manual" for any request made through the tool; an in-process trigger
+        # names itself ("circuit_breaker"). See AutomatedTrigger.
+        self.trigger_source = trigger_source
         # Exploration sessions can have more rounds (default: 10 for exploration, 5 for recovery)
         self.max_synthesis_rounds = max_synthesis_rounds if session_type != "exploration" else max(max_synthesis_rounds, 10)
 
@@ -1462,10 +1472,14 @@ class DialecticSession:
 
     def get_last_update_timestamp(self) -> Optional[datetime]:
         """Get timestamp of last transcript update"""
-        if not self.transcript:
+        protocol_messages = [
+            msg for msg in self.transcript
+            if getattr(msg, "phase", None) not in NON_PROTOCOL_PHASES
+        ]
+        if not protocol_messages:
             return self.created_at
 
-        last_msg = self.transcript[-1]
+        last_msg = protocol_messages[-1]
         try:
             return datetime.fromisoformat(last_msg.timestamp)
         except (ValueError, TypeError):
