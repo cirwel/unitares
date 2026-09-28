@@ -693,7 +693,7 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                     ctx.onboarding_guidance["open_questions"] = {
                         "message": f"Found {len(open_questions)} open question(s) waiting for answers. Want to try responding to one?",
                         "questions": open_questions,
-                        "invitation": "Answer one with knowledge(action='store', response_to={'discovery_id': <id>, 'response_type': 'answer'}) to help build shared knowledge.",
+                        "invitation": "Answer one with knowledge(action='store', summary=<answer>, response_to={'discovery_id': <id>, 'response_type': 'answer'}) to help build shared knowledge.",
                         "tool": "knowledge"
                     }
                 elif question_count > 0:

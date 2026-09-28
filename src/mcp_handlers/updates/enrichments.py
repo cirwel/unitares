@@ -719,9 +719,9 @@ def enrich_onboarding_info(ctx: UpdateContext) -> None:
                 if os.getenv("UNITARES_INCLUDE_API_KEY_IN_RESPONSES") == "1" or os.getenv("PYTEST_CURRENT_TEST"):
                     ctx.response_data["api_key"] = meta.api_key
             if ctx.is_new_agent:
-                ctx.response_data["api_key_warning"] = "API keys are deprecated: the agent UUID is the credential. Call identity() to see your agent_uuid."
+                ctx.response_data["api_key_warning"] = "API keys are deprecated: the agent UUID is the credential. identity(client_session_id='...') with this process's saved session id shows your agent_uuid."
             elif ctx.key_was_generated:
-                ctx.response_data["api_key_warning"] = "API key regenerated (migration). API keys are deprecated: the agent UUID is the credential. Call identity() to see your agent_uuid."
+                ctx.response_data["api_key_warning"] = "API key regenerated (migration). API keys are deprecated: the agent UUID is the credential. identity(client_session_id='...') with this process's saved session id shows your agent_uuid."
             elif ctx.api_key_auto_retrieved:
                 ctx.response_data["api_key_info"] = "Session authenticated via stored credentials. No need to pass api_key."
 
