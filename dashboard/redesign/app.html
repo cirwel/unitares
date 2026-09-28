@@ -134,8 +134,14 @@
           <div>
             <div class="risk-label"><span class="k">Risk</span><span class="v" id="riskVal">—</span></div>
             <div class="track"><div class="fill" id="riskFill" style="width:0%"></div></div>
+            <!-- Edges of the default risk tiers (config/governance_config.py
+                 RISK_APPROVE_THRESHOLD 0.45, RISK_REVISE_THRESHOLD 0.70): below
+                 0.45 the action is proceed, then guide, then pause. The verdict
+                 pill, not this bar, is what the server decided: an operator can
+                 override the edges at runtime, and void/coherence pauses do not
+                 read risk at all. -->
             <div class="ticks">
-              <span style="left:35%">approve</span><span style="left:60%">proceed</span><span style="left:70%">pause</span>
+              <span style="left:45%">guide</span><span style="left:70%">pause</span>
             </div>
           </div>
           <div class="eisv" id="eisv"></div>

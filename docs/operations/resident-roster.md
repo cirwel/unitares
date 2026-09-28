@@ -222,6 +222,35 @@ Packs are named for what they serve, never for a resident, for the reason in
 the next-but-one section. Declaring residents in `UNITARES_RESIDENTS` does not
 mount a pack; the two settings are independent.
 
+## Metrics extra catalog (`UNITARES_METRICS_CATALOG_EXTRA`)
+
+`POST /v1/metrics` writes only names in the metrics catalog, and
+`GET /v1/metrics/catalog` lists that catalog to every client. The core layer in
+`src/fleet_metrics/catalog.py` holds product metrics any install can produce
+(`agents.active.7d`, `kg.entries.count`, `governance.*`, `ode.*`,
+`lease_plane.*`). A metric about one deployment's own repo, GitHub org or
+residents is declared next to its producer in a JSON file and registered only
+when the governance server's `UNITARES_METRICS_CATALOG_EXTRA` names that file:
+
+```
+UNITARES_METRICS_CATALOG_EXTRA=/path/to/unitares/agents/chronicler/metrics_catalog.json
+```
+
+The reference Chronicler's file declares its repository-size, test-count,
+Sentinel-findings and GitHub-traffic series. Unset (the default) registers
+nothing, so an install that runs no such scraper neither lists those names nor
+accepts writes to them. Each entry is `{"name", "description", "unit"}` under a
+top-level `"metrics"` list and gets the same `.error` twin as a core entry.
+Data already in `metrics.series` stays readable through `/v1/metrics/series`
+whether or not its name is registered.
+
+A file that is missing, unreadable or not of that shape registers nothing, and
+an entry that is malformed or reuses a registered name with different fields is
+skipped; each case logs a `WARNING` beginning `metrics extra catalog`. A
+skipped name is then refused at `POST /v1/metrics` (404), which the scraper logs.
+The file is read once, when the catalog is first imported, so a change needs a
+server restart.
+
 ## Calibration note
 
 Each named resident becomes its own N=1 calibration class: `classify_agent`
