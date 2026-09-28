@@ -124,6 +124,11 @@ def test_transport_runtime_adds_a_loopback_public_listener(monkeypatch):
         assert cfg.port == runtime.public_socket.getsockname()[1] != 0
         assert cfg.proxy_headers is True
         assert cfg.forwarded_allow_ips == runtime.server.config.forwarded_allow_ips
+        # Both listeners apply X-Forwarded-For from every loopback form the REST
+        # trusted-network check trusts (tests/test_trusted_networks.py).
+        from src.services.mcp_transport_service import FORWARDED_ALLOW_IPS
+
+        assert runtime.server.config.forwarded_allow_ips == FORWARDED_ALLOW_IPS
     finally:
         runtime.public_socket.close()
 
