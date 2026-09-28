@@ -236,10 +236,27 @@ unmet_required_checks() {
 # GitHub's compare of base...<head>. It fails closed: no manifest, an
 # unreadable or possibly truncated compare, or a matched file with no patch to
 # inspect all count as sensitive.
-SENSITIVITY_MANIFEST="${PR_QUEUE_SENSITIVITY_MANIFEST-$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)/scripts/dev/governance_sensitivity_manifest.tsv}"
+# The manifest is read from the base branch through GitHub, not from this
+# script's checkout: the deploy tree can lag master, and CI judges against
+# master's manifest. PR_QUEUE_SENSITIVITY_MANIFEST names a local file instead
+# (tests; "" disables the check). Read once per tick.
+MANIFEST_PATH_IN_REPO="scripts/dev/governance_sensitivity_manifest.tsv"
+manifest_rows=""
+manifest_state=""  # "", "ok" or "unreadable"
+load_manifest() {
+  [ -n "$manifest_state" ] && return 0
+  if [ -n "${PR_QUEUE_SENSITIVITY_MANIFEST+set}" ]; then
+    if [ -z "$PR_QUEUE_SENSITIVITY_MANIFEST" ]; then manifest_state="off"; return 0; fi
+    manifest_rows=$(cat "$PR_QUEUE_SENSITIVITY_MANIFEST" 2>/dev/null) && manifest_state="ok" || manifest_state="unreadable"
+  else
+    manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$BASE" --jq .content 2>/dev/null | base64 --decode 2>/dev/null) \
+      && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
+  fi
+}
 sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when it is not
-  [ -n "$SENSITIVITY_MANIFEST" ] || return 1
-  [ -f "$SENSITIVITY_MANIFEST" ] || { echo "the sensitivity manifest is missing"; return 0; }
+  load_manifest
+  [ "$manifest_state" = "off" ] && return 1
+  [ "$manifest_state" = "ok" ] || { echo "the sensitivity manifest could not be read"; return 0; }
   local cmp path symbol why file patch
   cmp=$(gh api "repos/$REPO/compare/$BASE...$1" 2>/dev/null) \
     && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
@@ -252,7 +269,7 @@ sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when i
     patch=$(jq -r '.patch // empty' <<<"$file")
     [ -n "$patch" ] || { echo "$path (no patch to check)"; return 0; }
     grep -E '^[+-][^+-]' <<<"$patch" | grep -Eq -- "$symbol" && { echo "$path"; return 0; }
-  done < <(grep -v '^#' "$SENSITIVITY_MANIFEST" | grep -v '^[[:space:]]*$')
+  done < <(grep -v '^#' <<<"$manifest_rows" | grep -v '^[[:space:]]*$')
   return 1
 }
 
@@ -261,6 +278,8 @@ latest_label_time() {
   t=$(approval_times "$1") || return 2
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
+
+load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
 
 # --- 1. tidy the slot -----------------------------------------------------------
 # Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
