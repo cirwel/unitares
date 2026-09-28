@@ -64,6 +64,10 @@ SUITES = (
         (["tests/vendored/fermata-governed-effect-ir-v0.schema.json"], True),
         # What the lease_plane job's `docker compose up postgres-age` consumes.
         (["docker-compose.yml"], True),
+        # The admin overlay the same step layers on top to publish postgres-age's
+        # port for `mix test` on the runner (see docs/DEPLOYMENT_SECURITY.md) --
+        # a change to it alone can break that startup too.
+        (["docker-compose.admin.yml"], True),
         (["Dockerfile"], True),
         ([".dockerignore"], True),
         ([".github/workflows/elixir-tests.yml"], True),
