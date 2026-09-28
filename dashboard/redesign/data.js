@@ -318,7 +318,11 @@
           systemHealthDetail: hb ? `${hb.healthy || 0} ok · ${hb.warning || 0} warn`
             + (hb.degraded ? ` · ${hb.degraded} degraded` : "")
             + (hb.unavailable ? ` · ${hb.unavailable} unavailable` : "")
-            + (hb.error ? ` · ${hb.error} err` : "") : null,
+            + (hb.error ? ` · ${hb.error} err` : "")
+            // Not set up, or nothing recorded yet: named, never counted as ok
+            // or as a fault (src/services/runtime_queries.py NEUTRAL_STATUSES).
+            + (hb.not_configured ? ` · ${hb.not_configured} not configured` : "")
+            + (hb.no_data_yet ? ` · ${hb.no_data_yet} no data yet` : "") : null,
           degraded: [agentsR, kgR, dlcR, healthR].filter((x) => !x).length,
         };
       // LAZY, deliberately. This used to read `const snap = S().stats` as the
@@ -641,6 +645,29 @@
       return authFetch("/auth/sessions", {
         headers: { "X-Unitares-Csrf": "1" },
       });
+    },
+
+    // Whether this server has passkeys configured at all. Every passkey
+    // ceremony answers 503 {"error": "passkey sign-in is not configured",
+    // "fix": ...} while UNITARES_DASHBOARD_RP_ID is unset
+    // (src/dashboard_auth.py _passkeys_unconfigured); GET /auth/enroll is the
+    // cheapest of them and needs no credential. Returns
+    // { configured: false, fix } only on that exact answer, { configured: true }
+    // on any other response, and null when the server could not be asked:
+    // "could not tell" is never reported as either state. Never throws.
+    async passkeyConfig() {
+      try {
+        const r = await fetch("/auth/enroll", { credentials: "same-origin" });
+        if (r.status === 503) {
+          let j = null;
+          try { j = await r.json(); } catch { j = null; }
+          if (j && j.error === "passkey sign-in is not configured") {
+            return { configured: false, fix: typeof j.fix === "string" ? j.fix : null };
+          }
+          return null;
+        }
+        return { configured: true };
+      } catch { return null; }
     },
 
     async logoutDashboardSession() {

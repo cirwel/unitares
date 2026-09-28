@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Check skill freshness against the content of the sources each skill cites.
 # Exit 0 if all fresh, exit 1 if any stale. Suitable as pre-commit hook.
-# `--stamp NAME...` re-records a skill after its claims were re-checked.
+# `--stamp NAME...` re-records a skill after its claims were re-checked. Set
+# SKILL_ATTESTATION_VERIFIER to who re-checked them; without it, only a person
+# at a terminal falls back to git user.name (if set), and any other stamp is
+# refused.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
