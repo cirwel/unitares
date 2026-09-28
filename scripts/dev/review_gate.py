@@ -1656,29 +1656,29 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # The record is diff-bound: message amendments and base-only merges
         # remain valid. Use the fetched head, not an API SHA from before a push.
         fetched_key = diff_key(base_ref, head_ref)
+        fetched_head = git("rev-parse", head_ref).strip()
         current = fetched_key == key
         open_finding = None
-        if not current:
-            # A base merge GitHub made during the review is the same PR change,
-            # as CI's carry decides it; the reviewed diff is still the current
-            # one. CI then decides the merged head's key, so read it as CI
-            # does: a finding posted there meanwhile keeps the PR blocked.
+        if fetched_head != head:
+            # The head moved during the review: an amend, or a base merge GitHub
+            # made. A clean base merge is the same PR change, as CI's carry
+            # decides it, even when it moved the key. CI then decides the
+            # fetched head with that chain, so read it as CI does: a finding
+            # posted meanwhile, on any key or native to either head, keeps the
+            # PR blocked.
             equivalents = base_merge_equivalents(base_ref, head_ref)
-            current = key in {k for k, _ in equivalents}
+            current = current or key in {k for k, _ in equivalents}
             if current:
-                fetched_head = git("rev-parse", head_ref).strip()
-                saved = _CARRY.get((repo, pr))
                 _CARRY[(repo, pr)] = (fetched_key, equivalents)
                 try:
                     latest = current_record(repo, pr, fetched_key, fetched_head,
                                             pr_comments(repo, pr))
                 finally:
                     # The caller's later checks (the second-family pass) key on
-                    # `key`. Give them the whole chain under it: what `_resolve`
-                    # registered plus the merged head, whose records and native
-                    # reviews CI counts for this diff too.
-                    earlier = saved[1] if saved and saved[0] == key else []
-                    _CARRY[(repo, pr)] = (key, [*earlier, (fetched_key, fetched_head)])
+                    # `key`. Give them CI's own set under it: the fetched head's
+                    # chain and the fetched head itself.
+                    _CARRY[(repo, pr)] = (key, [*((k, c) for k, c in equivalents if k != key),
+                                                (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
     except SystemExit as exc:

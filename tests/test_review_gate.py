@@ -213,8 +213,9 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
     monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
     # _resolve registered the reviewed key's view. The second-family pass that
     # follows the handoff still keys on it (Codex on #2568), so afterwards the
-    # view stays under that key and adds the merged head: CI counts a family
-    # recorded on either.
+    # view stays under that key but holds CI's own set: the merged head and its
+    # chain. A key _resolve's older walk reached and CI's no longer does
+    # ("older") drops out, or the pass could count a family CI does not.
     earlier = [("older", "c0ffee")]
     monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, earlier)})
     assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == expected
@@ -222,8 +223,41 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
         assert rg._CARRY == {("o/r", 1): (reviewed_key, earlier)}
     else:
         merged = (rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD"))
-        assert rg._CARRY == {("o/r", 1): (reviewed_key, [*earlier, merged])}
+        assert rg._CARRY == {("o/r", 1): (reviewed_key, [merged])}
     assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
+
+
+@pytest.mark.parametrize("native_finding", [False, True])
+def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_repo, monkeypatch,
+                                                                       native_finding):
+    # Codex on #2568: a base merge that touches only files outside the PR keeps
+    # the key but moves the head, and CI reads native reviews of the new head.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    merged = {}
+
+    def pr_info(*args):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("y\n")
+        _git(carry_repo, "commit", "-q", "-am", "master edits a file the PR does not")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        merged["head"] = _git(carry_repo, "rev-parse", "HEAD")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    def read_native(repo, pr, key, head, comments):
+        found = native_finding and head == merged["head"]
+        return rg.NativeReview([rg.Record(key, "FINDINGS", 1, False, "codex-native")] if found else [])
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", read_native)
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == (1 if native_finding else 0)
+    assert rg.diff_key("master", "HEAD") == reviewed_key
+    assert rg._CARRY[("o/r", 1)][1][-1] == (reviewed_key, merged["head"])
 
 
 def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):
@@ -1152,6 +1186,8 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
         return {"headRefOid": head, "baseRefName": "master", "state": "OPEN"}
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
+    # An amend moves the head, so the handoff reads the PR's records as CI does.
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     assert completed_review_exit("o/r", 1, key, head, 0) == expected
     assert _git(repo, "for-each-ref", "refs/review-gate/handoff") == ""
 
@@ -1159,6 +1195,7 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
 @pytest.mark.parametrize("fetch_fails", [False, True])
 def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, fetch_fails):
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     destinations, removed, compared = [], [], []
 
     def git(*args, **kwargs):
