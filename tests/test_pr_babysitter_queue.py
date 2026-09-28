@@ -402,8 +402,8 @@ def test_a_failed_arm_stops_the_tick(tmp_path: Path) -> None:
 # --- the slot -------------------------------------------------------------------
 
 
-def test_an_armed_pr_holds_the_queue_even_when_armed_by_hand(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, state="BLOCKED"), _pr(4)])
+def test_an_operator_arm_holds_the_queue(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=("operator-armed",), armed_min_ago=5, state="BLOCKED"), _pr(4)])
     assert calls == []
 
 
@@ -421,17 +421,19 @@ def test_an_approved_armed_pr_that_failed_on_its_head_is_disarmed(tmp_path: Path
     assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
 
-def test_an_armed_pr_failed_on_a_stale_head_keeps_the_slot(tmp_path: Path) -> None:
+def test_a_script_armed_pr_failed_on_a_stale_head_is_disarmed_and_updated(tmp_path: Path) -> None:
     calls, _ = _run(
-        tmp_path, [_pr(3, armed_min_ago=20, state="BEHIND", checks=[_check("test", "FAILURE")]), _pr(4)]
+        tmp_path, [_pr(3, armed_min_ago=20, state="BEHIND", checks=[_check("test", "FAILURE")]), _pr(4)],
+        arms={3: 20},
     )
-    assert calls == []
+    # Script-armed and BEHIND: disarmed at once and updated (never armed across a new head).
+    assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
 
 
-def test_a_hand_armed_pr_is_never_disarmed_and_keeps_the_slot_while_conflicting(tmp_path: Path) -> None:
-    # Arming #4 would leave two armed the moment #3's conflict is resolved.
+def test_a_hand_armed_conflicting_pr_is_disarmed(tmp_path: Path) -> None:
+    # The queue owns arming: a hand-arm is disarmed, and the queue moves on.
     calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)])
-    assert calls == []
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
 
 def test_an_approved_armed_pr_parked_for_approval_is_disarmed(tmp_path: Path) -> None:
@@ -457,23 +459,23 @@ def test_a_failed_disarm_stops_the_tick(tmp_path: Path) -> None:
 
 
 def test_behind_holder_is_left_to_github_inside_the_grace(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND")], base_idle_min=1)
+    calls, _ = _run(tmp_path, [_pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=30, state="BEHIND")], base_idle_min=1)
     assert calls == []
 
 
 def test_grace_counts_from_the_arming_when_that_is_later(tmp_path: Path) -> None:
     # Armed a minute ago against a base that has been still for an hour.
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=1, state="BEHIND")], base_idle_min=60)
+    calls, _ = _run(tmp_path, [_pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=1, state="BEHIND")], base_idle_min=60)
     assert calls == []
 
 
 def test_behind_holder_is_updated_once_both_have_sat_idle(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=30, state="BEHIND"), _pr(4)], base_idle_min=20)
+    calls, _ = _run(tmp_path, [_pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=30, state="BEHIND"), _pr(4)], base_idle_min=20)
     assert calls == ["pr update-branch 3 -R o/r"]
 
 
 def test_a_long_hold_is_logged(tmp_path: Path) -> None:
-    _, out = _run(tmp_path, [_pr(3, armed_min_ago=120, state="BLOCKED")])
+    _, out = _run(tmp_path, [_pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=120, state="BLOCKED")])
     assert "#3 has held the queue for 12" in out
 
 
@@ -579,10 +581,10 @@ def test_an_unreadable_timeline_disarms_rather_than_trusting_a_moved_head(tmp_pa
     assert calls[0] == "pr merge 3 -R o/r --disable-auto"
 
 
-def test_an_armed_labelled_pr_with_no_pin_is_left_alone(tmp_path: Path) -> None:
-    # Armed by hand after labelling, or the state was lost: the maintainer's act.
+def test_an_armed_labelled_pr_the_queue_did_not_arm_is_disarmed(tmp_path: Path) -> None:
+    # Armed by hand after labelling: not the queue's arm, so disarmed; its label stays.
     calls, _ = _run(tmp_path, [_pr(3, head="bbb", armed_min_ago=3, state="BLOCKED"), _pr(4)])
-    assert calls == []
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
 
 def test_an_unreadable_diff_after_the_head_moved_approves_nothing(tmp_path: Path) -> None:
@@ -623,7 +625,7 @@ def test_an_unreadable_state_file_approves_nothing(tmp_path: Path) -> None:
 
 
 def test_a_label_is_pinned_even_while_another_pr_holds_the_slot(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=30, state="BLOCKED"), _pr(4, head="eee")])
+    calls, _ = _run(tmp_path, [_pr(3, labels=("operator-armed",), armed_min_ago=30, state="BLOCKED"), _pr(4, head="eee")])
     assert calls == []
     assert (tmp_path / "state" / "approvals").read_text().split()[:2] == ["4", "eee"]
 
@@ -675,7 +677,7 @@ def test_a_pr_the_maintainer_rearmed_by_hand_later_is_left_alone(tmp_path: Path)
     arms = tmp_path / "state" / "approvals.arms"
     arms.parent.mkdir(parents=True)
     arms.write_text("3 2020-01-01T00:00:00Z\n")  # the script's arm, long ago
-    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, state="BLOCKED"), _pr(4)])
+    calls, _ = _run(tmp_path, [_pr(3, labels=("operator-armed",), armed_min_ago=5, state="BLOCKED"), _pr(4)])
     assert calls == []  # holds the slot as a hand-armed PR
 
 
@@ -684,10 +686,10 @@ def test_a_dry_run_records_no_arm(tmp_path: Path) -> None:
     assert not (tmp_path / "state" / "approvals.arms").exists()
 
 
-def test_a_labelled_pr_armed_by_hand_is_never_disarmed(tmp_path: Path) -> None:
+def test_a_labelled_pr_armed_by_hand_is_disarmed(tmp_path: Path) -> None:
     # Labelled, but the maintainer armed it: no recorded arm, so it is theirs.
     calls, _ = _run(tmp_path, [_pr(3, armed_min_ago=20, mergeable="CONFLICTING"), _pr(4)])
-    assert calls == []
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
 
 def test_an_arm_that_cannot_be_recorded_is_rolled_back(tmp_path: Path) -> None:
@@ -746,10 +748,10 @@ def test_a_review_not_yet_passing_disarms_but_keeps_the_pr_first(tmp_path: Path,
     assert "nothing else armed this tick" in out
 
 
-def test_a_hand_armed_pr_whose_review_stops_passing_is_left_alone(tmp_path: Path) -> None:
+def test_a_hand_armed_pr_whose_review_stops_passing_is_disarmed(tmp_path: Path) -> None:
     pr = _pr(3, review=None, armed_min_ago=20, state="BLOCKED", checks=[_check("review", "NEUTRAL")])
     calls, _ = _run(tmp_path, [pr, _pr(4)])
-    assert calls == []
+    assert calls == ["pr merge 3 -R o/r --disable-auto", _arm(4)]
 
 
 
@@ -956,6 +958,31 @@ def test_a_script_armed_pr_is_disarmed_the_moment_it_is_seen_behind(tmp_path: Pa
     assert calls == ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
 
 
-def test_a_hand_armed_pr_just_behind_is_left_inside_the_grace(tmp_path: Path) -> None:
-    calls, _ = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=30, state="BEHIND")], base_idle_min=0)
+def test_an_operator_armed_pr_just_behind_is_left_inside_the_grace(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=("operator-armed",), armed_min_ago=30, state="BEHIND")], base_idle_min=0)
     assert calls == []
+
+
+# --- the queue owns arming ------------------------------------------------------
+
+
+def test_a_hand_arm_is_disarmed_with_a_notice(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(3, labels=(), armed_min_ago=5, head="ccc")], PR_QUEUE_NOTIFY="1")
+    assert calls[0] == "pr merge 3 -R o/r --disable-auto"
+    notices = _notices(calls)
+    assert len(notices) == 1 and "armed by hand" in notices[0] and "operator-armed" in notices[0]
+    assert "#3 armed but it was armed outside the queue" in out
+
+
+def test_an_operator_armed_pr_is_left_alone_and_holds_the_slot(tmp_path: Path) -> None:
+    calls, _ = _run(tmp_path, [_pr(3, labels=("operator-armed",), armed_min_ago=5), _pr(4)])
+    assert calls == []
+
+
+def test_seven_hand_arms_are_all_cleared_and_the_queue_moves(tmp_path: Path) -> None:
+    # 2026-09-27: seven hand-armed PRs, none mergeable, stalled the queue for hours.
+    armed = [_pr(n, armed_min_ago=30, checks=[_check("smoke", "FAILURE")]) for n in range(10, 17)]
+    calls, _ = _run(tmp_path, armed + [_pr(20)], timelines={20: _timeline(8)})
+    assert [c for c in calls if "--disable-auto" in c] == [f"pr merge {n} -R o/r --disable-auto" for n in range(10, 17)]
+    assert calls[-1] == _arm(20)
+

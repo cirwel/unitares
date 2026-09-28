@@ -21,8 +21,10 @@
 #      stays, so it returns to the queue.
 #   2. Pin the head each newly labelled PR is at (see below), every tick,
 #      whether or not the slot is free.
-#   3. If a PR is still armed (including one the maintainer armed by hand, which
-#      the script never disarms, even while it conflicts), it holds the slot.
+#   3. If a PR is still armed, it holds the slot. After step 1 that can only be
+#      the queue's own arm, or an operator's arm on a PR labelled
+#      operator-armed (PR_QUEUE_OPERATOR_ARMED_LABEL): step 1 disarms every
+#      other arm the queue did not make.
 #      If it is BEHIND and neither the base nor its arming has moved for
 #      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted: a PR
 #      this script armed is disarmed and updated (step 4 re-arms it), one
@@ -85,6 +87,10 @@ REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
 # enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
 # merge gate as the control for exactly those diffs.
 OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
+# An arm on a PR carrying this label is the operator's, and the queue leaves
+# it alone (it still holds the slot). Every other arm the queue did not make
+# is disarmed.
+OPERATOR_ARMED_LABEL="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
 operator_only() {  # <pr-json> -> why only the operator may merge it, if so
   local l
   # A fork PR: the fleet's own PRs never come from forks, and CI cannot label
@@ -289,10 +295,18 @@ while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   reason=""
-  # Only arms this script made are ever disarmed; the maintainer's own arm,
-  # labelled or not, is theirs to manage.
-  armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
-  if held_by=$(operator_only "$pr"); then
+  hand_notice=""
+  # The queue owns arming. An arm it did not make is disarmed, whoever made
+  # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
+  # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
+  # none mergeable, stalled the queue for hours). Its label stays, so the
+  # queue arms it in turn. The operator keeps a way to land a PR outside the
+  # queue: an arm on a PR labelled $OPERATOR_ARMED_LABEL is left alone.
+  if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
+    jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
+    reason="it was armed outside the queue"
+    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+  elif held_by=$(operator_only "$pr"); then
     reason="it is labelled $held_by, which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
@@ -319,6 +333,7 @@ while read -r pr; do
     log "#$n armed but $reason; disarming so it stops holding the queue"
     if act gh pr merge "$n" -R "$REPO" --disable-auto; then
       disarmed="$disarmed$n "
+      [ -n "$hand_notice" ] && notify "$n" hand-armed "$(jq -r .headRefOid <<<"$pr")" "$hand_notice"
     else
       log "#$n disarm failed; nothing else done this tick"
       exit 0
