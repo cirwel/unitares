@@ -367,3 +367,25 @@ def test_default_install_catalog_is_product_only(tmp_path):
     leaked = sorted(n for n in names if n.removesuffix(".error") in declared)
     assert not leaked, f"default catalog advertises operator metrics: {leaked}"
     assert "kg.entries.count" in names  # the product layer still ships
+
+
+def test_an_adopter_service_records_coordination_events(residentless):
+    # Migration 072: a residentless install's own agent records coordination
+    # events under its own service id. Before it, 035's CHECK admitted only
+    # one deployment's six emitter ids, and the sync emitter rewrote any
+    # other id to governance_mcp.
+    from unittest.mock import patch
+
+    from src.coordination_events import is_valid_service
+    from src.coordination_failure_emit import emit_coordination_failure_sync
+
+    assert is_valid_service("my_own_agent")
+    written = MagicMock()
+    with patch("src.audit_log.audit_logger", written), \
+         patch("src.audit_log.AuditEntry") as entry:
+        emit_coordination_failure_sync(
+            service="my_own_agent",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={},
+        )
+    assert entry.call_args.kwargs["details"]["service"] == "my_own_agent"
