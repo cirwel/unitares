@@ -37,27 +37,26 @@ RUN pip install --no-cache-dir -r requirements-docker.txt -c constraints.txt
 # in 2026-04-24 (was previously a separate compiled wheel) — no wheel install.
 COPY src/ src/
 COPY governance_core/ governance_core/
+COPY agents/ agents/
 # The server imports unitares_sdk (src/lease_plane re-exports its lease-plane
-# client). It ships in agents/sdk, a standalone package with no path
-# dependency on its agents/ siblings; install it so the import resolves.
-# Its dependencies (httpx, mcp, pydantic) are already installed above.
+# client). It ships in agents/sdk; install it so the import resolves. Its
+# dependencies (httpx, mcp, pydantic) are already installed above.
 #
-# Only these three agents/ subpackages are copied, not the whole tree:
-#   - agents/sdk: unitares_sdk, installed below.
-#   - agents/common: src/http_routes/sentinel.py imports
-#     agents.common.resolution_outcome to serve POST /v1/sentinel/adjudicate,
-#     mounted when UNITARES_ROUTE_PACKS includes "reference-residents".
-#   - agents/dialectic_reviewer: the spawn target when
-#     UNITARES_DIALECTIC_ORCHESTRATED_REVIEW is enabled (see
-#     src/mcp_handlers/dialectic/orchestrator_dispatch.py, which runs it via
-#     this image's own interpreter at this same repo root).
-# All three are self-contained (no import of a chronicler/vigil/sentinel/
-# watcher/... sibling), so the reference residents' deployment-specific
-# defaults (GITHUB_SCRAPE_ORG, VIGIL_STALLED_PR_OWNER, ...) stay out of the
-# image while both opt-in features keep working.
-COPY agents/sdk/ agents/sdk/
-COPY agents/common/ agents/common/
-COPY agents/dialectic_reviewer/ agents/dialectic_reviewer/
+# Narrowing this COPY to only the subpackages src/ imports directly looked
+# safe (agents/sdk, agents/common) but review caught a live regression each
+# of the first two times: agents.common.resolution_outcome (the
+# reference-residents route pack's POST /v1/sentinel/adjudicate) and, next
+# round, agents/chronicler/metrics_catalog.json — a path .env.example
+# documents mounting straight from inside this image via
+# UNITARES_METRICS_CATALOG_EXTRA. Both are real, supported, opt-in
+# integration points that a static import/grep sweep does not surface, and a
+# third pass is not a reason for confidence there isn't a fourth. Reference
+# residents genuinely aren't held to the fleet-neutrality bar (see
+# AGENTS.md/CLAUDE.md), so their defaults being in the image is an accepted
+# tradeoff, not a credential leak; re-attempt narrowing only with an
+# end-to-end test of every documented UNITARES_ROUTE_PACKS /
+# UNITARES_DIALECTIC_ORCHESTRATED_REVIEW / UNITARES_METRICS_CATALOG_EXTRA
+# path, not another static sweep.
 RUN pip install --no-cache-dir --no-deps ./agents/sdk
 COPY config/ config/
 COPY dashboard/ dashboard/
