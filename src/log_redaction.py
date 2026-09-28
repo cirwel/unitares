@@ -49,6 +49,14 @@ class QuerySecretRedactionFilter(logging.Filter):
             record.args = tuple(_redact_arg(a) for a in record.args)
         elif isinstance(record.args, dict):
             record.args = {k: _redact_arg(v) for k, v in record.args.items()}
+        # exc_info tracebacks can embed the request URL (e.g. on a handshake
+        # error during a ?token=-bearing request).  Format and redact now;
+        # clearing exc_info prevents a second raw format at emit time.
+        if record.exc_info:
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = redact(record.exc_text)
         return True
 
 

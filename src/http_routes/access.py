@@ -174,6 +174,8 @@ def _bearer_from_subprotocols(websocket) -> str | None:
         if not proto.startswith(_WS_BEARER_PREFIX):
             continue
         encoded = proto[len(_WS_BEARER_PREFIX):]
+        if not encoded:
+            return None
         try:
             return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
         except (binascii.Error, UnicodeDecodeError, ValueError):
@@ -186,6 +188,11 @@ def ws_accept_subprotocol(websocket) -> str | None:
 
     A browser that offers subprotocols fails the connection when the server
     selects none, so the marker has to be echoed whenever it was sent.
+
+    Clients must offer the bare marker (``unitares.bearer``) explicitly
+    alongside the credential entry (``unitares.bearer.<base64token>``); a
+    client that sends only the credential form will receive no subprotocol
+    selection and most browsers will close the connection.
     """
     offered = _offered_subprotocols(websocket)
     return WS_BEARER_SUBPROTOCOL if WS_BEARER_SUBPROTOCOL in offered else None
@@ -198,18 +205,21 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     requires a valid bearer with no IP bypass; the legacy/local posture keeps the
     trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
 
-    A browser cannot set request headers on a ``WebSocket``, so the break-glass
-    bearer rides in a ``Sec-WebSocket-Protocol`` entry (see
-    ``WS_BEARER_SUBPROTOCOL``); non-browser clients may still send the
-    ``Authorization`` header. A DB-validated passkey session is also accepted
-    in local posture when the browser supplies the exact RP Origin.
+    Browsers cannot set request headers on a ``WebSocket``, so the bearer rides
+    in a ``Sec-WebSocket-Protocol`` entry (``unitares.bearer.<base64token>``;
+    see ``WS_BEARER_SUBPROTOCOL`` and ``_bearer_from_subprotocols``).
+    Non-browser clients may use the ``Authorization`` header directly.
+    A DB-validated passkey session is also accepted in local posture when the
+    browser supplies the exact RP Origin.
 
-    The query string (``/ws/eisv?token=…``) is deliberately NOT read: uvicorn
-    logs the handshake request line verbatim and the tunnel edge sees the URL,
-    so a query-string bearer was persisted in the server log on every connect.
+    Query-string tokens (``?token=…``) are explicitly not read: uvicorn logs
+    the handshake request line including the query string, so any token placed
+    there would be written to the server log on every connect. The
+    ``QuerySecretRedactionFilter`` in ``log_redaction.py`` catches any
+    credential that reaches the log as a defense-in-depth measure.
 
-    Without this, ``/ws/eisv`` was the only route on the server with no auth
-    check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
+    Without this check, ``/ws/eisv`` was the only route on the server with no
+    auth at all: over the tunnel ``GET /v1/residents`` answered 401 while the
     WebSocket handshake answered 101 and streamed the full governance feed
     (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
     unauthenticated caller.

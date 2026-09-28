@@ -596,9 +596,6 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
-    # After Config: it applies uvicorn's logging dictConfig. uvicorn logs the
-    # WebSocket handshake request line (query string included) on uvicorn.error.
-    install_uvicorn_redaction()
     main_server = (
         _leader_server_class()(config) if public_socket is not None else uvicorn.Server(config)
     )
@@ -628,6 +625,10 @@ def build_transport_runtime(
             "Public OAuth listener on 127.0.0.1:%d; /mcp OAuth applies there only",
             public_socket.getsockname()[1],
         )
+    # After both Config objects: each Config.__init__ calls configure_logging()
+    # (uvicorn's dictConfig).  Installing the filter after both means it
+    # survives regardless of which Config ran last.
+    install_uvicorn_redaction()
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
