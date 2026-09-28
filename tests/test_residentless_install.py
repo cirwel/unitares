@@ -389,3 +389,18 @@ def test_an_adopter_service_records_coordination_events(residentless):
             payload={},
         )
     assert entry.call_args.kwargs["details"]["service"] == "my_own_agent"
+
+
+def test_every_non_reasoning_tag_is_privileged():
+    # A tag in NON_REASONING_TAGS exempts an agent from the stuck sweep,
+    # auto-triggered dialectic and the reviewer pool. If an agent could
+    # self-assign one (including the deprecated `anima` alias of `embodied`),
+    # it could opt itself out of all three. The set is defined once and the
+    # three sites read that one object.
+    from src.grounding.class_indicator import NON_REASONING_TAGS
+    from src.mcp_handlers.dialectic import reviewer
+    from src.mcp_handlers.lifecycle import mutation, stuck
+
+    assert NON_REASONING_TAGS <= mutation.PRIVILEGED_TAGS
+    assert reviewer.NON_REASONING_TAGS is NON_REASONING_TAGS
+    assert stuck.NON_REASONING_TAGS is NON_REASONING_TAGS
