@@ -37,22 +37,22 @@
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
 #
-# The approval label is the maintainer's merge decision made ahead of time,
-# exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
-# shared contract). It approves the PR as it stood when the label went on. The
+# The approval label is the merge decision. The agent that owns a PR applies it
+# when it marks the PR ready, never on another agent's PR, and the maintainer
+# vetoes by removing it (AGENTS.md / CLAUDE.md shared contract). It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
 # outright. Anything else is stale
-# until the label is re-applied, which pins afresh. A label is pinned only if
+# until the label is removed and re-added, which pins afresh. A label is pinned only if
 # the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
-# with no pin (the script was down, or its state lost) must be re-applied. The
+# with no pin (the script was down, or its state lost) must be removed and re-added. The
 # residual gap: a commit made before the label but pushed before the script
 # first sees it (normally the next tick, never beyond that window) is pinned
 # as approved.
 #
 # Threat model. The pin catches honest mistakes: an agent pushing a follow-up
-# after the maintainer approved, or a stale branch changing under the label.
+# after the PR was approved, or a stale branch changing under the label.
 # It is not a security boundary against a deliberately hostile agent, and does
 # not try to be: every actor here authenticates as the same GitHub account, so
 # such an agent could apply the label itself, or run `gh pr merge --auto`,
@@ -178,7 +178,7 @@ approval_times() {
 # SHA instead. A later head stays covered only while the fingerprint matches:
 # commit metadata (committer name, message, even a web-flow signature) is
 # author-controlled or API-mintable, so it cannot prove a commit was only a
-# base update, but the content can. A re-applied label pins afresh.
+# base update, but the content can. A removed-and-re-added label pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
 pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
@@ -367,7 +367,7 @@ queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
               and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
-# Order by when the label went on, which is the order the maintainer approved.
+# Order by when the label went on, which is the order the PRs were approved.
 ordered=""
 while read -r pr; do
   [ -n "$pr" ] || continue
@@ -377,7 +377,7 @@ while read -r pr; do
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
     notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
     continue
   fi
@@ -389,7 +389,7 @@ while read -r pr; do
     # what was approved.
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
-      log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      log "#$n approval at $labelled_at was never pinned and is ${age}m old; remove and re-add $LABEL to approve its head"
       notify "$n" unpinned "$head" "skipped: the \`$LABEL\` label went on at $labelled_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was approved. It needs renewing: remove the label, then add it (AGENTS.md says who may)."
       continue
     fi
@@ -400,7 +400,7 @@ while read -r pr; do
     if [ "$pinned_sha" != "$head" ]; then
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
-        log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        log "#$n changed since its approval at ${pinned_sha:0:8}; remove and re-add $LABEL to approve ${head:0:8}"
         notify "$n" changed "$head" "skipped: the change differs from what was approved at \`${pinned_sha:0:8}\` (more than a base update). Once validation passes on \`${head:0:8}\`, the approval needs renewing: remove the \`$LABEL\` label, then add it (AGENTS.md says who may)."
         continue
       fi

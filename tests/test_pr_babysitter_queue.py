@@ -270,7 +270,7 @@ def test_a_push_after_approval_makes_it_stale(tmp_path: Path) -> None:
         timelines={1: _timeline(labelled_min_ago=10, pushed_min_ago=5), 2: _timeline(8)},
     )
     assert calls == [_arm(2)]
-    assert "#1 has a commit from" in out and "re-apply approved-to-merge" in out
+    assert "#1 has a commit from" in out and "remove and re-add approved-to-merge" in out
 
 
 def test_base_update_merges_do_not_make_approval_stale(tmp_path: Path) -> None:
