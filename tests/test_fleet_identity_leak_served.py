@@ -291,6 +291,13 @@ def test_schema_text_built_by_a_constructor_call_is_flagged(tmp_path, source, na
     assert len(hits) == 1 and f'fleet identity "{name}" in served schema text' in hits[0]
 
 
+def test_schema_text_in_class_keywords_is_flagged(tmp_path):
+    """Review on #2536: class P(BaseModel, title=...) serves that title."""
+    hits = _schema(tmp_path, "from pydantic import BaseModel\n"
+                             "class P(BaseModel, title='Ask Lumen'):\n    x: int = 0\n")
+    assert len(hits) == 1 and 'fleet identity "Lumen" in served schema text' in hits[0]
+
+
 def test_schema_model_docstring_is_served_other_docstrings_are_not(tmp_path):
     # Pydantic serves a model's docstring as the schema's description. A
     # module docstring, a validator's docstring and a comment are not served.
@@ -486,13 +493,24 @@ def test_built_schemas_carry_no_resident_name():
 
     texts: list[tuple[str, str]] = []
 
+    def every_string(node):
+        # Structured examples ({"agent": ...} inside an examples list) are
+        # served too, so a served value is read to any depth.
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                yield from every_string(key)
+                yield from every_string(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from every_string(value)
+
     def walk(node, where: str) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
-                if key in guard.SERVED_SCHEMA_KEYS and isinstance(value, str):
-                    texts.append((where, value))
-                elif key in guard.SERVED_SCHEMA_KEYS and isinstance(value, list):
-                    texts.extend((where, v) for v in value if isinstance(v, str))
+                if key in guard.SERVED_SCHEMA_KEYS and isinstance(value, (str, list)):
+                    texts.extend((where, v) for v in every_string(value))
                 else:
                     walk(value, where)
         elif isinstance(node, list):

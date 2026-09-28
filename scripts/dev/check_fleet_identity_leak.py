@@ -257,7 +257,8 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
       ``Field(...)`` but the constructor forms that build the same schema
       text, such as ``json_schema_extra=dict(brief=...)`` and
       ``ConfigDict(title=...)``. Any call, rather than a list of known ones,
-      over-reads where a list would miss the next wrapper;
+      over-reads where a list would miss the next wrapper, and the same
+      keywords on a class statement, where Pydantic also takes model config;
     - the value of a dict-literal entry keyed by one of them, which covers
       ``json_schema_extra={"brief": ...}`` and the alias overrides;
     - a class docstring, which Pydantic serves as the model's description.
@@ -276,8 +277,11 @@ def served_schema_nodes(tree: ast.AST) -> set[int]:
                 value for key, value in zip(node.keys, node.values)
                 if isinstance(key, ast.Constant) and key.value in SERVED_SCHEMA_KEYS
             ]
-        elif isinstance(node, ast.ClassDef) and node.body:
-            first = node.body[0]
+        elif isinstance(node, ast.ClassDef):
+            # Pydantic takes model config as class keywords too:
+            # class P(BaseModel, title=...) serves that title.
+            roots += [kw.value for kw in node.keywords if kw.arg in SERVED_SCHEMA_KEYS]
+            first = node.body[0] if node.body else None
             if (
                 isinstance(first, ast.Expr)
                 and isinstance(first.value, ast.Constant)
