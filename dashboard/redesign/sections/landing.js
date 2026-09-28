@@ -228,6 +228,12 @@
   // hard stop) is a hard verdict.
   const verdictBucket = (a) => a === "guide" ? "guide" : !a || a === "proceed" || a === "approve" || a === "continue" ? "proceed" : "pause";
   const tone = (a) => ({ proceed: "", guide: " warn", pause: " danger" })[verdictBucket(a)];
+  // The word shown for a verdict. The ring records sub_action when present, so
+  // a low-risk check-in arrives as "approve" although its action is "proceed".
+  // Show the server's verdict vocabulary instead — proceed / guide / pause, the
+  // names /api/activity totals and the Check-ins card use — and keep a hard
+  // verdict's own name (pause, reject, risk_pause, …), which says more.
+  const verdictLabel = (a) => !a ? "—" : verdictBucket(a) === "proceed" ? "proceed" : a;
   const ago = (ms) => ms == null ? "—" : fmtSil(Math.max(0, Math.round((Date.now() - ms) / 1000))) + " ago";
 
   // Latest check-in of ANY agent (not only residents), from the check-in ring.
@@ -242,6 +248,7 @@
       $("riskVal").textContent = "—";
       $("riskFill").style.width = "0%";
       $("pulseVerdict").className = "verdict";
+      $("pulseVerdict").title = "";
       $("pulseVerdict").querySelector("span:last-child").textContent = "—";
       $("eisv").innerHTML = "";
       return;
@@ -252,11 +259,13 @@
     const risk = last.risk ?? 0;
     $("riskVal").textContent = num(risk);
     $("riskFill").style.width = Math.max(2, risk * 100) + "%";
-    $("riskFill").style.background = risk < 0.35 ? "var(--ok)" : risk < 0.6 ? "var(--warn)" : "var(--danger)";
+    // Same default tier edges as the ticks under the bar (app.html).
+    $("riskFill").style.background = risk < 0.45 ? "var(--ok)" : risk < 0.7 ? "var(--warn)" : "var(--danger)";
 
     const v = $("pulseVerdict");
     v.className = "verdict" + tone(last.action);
-    v.querySelector("span:last-child").textContent = last.action || "—";
+    v.querySelector("span:last-child").textContent = verdictLabel(last.action);
+    v.title = last.action && last.action !== verdictLabel(last.action) ? "recorded as " + last.action : "";
 
     const E = last.eisv;
     $("eisv").innerHTML = !E ? "" : [["E", E.E, "e", false], ["I", E.I, "i", false], ["S", E.S, "s", false], ["V", E.V, "v", true]].map(([k, val, c, signed]) => {
@@ -277,7 +286,7 @@
     if (!rows.length) { el.innerHTML = ""; return; }
     el.innerHTML = `<table class="tbl"><thead><tr><th>Agent</th><th>Verdict</th><th>Risk</th><th>Check-ins</th><th>Last</th></tr></thead><tbody>`
       + rows.map((a) => `<tr><td>${esc(a.name)}</td>`
-        + `<td><span class="verdict${tone(a.action)}"><span class="pip"></span><span>${esc(a.action || "—")}</span></span></td>`
+        + `<td><span class="verdict${tone(a.action)}"><span class="pip"></span><span>${esc(verdictLabel(a.action))}</span></span></td>`
         + `<td class="mono">${num(a.risk)}</td><td class="mono">${a.checkins || "—"}</td>`
         + `<td class="mono">${ago(a._ms)}</td></tr>`).join("")
       + `</tbody></table>`
@@ -378,11 +387,11 @@
   }
   function footnote(anyLive) {
     $("foot").innerHTML = anyLive
-      ? "Redesign · served live · design system in <code>tokens.css</code> + <code>kit.css</code>."
+      ? "Live from this server. A panel it cannot read says so; none falls back to example data."
       : !DATA.snapshotFallback
         ? "Server not answering — retrying. Nothing below is from a snapshot."
-      : "Redesign reference · rendering bundled snapshot (open served same-origin for live data) · "
-        + "design system in <code>tokens.css</code> + <code>kit.css</code>. Toggle theme to reskin via one token swap.";
+      : "Offline preview · rendering the bundled synthetic example, not any deployment's data. "
+        + "Open the dashboard from a UNITARES server for live data.";
   }
 
   // Optional accessors: a stubbed or older data layer without them renders the
