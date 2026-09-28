@@ -5369,18 +5369,35 @@ async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Text
         return [error_response(f"Failed to get lifecycle stats: {str(e)}")]
 
 
-async def _supersede_notes_details(
+def _supersede_notes_block_details(
+    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+) -> str:
+    """The older finding's details with the supersede's notes appended.
+
+    Built as an update builds them (_apply_update_text_fields) and held to
+    the same bound; over it, raises _UpdateResponseError.
+    """
+    updates: dict[str, Any] = {}
+    _apply_update_text_fields(request, discovery, updates)
+    _refuse_oversized_details(request, updates, call="supersede")
+    return updates["details"]
+
+
+async def _prepare_supersede_notes(
     arguments: Dict[str, Any], graph: Any, new_id: str, old_id: str, note: str
-) -> Optional[str]:
-    """The details a supersede writes on the older finding to carry its notes.
+) -> Optional[_KnowledgeUpdateRequest]:
+    """Check a supersede's resolution_notes before the supersede writes anything.
 
     resolution_notes are appended to the older finding's details the way an
     update appends them, and held to the same bound and the same gate. On a
     high or critical finding only its owner may append them: an update lets a
     non-owner add notes there only while closing it as resolved, closed or
-    wont_fix, never superseded. Everything is checked before the supersede
-    writes anything; a refusal raises _UpdateResponseError. None when the
-    older finding does not exist, which supersede_discovery then reports.
+    wont_fix, never superseded. A refusal raises _UpdateResponseError.
+    Returns the request the notes are built from, or None when the older
+    finding does not exist, which supersede_discovery then reports. The
+    details themselves are built later, from a read taken just before the
+    write (_supersede_notes_block_details), so an edit that lands while the
+    edge is created is kept.
     """
     leaked_marker = _detect_toolcall_markup_leak(note)
     if leaked_marker:
@@ -5424,10 +5441,32 @@ async def _supersede_notes_details(
                     },
                 )
             )
-    updates: dict[str, Any] = {}
-    _apply_update_text_fields(request, old, updates)
-    _refuse_oversized_details(request, updates, call="supersede")
-    return updates["details"]
+    _supersede_notes_block_details(request, old)
+    return request
+
+
+async def _supersede_flip_details(
+    graph: Any, request: _KnowledgeUpdateRequest, old_id: str
+) -> tuple[Optional[str], Optional[str]]:
+    """(details, problem) for the flip, from a fresh read of the older finding.
+
+    Read after the edge is created and just before the flip, so the window
+    in which a concurrent edit can be overwritten is the read-then-write gap
+    an update has, not that gap plus the edge work. The bound is checked
+    again on the fresh read: if the details grew past it meanwhile, or the
+    finding is gone, the flip goes ahead without notes and ``problem`` says
+    why.
+    """
+    latest = await graph.get_discovery(old_id)
+    if latest is None:
+        return None, f"'{old_id}' could not be read again before the flip."
+    try:
+        return _supersede_notes_block_details(request, latest), None
+    except _UpdateResponseError:
+        return None, (
+            f"The details of '{old_id}' grew while the supersede ran and no "
+            "longer leave room for these notes."
+        )
 
 
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
@@ -5463,10 +5502,10 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
         if not hasattr(graph, "supersede_discovery"):
             return [error_response("SUPERSEDES edges require AGE graph backend")]
 
-        notes_details = None
+        notes_request = None
         if note is not None:
             try:
-                notes_details = await _supersede_notes_details(
+                notes_request = await _prepare_supersede_notes(
                     arguments, graph, str(new_id), str(old_id), note
                 )
             except _UpdateResponseError as refused:
@@ -5481,16 +5520,30 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
                 "status": "superseded",
                 "updated_at": _utc_now_iso(),
             }
-            if notes_details is not None:
-                flip["details"] = notes_details
+            notes_problem = None
+            if notes_request is not None:
+                details, notes_problem = await _supersede_flip_details(
+                    graph, notes_request, str(old_id)
+                )
+                if details is not None:
+                    flip["details"] = details
             flipped = False
             try:
                 flipped = await graph.update_discovery(old_id, flip)
             except Exception as exc:  # noqa: BLE001 — edge is the primary effect
                 logger.warning(f"[KG] supersede status flip for {old_id[:8]} failed: {exc}")
-            if notes_details is not None:
-                if flipped:
+            if notes_request is not None:
+                if flipped and "details" in flip:
                     result["resolution_notes_appended_to"] = old_id
+                elif notes_problem:
+                    result["resolution_notes_warning"] = (
+                        f"The SUPERSEDES edge was recorded, but resolution_notes "
+                        f"were not appended: {notes_problem} Read it with "
+                        f"knowledge(action='details', discovery_id='{old_id}') "
+                        "and record the notes as a finding that responds to it "
+                        f"(response_to={{'discovery_id': '{old_id}', "
+                        "'response_type': 'supersedes'})."
+                    )
                 else:
                     result["resolution_notes_warning"] = (
                         f"The SUPERSEDES edge was recorded, but the update "

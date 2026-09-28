@@ -155,6 +155,75 @@ async def test_a_flip_that_did_not_apply_says_the_notes_are_not_stored(handler_e
 
 
 # ---------------------------------------------------------------------------
+# The details are built from a read taken after the edge, before the flip
+# ---------------------------------------------------------------------------
+
+
+def _graph_with_reads(*reads, calls):
+    """A graph whose successive get_discovery calls return ``reads``, and
+    which records the order of reads, the edge and the flip in ``calls``."""
+    graph = _graph(reads[0])
+    remaining = list(reads)
+
+    async def get_discovery(discovery_id):
+        calls.append("read")
+        return remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+    async def supersede_discovery(**_kwargs):
+        calls.append("edge")
+        return {"success": True, "new_id": "new-1", "old_id": "old-1"}
+
+    async def update_discovery(_discovery_id, _updates):
+        calls.append("flip")
+        return True
+
+    graph.get_discovery = AsyncMock(side_effect=get_discovery)
+    graph.supersede_discovery = AsyncMock(side_effect=supersede_discovery)
+    graph.update_discovery = AsyncMock(side_effect=update_discovery)
+    return graph
+
+
+@pytest.mark.asyncio
+async def test_an_edit_that_lands_while_the_edge_is_created_is_kept(handler_env):
+    """Review finding on #2569: details built from the read taken before the
+    edge overwrote an update that landed in between. They are now built from
+    a second read taken after the edge, just before the flip."""
+    calls: list[str] = []
+    before = _old(details="What was found.")
+    after = _old(details="What was found.\n\nA concurrent edit.")
+    graph = _graph_with_reads(before, after, calls=calls)
+    data = await _supersede(graph, resolution_notes="Replaced by new-1.")
+    assert calls == ["read", "edge", "read", "flip"]
+    _, flip = graph.update_discovery.await_args.args
+    assert flip["details"] == _update_details(after, "Replaced by new-1.")
+    assert "A concurrent edit." in flip["details"]
+    assert data["resolution_notes_appended_to"] == "old-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "latest,reason",
+    [
+        (_old(details="b" * MAX_UPDATED_DETAILS_LEN), "no longer leave room"),
+        (None, "could not be read again"),
+    ],
+)
+async def test_notes_that_no_longer_fit_leave_the_flip_and_say_so(
+    handler_env, latest, reason
+):
+    calls: list[str] = []
+    graph = _graph_with_reads(_old(), latest, calls=calls)
+    data = await _supersede(graph, resolution_notes="why")
+    assert data["success"] is True
+    _, flip = graph.update_discovery.await_args.args
+    assert flip == {"status": "superseded", "updated_at": _NOW}
+    assert "resolution_notes_appended_to" not in data
+    warning = data["resolution_notes_warning"]
+    assert "were not appended" in warning and reason in warning
+    assert "'response_type': 'supersedes'" in warning
+
+
+# ---------------------------------------------------------------------------
 # Refusals come before any write
 # ---------------------------------------------------------------------------
 
