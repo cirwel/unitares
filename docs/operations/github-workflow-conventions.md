@@ -678,10 +678,17 @@ the operator's machine is awake.
   keeps the slot even while it conflicts (arming another would leave two
   armed once the conflict is resolved); a hold longer than 90 minutes is
   logged, and clearing it is the maintainer's call.
-- **The single fallback update.** If the armed PR is `BEHIND` and neither the
-  base nor its arming has moved for 10 minutes, GitHub's updater has not
-  acted and the script updates that one branch. The grace period is what
-  keeps this from racing the native updater.
+- **Updates: never armed across an unchecked head.** When the head of the
+  queue is `BEHIND`, the script updates it unarmed and holds its place; a
+  later tick arms the updated head once its content still matches the
+  approval and its required checks pass. Arming first would leave auto-merge
+  on across a head nothing had re-checked, while `review` is not
+  branch-protected. GitHub's own updater is not relied on: in the queue's
+  first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
+  falls `BEHIND` later and GitHub has not updated it within 3 minutes, the
+  script disarms it, updates it, and re-arms it by the same rule; a PR armed
+  by hand is only updated. Only the one head-of-queue or armed PR is ever
+  updated, so there is nothing to race.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
 `--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
