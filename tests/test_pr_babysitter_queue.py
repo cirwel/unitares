@@ -1028,6 +1028,14 @@ def test_an_operator_armed_pr_is_left_alone_even_right_after_a_queue_arm(tmp_pat
     assert calls == []
 
 
+def test_an_operator_rearm_that_is_behind_is_not_taken_for_the_queues_own(tmp_path: Path) -> None:
+    # Review on #2561: the BEHIND holder path re-ran arm attribution and would
+    # disarm an operator re-arm made within the tolerance of the queue's record.
+    pr = _pr(3, labels=(LABEL, "operator-armed"), armed_min_ago=0.5, state="BEHIND")
+    calls, _ = _run(tmp_path, [pr], base_idle_min=0, arms={3: 0.5})
+    assert "pr merge 3 -R o/r --disable-auto" not in calls
+
+
 def test_the_queue_never_arms_an_operator_armed_pr(tmp_path: Path) -> None:
     # A leftover operator-armed label would otherwise shield the queue's own arm.
     # The operator-armed label went on long ago and was never armed: a leftover.

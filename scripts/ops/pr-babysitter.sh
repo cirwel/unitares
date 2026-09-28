@@ -483,7 +483,10 @@ if [ -n "$holder" ]; then
       && log "#$n has held the queue for ${held}m ($(jq -r .mergeStateStatus <<<"$holder")); needs a look"
   fi
   if [ "$(jq -r .mergeStateStatus <<<"$holder")" = "BEHIND" ]; then
-    if armed_by_script "$n" "$armed_at"; then
+    # The operator's label outranks arm attribution here as in the tidy loop:
+    # a re-arm within the tolerance of the queue's own record is still theirs.
+    if ! jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$holder" >/dev/null \
+       && armed_by_script "$n" "$armed_at"; then
       # No grace for the script's own arm: GitHub's updater can move the head
       # within a minute, and the arm must not outlive the head it validated.
       # Disarm now and update; the queue re-arms it once the new head passes.
