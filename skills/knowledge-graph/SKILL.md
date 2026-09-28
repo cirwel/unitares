@@ -130,13 +130,13 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `search` | Search by query, tags, or both |
 | `get` | Get one agent's knowledge, or read back a single `discovery_id` |
 | `list` | Raw status aggregate (`epoch_scope`, `including_cold`); its numbers differ from `stats` by design |
-| `update` | Modify an existing discovery (status, content, tags) |
+| `update` | Modify an existing discovery (status, content, tags); a `summary` over 4,003 characters, the most a store keeps, is refused |
 | `details` | Full row with `details` pagination (`offset`, `length` default 2000); `include_response_chain=true` adds the typed response chain (AGE backend only) |
 | `note` | Quick note storage through the unified interface |
 | `cleanup` | Run the lifecycle passes graph-wide (tag canonicalization; `ephemeral`-tagged → archived after 7 days; resolved → archived after 30 days, permanent entries skipped; archived → cold after 90 days). Never deletes; `dry_run` defaults to true |
 | `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
 | `stats` | Lifecycle-bucket statistics |
-| `supersede` | Create a SUPERSEDES edge from `discovery_id` (newer) to `supersedes_id` (older) and flip the older row to `superseded` — AGE backend only; on the default Postgres backend it returns an error |
+| `supersede` | Create a SUPERSEDES edge from `discovery_id` (newer) to `supersedes_id` (older) and flip the older row to `superseded` — AGE backend only; on the default Postgres backend it returns an error. `resolution_notes` are appended to the older row's details as `update` appends them, within the same bound; on a high or critical row only its owner may send them |
 | `promote` | Create a governed claim from an imported-memory `discovery_id`, one or more non-memory `evidence_ids`, an explicit `verification_basis`, and a `decision_standard`; the source remains unchanged |
 | `audit` | Read-only staleness/health scoring (`scope` open \| all \| by_agent, `top_n` default 10) |
 
@@ -226,6 +226,9 @@ Tags are how future agents find your contributions. Be intentional:
 - **Include context**: `postgres`, `eisv`, `dialectic`, `discord-bridge`
 - **Be specific**: `pool-connection-leak` is more useful than `bug`
 - **Be consistent**: Check existing tags before inventing new ones
+- **Keep them short**: a write with more than 50 tags, or a tag over 128
+  characters (both counted after normalization), is refused; descriptive
+  text belongs in `summary` or `details`
 - **Mind the lifecycle tags**: `ephemeral`, `temp`, `scratch`, `test`, `demo`
   archive the entry after 7 days; `permanent`, `foundational`, `architecture`,
   `decision` (and the `architectural_decision` / `learning` / `pattern` types)
