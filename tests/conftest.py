@@ -513,6 +513,19 @@ def _isolate_repo_data_writers(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_dialectic_emit_failure_ledger(monkeypatch, tmp_path):
+    """Keep the Wave 3 instrument's emit-failure ledger out of data/dialectic.
+
+    Fail-soft tests make audit emits fail on purpose, and each failure appends
+    a durable ledger line (src/dialectic_session_writes.py).
+    """
+    monkeypatch.setenv(
+        "UNITARES_DIALECTIC_EMIT_FAILURE_LEDGER",
+        str(tmp_path / "instrument_emit_failures.jsonl"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_recall_telemetry(monkeypatch, tmp_path):
     """Keep recall-miss telemetry out of the real data/telemetry file."""
     try:
