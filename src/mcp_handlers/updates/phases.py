@@ -693,14 +693,14 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                     ctx.onboarding_guidance["open_questions"] = {
                         "message": f"Found {len(open_questions)} open question(s) waiting for answers. Want to try responding to one?",
                         "questions": open_questions,
-                        "invitation": "Use reply_to_question tool to answer any of these questions and help build shared knowledge.",
-                        "tool": "reply_to_question"
+                        "invitation": "Answer one with knowledge(action='store', summary=<answer>, response_to={'discovery_id': <id>, 'response_type': 'answer'}) to help build shared knowledge.",
+                        "tool": "knowledge"
                     }
                 elif question_count > 0:
                     ctx.onboarding_guidance["open_questions"] = {
                         "message": f"There are {question_count} open question(s) in the knowledge graph.",
                         "suggestion": KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW,
-                        "tool": "reply_to_question"
+                        "tool": "knowledge"
                     }
         except Exception as e:
             logger.warning(f"Could not check knowledge graph for onboarding: {e}")

@@ -66,6 +66,15 @@ async def run_tool_dispatch_pipeline(
 
         name, arguments, ctx = await unwrap_kwargs(name, arguments, ctx)
 
+    # Refuse a name nothing answers before any pre-step runs. resolve_identity
+    # treats an unknown name as identity-required (fail-closed) and, on a
+    # session miss, auto-mints, so an unknown name used to leave a fresh
+    # identity behind and only then return TOOL_NOT_FOUND.
+    from src.mcp_handlers.tool_stability import resolve_tool_alias
+
+    if resolve_tool_alias(name)[0] not in TOOL_HANDLERS:
+        return tool_not_found_error(name, list(TOOL_HANDLERS.keys()))
+
     for step in pre_steps:
         result = await step(name, arguments, ctx)
         if isinstance(result, list):

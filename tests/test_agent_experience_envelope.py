@@ -69,7 +69,7 @@ def test_experience_flag_inventory():
 
 def test_canonical_names_are_not_experience_aliases():
     for name in ("onboard", "process_agent_update", "get_governance_metrics",
-                 "knowledge", "outcome_event", "dialectic", "status", "checkin"):
+                 "knowledge", "outcome_event", "dialectic", "list_agents"):
         assert not is_experience_alias(name), name
 
 
@@ -89,11 +89,11 @@ async def test_canonical_invocation_passes_through_byte_identical():
 
 @pytest.mark.asyncio
 async def test_legacy_alias_passes_through():
-    """Pre-existing intuitive aliases (status, checkin) keep their raw
-    shape - only experience aliases opt in."""
+    """Legacy dispatch aliases (list_agents) keep their raw shape - only
+    experience aliases opt in."""
     raw = _result({"success": True})
     out = await apply_experience_envelope(
-        "get_governance_metrics", {}, _ctx("status"), raw
+        "agent", {}, _ctx("list_agents"), raw
     )
     assert out is raw
 

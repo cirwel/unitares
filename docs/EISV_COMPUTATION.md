@@ -87,7 +87,7 @@ State is an EMA of the observations. The per-dimension α values are E 0.12, I 0
 E = (1−α)·E + α·E_obs        I = (1−α)·I + α·I_obs        S = (1−α)·S + α·S_obs
 ```
 
-**V is not an independent dimension.** It is the EMA-smoothed E−I imbalance (`behavioral_state.py`, `_raw_valence()` fed into the `update()` EMA). Since `V_FORMULA_VERSION = 2` the input is the gap of the **raw observations**, so V is smoothed exactly once:
+**V is not an independent dimension.** It is the EMA-smoothed E−I imbalance (`behavioral_state.py`, `_raw_valence()` fed into the `BehavioralEISV.update()` EMA). Since `V_FORMULA_VERSION = 2` the input is the gap of the **raw observations**, so V is smoothed exactly once:
 ```
 raw_v = E_obs − I_obs
 V     = (1−α_V)·V + α_V·raw_v
