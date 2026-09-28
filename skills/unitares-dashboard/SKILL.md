@@ -140,9 +140,12 @@ deployment's residents, EISV or version (a fresh install showed the bundled flee
 after one failed read, 2026-09-26). `authFetch` carries same-origin passkey
 session cookies and the optional bearer token. The `/ws/eisv` WebSocket
 connects cookie-first (a browser cannot set headers on a socket); only if that
-handshake fails early and a bearer is available does `ws.js` retry once with
-`?token=` (`DATA.apiToken()`), and every later reconnect starts cookie-first
-again. Badge freshness in the view with
+handshake fails early and a bearer is available does `ws.js` retry once,
+offering the bearer (`DATA.apiToken()`) as a `Sec-WebSocket-Protocol` entry
+(`unitares.bearer` plus `unitares.bearer.<base64url(token)>`), and every later
+reconnect starts cookie-first again. Never put a credential in the socket URL:
+the server does not read `?token=`, uvicorn logs the request line, and a
+tunnel sees the URL. Badge freshness in the view with
 `<span class="src-badge ${source}">${source}</span>`.
 
 ```js

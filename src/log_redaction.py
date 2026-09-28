@@ -19,10 +19,13 @@ import re
 
 REDACTED = "[REDACTED]"
 
-# Query parameters whose values are credentials. Matched case-insensitively
-# after ``?`` or ``&``; the value runs to the next ``&``, whitespace, or quote.
+# Query parameters whose values are credentials: any name ending in token,
+# key, secret, password or auth (``token``, ``operator_token``, ``api_key``,
+# ``access_token``...). Matched case-insensitively after ``?`` or ``&``; the
+# value runs to the next ``&``, whitespace, or quote. Over-redacting a harmless
+# ``sort_key`` costs nothing; missing a credential is the failure.
 _SECRET_PARAM = re.compile(
-    r"(?i)([?&](?:token|access_token|api_key|apikey|key|secret|password|auth)=)[^&\s\"']+"
+    r"(?i)([?&][\w.\-]*(?:token|key|secret|password|passwd|auth)=)[^&\s\"']+"
 )
 
 UVICORN_LOGGERS = ("uvicorn.error", "uvicorn.access")

@@ -52,6 +52,14 @@ def test_other_params_survive_and_every_secret_param_is_scrubbed():
     assert "since=5" in out and "limit=10" in out
 
 
+def test_prefixed_credential_params_are_scrubbed():
+    # The dashboard provisions ?operator_token=… by page URL; the page GET is
+    # logged on uvicorn.access like any other request line.
+    out = redact(f'"GET /dashboard?operator_token={SECRET}&x=1 HTTP/1.1" 200')
+    assert SECRET not in out
+    assert "x=1" in out
+
+
 def test_non_credential_text_is_untouched():
     line = '127.0.0.1:5000 - "GET /v1/residents?limit=5 HTTP/1.1" 200'
     assert redact(line) == line

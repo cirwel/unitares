@@ -53,9 +53,22 @@
     // API helpers
     // ========================================================================
 
+    // A ?token=… page URL is a one-time handoff: persisted, then scrubbed
+    // from the address bar (same pattern as redesign/data.js).
     function getToken() {
-        return localStorage.getItem('unitares_api_token') ||
-            new URLSearchParams(window.location.search).get('token');
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var fromUrl = params.get('token');
+            if (fromUrl) {
+                localStorage.setItem('unitares_api_token', fromUrl);
+                params.delete('token');
+                var qs = params.toString();
+                history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+            }
+            return localStorage.getItem('unitares_api_token');
+        } catch (e) {
+            return null;
+        }
     }
 
     function callTool(name, args) {

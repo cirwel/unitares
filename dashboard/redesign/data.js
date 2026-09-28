@@ -14,10 +14,21 @@
 (function () {
   "use strict";
 
+  // Read bearer. A ?token=… page URL is accepted once as a handoff: persisted
+  // to localStorage and scrubbed from the address bar and history, same as
+  // ?operator_token= below. Prefer setting localStorage directly — a URL
+  // credential is still seen by whatever proxies that first page load.
   function token() {
     try {
-      const u = new URLSearchParams(location.search).get("token");
-      return u || localStorage.getItem("unitares_api_token") || null;
+      const params = new URLSearchParams(location.search);
+      const fromUrl = params.get("token");
+      if (fromUrl) {
+        localStorage.setItem("unitares_api_token", fromUrl);
+        params.delete("token");
+        const qs = params.toString();
+        history.replaceState(null, "", location.pathname + (qs ? "?" + qs : "") + location.hash);
+      }
+      return localStorage.getItem("unitares_api_token") || null;
     } catch { return null; }
   }
 
