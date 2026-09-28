@@ -2532,6 +2532,28 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
     assert posted[0][3] == "action_required" and "second model family" in posted[0][4]
 
 
+def test_ci_registers_the_carry_before_reading_native_evidence(monkeypatch):
+    # Independent review on #2568: read_native carries native findings only
+    # when cmd_ci has registered the PR's equivalents first; nothing failed
+    # when that line was removed.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"state": "open", "head": {"sha": "h"},
+                                                    "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    seen = []
+
+    def native(repo, pr, key, head, comments):
+        seen.append(rg._CARRY.get((repo, pr)))
+        return rg.NativeReview([])
+    monkeypatch.setattr(rg, "read_native", native)
+    monkeypatch.setattr(rg, "post_check", lambda *a: None)
+    assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+    assert seen == [("k", [("old", "c0ffee")])]
+
+
 def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity")):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: changed)
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: rg.second_family_paths())
