@@ -148,14 +148,16 @@ From the checkout, see whether a newer release is published, then move to it:
 installed and target versions, and asks before changing anything. `--yes`
 skips the question; without a terminal and without `--yes` it stops rather than
 assume an answer. `--check` only reports and changes nothing. The command
-manages only this checkout's Docker Compose stack, and it refuses, changing
-nothing, when:
+manages only this checkout's Docker Compose stack, and it refuses, leaving the
+code and the database schema as they were, when:
 
 - tracked files in the checkout have local changes, or `db/postgres` holds
   untracked files (the database container would read a stray `NNN_*.sql` there
   as a migration);
 - the database schema is newer than anything the target release knows, so
-  moving to an older release is not supported;
+  moving to an older release is not supported (it learns this only after
+  fetching the target's tag and starting the database, which stay fetched and
+  running);
 - this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent))
   rather than from Compose.
 
