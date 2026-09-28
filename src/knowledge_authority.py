@@ -95,16 +95,23 @@ def is_channel_tag(tag: object) -> bool:
 
 
 def is_lane_filter(tags: Iterable[object] | None) -> bool:
-    """Whether a tag filter asks to read one provenance lane on its own terms.
+    """Whether a tag filter asks to read the imported-memory lane on its own terms.
 
-    True only when every supplied tag is an imported-memory or channel tag.
-    Tag filters match any-of, so a mixed filter such as
-    ``["channel-x", "review"]`` also returns ordinary findings, and those
-    still need the authority order.
+    True only when every supplied tag is an imported-memory tag. Tag filters
+    match any-of, so a mixed filter also returns ordinary findings, and those
+    still need the authority order. Channel tags are not a whole-query lane:
+    a `channel-*` tag can be an ordinary topic (`channel-detection`), so a
+    channel filter is honoured per row instead (see ``read_lanes`` in
+    ``rank_by_authority``).
     """
     values = [tag for tag in (tags or ()) if str(tag or "").strip()]
-    return bool(values) and all(
-        is_imported_memory_tag(tag) or is_channel_tag(tag) for tag in values
+    return bool(values) and all(is_imported_memory_tag(tag) for tag in values)
+
+
+def channel_lanes(tags: Iterable[object] | None) -> frozenset[str]:
+    """The `channel-*` tags in a filter, normalized."""
+    return frozenset(
+        str(tag).strip().lower() for tag in (tags or ()) if is_channel_tag(tag)
     )
 
 
@@ -187,30 +194,46 @@ def rank_by_authority(
     *,
     relevance_scores: Mapping[str, float] | None = None,
     enabled: bool = True,
+    read_lanes: Iterable[str] | None = None,
 ) -> tuple[list[Any], bool]:
     """Return a stable relevance×authority order and whether it changed.
 
     When a retrieval backend exposes no comparable score, a shallow positional
     score preserves its order while still breaking close contests by authority.
+
+    ``read_lanes`` names channel lanes the caller filtered on. A channel
+    message on one of them ranks at a neutral 1.0: the caller asked to read
+    that lane. Every other row, including an ordinary finding that merely
+    carries the tag, keeps its authority multiplier.
     """
+    lanes = frozenset(str(lane).strip().lower() for lane in (read_lanes or ()))
     ordered = list(discoveries)
     if not enabled or len(ordered) < 2:
         return ordered, False
 
     assessments = [assess_authority(document) for document in ordered]
-    if len({assessment.tier for assessment in assessments}) < 2:
+    multipliers = [
+        1.0
+        if assessment.tier == CHANNEL_MESSAGE
+        and lanes.intersection(
+            str(tag).strip().lower() for tag in (getattr(document, "tags", None) or ())
+        )
+        else assessment.multiplier
+        for document, assessment in zip(ordered, assessments)
+    ]
+    if len(set(multipliers)) < 2:
         return ordered, False
 
     score_map = relevance_scores or {}
     scored: list[tuple[float, int, Any]] = []
-    for index, (document, assessment) in enumerate(zip(ordered, assessments)):
+    for index, (document, multiplier) in enumerate(zip(ordered, multipliers)):
         document_id = str(getattr(document, "id", ""))
         raw_score = score_map.get(document_id)
         if not isinstance(raw_score, (int, float)):
             raw_score = getattr(document, "relevance", None)
         if not isinstance(raw_score, (int, float)):
             raw_score = 1.0 / (1.0 + (index * 0.05))
-        scored.append((float(raw_score) * assessment.multiplier, index, document))
+        scored.append((float(raw_score) * multiplier, index, document))
 
     ranked = [item[2] for item in sorted(scored, key=lambda item: (-item[0], item[1]))]
     changed = [getattr(item, "id", None) for item in ranked] != [

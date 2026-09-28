@@ -147,8 +147,9 @@ the harness-neutral `source-<provider>-memory` pattern classify a row as
 `imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
 together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
 `channel_message` and get the same close-contest down-rank. A tag filter made
-only of `channel-*` or source-memory tags reads that lane in its own order; a
-mixed filter keeps the authority order. Normal stores are `native_finding`.
+only of source-memory tags reads that lane in its own order. A `channel-*` tag
+filter lifts the down-rank only from channel messages on that lane; every other
+row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.
 A row becomes
 `governed_claim` only through `knowledge(action="promote")`, which adds a
 server-authored receipt that ordinary store arguments cannot forge.

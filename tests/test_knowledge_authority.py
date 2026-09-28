@@ -302,11 +302,11 @@ async def test_a_channel_tag_filter_reads_that_lane_in_its_own_order():
         _parse_knowledge_search_request,
     )
 
-    assert _authority_ranking_enabled(_parse_knowledge_search_request({"query": "x"}))
     request = _parse_knowledge_search_request({
         "query": "review", "limit": 2, "tags": ["channel-resource-agent"],
     })
-    assert not _authority_ranking_enabled(request)
+    # Authority stays on; the lane is honoured per row (review round 7).
+    assert _authority_ranking_enabled(request)
 
     channel = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
     native = _discovery("finding-1", tags=["channel-resource-agent"])
@@ -353,10 +353,12 @@ def test_only_a_filter_made_of_lane_tags_is_exempt():
             _parse_knowledge_search_request({"query": "x", "tags": tags})
         )
 
-    assert not enabled(["channel-resource-agent"])
-    assert not enabled(["source-claude-memory", "channel-resource-agent"])
-    assert enabled(["channel-resource-agent", "review"])
+    assert not enabled(["source-claude-memory"])
+    assert not enabled(["memory-sync", "source-claude-memory"])
     assert enabled(["memory-sync", "review"])
+    # Channel filters never switch authority off for the whole query.
+    assert enabled(["channel-resource-agent"])
+    assert enabled(["channel-detection"])
 
 
 @pytest.mark.asyncio
@@ -486,3 +488,40 @@ async def test_semantic_fallback_skips_excluded_writers_before_ranking():
          patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
         await handlers._execute_knowledge_search(state)
     assert [row.id for row in state.results] == ["m0", "m1"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_channel_topic_keeps_authority_order():
+    # Review round 7 on #2537: tags=["channel-detection"] was read as a lane
+    # and switched authority off, so an imported row carrying that topic
+    # outranked a native finding again.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    imported = _discovery("memory-1", tags=["channel-detection", "memory-sync"])
+    native = _discovery("finding-1", tags=["channel-detection"])
+    request = _parse_knowledge_search_request({
+        "query": "channel", "limit": 2, "tags": ["channel-detection"],
+    })
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.candidates = [imported, native]
+    state.semantic_scores = {"memory-1": 0.82, "finding-1": 0.55}
+    await _filter_and_rerank_candidates(state)
+    assert [row.id for row in state.results] == ["finding-1", "memory-1"]
+
+
+def test_read_lanes_neutralize_only_messages_on_that_lane():
+    on_lane = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    other_lane = _discovery("m2", tags=["channel-other", "to-codex"])
+    native = _discovery("finding-1")
+    ranked, _ = rank_by_authority(
+        [on_lane, other_lane, native],
+        relevance_scores={"m1": 0.80, "m2": 0.79, "finding-1": 0.60},
+        read_lanes=["channel-resource-agent"],
+    )
+    # m1 keeps 0.80; m2 is down-ranked to ~0.43; the native row sits between.
+    assert [row.id for row in ranked] == ["m1", "finding-1", "m2"]

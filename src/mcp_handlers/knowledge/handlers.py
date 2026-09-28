@@ -86,6 +86,7 @@ from src.knowledge_authority import (
     PROMOTION_SCHEMA,
     PROMOTION_TAG,
     assess_authority,
+    channel_lanes,
     is_lane_filter,
     rank_by_authority,
 )
@@ -2332,9 +2333,10 @@ def _authority_ranking_enabled(request: _KnowledgeSearchRequest) -> bool:
 
     A source-tag query is already an explicit request to inspect the imported
     lane, so applying its default penalty there would only distort that lane's
-    own relevance order. A `channel-*` tag filter is the same request for a
-    channel lane. Only a filter made entirely of lane tags counts: tags match
-    any-of, so a mixed filter also returns ordinary findings.
+    own relevance order. Only a filter made entirely of source-memory tags
+    counts: tags match any-of, so a mixed filter also returns ordinary
+    findings. A `channel-*` filter is honoured per row, in rank_by_authority,
+    because a channel- tag can also be an ordinary topic.
     """
     if request.authority_mode == "all":
         return False
@@ -2374,6 +2376,7 @@ def _rank_search_documents(
         documents,
         relevance_scores=_authority_score_map(state),
         enabled=_authority_ranking_enabled(state.request),
+        read_lanes=channel_lanes(state.request.tags),
     )
     state.authority_reranked = state.authority_reranked or changed
     return ranked
