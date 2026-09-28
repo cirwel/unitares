@@ -24,32 +24,35 @@
 #   3. If a PR is still armed (including one the maintainer armed by hand, which
 #      the script never disarms, even while it conflicts), it holds the slot.
 #      If it is BEHIND and neither the base nor its arming has moved for
-#      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted, so
-#      update that one branch. Then stop.
+#      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted: a PR
+#      this script armed is disarmed and updated (step 4 re-arms it), one
+#      armed by hand is only updated. Then stop.
 #   4. Otherwise walk the queue in the order the label was applied and arm the
 #      first PR that can go: its head still the one the approval covers, no
 #      open "merge after #N" dependency, MERGEABLE, no check needing approval.
-#      It is armed with --match-head-commit on that head.
+#      A BEHIND head of queue is updated first, unarmed, and armed on a later
+#      tick once the updated head re-validates. It is armed with
+#      --match-head-commit on that head.
 #      A PR whose checks failed on an up-to-date head gets its failed Actions
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
 #
-# The approval label is the maintainer's merge decision made ahead of time,
-# exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
-# shared contract). It approves the PR as it stood when the label went on. The
+# The approval label is the merge decision. The agent that owns a PR applies it
+# when it marks the PR ready, never on another agent's PR, and the maintainer
+# vetoes by removing it (AGENTS.md / CLAUDE.md shared contract). It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
 # outright. Anything else is stale
-# until the label is re-applied, which pins afresh. A label is pinned only if
+# until the label is removed and re-added, which pins afresh. A label is pinned only if
 # the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
-# with no pin (the script was down, or its state lost) must be re-applied. The
+# with no pin (the script was down, or its state lost) must be removed and re-added. The
 # residual gap: a commit made before the label but pushed before the script
 # first sees it (normally the next tick, never beyond that window) is pinned
 # as approved.
 #
 # Threat model. The pin catches honest mistakes: an agent pushing a follow-up
-# after the maintainer approved, or a stale branch changing under the label.
+# after the PR was approved, or a stale branch changing under the label.
 # It is not a security boundary against a deliberately hostile agent, and does
 # not try to be: every actor here authenticates as the same GitHub account, so
 # such an agent could apply the label itself, or run `gh pr merge --auto`,
@@ -69,9 +72,14 @@ REPO="${PR_BABYSITTER_REPO:-cirwel/unitares}"
 BASE="${PR_QUEUE_BASE:-master}"
 LABEL="${PR_QUEUE_LABEL:-approved-to-merge}"
 RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
-BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-10}"
+BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
+# Checks that must have passed on the head before it is armed, beyond the ones
+# branch protection requires. `review` is not a required check on master, and
+# its NEUTRAL conclusion means "unreviewed", so without this an agent's label
+# on a PR whose review never ran would merge it.
+REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"  # set it empty to require none
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
@@ -137,7 +145,7 @@ approval_times() {
 # SHA instead. A later head stays covered only while the fingerprint matches:
 # commit metadata (committer name, message, even a web-flow signature) is
 # author-controlled or API-mintable, so it cannot prove a commit was only a
-# base update, but the content can. A re-applied label pins afresh.
+# base update, but the content can. A removed-and-re-added label pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
 pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
@@ -178,6 +186,21 @@ still_approved() {  # <pr> <head>
 
 # Prints the latest label time, or nothing when there is no label event;
 # fails (2) when the timeline cannot be read, which is not the same thing.
+# <pr-json> -> space-separated "<check>=<state>" for each required check that
+# is not SUCCESS; empty when all passed. MISSING and PENDING are normal for
+# about a minute after a base update, while the review gate re-evaluates.
+unmet_required_checks() {
+  local check state unmet=""
+  for check in $REQUIRED_CHECKS; do
+    state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
+             | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
+             | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
+               else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
+    [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
+  done
+  echo "${unmet# }"
+}
+
 latest_label_time() {
   local t
   t=$(approval_times "$1") || return 2
@@ -206,6 +229,7 @@ armed=$(q -c --arg b "$BASE" \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
 disarmed=" "
+hold_order=0
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
@@ -219,6 +243,14 @@ while read -r pr; do
     reason="CONFLICTING"
   elif ! still_approved "$n" "$(jq -r .headRefOid <<<"$pr")"; then
     reason="its head changed since the approval"
+  elif unmet=$(unmet_required_checks "$pr") && [ -n "$unmet" ]; then
+    # Anything but SUCCESS disarms: review is not a branch-protection check,
+    # so an armed PR would otherwise merge without it (NEUTRAL means
+    # unreviewed). MISSING/PENDING is usual for about a minute after a base
+    # update; the PR keeps its place, since the tick stops here and the next
+    # one re-arms it once the check passes.
+    reason="$unmet is not passing"
+    case " $unmet" in *=MISSING*|*=PENDING*) hold_order=1 ;; esac
   elif [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     reason="a check is waiting for approval (ACTION_REQUIRED)"
   elif [ "$(jq -r .mergeStateStatus <<<"$pr")" != "BEHIND" ] \
@@ -236,6 +268,10 @@ while read -r pr; do
     fi
   fi
 done <<<"$armed"
+if [ "$hold_order" = "1" ]; then
+  log "a disarmed PR is waiting on a required check; nothing else armed this tick"
+  exit 0
+fi
 
 # --- 2. approvals ---------------------------------------------------------------
 # Runs every tick, before the slot check, so a PR labelled while another holds
@@ -246,7 +282,7 @@ queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
               and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
-# Order by when the label went on, which is the order the maintainer approved.
+# Order by when the label went on, which is the order the PRs were approved.
 ordered=""
 while read -r pr; do
   [ -n "$pr" ] || continue
@@ -256,7 +292,7 @@ while read -r pr; do
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
@@ -267,7 +303,7 @@ while read -r pr; do
     # what was approved.
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
-      log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      log "#$n approval at $labelled_at was never pinned and is ${age}m old; remove and re-add $LABEL to approve its head"
       continue
     fi
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
@@ -277,7 +313,7 @@ while read -r pr; do
     if [ "$pinned_sha" != "$head" ]; then
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
-        log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        log "#$n changed since its approval at ${pinned_sha:0:8}; remove and re-add $LABEL to approve ${head:0:8}"
         continue
       fi
       pin "$n" "$head" "$labelled_at" "$fp" || true
@@ -314,7 +350,14 @@ if [ -n "$holder" ]; then
       since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
       idle=$(minutes_since "$since")
       if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
-        log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+        if armed_by_script "$n" "$armed_at"; then
+          # Same rule as the queue: never stay armed across an unchecked head.
+          # Disarm, update; the queue re-arms it once the new head validates.
+          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; disarming to update"
+          act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
+        else
+          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+        fi
         act gh pr update-branch "$n" -R "$REPO" || true
       fi
     fi
@@ -397,6 +440,28 @@ while read -r _ n head; do
       log "#$n: $failed failing check(s); re-ran $started run(s) once"
     fi
     continue
+  fi
+
+  unmet=$(unmet_required_checks "$pr")
+  if [ -n "$unmet" ]; then
+    case " $unmet" in
+      # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
+      # an unreviewed PR): wait rather than let a later PR jump the order.
+      *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
+      *) log "#$n: $unmet (must pass before arming); skipped"; continue ;;
+    esac
+  fi
+
+  if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
+    # Update first, unarmed, and arm the updated head only once it has been
+    # re-validated (approval fingerprint, required checks) on a later tick. The
+    # PR keeps its place meanwhile: the tick stops here. Arming first and
+    # updating after would leave auto-merge on across a head nothing has
+    # checked, and `review` is not branch-protected. GitHub's own updater was
+    # no help anyway: it acted for 1 of 16 queue arms on 2026-09-27.
+    log "#$n updating before arming (head of queue)"
+    act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; retried next tick"
+    exit 0
   fi
 
   log "#$n arming (head of queue)"

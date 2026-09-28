@@ -38,6 +38,8 @@ data/.metadata.lock
 data/locks/
 data/processes/
 data/watcher/
+# Wave 3 instrument emit-failure ledger (append-only, per deployment)
+data/dialectic/
 
 # Claude Code / Cursor local state (machine-specific, never commit)
 .claude/
