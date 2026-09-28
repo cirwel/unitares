@@ -115,6 +115,142 @@ def test_key_ignores_local_diff_config(repo):
     assert rg.diff_key("master", "HEAD") == before
 
 
+# ---- carrying a review across a base merge that touched the PR's files ----
+
+@pytest.fixture
+def carry_repo(tmp_path, monkeypatch):
+    """master has a five-line file; the feature edits line 3. Master will then
+    edit line 1, next to the PR's line but not on it."""
+    r = tmp_path / "carry"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "master")
+    _git(r, "config", "user.email", "t@example.invalid")
+    _git(r, "config", "user.name", "t")
+    (r / "f.txt").write_text("one\ntwo\nthree\nfour\nfive\n")
+    (r / "other.txt").write_text("x\n")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "base")
+    _git(r, "checkout", "-q", "-b", "feature")
+    (r / "f.txt").write_text("one\ntwo\nTHREE by the PR\nfour\nfive\n")
+    _git(r, "commit", "-q", "-am", "feature change")
+    monkeypatch.chdir(r)
+    return r
+
+
+def _master_edits_next_to_the_pr(r: Path) -> None:
+    _git(r, "checkout", "-q", "master")
+    (r / "f.txt").write_text("ONE on master\ntwo\nthree\nfour\nfive\n")
+    _git(r, "commit", "-q", "-am", "master edits line 1")
+    _git(r, "checkout", "-q", "feature")
+
+
+def _clean_record(key: str) -> dict:
+    return _comment(rg.Record(key, "CLEAN", 0, False, "codex-native"), url="reviewed")
+
+
+def test_a_base_merge_next_to_the_pr_moves_the_raw_key_but_carries_the_review(carry_repo):
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.diff_key("master", "HEAD") != reviewed_key  # the #2519 failure
+    key, carried = rg.effective_key("master", "HEAD", [_clean_record(reviewed_key)])
+    assert key == reviewed_key
+    assert carried == reviewed_head
+    assert rg.latest_matching([_clean_record(reviewed_key)], key).verdict == "CLEAN"
+
+
+def test_the_heads_own_record_wins_and_nothing_is_carried(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    own = rg.diff_key("master", "HEAD")
+    key, carried = rg.effective_key(
+        "master", "HEAD", [_clean_record(reviewed_key), _clean_record(own)])
+    assert (key, carried) == (own, "")
+
+
+def test_no_earlier_record_means_the_heads_key(carry_repo):
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.effective_key("master", "HEAD", []) == (rg.diff_key("master", "HEAD"), "")
+
+
+def test_open_findings_carry_too(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    findings = _comment(rg.Record(reviewed_key, "FINDINGS", 2, False, "codex-native"))
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    key, _ = rg.effective_key("master", "HEAD", [findings])
+    assert key == reviewed_key
+    rec = rg.latest_matching([findings], key)
+    assert rec.verdict == "FINDINGS" and not rec.disposed
+
+
+def test_an_edit_to_the_prs_lines_after_the_merge_stops_the_carry(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE edited again\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "author edits the PR line")
+    assert rg.effective_key("master", "HEAD", [_clean_record(reviewed_key)])[0] != reviewed_key
+
+
+def test_a_merge_that_rewrites_the_prs_lines_does_not_carry(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-commit", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE resolved differently\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "merge with an edit")
+    assert rg.effective_key("master", "HEAD", [_clean_record(reviewed_key)])[0] != reviewed_key
+
+
+def test_a_merge_of_a_branch_not_on_the_base_does_not_carry(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", "master")
+    (carry_repo / "other.txt").write_text("side work\n")
+    _git(carry_repo, "commit", "-q", "-am", "side")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "side")
+    # The side branch's lines are now in the PR: a new diff, not a base merge.
+    assert rg.effective_key("master", "HEAD", [_clean_record(reviewed_key)])[0] != reviewed_key
+
+
+def test_the_carry_walks_through_several_base_merges(carry_repo):
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nthree\nfour\nFIVE on master\n")
+    _git(carry_repo, "commit", "-q", "-am", "master edits line 5")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.effective_key("master", "HEAD", [_clean_record(reviewed_key)]) == (
+        reviewed_key, reviewed_head)
+
+
+def test_fingerprint_sees_a_binary_change(carry_repo):
+    (carry_repo / "blob.bin").write_bytes(b"\x00\x01\x02")
+    _git(carry_repo, "add", "blob.bin")
+    _git(carry_repo, "commit", "-q", "-m", "binary")
+    before = rg.patch_fingerprint("master", "HEAD")
+    (carry_repo / "blob.bin").write_bytes(b"\x00\x01\x03")
+    _git(carry_repo, "commit", "-q", "-am", "binary edit")
+    # A text diff says only "Binary files differ"; the blob ids must count.
+    assert rg.patch_fingerprint("master", "HEAD") != before
+
+
+def test_fingerprint_ignores_context_but_not_changed_lines(carry_repo):
+    before = rg.patch_fingerprint("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.patch_fingerprint("master", "HEAD") == before
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE by the PR!\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "edit")
+    assert rg.patch_fingerprint("master", "HEAD") != before
+
+
 @pytest.mark.parametrize("text,expected", [
     ("looks fine\nVERDICT: CLEAN\n", ("CLEAN", 0)),
     ("1. x.py:3 bad\nVERDICT: FINDINGS(1)", ("FINDINGS", 1)),
