@@ -490,3 +490,24 @@ def test_discovery_keeps_the_default_endpoint_local(monkeypatch):
     host = inference_registry.get_inference_host("ollama:local")
     assert host["privacy_class"] == "local"
     assert host["cost_class"] == "local_free"
+
+
+@pytest.mark.asyncio
+async def test_host_id_ollama_local_refuses_before_the_availability_probe(external_endpoint, monkeypatch):
+    """host_id='ollama:local' forces a local request. Building its registry record
+    runs a socket probe to the endpoint, so the refusal has to come first."""
+    from src.mcp_handlers.support import inference_registry, model_inference
+
+    def probe_must_not_run():
+        raise AssertionError("the availability probe contacted the endpoint")
+
+    monkeypatch.setattr(inference_registry, "_ollama_available", probe_must_not_run)
+    client = _forbid_client(monkeypatch)
+    outcome = await model_inference.run_model_inference(
+        model_inference.CallModelRequest(
+            prompt="hi", requesting_agent_uuid=None, host_id="ollama:local"
+        )
+    )
+    assert not outcome.ok
+    assert outcome.failure.code == "MODEL_ENDPOINT_NOT_LOCAL"
+    assert client.call_count == 0

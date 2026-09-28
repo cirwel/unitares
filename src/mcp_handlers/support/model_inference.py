@@ -282,6 +282,27 @@ def _provider_timeout_s() -> float:
     return max(1.0, _call_model_timeout() - 5.0)
 
 
+def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
+    """The refusal for a local request whose configured endpoint is external."""
+    return InferenceOutcome.failed(
+        local_refusal_message(endpoint),
+        code=ENDPOINT_NOT_LOCAL,
+        category="validation_error",
+        details={"privacy": privacy, "endpoint_privacy": endpoint.privacy},
+        recovery={
+            "action": (
+                "The configured model endpoint is not on a network the "
+                "server treats as the operator's. Pass privacy='auto' "
+                "or 'cloud' to allow it, or reclassify the endpoint "
+                "with UNITARES_TRUSTED_NETWORKS (an address), "
+                "UNITARES_MODEL_LOCAL_HOSTS (a hostname) or "
+                "UNITARES_MODEL_PRIVACY=local."
+            ),
+            "related_tools": ["list_inference_hosts"],
+        },
+    )
+
+
 async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     """Run one standard advisory inference without an MCP response envelope."""
     if not OPENAI_AVAILABLE:
@@ -308,6 +329,15 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     privacy = request.privacy
     provider = request.provider
     host_id = request.host_id
+
+    if host_id == "ollama:local":
+        # This host id forces privacy='local' below. Classify from the URL
+        # before get_inference_host(), whose availability probe would open a
+        # connection to the endpoint: a local request contacts nothing
+        # external, not even to learn it is up.
+        requested_endpoint = classify_endpoint(model_base_url())
+        if not requested_endpoint.is_local:
+            return _endpoint_not_local_outcome(requested_endpoint, "local")
 
     if host_id:
         host = get_inference_host(str(host_id))
@@ -421,25 +451,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         if privacy == "local":
             # privacy='local' (stated or defaulted) is a promise about where the
             # prompt goes. Checked from the URL alone, before any request.
-            endpoint = local_endpoint
-            if not endpoint.is_local:
-                return InferenceOutcome.failed(
-                    local_refusal_message(endpoint),
-                    code=ENDPOINT_NOT_LOCAL,
-                    category="validation_error",
-                    details={"privacy": privacy, "endpoint_privacy": endpoint.privacy},
-                    recovery={
-                        "action": (
-                            "The configured model endpoint is not on a network the "
-                            "server treats as the operator's. Pass privacy='auto' "
-                            "or 'cloud' to allow it, or reclassify the endpoint "
-                            "with UNITARES_TRUSTED_NETWORKS (an address), "
-                            "UNITARES_MODEL_LOCAL_HOSTS (a hostname) or "
-                            "UNITARES_MODEL_PRIVACY=local."
-                        ),
-                        "related_tools": ["list_inference_hosts"],
-                    },
-                )
+            if not local_endpoint.is_local:
+                return _endpoint_not_local_outcome(local_endpoint, privacy)
         if model == "auto":
             model = default_local_model()
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
