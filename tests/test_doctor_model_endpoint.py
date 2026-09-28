@@ -1,0 +1,145 @@
+"""The doctor's local model endpoint check and its alias INFO lines.
+
+``model_endpoint`` asks the configured endpoint for ``GET {base}/models`` and
+looks for the configured model; ``setting_alias:<old>`` prints one INFO line
+per older setting name in use, naming the new name and its removal release.
+The endpoint is stubbed: nothing here touches the network.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import io
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "dev" / "unitares_doctor.py"
+NAMES = (
+    "UNITARES_MODEL_BASE_URL",
+    "UNITARES_MODEL",
+    "UNITARES_MODEL_LOCAL_HOSTS",
+    "UNITARES_MODEL_PRIVACY",
+    "UNITARES_OLLAMA_BASE",
+    "UNITARES_OLLAMA_BASE_URL",
+    "UNITARES_LLM_MODEL",
+)
+
+
+@pytest.fixture(scope="module")
+def doctor():
+    spec = importlib.util.spec_from_file_location("unitares_doctor_model", SCRIPT)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["unitares_doctor_model"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    for name in NAMES:
+        monkeypatch.delenv(name, raising=False)
+
+
+class _Resp(io.BytesIO):
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _serve(monkeypatch, doctor, payload=None, error=None):
+    seen = []
+
+    def fake(url, timeout=0):
+        seen.append(url)
+        if error is not None:
+            raise error
+        return _Resp(json.dumps(payload).encode())
+
+    monkeypatch.setattr(doctor.urllib.request, "urlopen", fake)
+    return seen
+
+
+def test_nothing_configured_skips_without_a_request(doctor, monkeypatch):
+    seen = _serve(monkeypatch, doctor, {"data": []})
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert result.status == doctor.Status.SKIP
+    assert "UNITARES_MODEL_BASE_URL" in result.message
+    assert seen == []
+
+
+def test_lists_the_configured_model(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://vllm.lan:8000/v1")
+    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    seen = _serve(monkeypatch, doctor, {"data": [{"id": "qwen3:8b"}, {"id": "other"}]})
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert result.status == doctor.Status.PASS, result
+    assert "classified external" in result.message
+    assert seen == ["http://vllm.lan:8000/v1/models"]
+
+
+def test_a_model_the_endpoint_does_not_list_warns(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    _serve(monkeypatch, doctor, {"data": [{"id": "gemma4:latest"}]})
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert result.status == doctor.Status.WARN
+    assert "qwen3:8b" in result.message and "gemma4:latest" in result.detail
+
+
+def test_an_endpoint_without_a_named_model_warns(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
+    _serve(monkeypatch, doctor, {"data": [{"id": "gemma4:latest"}]})
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert result.status == doctor.Status.WARN
+    assert "no model is named" in result.message
+    assert "UNITARES_MODEL" in result.detail
+
+
+def test_unreachable_skips_with_a_clear_message(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    _serve(monkeypatch, doctor, error=OSError("connection refused"))
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert result.status == doctor.Status.SKIP
+    assert "did not answer" in result.message
+
+
+def test_a_non_openai_answer_warns(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
+    monkeypatch.setenv("UNITARES_MODEL", "m")
+    _serve(monkeypatch, doctor, {"models": [{"name": "m"}]})
+    assert doctor.check_model_endpoint(REPO_ROOT).status == doctor.Status.WARN
+
+
+def test_credentials_in_the_url_are_not_printed(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://user:secret@vllm.lan:8000/v1")
+    monkeypatch.setenv("UNITARES_MODEL", "m")
+    _serve(monkeypatch, doctor, {"data": [{"id": "m"}]})
+    result = doctor.check_model_endpoint(REPO_ROOT)
+    assert "secret" not in result.message + result.detail
+
+
+def test_one_info_line_per_old_name_in_use(doctor, monkeypatch):
+    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://gpu:11434")
+    checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
+    results = doctor.run_checks(checks, "local")
+    assert {r.name for r in results} == {"setting_alias:UNITARES_LLM_MODEL", "setting_alias:UNITARES_OLLAMA_BASE"}
+    assert all(r.status == doctor.Status.INFO for r in results)
+    by_name = {r.name: r.message for r in results}
+    assert "UNITARES_MODEL until v3.2.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
+    assert "UNITARES_MODEL_BASE_URL" in by_name["setting_alias:UNITARES_OLLAMA_BASE"]
+    rendered = doctor.render_text(results, use_color=False)
+    assert "i setting_alias:UNITARES_LLM_MODEL" in rendered
+    assert doctor.exit_code(results) == 0
+
+
+def test_no_old_names_means_no_lines(doctor):
+    checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
+    assert checks, "one alias check per table row"
+    assert doctor.run_checks(checks, "local") == []

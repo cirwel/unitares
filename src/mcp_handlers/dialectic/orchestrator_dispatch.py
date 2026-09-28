@@ -24,7 +24,16 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.local_inference_env import ollama_base_url
+from src.local_inference_env import (
+    MODEL_BASE_URL_ENV,
+    MODEL_ENV,
+    MODEL_LOCAL_HOSTS_ENV,
+    MODEL_PRIVACY_ENV,
+    TRUSTED_NETWORKS_ENV,
+    aliases_for,
+    default_local_model,
+    model_base_url,
+)
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -160,9 +169,13 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         # claude/codex; only the CLI path and timeout are configuration.
         "UNITARES_ANTIGRAVITY_CLI",
         "UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S",
-        # The local Ollama host is forwarded below as this server's RESOLVED
-        # URL, not as raw names; only the model name passes through here.
-        "UNITARES_LLM_MODEL",
+        # The local model endpoint and model are forwarded below as this
+        # server's RESOLVED values. The classifier settings pass through as
+        # given, so the child classifies the endpoint (local or external) the
+        # way this server does; UNITARES_TRUSTED_NETWORKS is one of its inputs.
+        MODEL_LOCAL_HOSTS_ENV,
+        MODEL_PRIVACY_ENV,
+        TRUSTED_NETWORKS_ENV,
         # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp
         # gate is configured, the child needs the bearer or every call it makes
         # 401s — and the failure would look like a broken reviewer rather than
@@ -175,20 +188,17 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         if value:
             env[name] = value
 
-    # Local Ollama host: forward what THIS server resolved (src/local_inference_env.py),
-    # under both names, rather than the raw values. The child lets
-    # UNITARES_OLLAMA_BASE win over the alias, so forwarding raw names would let a
-    # canonical value the child inherits from the orchestrator daemon outrank an
-    # alias-only server setting and put the reviewer on a different host than the
-    # server. Only when the server has either name set: otherwise the child keeps
-    # whatever the orchestrator provides, as before.
-    if any(
-        os.environ.get(name, "").strip()
-        for name in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL")
-    ):
-        resolved_root = ollama_base_url()
-        env["UNITARES_OLLAMA_BASE"] = resolved_root
-        env["UNITARES_OLLAMA_BASE_URL"] = resolved_root
+    # Local model endpoint and model: forward what THIS server resolved
+    # (src/local_inference_env.py) under the new name, rather than raw values.
+    # The child runs this release, so the new name outranks every older one it
+    # might inherit from the orchestrator daemon, and the reviewer cannot land
+    # on a different endpoint or model than the server. Only when the server
+    # sets the setting under some name: otherwise the child keeps whatever the
+    # orchestrator provides, as before.
+    for new, resolve in ((MODEL_BASE_URL_ENV, model_base_url), (MODEL_ENV, default_local_model)):
+        names = (new, *(alias.old for alias in aliases_for(new)))
+        if any(os.environ.get(name, "").strip() for name in names):
+            env[new] = resolve()
 
     # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
     # the reviewer's env. The reviewer submits its antithesis/synthesis via the

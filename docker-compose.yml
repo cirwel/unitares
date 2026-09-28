@@ -192,11 +192,22 @@ services:
       UNITARES_BUILD_SHA: ${UNITARES_BUILD_SHA:-}
       # Model for consult and the in-process dialectic reviewer (see
       # .env.example, "Model for advice and dialectic reviews"). Empty default =
-      # no model configured, unchanged behavior. To use Ollama on the Docker
-      # host, set UNITARES_OLLAMA_BASE=http://host.docker.internal:11434 (root
-      # URL, no /v1) and UNITARES_LLM_MODEL to a model you have pulled. The
-      # older name UNITARES_OLLAMA_BASE_URL is passed through too; it is read
-      # only when UNITARES_OLLAMA_BASE is empty.
+      # no model configured, unchanged behavior. UNITARES_MODEL_BASE_URL is any
+      # OpenAI-compatible server, /v1 included (Ollama on the Docker host:
+      # http://host.docker.internal:11434/v1), and UNITARES_MODEL a model it
+      # serves. A privacy='local' request goes only to an endpoint the server
+      # classifies local; a Compose service name such as vllm is local only
+      # when listed in UNITARES_MODEL_LOCAL_HOSTS. The older names below are
+      # aliases until v3.2.0 and are read only when the new ones are empty.
+      UNITARES_MODEL_BASE_URL: ${UNITARES_MODEL_BASE_URL:-}
+      UNITARES_MODEL: ${UNITARES_MODEL:-}
+      UNITARES_MODEL_LOCAL_HOSTS: ${UNITARES_MODEL_LOCAL_HOSTS:-}
+      UNITARES_MODEL_PRIVACY: ${UNITARES_MODEL_PRIVACY:-}
+      # The classifier also reads the trusted-network list, so a model on a
+      # tailnet peer (100.64.0.0/10) is local once that range is listed. It
+      # changes nothing for the REST access checks here: container traffic
+      # arrives through the RFC 1918 Docker bridge, which is trusted already.
+      UNITARES_TRUSTED_NETWORKS: ${UNITARES_TRUSTED_NETWORKS:-}
       UNITARES_OLLAMA_BASE: ${UNITARES_OLLAMA_BASE:-}
       UNITARES_OLLAMA_BASE_URL: ${UNITARES_OLLAMA_BASE_URL:-}
       UNITARES_LLM_MODEL: ${UNITARES_LLM_MODEL:-}

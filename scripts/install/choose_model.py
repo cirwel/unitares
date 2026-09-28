@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 """Name the model UNITARES uses for consult and the in-process dialectic reviewer.
 
-Run from a Docker Compose install (``unitares model``). It asks the local
-Ollama which models are pulled, lets you pick one, writes the two settings to
-``.env`` and rebuilds the server, then checks that the server can reach the
-model. Without a model, consult answers "Standard advisory consultation is
-unavailable" and a review waits for a peer or the operator.
+Run from a Docker Compose install (``unitares model``). It asks the model
+server which models it serves (``GET {base}/models``, which Ollama, vLLM, LM
+Studio and llama.cpp's server all answer), lets you pick one, writes the two
+settings to ``.env`` and rebuilds the server, then checks that the server can
+reach the model. Ollama-only hints (``ollama pull``) appear only when the
+server answers like Ollama. Without a model, consult answers "Standard advisory
+consultation is unavailable" and a review waits for a peer or the operator.
 
     python3 scripts/install/choose_model.py                  # interactive
     python3 scripts/install/choose_model.py --model qwen3:8b --yes
     python3 scripts/install/choose_model.py --no-docker      # print settings for a source install
     python3 scripts/install/choose_model.py --clear          # remove the settings from .env
+    python3 scripts/install/choose_model.py --base-url http://localhost:8000/v1   # another server
 
 Stdlib only, so it runs before anything is installed. It edits one file
-(``.env``, only the two lines it owns) and, unless ``--no-rebuild``, runs
+(``.env``, only the lines it owns: the two settings, and the older names it
+wrote before, which it replaces) and, unless ``--no-rebuild``, runs
 ``docker compose up -d --build governance-mcp``.
 """
 
@@ -30,11 +34,17 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-BASE_KEY = "UNITARES_OLLAMA_BASE"
-MODEL_KEY = "UNITARES_LLM_MODEL"
+BASE_KEY = "UNITARES_MODEL_BASE_URL"
+MODEL_KEY = "UNITARES_MODEL"
+# Names this script wrote before the endpoint became any OpenAI-compatible
+# server. They are aliases now (src/local_inference_env.py), so writing the new
+# names removes them rather than leaving two answers in .env.
+OLD_KEYS = ("UNITARES_OLLAMA_BASE", "UNITARES_LLM_MODEL")
+# An older name this script never wrote: reported, not removed.
 ALIAS_KEY = "UNITARES_OLLAMA_BASE_URL"
-# How this script reaches Ollama by default (it runs on the host). The server,
-# in the container, reaches the same endpoint through container_base().
+# How this script reaches the model server by default (it runs on the host).
+# The server, in the container, reaches the same endpoint through
+# container_base().
 HOST_OLLAMA = "http://localhost:11434"
 PREFERRED_MODEL = "gemma4:latest"
 
@@ -47,29 +57,52 @@ def ollama_root(url: str) -> str:
     return url
 
 
-def list_ollama_models(base: str, timeout: float = 3.0) -> list[str] | None:
-    """Model names pulled into the Ollama at ``base``, or None if it did not answer."""
+def openai_base(url: str) -> str:
+    """An OpenAI-compatible base URL: no surrounding space or trailing ``/``, and
+    ``/v1`` added only when the URL has no path (an Ollama root such as
+    ``http://localhost:11434``). Mirrors src/local_inference_env.py."""
+    url = url.strip().rstrip("/")
+    if url and not urlsplit(url).path:
+        url += "/v1"
+    return url
+
+
+def list_models(base: str, timeout: float = 3.0) -> list[str] | None:
+    """Model ids the server at ``base`` lists on ``GET {base}/models``, or None
+    if it did not answer in the OpenAI-compatible shape."""
     try:
-        with urllib.request.urlopen(ollama_root(base) + "/api/tags", timeout=timeout) as resp:
+        with urllib.request.urlopen(openai_base(base) + "/models", timeout=timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError):
         return None
-    models = payload.get("models") if isinstance(payload, dict) else None
-    if not isinstance(models, list):
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
         return None
-    names = [m.get("name") for m in models if isinstance(m, dict) and isinstance(m.get("name"), str)]
-    return sorted(set(names))
+    ids = [m.get("id") for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)]
+    return sorted(set(ids))
+
+
+def is_ollama(base: str, timeout: float = 1.0) -> bool:
+    """True when ``GET {root}/api/version`` answers like Ollama. Gates the
+    Ollama-only hints; every other step works for any server."""
+    try:
+        with urllib.request.urlopen(ollama_root(base) + "/api/version", timeout=timeout) as resp:
+            payload = json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    return isinstance(payload, dict) and isinstance(payload.get("version"), str)
 
 
 def container_base(host_url: str) -> str:
-    """The same Ollama as the server in the container sees it.
+    """The same endpoint as the server in the container sees it.
 
     Inside the container, localhost is the container itself, so a host-local
-    address becomes host.docker.internal on the same scheme and port. Any other
-    host is already reachable by name and is kept as given. A trailing ``/`` or
-    ``/v1`` is dropped: the setting is the root URL.
+    address becomes host.docker.internal on the same scheme, port and path.
+    That holds for any server, not only Ollama. Any other host is already
+    reachable by name and is kept as given. The result is the
+    OpenAI-compatible base, ``/v1`` included.
     """
-    parts = urlsplit(ollama_root(host_url))
+    parts = urlsplit(openai_base(host_url))
     if parts.hostname in ("localhost", "127.0.0.1", "::1"):
         port = f":{parts.port}" if parts.port else ""
         parts = parts._replace(netloc=f"host.docker.internal{port}")
@@ -130,16 +163,21 @@ def ask(prompt: str, default: str, on_eof: str | None = None) -> str:
     return answer or default
 
 
-def pick_model(models: list[str], requested: str | None, assume_yes: bool) -> str | None:
+def pick_model(
+    models: list[str], requested: str | None, assume_yes: bool, *, ollama: bool = True
+) -> str | None:
     if requested:
         if requested not in models:
-            print(f"✗ {requested} is not pulled. Pull it first: ollama pull {requested}")
+            if ollama:
+                print(f"✗ {requested} is not pulled. Pull it first: ollama pull {requested}")
+            else:
+                print(f"✗ {requested} is not one of the models the server lists.")
             return None
         return requested
     fallback = default_choice(models)
     if assume_yes or not sys.stdin.isatty():
         return fallback
-    print("Models pulled into Ollama:")
+    print("Models the server lists:")
     for i, name in enumerate(models, 1):
         print(f"  {i}. {name}{'   (default)' if name == fallback else ''}")
     answer = ask(f"Which model should UNITARES use? [1-{len(models)}, Enter for {fallback}] ", "")
@@ -162,7 +200,8 @@ def compose(args: list[str], env_file: Path, settings: dict[str, str]) -> subpro
     the child environment carries the chosen values, not inherited ones.
     """
     env = dict(os.environ)
-    env.pop(ALIAS_KEY, None)
+    for key in (*OLD_KEYS, ALIAS_KEY):
+        env.pop(key, None)
     env.update(settings)
     return subprocess.run(
         ["docker", "compose", "--project-directory", str(REPO_ROOT), "--env-file", str(env_file), *args],
@@ -174,54 +213,68 @@ def server_reaches_model(env_file: Path, settings: dict[str, str]) -> bool:
     """True when the server, from inside its container, sees the chosen model listed."""
     probe = (
         "import json,os,sys,urllib.request;"
-        f"tags=json.load(urllib.request.urlopen(os.environ['{BASE_KEY}'].rstrip('/')+'/api/tags',timeout=5));"
-        f"sys.exit(0 if os.environ['{MODEL_KEY}'] in [m.get('name') for m in tags.get('models',[])] else 1)"
+        f"listed=json.load(urllib.request.urlopen(os.environ['{BASE_KEY}'].rstrip('/')+'/models',timeout=5));"
+        f"sys.exit(0 if os.environ['{MODEL_KEY}'] in [m.get('id') for m in listed.get('data',[])] else 1)"
     )
     return compose(["exec", "-T", "governance-mcp", "python", "-c", probe], env_file, settings).returncode == 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--model", help="model to use (must already be pulled)")
+    parser.add_argument("--model", help="model to use (must be one the server lists)")
     parser.add_argument("--yes", "-y", action="store_true", help="no prompts: take the default model and rebuild")
     parser.add_argument("--no-rebuild", action="store_true", help="write .env but do not rebuild the server")
     parser.add_argument("--no-docker", action="store_true", help="source install: print the settings instead of writing .env")
     parser.add_argument("--clear", action="store_true", help="remove the model settings from .env")
-    parser.add_argument("--ollama", default=os.environ.get("OLLAMA_HOST_URL", HOST_OLLAMA), help=f"where this script finds Ollama (default {HOST_OLLAMA})")
+    parser.add_argument(
+        "--base-url", "--ollama", dest="base_url",
+        default=os.environ.get("OLLAMA_HOST_URL", HOST_OLLAMA + "/v1"),
+        help=f"where this script finds the OpenAI-compatible model server, /v1 included (default {HOST_OLLAMA}/v1)",
+    )
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     args = parser.parse_args(argv)
     env_file: Path = args.env_file
 
+    owned_old = {key: None for key in OLD_KEYS}
     if args.clear:
         if env_file.exists():
-            env_file.write_text(update_env_text(env_file.read_text(), {BASE_KEY: None, MODEL_KEY: None}))
+            env_file.write_text(update_env_text(env_file.read_text(), {BASE_KEY: None, MODEL_KEY: None, **owned_old}))
         print(f"✓ Removed {BASE_KEY} and {MODEL_KEY} from {env_file}. Rebuild to apply: docker compose up -d --build governance-mcp")
         return 0
 
-    models = list_ollama_models(args.ollama)
+    base = openai_base(args.base_url)
+    models = list_models(base)
+    ollama = is_ollama(base) if models is not None else False
     if models is None:
-        print(f"✗ No Ollama answered at {args.ollama}.")
-        print("  Install it from https://ollama.com, start it, pull a model (for example: ollama pull gemma4:latest),")
-        print("  then run this again. Without a model, consult is unavailable and reviews wait for a peer.")
+        print(f"✗ No model server answered at {base}/models.")
+        print("  Start an OpenAI-compatible server (Ollama from https://ollama.com is one: start it and pull a model,")
+        print("  for example ollama pull gemma4:latest), or point --base-url at yours, then run this again.")
+        print("  Without a model, consult is unavailable and reviews wait for a peer.")
         return 1
     if not models:
-        print(f"✗ Ollama at {args.ollama} has no models. Pull one (for example: ollama pull {PREFERRED_MODEL}) and run this again.")
+        if ollama:
+            print(f"✗ Ollama at {base} has no models. Pull one (for example: ollama pull {PREFERRED_MODEL}) and run this again.")
+        else:
+            print(f"✗ The server at {base} lists no models. Load one and run this again.")
         return 1
 
-    model = pick_model(models, args.model, args.yes)
+    model = pick_model(models, args.model, args.yes, ollama=ollama)
     if model is None:
         return 1
 
     if args.no_docker:
         print("✓ Source install: set these in the server's environment (shell, or the launchd plist), then restart it:")
-        print(f"  {BASE_KEY}={ollama_root(args.ollama)}")
+        print(f"  {BASE_KEY}={base}")
         print(f"  {MODEL_KEY}={model}")
         return 0
 
-    server_base = container_base(args.ollama)
+    server_base = container_base(base)
     before = env_file.read_text() if env_file.exists() else ""
-    env_file.write_text(update_env_text(before, {BASE_KEY: server_base, MODEL_KEY: model}))
+    env_file.write_text(update_env_text(before, {BASE_KEY: server_base, MODEL_KEY: model, **owned_old}))
     print(f"✓ Wrote {BASE_KEY}={server_base} and {MODEL_KEY}={model} to {env_file}")
+    replaced = [key for key in OLD_KEYS if read_env_value(before, key) is not None]
+    if replaced:
+        print(f"  Replaced the older {' and '.join(replaced)} line(s) with these.")
     alias = read_env_value(before, ALIAS_KEY)
     if alias:
         print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}. {BASE_KEY} takes precedence; remove the other line to avoid confusion.")
@@ -245,12 +298,14 @@ def main(argv: list[str] | None = None) -> int:
     if server_reaches_model(env_file, settings):
         print(f"✓ The server reaches {model}. consult and dialectic reviews will use it.")
         return 0
-    print(f"✗ The server cannot reach Ollama at {server_base}.")
-    if sys.platform.startswith("linux"):
+    print(f"✗ The server cannot reach {model} at {server_base}.")
+    if ollama and sys.platform.startswith("linux"):
         print("  On Linux, Ollama listens only on 127.0.0.1 by default. Set OLLAMA_HOST=0.0.0.0 for the Ollama service,")
         print("  allow port 11434 from the Docker bridge, and do not expose it beyond this machine (Ollama has no authentication).")
-    else:
+    elif ollama:
         print("  Check that Ollama is running on this machine, then run: unitares model")
+    else:
+        print("  Check that the model server is running and listens beyond 127.0.0.1 for the Docker bridge, then run: unitares model")
     return 1
 
 

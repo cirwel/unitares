@@ -35,7 +35,12 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
-from src.local_inference_env import default_local_model, ollama_openai_base_url
+from src.local_inference_env import (
+    EndpointNotLocalError,
+    default_local_model,
+    model_base_url,
+    require_local_endpoint,
+)
 
 from .host_backends import (
     HostReviewResult,
@@ -52,10 +57,10 @@ _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 _JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
 
 # Same resolution as the server's local lane (src/local_inference_env.py):
-# UNITARES_OLLAMA_BASE, or its alias UNITARES_OLLAMA_BASE_URL, with "/v1" added
-# exactly once for the OpenAI-compatible client.
+# UNITARES_MODEL_BASE_URL (or an older name from its alias table), the
+# OpenAI-compatible base including /v1.
 DEFAULT_MODEL = default_local_model()
-OLLAMA_BASE_URL = ollama_openai_base_url()
+OLLAMA_BASE_URL = model_base_url()
 SPAWN_REASON = LineageSpawnReason.DIALECTIC_REVIEWER.value
 REVIEWER_NAME = "DialecticReviewer"
 # Keep a rejecting reviewer available for the protocol's full synthesis-response
@@ -704,8 +709,24 @@ async def obtain_reviewer_text(prompt: str) -> str:
 
     # Any selected-host failure degrades to the local default, never harder
     # than the pre-existing path.
-    text = await call_reviewer_model(prompt)
     warnings = [fallback_warning] if fallback_warning else []
+    try:
+        text = await call_reviewer_model(prompt)
+    except EndpointNotLocalError as exc:
+        # The local fallback is the operator's own model by definition. When
+        # the endpoint does not classify local, nothing is sent: the empty text
+        # parses to no judgment, so the reviewer abstains, and the reason
+        # travels in the provenance warnings recorded with the abstention.
+        logger.warning("Dialectic reviewer local backend refused: %s", exc)
+        _record_reviewer_provenance({
+            "backend": "ollama",
+            "host_id": "ollama:local",
+            "model_requested": DEFAULT_MODEL,
+            "models_used": [],
+            "fallback_from": fallback_from,
+            "warnings": [*warnings, f"{exc.code}: {exc}"],
+        })
+        return ""
     _record_reviewer_provenance({
         "backend": "ollama",
         "host_id": "ollama:local",
@@ -726,6 +747,9 @@ async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
     event loop (this is an ``async def`` driven by ``asyncio.run``)."""
     from openai import AsyncOpenAI  # local import: only the runner process needs it
 
+    # privacy='local' by nature: raises EndpointNotLocalError, before any
+    # request, when the endpoint does not classify local.
+    require_local_endpoint(OLLAMA_BASE_URL)
     client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
     kwargs: dict[str, Any] = {
         "model": model,

@@ -2377,7 +2377,23 @@ async def _run_synthetic_review(
         generate_antithesis,
         generate_synthesis,
         is_llm_available,
+        local_endpoint_refusal,
     )
+
+    # The thesis and agent state are the operator's data, so this reviewer only
+    # runs against an endpoint that classifies local. Recorded as an abstention
+    # with its reason, so the open slot does not read as "no reviewer tried".
+    refusal = local_endpoint_refusal()
+    if refusal is not None:
+        logger.info("[DIALECTIC] Synthetic reviewer abstained: %s", refusal)
+        await emit_reviewer_abstained(
+            session_id=session.session_id,
+            reviewer_agent_id=SYNTHETIC_REVIEWER_ID,
+            paused_agent_id=session.paused_agent_id,
+            phase=session.phase.value,
+            reason="local_model_endpoint_not_local",
+        )
+        return None
 
     if not await is_llm_available():
         logger.info("[DIALECTIC] Synthetic reviewer skipped — local LLM unavailable")
@@ -3948,7 +3964,12 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         Complete dialectic result with antithesis, synthesis, and recommendation
     """
     # Import LLM delegation functions
-    from ..support.llm_delegation import run_full_dialectic, is_llm_available
+    from ..support.llm_delegation import (
+        is_llm_available,
+        local_endpoint_refusal,
+        run_full_dialectic,
+    )
+    from src.local_inference_env import ENDPOINT_NOT_LOCAL
 
     # Require registered agent
     agent_id, error = require_registered_agent(arguments)
@@ -3956,6 +3977,24 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         return [error]
 
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
+
+    # The thesis goes to the local model, so it is privacy='local' by nature:
+    # refused before any request when the endpoint does not classify local.
+    refusal = local_endpoint_refusal()
+    if refusal is not None:
+        return [error_response(
+            refusal,
+            error_code=ENDPOINT_NOT_LOCAL,
+            error_category="validation_error",
+            recovery={
+                "action": (
+                    "Use dialectic(action='request') for peer review, or have the "
+                    "operator reclassify the model endpoint (UNITARES_TRUSTED_NETWORKS, "
+                    "UNITARES_MODEL_LOCAL_HOSTS or UNITARES_MODEL_PRIVACY)."
+                ),
+                "related_tools": ["dialectic"],
+            },
+        )]
 
     # Check LLM availability
     if not await is_llm_available():

@@ -18,15 +18,15 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
-from src.local_inference_env import default_local_model, ollama_openai_base_url
+from src.local_inference_env import default_local_model, model_base_url, require_local_endpoint
 
 # Localhost Ollama's OpenAI-compatible endpoint. Not the server's `call_model`
 # tool: that carries a 30s timeout, and a small local model routinely needs
 # 40-70s for a real answer. The reviewer learned this the expensive way; a
 # resident that routes its own thinking through call_model will look flaky
-# rather than slow. The host is the server's (src/local_inference_env.py:
-# UNITARES_OLLAMA_BASE, or its alias UNITARES_OLLAMA_BASE_URL), plus "/v1".
-OLLAMA_BASE_URL = ollama_openai_base_url()
+# rather than slow. The endpoint is the server's (src/local_inference_env.py:
+# UNITARES_MODEL_BASE_URL, or an older name from its alias table).
+OLLAMA_BASE_URL = model_base_url()
 DEFAULT_MODEL = default_local_model()
 
 
@@ -72,6 +72,10 @@ async def call_local_model(
     """
     from openai import AsyncOpenAI  # local import: only a runner process needs it
 
+    # A resident's prompts are the operator's data: this raises
+    # EndpointNotLocalError, before any request, when the endpoint does not
+    # classify local (see src/local_inference_env.classify_endpoint).
+    require_local_endpoint(OLLAMA_BASE_URL)
     client = AsyncOpenAI(base_url=OLLAMA_BASE_URL, api_key="ollama")
     resp = await client.chat.completions.create(
         model=model or DEFAULT_MODEL,

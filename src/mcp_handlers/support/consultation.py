@@ -40,6 +40,7 @@ from .host_adapter import (
 )
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
+from src.local_inference_env import ENDPOINT_NOT_LOCAL
 from .model_inference import (
     CallModelRequest,
     _provider_timeout_s,
@@ -770,6 +771,13 @@ def _recovery_for_upstream(failure: InferenceFailure, *, lane: str) -> str:
         "RATE_LIMITED",
     }:
         return "Wait briefly, then retry the consultation once."
+    if failure.code == ENDPOINT_NOT_LOCAL:
+        return (
+            "The configured model endpoint is not classified local, so a "
+            "privacy='local' brief was not sent. Use privacy='cloud_allowed', or "
+            "have the operator reclassify the endpoint (UNITARES_TRUSTED_NETWORKS, "
+            "UNITARES_MODEL_LOCAL_HOSTS or UNITARES_MODEL_PRIVACY)."
+        )
     if failure.code in {
         "INFERENCE_HOST_NOT_FOUND",
         "INFERENCE_HOST_UNREACHABLE",

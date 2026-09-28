@@ -27,8 +27,13 @@ from .inference_registry import (
     host_for_routed_provider,
     inference_extensions,
     list_inference_hosts,
-    ollama_base_url,
     sha256_text as _sha256_text,
+)
+from src.local_inference_env import (
+    ENDPOINT_NOT_LOCAL,
+    classify_endpoint,
+    local_refusal_message,
+    model_base_url,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -406,7 +411,29 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         # Route to Ollama (local). Model names pass through verbatim so
         # callers get a clean 404 if the model isn't pulled — no silent
         # aliasing to a model that may also be absent.
-        base_url = ollama_base_url() + "/v1"  # Ollama OpenAI-compatible API
+        base_url = model_base_url()  # OpenAI-compatible base, /v1 included
+        if privacy == "local":
+            # privacy='local' (stated or defaulted) is a promise about where the
+            # prompt goes. Checked from the URL alone, before any request.
+            endpoint = classify_endpoint(base_url)
+            if not endpoint.is_local:
+                return InferenceOutcome.failed(
+                    local_refusal_message(endpoint),
+                    code=ENDPOINT_NOT_LOCAL,
+                    category="validation_error",
+                    details={"privacy": privacy, "endpoint_privacy": endpoint.privacy},
+                    recovery={
+                        "action": (
+                            "The configured model endpoint is not on a network the "
+                            "server treats as the operator's. Pass privacy='auto' "
+                            "or 'cloud' to allow it, or reclassify the endpoint "
+                            "with UNITARES_TRUSTED_NETWORKS (an address), "
+                            "UNITARES_MODEL_LOCAL_HOSTS (a hostname) or "
+                            "UNITARES_MODEL_PRIVACY=local."
+                        ),
+                        "related_tools": ["list_inference_hosts"],
+                    },
+                )
         if model == "auto":
             model = default_local_model()
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
@@ -454,7 +481,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
 
         if ollama_available:
             # Prefer Ollama (local, free, no token needed)
-            base_url = ollama_base_url() + "/v1"
+            base_url = model_base_url()
             api_key = "ollama"
             model = default_local_model() if model == "auto" else model
             provider = "ollama"

@@ -7,9 +7,15 @@ internal call must not consume the target agent's Energy or wear its
 attribution (same boundary as the #1424 fix's ``audit_only``: instrumenting a
 surface must not enrol it in a behavioral feed nobody measured). It DOES share
 the local-inference plane with ``call_model`` via ``inference_registry``: one
-base URL (``UNITARES_OLLAMA_BASE``), one default model
-(``UNITARES_LLM_MODEL``), one cached availability probe, one provenance hash.
+base URL (``UNITARES_MODEL_BASE_URL``), one default model
+(``UNITARES_MODEL``), one cached availability probe, one provenance hash.
 Non-blocking and graceful-failure by design.
+
+Every call here is local by nature: it carries governance state about an agent
+and has no ``privacy`` argument. So it is treated as ``privacy='local'``: when
+the configured endpoint does not classify local
+(``src/local_inference_env.classify_endpoint``), nothing is sent and the call
+returns its usual "unavailable" value, with the reason logged once.
 
 Use cases:
 - Knowledge synthesis (summarizing many discoveries)
@@ -39,6 +45,12 @@ from .inference_registry import (
     ollama_base_url,
     sha256_text,
 )
+from src.local_inference_env import (
+    classify_endpoint,
+    is_ollama_endpoint,
+    local_refusal_message,
+    model_base_url,
+)
 
 # Check if OpenAI SDK available
 try:
@@ -53,14 +65,33 @@ def _get_ollama_client() -> Optional[Any]:
         return None
 
     try:
-        # Ollama's OpenAI-compatible API, same base as call_model's local route
+        # The endpoint's OpenAI-compatible API, same base as call_model's local route
         return OpenAI(
-            base_url=ollama_base_url() + "/v1",
+            base_url=model_base_url(),
             api_key="ollama"  # Required by SDK but ignored by Ollama
         )
     except Exception as e:
         logger.debug(f"Ollama client not available: {e}")
         return None
+
+_refusals_logged: set[str] = set()
+
+
+def local_endpoint_refusal() -> Optional[str]:
+    """Why the configured endpoint may not receive this lane's prompts, or None.
+
+    Decided from the URL alone (no network call), so a refusal happens before
+    anything is sent. Logged once per endpoint, not on every call.
+    """
+    endpoint = classify_endpoint()
+    if endpoint.is_local:
+        return None
+    message = local_refusal_message(endpoint)
+    if endpoint.url not in _refusals_logged:
+        _refusals_logged.add(endpoint.url)
+        logger.warning("internal inference refused: %s", message)
+    return message
+
 
 # gemma4 default for governance coaching — needs real reasoning. Resolution is
 # the registry's, so call_model and the internal lane cannot drift apart.
@@ -116,6 +147,9 @@ async def call_local_llm(
     """
     if not OPENAI_AVAILABLE:
         logger.warning("OpenAI SDK not available for local LLM delegation")
+        return None
+
+    if local_endpoint_refusal() is not None:
         return None
 
     client = _get_ollama_client()
@@ -212,6 +246,18 @@ async def call_local_llm_structured(
     """
     import asyncio
     import urllib.request
+
+    if local_endpoint_refusal() is not None:
+        return None
+    # The native route exists only on Ollama. Anything else gets None here, and
+    # the callers fall back to the OpenAI-compatible route at once instead of
+    # waiting out this call's timeout against a server that has no /api/chat.
+    if not await asyncio.to_thread(is_ollama_endpoint):
+        logger.debug(
+            "Structured LLM skipped: the endpoint is not Ollama, so there is no "
+            "native /api/chat; callers use the OpenAI-compatible route"
+        )
+        return None
 
     model = model or _get_default_model()
     body = {
@@ -764,6 +810,8 @@ async def is_llm_available() -> bool:
     that re-opened a connection on every check.
     """
     if not OPENAI_AVAILABLE:
+        return False
+    if local_endpoint_refusal() is not None:
         return False
     import asyncio
     # The cache-priming probe is a blocking socket connect; keep it off the loop.

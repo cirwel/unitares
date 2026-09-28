@@ -10,13 +10,17 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress as _ipaddress
-import os
 import secrets
 
 from starlette.responses import JSONResponse
 
 
 from src.logging_utils import get_logger
+from src.trusted_networks import (  # noqa: F401  (extra_trusted_networks is re-exported)
+    BUILTIN_TRUSTED_NETWORKS,
+    extra_trusted_networks,
+    is_trusted_address,
+)
 from src.mcp_listen_config import (
     check_mcp_bearer,
     mcp_bearer_required,
@@ -85,61 +89,11 @@ def _build_http_session_signals(request):
 
 # ---------------------------------------------------------------------------
 # Trusted networks: loopback and the private RFC1918 ranges, plus any the
-# operator adds with UNITARES_TRUSTED_NETWORKS
+# operator adds with UNITARES_TRUSTED_NETWORKS. Defined once in
+# src/trusted_networks.py, which the local model endpoint classifier
+# (src/local_inference_env.py) shares, so "local" means one thing server-wide.
 # ---------------------------------------------------------------------------
-# Built-in set. A Docker Compose install reaches the server through the bridge
-# gateway, which is in 172.16.0.0/12. Overlay or VPN ranges are not built in:
-# 100.64.0.0/10 (the CGNAT range that Tailscale assigns from, and that some
-# ISPs use for their own subscribers) was, which trusted one operator's network
-# layout on every install. An operator on such a network lists it explicitly.
-_TRUSTED_NETWORKS = [
-    _ipaddress.ip_network("127.0.0.0/8"),
-    _ipaddress.ip_network("::1/128"),
-    _ipaddress.ip_network("192.168.0.0/16"),
-    _ipaddress.ip_network("10.0.0.0/8"),
-    _ipaddress.ip_network("172.16.0.0/12"),
-]
-
-_extra_networks_cache: tuple[str, tuple] = ("", ())
-
-
-def extra_trusted_networks() -> tuple:
-    """Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS).
-
-    Comma-separated CIDRs or addresses, for example ``100.64.0.0/10`` for a
-    Tailscale tailnet. Unset or empty adds nothing. An entry that does not
-    parse, including a CIDR with host bits set (``203.0.113.7/8``, a likely
-    typo for one host), is logged and skipped, never widened into something
-    broader. A catch-all (``0.0.0.0/0``, ``::/0``) is honoured, since the
-    operator wrote it, but logged, because it trusts every caller.
-    """
-    global _extra_networks_cache
-    raw = os.getenv("UNITARES_TRUSTED_NETWORKS", "").strip()
-    if raw == _extra_networks_cache[0]:
-        return _extra_networks_cache[1]
-    nets = []
-    for item in raw.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        try:
-            net = _ipaddress.ip_network(item, strict=True)
-        except ValueError:
-            logger.warning(
-                "UNITARES_TRUSTED_NETWORKS: ignoring %r, not an address or a CIDR "
-                "without host bits",
-                item,
-            )
-            continue
-        if net.prefixlen == 0:
-            logger.warning(
-                "UNITARES_TRUSTED_NETWORKS: %s trusts every caller; local-posture "
-                "auth is effectively off",
-                net,
-            )
-        nets.append(net)
-    _extra_networks_cache = (raw, tuple(nets))
-    return _extra_networks_cache[1]
+_TRUSTED_NETWORKS = list(BUILTIN_TRUSTED_NETWORKS)
 
 
 # ---------------------------------------------------------------------------
@@ -160,8 +114,7 @@ def _is_trusted_network(request) -> bool:
     if not client_ip:
         return False
     try:
-        addr = _ipaddress.ip_address(client_ip)
-        return any(addr in net for net in (*_TRUSTED_NETWORKS, *extra_trusted_networks()))
+        return is_trusted_address(_ipaddress.ip_address(client_ip))
     except ValueError:
         return False
 
