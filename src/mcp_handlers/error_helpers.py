@@ -417,9 +417,16 @@ def _knowledge_store_recovery(
 
     A batch store (``discoveries``) writes its items one at a time, each
     committed on its own, so a timed-out batch can have saved some items and
-    not others. Its recovery has the caller match each item to a row and send
-    only the unmatched ones again: resending the whole batch would store
-    every item that landed a second time.
+    not others. Resending the whole batch would store every item that landed a
+    second time, so the caller compares each item with the rows by its full
+    content (summary, details, tags and discovery_type; the lookup carries
+    include_details for that) and resends only the items no row matches. A
+    summary alone cannot tell two items apart. Items that are the same in all
+    of those fields cannot be told apart by any row, so once a row matches
+    them the recovery says resending cannot be made safe for them.
+
+    Both are database writes: the row commits in one transaction per row
+    before the handler returns, so settled_by bounds when it can still land.
     """
     author = _knowledge_write_author(call, arguments)
     writer = _call_literal(author.agent_id, "") if author is not None else ""
@@ -436,33 +443,38 @@ def _knowledge_store_recovery(
             "limit": _WINDOW_LOOKUP_LIMIT,
         }
     )
-    check = _render_call("knowledge", lookup)
-    limit = _WINDOW_LOOKUP_LIMIT
     batch_size = _store_batch_size(call, arguments)
     batch = batch_size is not None
-    # The summary a row of this call's would carry.
-    match = "an item's summary" if batch else "your summary"
+    if batch:
+        # Items are compared by their full content, details included; without
+        # this a page of more than a few rows carries a 500-character preview.
+        lookup["include_details"] = True
+    check = _render_call("knowledge", lookup)
+    limit = _WINDOW_LOOKUP_LIMIT
+    # What a row of this call's would carry.
+    match = "an item's content" if batch else "your summary"
+    same = "the same item" if batch else "the same summary"
     yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
     matching = (
-        "Match each item you sent to its own row in it by summary (a long one "
-        "is stored cut short) and, where two items share a summary, by "
-        "details_preview too; if the preview cannot tell them apart, open each "
-        "candidate row with knowledge(action='details', discovery_id=...) and "
-        "compare its details, type and tags with what you sent"
+        "Compare each item you sent with the rows by its full content, not by "
+        "summary alone: summary, details, tags and discovery_type, as stored "
+        "(a long summary or details is cut short; tags are lowercased and "
+        "normalized)"
     )
 
     if writer and author.kind == "bound":
         listed = f"every row your bound identity '{writer}' created"
         attribution = (
             "Rows under your identity come from calls bound to it, so a row "
-            f"with {match} is your write: this call's, unless you sent the "
-            "same summary in another call in the window. The exception is a "
+            f"with {match} is your write: this call's, unless you sent {same} "
+            "in another call in the window. The exception is a "
             "call that reaches the handler unbound and passes your id as "
             "agent_id on a low or medium write, which no ownership check stops."
         )
         if batch:
             found_step = (
-                f"2. {matching}. An item with a row was saved. Do not send it again"
+                f"2. {matching}. An item a row matches was saved. Do not send it "
+                "again"
             )
         else:
             found_step = (
@@ -489,9 +501,9 @@ def _knowledge_store_recovery(
             )
         if batch:
             found_step = (
-                f"2. {matching}. A row shows a write like that item landed in "
-                "the window but may be another caller's. Do not send that item "
-                "again unless you know that row is not yours"
+                f"2. {matching}. A row matching an item shows a write like it "
+                "landed in the window but may be another caller's. Do not send "
+                "that item again unless you know that row is not yours"
             )
         else:
             found_step = (
@@ -519,17 +531,23 @@ def _knowledge_store_recovery(
             "commits each item on its own, so some items may be saved and "
             "others not. Every store adds a new row, so resending the whole "
             "batch leaves a second finding for every item that landed. "
-            f"{listing} Compare each item you sent against those rows, by "
-            "summary and, for items that share one, by their details, and send "
-            "only the items with no row again. An item "
-            "with no row is proven unsaved only when the list was read after "
-            f"settled_by and its count is below {limit}."
+            f"{listing} Compare each item you sent with those rows by its full "
+            "content (summary, details, tags and discovery_type), not by its "
+            "summary alone, and send again only the items no row matches. An "
+            "item no row matches is proven unsaved only when the list was read "
+            f"after settled_by and its count is below {limit}. Items that are "
+            "the same in all four fields cannot be told apart: once a row "
+            "matches them, the list cannot say which of them landed, and "
+            "resending cannot be made safe for them."
         )
         resend_step = (
             "3. On a read after settled_by whose count is below "
-            f"{limit}, an item with no row was not saved: send only those "
-            "items again, in one store or a batch of just them. Never resend "
-            "the whole batch"
+            f"{limit}, an item no row matches was not saved: send only those "
+            "items again, in one store or a batch of just them. Items that are "
+            "the same in all four fields cannot be told apart: when a row "
+            "matches them, the list cannot say which of them landed, so "
+            "resending cannot be made safe for them. Do not resend them blind. "
+            "Never resend the whole batch"
         )
     else:
         action = (
@@ -553,6 +571,62 @@ def _knowledge_store_recovery(
             found_step,
             resend_step,
             paging_step,
+        ],
+        "related_tools": ["knowledge", "health_check"],
+    }
+
+
+def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Recovery for a timed-out knowledge update: look for the notes it appends.
+
+    The update commits its row in one transaction; what it does after that is
+    derived (the embedding refresh it schedules) or idempotent (the SUPERSEDES
+    edge it MERGEs), so settled_by bounds when the row can still change. Every
+    field it sends is set, not added to, except resolution_notes, which are
+    appended to details as a timestamped block. A resend can duplicate only
+    the notes, so the check is whether their text is anywhere in details, not
+    only at its end: another writer can append after them. The read asks for
+    MAX_UPDATED_DETAILS_LEN characters, the most an update stores, and the
+    workflow pages on while has_more says a row is longer.
+
+    updated_at settles nothing: any writer's update moves it, and an update
+    built before this call began can commit after it and set it back.
+    """
+    from .knowledge.limits import MAX_UPDATED_DETAILS_LEN
+
+    lookup = {
+        "action": "details",
+        "discovery_id": _call_literal(arguments.get("discovery_id"), "<discovery_id>"),
+        "length": MAX_UPDATED_DETAILS_LEN,
+    }
+    check = _render_call("knowledge", lookup)
+    return {
+        "action": (
+            "Do not send this update again yet. It may already be saved, and "
+            "resolution_notes append, so a second call adds them twice. Every "
+            "other field an update sends is set, not added to, so sending it "
+            "again stores no second copy. After settled_by, read the discovery "
+            f"with {check} and look for the text of your resolution_notes "
+            "anywhere in details, not only at its end: another writer can "
+            "append after them. If it is there, the notes are stored. Only its "
+            "absence from the whole of details, read after settled_by, shows "
+            "they are not. updated_at settles nothing: any writer's update "
+            "moves it."
+        ),
+        "check_before_retry": check,
+        "check_arguments": lookup,
+        "workflow": [
+            f"1. After settled_by, call {check}. If pagination.has_more is "
+            "true, read on from pagination.next_offset until it is false, so "
+            "you have all of details",
+            "2. If the text of your resolution_notes (trimmed of surrounding "
+            "whitespace) is anywhere in details, the notes are stored. Do not "
+            "send them again",
+            "3. If you sent resolution_notes and that text is nowhere in "
+            "details on the read after settled_by, they are not stored: send "
+            "the update again. An update without resolution_notes only sets "
+            "fields, so sending it again after settled_by stores no second "
+            "copy, though it replaces any change another writer made since",
         ],
         "related_tools": ["knowledge", "health_check"],
     }
@@ -586,8 +660,12 @@ def _unknown_outcome_recovery(
 ) -> Dict[str, Any]:
     """Recovery for a timed-out call that may have written: read, then decide.
 
-    No step resends before settled_by, when a statement still running at the
-    timeout has finished, so a retry cannot race the write it would repeat.
+    A step that resends is offered only where settled_by bounds the work (a
+    knowledge store, note or update, each one database transaction per row)
+    and the named read covers everything the call would have written; it
+    comes after settled_by, when a statement still running at the timeout has
+    finished, so a resend cannot race the write it would repeat. Any other
+    write gets no resend step: its outcome cannot be settled by reading.
     call_started_at and settled_by are the reply's values; a step that needs
     them as literals falls back to placeholders without them.
     """
@@ -663,38 +741,7 @@ def _unknown_outcome_recovery(
         }
 
     if tool == "knowledge" and action == "update":
-        discovery_id = _call_literal(arguments.get("discovery_id"), "<discovery_id>")
-        check = f"knowledge(action='details', discovery_id='{discovery_id}')"
-        # updated_at alone cannot prove this call wrote: any writer moves it.
-        # Earlier than the call's start does prove nothing has landed yet.
-        return {
-            "action": (
-                "Do not send this update again yet. It may already be saved, and "
-                "resolution_notes append, so a second call adds them twice. Read "
-                f"the discovery with {check} and compare it with what you sent. "
-                "An updated_at earlier than call_started_at means nothing has "
-                "been written since this call began; a later one means the row "
-                "was written, by this call or another, so look for your own "
-                "fields. Do not conclude it was not saved before settled_by."
-            ),
-            "check_before_retry": check,
-            "workflow": [
-                f"1. Call {check}",
-                "2. If updated_at is earlier than call_started_at, nothing has "
-                "been written since this call began. Read again after "
-                "settled_by; if it is still earlier, send the update again",
-                "3. If updated_at is at or after call_started_at, look for what "
-                "you sent: the status you set, and your resolution_notes in "
-                "details. Another writer may have appended after them, so read "
-                "every page (raise offset until it reaches "
-                "pagination.total_length), not only the tail. If they are "
-                "there, the update was saved. Do not send it again",
-                "4. If the row changed but your fields are still missing on a "
-                "read after settled_by, another writer changed it: send your "
-                "update again",
-            ],
-            "related_tools": ["knowledge", "health_check"],
-        }
+        return _knowledge_update_recovery(arguments)
 
     if (tool == "knowledge" and action in _KNOWLEDGE_STORE_ACTIONS) or tool == "leave_note":
         # Search serves unbound callers; an anonymous writer's id (anonkg_*) is
@@ -709,27 +756,37 @@ def _unknown_outcome_recovery(
             settled_by=settled_by,
         )
 
+    # Any other call: no resend step. This recovery knows neither whether the
+    # tool's work is bounded by settled_by (a tool can write a file on an
+    # executor thread, hand work to a background task or call another service,
+    # all of which outlive the cancelled await) nor what a read would have to
+    # cover to prove the call left no effect.
     call_shape = f"{tool}(action='{action}')" if action else tool
     related = [tool, "describe_tool", "health_check"]
     return {
         "action": (
-            f"Do not call {call_shape} again yet: it may already have taken "
-            "effect. Read the state it changes with a read-only tool, and call it "
-            "again only if the change is still missing after settled_by and "
-            "repeating it is harmless. "
-            f"describe_tool(tool_name='{tool}') lists the related tools."
+            f"Do not call {call_shape} again blind: it may already have taken "
+            "effect, or still be running. Its outcome cannot be settled by "
+            "reading alone. settled_by bounds only a database statement "
+            "running at the timeout; a tool can also write files, start "
+            "background tasks or call other services, and that work can finish "
+            "later. Inspect the effect this call would have with a read-only "
+            f"tool (describe_tool(tool_name='{tool}') lists the related tools). "
+            "If the effect is there, do not call it again. If you cannot find "
+            "it, that does not show the call failed: unless you can confirm "
+            "the effect is absent everywhere the call writes and cannot still "
+            "land, do not send it again."
         ),
         "check_before_retry": f"describe_tool(tool_name='{tool}')",
         "workflow": [
-            "1. Read the state this call changes with a read-only tool; "
+            "1. Inspect the effect this call would have with a read-only tool; "
             "describe_tool lists the related tools",
-            "2. If the change is there, the call succeeded. Do not send it again",
-            "3. If it is still missing on a read after settled_by, no database "
-            "statement from this call is still running. settled_by does not "
-            "bound work the tool does outside the database, such as a file write "
-            "or a background task, which can still land later. If repeating it "
-            "is harmless, or a later read still shows no change, send the call "
-            "again. If timeouts repeat, call health_check",
+            "2. If the effect is there, the call took effect. Do not send it "
+            "again",
+            "3. If you cannot find it, that is not proof the call failed: work "
+            "outside the database can land after settled_by, and a read may not "
+            "cover everywhere the call writes. Do not send the call again blind",
+            "4. If timeouts repeat, call health_check",
         ],
         "related_tools": list(dict.fromkeys(related)),
     }
@@ -753,9 +810,12 @@ def unknown_outcome_timeout_error(
     call.
 
     ``settled_by`` is this reply's time plus the pool's per-statement command
-    timeout: a statement still running now has finished by then, so a read
-    after it cannot be racing this call's write. error_code and error_category
-    stay TIMEOUT / system_error, the values every timeout already carried.
+    timeout: a database statement still running now has finished by then. It
+    bounds nothing else. Work a tool runs on an executor thread, hands to a
+    background task or sends to another service can finish later, so only a
+    recovery for a write made of database statements relies on it.
+    error_code and error_category stay TIMEOUT / system_error, the values
+    every timeout already carried.
     """
     import time
     from datetime import datetime, timezone
