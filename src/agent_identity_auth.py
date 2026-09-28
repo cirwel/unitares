@@ -270,7 +270,7 @@ def require_agent_auth(agent_id: str, arguments: dict, enforce: bool = False) ->
                     "error": "API key required for authentication",
                     "details": f"Agent '{agent_id}' requires an API key for updates. This is a security requirement to prevent impersonation.",
                     "migration": "This agent was created before authentication was added.",
-                    "suggestion": "API keys are deprecated: the agent UUID is the credential. identity(client_session_id='...') with this process's saved session id shows your agent_uuid."
+                    "suggestion": "API keys are deprecated: pass the client_session_id from start_session on later calls as this process's proof; identity(client_session_id='...') shows your agent_uuid."
                 }, indent=2)
             )
         else:
@@ -284,7 +284,7 @@ def require_agent_auth(agent_id: str, arguments: dict, enforce: bool = False) ->
                 "error": "API key required",
                 "details": f"Agent '{agent_id}' requires an API key for authentication. This prevents impersonation and protects your identity.",
                 "why_this_matters": "Without authentication, anyone could update your agent's state, corrupt your history, and manipulate your governance record.",
-                "suggestion": "Include 'api_key' parameter in your request. API keys are deprecated: the agent UUID is the credential. identity(client_session_id='...') with this process's saved session id shows your agent_uuid."
+                "suggestion": "Include 'api_key' parameter in your request. API keys are deprecated: pass the client_session_id from start_session on later calls as this process's proof; identity(client_session_id='...') shows your agent_uuid."
             }, indent=2)
         )
 
