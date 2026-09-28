@@ -1072,7 +1072,9 @@ assertions?
   source badge still reads `live` — no snapshot involved in the worse-labelled
   of the two. The route is auth-gated, but the trusted-network bypass in
   `src/http_routes/access.py` covers six networks — loopback v4 and v6, Tailscale
-  CGNAT, and all three RFC1918 blocks — and applies whenever strict REST auth is
+  CGNAT, and all three RFC1918 blocks (since #2560 the built-in set is five:
+  CGNAT is trusted only when an operator lists it in `UNITARES_TRUSTED_NETWORKS`)
+  — and applies whenever strict REST auth is
   not required, which is the default when no MCP bearer is configured. The
   remedy is already named in `src/http_routes/dashboard.py`: "The deeper fix is
   for the fallback bundle to hold synthetic data instead of a real capture."

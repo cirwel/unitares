@@ -78,10 +78,28 @@ def test_a_cidr_with_host_bits_is_refused_not_masked_wider(monkeypatch):
     assert _is_trusted_network(_request("203.1.2.3")) is False
 
 
-def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog):
+@pytest.mark.parametrize("listed,caller", [
+    ("0.0.0.0/0", "8.8.8.8"),
+    ("::/0", "2001:db8::1"),
+    # Together these cover all of IPv4; neither entry is a /0 on its own.
+    ("0.0.0.0/1,128.0.0.0/1", "8.8.8.8"),
+    ("::/1,8000::/1", "2001:db8::1"),
+    # A dual-stack bind reports every IPv4 caller from this range.
+    ("::ffff:0:0/96", "::ffff:8.8.8.8"),
+])
+def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog, listed, caller):
     import logging
 
-    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "0.0.0.0/0")
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", listed)
     with caplog.at_level(logging.WARNING):
-        assert _is_trusted_network(_request("8.8.8.8")) is True
+        assert _is_trusted_network(_request(caller)) is True
     assert "trusts every caller" in caplog.text
+
+
+def test_an_ordinary_range_is_not_logged_as_a_catch_all(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10,fd7a:115c:a1e0::/48")
+    with caplog.at_level(logging.WARNING):
+        assert _is_trusted_network(_request("100.101.102.103")) is True
+    assert "trusts every caller" not in caplog.text
