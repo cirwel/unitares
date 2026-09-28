@@ -3,19 +3,30 @@
 # The base docker-compose.yml intentionally does NOT publish Postgres (5432)
 # or Redis (6379) to the host: Postgres carries a default credential
 # (postgres/postgres) and Redis has no auth at all, so publishing either means
-# ANY other local process or user account on the machine can reach it —
-# 127.0.0.1 is a machine boundary, not a user boundary. governance-mcp and
-# lease-plane already reach both over the internal Compose network without
-# this file; nothing about the running stack needs it.
+# ANY other local process or user account on the machine can reach it. That's
+# a real boundary on Docker Desktop (macOS/Windows); on a native Linux Docker
+# host it's weaker than it sounds, since the container bridge network is
+# already routable from the host namespace other local accounts share (see
+# docs/DEPLOYMENT_SECURITY.md). governance-mcp and lease-plane already reach
+# both over the internal Compose network without this file; nothing about the
+# running stack needs it.
 #
 # Opt in only when you need direct host access for local debugging (psql,
 # redis-cli, a GUI client):
 #
 #   docker compose -f docker-compose.yml -f docker-compose.admin.yml up
 #
-# Rotate POSTGRES_PASSWORD in .env before using this on a shared machine, and
-# do not use it on a host reachable by anyone you don't trust with both
-# databases.
+# Set a real POSTGRES_PASSWORD in .env *before the first `docker compose up`*
+# if using this on a shared machine — Postgres only applies POSTGRES_PASSWORD
+# when it initializes an empty data volume, so changing .env later does not
+# rotate the password on a volume that already exists; that needs `ALTER ROLE
+# postgres WITH PASSWORD '...'` run against the running instance (and updating
+# every service's DB_POSTGRES_URL / UNITARES_LEASE_PLANE_DATABASE_URL to
+# match), or dropping the postgres-age-data volume to reinitialize. Redis has
+# no auth to rotate at all — this overlay does not add any; it only controls
+# whether the existing, still-unauthenticated Redis is reachable from the
+# host. Don't use this on a host reachable by anyone you don't trust with
+# both databases.
 
 services:
   postgres-age:
