@@ -248,8 +248,15 @@ def main(argv: list[str] | None = None) -> int:
     owned_old = {key: None for key in OLD_KEYS}
     if args.clear:
         if env_file.exists():
-            env_file.write_text(update_env_text(env_file.read_text(), {BASE_KEY: None, MODEL_KEY: None, **owned_old}))
-        print(f"✓ Removed {BASE_KEY} and {MODEL_KEY} from {env_file}. Rebuild to apply: docker compose up -d --build governance-mcp")
+            env_file.write_text(
+                update_env_text(
+                    env_file.read_text(),
+                    # Every name the resolver reads, aliases included, or an
+                    # old alias left behind becomes the endpoint again.
+                    {BASE_KEY: None, MODEL_KEY: None, ALIAS_KEY: None, **owned_old},
+                )
+            )
+        print(f"✓ Removed the model settings ({BASE_KEY}, {MODEL_KEY} and their older names) from {env_file}. Rebuild to apply: docker compose up -d --build governance-mcp")
         return 0
 
     base = openai_base(args.base_url)

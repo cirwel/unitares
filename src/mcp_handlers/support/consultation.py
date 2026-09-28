@@ -603,6 +603,9 @@ def _delivery_postcondition_error(
     standard_local = ("ollama", "ollama:local", "ollama", "local")
     standard_cloud_allowed = {
         standard_local,
+        # The configured local-route endpoint when it classifies external: the
+        # caller permitted external processing, and the record says external.
+        ("ollama", "ollama:local", "ollama", "external"),
         ("huggingface", "hf:router", "hf", "external_cloud"),
     }
     if delivery_policy == "standard_local" and actual != standard_local:

@@ -169,7 +169,10 @@ def test_writing_replaces_the_older_names_this_script_wrote(tmp_path: Path, stub
 
 def test_clear(tmp_path: Path, capsys):
     env = tmp_path / ".env"
-    env.write_text("A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL=y\nUNITARES_OLLAMA_BASE=x\nUNITARES_LLM_MODEL=y\n")
+    env.write_text(
+        "A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL=y\nUNITARES_OLLAMA_BASE=x\n"
+        "UNITARES_LLM_MODEL=y\nUNITARES_OLLAMA_BASE_URL=http://stale:11434\n"
+    )
     assert cm.main(["--clear", "--env-file", str(env)]) == 0
     assert env.read_text() == "A=1\n"
 
