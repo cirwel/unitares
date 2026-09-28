@@ -458,6 +458,16 @@ def test_the_router_examples_name_archive_targets_by_uuid():
 # ---------------------------------------------------------------------------
 
 
+async def _dispatch_unwrapped(name: str, arguments: dict) -> tuple[dict, dict]:
+    """REST dispatch unwraps a kwargs wrapper before the alias step."""
+    from src.mcp_handlers.middleware import unwrap_kwargs
+
+    name, arguments, _ctx = await unwrap_kwargs(
+        name, dict(arguments), DispatchContext(bound_agent_id=CALLER)
+    )
+    return await _dispatch(name, arguments)
+
+
 def _rest_prebind(name: str, arguments: dict, path: str, monkeypatch) -> tuple[str | None, dict]:
     """Run the real REST prebind with the caller resolved on one path.
 
@@ -501,6 +511,11 @@ def _rest_prebind(name: str, arguments: dict, path: str, monkeypatch) -> tuple[s
         ("agent", {"action": "archive"}),
         ("archive_agent", {}),
         ("agent", {"action": "archive", "agent_id": ""}),
+        # Codex on #2579: the kwargs wrapper REST accepts. The stamp lands on
+        # the outer dict and dispatch unwraps kwargs over it afterwards.
+        ("agent", {"kwargs": {"action": "delete", "confirm": True}}),
+        ("agent", {"kwargs": json.dumps({"action": "archive"})}),
+        ("delete_agent", {"kwargs": {"confirm": True}}),
     ],
 )
 def test_rest_prebind_does_not_name_the_caller_as_the_target(name, arguments, path, monkeypatch):
@@ -513,18 +528,49 @@ def test_rest_prebind_does_not_name_the_caller_as_the_target(name, arguments, pa
     assert bound_to == CALLER, "the prebind still binds the caller"
     assert not sent.get("agent_id"), f"the prebind named the caller as the target: {sent}"
     with _Bound() as bound:
-        _dispatched, payload = asyncio.run(_dispatch(name, sent))
+        _dispatched, payload = asyncio.run(_dispatch_unwrapped(name, sent))
         assert payload.get("error_code") == "TARGET_AGENT_REQUIRED", payload
         assert bound.archived() == [] and bound.deleted() == []
         assert bound.server.agent_metadata[CALLER].status == "active"
 
 
 @pytest.mark.parametrize("path", ["operator", "sticky", "session"])
-def test_rest_prebind_keeps_a_named_target(path, monkeypatch):
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"action": "archive", "agent_id": TARGET},
+        {"kwargs": {"action": "archive", "agent_id": TARGET}},
+    ],
+)
+def test_rest_prebind_keeps_a_named_target(arguments, path, monkeypatch):
+    from src.mcp_handlers.middleware.params_step import unwrapped_view
+
+    _bound_to, sent = _rest_prebind("agent", arguments, path, monkeypatch)
+    assert unwrapped_view(sent)["agent_id"] == TARGET
+
+
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+def test_rest_prebind_reads_a_nested_kwargs_wrapper(path, monkeypatch):
+    """A wrapper inside a wrapper: dispatch unwraps one level and a handler
+    may unwrap the next, so the outer dict still gets no target."""
     _bound_to, sent = _rest_prebind(
-        "agent", {"action": "archive", "agent_id": TARGET}, path, monkeypatch
+        "agent",
+        {"kwargs": {"kwargs": json.dumps({"action": "delete", "confirm": True})}},
+        path,
+        monkeypatch,
     )
-    assert sent["agent_id"] == TARGET
+    assert "agent_id" not in sent
+
+
+def test_unwrapped_view_merges_like_unwrap_kwargs():
+    from src.mcp_handlers.middleware.params_step import unwrapped_view
+
+    assert unwrapped_view({"a": 1, "kwargs": {"a": 2, "b": 3}}) == {"a": 2, "b": 3}
+    assert unwrapped_view({"a": 1, "kwargs": json.dumps({"b": 2})}) == {"a": 1, "b": 2}
+    assert unwrapped_view({"a": 1, "kwargs": "{not json"}) == {"a": 1}
+    original = {"kwargs": {"agent_id": TARGET}}
+    unwrapped_view(original)
+    assert original == {"kwargs": {"agent_id": TARGET}}, "the view is a copy"
 
 
 @pytest.mark.parametrize("path", ["operator", "sticky", "session"])

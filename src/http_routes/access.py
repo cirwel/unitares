@@ -1036,10 +1036,17 @@ async def _resolve_http_bound_agent(
     # "no target" into "the caller". Whether the caller named one is read
     # here, before any path writes it, and the stamp is taken off again once
     # the caller is bound; a missing key and an empty one both mean no
-    # target to the handler, which then refuses.
-    from src.mcp_handlers.middleware.params_step import _EXPLICIT_TARGET_CALLS
+    # target to the handler, which then refuses. The call is read as
+    # dispatch will see it after unwrapping a ``kwargs`` wrapper: the stamp
+    # lands on the outer dict, and an action or target inside ``kwargs``
+    # only surfaces later, merged over it.
+    from src.mcp_handlers.middleware.params_step import (
+        _EXPLICIT_TARGET_CALLS,
+        unwrapped_view,
+    )
 
-    if _EXPLICIT_TARGET_CALLS.matches(tool_name, arguments) and not arguments.get("agent_id"):
+    call = unwrapped_view(arguments)
+    if _EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id"):
         try:
             return await _resolve_http_bound_caller(arguments, signals, tool_name)
         finally:
