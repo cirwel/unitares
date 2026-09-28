@@ -87,6 +87,10 @@ class KnowledgeGraphAGE:
         self._db = None
         self._indexes_created = False
         self.rate_limit_stores_per_hour = 20  # Max stores per agent per hour
+        # Background embedding refreshes, one pass at a time per discovery
+        # (_schedule_embedding_refresh).
+        self._embedding_refresh_running: set[str] = set()
+        self._embedding_refresh_again: set[str] = set()
 
     @staticmethod
     def _parse_optional_datetime(value: Any) -> Optional[datetime]:
@@ -1144,6 +1148,11 @@ class KnowledgeGraphAGE:
                 exclude_cold=exclude_cold,
                 created_after=created_after,
                 created_before=created_before,
+                # An empty windowed read answers "nothing was created in this
+                # window", which is how a timed-out write's recovery settles
+                # that it saved nothing (error_helpers). A failed read must
+                # not give that answer; the postgres backend raises here too.
+                raise_on_error=bool(created_after or created_before),
             )
 
         # Check if graph is available
@@ -1265,6 +1274,7 @@ class KnowledgeGraphAGE:
         exclude_cold: bool = False,
         created_after: Optional[datetime] = None,
         created_before: Optional[datetime] = None,
+        raise_on_error: bool = False,
     ) -> List[DiscoveryNode]:
         """Read discoveries straight from knowledge.discoveries (source of truth).
 
@@ -1273,6 +1283,9 @@ class KnowledgeGraphAGE:
         read returns nothing while the data is plainly present (get_discovery()
         still finds it). This mirrors the SQL fallback those read paths already
         use so query()/search stop looking write-only.
+
+        A failed read is logged and returns no rows, unless ``raise_on_error``,
+        which re-raises it for a caller that must not read a failure as "none".
         """
         # The date bounds ride only when set, so an unwindowed read makes the
         # same call it always did.
@@ -1298,6 +1311,8 @@ class KnowledgeGraphAGE:
             )
         except Exception as exc:
             logger.warning(f"SQL fallback query failed: {exc}")
+            if raise_on_error:
+                raise
             return []
 
         discoveries: List[DiscoveryNode] = []
@@ -1599,7 +1614,7 @@ class KnowledgeGraphAGE:
                         )
                         await self._delete_orphan_age_tags(db, conn)
                 if "summary" in updates or "details" in updates:
-                    await self._refresh_embedding(discovery_id)
+                    self._schedule_embedding_refresh(discovery_id)
                 return True
             except Exception as e:
                 # AGE raises TM_Updated ("Entity failed to be updated: 3") on a
@@ -2279,6 +2294,58 @@ class KnowledgeGraphAGE:
         except Exception as e:
             logger.debug(f"Failed to store embedding for {discovery_id}: {e}")
 
+    def _schedule_embedding_refresh(self, discovery_id: str) -> None:
+        """Refresh the embedding in a background task once an update has committed.
+
+        The update does not wait for it. The first embedding a process computes
+        imports sentence-transformers and loads the model, which can outlast the
+        update tool's 10 s timeout. On 2026-09-27 a committed resolution_notes
+        append on the live AGE backend was reported as a timeout while bge-m3
+        loaded, and the load finished after the reply, so its model was thrown
+        away. The embedding is best-effort derived data: the update's result
+        never depended on it. _refresh_embedding and _store_embedding catch
+        their own failures and log them at debug, as they did when the update
+        awaited the refresh.
+
+        One pass runs at a time per discovery. A pass reads the row before it
+        encodes, so two overlapping passes could store the older text last and
+        leave the embedding stale until the next edit. A commit that lands
+        while a pass runs asks for one more pass instead, which reads the
+        latest row.
+
+        Called after the commit, so it never raises: a scheduling failure must
+        not turn a saved update into a reported failure.
+        """
+        refresh = None
+        try:
+            if discovery_id in self._embedding_refresh_running:
+                self._embedding_refresh_again.add(discovery_id)
+                return
+            from src.background_tasks import create_tracked_task
+
+            refresh = self._run_embedding_refresh(discovery_id)
+            create_tracked_task(refresh, name="kg_embedding_refresh")
+            self._embedding_refresh_running.add(discovery_id)
+        except Exception as e:
+            close = getattr(refresh, "close", None)
+            if callable(close):
+                close()
+            logger.warning(
+                f"Embedding refresh for {discovery_id} not scheduled: {e}"
+            )
+
+    async def _run_embedding_refresh(self, discovery_id: str) -> None:
+        """Refresh until no commit for this discovery arrived during a pass."""
+        try:
+            while True:
+                self._embedding_refresh_again.discard(discovery_id)
+                await self._refresh_embedding(discovery_id)
+                if discovery_id not in self._embedding_refresh_again:
+                    return
+        finally:
+            self._embedding_refresh_running.discard(discovery_id)
+            self._embedding_refresh_again.discard(discovery_id)
+
     async def _refresh_embedding(self, discovery_id: str) -> None:
         """Regenerate the stored embedding after summary/details edits."""
         if not await self._pgvector_available():
@@ -2682,14 +2749,22 @@ class KnowledgeGraphAGE:
         # Fallback: In-memory semantic search
         logger.debug("Using in-memory semantic search")
         
-        # Get candidate discoveries
-        candidates = await self.query(
-            agent_id=agent_id,
-            tags=tags,
-            limit=limit * 5,
-            created_after=created_after,
-            created_before=created_before,
-        )
+        # Get candidate discoveries. A windowed query() raises when its SQL
+        # read fails (so a timed-out write's check cannot read an error as an
+        # empty window); here that read only feeds a best-effort ranking, so a
+        # failure degrades to no semantic candidates and a hybrid search keeps
+        # its full-text results, as before.
+        try:
+            candidates = await self.query(
+                agent_id=agent_id,
+                tags=tags,
+                limit=limit * 5,
+                created_after=created_after,
+                created_before=created_before,
+            )
+        except Exception as e:
+            logger.warning(f"In-memory semantic candidates unavailable: {e}")
+            return []
 
         if not candidates:
             return []
