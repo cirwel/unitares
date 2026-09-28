@@ -41,11 +41,23 @@ COPY governance_core/ governance_core/
 # client). It ships in agents/sdk, a standalone package with no path
 # dependency on its agents/ siblings; install it so the import resolves.
 # Its dependencies (httpx, mcp, pydantic) are already installed above.
-# Only agents/sdk is copied — the reference residents (chronicler, vigil,
-# sentinel, watcher, ...) are not imported by src/ or governance_core/ at
-# runtime, and their deployment-specific defaults (GITHUB_SCRAPE_ORG,
-# VIGIL_STALLED_PR_OWNER, ...) have no reason to ship in this image.
+#
+# Only these three agents/ subpackages are copied, not the whole tree:
+#   - agents/sdk: unitares_sdk, installed below.
+#   - agents/common: src/http_routes/sentinel.py imports
+#     agents.common.resolution_outcome to serve POST /v1/sentinel/adjudicate,
+#     mounted when UNITARES_ROUTE_PACKS includes "reference-residents".
+#   - agents/dialectic_reviewer: the spawn target when
+#     UNITARES_DIALECTIC_ORCHESTRATED_REVIEW is enabled (see
+#     src/mcp_handlers/dialectic/orchestrator_dispatch.py, which runs it via
+#     this image's own interpreter at this same repo root).
+# All three are self-contained (no import of a chronicler/vigil/sentinel/
+# watcher/... sibling), so the reference residents' deployment-specific
+# defaults (GITHUB_SCRAPE_ORG, VIGIL_STALLED_PR_OWNER, ...) stay out of the
+# image while both opt-in features keep working.
 COPY agents/sdk/ agents/sdk/
+COPY agents/common/ agents/common/
+COPY agents/dialectic_reviewer/ agents/dialectic_reviewer/
 RUN pip install --no-cache-dir --no-deps ./agents/sdk
 COPY config/ config/
 COPY dashboard/ dashboard/
