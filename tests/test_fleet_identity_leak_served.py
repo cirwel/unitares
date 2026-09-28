@@ -10,6 +10,8 @@ rule, and served prose has no comments, so any name in it is delivered.
 
 from __future__ import annotations
 
+import pytest
+
 import importlib.util
 from pathlib import Path
 
@@ -157,10 +159,22 @@ def test_served_files_cover_every_served_surface():
     assert not any("/.attestations/" in r for r in rels)
 
 
-def test_known_coupling_defers_up_to_its_known_occurrences():
-    # Any still-listed entry works; snapshot.js was the example until it went
-    # synthetic (2026-09-27) and left the list.
-    rel = "dashboard/redesign/PLAN.md"
+# The served known-coupling list is empty now: every file it recorded
+# (snapshot.js, PLAN.md, tool_descriptions.json) stopped naming residents.
+# The deferral mechanism stays for any future entry, so these tests pin it
+# against a synthetic one.
+_SYNTHETIC_REL = "dashboard/redesign/example.js"
+_SYNTHETIC_ENTRY = (("Vigil", "Vigil", "Sentinel"), "synthetic entry for the mechanism tests")
+
+
+@pytest.fixture
+def synthetic_coupling(monkeypatch):
+    monkeypatch.setitem(guard.SERVED_KNOWN_COUPLINGS, _SYNTHETIC_REL, _SYNTHETIC_ENTRY)
+    return _SYNTHETIC_REL
+
+
+def test_known_coupling_defers_up_to_its_known_occurrences(synthetic_coupling):
+    rel = synthetic_coupling
     approved = guard.SERVED_KNOWN_COUPLINGS[rel][0]
     at_budget = [
         f'  {rel}:{k}: hardcoded fleet identity "{name}" in a string literal'
@@ -175,13 +189,11 @@ def test_known_coupling_defers_up_to_its_known_occurrences():
     assert guard.triage_served(rel, over) == (over, [])
 
 
-def test_known_coupling_name_substitution_is_caught():
+def test_known_coupling_name_substitution_is_caught(synthetic_coupling):
     # The bug this pins: removing one known reference and adding a DIFFERENT
     # name in the same file must not pass just because the total count is
     # unchanged — the old ceiling-only check let this through.
-    # Any still-listed entry works; snapshot.js was the example until it went
-    # synthetic (2026-09-27) and left the list.
-    rel = "dashboard/redesign/PLAN.md"
+    rel = synthetic_coupling
     approved = list(guard.SERVED_KNOWN_COUPLINGS[rel][0])
     swapped = approved[:-1] + ["Steward"]  # a name never recorded for this file
     hits = [
@@ -192,8 +204,8 @@ def test_known_coupling_name_substitution_is_caught():
     assert failing == hits and deferred == []
 
 
-def test_domain_is_never_deferred_by_a_known_coupling():
-    rel = next(iter(guard.SERVED_KNOWN_COUPLINGS))
+def test_domain_is_never_deferred_by_a_known_coupling(synthetic_coupling):
+    rel = synthetic_coupling
     approved_name = guard.SERVED_KNOWN_COUPLINGS[rel][0][0]
     name_hit = f'  {rel}:1: fleet identity "{approved_name}" in served text'
     domain_hit = f'  {rel}:2: operator domain "cirwel.org" in served text'

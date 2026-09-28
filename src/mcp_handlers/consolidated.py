@@ -93,6 +93,7 @@ from .dialectic.handlers import (
     handle_submit_thesis,
     handle_submit_antithesis,
     handle_submit_synthesis,
+    handle_submit_consult,
     handle_reassign_reviewer,
 )
 
@@ -236,7 +237,7 @@ handle_agent = action_router(
         "agent(action='list')",
         "agent(action='get', agent_id='claude-opus-20251215')",
         "agent(action='update', tags=['explorer', 'governance'])",
-        "agent(action='archive', agent_id='old-agent-id')",
+        "agent(action='archive', agent_id='<the target agent's UUID>')",
         "agent(action='resume', agent_id='stuck-agent-id')",
         "agent(action='release_presence')  # on clean exit, so a successor can declare this agent as parent",
     ],
@@ -397,6 +398,7 @@ handle_dialectic = action_router(
         "thesis": handle_submit_thesis,
         "antithesis": handle_submit_antithesis,
         "synthesis": handle_submit_synthesis,
+        "consult": handle_submit_consult,
         "reassign": handle_reassign_reviewer,
     },
     # This router wait_for is the outer ceiling, so it must clear the slowest
@@ -418,5 +420,6 @@ handle_dialectic = action_router(
         "dialectic(action='request', issue_description='Agent stuck in loop')",
         "dialectic(action='thesis', session_id='abc123', root_cause='...', proposed_conditions=[...])",
         "dialectic(action='synthesis', session_id='abc123', agrees=True, reasoning='...', proposed_conditions=[...])",
+        "dialectic(action='consult', session_id='abc123', reasoning='...', agrees=False, reviewer_provenance={'backend': 'codex-cli', 'consult_source': '...'})",
     ],
 )

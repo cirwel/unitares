@@ -281,12 +281,7 @@ SERVED_SKILLS_GLOB = "skills/*/SKILL.md"
 # is slated to be rewritten or removed, the record can only shrink, and a
 # location pin (line or surrounding text) breaks on every unrelated edit to
 # files that are still live.
-SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {
-    "dashboard/redesign/PLAN.md": (
-        ("Sentinel",) * 2 + ("Vigil",) * 2 + ("Watcher",) * 1 + ("Chronicler",) * 2,
-        "design notes describing one deployment's own fleet",
-    ),
-}
+SERVED_KNOWN_COUPLINGS: dict[str, tuple[tuple[str, ...], str]] = {}
 
 _NAME_WORD = re.compile(
     r"\b(" + "|".join(re.escape(n) for n in FLEET_IDENTITIES) + r")\b", re.I
