@@ -445,10 +445,13 @@ create_or_show_pr() {
         # (scripts/ops/pr-babysitter.sh) disarms any arm it did not make unless
         # the PR carries operator-armed, so mark it before arming.
         local armed_label="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
-        gh pr edit "$pr_url" --add-label "$armed_label" >/dev/null 2>&1 || \
-            echo "[ship] could not add the $armed_label label; the merge queue may disarm this arm"
-        gh pr merge --auto --squash "$pr_url" || \
-            echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
+        if gh pr edit "$pr_url" --add-label "$armed_label" >/dev/null 2>&1; then
+            gh pr merge --auto --squash "$pr_url" || \
+                echo "[ship] auto-merge not enabled (branch protection may require manual setup); PR is open"
+        else
+            # Without the label the queue would disarm this arm on its next tick.
+            echo "[ship] could not add the $armed_label label, so auto-merge was NOT enabled (the merge queue would cancel it); PR is open"
+        fi
     fi
 }
 
