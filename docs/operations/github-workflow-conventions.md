@@ -55,8 +55,10 @@ create a feature branch first.
 ### 2. Delivery — draft PR for everything
 
 Every session lands its work as a **draft PR**, regardless of agent and
-regardless of whether the change is runtime code or docs/tests. The operator
-is the merge gate.
+regardless of whether the change is runtime code or docs/tests. The merge
+queue (section 4) is the merge gate: the owning agent enters a PR into it with
+the `approved-to-merge` label once validation passed, and the operator can
+veto by removing the label.
 
 - If the operator asks an agent to ship, finish, deliver, open a PR, or
   otherwise complete a delivery workflow, the agent may assume branch -> commit
@@ -562,15 +564,14 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Use `gh pr merge --auto <n>` instead of watching, or queue it.** The repo has
-"always suggest updating pull request branches" enabled, and with auto-merge
-set GitHub updates the branch itself when the base moves and merges as soon as
-checks pass. This does **not** weaken the human merge gate: `--auto` is a
-deliberate per-PR act, and it says "this one is approved, land it when green" —
-you are giving up the waiting, not the decision. Draft PRs cannot take
-`--auto`, so mark ready first; that mark is the gate. To approve several PRs at
-once, label them `approved-to-merge` instead (the queue, below); arming one by
-hand while the queue runs makes it the queue's in-flight PR until it lands.
+**Queue it instead of watching.** When your PR is ready (CI green, `review`
+check passing), mark it ready and apply `approved-to-merge` in the same step.
+The queue below arms it in turn, GitHub updates the branch when the base moves
+(the repo has "always suggest updating pull request branches" enabled), and it
+merges as soon as the required checks pass. Do not arm with `gh pr merge
+--auto` yourself: a PR armed outside the queue holds the queue's slot until it
+lands, and two armed PRs are the cascade below. Arming by hand stays the
+operator's tool. Draft PRs cannot be queued, so mark ready first.
 
 **What GitHub's updater actually does.** On 2026-09-27 it updated armed #2524
 43 s after #2518 merged and 101 s after #2507 merged, with no script involved
@@ -604,8 +605,12 @@ not speed: one merge per CI cycle is still the ceiling under `strict`, and a
 hand-merging maintainer who is watching reaches it too. It runs only while
 the operator's machine is awake.
 
-- **The label is the merge decision made ahead of time**, so like arming it
-  is the maintainer's, never an agent's. It approves the PR as it stood: the
+- **The label is the merge decision, and the owning agent makes it.** Apply
+  it when you mark your PR ready, on the same validation (CI green, `review`
+  passing), and never on another agent's PR; the operator vetoes by removing
+  it. The gate exists for coordination, which the queue does more reliably
+  than hand-merging (operator decision, 2026-09-27). It approves the PR as it
+  stood: the
   script pins the head and a fingerprint of what it changes when it first
   sees the label (GitHub's compare of `master...<that SHA>`: per file the
   added and removed lines, or the blob SHA where there is no patch, as for a
@@ -613,10 +618,10 @@ the operator's machine is awake.
   unchanged, which a clean base update preserves; commit metadata is
   author-controlled and proves nothing. It arms with `--match-head-commit` on
   that head. A push after the label makes the approval stale, and the PR is
-  skipped until the label is re-applied. A label is pinned only if the
+  skipped until the label is removed and re-added. A label is pinned only if the
   script sees it within 15 minutes of going on; an older label with no pin
   (the machine was asleep, or the script's state was lost) must be
-  re-applied. The residual gap is a commit made before the label but pushed
+  removed and re-added. The residual gap is a commit made before the label but pushed
   before the script first sees it (normally the next five-minute tick, never
   beyond those 15 minutes), which gets pinned as approved.
 - **What the pin is for.** It catches honest mistakes: a follow-up pushed
@@ -651,10 +656,26 @@ the operator's machine is awake.
   keeps the slot even while it conflicts (arming another would leave two
   armed once the conflict is resolved); a hold longer than 90 minutes is
   logged, and clearing it is the maintainer's call.
-- **The single fallback update.** If the armed PR is `BEHIND` and neither the
-  base nor its arming has moved for 10 minutes, GitHub's updater has not
-  acted and the script updates that one branch. The grace period is what
-  keeps this from racing the native updater.
+- **Notices on the PR.** When the queue skips a labelled PR for a reason
+  that will not clear by itself (a conflict, an approval gone stale, a
+  required check that concluded without passing, a check parked for
+  approval, failures that survived the one re-run), it posts one comment on
+  the PR saying why and what fixes it, so whoever looks next (the owner, or
+  an agent adopting it) does not need this machine's log. A hidden marker
+  keeps it to one notice per reason and head. Transient waits (a pending
+  check, a dependency still open) post nothing.
+- **Updates: never armed across an unchecked head.** When the head of the
+  queue is `BEHIND`, the script updates it unarmed and holds its place; a
+  later tick arms the updated head once its content still matches the
+  approval and its required checks pass. Arming first would leave auto-merge
+  on across a head nothing had re-checked, while `review` is not
+  branch-protected. GitHub's own updater is not relied on: in the queue's
+  first run (2026-09-27) it acted for 1 of 16 arms. If a PR the script armed
+  falls `BEHIND` later, the script disarms it at once, updates it, and
+  re-arms it by the same rule (no grace: GitHub's updater can move the head
+  within a minute). A PR armed by hand is only updated, and only if GitHub
+  has not done so within 3 minutes. Only the one head-of-queue or armed PR is ever
+  updated, so there is nothing to race.
 
 **Drafts are the one case GitHub's updater never covers** — a draft cannot take
 `--auto` — so `.github/workflows/draft-base-refresh.yml` merges base into any
@@ -752,8 +773,9 @@ this entirely).
 | Claude on the web harness | Already parks a draft PR on its `claude/...` branch — nothing extra needed |
 | About to touch a single-writer surface | Check for an in-flight PR first; branch from its head if one exists |
 | Operator explicitly wants auto-merge | `./scripts/dev/ship.sh --auto-merge "msg"` (not the default) |
-| A READY PR should land unattended | `gh pr merge --auto <n>` (readiness was the owning agent's declaration; see section 2) |
-| Maintainer approving several READY PRs at once | label them `approved-to-merge`; the queue arms one at a time (section 4) |
+| Operator wants one PR to land outside the queue | `gh pr merge --auto <n>`, operator only (it holds the queue's slot until it lands; agents queue with the label instead) |
+| Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
+| You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
 | Review round 3 done, only P2s open | Dispose them in one batch; don't request round 4 ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
