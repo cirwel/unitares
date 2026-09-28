@@ -294,13 +294,17 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
 
     It stops at the first commit that is not such a merge. A new commit or an
     edit to the PR's lines needs its own review. History that cannot be read
-    yields no equivalents: the head's own key then decides alone.
+    yields no equivalents: the head's own key then decides alone. So does a
+    chain longer than `CARRY_MAX_BASE_MERGES`: its cut-off tail could hold an
+    open finding the carried records would then hide.
     """
     out: list[tuple[str, str]] = []
     try:
         fingerprint = None  # computed only once a base merge is found
         cur = head
-        for _ in range(CARRY_MAX_BASE_MERGES):
+        # One step past the bound, to tell a chain that ends there from one
+        # that would be cut off.
+        for _ in range(CARRY_MAX_BASE_MERGES + 1):
             parents = git("rev-list", "--parents", "-n", "1", cur).split()[1:]
             if len(parents) != 2:
                 break
@@ -318,6 +322,8 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
             cur = pr_side
     except (subprocess.CalledProcessError, SystemExit):
         return []  # history unreadable (git() raises SystemExit): no carry
+    if len(out) > CARRY_MAX_BASE_MERGES:
+        return []  # a truncated chain is not the whole diff: no carry
     return out
 
 

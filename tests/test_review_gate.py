@@ -497,6 +497,28 @@ def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_rep
     assert rg.passing_families(rg.pr_comments("o/r", 1), reviewed_key) == {"anthropic", "openai"}
 
 
+@pytest.mark.parametrize("merges,carried", [(2, 2), (3, 0)])
+def test_a_chain_past_the_bound_carries_nothing(carry_repo, monkeypatch, merges, carried):
+    # Codex on #2568: a chain cut off at the bound would drop its oldest
+    # records, so an open finding there could be hidden by a carried CLEAN.
+    # A chain longer than the bound carries nothing; the head's key decides.
+    monkeypatch.setattr(rg, "CARRY_MAX_BASE_MERGES", 2)
+    comments = [_record(rg.diff_key("master", "HEAD"), "FINDINGS", 1, url="finding")]
+    for n in range(merges):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "f.txt").write_text(f"ONE on master {n}\ntwo\nthree\nfour\nfive\n")
+        _git(carry_repo, "commit", "-q", "-am", f"master edits line 1 ({n})")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        if n == 0:
+            comments.append(_record(rg.diff_key("master", "HEAD"), url="clean"))
+    assert len(rg.base_merge_equivalents("master", "HEAD")) == carried
+    rec, _ = _decide(comments)
+    assert (rec is not None and rec.verdict == "FINDINGS") == bool(carried)
+    if not carried:
+        assert rec is None
+
+
 def test_no_earlier_record_means_nothing_decides(carry_repo):
     _master_edits_next_to_the_pr(carry_repo)
     _git(carry_repo, "merge", "-q", "--no-edit", "master")
