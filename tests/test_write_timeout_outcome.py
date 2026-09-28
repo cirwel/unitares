@@ -208,9 +208,11 @@ async def test_update_committed_before_a_slow_post_commit_step_reports_unknown_o
     assert graph.committed_at is not None, "premise: the write committed"
     assert graph.row.details.endswith(NOTES), "premise: the notes are stored"
     _assert_unknown_outcome_for_update(payload)
-    # The read the recovery prescribes finds the notes this call stored.
+    # The read the recovery prescribes finds the block this call stored.
     read = await _read_details_by_the_check(graph, payload["recovery"]["check_arguments"])
-    assert NOTES in _details_text(read)
+    assert _has_this_calls_notes_block(
+        _details_text(read), NOTES, payload["call_started_at"]
+    )
 
 
 @pytest.mark.asyncio
@@ -474,16 +476,14 @@ def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, share
     )
 
 
-FULL_CONTENT = "summary, details, tags and discovery_type"
-
-
 @pytest.mark.parametrize("bound", [BOUND_UUID, None], ids=["bound", "anonymous"])
-def test_batch_items_are_matched_by_full_content_not_by_summary(bound):
+def test_batch_items_are_matched_on_every_field_a_row_shows_not_on_summary(bound):
     """Codex review on #2543: items were matched by summary and row count, so
     of two items with one summary and different details the caller could not
     say which landed, and resending "the unmatched one" could duplicate one
-    and drop the other. Each item is compared by its full content, and items
-    that no stored field tells apart are named as unsafe to resend."""
+    and drop the other. Each item is compared on every field it sent that a
+    row shows, severity included, and only items that agree on all of them
+    are named as unsafe to resend."""
     payload = _store_lookup_payload(
         {"action": "store", "discoveries": _batch(2)}, bound=bound
     )
@@ -492,18 +492,19 @@ def test_batch_items_are_matched_by_full_content_not_by_summary(bound):
     match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
 
     assert recovery["check_arguments"]["include_details"] is True
-    assert f"full content ({FULL_CONTENT}), not by its summary alone" in action
+    assert "by every field you sent that a row shows, not by its summary alone" in action
     assert match_step.startswith(
-        "2. Compare each item you sent with the rows by its full content, not "
-        f"by summary alone: {FULL_CONTENT}, as stored"
+        "2. Compare each item you sent with the rows by every field you sent "
+        "that a row shows (summary, details, discovery_type, tags, severity), "
+        "not by summary alone"
     )
     for text in (action, resend_step):
-        assert "the same in all four fields cannot be told apart" in text
+        assert "Items that agree on every field a row shows cannot be told apart" in text
         assert "resending cannot be made safe for them" in text
     assert "Do not resend them blind" in resend_step
     everything = json.dumps(recovery)
     assert "by summary (" not in everything and "count" not in match_step
-    assert "details_preview" not in everything
+    assert "details_preview" not in everything and "four fields" not in everything
 
 
 def test_a_batch_whose_size_the_arguments_do_not_give_is_still_a_batch():
@@ -588,24 +589,47 @@ def _recovery_for(tool: str, action, arguments=None) -> dict:
     )
 
 
-def test_update_recovery_settles_on_the_notes_text_not_on_updated_at():
+_NOTES_HEADER = re.compile(r"Resolution notes \(([^)]+)\):\n")
+
+
+def _has_this_calls_notes_block(details: str, notes: str, call_started_at: str) -> bool:
+    """The update recovery's rule, applied as it words it: somewhere in
+    details, a 'Resolution notes (<time>):' line with a time at or after
+    call_started_at, followed by the notes' text."""
+    started = datetime.fromisoformat(call_started_at)
+    return any(
+        datetime.fromisoformat(header.group(1)) >= started
+        and details[header.end():].startswith(notes.strip())
+        for header in _NOTES_HEADER.finditer(details)
+    )
+
+
+def test_update_recovery_settles_on_this_calls_notes_block_not_on_updated_at():
     """updated_at moves for any writer, and an update built before this call
     began can commit after it and set it back, so it proves nothing either
-    way. A resend can duplicate only the appended notes, so the check is
-    their text anywhere in details."""
+    way. A resend can duplicate only the appended notes block, so the check
+    is for a block stamped at or after the call's start that carries the
+    caller's text; the text alone can sit in an earlier block."""
     recovery = _recovery_for("knowledge", "update")
     text = json.dumps(recovery)
     steps = recovery["workflow"]
+    block = (
+        "a line 'Resolution notes (<time>):' with a time at or after "
+        "call_started_at, followed by the text of your resolution_notes"
+    )
 
     assert "updated_at settles nothing" in recovery["action"]
-    assert "call_started_at" not in text, "no rule reads updated_at against the call's start"
+    assert text.count("updated_at") == 1, "no rule reads updated_at"
     assert "anywhere in details, not only at its end" in recovery["action"]
+    assert "Your text alone proves nothing" in recovery["action"]
+    assert block in recovery["action"] and block in steps[1]
     assert "pagination.has_more" in steps[0] and "pagination.next_offset" in steps[0]
     assert not re.search(r"\btail\b", text) and "total_length" not in text
-    assert "anywhere in details" in steps[1]
     assert steps[2].startswith(
-        "3. If you sent resolution_notes and that text is nowhere in details"
+        "3. If you sent resolution_notes and no such block is in details"
     )
+    # The set fields are not left behind when the notes are found.
+    assert "send the update again without resolution_notes" in steps[3]
 
 
 @pytest.mark.asyncio
@@ -615,8 +639,9 @@ async def test_the_update_check_finds_notes_a_later_longer_note_pushed_out_of_th
     tail read, and a caller who then sees no notes resends and duplicates
     them. The check reads the whole of details at the largest size an update
     stores."""
-    ours = f"Resolution notes (2026-09-27T09:22:12+00:00):\n{NOTES}"
-    theirs = "Resolution notes (2026-09-27T09:30:00+00:00):\n" + "y" * 8000
+    started = "2026-09-27T09:22:12.000000+00:00"
+    ours = f"Resolution notes (2026-09-27T09:22:12.010000+00:00):\n{NOTES}"
+    theirs = "Resolution notes (2026-09-27T09:30:00.000000+00:00):\n" + "y" * 8000
     head = "x" * (MAX_UPDATED_DETAILS_LEN - len(ours) - len(theirs) - 4)
     graph = _Graph()
     graph.row = replace(graph.row, details=f"{head}\n\n{ours}\n\n{theirs}")
@@ -627,8 +652,35 @@ async def test_the_update_check_finds_notes_a_later_longer_note_pushed_out_of_th
     recovery = _recovery_for("knowledge", "update")
     read = await _read_details_by_the_check(graph, recovery["check_arguments"])
 
-    assert NOTES in _details_text(read)
     assert "pagination" not in read, "one read holds all of it"
+    assert _has_this_calls_notes_block(_details_text(read), NOTES, started)
+
+
+@pytest.mark.asyncio
+async def test_the_same_text_in_an_earlier_block_is_not_taken_for_this_calls_notes():
+    """Codex review on #2543: the notes check tested only that the text was
+    somewhere in details. An earlier update that recorded the same words
+    made a timed-out update that never committed look saved, and its other
+    fields were lost. The block this call writes is stamped after the call
+    began, which an earlier block is not."""
+    graph = _Graph()
+    earlier = f"Resolution notes (2026-09-01T00:00:00.000000+00:00):\n{NOTES}"
+    graph.row = replace(graph.row, details=f"{graph.row.details}\n\n{earlier}")
+
+    async def update_discovery(discovery_id, updates):
+        await asyncio.sleep(5)  # times out before it commits
+        graph.commit(updates)
+        return True
+
+    graph.update_discovery = update_discovery
+    handler = _short_timeout_update_handler(0.2)
+    payload = _payload(await _run_patched(handler, graph, _update_arguments()))
+
+    assert graph.committed_at is None, "premise: nothing was written"
+    read = await _read_details_by_the_check(graph, payload["recovery"]["check_arguments"])
+    details = _details_text(read)
+    assert NOTES in details, "premise: the words are there from an earlier update"
+    assert not _has_this_calls_notes_block(details, NOTES, payload["call_started_at"])
 
 
 @pytest.mark.parametrize(

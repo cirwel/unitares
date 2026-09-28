@@ -418,12 +418,12 @@ def _knowledge_store_recovery(
     A batch store (``discoveries``) writes its items one at a time, each
     committed on its own, so a timed-out batch can have saved some items and
     not others. Resending the whole batch would store every item that landed a
-    second time, so the caller compares each item with the rows by its full
-    content (summary, details, tags and discovery_type; the lookup carries
-    include_details for that) and resends only the items no row matches. A
-    summary alone cannot tell two items apart. Items that are the same in all
-    of those fields cannot be told apart by any row, so once a row matches
-    them the recovery says resending cannot be made safe for them.
+    second time, so the caller compares each item with the rows by every field
+    it sent that a row shows (the lookup carries include_details for the
+    details) and resends only the items no row matches. A summary alone cannot
+    tell two items apart. Items that agree on every field a row shows cannot
+    be told apart by any row, so once a row matches them the recovery says
+    resending cannot be made safe for them.
 
     Both are database writes: the row commits in one transaction per row
     before the handler returns, so settled_by bounds when it can still land.
@@ -456,10 +456,10 @@ def _knowledge_store_recovery(
     same = "the same item" if batch else "the same summary"
     yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
     matching = (
-        "Compare each item you sent with the rows by its full content, not by "
-        "summary alone: summary, details, tags and discovery_type, as stored "
-        "(a long summary or details is cut short; tags are lowercased and "
-        "normalized)"
+        "Compare each item you sent with the rows by every field you sent "
+        "that a row shows (summary, details, discovery_type, tags, severity), "
+        "not by summary alone, as stored: a long summary or details is cut "
+        "short, tags are lowercased and normalized"
     )
 
     if writer and author.kind == "bound":
@@ -531,20 +531,20 @@ def _knowledge_store_recovery(
             "commits each item on its own, so some items may be saved and "
             "others not. Every store adds a new row, so resending the whole "
             "batch leaves a second finding for every item that landed. "
-            f"{listing} Compare each item you sent with those rows by its full "
-            "content (summary, details, tags and discovery_type), not by its "
-            "summary alone, and send again only the items no row matches. An "
-            "item no row matches is proven unsaved only when the list was read "
-            f"after settled_by and its count is below {limit}. Items that are "
-            "the same in all four fields cannot be told apart: once a row "
-            "matches them, the list cannot say which of them landed, and "
-            "resending cannot be made safe for them."
+            f"{listing} Compare each item you sent with those rows by every "
+            "field you sent that a row shows, not by its summary alone, and "
+            "send again only the items no row matches. An item no row matches "
+            "is proven unsaved only when the list was read after settled_by "
+            f"and its count is below {limit}. Items that agree on every field "
+            "a row shows cannot be told apart: once a row matches them, the "
+            "list cannot say which of them landed, and resending cannot be "
+            "made safe for them."
         )
         resend_step = (
             "3. On a read after settled_by whose count is below "
             f"{limit}, an item no row matches was not saved: send only those "
-            "items again, in one store or a batch of just them. Items that are "
-            "the same in all four fields cannot be told apart: when a row "
+            "items again, in one store or a batch of just them. Items that agree "
+            "on every field a row shows cannot be told apart: when a row "
             "matches them, the list cannot say which of them landed, so "
             "resending cannot be made safe for them. Do not resend them blind. "
             "Never resend the whole batch"
@@ -583,11 +583,15 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
     derived (the embedding refresh it schedules) or idempotent (the SUPERSEDES
     edge it MERGEs), so settled_by bounds when the row can still change. Every
     field it sends is set, not added to, except resolution_notes, which are
-    appended to details as a timestamped block. A resend can duplicate only
-    the notes, so the check is whether their text is anywhere in details, not
-    only at its end: another writer can append after them. The read asks for
-    MAX_UPDATED_DETAILS_LEN characters, the most an update stores, and the
-    workflow pages on while has_more says a row is longer.
+    appended to details as a block headed ``Resolution notes (<time>):``,
+    stamped when the handler builds the update, after the call began. A
+    resend can duplicate only that block, so the check is for a block stamped
+    at or after call_started_at that carries the caller's text: the text
+    alone can already be in an earlier block. It is looked for anywhere in
+    details, not only at its end, since another writer can append after it.
+    The read asks for MAX_UPDATED_DETAILS_LEN characters, the most an update
+    stores, and the workflow pages on while has_more says a row is longer.
+    The set fields can always be sent again after settled_by.
 
     updated_at settles nothing: any writer's update moves it, and an update
     built before this call began can commit after it and set it back.
@@ -600,18 +604,25 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
         "length": MAX_UPDATED_DETAILS_LEN,
     }
     check = _render_call("knowledge", lookup)
+    block = (
+        "a line 'Resolution notes (<time>):' with a time at or after "
+        "call_started_at, followed by the text of your resolution_notes "
+        "(trimmed of surrounding whitespace)"
+    )
     return {
         "action": (
             "Do not send this update again yet. It may already be saved, and "
             "resolution_notes append, so a second call adds them twice. Every "
             "other field an update sends is set, not added to, so sending it "
-            "again stores no second copy. After settled_by, read the discovery "
-            f"with {check} and look for the text of your resolution_notes "
-            "anywhere in details, not only at its end: another writer can "
-            "append after them. If it is there, the notes are stored. Only its "
-            "absence from the whole of details, read after settled_by, shows "
-            "they are not. updated_at settles nothing: any writer's update "
-            "moves it."
+            "again stores no second copy, though it replaces any change "
+            "another writer made since. After settled_by, read the discovery "
+            f"with {check} and look anywhere in details, not only at its end, "
+            f"for the notes block this call would have written: {block}. Your "
+            "text alone proves nothing, since an earlier block can hold the "
+            "same words. If that block is there, your notes are stored. Only "
+            "its absence from the whole of details, read after settled_by, "
+            "shows they are not. updated_at settles nothing: any writer's "
+            "update moves it."
         ),
         "check_before_retry": check,
         "check_arguments": lookup,
@@ -619,14 +630,16 @@ def _knowledge_update_recovery(arguments: Dict[str, Any]) -> Dict[str, Any]:
             f"1. After settled_by, call {check}. If pagination.has_more is "
             "true, read on from pagination.next_offset until it is false, so "
             "you have all of details",
-            "2. If the text of your resolution_notes (trimmed of surrounding "
-            "whitespace) is anywhere in details, the notes are stored. Do not "
-            "send them again",
-            "3. If you sent resolution_notes and that text is nowhere in "
-            "details on the read after settled_by, they are not stored: send "
-            "the update again. An update without resolution_notes only sets "
-            "fields, so sending it again after settled_by stores no second "
-            "copy, though it replaces any change another writer made since",
+            f"2. Look anywhere in details for {block}. If it is there, your "
+            "notes are stored. Do not send them again",
+            "3. If you sent resolution_notes and no such block is in details "
+            "on the read after settled_by, they are not stored: send the "
+            "update again with them",
+            "4. Every other field you sent is set, not added to, so sending it "
+            "again after settled_by stores no second copy, though it replaces "
+            "any change another writer made since. If step 2 found your notes "
+            "and the row does not show a field you set, send the update again "
+            "without resolution_notes",
         ],
         "related_tools": ["knowledge", "health_check"],
     }
