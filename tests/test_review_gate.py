@@ -207,8 +207,12 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
     monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
-    monkeypatch.setattr(rg, "_CARRY", {})
+    # _resolve registered the reviewed key's view; the second-family pass that
+    # follows the handoff still keys on it (Codex on #2568), so it must survive.
+    registered = (reviewed_key, [])
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): registered})
     assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == expected
+    assert rg._CARRY == {("o/r", 1): registered}
     assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
 
 

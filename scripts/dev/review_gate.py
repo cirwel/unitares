@@ -1666,10 +1666,19 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             equivalents = base_merge_equivalents(base_ref, head_ref)
             current = key in {k for k, _ in equivalents}
             if current:
+                # Only for this read: the caller's later checks (the second-family
+                # pass) still key on `key`, so they keep its carry view.
+                saved = _CARRY.get((repo, pr))
                 _CARRY[(repo, pr)] = (fetched_key, equivalents)
-                latest = current_record(repo, pr, fetched_key,
-                                        git("rev-parse", head_ref).strip(),
-                                        pr_comments(repo, pr))
+                try:
+                    latest = current_record(repo, pr, fetched_key,
+                                            git("rev-parse", head_ref).strip(),
+                                            pr_comments(repo, pr))
+                finally:
+                    if saved is None:
+                        _CARRY.pop((repo, pr), None)
+                    else:
+                        _CARRY[(repo, pr)] = saved
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
     except SystemExit as exc:
