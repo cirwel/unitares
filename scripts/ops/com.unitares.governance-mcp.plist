@@ -127,7 +127,7 @@
         <string></string>
         <!-- Optional route packs (src/http_routes/packs.py), comma-separated:
              reference-residents  the reference residents' summaries and the
-                                  finding adjudication queue
+                                  finding backlog
              automation-census    /api/automations
              Empty = core routes only. See docs/operations/resident-roster.md. -->
         <key>UNITARES_ROUTE_PACKS</key>

@@ -23,8 +23,7 @@ def _paths(app) -> set[str]:
 
 PACK_PATHS = {
     "reference-residents": {
-        "/v1/sentinel/backlog", "/v1/sentinel/summary", "/v1/sentinel/adjudication-queue",
-        "/v1/sentinel/adjudicate", "/v1/sentinel/model-adjudicate",
+        "/v1/sentinel/backlog", "/v1/sentinel/summary",
         "/v1/watcher/summary", "/v1/vigil/summary",
     },
     "automation-census": {"/api/automations"},

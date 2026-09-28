@@ -1,16 +1,13 @@
-"""A drained adjudication queue and a dead one are the same observation.
+"""A quiet finding stream and a broken alarm path are the same observation.
 
-`adjudication_feedstock` reasons only from downstream `audit.events`, so when it
-sees zero queue-eligible findings it cannot tell which of three things happened:
-(a) the producing condition is genuinely gone, (b) the queue was DRAINED — the
-last eligible finding was adjudicated and none has arrived since, or (c) the
-alarm path BROKE. This check supplies the orthogonal signal by reading the
-UPSTREAM substrate and asserting the transform: every real (non-test) forced
-lease release must become a queue-admissible sentinel finding.
+Counting findings cannot tell (a) the producing condition is genuinely gone
+from (b) the alarm path BROKE. This check supplies the orthogonal signal by
+reading the UPSTREAM substrate and asserting the transform: every real
+(non-test) forced lease release must become a sentinel finding.
 
-Why not just pass `adjudication_feedstock` when the newest eligible finding has a
-newer adjudication: that shortcut lets case (c) read green forever against a
-stale matched pair. Rejected in dialectic ce6f53ad3e0f404e (2026-08-19).
+(Until 2026-09-27 this sat beside an operator adjudication queue and its
+`adjudication_feedstock` check; both were removed. The transform check stands
+on its own.)
 
 Live evidence behind the design (verified 2026-08-19 against `governance`):
 a real forced release fired 2026-08-10 23:46:25 on `resident:/steward_eisv_sync`
@@ -195,7 +192,7 @@ def test_passes_when_every_forced_release_alarmed(doctor, monkeypatch):
     ])
     r = doctor.check_forced_release_transform("postgresql:///x")
     assert r.status is doctor.Status.PASS
-    assert "DRAINED, not dead" in r.detail
+    assert "quiet, not broken" in r.detail
 
 
 def test_vacuous_when_no_real_forced_releases(doctor, monkeypatch):
@@ -276,18 +273,4 @@ def test_check_is_registered(doctor):
     checks = doctor.build_checks(REPO_ROOT, "postgresql:///x")
     names = {c.name for c in checks}
     assert "forced_release_transform" in names
-    assert "adjudication_feedstock" in names
-
-
-def test_feedstock_still_warns_and_does_not_pass_on_adjudication_recency(doctor, monkeypatch):
-    """Ratified condition 1. The sibling stays WARN by design; the separation of
-    drained-from-dead belongs to forced_release_transform, not to a shortcut
-    here."""
-    _rows(doctor, monkeypatch, [
-        ["sentinel_alarm_finding", "305", "0", "0.1"],
-        ["sentinel_finding", "65", "0", "0.5"],
-        ["doctor_check_finding", "50", "0", "0.2"],
-    ])
-    r = doctor.check_adjudication_feedstock("postgresql:///x")
-    assert r.status is doctor.Status.WARN
-    assert "forced_release_transform" in r.detail
+    assert "adjudication_feedstock" not in names  # retired with the queue

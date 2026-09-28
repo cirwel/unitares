@@ -455,7 +455,7 @@ class TestCappingIsTheDefault:
             # path -- the boundary itself, not a grant.
             "src/mcp_handlers/observability/outcome_events.py",
             # The four grants.
-            "src/http_routes/sentinel.py",
+            # src/http_routes/sentinel.py left 2026-09-27 with operator adjudication.
             "src/http_routes/substrate.py",
             "src/mcp_handlers/dialectic/resolution.py",
             "src/mcp_handlers/updates/phases.py",
@@ -707,7 +707,7 @@ class TestEveryWritePathIsAccountedFor:
             "src/mcp_handlers/updates/phases.py",
             "src/mcp_handlers/dialectic/resolution.py",
             "src/http_routes/substrate.py",
-            "src/http_routes/sentinel.py",
+            # src/http_routes/sentinel.py left 2026-09-27 with operator adjudication.
         }, (
             "a new outcome write path appeared. It is capped by default, so this "
             "is not a vulnerability -- but confirm it should not be vouched, and "

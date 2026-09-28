@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.http_api import _sentinel_event_from_audit, _sentinel_summary_from_events
+from agents.sentinel.routes import _sentinel_event_from_audit, _sentinel_summary_from_events
 
 
 NOW = datetime(2026, 4, 24, 12, 0, tzinfo=timezone.utc)
