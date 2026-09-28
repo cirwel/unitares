@@ -30,7 +30,7 @@ def _payload(result):
 
 def _make_meta(**overrides):
     meta = SimpleNamespace(
-        agent_id="agent-uuid",
+        agent_id="aaaaaaaa-0000-4000-8000-000000000001",
         status="active",
         archived_at=None,
         notes="",
@@ -45,7 +45,7 @@ def _make_meta(**overrides):
     return meta
 
 
-def _archive_patches(meta, agent_uuid="agent-uuid"):
+def _archive_patches(meta, agent_uuid="aaaaaaaa-0000-4000-8000-000000000001"):
     """Common patch set for handle_archive_agent tests."""
     mock_server = MagicMock()
     mock_server.agent_metadata = {agent_uuid: meta}
@@ -70,7 +70,7 @@ class TestLivenessSignalsHelper:
             "src.mcp_handlers.identity.process_binding.get_live_bindings",
             new=AsyncMock(return_value=[]),
         ):
-            signals = await manual_archive_liveness_signals("agent-uuid", meta)
+            signals = await manual_archive_liveness_signals("aaaaaaaa-0000-4000-8000-000000000001", meta)
         assert signals == []
 
     @pytest.mark.asyncio
@@ -82,7 +82,7 @@ class TestLivenessSignalsHelper:
             "src.mcp_handlers.identity.process_binding.get_live_bindings",
             new=AsyncMock(return_value=[{"pid": 123}]),
         ):
-            signals = await manual_archive_liveness_signals("agent-uuid", meta)
+            signals = await manual_archive_liveness_signals("aaaaaaaa-0000-4000-8000-000000000001", meta)
         assert any("binding" in s for s in signals)
 
     @pytest.mark.asyncio
@@ -139,7 +139,7 @@ class TestLivenessSignalsHelper:
 
 class TestManualArchiveGuard:
     async def _run_archive(self, meta, arguments):
-        agent_uuid = "agent-uuid"
+        agent_uuid = "aaaaaaaa-0000-4000-8000-000000000001"
         mock_server, mock_storage = _archive_patches(meta, agent_uuid)
         with patch("src.mcp_handlers.lifecycle.mutation.mcp_server", mock_server), \
              patch("src.mcp_handlers.lifecycle.mutation.agent_storage", mock_storage), \
@@ -172,7 +172,7 @@ class TestManualArchiveGuard:
     async def test_refuses_archive_of_lineage_declared_agent(self, spawn_reason):
         meta = _make_meta(parent_agent_id="parent", spawn_reason=spawn_reason)
         meta._live_bindings = []
-        result, mock_arch = await self._run_archive(meta, {"agent_id": "agent-uuid"})
+        result, mock_arch = await self._run_archive(meta, {"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
         body = _payload(result)
         assert body["success"] is False
         assert body["error_code"] == "AGENT_LOOKS_LIVE"
@@ -183,7 +183,7 @@ class TestManualArchiveGuard:
     async def test_refuses_archive_of_agent_with_live_binding(self):
         meta = _make_meta()
         meta._live_bindings = [{"pid": 999}]
-        result, mock_arch = await self._run_archive(meta, {"agent_id": "agent-uuid"})
+        result, mock_arch = await self._run_archive(meta, {"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
         body = _payload(result)
         assert body["error_code"] == "AGENT_LOOKS_LIVE"
         mock_arch.assert_not_awaited()
@@ -193,7 +193,7 @@ class TestManualArchiveGuard:
         meta = _make_meta(parent_agent_id="parent", spawn_reason="subagent")
         meta._live_bindings = [{"pid": 999}]
         result, mock_arch = await self._run_archive(
-            meta, {"agent_id": "agent-uuid", "force": True}
+            meta, {"agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "force": True}
         )
         body = _payload(result)
         assert body["success"] is True
@@ -204,7 +204,7 @@ class TestManualArchiveGuard:
         meta = _make_meta(parent_agent_id="parent", spawn_reason="dispatch")
         meta._live_bindings = []
         result, mock_arch = await self._run_archive(
-            meta, {"agent_id": "agent-uuid", "force": "true"}
+            meta, {"agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "force": "true"}
         )
         assert _payload(result)["success"] is True
         mock_arch.assert_awaited_once()
@@ -213,7 +213,7 @@ class TestManualArchiveGuard:
     async def test_idle_unlineaged_agent_archives_without_force(self):
         meta = _make_meta()  # no lineage, no recent activity
         meta._live_bindings = []
-        result, mock_arch = await self._run_archive(meta, {"agent_id": "agent-uuid"})
+        result, mock_arch = await self._run_archive(meta, {"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
         assert _payload(result)["success"] is True
         mock_arch.assert_awaited_once()
 

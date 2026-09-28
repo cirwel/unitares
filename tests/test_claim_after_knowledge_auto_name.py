@@ -146,24 +146,28 @@ async def test_a_claim_renamed_by_a_collision_is_displayed_as_renamed(auto_named
 
 
 @pytest.mark.asyncio
-async def test_a_collision_rename_that_reproduces_the_auto_name_still_reads_claimed(
+async def test_a_collision_rename_does_not_reproduce_the_auto_name(
     auto_named,
 ):
-    """The exact review-finding 2 scenario: the collision rename appends
-    THIS agent's own uuid8 (``f"{label}_{agent_uuid[:8]}"``), which is
-    exactly how the stale auto-name was built. Claiming ``"Agent"`` after
-    being auto-named ``Agent_<uuid8>`` and colliding with someone else's
-    ``"Agent"`` resolves to that identical string -- the case the old
-    value-equality guard silently let slide back to label_source "auto"."""
+    """The review-finding 2 scenario: the collision rename appends THIS
+    agent's own uuid8 (``f"{label}_{agent_uuid[:8]}"``), which is exactly
+    how the auto-name was built. Claiming ``"Agent"`` after being auto-named
+    ``Agent_<uuid8>`` and colliding with someone else's ``"Agent"`` used to
+    resolve to that identical string, and only the clear-on-claim kept it
+    from reading "auto". The rename now sees the recorded auto-name and
+    takes the uuid's first two groups instead."""
     from src.mcp_handlers.identity.persistence import set_agent_label_resolved
 
     agent_uuid, meta = await _auto_name(auto_named)
     assert meta.display_name == meta.auto_label == f"Agent_{agent_uuid[:8]}"
-    auto_named.db.find_agent_by_label = AsyncMock(return_value="another-agent-uuid")
+    auto_named.db.find_agent_by_label = AsyncMock(
+        side_effect=lambda label: "another-agent-uuid" if label == "Agent" else None
+    )
 
     applied = await set_agent_label_resolved(agent_uuid, "Agent")
 
-    assert applied == f"Agent_{agent_uuid[:8]}"
+    assert applied == f"Agent_{agent_uuid[:13]}"
+    assert applied != f"Agent_{agent_uuid[:8]}"
     assert getattr(meta, "display_name", None) is None
     assert getattr(meta, "auto_label", None) is None
     signature = _signature(agent_uuid)
@@ -171,12 +175,27 @@ async def test_a_collision_rename_that_reproduces_the_auto_name_still_reads_clai
     assert signature["label_source"] == "claimed"
 
 
+@pytest.mark.asyncio
+async def test_a_claim_of_the_exact_auto_name_reads_claimed(auto_named):
+    """Nobody else holds ``Agent_<uuid8>``, so no rename happens and the
+    claimed label is the auto-name's string. The claim clearing the
+    in-memory auto-name is what makes it read "claimed"."""
+    from src.mcp_handlers.identity.persistence import set_agent_label_resolved
+
+    agent_uuid, meta = await _auto_name(auto_named)
+
+    applied = await set_agent_label_resolved(agent_uuid, f"Agent_{agent_uuid[:8]}")
+
+    assert applied == f"Agent_{agent_uuid[:8]}"
+    assert getattr(meta, "auto_label", None) is None
+    assert _signature(agent_uuid)["label_source"] == "claimed"
+
+
 def test_a_stale_display_name_equal_to_the_new_label_is_still_cleared():
-    """A collision rename appends this agent's OWN uuid8
-    (``f"{label}_{agent_uuid[:8]}"``), the same construction the auto-name
-    used, so claiming a taken name can resolve to a string identical to the
-    stale auto-name. Any real call to ``drop_stale_display_name`` means a
-    claim happened, so the coincidence must not suppress the clear —
+    """A claim can land on a string identical to the stale auto-name: a
+    claim of the exact string ``Agent_<uuid8>`` does (a collision rename no
+    longer does, see above). Any real call to ``drop_stale_display_name``
+    means a claim happened, so the coincidence must not suppress the clear —
     otherwise label_source keeps reading "auto" for a name just claimed
     (review finding 2)."""
     from src.mcp_handlers.identity.persistence import drop_stale_display_name
