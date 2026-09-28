@@ -510,6 +510,38 @@ async def http_bootstrap_silent(request):
     })
 
 
+# How each incident type reaches the audit trail. An empty or old list reads as
+# a quiet fleet unless the reader knows how the rows are produced. Neither
+# producer records its runs here, so absence is stated as undetermined, never
+# as "nothing was looking" or "nothing was found".
+# anomaly_detected is written only when a caller runs detect_anomalies
+# (observe(action='anomalies')); nothing schedules it. Until 2026-09-26 the
+# dashboard's Anomalies card called it on every refresh, so the feed looked
+# continuous; #2494 removed that card and with it the only regular producer.
+# Deliberately not a list of causes. An empty or old feed is consistent with a
+# producer that did not run, one that ran and found nothing new, one that
+# errored, and a finding whose audit write to PostgreSQL failed (the JSONL
+# record survives it; this endpoint reads PostgreSQL). Naming some of these
+# would imply the rest were ruled out.
+_ABSENCE_UNDETERMINED = (
+    "undetermined: this feed holds findings that reached the audit database, "
+    "not a record of runs, so an empty or old feed does not show that nothing "
+    "was found"
+)
+INCIDENT_PRODUCERS = {
+    "anomaly_detected": {
+        "cadence": "on_demand",
+        "written_by": "detect_anomalies",
+        "absence_means": _ABSENCE_UNDETERMINED,
+    },
+    "stuck_detected": {
+        "cadence": "scheduled",
+        "written_by": "detect_stuck_agents (5-minute background sweep)",
+        "absence_means": _ABSENCE_UNDETERMINED,
+    },
+}
+
+
 # Incident history endpoint (anomalies + stuck agents from audit log)
 async def http_incidents(request):
     """Return historical anomaly and stuck-agent incidents from the audit trail."""
@@ -520,20 +552,33 @@ async def http_incidents(request):
         from src.audit_db import query_audit_events_async
 
         event_type = request.query_params.get("type")  # "anomaly_detected" or "stuck_detected"
-        limit = min(int(request.query_params.get("limit", 200)), 500)
+        # At least 1: newest_at is read off the first row, so an empty page
+        # would report a type with rows as having none.
+        limit = max(1, min(int(request.query_params.get("limit", 200)), 500))
 
         # Query both types if none specified
         types_to_query = [event_type] if event_type else ["anomaly_detected", "stuck_detected"]
         all_events = []
+        producers = {}
         for et in types_to_query:
             events = await query_audit_events_async(event_type=et, order="desc", limit=limit)
             all_events.extend(events)
+            if et in INCIDENT_PRODUCERS:
+                producers[et] = {
+                    **INCIDENT_PRODUCERS[et],
+                    "newest_at": events[0].get("timestamp") if events else None,
+                }
 
         # Sort by timestamp descending, limit total
         all_events.sort(key=lambda e: e.get("timestamp", ""), reverse=True)
         all_events = all_events[:limit]
 
-        return JSONResponse({"success": True, "incidents": all_events, "count": len(all_events)})
+        return JSONResponse({
+            "success": True,
+            "incidents": all_events,
+            "count": len(all_events),
+            "producers": producers,
+        })
     except Exception as e:
         logger.error(f"Error fetching incidents: {e}")
         return JSONResponse({"success": False, "error": str(e), "incidents": []}, status_code=500)
