@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ci"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "ops"))
 
 from compat_published_row import ROW_PREFIX, main, render_row, rewrite  # noqa: E402
 
@@ -42,9 +41,15 @@ def test_rewrite_replaces_the_whole_row_and_nothing_else():
 
 
 def test_version_manager_still_reads_the_regenerated_row():
-    from version_manager import PUBLISHED_VERSION_REFERENCES
+    # By path: scripts/dev also has a version_manager module, and whichever is
+    # first on sys.path would win a by-name import.
+    import importlib.util
 
-    pattern = dict(PUBLISHED_VERSION_REFERENCES)["docs/COMPATIBILITY.md"][0][0]
+    path = Path(__file__).resolve().parents[1] / "scripts" / "ops" / "version_manager.py"
+    spec = importlib.util.spec_from_file_location("ops_version_manager", path)
+    vm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(vm)
+    pattern = dict(vm.PUBLISHED_VERSION_REFERENCES)["docs/COMPATIBILITY.md"][0][0]
     assert re.findall(pattern, render_row("9.1.0", RUN, REL)) == ["9.1.0"]
 
 
