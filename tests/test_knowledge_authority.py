@@ -249,3 +249,279 @@ async def test_promote_memory_rejects_memory_only_corroboration():
 
     assert result["success"] is False
     assert "cannot independently corroborate" in result["error"]
+
+
+# Channel messages (operator decision 2026-09-27): agent-to-agent notes on a
+# `channel-<topic>` lane get the imported-memory multiplier. Measured that day
+# on the relational table: 78 rows match, 61 of them open.
+
+
+def test_channel_message_is_the_tag_pair_or_the_summary_prefix():
+    from src.knowledge_authority import CHANNEL_MESSAGE
+
+    tag_pair = _discovery("m1", tags=["channel-resource-agent", "to-codex", "review"])
+    prefixed = _discovery("m2", summary="[channel:beam-verbs] ack", tags=["review"])
+    assert assess_authority(tag_pair).tier == CHANNEL_MESSAGE
+    assert assess_authority(prefixed).tier == CHANNEL_MESSAGE
+    assert assess_authority(tag_pair).to_dict()["ranking_multiplier"] == 0.55
+
+    # A `channel-` topic tag with no addressee is an ordinary finding:
+    # `channel-detection` is about how the server detects a client channel.
+    topic = _discovery("f1", tags=["identity", "channel-detection"])
+    addressed_only = _discovery("f2", tags=["to-codex", "coordination"])
+    assert assess_authority(topic).tier == NATIVE_FINDING
+    assert assess_authority(addressed_only).tier == NATIVE_FINDING
+
+
+def test_imported_memory_wins_over_channel_when_both_markers_are_present():
+    both = _discovery("m1", tags=["memory-sync", "channel-x", "to-claude"])
+    assert assess_authority(both).tier == IMPORTED_CONTEXT
+
+
+def test_channel_message_loses_close_contests_but_keeps_a_strong_match():
+    channel = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    native = _discovery("finding-1")
+    close, changed = rank_by_authority(
+        [channel, native], relevance_scores={"m1": 0.82, "finding-1": 0.55}
+    )
+    assert changed is True
+    assert [row.id for row in close] == ["finding-1", "m1"]
+    strong, changed = rank_by_authority(
+        [channel, native], relevance_scores={"m1": 0.95, "finding-1": 0.30}
+    )
+    assert changed is False
+    assert [row.id for row in strong] == ["m1", "finding-1"]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_tag_filter_reads_that_lane_in_its_own_order():
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _authority_ranking_enabled,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    request = _parse_knowledge_search_request({
+        "query": "review", "limit": 2, "tags": ["channel-resource-agent"],
+    })
+    # Authority stays on; the lane is honoured per row (review round 7).
+    assert _authority_ranking_enabled(request)
+
+    channel = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    native = _discovery("finding-1", tags=["channel-resource-agent"])
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.candidates = [channel, native]
+    state.semantic_scores = {"m1": 0.82, "finding-1": 0.55}
+    await _filter_and_rerank_candidates(state)
+    assert [row.id for row in state.results] == ["m1", "finding-1"]
+
+
+@pytest.mark.asyncio
+async def test_channel_results_disclose_the_authority_policy():
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _attach_search_diagnostics,
+        _parse_knowledge_search_request,
+    )
+
+    request = _parse_knowledge_search_request({"query": "review"})
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.results = [
+        _discovery("m1", tags=["channel-resource-agent", "to-claude"]),
+        _discovery("finding-1"),
+    ]
+    response: dict = {}
+    _attach_search_diagnostics(response, state)
+    assert response["authority_policy"]["result_tiers"] == {
+        "channel_message": 1,
+        "native_finding": 1,
+    }
+
+
+def test_only_a_filter_made_of_lane_tags_is_exempt():
+    # Review on #2537: tags match any-of, so a mixed filter also returns
+    # ordinary findings and must keep the authority order.
+    from src.mcp_handlers.knowledge.handlers import (
+        _authority_ranking_enabled,
+        _parse_knowledge_search_request,
+    )
+
+    def enabled(tags):
+        return _authority_ranking_enabled(
+            _parse_knowledge_search_request({"query": "x", "tags": tags})
+        )
+
+    assert not enabled(["source-claude-memory"])
+    assert not enabled(["memory-sync", "source-claude-memory"])
+    assert enabled(["memory-sync", "review"])
+    # Channel filters never switch authority off for the whole query.
+    assert enabled(["channel-resource-agent"])
+    assert enabled(["channel-detection"])
+
+
+@pytest.mark.asyncio
+async def test_authority_sees_past_the_page_on_the_default_path():
+    # Review on #2537 (P1): with hybrid and the reranker off, the candidate
+    # list was cut to `limit` before authority ranking, so a native finding
+    # just below a page of channel notes could never be lifted.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(3)
+    ]
+    native = _discovery("finding-1")
+    request = _parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.hybrid_on = False
+    state.rerank_on = False
+    state.candidates = [*channel, native]
+    state.semantic_scores = {"m0": 0.82, "m1": 0.81, "m2": 0.80, "finding-1": 0.60}
+
+    await _filter_and_rerank_candidates(state)
+
+    assert [row.id for row in state.results] == ["finding-1", "m0"]
+
+
+@pytest.mark.asyncio
+async def test_retrieval_windows_widen_when_authority_ranking_is_on(monkeypatch):
+    # Review on #2537 (P1, round 2): widening only the post-retrieval cap
+    # could not help while semantic_search was asked for limit * 2 rows.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_text_search,
+    )
+
+    monkeypatch.delenv("UNITARES_ENABLE_HYBRID", raising=False)
+    monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "0")
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(4)
+    ]
+    native = _discovery("finding-1")
+    scored = [(row, 0.82 - i * 0.01) for i, row in enumerate(channel)] + [(native, 0.60)]
+
+    async def semantic_search(query, *, limit, min_similarity, **_):
+        return scored[:limit]
+
+    graph = AsyncMock()
+    graph.semantic_search = semantic_search
+    graph.full_text_search = AsyncMock(return_value=[])
+    request = _parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = _KnowledgeSearchState(request=request, graph=graph)
+    await _run_text_search(state)
+    assert [row.id for row in state.results] == ["finding-1", "m0"]
+
+    raw = _parse_knowledge_search_request({"query": "review", "limit": 2, "authority_mode": "all"})
+    raw_state = _KnowledgeSearchState(request=raw, graph=graph)
+    await _run_text_search(raw_state)
+    assert [row.id for row in raw_state.results] == ["m0", "m1"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_pool_is_ranked_before_the_page_is_cut():
+    # Review on #2537 (round 3): the FTS fallback kept only the first
+    # `limit` rows before authority ranking ran.
+    from src.mcp_handlers.knowledge import handlers
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(2)
+    ]
+    native = _discovery("finding-1")
+    graph = AsyncMock()
+    graph.semantic_search = AsyncMock(return_value=[])
+    graph.full_text_search = AsyncMock(return_value=[*channel, native])
+    request = handlers._parse_knowledge_search_request({"query": "review", "limit": 2})
+    state = handlers._KnowledgeSearchState(request=request, graph=graph)
+    with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
+         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+        await handlers._execute_knowledge_search(state)
+    assert state.search_mode == "semantic_fallback_fts"
+    assert [row.id for row in state.results][0] == "finding-1"
+
+
+def test_semantic_fallback_hides_cold_rows_by_default():
+    # Review on #2537 (round 4): the fallback predicate checked archived but
+    # never cold, and the wider pool made that reachable.
+    from src.mcp_handlers.knowledge.handlers import (
+        _candidate_matches_semantic_fallback,
+        _parse_knowledge_search_request,
+    )
+
+    cold = _discovery("cold-1")
+    cold.status = "cold"
+    default = _parse_knowledge_search_request({"query": "x"})
+    assert not _candidate_matches_semantic_fallback(cold, default)
+    with_cold = _parse_knowledge_search_request({"query": "x", "include_cold": True})
+    assert _candidate_matches_semantic_fallback(cold, with_cold)
+    explicit = _parse_knowledge_search_request({"query": "x", "status": "cold"})
+    assert _candidate_matches_semantic_fallback(cold, explicit)
+
+
+@pytest.mark.asyncio
+async def test_semantic_fallback_skips_excluded_writers_before_ranking():
+    # Review on #2537 after the rebase onto #2517: the widened fallback pool
+    # let an excluded writer's native row be promoted into the page and then
+    # removed, leaving it short.
+    from src.mcp_handlers.knowledge import handlers
+
+    channel = [
+        _discovery(f"m{i}", tags=["channel-resource-agent", "to-claude"]) for i in range(2)
+    ]
+    excluded = [_discovery(f"x{i}") for i in range(2)]
+    for row in excluded:
+        row.agent_id = "excluded-writer"
+    graph = AsyncMock()
+    graph.semantic_search = AsyncMock(return_value=[])
+    graph.full_text_search = AsyncMock(return_value=[*channel, *excluded])
+    request = handlers._parse_knowledge_search_request({
+        "query": "review", "limit": 2, "exclude_agent_labels": ["excluded-writer"],
+    })
+    state = handlers._KnowledgeSearchState(request=request, graph=graph)
+    with patch.object(handlers, "_broadcast_knowledge_read", AsyncMock()), \
+         patch.object(handlers, "_resolve_agent_display", lambda agent_id: {"display_name": agent_id}):
+        await handlers._execute_knowledge_search(state)
+    assert [row.id for row in state.results] == ["m0", "m1"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_channel_topic_keeps_authority_order():
+    # Review round 7 on #2537: tags=["channel-detection"] was read as a lane
+    # and switched authority off, so an imported row carrying that topic
+    # outranked a native finding again.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _filter_and_rerank_candidates,
+        _parse_knowledge_search_request,
+    )
+
+    imported = _discovery("memory-1", tags=["channel-detection", "memory-sync"])
+    native = _discovery("finding-1", tags=["channel-detection"])
+    request = _parse_knowledge_search_request({
+        "query": "channel", "limit": 2, "tags": ["channel-detection"],
+    })
+    state = _KnowledgeSearchState(request=request, graph=AsyncMock())
+    state.search_mode = "semantic"
+    state.candidates = [imported, native]
+    state.semantic_scores = {"memory-1": 0.82, "finding-1": 0.55}
+    await _filter_and_rerank_candidates(state)
+    assert [row.id for row in state.results] == ["finding-1", "memory-1"]
+
+
+def test_read_lanes_neutralize_only_messages_on_that_lane():
+    on_lane = _discovery("m1", tags=["channel-resource-agent", "to-claude"])
+    other_lane = _discovery("m2", tags=["channel-other", "to-codex"])
+    native = _discovery("finding-1")
+    ranked, _ = rank_by_authority(
+        [on_lane, other_lane, native],
+        relevance_scores={"m1": 0.80, "m2": 0.79, "finding-1": 0.60},
+        read_lanes=["channel-resource-agent"],
+    )
+    # m1 keeps 0.80; m2 is down-ranked to ~0.43; the native row sits between.
+    assert [row.id for row in ranked] == ["m1", "finding-1", "m2"]
