@@ -1590,8 +1590,14 @@ def test_an_update_with_superseded_by_repairs_the_edge_its_notes_do_not_prove():
 
 
 
-def _no_whitespace(text):
-    return "".join(text.split())
+def _is_split_of(text, summary, details):
+    """The exact inverse of _split_note_text for a split note: the text is
+    the summary, nothing or only whitespace, the details, then nothing or
+    only whitespace."""
+    return text.startswith(summary) and text[len(summary):].strip() == details
+
+
+_SPLIT_RULE = "continues, after nothing or only whitespace, with its details"
 
 
 @pytest.mark.parametrize(
@@ -1604,15 +1610,15 @@ def test_a_note_is_matched_on_its_text_as_the_split_stores_it(boundary):
     becomes the summary and the rest the details, both trimmed. The trim
     drops the newline or run of spaces the split fell on, and with no
     boundary near the cut lands inside a word, so no joiner gives back the
-    text sent. A caller comparing exactly would miss its own row and store a
-    duplicate, so the recovery says to compare with whitespace ignored."""
+    text sent. A caller comparing a join exactly would miss its own row and
+    store a duplicate, so the recovery states the split's exact inverse."""
     from src.mcp_handlers.knowledge.handlers import _split_note_text
     from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN
 
     text = (boundary * (MAX_SUMMARY_LEN // len(boundary) + 40)).strip()
     summary, details = _split_note_text(text)
     assert details, "premise: a long note is split"
-    assert _no_whitespace(summary + details) == _no_whitespace(text)
+    assert _is_split_of(text, summary, details)
     if boundary != "First sentence. ":
         assert " ".join([summary, details]) != text, "premise: no exact join"
 
@@ -1626,12 +1632,38 @@ def test_a_note_is_matched_on_its_text_as_the_split_stores_it(boundary):
             call_started_at="2026-09-27T00:00:00+00:00",
             settled_by="2026-09-27T00:00:40+00:00",
         )
-    ignored = "compared with whitespace ignored"
-    assert ignored in recovery["action"]
-    assert "remove every whitespace character" in recovery["workflow"][1]
+    by_step_2 = "as step 2 says"
+    assert by_step_2 in recovery["action"]
+    assert _SPLIT_RULE in recovery["workflow"][1]
     assert "split at a nearby sentence or word boundary" in recovery["workflow"][1]
-    assert f"up to {MAX_SUMMARY_LEN} characters" in recovery["workflow"][1]
-    assert ignored in recovery["workflow"][2]
+    assert by_step_2 in recovery["workflow"][2]
+
+
+def test_a_short_note_is_matched_exactly_not_whitespace_blind():
+    """A note up to the summary limit is stored verbatim, so two short notes
+    that differ only in spacing are different rows. A whitespace-blind
+    compare would take the other one for this call's and suppress a needed
+    resend, losing the note; the recovery says to compare it exactly."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+    from src.mcp_handlers.knowledge.handlers import _split_note_text
+    from src.mcp_handlers.knowledge.limits import MAX_SUMMARY_LEN
+
+    assert _split_note_text("ab c") == ("ab c", "")
+    assert _split_note_text(" a bc\n") == (" a bc\n", "")
+
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND_UUID):
+        recovery = _unknown_outcome_recovery(
+            CallOperation(operation="write", tool="knowledge", action="note"),
+            {"action": "note", "summary": "ab c"},
+            call_started_at="2026-09-27T00:00:00+00:00",
+            settled_by="2026-09-27T00:00:40+00:00",
+        )
+    step = recovery["workflow"][1]
+    assert f"up to {MAX_SUMMARY_LEN} characters is stored exactly as sent" in step
+    assert "compare it exactly" in step
+    assert "whitespace ignored" not in " ".join(recovery["workflow"])
+    assert "remove every whitespace" not in " ".join(recovery["workflow"])
 
 
 
@@ -1650,9 +1682,7 @@ def test_an_oversized_note_is_matched_on_its_truncated_text():
     text = ("Word " * (_NOTE_TOTAL_LEN // 5 + 50)).strip()
     stored = _truncate_note_text(text)
     summary, details = _split_note_text(stored)
-    assert _no_whitespace(summary + details) == _no_whitespace(
-        text[:_NOTE_TOTAL_LEN] + "... [truncated]"
-    )
+    assert _is_split_of(text[:_NOTE_TOTAL_LEN] + "... [truncated]", summary, details)
 
     with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND_UUID):
         recovery = _unknown_outcome_recovery(

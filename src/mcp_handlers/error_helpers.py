@@ -466,32 +466,33 @@ def _knowledge_store_recovery(
         # cut to it and marked, and only then split.
         note_total = MAX_SUMMARY_LEN + MAX_DETAILS_LEN
 
-        # _split_note_text: a note up to MAX_SUMMARY_LEN is stored whole as
-        # the summary; a longer one is split at a nearby sentence or word
-        # boundary, or at the limit inside a word when none is near, its
-        # start in summary and the rest in details, both trimmed. The trim
-        # drops whatever whitespace the split fell on (a newline, a run of
-        # spaces) and a cut inside a word had none, so no single joiner
-        # gives back the text sent; only a whitespace-blind compare does.
+        # _split_note_text: a note up to MAX_SUMMARY_LEN is stored verbatim
+        # as the summary; a longer one is split at a nearby sentence or word
+        # boundary, or at the limit inside a word when none is near, as
+        # text[:p].rstrip() and text[p:].strip(). The trim drops whatever
+        # whitespace the split fell on and a cut inside a word had none, so
+        # no joiner gives back the text sent. The exact inverse: the text
+        # is the summary, only whitespace, the details, only whitespace.
+        # Ignoring whitespace everywhere would match a short note to another
+        # that differs only in spacing, and suppress a needed resend.
         pair = (
-            "your note's text (its summary and details compared with "
-            "whitespace ignored)"
+            "your note's text (matched against a row's summary and details "
+            "as step 2 says)"
         )
         match = "your note's text"
         same = "the same note"
         yours = (
             f"your note's text: a note up to {MAX_SUMMARY_LEN} characters is "
-            "stored whole as the summary, and a longer one is split at a "
-            "nearby sentence or word boundary, or inside a word when none is "
-            "near, its start in summary and the rest in details, both "
-            "trimmed. The split drops the whitespace it falls on, so compare "
-            "with whitespace ignored: remove every whitespace character from "
-            "your text and from the row's summary followed by its details, "
-            "and compare the two. A note over "
-            f"{note_total} characters is first cut to its first {note_total} "
-            "characters followed by '... [truncated]', and that is what the "
-            "row holds. A row whose text differs by more than whitespace is "
-            "not this call's"
+            "stored exactly as sent as the summary, with empty details, so "
+            "compare it exactly. A longer one is split at a nearby sentence "
+            "or word boundary, or inside a word when none is near, its start "
+            "in summary and the rest in details, both trimmed, so a row is "
+            "yours when your text starts with its summary and continues, "
+            "after nothing or only whitespace, with its details, followed by "
+            f"nothing or only whitespace. A note over {note_total} characters "
+            f"is first cut to its first {note_total} characters followed by "
+            "'... [truncated]', and that is the text to compare. Any other "
+            "row is not this call's"
         )
     else:
         pair = "your summary and details together"
