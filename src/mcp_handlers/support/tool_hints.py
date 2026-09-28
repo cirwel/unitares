@@ -12,6 +12,7 @@ KNOWLEDGE_SEARCH_SUGGESTION = (
 )
 KNOWLEDGE_OPEN_QUESTIONS_WORKFLOW = (
     "1. knowledge(action='search', discovery_type='question', status='open') "
-    "2. Use the discovery_id in response_to"
+    "2. knowledge(action='store', summary=<answer>, "
+    "response_to={'discovery_id': <id>, 'response_type': 'answer'})"
 )
 
