@@ -144,15 +144,39 @@ From the checkout, see whether a newer release is published, then move to it:
 ./scripts/unitares update
 ```
 
-`update` fetches the newest published release (or `--to <tag>`), starts the
-database, applies that release's migrations with
-`scripts/dev/apply_migrations.py` (run inside the database container, so no
-`psql` is needed on the host), rebuilds and restarts the stack, and reports deep
-health. It asks before changing anything; `--yes` skips the question. It
-refuses when tracked files in the checkout have local changes, and it manages
-only this checkout's Docker Compose stack. A checkout that is already on the
-target release only has its pending migrations checked and, on confirmation,
-applied.
+`update` resolves the newest published release (or `--to <tag>`), prints the
+installed and target versions, and asks before changing anything. `--yes`
+skips the question; without a terminal and without `--yes` it stops rather than
+assume an answer. `--check` only reports and changes nothing. The command
+manages only this checkout's Docker Compose stack, and it refuses, changing
+nothing, when:
+
+- tracked files in the checkout have local changes, or `db/postgres` holds
+  untracked files (the database container would read a stray `NNN_*.sql` there
+  as a migration);
+- the database schema is newer than anything the target release knows, so
+  moving to an older release is not supported;
+- this machine runs UNITARES as a macOS LaunchAgent ([§3.7](03-running-the-server.md#37-run-at-login-macos-launchagent))
+  rather than from Compose.
+
+On confirmation it:
+
+1. checks out the target and stops the governance server and the lease plane,
+   so nothing writes while the schema changes; it goes on only once both are
+   confirmed stopped;
+2. starts the database and, if the release has pending migrations, backs the
+   database up, then applies them with `scripts/dev/apply_migrations.py` inside
+   the database container, so no `psql` is needed on the host;
+3. rebuilds and restarts the stack and reports deep health.
+
+The backup is a gzipped plain-SQL `pg_dump` written to
+`~/.unitares/backups/unitares-<time>-before-<tag>.sql.gz` (set
+`UNITARES_BACKUP_DIR` to put it elsewhere) and readable only by your account.
+If the dump fails, nothing is migrated. If a migration or the rebuild fails,
+`update` checks the previous release back out and rebuilds it; migrations that
+already applied stay applied, and the error names the backup. The command exits
+non-zero unless deep health comes back healthy or moderate. A checkout already
+on the target release goes through the same steps without moving the code.
 
 Releases before this command existed shipped a `scripts/unitares update` that
 posted a check-in instead. From one of those, move the code once by hand and
