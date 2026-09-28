@@ -986,3 +986,12 @@ def test_seven_hand_arms_are_all_cleared_and_the_queue_moves(tmp_path: Path) -> 
     assert [c for c in calls if "--disable-auto" in c] == [f"pr merge {n} -R o/r --disable-auto" for n in range(10, 17)]
     assert calls[-1] == _arm(20)
 
+
+
+def test_a_sensitive_pr_with_a_pending_review_does_not_hold_the_order(tmp_path: Path) -> None:
+    # It will never be armed, so waiting on its review would stall the queue.
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    pending = _pr(1, head="aaa", review=None, checks=[_check("review", "", status="IN_PROGRESS")])
+    calls, _ = _run(tmp_path, [pending, _pr(2, head="bbb")], timelines={1: _timeline(12), 2: _timeline(8)},
+                    compares={"aaa": CHANGE_A, "bbb": _files(("g", "modified", "b1", "+x"))})
+    assert calls == [_arm(2, "bbb")]

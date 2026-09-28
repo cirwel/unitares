@@ -487,6 +487,14 @@ while read -r _ n head; do
     *) exit 0 ;;
   esac
 
+  # Before any wait on its checks: a sensitive PR is never armed, so waiting
+  # on its review would hold the order for a PR the queue will not take.
+  if why=$(sensitive_path "$head"); then
+    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
+    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
+  fi
+
   if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
     notify "$n" parked "$head" "skipped: $(q -r 'parked | map(.name // .context) | unique | join(", ")' <<<"$pr") is waiting for approval (ACTION_REQUIRED). A re-run does not clear it; see the check's details."
@@ -542,12 +550,6 @@ while read -r _ n head; do
         notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
         continue ;;
     esac
-  fi
-
-  if why=$(sensitive_path "$head"); then
-    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
-    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
-    continue
   fi
 
   if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
