@@ -41,6 +41,7 @@ from src.mcp_handlers.decorators import (
     resolve_call_operation,
 )
 from src.mcp_handlers.error_helpers import _call_literal
+from src.mcp_handlers.knowledge.limits import MAX_UPDATED_DETAILS_LEN
 
 
 DISCOVERY_ID = "2026-09-26T11:20:10.803820+00:00"
@@ -149,10 +150,12 @@ def _assert_unknown_outcome_for_update(payload: dict) -> None:
     assert "call_started_at" in payload
     _assert_settled_by_bounds_a_running_statement(payload)
     recovery = payload["recovery"]
-    check = f"knowledge(action='details', discovery_id='{DISCOVERY_ID}')"
+    check = (
+        f"knowledge(action='details', discovery_id='{DISCOVERY_ID}', "
+        f"length={MAX_UPDATED_DETAILS_LEN})"
+    )
     assert recovery["check_before_retry"] == check
     assert check in recovery["action"]
-    assert "updated_at" in recovery["action"]
     assert "try again" not in recovery["action"].lower()
     assert recovery["action"].startswith("Do not send this update again yet")
 
@@ -165,6 +168,26 @@ def _assert_settled_by_bounds_a_running_statement(payload: dict) -> None:
     replied = datetime.fromisoformat(payload["server_time"])
     margin = (settled - replied).total_seconds()
     assert COMMAND_TIMEOUT_SECONDS - 1 <= margin <= COMMAND_TIMEOUT_SECONDS + 1
+
+
+async def _read_details_by_the_check(graph, arguments: dict) -> dict:
+    """One knowledge(action='details') read with the recovery's arguments,
+    through the real details handler."""
+    from src.mcp_handlers.knowledge import handlers as kg_handlers
+
+    with patch.object(kg_handlers, "get_knowledge_graph", AsyncMock(return_value=graph)), \
+         patch.object(kg_handlers, "_broadcast_knowledge_read", AsyncMock()):
+        result = await kg_handlers.handle_get_discovery_details(dict(arguments))
+    payload = json.loads(result[0].text)
+    assert payload["success"] is True, payload
+    return payload
+
+
+def _details_text(payload: dict) -> str:
+    """The details a details read returned, paginated or whole."""
+    if "pagination" in payload:
+        return payload["details"]
+    return payload["discovery"]["details"]
 
 
 @pytest.mark.asyncio
@@ -185,10 +208,9 @@ async def test_update_committed_before_a_slow_post_commit_step_reports_unknown_o
     assert graph.committed_at is not None, "premise: the write committed"
     assert graph.row.details.endswith(NOTES), "premise: the notes are stored"
     _assert_unknown_outcome_for_update(payload)
-    # The check the recovery prescribes tells this call's write apart.
-    assert datetime.fromisoformat(graph.row.updated_at) >= datetime.fromisoformat(
-        payload["call_started_at"]
-    )
+    # The read the recovery prescribes finds the notes this call stored.
+    read = await _read_details_by_the_check(graph, payload["recovery"]["check_arguments"])
+    assert NOTES in _details_text(read)
 
 
 @pytest.mark.asyncio
@@ -275,8 +297,11 @@ def _store_lookup_payload(arguments: dict, *, bound: str | None = None) -> dict:
         return asyncio.run(_run())
 
 
-def _assert_window_lookup(payload: dict, writer: str | None) -> dict:
-    """The check lists the writer's rows created in the call's own window."""
+def _assert_window_lookup(
+    payload: dict, writer: str | None, *, batch: bool = False
+) -> dict:
+    """The check lists the writer's rows created in the call's own window; a
+    batch's check also carries each row's full details."""
     from src.mcp_handlers.error_helpers import _render_call
 
     recovery = payload["recovery"]
@@ -294,6 +319,8 @@ def _assert_window_lookup(payload: dict, writer: str | None) -> dict:
             "limit": 100,
         }
     )
+    if batch:
+        expected["include_details"] = True
     assert lookup == expected
     assert "query" not in lookup, "a relevance query would rank and cut the page"
     assert recovery["check_before_retry"] == _render_call("knowledge", lookup)
@@ -430,17 +457,13 @@ def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, share
     )
 
     writer = payload["recovery"]["check_arguments"].get("agent_id_filter")
-    recovery = _assert_window_lookup(payload, bound or writer)
+    recovery = _assert_window_lookup(payload, bound or writer, batch=True)
     action = recovery["action"]
     assert action.startswith("Do not send this batch again. It was a batch of 3 items")
     assert "commits each item on its own" in action
     assert "resending the whole batch leaves a second finding" in action
-    assert "send only the items with no row again" in action
+    assert "send again only the items no row matches" in action
     match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
-    assert match_step.startswith("2. Match each item you sent to its own row")
-    # Review round 6: a shared summary cannot say which item landed.
-    assert "where two items share a summary, by details_preview" in match_step
-    assert "knowledge(action='details', discovery_id=...)" in match_step
     assert ("may be another caller's" in match_step) is shared
     assert "after settled_by" in resend_step
     assert "send only those items again" in resend_step
@@ -451,12 +474,44 @@ def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, share
     )
 
 
+FULL_CONTENT = "summary, details, tags and discovery_type"
+
+
+@pytest.mark.parametrize("bound", [BOUND_UUID, None], ids=["bound", "anonymous"])
+def test_batch_items_are_matched_by_full_content_not_by_summary(bound):
+    """Codex review on #2543: items were matched by summary and row count, so
+    of two items with one summary and different details the caller could not
+    say which landed, and resending "the unmatched one" could duplicate one
+    and drop the other. Each item is compared by its full content, and items
+    that no stored field tells apart are named as unsafe to resend."""
+    payload = _store_lookup_payload(
+        {"action": "store", "discoveries": _batch(2)}, bound=bound
+    )
+    recovery = payload["recovery"]
+    action = recovery["action"]
+    match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
+
+    assert recovery["check_arguments"]["include_details"] is True
+    assert f"full content ({FULL_CONTENT}), not by its summary alone" in action
+    assert match_step.startswith(
+        "2. Compare each item you sent with the rows by its full content, not "
+        f"by summary alone: {FULL_CONTENT}, as stored"
+    )
+    for text in (action, resend_step):
+        assert "the same in all four fields cannot be told apart" in text
+        assert "resending cannot be made safe for them" in text
+    assert "Do not resend them blind" in resend_step
+    everything = json.dumps(recovery)
+    assert "by summary (" not in everything and "count" not in match_step
+    assert "details_preview" not in everything
+
+
 def test_a_batch_whose_size_the_arguments_do_not_give_is_still_a_batch():
     payload = _store_lookup_payload(
         {"action": "store", "discoveries": "not a list"}, bound=BOUND_UUID
     )
 
-    action = _assert_window_lookup(payload, BOUND_UUID)["action"]
+    action = _assert_window_lookup(payload, BOUND_UUID, batch=True)["action"]
     assert action.startswith("Do not send this batch again. It was a batch, and")
 
 
@@ -523,24 +578,57 @@ async def test_a_batch_that_times_out_between_items_is_half_saved():
     assert recovery["workflow"][2].endswith("Never resend the whole batch")
 
 
-def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
-    """Another writer can move updated_at after this call starts; only the
-    caller's own fields show that this call's write landed."""
+def _recovery_for(tool: str, action, arguments=None) -> dict:
     from src.mcp_handlers.decorators import CallOperation
     from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
 
-    recovery = _unknown_outcome_recovery(
-        CallOperation(operation="write", tool="knowledge", action="update"),
-        {"discovery_id": DISCOVERY_ID},
+    return _unknown_outcome_recovery(
+        CallOperation(operation="write", tool=tool, action=action),
+        {"discovery_id": DISCOVERY_ID} if arguments is None else arguments,
     )
-    steps = " ".join(recovery["workflow"])
-    assert "by this call or another" in recovery["action"]
-    assert "earlier than call_started_at" in steps
-    # Review round 6: a later writer's note can push this one out of the tail.
-    assert "your resolution_notes in details" in steps
-    assert "read every page" in steps and "not only the tail" in steps
-    assert "pagination.total_length" in steps
-    assert "another writer changed it" in steps
+
+
+def test_update_recovery_settles_on_the_notes_text_not_on_updated_at():
+    """updated_at moves for any writer, and an update built before this call
+    began can commit after it and set it back, so it proves nothing either
+    way. A resend can duplicate only the appended notes, so the check is
+    their text anywhere in details."""
+    recovery = _recovery_for("knowledge", "update")
+    text = json.dumps(recovery)
+    steps = recovery["workflow"]
+
+    assert "updated_at settles nothing" in recovery["action"]
+    assert "call_started_at" not in text, "no rule reads updated_at against the call's start"
+    assert "anywhere in details, not only at its end" in recovery["action"]
+    assert "pagination.has_more" in steps[0] and "pagination.next_offset" in steps[0]
+    assert not re.search(r"\btail\b", text) and "total_length" not in text
+    assert "anywhere in details" in steps[1]
+    assert steps[2].startswith(
+        "3. If you sent resolution_notes and that text is nowhere in details"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_update_check_finds_notes_a_later_longer_note_pushed_out_of_the_tail():
+    """Codex review on #2543: the check read only the tail of details. A later
+    writer's longer note, appended after this call's, moves it out of any
+    tail read, and a caller who then sees no notes resends and duplicates
+    them. The check reads the whole of details at the largest size an update
+    stores."""
+    ours = f"Resolution notes (2026-09-27T09:22:12+00:00):\n{NOTES}"
+    theirs = "Resolution notes (2026-09-27T09:30:00+00:00):\n" + "y" * 8000
+    head = "x" * (MAX_UPDATED_DETAILS_LEN - len(ours) - len(theirs) - 4)
+    graph = _Graph()
+    graph.row = replace(graph.row, details=f"{head}\n\n{ours}\n\n{theirs}")
+    assert len(graph.row.details) == MAX_UPDATED_DETAILS_LEN, (
+        "premise: the largest details an update stores"
+    )
+
+    recovery = _recovery_for("knowledge", "update")
+    read = await _read_details_by_the_check(graph, recovery["check_arguments"])
+
+    assert NOTES in _details_text(read)
+    assert "pagination" not in read, "one read holds all of it"
 
 
 @pytest.mark.parametrize(
@@ -548,21 +636,15 @@ def test_update_recovery_does_not_take_a_moved_updated_at_as_proof():
     [
         ("knowledge", "update"),
         ("knowledge", "store"),
+        ("knowledge", "note"),
         ("leave_note", None),
-        ("process_agent_update", None),
     ],
 )
 def test_no_recovery_resends_before_the_running_statement_has_settled(call):
     """A statement still running at the timeout can commit for up to the pool's
     command timeout; a resend before then can land beside it."""
-    from src.mcp_handlers.decorators import CallOperation
-    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
-
     tool, action = call
-    recovery = _unknown_outcome_recovery(
-        CallOperation(operation="write", tool=tool, action=action),
-        {"discovery_id": DISCOVERY_ID},
-    )
+    recovery = _recovery_for(tool, action)
     resend_steps = [
         step
         for step in recovery["workflow"]
@@ -574,19 +656,47 @@ def test_no_recovery_resends_before_the_running_statement_has_settled(call):
     assert "few seconds" not in json.dumps(recovery)
 
 
-def test_the_generic_resend_does_not_claim_settled_by_bounds_work_outside_the_database():
-    """Review round 6: settled_by bounds a running statement, not a file write
-    or background task the tool handed off, so the resend is conditional."""
+def _sentences_saying_again(recovery: dict) -> list[str]:
+    text = " ".join([recovery["action"], *recovery["workflow"]])
+    return [
+        sentence
+        for sentence in re.split(r"(?<=[.;:])\s+", text)
+        if re.search(r"\bagain\b", sentence)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("tool", "action", "operation"),
+    [
+        # Writes its file on an executor thread, which outlives the await.
+        ("export", "file", "write"),
+        ("process_agent_update", None, "write"),
+        # Create-only, like a store, but no read here is shown exhaustive.
+        ("knowledge", "promote", "write"),
+        ("knowledge", "supersede", "write"),
+        ("plugin_tool_without_metadata", None, None),
+    ],
+)
+def test_a_write_a_read_cannot_settle_gets_no_resend_step(tool, action, operation):
+    """Codex review on #2543: settled_by bounds a database statement, not a
+    file an executor thread is still writing, a background task or a call to
+    another service, and a read with some read-only tool is not shown to
+    cover everything the call writes. So outside the knowledge store, note
+    and update no step says to send the call again: every sentence that says
+    'again' says 'do not'."""
     from src.mcp_handlers.decorators import CallOperation
     from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
 
     recovery = _unknown_outcome_recovery(
-        CallOperation(operation="write", tool="export", action="file"), {},
+        CallOperation(operation=operation, tool=tool, action=action), {}
     )
-    step = recovery["workflow"][2]
-    assert "settled_by does not bound work the tool does outside the database" in step
-    assert "If repeating it is harmless, or a later read still shows no change" in step
-    assert "repeating it is harmless" in recovery["action"]
+
+    assert "cannot be settled by reading" in recovery["action"]
+    assert "settled_by bounds only a database statement" in recovery["action"]
+    sentences = _sentences_saying_again(recovery)
+    assert sentences, "premise: the recovery speaks of calling again"
+    for sentence in sentences:
+        assert re.search(r"\b[Dd]o not\b", sentence), sentence
 
 
 @pytest.mark.asyncio
@@ -781,19 +891,31 @@ async def test_router_level_timeout_classifies_the_routed_action():
 
 
 @pytest.mark.asyncio
-async def test_other_write_timeout_points_at_a_read_before_any_retry():
-    @mcp_tool("process_agent_update", timeout=0.05, register=False)
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "shape"),
+    [
+        ("process_agent_update", {}, "process_agent_update"),
+        # The Codex review's example: its file write runs on an executor
+        # thread that the cancelled await does not stop.
+        ("export", {"action": "file"}, "export(action='file')"),
+    ],
+)
+async def test_other_write_timeout_points_at_a_read_before_any_retry(
+    tool_name, arguments, shape
+):
+    @mcp_tool(tool_name, timeout=0.05, register=False)
     async def _slow(arguments):
         await asyncio.sleep(5)
 
     with patch("src.coordination_failure_emit.emit_coordination_failure_sync"):
-        payload = _payload(await _slow({}))
+        payload = _payload(await _slow(dict(arguments)))
 
     assert payload["outcome"] == "unknown"
     assert payload["operation"] == "write"
     recovery = payload["recovery"]
-    assert recovery["check_before_retry"] == "describe_tool(tool_name='process_agent_update')"
-    assert recovery["action"].startswith("Do not call process_agent_update again yet")
+    assert recovery["check_before_retry"] == f"describe_tool(tool_name='{tool_name}')"
+    assert recovery["action"].startswith(f"Do not call {shape} again blind")
+    assert "cannot be settled by reading" in recovery["action"]
     assert "try again" not in recovery["action"].lower()
 
 
@@ -1042,6 +1164,68 @@ async def test_the_store_lookup_lists_exactly_this_writers_rows_in_the_window(
     assert payload["count"] == 3 < lookup["limit"]
     assert "_more_available" not in payload
     assert "limit_clamped_from" not in payload
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend", sorted(GRAPHS))
+async def test_the_batch_lookup_carries_the_details_that_tell_same_summary_items_apart(
+    live_postgres_backend, backend
+):
+    """Codex review on #2543: two batch items with one summary and different
+    details. Item 0 landed, item 1 did not. The batch lookup returns each
+    row's full details (a page of more than three rows otherwise carries a
+    500-character preview), so comparing full content matches item 0 to its
+    row and leaves item 1 unmatched, where summary and count cannot."""
+    from src.mcp_handlers.decorators import CallOperation
+    from src.mcp_handlers.error_helpers import _unknown_outcome_recovery
+
+    started, settled = _window()
+    shared_head = "same opening paragraph. " * 40  # longer than any preview
+    items = [
+        {"discovery_type": "note", "summary": PROBE, "details": shared_head + "item zero",
+         "tags": ["timeout-lookup"]},
+        {"discovery_type": "note", "summary": PROBE, "details": shared_head + "item one",
+         "tags": ["timeout-lookup"]},
+    ]
+    landed = _row("item0", writer=BOUND_UUID, created=started + timedelta(seconds=1),
+                  summary=PROBE, details=items[0]["details"])
+    # Other rows of this writer in the window, so the page is past the size
+    # at which search includes details on its own.
+    others = [
+        _row(f"other{i}", writer=BOUND_UUID, created=started + timedelta(seconds=2 + i),
+             summary=f"unrelated {i}")
+        for i in range(3)
+    ]
+    for node in [landed, *others]:
+        await live_postgres_backend.kg_add_discovery(node)
+    graph = GRAPHS[backend](live_postgres_backend)
+
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=BOUND_UUID):
+        recovery = _unknown_outcome_recovery(
+            CallOperation(operation="write", tool="knowledge", action="store"),
+            {"discoveries": items},
+            call_started_at=started.isoformat(),
+            settled_by=settled.isoformat(),
+        )
+    payload = await _search(graph, recovery["check_arguments"])
+
+    assert payload["success"] is True, payload
+    assert payload["count"] == 4 < recovery["check_arguments"]["limit"]
+    rows = payload["discoveries"]
+    assert [r for r in rows if r["summary"] == PROBE] == [
+        r for r in rows if r["id"] == landed.id
+    ], "premise: one row carries the shared summary"
+
+    def matches(item, row):
+        return (
+            row["summary"] == item["summary"]
+            and row.get("details") == item["details"]
+            and row["type"] == item["discovery_type"]
+            and row["tags"] == item["tags"]
+        )
+
+    matched = [[r["id"] for r in rows if matches(item, r)] for item in items]
+    assert matched == [[landed.id], []]
 
 
 @pytest.mark.asyncio
