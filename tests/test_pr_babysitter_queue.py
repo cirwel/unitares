@@ -51,6 +51,10 @@ if [ "$1" = "api" ]; then
       [ -f "$d/comments_$n.fail" ] && exit 1
       cat "$d/comments_$n.txt" 2>/dev/null
       exit 0 ;;
+    */contents/*)
+      [ -f "$d/manifest_remote.tsv" ] || exit 1
+      base64 < "$d/manifest_remote.tsv" | tr -d '\n'; echo
+      exit 0 ;;
     */timeline*)
       n=$(sed -E 's#.*issues/([0-9]+)/timeline.*#\1#' <<<"$*")
       [ -f "$d/timeline_$n.fail" ] && exit 1
@@ -206,6 +210,13 @@ def _run(
             "PR_QUEUE_NOTIFY": "0",
             "PR_QUEUE_SENSITIVITY_MANIFEST": str(_empty_manifest(tmp_path)),
             **env,
+        } if "PR_QUEUE_SENSITIVITY_MANIFEST_UNSET" not in env else {
+            **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
+            "PATH": f"{d}{os.pathsep}{os.environ['PATH']}",
+            "FAKE_GH_DIR": str(d),
+            "PR_BABYSITTER_REPO": "o/r",
+            "PR_QUEUE_STATE_FILE": str(state_file),
+            "PR_QUEUE_NOTIFY": "0",
         },
         text=True,
         capture_output=True,
@@ -941,7 +952,7 @@ def test_a_sensitive_file_with_no_patch_fails_closed(tmp_path: Path) -> None:
 def test_a_missing_manifest_fails_closed(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST=str(tmp_path / "gone.tsv"))
     assert calls == []
-    assert "manifest is missing" in out
+    assert "manifest could not be read" in out
 
 
 def test_a_fork_pr_is_never_armed(tmp_path: Path) -> None:
@@ -1007,8 +1018,10 @@ def test_an_operator_armed_pr_is_left_alone_even_right_after_a_queue_arm(tmp_pat
 
 def test_the_queue_never_arms_an_operator_armed_pr(tmp_path: Path) -> None:
     # A leftover operator-armed label would otherwise shield the queue's own arm.
+    # The operator-armed label went on long ago and was never armed: a leftover.
+    old_label = _timeline(12) + [{"event": "labeled", "label": {"name": "operator-armed"}, "created_at": _iso(60)}]
     calls, out = _run(tmp_path, [_pr(1, labels=(LABEL, "operator-armed")), _pr(2)],
-                      timelines={1: _timeline(12), 2: _timeline(8)})
+                      timelines={1: old_label, 2: _timeline(8)})
     assert calls == [_arm(2)]
 
 
@@ -1028,3 +1041,31 @@ def test_an_operator_arm_takes_the_slot_from_a_queue_arm(tmp_path: Path) -> None
     calls, out = _run(tmp_path, [queue_armed, operator], arms={3: 20})
     assert calls == ["pr merge 3 -R o/r --disable-auto"]
     assert "the operator armed #4, which takes the slot" in out
+
+
+def test_by_default_the_manifest_is_read_from_the_base_branch(tmp_path: Path) -> None:
+    # The deploy checkout can lag master; CI judges against master's manifest.
+    d = tmp_path / "gh"
+    d.mkdir(parents=True)
+    (d / "manifest_remote.tsv").write_text("# rules\nf\t-\tanti-gaming test\n")
+    calls, out = _run(tmp_path, [_pr(1, head="aaa")], compares={"aaa": CHANGE_A},
+                      PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1")
+    assert calls == []
+    assert "governance-sensitive surface (f)" in out
+
+
+def test_an_unreadable_remote_manifest_fails_closed(tmp_path: Path) -> None:
+    calls, out = _run(tmp_path, [_pr(1)], PR_QUEUE_SENSITIVITY_MANIFEST_UNSET="1")
+    assert calls == []
+    assert "manifest could not be read" in out
+
+
+def test_a_fresh_operator_armed_label_reserves_the_slot(tmp_path: Path) -> None:
+    # ship.sh --auto-merge labels, then arms, in two calls; a tick in between
+    # must not arm another PR alongside the operator's.
+    fresh = [{"event": "labeled", "label": {"name": "operator-armed"}, "created_at": _iso(2)}]
+    calls, out = _run(tmp_path, [_pr(1, labels=("operator-armed",)), _pr(2)],
+                      timelines={1: fresh, 2: _timeline(8)})
+    assert calls == []
+    assert "holding the slot for the operator" in out
+
