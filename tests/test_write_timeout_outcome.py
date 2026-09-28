@@ -477,13 +477,16 @@ def test_a_batch_store_timeout_resends_only_the_items_without_a_row(bound, share
 
 
 @pytest.mark.parametrize("bound", [BOUND_UUID, None], ids=["bound", "anonymous"])
-def test_batch_items_are_matched_on_every_field_a_row_shows_not_on_summary(bound):
+def test_batch_items_are_matched_on_summary_and_details_not_on_summary_alone(bound):
     """Codex review on #2543: items were matched by summary and row count, so
     of two items with one summary and different details the caller could not
     say which landed, and resending "the unmatched one" could duplicate one
-    and drop the other. Each item is compared on every field it sent that a
-    row shows, severity included, and only items that agree on all of them
-    are named as unsafe to resend."""
+    and drop the other. Each item is matched on summary and details together,
+    the two fields stored as sent (only cut short when long). The normalized
+    fields (discovery_type aliases, severity case, tags) are not matched on: a
+    caller comparing its 'bug' with a stored 'bug_found' would miss its own
+    row and resend it. Items agreeing on summary and details are named as
+    unsafe to resend."""
     payload = _store_lookup_payload(
         {"action": "store", "discoveries": _batch(2)}, bound=bound
     )
@@ -492,19 +495,22 @@ def test_batch_items_are_matched_on_every_field_a_row_shows_not_on_summary(bound
     match_step, resend_step = recovery["workflow"][1], recovery["workflow"][2]
 
     assert recovery["check_arguments"]["include_details"] is True
-    assert "by every field you sent that a row shows, not by its summary alone" in action
+    assert "by its summary and details together, not by its summary alone" in action
     assert match_step.startswith(
-        "2. Compare each item you sent with the rows by every field you sent "
-        "that a row shows (summary, details, discovery_type, tags, severity), "
-        "not by summary alone"
+        "2. Compare each item you sent with the rows by its summary and "
+        "details together, not by summary alone. Both are stored as sent, "
+        "except that a long one is cut short; the other fields are normalized "
+        "when stored, so do not match on them"
     )
     for text in (action, resend_step):
-        assert "Items that agree on every field a row shows cannot be told apart" in text
+        assert "Items that agree on summary and details cannot be told apart" in text
         assert "resending cannot be made safe for them" in text
     assert "Do not resend them blind" in resend_step
     everything = json.dumps(recovery)
     assert "by summary (" not in everything and "count" not in match_step
-    assert "details_preview" not in everything and "four fields" not in everything
+    assert "details_preview" not in everything
+    for normalized in ("severity", "discovery_type", "tags,"):
+        assert normalized not in match_step, normalized
 
 
 def test_a_batch_whose_size_the_arguments_do_not_give_is_still_a_batch():
@@ -1269,12 +1275,7 @@ async def test_the_batch_lookup_carries_the_details_that_tell_same_summary_items
     ], "premise: one row carries the shared summary"
 
     def matches(item, row):
-        return (
-            row["summary"] == item["summary"]
-            and row.get("details") == item["details"]
-            and row["type"] == item["discovery_type"]
-            and row["tags"] == item["tags"]
-        )
+        return row["summary"] == item["summary"] and row.get("details") == item["details"]
 
     matched = [[r["id"] for r in rows if matches(item, r)] for item in items]
     assert matched == [[landed.id], []]

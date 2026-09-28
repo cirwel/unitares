@@ -418,12 +418,15 @@ def _knowledge_store_recovery(
     A batch store (``discoveries``) writes its items one at a time, each
     committed on its own, so a timed-out batch can have saved some items and
     not others. Resending the whole batch would store every item that landed a
-    second time, so the caller compares each item with the rows by every field
-    it sent that a row shows (the lookup carries include_details for the
-    details) and resends only the items no row matches. A summary alone cannot
-    tell two items apart. Items that agree on every field a row shows cannot
-    be told apart by any row, so once a row matches them the recovery says
-    resending cannot be made safe for them.
+    second time, so the caller compares each item with the rows by its summary
+    and details together (the lookup carries include_details for the details)
+    and resends only the items no row matches. A summary alone cannot tell two
+    items apart. Summary and details are the fields stored as sent, except
+    that a long one is cut short; discovery_type, severity and tags are
+    normalized on the way in (aliases mapped, case folded), so a caller
+    comparing them could miss its own row and resend it. Items that agree on
+    summary and details cannot be told apart by any row, so once a row
+    matches them the recovery says resending cannot be made safe for them.
 
     Both are database writes: the row commits in one transaction per row
     before the handler returns, so settled_by bounds when it can still land.
@@ -456,10 +459,10 @@ def _knowledge_store_recovery(
     same = "the same item" if batch else "the same summary"
     yours = "your summary (a long one is stored cut short; for a note, the start of its text)"
     matching = (
-        "Compare each item you sent with the rows by every field you sent "
-        "that a row shows (summary, details, discovery_type, tags, severity), "
-        "not by summary alone, as stored: a long summary or details is cut "
-        "short, tags are lowercased and normalized"
+        "Compare each item you sent with the rows by its summary and details "
+        "together, not by summary alone. Both are stored as sent, except that "
+        "a long one is cut short; the other fields are normalized when "
+        "stored, so do not match on them"
     )
 
     if writer and author.kind == "bound":
@@ -531,20 +534,20 @@ def _knowledge_store_recovery(
             "commits each item on its own, so some items may be saved and "
             "others not. Every store adds a new row, so resending the whole "
             "batch leaves a second finding for every item that landed. "
-            f"{listing} Compare each item you sent with those rows by every "
-            "field you sent that a row shows, not by its summary alone, and "
-            "send again only the items no row matches. An item no row matches "
-            "is proven unsaved only when the list was read after settled_by "
-            f"and its count is below {limit}. Items that agree on every field "
-            "a row shows cannot be told apart: once a row matches them, the "
-            "list cannot say which of them landed, and resending cannot be "
-            "made safe for them."
+            f"{listing} Compare each item you sent with those rows by its "
+            "summary and details together, not by its summary alone, and send "
+            "again only the items no row matches. An item no row matches is "
+            "proven unsaved only when the list was read after settled_by and "
+            f"its count is below {limit}. Items that agree on summary and "
+            "details cannot be told apart: once a row matches them, the list "
+            "cannot say which of them landed, and resending cannot be made "
+            "safe for them."
         )
         resend_step = (
             "3. On a read after settled_by whose count is below "
             f"{limit}, an item no row matches was not saved: send only those "
             "items again, in one store or a batch of just them. Items that agree "
-            "on every field a row shows cannot be told apart: when a row "
+            "on summary and details cannot be told apart: when a row "
             "matches them, the list cannot say which of them landed, so "
             "resending cannot be made safe for them. Do not resend them blind. "
             "Never resend the whole batch"
