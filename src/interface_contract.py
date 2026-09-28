@@ -183,7 +183,35 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # client_session_id in the call that sets a display name. No parameter is
 # added, removed, retyped or renamed, and no input digest or the surface
 # digest moves.
-INTERFACE_CONTRACT_VERSION = "1.21.0"
+# 1.22.0 (2026-09-27), numbered after 1.21.0 (#2490): knowledge and
+# search_shared_memory declare sort_by ("relevance" | "created_at"),
+# created_after and created_before for action=search. search_knowledge_graph
+# already declared them, but no handler read them; its sort_by default moves
+# from created_at to unset (read as relevance) and its never-implemented "score" and
+# "related_count" values are refused. A compatible addition: the default
+# order is unchanged. To stay inside the progressive-surface ratchet,
+# search_shared_memory advertises shorter briefs for nine existing search
+# parameters (their full descriptions, served by describe_tool, are
+# unchanged). The three input digests and the surface digest move.
+# 1.23.0 (2026-09-27), numbered after 1.22.0 (#2517): agent(action='archive')
+# and agent(action='delete') act only on the agent named in agent_id. Behavior
+# that changes for existing inputs: a call with no agent_id (or a blank one)
+# is refused with TARGET_AGENT_REQUIRED where it used to act on the caller's
+# own agent, because dispatch wrote the session's id in; a UUID no agent
+# holds is refused with TARGET_AGENT_NOT_FOUND where it used to fall back to
+# the caller; and an agent_id that is not a UUID (a label, public id or
+# legacy non-UUID key) is refused with TARGET_AGENT_UUID_REQUIRED where it
+# used to select the first cached holder (public ids are shared by most
+# identities that carry one). The legacy
+# archive_agent and delete_agent names follow. get, update, resume and
+# release_presence are unchanged. agent's agent_id description says it is the
+# target's UUID, required for archive and delete, and names who get, resume
+# and update default to; describe_tool's
+# lite view of archive and delete lists agent_id (and delete's confirm) as
+# required at call time, and of get and resume lists agent_id. No parameter is
+# added, removed, retyped or renamed; agent's input_schema_sha256 and the
+# surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.23.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

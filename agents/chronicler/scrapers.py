@@ -272,10 +272,13 @@ def github_cirwel_traffic_clones_uniques_14d(_repo_root: Path) -> float:
 
 # Registry: metric name → scrape callable. Chronicler iterates this on each run.
 #
-# Keep this in sync with the server-side catalog in
-# src/fleet_metrics/catalog.py — the server validates writes against the
-# catalog, so a name here without a matching catalog entry is a 404 at
-# the POST endpoint.
+# Keep this in sync with the server-side catalog — the server validates
+# writes against it, so a name here without a matching entry is a 404 at the
+# POST endpoint. Product metrics any install can produce are registered in
+# src/fleet_metrics/catalog.py; names specific to this deployment (its repo,
+# its GitHub org, its reference residents) go in metrics_catalog.json next to
+# this file, which the server loads only when UNITARES_METRICS_CATALOG_EXTRA
+# names it.
 SCRAPERS: dict[str, Callable[[Path], float]] = {
     "tokei.unitares.src.code": tokei_unitares_src_code,
     "tests.unitares.count": tests_unitares_count,

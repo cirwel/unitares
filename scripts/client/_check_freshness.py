@@ -38,6 +38,22 @@ exactly the text being stamped, a best-effort sign that the verifier left the
 wording alone (see Recorded transitions for what it cannot see): the stamp records that its verifier
 re-checked the skill across that change. See Recorded transitions below.
 
+`verifier` names who re-checked the claims: SKILL_ATTESTATION_VERIFIER when
+it is set (for an agent, its name and what it re-checked, for example
+`Claude (re-checked the dialectic claims against handlers.py)`); otherwise,
+only for a person at a terminal (stdin is a TTY and no variable in
+AGENT_ENV_MARKERS is set), the repository's git `user.name`. A stamp without
+SKILL_ATTESTATION_VERIFIER is refused and writes nothing when there is no
+terminal, when an agent harness's or CI runner's variable is set (CLAUDECODE,
+CODEX_THREAD_ID, CODEX_CI, AI_AGENT or CI, each seen set by the harness it is
+attributed to; see AGENT_ENV_MARKERS), or when git has no `user.name` to
+record. The refusal names which of these it found. Agents on the operator's
+machine commit under the operator's git identity, so before 2026-09-27 the
+fallback recorded an agent's stamp as the operator's own re-check whenever the
+agent left the variable unset, and until the markers were added an agent
+whose harness gave its command a pseudo-terminal (Codex and Hermes both can)
+still reached it.
+
 It never edits SKILL.md. Until 2026-09-24 a stamp rewrote the `last_verified`
 line and a `source_digests` block inside SKILL.md, and the skills manifest
 hashed that file, so any two open pull requests that stamped conflicted on the
@@ -187,7 +203,33 @@ YELLOW = "\033[0;33m"
 GREEN = "\033[0;32m"
 NC = "\033[0m"
 
-STAMP_HINT = "scripts/client/check-skill-freshness.sh --stamp"
+VERIFIER_ENV = "SKILL_ATTESTATION_VERIFIER"
+STAMP_HINT = (f'{VERIFIER_ENV}="<who re-checked, and what>" '
+              "scripts/client/check-skill-freshness.sh --stamp")
+
+# Variables an agent harness or a CI runner sets in the shells it runs. A TTY
+# on stdin alone does not mean a person: Codex's exec_command takes
+# `tty: true` and Hermes' terminal tool takes `pty`, and either gives an
+# agent's command a pseudo-terminal. Each entry is here because it was seen
+# set, not because a harness might set it (checked 2026-09-27):
+# CLAUDECODE=1 and AI_AGENT=claude-code_<version>_agent in a Claude Code Bash
+# tool shell; CODEX_THREAD_ID=<thread id> and CODEX_CI=1 in the output of
+# `env` in Codex session transcripts on the operator's machine (April to
+# August 2026, with or without the seatbelt sandbox); AI_AGENT=hermes-agent in
+# the command wrapper of Hermes' terminal tool
+# (tools/environments/base_session_env.py); CI=true in this repository's Tests
+# workflow on GitHub Actions, whose runner passes it on to its service
+# containers in the job log.
+AGENT_ENV_MARKERS: tuple[tuple[str, str], ...] = (
+    ("CLAUDECODE", "Claude Code sets it in the shells it runs"),
+    ("CODEX_THREAD_ID", "Codex sets it in the shells it runs"),
+    ("CODEX_CI", "Codex sets it in the shells it runs"),
+    ("AI_AGENT", "Claude Code and Hermes set it in the shells they run"),
+    ("CI", "CI runners set it"),
+)
+# `CI=false` is how a person switches CI behaviour off in a terminal, so an
+# empty, 0 or false value is not a marker.
+_MARKER_OFF_VALUES = ("", "0", "false")
 
 
 def content_digest(path: Path) -> str:
@@ -463,11 +505,51 @@ def check_skills(root: str, projects_root: str) -> int:
     return 0
 
 
-def _verifier(root: str) -> str:
-    """Who is attesting: an explicit override, else the git author identity."""
-    explicit = os.environ.get("SKILL_ATTESTATION_VERIFIER", "").strip()
+def _interactive() -> bool:
+    """stdin is a TTY. Most agent and CI shells have none; a harness that runs
+    commands under a pseudo-terminal does, so see _not_a_person too."""
+    try:
+        return sys.stdin is not None and sys.stdin.isatty()
+    except (OSError, ValueError):
+        return False
+
+
+def _agent_marker() -> tuple[str, str] | None:
+    """The first AGENT_ENV_MARKERS variable set in this environment, with who
+    is known to set it, or None."""
+    for name, setter in AGENT_ENV_MARKERS:
+        if os.environ.get(name, "").strip().lower() not in _MARKER_OFF_VALUES:
+            return name, setter
+    return None
+
+
+def _not_a_person() -> list[str]:
+    """Why this process is taken for an agent or a job rather than a person at
+    a terminal; empty when it is taken for a person. A marker counts even when
+    stdin is a terminal, since a pseudo-terminal gives an agent's shell one."""
+    reasons: list[str] = []
+    marker = _agent_marker()
+    if marker:
+        name, setter = marker
+        reasons.append(f"{name} is set ({setter})")
+    if not _interactive():
+        reasons.append("stdin is not a terminal")
+    return reasons
+
+
+def _verifier(root: str) -> str | None:
+    """Who is attesting: SKILL_ATTESTATION_VERIFIER, else, for a person at a
+    terminal only, the git author identity. None when neither names anyone:
+    without a terminal, or with an agent harness's marker set, the caller is an
+    agent or a job, and git user.name names whoever configured git, so
+    recording it would credit that person with the caller's re-check; at a
+    terminal with no git user.name there is no name to record, and a record
+    naming nobody is not an attestation."""
+    explicit = os.environ.get(VERIFIER_ENV, "").strip()
     if explicit:
         return explicit
+    if _not_a_person():
+        return None
     try:
         name = subprocess.run(
             ["git", "-C", root, "config", "user.name"],
@@ -475,7 +557,7 @@ def _verifier(root: str) -> str:
         ).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         name = ""
-    return name or "unknown"
+    return name or None
 
 
 def write_attestation(skills_dir: Path, name: str, digests: dict[str, str],
@@ -512,6 +594,23 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
     skills_dir = Path(root) / "skills"
     now = datetime.now(timezone.utc)
     verifier = _verifier(root)
+    if verifier is None:
+        reasons = _not_a_person()
+        why = (",\n          and ".join(reasons) + ",\n"
+               "          so the caller is taken for an agent or a job, and there the fallback,\n"
+               "          git user.name, names whoever configured git, not whoever re-checked\n"
+               "          the skill"
+               if reasons else "stdin is a terminal but git user.name is not set")
+        print(
+            f"  [{RED}REFUSED{NC}] no attestation written: {VERIFIER_ENV} is not set and\n"
+            f"          {why}. Name the verifier:\n"
+            f'          {VERIFIER_ENV}="<agent or person> (re-checked <claims> against <change>)" \\\n'
+            f"            scripts/client/check-skill-freshness.sh --stamp {' '.join(names)}",
+            file=sys.stderr,
+        )
+        return 2
+    if not os.environ.get(VERIFIER_ENV, "").strip():
+        print(f"  verifier: {verifier} (git user.name; set {VERIFIER_ENV} to name someone else)")
     rc = 0
     for name in names:
         skill_dir = skills_dir / name
@@ -763,7 +862,11 @@ def main(argv: list[str]) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "--stamp", nargs="+", metavar="SKILL",
-        help="write a new attestation with today's date and current source digests",
+        help=("write a new attestation with today's date and current source digests; "
+              f"the verifier is ${VERIFIER_ENV}, or git user.name only when stdin is a "
+              "terminal and no agent-harness or CI variable ("
+              + ", ".join(name for name, _ in AGENT_ENV_MARKERS)
+              + ") is set (without a name from either, the stamp is refused)"),
     )
     group.add_argument("--migrate", action="store_true",
                        help="move frontmatter source_digests blocks into attestations")

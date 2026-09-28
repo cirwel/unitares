@@ -2,6 +2,7 @@
 Pytest configuration and fixtures for unitares tests.
 """
 import os
+import sys
 import pytest
 import pytest_asyncio
 import tempfile
@@ -512,6 +513,19 @@ def _isolate_repo_data_writers(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_dialectic_emit_failure_ledger(monkeypatch, tmp_path):
+    """Keep the Wave 3 instrument's emit-failure ledger out of data/dialectic.
+
+    Fail-soft tests make audit emits fail on purpose, and each failure appends
+    a durable ledger line (src/dialectic_session_writes.py).
+    """
+    monkeypatch.setenv(
+        "UNITARES_DIALECTIC_EMIT_FAILURE_LEDGER",
+        str(tmp_path / "instrument_emit_failures.jsonl"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_recall_telemetry(monkeypatch, tmp_path):
     """Keep recall-miss telemetry out of the real data/telemetry file."""
     try:
@@ -870,11 +884,28 @@ def set_governance_config(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reset_host_availability_cooldowns():
+def _reset_host_availability_cooldowns(monkeypatch):
     """Provider cooldowns are process-global; one test's recorded usage limit
-    must not make a host unavailable in the next."""
-    from src.mcp_handlers.support import host_availability
+    must not make a host unavailable in the next. Their Redis copy is cut off
+    too, so a cooldown a test records is never written anywhere; the root
+    conftest already points REDIS_URL at an unreachable port as the backstop.
 
-    host_availability._reset_for_tests()
+    Only a module already loaded is touched: importing it here would break
+    files that stub ``src.mcp_handlers`` in ``sys.modules`` at import time
+    (``test_age_sql_fallback.py`` run alone). One imported mid-test is still
+    reset at teardown."""
+
+    def _loaded():
+        return sys.modules.get("src.mcp_handlers.support.host_availability")
+
+    module = _loaded()
+    if module is not None:
+        async def _no_redis():
+            return None
+
+        monkeypatch.setattr(module, "_get_redis", _no_redis)
+        module._reset_for_tests()
     yield
-    host_availability._reset_for_tests()
+    module = _loaded()
+    if module is not None:
+        module._reset_for_tests()
