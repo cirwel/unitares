@@ -10,25 +10,37 @@ unauthenticated caller.
 
 These tests pin the aligned posture. ``_check_ws_auth`` mirrors
 ``_check_http_auth`` exactly, with one difference: a browser cannot set headers
-on a ``WebSocket``, so the credential may ride in the query string. Both
-sources are accepted; neither weakens the gate.
+on a ``WebSocket``, so the credential may ride in a ``Sec-WebSocket-Protocol``
+entry. The query string is NOT a credential source: uvicorn logs the handshake
+request line verbatim, and ``?token=`` put the live bearer in the server log on
+every dashboard connect.
 """
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from src.http_api import _check_ws_auth
+from src.http_routes.access import WS_BEARER_SUBPROTOCOL, ws_accept_subprotocol
+
+
+def _proto(token: str) -> str:
+    """The subprotocol entry the dashboard offers for a bearer."""
+    b64 = base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+    return f"{WS_BEARER_SUBPROTOCOL}.{b64}"
 
 
 class _WS:
-    """Minimal stand-in for a Starlette WebSocket: .query_params + .headers + .client."""
+    """Minimal stand-in for a Starlette WebSocket: .query_params + .headers + .client + .scope."""
 
     def __init__(
         self,
         ip: str = "10.1.2.3",
         auth: str | None = None,
         qs_token: str | None = None,
+        proto_token: str | None = None,
         dashboard_session: dict | None = None,
         origin: str | None = None,
     ):
@@ -36,6 +48,11 @@ class _WS:
         if origin is not None:
             self.headers["origin"] = origin
         self.query_params = {"token": qs_token} if qs_token is not None else {}
+        self.scope = {
+            "subprotocols": [WS_BEARER_SUBPROTOCOL, _proto(proto_token)]
+            if proto_token is not None
+            else []
+        }
         self.client = type("C", (), {"host": ip})()
         self.state = type("State", (), {})()
         if dashboard_session is not None:
@@ -62,12 +79,40 @@ def test_untrusted_peer_without_token_is_rejected():
     assert _check_ws_auth(_WS(ip="8.8.8.8"), http_api_token="s3cret") is False
 
 
-def test_untrusted_peer_with_query_token_is_accepted():
-    assert _check_ws_auth(_WS(ip="8.8.8.8", qs_token="s3cret"), http_api_token="s3cret") is True
+def test_untrusted_peer_with_subprotocol_token_is_accepted():
+    assert _check_ws_auth(_WS(ip="8.8.8.8", proto_token="s3cret"), http_api_token="s3cret") is True
 
 
-def test_untrusted_peer_with_wrong_query_token_is_rejected():
-    assert _check_ws_auth(_WS(ip="8.8.8.8", qs_token="nope"), http_api_token="s3cret") is False
+def test_untrusted_peer_with_wrong_subprotocol_token_is_rejected():
+    assert _check_ws_auth(_WS(ip="8.8.8.8", proto_token="nope"), http_api_token="s3cret") is False
+
+
+def test_query_string_token_is_not_a_credential():
+    # The leak this closes: a correct token in the URL is ignored, so no client
+    # has a reason to put one where uvicorn and the tunnel edge log it.
+    assert _check_ws_auth(_WS(ip="8.8.8.8", qs_token="s3cret"), http_api_token="s3cret") is False
+
+
+def test_malformed_subprotocol_token_is_rejected_not_raised():
+    ws = _WS(ip="8.8.8.8")
+    ws.scope = {"subprotocols": [WS_BEARER_SUBPROTOCOL, WS_BEARER_SUBPROTOCOL + ".%%%"]}
+    assert _check_ws_auth(ws, http_api_token="s3cret") is False
+
+
+def test_comma_joined_subprotocol_header_is_split():
+    # uvicorn's websockets-sansio impl hands the raw header through as ONE
+    # entry; found end-to-end, so pinned here.
+    ws = _WS(ip="8.8.8.8")
+    ws.scope = {"subprotocols": [f"{WS_BEARER_SUBPROTOCOL}, {_proto('s3cret')}"]}
+    assert _check_ws_auth(ws, http_api_token="s3cret") is True
+    assert ws_accept_subprotocol(ws) == WS_BEARER_SUBPROTOCOL
+
+
+def test_accept_selects_the_marker_never_the_token():
+    # Browsers fail the connection if they offered subprotocols and the server
+    # selects none; selecting the token entry would echo the bearer back.
+    assert ws_accept_subprotocol(_WS(proto_token="s3cret")) == WS_BEARER_SUBPROTOCOL
+    assert ws_accept_subprotocol(_WS()) is None
 
 
 def test_untrusted_peer_with_bearer_header_is_accepted():
@@ -173,21 +218,26 @@ def test_hosted_loopback_still_needs_bearer(monkeypatch):
     assert _check_ws_auth(_WS(ip="127.0.0.1"), http_api_token=None) is False
 
 
-def test_hosted_query_token_is_accepted(monkeypatch):
+def test_hosted_subprotocol_token_is_accepted(monkeypatch):
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
-    assert _check_ws_auth(_WS(ip="10.1.2.3", qs_token="hosted-tok"), http_api_token=None) is True
+    assert _check_ws_auth(_WS(ip="10.1.2.3", proto_token="hosted-tok"), http_api_token=None) is True
+
+
+def test_hosted_query_token_is_not_a_credential(monkeypatch):
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
+    assert _check_ws_auth(_WS(ip="10.1.2.3", qs_token="hosted-tok"), http_api_token=None) is False
 
 
 def test_hosted_wrong_token_is_rejected(monkeypatch):
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
-    assert _check_ws_auth(_WS(ip="10.1.2.3", qs_token="nope"), http_api_token=None) is False
+    assert _check_ws_auth(_WS(ip="10.1.2.3", proto_token="nope"), http_api_token=None) is False
 
 
 def test_hosted_ignores_local_http_api_token(monkeypatch):
     # In hosted posture the MCP bearer is the only credential; the legacy local
     # token must not open a side door.
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "hosted-tok")
-    assert _check_ws_auth(_WS(ip="10.1.2.3", qs_token="local-tok"), http_api_token="local-tok") is False
+    assert _check_ws_auth(_WS(ip="10.1.2.3", proto_token="local-tok"), http_api_token="local-tok") is False
 
 
 # ---- The gate is actually wired into the handler ----
@@ -202,7 +252,7 @@ async def test_handler_closes_unauthorized_before_connecting(monkeypatch):
     monkeypatch.setattr(
         http_api.broadcaster_instance,
         "connect",
-        lambda ws: connected.append(ws),
+        lambda ws, **kw: connected.append(ws),
     )
 
     closed: list = []

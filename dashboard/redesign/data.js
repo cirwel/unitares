@@ -633,7 +633,7 @@
 
     operatorToken,
 
-    // Read bearer, exposed so ws.js can put it in the /ws/eisv query string —
+    // Read bearer, exposed so ws.js can offer it as a /ws/eisv subprotocol —
     // a browser cannot set headers on a WebSocket. Same credential authFetch
     // sends; exported rather than duplicated so the two cannot drift.
     apiToken: token,

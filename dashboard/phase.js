@@ -565,10 +565,17 @@
         var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         var url = protocol + '//' + window.location.host + '/ws/eisv';
         var token = getToken();
-        if (token) url += '?token=' + encodeURIComponent(token);
 
         try {
-            ws = new WebSocket(url);
+            // Bearer in Sec-WebSocket-Protocol, never the URL (the server logs
+            // handshake request lines). Same encoding as redesign/ws.js.
+            if (token) {
+                var b64 = btoa(unescape(encodeURIComponent(token)))
+                    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+                ws = new WebSocket(url, ['unitares.bearer', 'unitares.bearer.' + b64]);
+            } else {
+                ws = new WebSocket(url);
+            }
         } catch (e) {
             console.warn('[Phase] WebSocket not available');
             return;

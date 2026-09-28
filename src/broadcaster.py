@@ -47,8 +47,8 @@ class EISVBroadcaster:
         self.event_history: deque = deque(maxlen=EVENT_HISTORY_MAX)
         self.started_at: float = time.time()
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, subprotocol: str | None = None):
+        await websocket.accept(subprotocol=subprotocol)
         async with self._lock:
             self.connections.append(websocket)
         logger.info(f"[WS] Dashboard client connected ({len(self.connections)} active)")

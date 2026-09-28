@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
 from src.connection_tracker import ConnectionTrackingMiddleware
+from src.log_redaction import install_uvicorn_redaction
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import (
     SessionSignals,
@@ -595,6 +596,9 @@ def build_transport_runtime(
         proxy_headers=True,
         ws="websockets-sansio",
     )
+    # After Config: it applies uvicorn's logging dictConfig. uvicorn logs the
+    # WebSocket handshake request line (query string included) on uvicorn.error.
+    install_uvicorn_redaction()
     main_server = (
         _leader_server_class()(config) if public_socket is not None else uvicorn.Server(config)
     )

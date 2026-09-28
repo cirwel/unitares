@@ -9,6 +9,8 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import ipaddress as _ipaddress
 import secrets
 
@@ -139,6 +141,56 @@ def _bearer_from_header(auth: str | None) -> str | None:
     return auth.split(" ", 1)[1].strip()
 
 
+# A browser cannot set headers on a ``WebSocket`` handshake, but it can offer
+# subprotocols, and ``Sec-WebSocket-Protocol`` is a header: it is not part of
+# the request line, so it never reaches uvicorn's handshake log or an edge
+# proxy's URL log the way ``?token=`` did. The client offers the marker plus
+# ``<marker>.<base64url(token)>`` (base64url because a subprotocol must be an
+# RFC 7230 token); the server selects the marker, so the credential is never
+# echoed back in the response.
+WS_BEARER_SUBPROTOCOL = "unitares.bearer"
+_WS_BEARER_PREFIX = WS_BEARER_SUBPROTOCOL + "."
+
+
+def _offered_subprotocols(websocket) -> list[str]:
+    """The client's offered subprotocols, one per entry.
+
+    ASGI says ``scope["subprotocols"]`` is already a list of names, but
+    uvicorn's ``websockets-sansio`` implementation (the one the server runs)
+    passes the raw header value through, so a single entry can still be
+    ``"a, b"``. Split defensively.
+    """
+    scope = getattr(websocket, "scope", None) or {}
+    out: list[str] = []
+    for raw in scope.get("subprotocols") or ():
+        if isinstance(raw, str):
+            out.extend(p.strip() for p in raw.split(",") if p.strip())
+    return out
+
+
+def _bearer_from_subprotocols(websocket) -> str | None:
+    """Extract the bearer a browser offered as a ``Sec-WebSocket-Protocol`` entry."""
+    for proto in _offered_subprotocols(websocket):
+        if not proto.startswith(_WS_BEARER_PREFIX):
+            continue
+        encoded = proto[len(_WS_BEARER_PREFIX):]
+        try:
+            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+    return None
+
+
+def ws_accept_subprotocol(websocket) -> str | None:
+    """The subprotocol to select on accept: the marker, if the client offered it.
+
+    A browser that offers subprotocols fails the connection when the server
+    selects none, so the marker has to be echoed whenever it was sent.
+    """
+    offered = _offered_subprotocols(websocket)
+    return WS_BEARER_SUBPROTOCOL if WS_BEARER_SUBPROTOCOL in offered else None
+
+
 def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     """Bearer token auth for WebSocket endpoints.
 
@@ -147,10 +199,14 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
 
     A browser cannot set request headers on a ``WebSocket``, so the break-glass
-    bearer rides in the query string (``/ws/eisv?token=…``); non-browser clients
-    may still send the ``Authorization`` header. A DB-validated passkey session
-    is also accepted in local posture when the browser supplies the exact RP
-    Origin.
+    bearer rides in a ``Sec-WebSocket-Protocol`` entry (see
+    ``WS_BEARER_SUBPROTOCOL``); non-browser clients may still send the
+    ``Authorization`` header. A DB-validated passkey session is also accepted
+    in local posture when the browser supplies the exact RP Origin.
+
+    The query string (``/ws/eisv?token=…``) is deliberately NOT read: uvicorn
+    logs the handshake request line verbatim and the tunnel edge sees the URL,
+    so a query-string bearer was persisted in the server log on every connect.
 
     Without this, ``/ws/eisv`` was the only route on the server with no auth
     check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
@@ -158,9 +214,9 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
     unauthenticated caller.
     """
-    tok = websocket.query_params.get("token") or _bearer_from_header(
+    tok = _bearer_from_header(
         websocket.headers.get("authorization") or websocket.headers.get("Authorization")
-    )
+    ) or _bearer_from_subprotocols(websocket)
 
     # Strict posture: bearer, or a validated session from our exact RP origin.
     #
