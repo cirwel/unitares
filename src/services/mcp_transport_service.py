@@ -136,11 +136,11 @@ def _www_authenticate_header(auth_settings: Any) -> str:
 PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
 
 #: Peers whose X-Forwarded-For uvicorn applies: a reverse proxy on this host.
-#: Every form a loopback peer can take, IPv4-mapped on a dual-stack bind
-#: included, because the REST trusted-network check treats each of them as
-#: loopback. A proxy uvicorn did not recognise would pass its callers through
-#: that check with its own loopback address.
-FORWARDED_ALLOW_IPS = "127.0.0.1,::1,::ffff:127.0.0.1"
+#: Every loopback address, in every form a peer can take (IPv4-mapped on a
+#: dual-stack bind included), because the REST trusted-network check trusts
+#: all of 127.0.0.0/8 and ::1 as loopback. A proxy uvicorn did not recognise
+#: would pass its callers through that check with its own loopback address.
+FORWARDED_ALLOW_IPS = "127.0.0.0/8,::1,::ffff:127.0.0.0/104"
 
 
 def mark_public_listener(app: Any) -> AsgiCallable:

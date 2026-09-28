@@ -90,6 +90,7 @@ def test_a_cidr_with_host_bits_is_refused_not_masked_wider(monkeypatch):
     ("::ffff:0:0/97,::ffff:8000:0/97", "::ffff:8.8.8.8"),
     # One half as IPv4-mapped IPv6, the other as IPv4: every IPv4 caller.
     ("::ffff:0:0/97,128.0.0.0/1", "::ffff:200.1.1.1"),
+    ("0.0.0.0/1,::ffff:128.0.0.0/97", "::ffff:200.1.1.1"),
 ])
 def test_a_catch_all_is_honoured_but_logged(monkeypatch, caplog, listed, caller):
     import logging
@@ -139,7 +140,8 @@ def test_the_setting_is_parsed_and_logged_once_per_value(monkeypatch, caplog):
     assert sum("trusts every caller" in r.getMessage() for r in caplog.records) == 1
 
 
-@pytest.mark.parametrize("proxy_peer", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+@pytest.mark.parametrize("proxy_peer", [
+    "127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1", "::ffff:127.0.0.2"])
 def test_a_same_host_proxy_passes_on_its_callers_address_not_loopback(proxy_peer):
     # A reverse proxy on this host connects from a loopback address, in
     # whichever form the bind reports it. uvicorn must apply its
