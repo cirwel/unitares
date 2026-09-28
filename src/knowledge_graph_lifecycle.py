@@ -239,32 +239,29 @@ class KnowledgeGraphLifecycle:
     async def _batch_update_status(
         self, graph, discovery_ids: List[str], new_status: str, now: datetime
     ):
-        """Update status through the active KG backend and canonical PG table."""
+        """Update status through the active KG backend.
+
+        The backend's update_discovery writes knowledge.discoveries itself, so
+        there is no second write here. The Postgres backend updates the row
+        directly. The AGE backend sets the graph node and syncs the row in the
+        same transaction (_sync_updated_discovery_row), or updates the row alone
+        when the node is missing or the graph is unavailable.
+
+        A "PG sync" block used to follow this loop. It imported
+        get_postgres_backend from src.db.postgres_backend, which has never
+        existed, and swallowed the ImportError at debug level, so it never
+        ran. It dates from when the AGE update set only the graph node. Made to
+        work now, it would be a second write of the same row, and when the AGE
+        update failed and rolled back it would still write the row, leaving
+        the row and the graph node disagreeing.
+        """
         updated_at = now.isoformat()
 
-        # Update the selected KG backend.
         for discovery_id in discovery_ids:
             await graph.update_discovery(discovery_id, {
                 "status": new_status,
                 "updated_at": updated_at,
             })
-
-        # Keep the canonical PG table aligned when an alternate backend is active.
-        try:
-            from src.db.postgres_backend import get_postgres_backend
-            db = await get_postgres_backend()
-            async with db.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE knowledge.discoveries
-                    SET status = $1, updated_at = now()
-                    WHERE id = ANY($2::text[])
-                    """,
-                    new_status,
-                    discovery_ids,
-                )
-        except Exception as e:
-            logger.debug(f"PG sync skipped for lifecycle update: {e}")
 
     async def _canonicalize_tags(self, now: datetime, dry_run: bool) -> List[str]:
         """Apply the curated semantic synonym map to the active corpus.

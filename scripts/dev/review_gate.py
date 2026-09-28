@@ -102,6 +102,10 @@ NATIVE_WAIT_S = 600
 # same subscription quota authoring does, and past the third round most
 # findings are about text the previous fix added.
 ROUND_CAP = 3
+# The cap is switched OFF (operator decision, 2026-09-27): every round gets a
+# full review, however many came before. The mechanism below is kept, and kept
+# tested, so it can be switched back on here without being rebuilt.
+ROUND_CAP_ENABLED = False
 # Codex renders severity as an image badge; plain `[P1]` titles occur too.
 SEVERE_BADGE_RE = re.compile(r"!\[P[01] Badge\]|\[P[01]\]")
 SEVERITY_LABEL_RE = re.compile(r"!\[P[0-3] Badge\]|\[P[0-3]\]")
@@ -380,7 +384,8 @@ class CodexRounds:
         """
         # Once the round is answered (disposed, or fixes verified once), a
         # push may be new work, and new work gets a full review (PR #2401).
-        return (self.count >= ROUND_CAP and bool(self.last_findings)
+        return (ROUND_CAP_ENABLED and self.count >= ROUND_CAP
+                and bool(self.last_findings)
                 and not self.last_severe and not self.answered_since)
 
 
@@ -2213,6 +2218,8 @@ def post_check(repo: str, pr: int, head: str, conclusion: str, description: str,
 def round_note(rounds: CodexRounds | None) -> str:
     if not rounds or not rounds.count:
         return ""
+    if not ROUND_CAP_ENABLED:
+        return f" · review round {rounds.count}"
     note = f" · review round {rounds.count} of {ROUND_CAP}"
     return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
 

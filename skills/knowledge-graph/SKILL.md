@@ -144,7 +144,13 @@ For more control, use the `knowledge()` tool with an action parameter:
 
 Imported memory is context, not policy. Source tags such as `memory-sync` and
 the harness-neutral `source-<provider>-memory` pattern classify a row as
-`imported_context`. Normal stores are `native_finding`. A row becomes
+`imported_context`. Agent-to-agent channel messages (a `channel-<topic>` tag
+together with a `to-<agent>` tag, or a `[channel:<topic>]` summary prefix) are
+`channel_message` and get the same close-contest down-rank. A tag filter made
+only of source-memory tags reads that lane in its own order. A `channel-*` tag
+filter lifts the down-rank only from channel messages on that lane; every other
+row keeps its authority order, since a `channel-` tag can be an ordinary topic. Normal stores are `native_finding`.
+A row becomes
 `governed_claim` only through `knowledge(action="promote")`, which adds a
 server-authored receipt that ordinary store arguments cannot forge.
 
@@ -244,7 +250,10 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   `fix_verified`, `window` and `instrument_check` for `unobserved`. Keep each
   evidence value to a short statement or a pointer (a commit, a build_sha, a
   query): evidence over 8 KiB as stored JSON is refused, and long material
-  such as a log excerpt belongs in `resolution_notes`. Both are
+  such as a log excerpt belongs in `resolution_notes`. Notes are appended to
+  the finding's details, and an update whose stored details would exceed 96
+  KiB is refused, so point to a file, commit or run rather than pasting a
+  whole log. Both are
   parameters of `update_finding` and `knowledge(action="update")`, are
   validated, and are stored. The response's `closure_class` is the value read
   back from the record. `knowledge(action="details")` returns the class and

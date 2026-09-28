@@ -1029,8 +1029,25 @@ class TestGithubTrafficScrapers:
         ):
             assert name in SCRAPERS, f"{name} missing from SCRAPERS registry"
 
+    @staticmethod
+    def _extra_catalog():
+        """Chronicler's deployment extra catalog, registered into a copy of
+        the core layer — the catalog its deployment serves."""
+        from src.fleet_metrics.catalog import catalog as _catalog, load_extra_catalog
+
+        saved = dict(_catalog)
+        try:
+            load_extra_catalog(
+                Path(__file__).resolve().parent.parent
+                / "agents" / "chronicler" / "metrics_catalog.json"
+            )
+            return dict(_catalog)
+        finally:
+            _catalog.clear()
+            _catalog.update(saved)
+
     def test_traffic_metrics_in_catalog(self):
-        from src.fleet_metrics.catalog import catalog as _catalog
+        _catalog = self._extra_catalog()
 
         for name in (
             "github.cirwel.traffic.views.14d",
@@ -1051,7 +1068,7 @@ class TestGithubTrafficScrapers:
         emitted `<name>.error` metric must be a registered catalog name so
         the POST is accepted (not 404'd) — this exercises both the new
         traffic surface and the auto-twin catalog fix."""
-        from src.fleet_metrics.catalog import catalog as _catalog
+        _catalog = self._extra_catalog()
 
         for name in (
             "github.cirwel.traffic.views.14d",

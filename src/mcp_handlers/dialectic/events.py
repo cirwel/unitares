@@ -47,8 +47,11 @@ must not drift.
 
 from __future__ import annotations
 
+import itertools
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, Optional
+
+from src import dialectic_session_writes as _session_writes
 
 from src.logging_utils import get_logger
 
@@ -61,6 +64,88 @@ WRITE_OVERLAP = "dialectic_write_overlap"
 SWEEP_CYCLE = "dialectic_sweep_cycle"
 REVIEWER_ABSTAINED = "dialectic_reviewer_abstained"
 PARTICIPANT_ABSTAINED = "dialectic_participant_abstained"
+GUARDED_WRITE = "dialectic_guarded_write"
+
+# Provenance stamped on every `dialectic_sweep_cycle` row (Wave 3 gate council
+# 2026-09-27, finding B5). Without these a heartbeat gap could not be
+# classified: a hung periodic task, a lost audit write and a process restart
+# all looked like "no row".
+#
+# * INSTRUMENT_VERSION names the shape of the payload. The gate amendment
+#   defines the §7 window start as the first periodic row at this version, so
+#   the window records its own start instead of depending on a deploy slot
+#   somebody has to remember to fill in. ⛔Bump it whenever the meaning of a
+#   cycle-row field changes; a reader must never pool rows whose fields mean
+#   different things.
+# * PROCESS_BOOT_ID is minted once per Python process (module import), so a
+#   change of boot id between consecutive rows is a restart.
+# * cycle_seq is a per-boot counter taken BEFORE the audit write is attempted,
+#   so a missing number inside one boot is a lost audit write rather than a
+#   cycle that never ran.
+INSTRUMENT_VERSION = "wave3-instrument-v2"
+PROCESS_BOOT_ID = _session_writes.PROCESS_BOOT_ID  # one id per process, shared
+_CYCLE_SEQ = itertools.count(1)
+
+
+async def _instrument_append(entry: Dict[str, Any]) -> None:
+    """Append one instrument audit row, counting a failure before re-raising.
+
+    `append_audit_event_async` can answer False instead of raising; both are
+    failures, and both are counted (`record_emit_failure`) so the next cycle
+    row reports them in ``emit_failures_since_last_cycle``.
+    """
+    details = entry.get("details") or {}
+    where = dict(event_type=entry.get("event_type"), session_id=entry.get("session_id"),
+                 cycle_seq=details.get("cycle_seq"))
+    try:
+        # Bounded: a stalled audit sink is a failed emit, not a hung caller.
+        persisted = await _session_writes.bounded_append(entry)
+    except Exception:
+        _session_writes.record_emit_failure(**where)
+        raise
+    if persisted is False:
+        _session_writes.record_emit_failure(**where)
+
+
+def _resolve_code_commit() -> tuple[Optional[str], str]:
+    """The git commit of the checkout this process runs from, and how it was known.
+
+    Resolved once, at import -- which happens while the server registers its
+    dialectic handlers at startup -- so it names the code this process loaded,
+    not whatever the checkout holds later. The gate defines the start record of
+    its pre-port window as the first periodic v2 cycle row together with this
+    value, because the deploy slot a human had to fill in is how the
+    reassignment window was lost in 2026-06.
+
+    Returns ``(sha, "git")``; ``(sha, "env")`` from ``UNITARES_BUILD_SHA`` when
+    the tree is not a git checkout (a container image); otherwise
+    ``(None, "unavailable")``. Never raises.
+    """
+    import os
+    import subprocess
+    from pathlib import Path
+
+    try:
+        repo_root = Path(__file__).resolve().parents[3]
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        sha = out.stdout.strip()
+        if out.returncode == 0 and sha:
+            return sha, "git"
+    except Exception:
+        pass
+    env_sha = os.environ.get("UNITARES_BUILD_SHA", "").strip()
+    if env_sha:
+        return env_sha, "env"
+    return None, "unavailable"
+
+
+CODE_COMMIT, CODE_COMMIT_SOURCE = _resolve_code_commit()
 
 # The three guarded writes the sweeper can have refused. Shared with the
 # sweeper's own `details` entries so the event payload and the returned summary
@@ -69,6 +154,23 @@ PARTICIPANT_ABSTAINED = "dialectic_participant_abstained"
 ATTEMPT_REVIEWER_REASSIGNMENT = "reviewer_reassignment"
 ATTEMPT_AWAITING_FACILITATION = "awaiting_facilitation"
 ATTEMPT_REAP_FAILED = "reap_failed"
+
+# What each guarded write intends the row's STATUS to be once it lands. A reap
+# means the session to end `failed`; a reassignment or a facilitation request
+# means it to stay live. The collision report compares a competing writer's
+# final status against this, so it is stated once, beside the write names.
+INTENDED_STATUS = {
+    ATTEMPT_REVIEWER_REASSIGNMENT: "active",
+    ATTEMPT_AWAITING_FACILITATION: "active",
+    ATTEMPT_REAP_FAILED: "failed",
+}
+
+# Short mutation names used by the Wave 3 gate text and the collision report.
+MUTATION_NAME = {
+    ATTEMPT_REVIEWER_REASSIGNMENT: "reassignment",
+    ATTEMPT_AWAITING_FACILITATION: "facilitation",
+    ATTEMPT_REAP_FAILED: "reap",
+}
 
 
 async def emit_reviewer_reassigned(
@@ -174,6 +276,8 @@ async def emit_write_refused(
     attempted: str,
     paused_agent_id: Optional[str] = None,
     source: str = "sweeper",
+    winner_status: Optional[str] = None,
+    winner_reason: Optional[str] = None,
 ) -> None:
     """Record one guarded write the sweeper attempted and the database refused.
 
@@ -214,6 +318,27 @@ async def emit_write_refused(
             the parameter exists so a second producer cannot be added without
             declaring itself, which is exactly how the reassignment stream came
             to be incomplete.
+        winner_status: the ``status`` of the row that refused the write, read
+            by the guarded helper's own follow-up ``SELECT`` on the same
+            connection (Wave 3 gate council 2026-09-27, finding B3). ``None``
+            when the row was missing, or when the helper could not say.
+        winner_reason: ``resolution_json->>'reason'`` of that row when present
+            -- ``liveness_timeout`` for BEAM `DialecticLiveness`, for example.
+            ``None`` when the winner recorded no reason (a sweeper reap writes
+            no ``resolution_json`` at all) or the row was missing.
+
+    WHO WON, AND WHY IT IS RECORDED HERE
+    ------------------------------------
+    A refusal is the terminal guard working, so a refusal count alone cannot
+    tell contention from harm. With a third writer (BEAM liveness fails stuck
+    sessions after 4 h) benign refusals, where both writers wanted ``failed``,
+    are expected. ``winner_status`` and ``winner_reason`` let a reader separate
+    contention-benign (the winner's status is the one the sweeper intended)
+    from contention-divergent (it is not) without a second query that could
+    race a ``reopen_session``. ⛔``winner_status is None`` does NOT mean the
+    row was missing on its own: an event written before this field existed,
+    or by a caller that did not collect it, also carries None. Read it
+    together with ``instrument_version`` on the surrounding cycle rows.
 
     ⛔**Deliberately does NOT record the refusing predicate**, though the gate
     that commissioned this event asked for one. There is no honest source for it
@@ -221,11 +346,7 @@ async def emit_write_refused(
     `UPDATE` statements inline `('resolved', 'failed')` and never interpolate
     the constant -- so recording it would stamp every event with a value that
     governs no write, and hardcoding the literal would add a third copy to drift
-    against. ⛔**Nor can this event distinguish terminal-from-missing.** The
-    write helpers establish which by a follow-up `SELECT` and only *log* it;
-    they return a bare `False`. A reader who needs that distinction must go to
-    the DB-layer log, and any future attempt to answer it from this stream alone
-    must first change what those helpers return.
+    against. The winner's status is the observable that predicate acted on.
 
     Fail-soft, for the same reason as the emitters above inverted: the sweep has
     already decided to skip this session by the time this runs, so a failure
@@ -233,9 +354,7 @@ async def emit_write_refused(
     session into a failed sweep.
     """
     try:
-        from src.audit_db import append_audit_event_async
-
-        await append_audit_event_async({
+        await _instrument_append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": WRITE_REFUSED,
             "agent_id": paused_agent_id,
@@ -247,12 +366,147 @@ async def emit_write_refused(
                 "attempted": attempted,
                 "paused_agent_id": paused_agent_id,
                 "source": source,
+                "winner_status": winner_status,
+                "winner_reason": winner_reason,
             },
         })
     except Exception as exc:
         logger.warning(
             "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
             WRITE_REFUSED, session_id, attempted, source, exc,
+        )
+
+
+async def emit_guarded_write(
+    *,
+    session_id: str,
+    attempted: str,
+    outcome: str,
+    cycle_id: Optional[str],
+    attempt_id: Optional[str] = None,
+    decision_read_ts: Optional[datetime],
+    early_check_ts: Optional[datetime],
+    commit_ts: Optional[datetime],
+    effect_ts: Optional[datetime] = None,
+    read_state: Optional[Dict[str, Any]] = None,
+    paused_agent_id: Optional[str] = None,
+    new_reviewer_agent_id: Optional[str] = None,
+    probe_outcome: Optional[str] = None,
+    winner_status: Optional[str] = None,
+    winner_reason: Optional[str] = None,
+    error: Optional[str] = None,
+    source: str = "sweeper",
+) -> None:
+    """Record one guarded sweeper write: what it read, when, and what happened.
+
+    WHY THIS EXISTS (instrument v2)
+    -------------------------------
+    The cycle row says how many guarded writes a cycle made; it does not say
+    which sessions, what state the sweeper decided on, or when it read it. A
+    collision can happen on either side of the sweeper's commit (Wave 3 gate
+    amendment, harm definition):
+
+    (a) a competing write whose cause precedes the sweeper's commit lands
+        after it; or
+    (b) a competing write -- a reviewer assignment, a protocol message, a
+        resolve -- lands between the sweeper's decision read and its commit,
+        so the sweeper acted on stale state even when both writes succeed and
+        the final status is the one it intended.
+
+    (b) cannot be rebuilt from the durable tables. BEAM `update_reviewer`
+    writes the reviewer slot outside any saga and only bumps
+    ``core.dialectic_sessions.updated_at``, and the sweeper's own reap then
+    overwrites that same ``updated_at``. The only place the pre-write state
+    survives is this process, at the moment it read the row. So every guarded
+    write attempt -- succeeded, refused or errored -- emits exactly one of
+    these, carrying:
+
+    * ``decision_read_ts``: taken just before the cycle's batch read of the
+      active sessions, so no later than the read of the row state the sweeper
+      decided on. The lower bound of ordering (b).
+    * ``read_reviewer_agent_id`` / ``read_phase`` / ``read_status`` /
+      ``read_updated_at``: that state, as read. A later reviewer or phase that
+      differs, with no sweeper write to explain it, is a competing writer.
+    * ``early_check_ts``: just before the per-session saga check.
+    * ``commit_ts``: when the guarded write returned (Python clock). For a
+      succeeded write the commit happened at or before it.
+    * ``effect_ts``: the database clock read by the write statement itself
+      (``RETURNING clock_timestamp()``), after the row was locked and changed
+      and before its commit. When present, the collision report orders the
+      write by this, not by ``commit_ts``.
+    * ``cycle_id``: joins the row to its ``dialectic_sweep_cycle`` row. The
+      per-write rows of one cycle sum to that row's write counts.
+    * ``attempt_id``: joins the row to the ``dialectic_session_write``
+      attempt/response pair the DB helper recorded for the same write
+      (``via="sweeper"``); see ``src/dialectic_session_writes.py``.
+
+    Args:
+        attempted: the ``ATTEMPT_*`` constant; ``mutation`` is its short name.
+        outcome: ``"succeeded"``, ``"refused"`` or ``"error"`` (the write
+            raised; its effect is unknown).
+        read_state: the session row as the sweeper read it.
+        new_reviewer_agent_id: for a reassignment, the reviewer written.
+        probe_outcome: for a succeeded write, the post-write saga probe's
+            result -- ``"clean"``, ``"detected"`` or ``"probe_failed"``.
+        winner_status / winner_reason: for a refused write, who refused it
+            (see `emit_write_refused`).
+        error: exception class name, for an ``"error"`` outcome.
+
+    ⛔A write interrupted by cancellation (the periodic cycle timeout, or a
+    shutdown) still gets its row, written by the cycle's caller after the
+    cancellation has completed rather than mid-cancellation: ``outcome=
+    "error"`` with ``error="timeout"``/``"cancelled"`` when the write had not
+    returned (its effect is unknown), or ``outcome="succeeded"`` with
+    ``probe_outcome="probe_failed"`` when only the probe was cut short. So
+    the per-write rows of a cycle equal its ``write_attempt_count`` always; a
+    shortfall is a lost audit write, and a surplus (a row re-written because
+    the cancellation landed after the audit insert but before it returned) is
+    a duplicate. Either one makes a completeness check fail, which is the
+    safe direction.
+
+    Fail-soft: the write's outcome is already decided when this runs.
+    """
+    read = read_state or {}
+    try:
+        await _instrument_append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "event_type": GUARDED_WRITE,
+            "agent_id": paused_agent_id,
+            "session_id": session_id,
+            "details": {
+                "session_id": session_id,
+                "attempted": attempted,
+                "mutation": MUTATION_NAME.get(attempted),
+                "intended_status": INTENDED_STATUS.get(attempted),
+                "outcome": outcome,
+                "probe_outcome": probe_outcome,
+                "winner_status": winner_status,
+                "winner_reason": winner_reason,
+                "error": error,
+                "paused_agent_id": paused_agent_id,
+                "new_reviewer_agent_id": new_reviewer_agent_id,
+                "read_reviewer_agent_id": read.get("reviewer_agent_id"),
+                "read_phase": read.get("phase"),
+                "read_status": read.get("status"),
+                "read_updated_at": _iso_or_str(read.get("updated_at")),
+                "read_awaiting_facilitation": read.get("awaiting_facilitation"),
+                "decision_read_ts": _iso_or_str(decision_read_ts),
+                "early_check_ts": _iso_or_str(early_check_ts),
+                "commit_ts": _iso_or_str(commit_ts),
+                "effect_ts": _iso_or_str(effect_ts),
+                "cycle_id": cycle_id,
+                "attempt_id": attempt_id,
+                "source": source,
+                "process_boot_id": PROCESS_BOOT_ID,
+                "instrument_version": INSTRUMENT_VERSION,
+                "code_commit": CODE_COMMIT,
+                "code_commit_source": CODE_COMMIT_SOURCE,
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "%s audit emit failed: session=%s attempted=%s outcome=%s err=%s",
+            GUARDED_WRITE, session_id, attempted, outcome, exc,
         )
 
 
@@ -391,7 +645,10 @@ async def emit_sweep_cycle(
     invalid_session_count: int,
     saga_inflight_skip_count: int,
     write_attempt_count: int,
+    write_succeeded_count: int,
     write_refused_count: int,
+    write_error_count: int,
+    overlap_clean_count: int,
     overlap_detected_count: int,
     overlap_probe_failed_count: int,
     resolved_count: int,
@@ -399,6 +656,7 @@ async def emit_sweep_cycle(
     facilitation_count: int,
     duration_ms: int,
     error: Optional[str] = None,
+    cycle_id: Optional[str] = None,
 ) -> None:
     """Record every completed resolver cycle, including an all-zero cycle.
 
@@ -412,19 +670,60 @@ async def emit_sweep_cycle(
     ``saga_inflight_skip_count`` records the ordering visible at the early saga
     guard. ``write_refused_count`` records guarded writes another writer beat.
     ``overlap_detected_count`` records the third ordering -- the early check was
-    clean, the guarded write succeeded, and a saga appeared anyway -- which the
-    first two cannot see and which this docstring previously named as uncovered.
+    clean, the guarded write succeeded, and a saga was seen on the session
+    anyway -- which the first two cannot see.
 
-    ⛔Both overlap counts are **required**, deliberately. A default of zero lets
-    a caller that never probed report the same thing as a caller that probed and
-    found nothing, which is the manufactured zero this whole event exists to
-    prevent.
+    EVERY ROW BALANCES (instrument v2)
+    ----------------------------------
+    Two identities hold on every row, so write and probe coverage can be
+    reconstructed from the row alone (council 2026-09-27, "write and probe
+    coverage"):
+
+    * ``write_attempt_count == write_succeeded_count + write_refused_count
+      + write_error_count``. ``write_error_count`` is a guarded write that
+      raised, including one interrupted by a cycle timeout; its outcome is
+      unknown, which is why it is neither a success nor a refusal.
+    * ``write_succeeded_count == overlap_clean_count + overlap_detected_count
+      + overlap_probe_failed_count``. Every successful guarded write is probed
+      exactly once, and ``overlap_clean_count`` is a probe that ran and found
+      nothing -- an observed absence, which the other two are not.
+
+    A row that does not balance is an instrument defect, not a datum.
+
+    HEARTBEAT PROVENANCE (instrument v2)
+    ------------------------------------
+    ``process_boot_id``, ``cycle_seq`` and ``instrument_version`` are added
+    here, not by the caller, so no caller can omit them. Within one boot id,
+    a missing ``cycle_seq`` is a lost audit write (the number is consumed
+    before the write is attempted); a boot id change is a restart; a silence
+    between periodic rows of one boot is a hung or dead loop. ``cycle_seq``
+    counts every emitted row, periodic and lazy alike, so gaps must be read
+    across all rows of a boot, not the periodic ones only.
+    ``emit_failures_since_last_cycle`` counts the instrument's own audit emits
+    that failed in this process since the previous row (a returned False or a
+    raise); any nonzero value makes a collision-report reading inconclusive.
+    Each failure is also appended, fsynced, to a local ledger
+    (`dialectic_session_writes.emit_failure_ledger_path`) so it survives a
+    crash before the next row; the report reads that too. ``code_commit``
+    (with ``code_commit_source``: ``git``, ``env`` or ``unavailable``) names
+    the code the process loaded. ``cycle_id`` joins the row to the
+    ``dialectic_guarded_write`` rows it made; those rows sum to its write
+    counts.
+    ``error="timeout"`` is a periodic cycle the background loop bounded
+    (``UNITARES_DIALECTIC_SWEEP_CYCLE_TIMEOUT_S``); its counts are what had committed
+    before it was cancelled, and a write it interrupted is counted in
+    ``write_error_count``.
+
+    ⛔The three overlap counts are **required**, deliberately. A default of
+    zero lets a caller that never probed report the same thing as a caller
+    that probed and found nothing, which is the manufactured zero this whole
+    event exists to prevent.
 
     ⛔``overlap_probe_failed_count`` is the denominator that keeps
     ``overlap_detected_count`` honest. The probe can fail (saga table absent,
     pool exhausted), and a failed probe is not an observed absence. A window
     whose probe-failure count is non-trivial has not measured overlap, however
-    many zeros the detected count shows. Read the two together or neither.
+    many zeros the detected count shows. Read the three together or none.
 
     Consumers must treat cycle gaps as missing evidence and must not infer a
     collision-free system from zero counts alone: even a fully probed window
@@ -433,10 +732,14 @@ async def emit_sweep_cycle(
     Fail-soft: audit availability cannot decide whether session maintenance is
     allowed to run.
     """
+    cycle_seq = next(_CYCLE_SEQ)
+    _session_writes.LAST_CYCLE_SEQ = cycle_seq
+    # A present (possibly empty) ledger is how the report knows it is reading
+    # this server's failures, not an absent file on another host.
+    _session_writes.ensure_emit_failure_ledger(CODE_COMMIT)
+    emit_failures = _session_writes.take_emit_failures()
     try:
-        from src.audit_db import append_audit_event_async
-
-        await append_audit_event_async({
+        await _instrument_append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": SWEEP_CYCLE,
             "agent_id": None,
@@ -448,6 +751,9 @@ async def emit_sweep_cycle(
                 "invalid_session_count": invalid_session_count,
                 "saga_inflight_skip_count": saga_inflight_skip_count,
                 "write_attempt_count": write_attempt_count,
+                "write_succeeded_count": write_succeeded_count,
+                "write_error_count": write_error_count,
+                "overlap_clean_count": overlap_clean_count,
                 "overlap_detected_count": overlap_detected_count,
                 "overlap_probe_failed_count": overlap_probe_failed_count,
                 "write_refused_count": write_refused_count,
@@ -456,12 +762,22 @@ async def emit_sweep_cycle(
                 "facilitation_count": facilitation_count,
                 "duration_ms": duration_ms,
                 "error": error,
+                "process_boot_id": PROCESS_BOOT_ID,
+                "cycle_seq": cycle_seq,
+                "cycle_id": cycle_id,
+                "instrument_version": INSTRUMENT_VERSION,
+                "code_commit": CODE_COMMIT,
+                "code_commit_source": CODE_COMMIT_SOURCE,
+                "emit_failures_since_last_cycle": emit_failures,
             },
         })
     except Exception as exc:
+        # The failures this row was carrying are handed to the next row
+        # (the failed row itself was already counted by `_instrument_append`).
+        _session_writes.carry_emit_failures(emit_failures)
         logger.warning(
-            "%s audit emit failed: source=%s err=%s",
-            SWEEP_CYCLE, trigger_source, exc,
+            "%s audit emit failed: source=%s seq=%s err=%s",
+            SWEEP_CYCLE, trigger_source, cycle_seq, exc,
         )
 
 
@@ -471,8 +787,11 @@ async def emit_write_overlap(
     attempted: str,
     paused_agent_id: Optional[str] = None,
     source: str = "sweeper",
+    saga: Optional[Dict[str, Any]] = None,
+    early_check_ts: Optional[datetime] = None,
+    commit_ts: Optional[datetime] = None,
 ) -> None:
-    """Record the one dual-writer ordering nothing else could see.
+    """Record the dual-writer ordering nothing else could see.
 
     THE ORDERING THIS COVERS
     ------------------------
@@ -480,37 +799,79 @@ async def emit_write_overlap(
     checks. `dialectic_write_refused` sees another writer finish before Python's
     guarded write lands. Neither sees the third case, named in `emit_sweep_cycle`
     and in gate §3.1: the early saga check finds nothing, Python's guarded write
-    **succeeds**, and a saga begins anyway. Python has written first and BEAM is
-    now acting on a row it did not own when the sweeper decided.
+    **succeeds**, and a saga exists on the session anyway. Python has written
+    first and BEAM acted on a row it did not own when the sweeper decided.
 
-    This is emitted when a probe taken immediately after a successful guarded
-    write finds a non-terminal saga that the early check did not.
+    WHAT THE PROBE LOOKS FOR (instrument v2)
+    ----------------------------------------
+    Emitted when the probe taken immediately after a *successful* guarded write
+    finds a saga on the session, in ANY state, whose ``created_at`` is at or
+    after the sweeper's early saga check -- or any saga still non-terminal.
 
-    ⛔WHAT IT CANNOT ESTABLISH, stated because a zero here is going to be quoted.
-    The probe closes the window between the early check and just after the write;
-    it cannot close the window after itself. A saga starting later is unobserved,
-    so **absence of these rows narrows the unmeasured interval, it does not
-    empty it.** Only a serialization primitive both writers honour removes the
-    interval rather than measuring it — gate §2 (b2), which remains unbuilt and
-    is not authorised by the instrument-first ruling.
+    The v1 probe matched non-terminal states only, and that could not see sagas
+    at production speed: sagas go from ``created_at`` to ``pg_committed_at`` in
+    p50 6.5 ms, p99 84 ms (n=138, Wave 3 gate council 2026-09-27, finding B1).
+    A saga that started after the early check and committed before the probe
+    was invisible to both checks. Matching on creation time instead of state
+    removes that blind spot: a saga that started in the interval between the
+    early check and the probe is seen whether it is still running, committed
+    (``pg_committed``) or compensated (``reverted``). ``saga_started`` says
+    which side of the write it began on.
+
+    ⛔WHAT IT STILL CANNOT ESTABLISH, stated because a zero here is going to be
+    quoted. The instrument now covers the interval from the early check to the
+    probe, whatever state the saga reached; it does NOT cover the interval
+    after the probe. A saga created later is unobserved by this event, so
+    **absence of these rows bounds the unmeasured interval, it does not empty
+    it.** That tail is read from the saga side after the fact
+    (`scripts/ops/wave3_collision_report.py` correlates
+    `coordination.session_resolution_sagas`, which is never deleted from,
+    against every sweeper write within a bounded window). Only a serialization
+    primitive both writers honour removes the interval rather than measuring
+    it -- gate §2 (b2), which remains unbuilt and is not authorised by the
+    instrument-first ruling.
+
+    ⛔The comparison is between the sweeper host's clock (``early_check_ts``)
+    and PostgreSQL's ``now()`` at saga insert. On the single-host deployment
+    those are the same clock; across hosts a skew shifts the boundary by that
+    skew. Both timestamps are recorded so a reader can check.
 
     ⛔A failed probe is NOT an absent overlap. The caller counts those
-    separately; see `probe_inflight_saga`, which returns None rather than
+    separately; see `probe_saga_since`, which returns None rather than
     inheriting the write gate's fail-open False.
 
     Args:
-        session_id: the session whose write landed before a saga appeared.
+        session_id: the session whose write landed before a saga was seen.
         attempted: which guarded write succeeded -- an ``ATTEMPT_*`` constant.
         paused_agent_id: the session's paused agent, when the row carried one.
         source: which producer observed it. Only ``"sweeper"`` today.
+        saga: the saga row the probe found (``saga_id``, ``state``,
+            ``created_at``, ``pg_committed_at``, ``reverted_at``), or None for
+            a caller that has no row to report.
+        early_check_ts: when the sweeper ran its early saga check for this
+            session (the lower bound the probe searched from).
+        commit_ts: when the guarded write returned success; the commit
+            happened at or before it.
+
+    The payload keeps every v1 field (``ordering`` is still
+    ``"sweeper_wrote_first"``: the write succeeded, so from the row's point of
+    view the sweeper wrote first) and adds ``detection``, ``saga_*``,
+    ``early_check_ts``, ``commit_ts`` and ``saga_started``.
 
     Fail-soft: the write has already committed, so a failure here costs
     observability, never correctness.
     """
+    saga = saga or {}
+    created_at = saga.get("created_at")
+    saga_started = "unknown"
+    if isinstance(created_at, datetime) and isinstance(commit_ts, datetime):
+        saga_started = (
+            "after_commit"
+            if created_at >= commit_ts
+            else "between_early_check_and_commit"
+        )
     try:
-        from src.audit_db import append_audit_event_async
-
-        await append_audit_event_async({
+        await _instrument_append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": WRITE_OVERLAP,
             "agent_id": paused_agent_id,
@@ -521,6 +882,15 @@ async def emit_write_overlap(
                 "paused_agent_id": paused_agent_id,
                 "source": source,
                 "ordering": "sweeper_wrote_first",
+                "detection": "time_correlated",
+                "saga_id": _iso_or_str(saga.get("saga_id")),
+                "saga_state": saga.get("state"),
+                "saga_created_at": _iso_or_str(created_at),
+                "saga_pg_committed_at": _iso_or_str(saga.get("pg_committed_at")),
+                "saga_reverted_at": _iso_or_str(saga.get("reverted_at")),
+                "early_check_ts": _iso_or_str(early_check_ts),
+                "commit_ts": _iso_or_str(commit_ts),
+                "saga_started": saga_started,
             },
         })
     except Exception as exc:
@@ -528,3 +898,12 @@ async def emit_write_overlap(
             "%s audit emit failed: session=%s attempted=%s source=%s err=%s",
             WRITE_OVERLAP, session_id, attempted, source, exc,
         )
+
+
+def _iso_or_str(value: Any) -> Optional[str]:
+    """JSON-safe rendering for timestamps and ids in an audit payload."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
