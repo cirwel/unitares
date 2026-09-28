@@ -91,8 +91,9 @@ from src.knowledge_authority import (
     rank_by_authority,
 )
 from src.mcp_handlers.knowledge.limits import (
-    MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_SUMMARY_LEN,
-    MAX_UPDATED_DETAILS_LEN,
+    MAX_CLOSURE_EVIDENCE_BYTES, MAX_DETAILS_LEN, MAX_DISCOVERY_METADATA_LEN,
+    MAX_SUMMARY_LEN, MAX_TAG_LEN, MAX_TAGS, MAX_UPDATED_DETAILS_LEN,
+    MAX_UPDATED_SUMMARY_LEN, SUMMARY_TRUNCATION_MARKER,
 )
 from config.governance_config import config
 from src.logging_utils import get_logger
@@ -405,6 +406,104 @@ def _degenerate_write_response(leaked_marker: str, field: str):
             "action": "Resend the call with summary, content/details, and tags "
             "as distinct arguments; do not embed tags or markup inside content."
         },
+    )
+
+
+def _write_bound_refusal(message: str, action: str) -> TextContent:
+    """INVALID_PARAM for a knowledge write with a value over its bound."""
+    return error_response(
+        message,
+        error_code="INVALID_PARAM",
+        error_category="validation_error",
+        recovery={"action": action, "related_tools": ["knowledge"]},
+    )
+
+
+def _oversized_tags(tags: Any, outcome: str) -> Optional[tuple[str, str]]:
+    """(message, recovery action) when tags are over MAX_TAGS or MAX_TAG_LEN.
+
+    Measured on normalize_tags output, the list storage writes. ``outcome``
+    ends the message ("Nothing was stored." or "Nothing was changed."). Input
+    normalize_tags cannot read is left to the write path, which fails on it as
+    it did before these bounds.
+    """
+    if tags is None:
+        return None
+    try:
+        normalized = normalize_tags(tags)
+    except Exception:
+        return None
+    if len(normalized) > MAX_TAGS:
+        return (
+            f"tags has {len(normalized)} entries after normalization; the "
+            f"limit is {MAX_TAGS}. {outcome}",
+            f"Send at most {MAX_TAGS} tags, naming the topics and components a "
+            "search should find this by. Put descriptive text in summary or "
+            "details.",
+        )
+    long_tags = [tag for tag in normalized if len(tag) > MAX_TAG_LEN]
+    if long_tags:
+        longest = max(long_tags, key=len)
+        return (
+            f"{len(long_tags)} tag(s) are over {MAX_TAG_LEN} characters after "
+            f"normalization (the longest is {len(longest):,}, starting "
+            f"'{longest[:40]}'); the limit is {MAX_TAG_LEN}. {outcome}",
+            f"Tags are short labels such as 'age-backend'. Shorten each to at "
+            f"most {MAX_TAG_LEN} characters and put descriptive text in summary "
+            "or details.",
+        )
+    return None
+
+
+# How a metadata refusal names a part of the node metadata that a caller
+# fills under another name. Every other part is named by its own key.
+_METADATA_PART_NAMES = {
+    "references_files": "related_files",
+    "provenance": (
+        "provenance (memory_context, task_label, task_outcome and the other "
+        "provenance fields, or a batch item's provenance)"
+    ),
+}
+
+
+def _oversized_metadata(discovery: DiscoveryNode) -> Optional[tuple[str, str]]:
+    """(message, recovery action) when a new finding's metadata is over its bound.
+
+    Measured as the AGE backend writes it: the node metadata its store builds
+    (KnowledgeGraphAGE._build_discovery_metadata), serialized with json.dumps
+    as GraphMixin._sanitize_cypher_param serializes it. A value json.dumps
+    cannot encode is measured as its str(); the store then fails on it as it
+    did before this bound. Held on both backends, so a finding stored on one
+    can be carried to the other. Call it after the handler has set every
+    field it stores (related_to included).
+    """
+    from src.storage.knowledge_graph_age import KnowledgeGraphAGE
+
+    metadata = KnowledgeGraphAGE._build_discovery_metadata(discovery)
+    if not metadata:
+        return None
+    try:
+        size = len(json.dumps(metadata, default=str))
+    except ValueError:
+        # A circular reference: the store fails on it as it did before.
+        return None
+    if size <= MAX_DISCOVERY_METADATA_LEN:
+        return None
+    parts = sorted(
+        ((len(json.dumps(value, default=str)), key) for key, value in metadata.items()),
+        reverse=True,
+    )
+    largest = ", ".join(
+        f"{_METADATA_PART_NAMES.get(key, key)} {length:,}"
+        for length, key in parts[:3]
+    )
+    return (
+        f"This finding's metadata would be {size:,} characters as stored JSON; "
+        f"the limit is {MAX_DISCOVERY_METADATA_LEN:,}. Nothing was stored. "
+        f"Largest parts, in characters: {largest}.",
+        "Send fewer or shorter related_files, and keep provenance fields such as "
+        "memory_context, task_label and task_outcome to short labels. Put long "
+        "material in details.",
     )
 
 
@@ -1094,6 +1193,10 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
 
 _ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
 _ANONYMOUS_WRITER_FALLBACK_KEY = secrets.token_bytes(32)
+_ANONYMOUS_WRITER_PREFIX = "anonkg_"
+# The pseudonym of a session with no identifying signal; every such caller
+# shares it. A derived pseudonym ends in a hex digest instead.
+_ANONYMOUS_WRITER_SHARED_SUFFIX = "_local"
 
 
 def _pseudonymize_anonymous_writer_source(source: str) -> str:
@@ -1137,8 +1240,8 @@ def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
 
     if source:
         digest = _pseudonymize_anonymous_writer_source(str(source))
-        return f"anonkg_{client_hint}_{digest}"
-    return f"anonkg_{client_hint}_local"
+        return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}_{digest}"
+    return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}{_ANONYMOUS_WRITER_SHARED_SUFFIX}"
 
 
 def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Optional[TextContent], bool]:
@@ -1195,12 +1298,16 @@ class _KnowledgeStoreState:
     similar_discoveries: list[dict[str, Any]] = field(default_factory=list)
 
 
+def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
+    """A high or critical store must come from a registered agent."""
+    return str(arguments.get("severity", "low")).lower() in {"high", "critical"}
+
+
 def _resolve_store_writer(
     arguments: Dict[str, Any],
 ) -> tuple[str, Optional[TextContent], Optional[str], bool]:
     """Resolve the writer using the severity-dependent identity policy."""
-    raw_severity = str(arguments.get("severity", "low")).lower()
-    if raw_severity not in {"high", "critical"}:
+    if not _store_needs_registered_writer(arguments):
         agent_id, error, is_anonymous = _resolve_low_friction_writer(arguments)
         return agent_id, error, None, is_anonymous
 
@@ -1209,6 +1316,73 @@ def _resolve_store_writer(
         return agent_id, error, None, False
     display_name_error, display_name_warning = _check_display_name_required(agent_id, arguments)
     return agent_id, display_name_error, display_name_warning, False
+
+
+@dataclass(frozen=True)
+class KnowledgeWriteAuthor:
+    """The agent_id a knowledge store or note records, and who else can use it.
+
+    kind says whether only this caller writes under agent_id:
+
+    - "bound": the identity bound to this session. Calls bound to it write
+      under it; so can a call that reaches the handler unbound and passes it
+      as agent_id on a low or medium write, which no ownership check stops
+      (only high and critical stores verify ownership).
+    - "anonymous": the low-friction pseudonym derived from this session's
+      signals. An anonymous caller whose session yields the same signals
+      (the last fallback is an IP and user-agent fingerprint) writes under
+      it too.
+    - "anonymous_shared": the pseudonym for a session with no identifying
+      signal (``anonkg_<client>_local``), which every such caller shares.
+    - "named": an agent_id the call passed that is not this session's
+      binding. Any caller can pass it.
+    """
+
+    agent_id: str
+    kind: str
+
+
+def resolve_knowledge_write_author(
+    arguments: Dict[str, Any], *, store: bool
+) -> Optional[KnowledgeWriteAuthor]:
+    """The author a knowledge store (``store``) or note records for this call.
+
+    For the recovery of a timed-out write: it runs the writer resolution the
+    handler runs (the store's severity-dependent policy, or the note's
+    low-friction one) on a copy, so the caller's arguments stay as sent. The
+    display-name check the store also runs is skipped; it can relabel an
+    agent but never changes the author. None when the handler would refuse
+    the writer or the resolution fails, which it logs.
+    """
+    from ..context import get_context_agent_id
+
+    candidate = dict(arguments)
+    try:
+        if store and _store_needs_registered_writer(candidate):
+            agent_id, error = require_registered_agent(candidate)
+        else:
+            agent_id, error, _ = _resolve_low_friction_writer(candidate)
+        bound = get_context_agent_id()
+    except Exception:
+        logger.warning(
+            "Could not resolve the author of a timed-out knowledge write",
+            exc_info=True,
+        )
+        return None
+    if error is not None or not agent_id:
+        return None
+    agent_id = str(agent_id)
+    if bound and agent_id == bound:
+        kind = "bound"
+    elif agent_id.startswith(_ANONYMOUS_WRITER_PREFIX):
+        kind = (
+            "anonymous_shared"
+            if agent_id.endswith(_ANONYMOUS_WRITER_SHARED_SUFFIX)
+            else "anonymous"
+        )
+    else:
+        kind = "named"
+    return KnowledgeWriteAuthor(agent_id=agent_id, kind=kind)
 
 
 def _parse_single_store_request(
@@ -1243,6 +1417,10 @@ def _parse_single_store_request(
         if not supersedes_id:
             raise _StoreResponseError(error_response("supersedes parameter cannot be empty string"))
 
+    oversized_tags = _oversized_tags(arguments.get("tags"), "Nothing was stored.")
+    if oversized_tags:
+        raise _StoreResponseError(_write_bound_refusal(*oversized_tags))
+
     return _KnowledgeStoreRequest(
         arguments=arguments,
         agent_id=agent_id,
@@ -1276,7 +1454,7 @@ def _truncate_store_content(state: _KnowledgeStoreState) -> None:
             last_space = truncated.rfind(" ")
             if last_space > MAX_SUMMARY_LEN - 50:
                 truncated = truncated[:last_space]
-        state.summary = truncated.rstrip() + "..."
+        state.summary = truncated.rstrip() + SUMMARY_TRUNCATION_MARKER
 
     if len(raw_details) > MAX_DETAILS_LEN:
         state.truncation_info["details"] = f"Truncated from {len(raw_details)} to {MAX_DETAILS_LEN} chars"
@@ -1487,6 +1665,12 @@ async def _link_similar_store_discoveries(state: _KnowledgeStoreState) -> None:
     state.similar_discoveries = [item.to_dict(include_details=False) for item in state.similar]
 
 
+def _refuse_oversized_store_metadata(state: _KnowledgeStoreState) -> None:
+    oversized = _oversized_metadata(state.discovery)
+    if oversized:
+        raise _StoreResponseError(_write_bound_refusal(*oversized))
+
+
 def _authorize_store_discovery(state: _KnowledgeStoreState) -> None:
     if state.discovery.severity not in {"high", "critical"}:
         return
@@ -1604,6 +1788,7 @@ async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> 
     _annotate_knowledge_confidence_authority(state.discovery)
     await _link_similar_store_discoveries(state)
     _authorize_store_discovery(state)
+    _refuse_oversized_store_metadata(state)
     await _persist_store_discovery(state)
     return _build_store_response(state)
 
@@ -3505,7 +3690,33 @@ def _parse_knowledge_update_request(
                 "discovery_type, tags, superseded_by, or closure_class."
             )
         )
+    _refuse_oversized_summary_or_tags(request)
     return request
+
+
+def _refuse_oversized_summary_or_tags(request: _KnowledgeUpdateRequest) -> None:
+    """Refuse an update whose summary or tags are over their bounds.
+
+    Measured on the values storage would write (the summary as a string, the
+    tags normalized). On AGE either one over the Cypher parameter limit fails
+    the whole update and reads back as "Discovery not found"; refusing here
+    names the real cause and changes nothing.
+    """
+    if request.summary is not None:
+        size = len(str(request.summary))
+        if size > MAX_UPDATED_SUMMARY_LEN:
+            raise _UpdateResponseError(
+                _write_bound_refusal(
+                    f"summary is {size:,} characters; the limit is "
+                    f"{MAX_UPDATED_SUMMARY_LEN:,}. Nothing was changed.",
+                    f"Send a summary of at most {MAX_UPDATED_SUMMARY_LEN:,} "
+                    "characters: the claim itself. Put supporting material in "
+                    "details, or in resolution_notes when closing.",
+                )
+            )
+    oversized_tags = _oversized_tags(request.tags, "Nothing was changed.")
+    if oversized_tags:
+        raise _UpdateResponseError(_write_bound_refusal(*oversized_tags))
 
 
 _SEVERITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -3652,17 +3863,8 @@ def _non_owner_edit_refusal(
     )
 
 
-def _authorize_high_severity_update(
-    request: _KnowledgeUpdateRequest,
-    discovery: DiscoveryNode,
-    agent_id: str,
-) -> None:
-    """Enforce authentication and ownership rules for sensitive updates."""
-    # Effective, not stored — an update that raises severity into the gated
-    # band must clear the same bar store() sets for creating it there.
-    if _effective_update_severity(request, discovery) not in _GATED_SEVERITIES:
-        return
-
+def _require_owned_binding(request: _KnowledgeUpdateRequest, agent_id: str) -> None:
+    """Refuse a write to a high or critical finding from an unproven caller."""
     from ..utils import verify_agent_ownership
 
     if not verify_agent_ownership(agent_id, request.arguments):
@@ -3682,6 +3884,20 @@ def _authorize_high_severity_update(
                 },
             )
         )
+
+
+def _authorize_high_severity_update(
+    request: _KnowledgeUpdateRequest,
+    discovery: DiscoveryNode,
+    agent_id: str,
+) -> None:
+    """Enforce authentication and ownership rules for sensitive updates."""
+    # Effective, not stored — an update that raises severity into the gated
+    # band must clear the same bar store() sets for creating it there.
+    if _effective_update_severity(request, discovery) not in _GATED_SEVERITIES:
+        return
+
+    _require_owned_binding(request, agent_id)
 
     allowed_statuses = {"resolved", "closed", "wont_fix"}
     if discovery.agent_id == agent_id:
@@ -3741,7 +3957,9 @@ def _apply_update_text_fields(
 
 
 def _refuse_oversized_details(
-    request: _KnowledgeUpdateRequest, updates: dict[str, Any]
+    request: _KnowledgeUpdateRequest,
+    updates: dict[str, Any],
+    call: str = "update",
 ) -> None:
     """Refuse an update whose details value is over MAX_UPDATED_DETAILS_LEN.
 
@@ -3749,7 +3967,8 @@ def _refuse_oversized_details(
     notes included) or the details this call sends count along with the new
     notes block. On AGE a value over the Cypher parameter limit fails the
     whole update and reads back as "Discovery not found"; refusing here
-    names the real cause and changes nothing.
+    names the real cause and changes nothing. ``call`` names the call the
+    recovery tells the caller to resend (a supersede appends notes too).
     """
     details = updates.get("details")
     if details is None or len(details) <= MAX_UPDATED_DETAILS_LEN:
@@ -3788,7 +4007,7 @@ def _refuse_oversized_details(
                 else "This finding's stored details leave"
             )
             action = (
-                f"{held_by} no room for a notes block. Send the update "
+                f"{held_by} no room for a notes block. Send the {call} "
                 "without resolution_notes and record the notes as a new "
                 "finding that responds to this one (response_to="
                 f"{{'discovery_id': '{request.discovery_id}', "
@@ -4503,7 +4722,7 @@ def _truncate_batch_summary(summary: Any) -> tuple[Any, Optional[str]]:
         last_space = shortened.rfind(" ")
         if last_space > MAX_SUMMARY_LEN - 50:
             shortened = shortened[:last_space]
-    return shortened.rstrip() + "...", truncation
+    return shortened.rstrip() + SUMMARY_TRUNCATION_MARKER, truncation
 
 
 def _truncate_batch_details(details: Any) -> tuple[Any, Optional[str]]:
@@ -4598,6 +4817,10 @@ def _prepare_batch_discovery(
     if not summary:
         raise _BatchItemError("summary is required")
 
+    oversized_tags = _oversized_tags(disc_data.get("tags"), "It was not stored.")
+    if oversized_tags:
+        raise _BatchItemError(" ".join(oversized_tags))
+
     truncated_fields = []
     summary, summary_truncation = _truncate_batch_summary(summary)
     if summary_truncation:
@@ -4660,6 +4883,10 @@ async def _persist_batch_discovery(
             raise _BatchItemError(
                 "Authentication required for high-severity discoveries"
             )
+
+    oversized = _oversized_metadata(discovery)
+    if oversized:
+        raise _BatchItemError(" ".join(oversized))
 
     await graph.add_discovery(discovery)
     await _broadcast_knowledge_write(discovery, agent_id)
@@ -4932,6 +5159,9 @@ async def _persist_note_discovery(
     if note.tags:
         similar = await graph.find_similar(note, limit=3)
         note.related_to = [item.id for item in similar]
+    oversized = _oversized_metadata(note)
+    if oversized:
+        raise _NoteResponseError(_write_bound_refusal(*oversized))
     await graph.add_discovery(note)
     await _broadcast_knowledge_write(note, agent_id)
 
@@ -5002,6 +5232,10 @@ async def handle_knowledge_note(
     )
     if error:
         return [error]
+
+    oversized_tags = _oversized_tags(arguments.get("tags"), "Nothing was stored.")
+    if oversized_tags:
+        return [_write_bound_refusal(*oversized_tags)]
 
     request = _KnowledgeNoteRequest(
         arguments=arguments,
@@ -5209,16 +5443,140 @@ async def handle_get_lifecycle_stats(arguments: Dict[str, Any]) -> Sequence[Text
     except Exception as e:
         return [error_response(f"Failed to get lifecycle stats: {str(e)}")]
 
+
+def _supersede_notes_block_details(
+    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+) -> str:
+    """The older finding's details with the supersede's notes appended.
+
+    Built as an update builds them (_apply_update_text_fields) and held to
+    the same bound; over it, raises _UpdateResponseError.
+    """
+    updates: dict[str, Any] = {}
+    _apply_update_text_fields(request, discovery, updates)
+    _refuse_oversized_details(request, updates, call="supersede")
+    return updates["details"]
+
+
+def _authorize_supersede_notes(
+    request: _KnowledgeUpdateRequest, finding: DiscoveryNode, old_id: str
+) -> None:
+    """Refuse notes on a high or critical finding from anyone but its owner.
+
+    Run on the first read, before the supersede writes anything, and again on
+    the read taken just before the flip: a finding raised to high or critical
+    in between is held to the rule as it stands then. Raises
+    _UpdateResponseError.
+    """
+    agent_id = _resolve_update_writer(request, finding)
+    if _effective_update_severity(request, finding) in _GATED_SEVERITIES:
+        _require_owned_binding(request, agent_id)
+        if finding.agent_id != agent_id:
+            raise _UpdateResponseError(
+                error_response(
+                    f"Permission denied on high-severity discovery '{old_id}': "
+                    "a supersede appends resolution_notes to its details, and "
+                    "only its owner may add notes while superseding it. "
+                    "Nothing was changed.",
+                    recovery={
+                        "action": (
+                            "Record your correction and its rationale as a "
+                            "finding that responds to this one (response_to={"
+                            f"'discovery_id': '{old_id}', 'response_type': "
+                            "'supersedes'})."
+                        ),
+                        "related_tools": ["knowledge", "search_knowledge_graph"],
+                    },
+                )
+            )
+
+
+async def _prepare_supersede_notes(
+    arguments: Dict[str, Any], graph: Any, new_id: str, old_id: str, note: str
+) -> Optional[_KnowledgeUpdateRequest]:
+    """Check a supersede's resolution_notes before the supersede writes anything.
+
+    resolution_notes are appended to the older finding's details the way an
+    update appends them, and held to the same bound and the same gate. On a
+    high or critical finding only its owner may append them: an update lets a
+    non-owner add notes there only while closing it as resolved, closed or
+    wont_fix, never superseded. A refusal raises _UpdateResponseError.
+    Returns the request the notes are built from, or None when the older
+    finding does not exist, which supersede_discovery then reports. The
+    details themselves are built later, from a read taken just before the
+    write (_supersede_notes_block_details), so an edit that lands while the
+    edge is created is kept.
+    """
+    leaked_marker = _detect_toolcall_markup_leak(note)
+    if leaked_marker:
+        raise _UpdateResponseError(
+            _degenerate_write_response(leaked_marker, "resolution_notes")
+        )
+    old = await graph.get_discovery(old_id)
+    if old is None:
+        return None
+    request = _KnowledgeUpdateRequest(
+        arguments=arguments,
+        discovery_id=old_id,
+        status="superseded",
+        details=None,
+        resolution_note=note,
+        summary=None,
+        severity=None,
+        discovery_type=None,
+        tags=None,
+        superseded_by=new_id,
+    )
+    _authorize_supersede_notes(request, old, old_id)
+    _supersede_notes_block_details(request, old)
+    return request
+
+
+async def _supersede_flip_details(
+    graph: Any, request: _KnowledgeUpdateRequest, old_id: str
+) -> tuple[Optional[str], Optional[str]]:
+    """(details, problem) for the flip, from a fresh read of the older finding.
+
+    Read after the edge is created and just before the flip, so the window
+    in which a concurrent edit can be overwritten is the read-then-write gap
+    an update has, not that gap plus the edge work. The bound and the owner
+    rule are checked again on the fresh read: if the details grew past the
+    bound meanwhile, the finding was raised to high or critical and the
+    caller is not its owner, or the finding is gone, the flip goes ahead
+    without notes and ``problem`` says why.
+    """
+    latest = await graph.get_discovery(old_id)
+    if latest is None:
+        return None, f"'{old_id}' could not be read again before the flip."
+    try:
+        _authorize_supersede_notes(request, latest, old_id)
+    except _UpdateResponseError:
+        return None, (
+            f"'{old_id}' was raised to high or critical while the supersede "
+            "ran, and only its owner may add notes to it now."
+        )
+    try:
+        return _supersede_notes_block_details(request, latest), None
+    except _UpdateResponseError:
+        return None, (
+            f"The details of '{old_id}' grew while the supersede ran and no "
+            "longer leave room for these notes."
+        )
+
+
 @mcp_tool("supersede_discovery", timeout=15.0, register=False)
 async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Mark a discovery as superseding another.
 
-    Creates a SUPERSEDES edge in the knowledge graph. Superseded entries
-    receive a ranking penalty in search results.
+    Creates a SUPERSEDES edge in the knowledge graph and flips the older
+    discovery to superseded. Superseded entries receive a ranking penalty in
+    search results. resolution_notes, when given, are appended to the older
+    discovery's details in that same flip, as an update appends them.
 
     Args:
         discovery_id: The newer discovery (the one that replaces)
         supersedes_id: The older discovery being replaced
+        resolution_notes: Why it was superseded (optional)
 
     Returns success/failure status.
     """
@@ -5228,23 +5586,69 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
     if not new_id or not old_id:
         return [error_response("Both discovery_id and supersedes_id are required")]
 
+    # Parsed as update parses them: blank notes are no notes.
+    raw_notes = arguments.get("resolution_notes")
+    note = None
+    if raw_notes is not None:
+        note = str(raw_notes).strip() or None
+
     try:
         graph = await get_knowledge_graph()
         if not hasattr(graph, "supersede_discovery"):
             return [error_response("SUPERSEDES edges require AGE graph backend")]
+
+        notes_request = None
+        if note is not None:
+            try:
+                notes_request = await _prepare_supersede_notes(
+                    arguments, graph, str(new_id), str(old_id), note
+                )
+            except _UpdateResponseError as refused:
+                return [refused.response]
 
         result = await graph.supersede_discovery(new_id=new_id, old_id=old_id)
         if result.get("success"):
             # Also flip the old entry to superseded so it's flagged stale in
             # search — keep all three supersede paths consistent (store/update
             # both set status + edge; the edge alone doesn't change status).
+            flip: dict[str, Any] = {
+                "status": "superseded",
+                "updated_at": _utc_now_iso(),
+            }
+            notes_problem = None
+            if notes_request is not None:
+                details, notes_problem = await _supersede_flip_details(
+                    graph, notes_request, str(old_id)
+                )
+                if details is not None:
+                    flip["details"] = details
+            flipped = False
             try:
-                await graph.update_discovery(old_id, {
-                    "status": "superseded",
-                    "updated_at": _utc_now_iso(),
-                })
+                flipped = await graph.update_discovery(old_id, flip)
             except Exception as exc:  # noqa: BLE001 — edge is the primary effect
                 logger.warning(f"[KG] supersede status flip for {old_id[:8]} failed: {exc}")
+            if notes_request is not None:
+                if flipped and "details" in flip:
+                    result["resolution_notes_appended_to"] = old_id
+                elif notes_problem:
+                    result["resolution_notes_warning"] = (
+                        f"The SUPERSEDES edge was recorded, but resolution_notes "
+                        f"were not appended: {notes_problem} Read it with "
+                        f"knowledge(action='details', discovery_id='{old_id}') "
+                        "and record the notes as a finding that responds to it "
+                        f"(response_to={{'discovery_id': '{old_id}', "
+                        "'response_type': 'supersedes'})."
+                    )
+                else:
+                    result["resolution_notes_warning"] = (
+                        f"The SUPERSEDES edge was recorded, but the update "
+                        f"that marks '{old_id}' superseded and appends "
+                        "resolution_notes to its details did not apply. Read "
+                        f"it with knowledge(action='details', discovery_id="
+                        f"'{old_id}'); if the notes are not there, send "
+                        f"knowledge(action='update', discovery_id='{old_id}', "
+                        "status='superseded', resolution_notes=...)."
+                    )
             return success_response(result, arguments=arguments)
         else:
             return [error_response(result.get("error", "Failed to create SUPERSEDES edge"))]
@@ -5423,6 +5827,14 @@ async def handle_promote_memory_claim(
             confidence=_parse_store_confidence(arguments),
         )
         _annotate_knowledge_confidence_authority(claim)
+        # Measured on the stored list, which includes the two promotion tags.
+        oversized = _oversized_tags(
+            tags,
+            f"The stored list includes the tags '{PROMOTION_TAG}' and "
+            "'promoted-from-memory', which promotion adds. Nothing was stored.",
+        ) or _oversized_metadata(claim)
+        if oversized:
+            return [_write_bound_refusal(*oversized)]
         await graph.add_discovery(claim)
         await _broadcast_knowledge_write(claim, agent_id)
 
