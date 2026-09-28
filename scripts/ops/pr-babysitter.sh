@@ -96,6 +96,10 @@ operator_only() {  # <pr-json> -> why only the operator may merge it, if so
   # A fork PR: the fleet's own PRs never come from forks, and CI cannot label
   # one (its token is read-only there), so nothing else would flag it.
   jq -e '.isCrossRepository == true' <<<"$1" >/dev/null && { echo "a fork"; return 0; }
+  # A PR the operator marked to land outside the queue is never armed by it,
+  # so that label only ever protects the operator's own arm (step 1).
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null \
+    && { echo "$OPERATOR_ARMED_LABEL"; return 0; }
   for l in $OPERATOR_ONLY_LABELS; do
     jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
   done
@@ -311,6 +315,9 @@ while read -r pr; do
     hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
   elif held_by=$(operator_only "$pr"); then
     reason="it is labelled $held_by, which only the operator merges"
+  elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then
+    # Also for arms made before this check existed, or before the diff grew.
+    reason="it touches a governance-sensitive surface ($why), which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then

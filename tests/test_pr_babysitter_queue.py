@@ -1003,3 +1003,18 @@ def test_an_operator_armed_pr_is_left_alone_even_right_after_a_queue_arm(tmp_pat
              checks=[_check("review", "NEUTRAL")])
     calls, _ = _run(tmp_path, [pr], arms={3: 0.5})
     assert calls == []
+
+
+def test_the_queue_never_arms_an_operator_armed_pr(tmp_path: Path) -> None:
+    # A leftover operator-armed label would otherwise shield the queue's own arm.
+    calls, out = _run(tmp_path, [_pr(1, labels=(LABEL, "operator-armed")), _pr(2)],
+                      timelines={1: _timeline(12), 2: _timeline(8)})
+    assert calls == [_arm(2)]
+
+
+def test_a_queue_arm_that_turns_out_sensitive_is_disarmed(tmp_path: Path) -> None:
+    _manifest(tmp_path, "f\t-\tanti-gaming test")
+    calls, out = _run(tmp_path, [_pr(3, head="aaa", armed_min_ago=20)], arms={3: 20},
+                      compares={"aaa": CHANGE_A})
+    assert calls == ["pr merge 3 -R o/r --disable-auto"]
+    assert "governance-sensitive surface (f)" in out
