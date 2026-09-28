@@ -144,7 +144,7 @@ async def test_concurrent_top_level_tasks_do_not_suppress_each_other():
         "write_attempt_count": 0,
     }
 
-    async def overlapping_cycle():
+    async def overlapping_cycle(*_args, **_kwargs):
         nonlocal entered
         entered += 1
         if entered == 2:
@@ -169,3 +169,84 @@ async def test_concurrent_top_level_tasks_do_not_suppress_each_other():
     assert entered == 2
     assert emitted.await_count == 2
     assert all("reentrant_suppressed" not in result for result in results)
+
+
+def _candidates(n):
+    """N reviewer candidates that pass every cheap filter."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc).isoformat()
+    return {
+        f"candidate-{i}": {"status": "active", "label": f"Agent{i}", "tags": [],
+                           "last_update": now}
+        for i in range(n)
+    }
+
+
+@pytest.mark.asyncio
+async def test_select_reviewer_runs_at_most_one_nested_sweep_for_n_candidates(monkeypatch):
+    """A request-handler call must not fan out one sweep per candidate.
+
+    Three request handlers call select_reviewer without owning the flag, so
+    each candidate's is_agent_in_active_session used to launch a full sweep:
+    N candidates, N `active_session_check` cycle rows (council 2026-09-27).
+    select_reviewer now owns the flag for its whole loop and runs the lazy
+    pre-check once, up front.
+    """
+    from src.mcp_handlers.dialectic import reviewer
+
+    monkeypatch.setenv("UNITARES_AUTOSELECT_REVIEWER", "1")
+    sweep = AsyncMock(return_value={"resolved_count": 0})
+    active_check = AsyncMock(return_value=False)
+    with patch(f"{AUTO_RESOLVE}.check_and_resolve_stuck_sessions", sweep), \
+         patch(f"{REVIEWER}.pg_is_agent_in_active_session", active_check), \
+         patch(f"{REVIEWER}._has_recently_reviewed",
+               new_callable=AsyncMock, return_value=False):
+        chosen = await reviewer.select_reviewer(
+            paused_agent_id="paused", metadata=_candidates(6),
+        )
+
+    assert chosen is not None
+    assert active_check.await_count == 6, "every candidate was still checked"
+    assert sweep.await_count <= 1
+    assert sweep.await_count == 1, "the pre-check's purpose is kept once"
+    assert reviewer._AUTO_RESOLVE_IN_PROGRESS.get() is False, "flag reset on return"
+
+
+@pytest.mark.asyncio
+async def test_select_reviewer_inside_a_resolver_cycle_runs_no_sweep(monkeypatch):
+    """Called from the sweeper (flag already held): zero nested sweeps."""
+    from src.mcp_handlers.dialectic import reviewer
+
+    monkeypatch.setenv("UNITARES_AUTOSELECT_REVIEWER", "1")
+    sweep = AsyncMock(return_value={"resolved_count": 0})
+    token = reviewer._AUTO_RESOLVE_IN_PROGRESS.set(True)
+    try:
+        with patch(f"{AUTO_RESOLVE}.check_and_resolve_stuck_sessions", sweep), \
+             patch(f"{REVIEWER}.pg_is_agent_in_active_session",
+                   new_callable=AsyncMock, return_value=False), \
+             patch(f"{REVIEWER}._has_recently_reviewed",
+                   new_callable=AsyncMock, return_value=False):
+            await reviewer.select_reviewer(paused_agent_id="paused", metadata=_candidates(4))
+        assert reviewer._AUTO_RESOLVE_IN_PROGRESS.get() is True, (
+            "a nested call must restore the caller's flag, not clear it"
+        )
+    finally:
+        reviewer._AUTO_RESOLVE_IN_PROGRESS.reset(token)
+
+    sweep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_select_reviewer_resets_the_flag_when_the_loop_raises(monkeypatch):
+    from src.mcp_handlers.dialectic import reviewer
+
+    monkeypatch.setenv("UNITARES_AUTOSELECT_REVIEWER", "1")
+    with patch(f"{AUTO_RESOLVE}.check_and_resolve_stuck_sessions",
+               new_callable=AsyncMock, return_value={"resolved_count": 0}), \
+         patch(f"{REVIEWER}.pg_is_agent_in_active_session",
+               new_callable=AsyncMock, side_effect=KeyboardInterrupt), \
+         pytest.raises(KeyboardInterrupt):
+        await reviewer.select_reviewer(paused_agent_id="paused", metadata=_candidates(2))
+
+    assert reviewer._AUTO_RESOLVE_IN_PROGRESS.get() is False

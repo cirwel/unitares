@@ -196,15 +196,10 @@ async def is_agent_in_active_session(agent_id: str) -> bool:
     # would otherwise recurse back here once per candidate. The resolver owns
     # the shared ContextVar for its whole invocation; this check only avoids
     # entering it again. The flag is task-local, not a cross-process lock.
+    # `select_reviewer` holds the flag across its whole candidate loop, so
+    # this runs at most once per top-level selection, not once per candidate.
     if not _AUTO_RESOLVE_IN_PROGRESS.get():
-        try:
-            from src.mcp_handlers.dialectic.auto_resolve import check_and_resolve_stuck_sessions
-            resolution_result = await check_and_resolve_stuck_sessions()
-            if resolution_result.get("resolved_count", 0) > 0:
-                logger.info(f"Auto-resolved {resolution_result['resolved_count']} stuck session(s) before checking active sessions")
-        except Exception as e:
-            # Best-effort: don't block reviewer selection if auto-resolve fails
-            logger.warning(f"Auto-resolve pre-check failed in is_agent_in_active_session: {e}")
+        await _presweep_stuck_sessions()
 
     # PRIMARY: Use PostgreSQL for cross-process visibility
     # This is the key fix - CLI and SSE processes now share session state
@@ -342,6 +337,66 @@ async def select_reviewer(paused_agent_id: str,
     if not metadata or not isinstance(metadata, dict):
         return None
 
+    # ⛔Own the resolver's reentrancy flag for the whole candidate loop.
+    #
+    # Every candidate reaches `is_agent_in_active_session`, whose lazy
+    # pre-check runs a full stuck-session sweep whenever the flag is unset.
+    # The sweeper sets the flag itself, but the three request-handler callers
+    # of this function did not, so each of their calls fanned out one nested
+    # sweep per candidate -- N `dialectic_sweep_cycle` rows labelled
+    # `active_session_check` for one reviewer selection, corrupting the lazy
+    # cycle denominator the Wave 3 gate reads (council 2026-09-27, "the
+    # reentrancy fix covers one of four callers"; dormant only while
+    # UNITARES_AUTOSELECT_REVIEWER is unset).
+    #
+    # A top-level call keeps the pre-check's purpose -- clear stuck sessions
+    # before judging who is busy -- by running it ONCE, before the loop, then
+    # holds the flag so no candidate can start another. A call nested inside a
+    # resolver cycle (the flag already set) runs none, as before.
+    owns_flag = not _AUTO_RESOLVE_IN_PROGRESS.get()
+    if owns_flag:
+        await _presweep_stuck_sessions()
+    token = _AUTO_RESOLVE_IN_PROGRESS.set(True)
+    try:
+        return await _select_reviewer_candidates(
+            paused_agent_id,
+            metadata,
+            paused_agent_state,
+            paused_agent_tags,
+            exclude_agent_ids,
+        )
+    finally:
+        _AUTO_RESOLVE_IN_PROGRESS.reset(token)
+
+
+async def _presweep_stuck_sessions() -> None:
+    """Run the lazy stuck-session sweep once, best-effort.
+
+    Shared by `is_agent_in_active_session` (one call) and `select_reviewer`
+    (once per selection, not once per candidate). Never raises: reviewer
+    selection must not fail because maintenance did.
+    """
+    try:
+        from src.mcp_handlers.dialectic.auto_resolve import check_and_resolve_stuck_sessions
+        resolution_result = await check_and_resolve_stuck_sessions()
+        if resolution_result.get("resolved_count", 0) > 0:
+            logger.info(
+                f"Auto-resolved {resolution_result['resolved_count']} stuck session(s) "
+                "before checking active sessions"
+            )
+    except Exception as e:
+        # Best-effort: don't block reviewer selection if auto-resolve fails
+        logger.warning(f"Auto-resolve pre-check failed before reviewer selection: {e}")
+
+
+async def _select_reviewer_candidates(
+    paused_agent_id: str,
+    metadata: Dict[str, Any],
+    paused_agent_state: Optional[Dict[str, Any]],
+    paused_agent_tags: Optional[List[str]],
+    exclude_agent_ids: Optional[List[str]],
+) -> Optional[str]:
+    """The candidate loop of `select_reviewer`; call only with the flag held."""
     candidates = []
     recency_cutoff = datetime.now() - timedelta(hours=24)
 
