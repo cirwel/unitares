@@ -167,7 +167,8 @@ async def http_dashboard_redesign(request):
             "<head>", '<head>\n<base href="/dashboard/redesign/">', 1
         )
         # Inject the API token so data.js authenticates live calls — but only
-        # for a caller already trusted (loopback/tailnet) or signed in. See
+        # for a caller already trusted (loopback, private LAN, or a range listed
+        # in UNITARES_TRUSTED_NETWORKS) or signed in. See
         # http_phase above: an unconditional inject published the bearer to
         # anonymous callers. An unauthenticated browser still gets the shell;
         # its data calls 401 and authFetch redirects it to /auth/signin.

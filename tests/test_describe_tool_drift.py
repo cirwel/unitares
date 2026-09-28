@@ -482,27 +482,10 @@ def test_no_new_describe_cross_refs_to_unreachable_tools():
     }
 
     # Tokens that look like tool names but aren't (markdown words, status
-    # values, action names that live behind a consolidated tool).
-    not_tools = {
-        "status",
-        "metrics",
-        "checkin",
-        "log",
-        "update",
-        "register",
-        "init",
-        "session",
-        "hello",
-        "authenticate",
-        "login",
-        "start",
-        "state",
-        "quick_start",
-        "my_status",
-        "check_status",
-        "bind_identity",
-        "recall_identity",
-    }
+    # values, action names that live behind a consolidated tool). Empty since
+    # the 2026-09-28 alias cut: every former entry was a retired alias word,
+    # and exempting one would hide a stale reference to it.
+    not_tools: set[str] = set()
 
     referenced = set()
     # Tool references in SEE ALSO / RELATED TOOLS / ALTERNATIVES blocks are
@@ -786,8 +769,8 @@ async def test_describe_reports_a_legacy_alias_own_narrower_operation():
     assert legacy["operation"] == "read"  # the agent router it dispatches through is write
     router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
     assert router["operation"] == "write"
-    guess = json.loads((await handle_describe_tool({"tool_name": "checkin", "lite": True}))[0].text)
-    assert guess["operation"] == "write"  # no override: process_agent_update's class
+    legacy_write = json.loads((await handle_describe_tool({"tool_name": "submit_thesis", "lite": True}))[0].text)
+    assert legacy_write["operation"] == "write"  # no override: dialectic's class
 
 
 @pytest.mark.asyncio

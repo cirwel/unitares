@@ -251,6 +251,12 @@ Sentinel-findings and GitHub-traffic series. Unset (the default) registers
 nothing, so an install that runs no such scraper neither lists those names nor
 accepts writes to them. Each entry is `{"name", "description", "unit"}` under a
 top-level `"metrics"` list and gets the same `.error` twin as a core entry.
+An entry may also set `"progress": true`: its rows then count as the
+producer's work for the resident-progress `metrics_series` source, alongside
+the product series `agents.active.7d`, `kg.entries.count` and `checkins.7d`.
+The reference file marks its repository-size and test-count series and leaves
+the GitHub-traffic series unmarked, because those measure the repository, not
+the resident. A `progress` value that is not a boolean skips the entry.
 Data already in `metrics.series` stays readable through `/v1/metrics/series`
 whether or not its name is registered.
 

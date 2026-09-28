@@ -79,10 +79,10 @@ the self-relative baseline threshold, so it does not establish predictive value
 or demonstrate the post-warmup model. Use the falsifiability path below for that
 question.
 
-If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports:
+If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports (Postgres/Redis aren't published to the host by default, so only the governance server and lease plane ports can collide):
 
 ```bash
-POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 ```
 

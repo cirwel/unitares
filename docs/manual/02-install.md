@@ -63,11 +63,13 @@ When it completes:
 - Liveness: `http://localhost:8767/health/live`
 - Lease plane: `http://127.0.0.1:8788/v1/health` (bearer-authenticated)
 
-If the default ports are occupied:
+Postgres and Redis aren't published to the host by default (see
+`docs/DEPLOYMENT_SECURITY.md`), so only the governance server and lease plane
+ports can collide with something already running. If either default port is
+occupied:
 
 ```bash
-POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 \
-  LEASE_PLANE_HOST_PORT=18788 \
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 \
   docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 make coordination-demo

@@ -67,3 +67,8 @@ archives/
 # Local env (don't bake secrets into image)
 .env
 .env.local
+
+# Local credential/continuity caches (client_session_id, continuity_token) —
+# never needed inside the image, and never safe to send to a remote builder
+.unitares/
+secrets/

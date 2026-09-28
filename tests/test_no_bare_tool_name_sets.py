@@ -119,7 +119,6 @@ EXCEPTIONS: dict[str, str] = {
     "[t in describe_tool,health_check,list_tools,process_agent_update,search_knowledge_graph]": (
         "suggestion list filtered through the registry at call time"
     ),
-    "src/gateway/query_engine.py::INTENTS": "gateway intent labels, not tool names",
     "src/mcp_handlers/validators.py::RESERVED_NAMES": "reserved agent display names, not tool names",
     # --- description tables with alias keys that are never served ---------
     # Known drift (tool-surface sweep 2026-09-13): these readers look up the
