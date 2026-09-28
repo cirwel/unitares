@@ -175,12 +175,16 @@ def _is_trusted_network(request) -> bool:
     """Check if request originates from a trusted network.
 
     Reads ``request.client``: the TCP peer, except when that peer is a
-    loopback proxy listed in ``FORWARDED_ALLOW_IPS``
-    (``src/services/mcp_transport_service.py``), where uvicorn has already
-    replaced it with the caller named in X-Forwarded-For. That rewrite is what
-    stops a same-host reverse proxy passing its callers through on its own
-    loopback address, so the list must cover every loopback address trusted
-    here. X-Forwarded-For from any other peer is ignored. A request on the
+    loopback address listed in ``FORWARDED_ALLOW_IPS``
+    (``src/services/mcp_transport_service.py``) and sent X-Forwarded-For,
+    where uvicorn has already replaced it with the caller named there. That
+    rewrite is what stops a same-host reverse proxy that sets the header from
+    passing its callers through on its own loopback address, so the list must
+    cover every loopback address trusted here. It does not help a forwarder
+    that sets no header (socat, an SSH tunnel), nor a proxy on a trusted
+    non-loopback address, whose X-Forwarded-For is ignored: their callers ride
+    the forwarder's own trust. Front those with UNITARES_REST_STRICT or a
+    bearer. A request on the
     public OAuth listener is never trusted: that socket exists to carry the
     public tunnel, so its loopback peer says nothing about the caller.
     """

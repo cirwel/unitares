@@ -140,7 +140,9 @@ PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
 #: dual-stack bind included), because the REST trusted-network check trusts
 #: all of 127.0.0.0/8 and ::1 as loopback. A proxy uvicorn did not recognise
 #: would pass its callers through that check with its own loopback address.
-FORWARDED_ALLOW_IPS = "127.0.0.0/8,::1,::ffff:127.0.0.0/104"
+# Networks, not bare addresses: uvicorn matches a bare IPv6 address with its
+# zone id, so ``::1`` would miss a ``::1%lo`` peer the bypass still trusts.
+FORWARDED_ALLOW_IPS = "127.0.0.0/8,::1/128,::ffff:127.0.0.0/104"
 
 
 def mark_public_listener(app: Any) -> AsgiCallable:

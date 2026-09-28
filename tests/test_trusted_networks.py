@@ -141,7 +141,8 @@ def test_the_setting_is_parsed_and_logged_once_per_value(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("proxy_peer", [
-    "127.0.0.1", "127.0.0.2", "::1", "::ffff:127.0.0.1", "::ffff:127.0.0.2"])
+    "127.0.0.1", "127.0.0.2", "127.255.255.254", "::1", "::1%lo",
+    "::ffff:127.0.0.1", "::ffff:127.0.0.2", "::ffff:127.255.255.254"])
 def test_a_same_host_proxy_passes_on_its_callers_address_not_loopback(proxy_peer):
     # A reverse proxy on this host connects from a loopback address, in
     # whichever form the bind reports it. uvicorn must apply its
