@@ -117,3 +117,41 @@ def test_transport_installs_the_filter_after_building_config():
     assert text.index("config = uvicorn.Config(") < text.index(
         "install_uvicorn_redaction()"
     )
+
+
+# ---- Percent-encoded parameter names (Codex review finding, PR #2577) ----
+
+class TestPercentEncodedParamNames:
+    """A caller can percent-encode the parameter name to bypass the regex.
+
+    ``to%6ben`` decodes to ``token`` via URLSearchParams but the raw query
+    string carries the encoded form and the regex misses it.  The fix decodes
+    only the *name* portion before matching, leaving value bytes intact.
+    """
+
+    def test_hex_encoded_letter_in_name(self):
+        # to%6ben -> token (%6b == 'k')
+        assert SECRET not in redact(f"/ws?to%6ben={SECRET}")
+        assert REDACTED in redact(f"/ws?to%6ben={SECRET}")
+
+    def test_underscore_encoded_in_compound_name(self):
+        # operator%5ftoken -> operator_token (%5f == '_')
+        assert SECRET not in redact(f"/ws?operator%5ftoken={SECRET}")
+
+    def test_uppercase_hex_encoding(self):
+        # to%4BEN -> toKEN (%4B == 'K', case-insensitive suffix match)
+        assert SECRET not in redact(f"/ws?to%4BEN={SECRET}")
+
+    def test_fully_encoded_name(self):
+        # %74%6f%6b%65%6e -> token
+        assert SECRET not in redact(f"/ws?%74%6f%6b%65%6e={SECRET}")
+
+    def test_non_credential_encoded_name_not_redacted(self):
+        # %73ort -> sort (not a credential suffix)
+        url = "/search?%73ort=desc"
+        assert REDACTED not in redact(url)
+
+    def test_filter_path_also_catches_encoded_name(self):
+        out = _format('%s - "WebSocket %s" [accepted]', "1.2.3.4", f"/ws?to%6ben={SECRET}")
+        assert SECRET not in out
+        assert REDACTED in out

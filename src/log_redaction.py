@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import urllib.parse
 
 REDACTED = "[REDACTED]"
 
@@ -28,11 +29,30 @@ _SECRET_PARAM = re.compile(
     r"(?i)([?&][\w.\-]*(?:token|key|secret|password|passwd|auth)=)[^&\s\"']+"
 )
 
+# Matches the name portion of a query parameter — allows percent-encoded chars
+# so ``to%6ben`` (decoded: ``token``) is captured and decoded before the regex
+# above runs. Values are left encoded; only names need normalisation here.
+_QUERY_PARAM_NAME = re.compile(r"([?&])((?:%[0-9A-Fa-f]{2}|[\w.\-])+)(=)")
+
 UVICORN_LOGGERS = ("uvicorn.error", "uvicorn.access")
 
 
+def _decode_query_param_names(text: str) -> str:
+    """Percent-decode only the name portion of query parameters.
+
+    A caller can send ``/ws/eisv?to%6ben=SECRET``; ``URLSearchParams`` decodes
+    the name to ``token`` but ``_SECRET_PARAM`` sees the raw percent-encoded
+    form and misses it. Decoding names before regex matching closes the gap
+    without changing value encoding.
+    """
+    return _QUERY_PARAM_NAME.sub(
+        lambda m: m.group(1) + urllib.parse.unquote(m.group(2)) + m.group(3),
+        text,
+    )
+
+
 def redact(text: str) -> str:
-    return _SECRET_PARAM.sub(lambda m: m.group(1) + REDACTED, text)
+    return _SECRET_PARAM.sub(lambda m: m.group(1) + REDACTED, _decode_query_param_names(text))
 
 
 def _redact_arg(arg):
