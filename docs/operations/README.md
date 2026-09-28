@@ -20,8 +20,9 @@ or [User Manual](../manual/README.md).
   deployment release checklist.
 - [`github-workflow-conventions.md`](github-workflow-conventions.md) — branch,
   draft-PR, and delivery contract.
-- [`merge-automation-plan.md`](merge-automation-plan.md) — operator-armed
-  auto-merge plan; not yet applied.
+- [`merge-automation-plan.md`](merge-automation-plan.md) — SUPERSEDED
+  historical plan; do not apply it. Landing now goes through the merge queue
+  (`github-workflow-conventions.md` §4).
 - [`ci-issue-surfacing.md`](ci-issue-surfacing.md) — deduplicated CI finding
   experiment.
 - [`automation-overrides.md`](automation-overrides.md) — operator metadata for
