@@ -391,7 +391,7 @@ _DECLARING = [
 
 
 def test_the_survey_found_every_requirement_declaration():
-    assert {name for name, _ in _DECLARING} == {"knowledge", "dialectic"}
+    assert {name for name, _ in _DECLARING} == {"knowledge", "dialectic", "agent"}
 
 
 @pytest.mark.parametrize("router,model", _DECLARING, ids=[n for n, _ in _DECLARING])

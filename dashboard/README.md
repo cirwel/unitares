@@ -3,8 +3,8 @@
 **Last updated:** September 2026
 
 The operator dashboard is **`dashboard/redesign/`**, served buildless at `/` and
-`/dashboard`. See [`redesign/PLAN.md`](redesign/PLAN.md) for its design system,
-sections, and data layer.
+`/dashboard`. Its conventions (design system, section modules, data layer) are
+in `skills/unitares-dashboard/SKILL.md`; extensions in [`EXTENSIONS.md`](EXTENSIONS.md).
 
 ## Layout
 
@@ -41,7 +41,7 @@ git show 7c6037b:dashboard/dashboard.js        # view a file
 git checkout 7c6037b -- dashboard/agents.js    # restore one into the worktree
 ```
 
-**Known non-parity (intentional, see PLAN.md).** The redesign is read-only —
+**Known non-parity (intentional).** The redesign is read-only —
 the classic operator write actions (archive/resume agent, request dialectic
 review, update discovery status) were **not** ported; do those via the MCP
 tools / CLI. The classic Resident-Progress panel and the richer EISV views
