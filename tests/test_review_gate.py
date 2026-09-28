@@ -320,11 +320,14 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
     assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
 
 
-@pytest.mark.parametrize("start,expected", [
-    (None, "new"), ("old", "new"), ("newer", "newer"), ("side", "side")])
-def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
+@pytest.mark.parametrize("start,expected,consistent", [
+    (None, "new", True), ("old", "new", True), ("newer", "newer", True),
+    ("side", "side", False)])
+def test_the_base_ref_only_moves_forward(carry_repo, start, expected, consistent):
     # Codex on #2568: another worktree may fetch a newer base while the
-    # handoff runs; the handoff must never roll the shared ref back.
+    # handoff runs; the handoff must never roll the shared ref back. A value
+    # on another line of history (a rewritten base) is kept but reported, so
+    # the handoff can refuse rather than guess which base CI reads.
     commits = {"old": _git(carry_repo, "rev-parse", "master")}
     _git(carry_repo, "checkout", "-q", "master")
     for name in ("new", "newer"):
@@ -338,8 +341,30 @@ def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
     ref = "refs/remotes/origin/master"
     if start:
         _git(carry_repo, "update-ref", ref, commits[start])
-    rg._advance_ref(ref, commits["new"])
+    assert rg._advance_ref(ref, commits["new"]) is consistent
     assert _git(carry_repo, "rev-parse", ref) == commits[expected]
+
+
+def test_handoff_refuses_when_the_base_was_rewritten(carry_repo, monkeypatch, capsys):
+    # Codex on #2568: if origin/<base> moved to another line of history during
+    # the review, the reviewed key was checked against a base CI no longer reads.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "--detach", "master")
+    (carry_repo / "other.txt").write_text("rewritten\n")
+    _git(carry_repo, "commit", "-q", "-am", "a rewritten base another worktree fetched")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "other.txt").write_text("the base as fetched here\n")
+    _git(carry_repo, "commit", "-q", "-am", "base")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
+    assert "different lines of history" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])

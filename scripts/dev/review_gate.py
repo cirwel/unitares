@@ -1645,15 +1645,24 @@ def _resolve(args) -> tuple[int, str, str, str]:
     return info["number"], repo, key, info["headRefName"]
 
 
-def _advance_ref(ref: str, new: str) -> None:
+def _is_ancestor(a: str, b: str) -> bool:
+    return subprocess.run(["git", "merge-base", "--is-ancestor", a, b],
+                          capture_output=True).returncode == 0
+
+
+def _advance_ref(ref: str, new: str) -> bool:
     """Move `ref` forward to `new`, never back: a newer value (another worktree
-    fetched meanwhile) is kept. Compare-and-swap, so a concurrent update wins."""
+    fetched meanwhile) is kept. Compare-and-swap, so a concurrent update wins.
+    False when `ref` holds a value on another line of history (the base was
+    rewritten): the caller then cannot say which base CI will read."""
     old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
-    if old and (old == new or subprocess.run(
-            ["git", "merge-base", "--is-ancestor", old, new], capture_output=True).returncode):
-        return
+    if old == new or (old and _is_ancestor(new, old)):
+        return True
+    if old and not _is_ancestor(old, new):
+        return False
     # An empty old value asserts the ref does not exist yet.
     git("update-ref", ref, new, old, check=False)
+    return True
 
 
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
@@ -1678,8 +1687,11 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # CI reads the base as it is now, and a base advance may have added a
         # sensitive path; move that ref forward to this snapshot, as a fetch
         # would, whether or not the head moved.
-        _advance_ref(f"refs/remotes/origin/{info['baseRefName']}",
-                     git("rev-parse", base_ref).strip())
+        if not _advance_ref(f"refs/remotes/origin/{info['baseRefName']}",
+                            git("rev-parse", base_ref).strip()):
+            raise SystemExit(f"origin/{info['baseRefName']} and the fetched base are on "
+                             "different lines of history (was the base rewritten?); "
+                             "fetch it and review the current diff")
         fetched_key = diff_key(base_ref, head_ref)
         fetched_head = git("rev-parse", head_ref).strip()
         current = fetched_key == key
