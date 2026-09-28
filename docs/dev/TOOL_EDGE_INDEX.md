@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (54 actions) · 70 aliases.**
+**43 registered tools · 8 consolidated (55 actions) · 70 aliases.**
 
 ## Content-addressed snapshots
 
@@ -67,7 +67,7 @@ note for why the raw rendering is not.
 |---|---|---:|---|---|
 | `check_working_state` | `get_governance_metrics` | 5 | — | `sha256:e98aac66989d2ec35f3967d026e28574c41b03ac1362e8095849da9b2a034870` |
 | `record_result` | `outcome_event` | 14 | — | `sha256:446e543296b3c10d8faf5801e5d19f50b8f572f5accf7b891811ef1748a33300` |
-| `request_review` | `dialectic` | 9 | — | `sha256:c02a1b955af911197f07316783b159b54af92963880c323893f8db6044761b7f` |
+| `request_review` | `dialectic` | 9 | — | `sha256:c92d4a95a1c30fe39616cd66bd4f3d0caad871ae20fc861549bf058cd99b3820` |
 | `search_shared_memory` | `knowledge` | 24 | — | `sha256:1836bf4f18ff55bcd93f4db2c8e86c3239c230135040154e0ec75ccf5f42e303` |
 | `start_session` | `onboard` | 17 | — | `sha256:64a101600126d8fa25ec1cff5603dd6c4505cbe33ee01dd14214433edb854cac` |
 | `store_finding` | `knowledge` | 13 | — | `sha256:938f0ad1a527818f675654a2635387068501a288cf31f8e5e8bfeca53713bb4e` |
@@ -191,6 +191,7 @@ runs (`from→to`, filled only when the destination is absent).
 | Action | Delegate | Remaps |
 |---|---|---|
 | `antithesis` | `src/mcp_handlers/dialectic/handlers.py handle_submit_antithesis` | — |
+| `consult` | `src/mcp_handlers/dialectic/handlers.py handle_submit_consult` | — |
 | `get` | `src/mcp_handlers/dialectic/handlers.py handle_get_dialectic_session` | — |
 | `list` | `src/mcp_handlers/dialectic/handlers.py handle_list_dialectic_sessions` | — |
 | `quick` | `src/mcp_handlers/dialectic/handlers.py handle_quick_dialectic` | — |
