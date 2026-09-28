@@ -27,9 +27,6 @@ from typing import Any, Dict, Optional
 from src.local_inference_env import (
     MODEL_BASE_URL_ENV,
     MODEL_ENV,
-    MODEL_LOCAL_HOSTS_ENV,
-    MODEL_PRIVACY_ENV,
-    TRUSTED_NETWORKS_ENV,
     aliases_for,
     default_local_model,
     model_base_url,
@@ -173,9 +170,12 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         # server's RESOLVED values. The classifier settings pass through as
         # given, so the child classifies the endpoint (local or external) the
         # way this server does; UNITARES_TRUSTED_NETWORKS is one of its inputs.
-        MODEL_LOCAL_HOSTS_ENV,
-        MODEL_PRIVACY_ENV,
-        TRUSTED_NETWORKS_ENV,
+        # Literal names (not the resolver's constants) so scripts/dev/
+        # flag_catalog.py can read this tuple; the settings-routing test in
+        # tests/test_local_inference_env.py keeps it in step with the list.
+        "UNITARES_MODEL_LOCAL_HOSTS",
+        "UNITARES_MODEL_PRIVACY",
+        "UNITARES_TRUSTED_NETWORKS",
         # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp
         # gate is configured, the child needs the bearer or every call it makes
         # 401s — and the failure would look like a broken reviewer rather than

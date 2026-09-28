@@ -869,7 +869,7 @@ class CallModelParams(AgentIdentityMixin):
     """Parameters for call_model"""
     prompt: str = Field(..., description="The prompt/question to send to the model (required)")
     model: str = Field("auto", description="Model to use. For ollama: any model pulled locally (default UNITARES_LLM_MODEL or gemma4:latest). For hf: model IDs like 'deepseek-ai/DeepSeek-R1' or 'Qwen/Qwen2.5-72B-Instruct'. Default: auto")
-    provider: Literal["auto", "hf", "ollama"] = Field("auto", description="Provider to use. Options: auto (ollama first, hf fallback), hf (Hugging Face Inference Providers), ollama (local). Default: auto")
+    provider: Literal["auto", "hf", "ollama"] = Field("auto", description="Provider to use. Options: auto (ollama first, hf fallback), hf (the Hugging Face router), ollama (the configured local endpoint: an OpenAI-compatible server, Ollama by default). Default: auto")
     host_id: Optional[str] = Field(
         None,
         description=(

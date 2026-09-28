@@ -78,7 +78,7 @@ additions merge cleanly. -->
 | `UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `'420'` (agents/dialectic_reviewer/host_backends.py) | Run Claude safely and return exact provider-reported model provenance | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/host_backends.py |
 | `UNITARES_DIALECTIC_CODEX_TIMEOUT_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `str(DEFAULT_VERDICT_TIMEOUT_S)` (src/mcp_handlers/dialectic/wait_assessment.py); `'420'` (agents/dialectic_reviewer/reviewer.py) | Seconds a reviewer model call may take before the wait is unusual | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/dialectic/wait_assessment.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_CONTINUATION_POLL_S` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `DEFAULT_CONTINUATION_POLL_S` (agents/dialectic_reviewer/reviewer.py) | Run bounded objection → response → reconsideration rounds | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
-| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:85); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:174); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
+| `UNITARES_DIALECTIC_CONTINUATION_WAIT_S` | varies: `'3600'` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:91); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:187); `DEFAULT_CONTINUATION_WAIT_S` (agents/dialectic_reviewer/reviewer.py) | Lifetime cap for one spawned reviewer | src/mcp_handlers/dialectic/orchestrator_dispatch.py, agents/dialectic_reviewer/reviewer.py |
 | `UNITARES_DIALECTIC_DISPATCHER_UUID` | `None (no reader fallback)` | The standing dispatcher identity's UUID (operator-provisioned) | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_DIALECTIC_EMIT_FAILURE_LEDGER` | `''` | The append-only emit-failure ledger: env override, else data/dialectic/. | src/dialectic_session_writes.py |
 | `UNITARES_DIALECTIC_EXTERNAL_API_KEY` | `''` | Default variable holding the external reviewer's API key | agents/dialectic_reviewer/host_backends.py |
@@ -142,7 +142,7 @@ additions merge cleanly. -->
 | `UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS` | `''` | Resolve a governance URL without sending credentials over remote HTTP. | agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | varies: `'gemma4:latest'` (src/local_inference_env.py); `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py) | Default model for local inference | src/local_inference_env.py, src/mcp_handlers/dialectic/orchestrator_dispatch.py |
+| `UNITARES_LLM_MODEL` | `''` | Alias of UNITARES_MODEL until v3.2.0 | src/local_inference_env.py |
 | `UNITARES_LOCK_DIR` | `None (no reader fallback)` | — | src/state_locking.py |
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
@@ -156,8 +156,12 @@ additions merge cleanly. -->
 | `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
+| `UNITARES_MODEL` | `''` | Model id the local model endpoint serves; default gemma4:latest | src/local_inference_env.py |
 | `UNITARES_MODEL_ADJUDICATION_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
+| `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
+| `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
+| `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |
 | `UNITARES_OAUTH_AUTO_APPROVE` | `'true'` | — | src/mcp_server.py |
 | `UNITARES_OAUTH_DYNAMIC_REGISTRATION` | `'true'` | Whether OAuth dynamic client registration is open (UNITARES_OAUTH_DYNAMIC_REGISTRATION) | src/mcp_listen_config.py |
@@ -169,8 +173,8 @@ additions merge cleanly. -->
 | `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
-| `UNITARES_OLLAMA_BASE` | `''` | Root URL of the local Ollama endpoint, without /v1; default http://localhost:11434 | src/local_inference_env.py |
-| `UNITARES_OLLAMA_BASE_URL` | `''` | Accepted alias of UNITARES_OLLAMA_BASE, used when that is unset; with or without /v1. | src/local_inference_env.py |
+| `UNITARES_OLLAMA_BASE` | `''` | Alias of UNITARES_MODEL_BASE_URL until v3.2.0 | src/local_inference_env.py |
+| `UNITARES_OLLAMA_BASE_URL` | `''` | Alias of UNITARES_MODEL_BASE_URL until v3.2.0 | src/local_inference_env.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
 | `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |
@@ -221,7 +225,7 @@ additions merge cleanly. -->
 | `UNITARES_TOOL_USAGE_LOG` | `None (no reader fallback)` | read by __init__() | src/tool_usage_tracker.py |
 | `UNITARES_TRACEMALLOC` | `''` | — | src/mcp_server.py |
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
-| `UNITARES_TRUSTED_NETWORKS` | `''` | Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS) | src/http_routes/access.py |
+| `UNITARES_TRUSTED_NETWORKS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/trusted_networks.py) | Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS) | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/trusted_networks.py |
 | `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
 | `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |

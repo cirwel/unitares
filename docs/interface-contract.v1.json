@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.23.0",
+  "version": "1.24.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "294334142838f14c60ba5be51efa81f4b99c453e5d96ecd0c010c88fa5626c4b",
+  "surface_sha256": "77ecb1ee7adc0fcab576c56ea5a5d07082b17a1a84b259b4e6050791e1ea2aa3",
   "capabilities": [
     {
       "name": "start_session",
@@ -345,7 +345,7 @@
       "name": "call_model",
       "implementation": "call_model",
       "kind": "canonical_tool",
-      "input_schema_sha256": "44fa25c3dec254e5ff9d90f365dbfd2c06b159e339a30ee7525b470e1f9d2f3a",
+      "input_schema_sha256": "d71eb0f7f23942b36881eac18c4d0621086c9c4a06a2d8b5b79abfe780f712db",
       "transport_names": {
         "mcp_streamable_http": "call_model",
         "rest_v1_tools": "call_model",

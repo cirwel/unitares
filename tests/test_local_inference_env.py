@@ -351,3 +351,11 @@ def test_every_local_model_setting_reaches_every_reader(monkeypatch):
         assert compose_env.get(name) == "${%s:-}" % name, f"{name} not mapped in docker-compose.yml"
         assert f"<key>{name}</key>" in plist, f"{name} missing from the LaunchAgent template"
         assert spawn.get(name) == values[name], f"{name} not forwarded to the orchestrated reviewer"
+
+
+def test_the_flag_catalog_lists_each_alias_with_its_removal_release():
+    flags = (REPO / "docs/FLAGS.md").read_text()
+    for alias in env.SETTING_ALIASES:
+        assert f"| `{alias.old}` | `''` | Alias of {alias.new} until v{alias.removed_in} |" in flags
+    for name in env.LOCAL_MODEL_SETTINGS:
+        assert f"| `{name}` |" in flags
