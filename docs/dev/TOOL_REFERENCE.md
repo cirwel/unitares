@@ -1204,7 +1204,7 @@ ACTIONS:
 - telemetry: System-wide telemetry rollup (skip rates, calibration, suspicious patterns)
 - audit_events: Query audit.events by event_type + time window (issue #422 grace-window evaluations)
 - outcome_evidence: Query audit.outcome_events corroboration grades, claim-only task_completed rows, low-corroboration agents, and verified/unverified PR/commit/test claim fields
-- bridge: Query notification-bridge delivery receipts, suppressions, failures, operator commands, and unacked high/critical alerts
+- bridge: Query Discord bridge delivery receipts, suppressions, failures, operator commands, and unacked high/critical alerts
 
 ~~~text
 EXAMPLES:
