@@ -320,14 +320,13 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
     assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
 
 
-@pytest.mark.parametrize("start,expected,consistent", [
-    (None, "new", True), ("old", "new", True), ("newer", "newer", True),
-    ("side", "side", False)])
-def test_the_base_ref_only_moves_forward(carry_repo, start, expected, consistent):
+@pytest.mark.parametrize("start,expected", [
+    (None, "new"), ("old", "new"), ("newer", "newer"), ("side", "side")])
+def test_the_base_ref_only_moves_forward(carry_repo, start, expected):
     # Codex on #2568: another worktree may fetch a newer base while the
     # handoff runs; the handoff must never roll the shared ref back. A value
-    # on another line of history (a rewritten base) is kept but reported, so
-    # the handoff can refuse rather than guess which base CI reads.
+    # on another line of history (a rewritten base) is kept too: the handoff
+    # validates against whatever the ref holds.
     commits = {"old": _git(carry_repo, "rev-parse", "master")}
     _git(carry_repo, "checkout", "-q", "master")
     for name in ("new", "newer"):
@@ -341,57 +340,69 @@ def test_the_base_ref_only_moves_forward(carry_repo, start, expected, consistent
     ref = "refs/remotes/origin/master"
     if start:
         _git(carry_repo, "update-ref", ref, commits[start])
-    assert rg._advance_ref(ref, commits["new"]) is consistent
+    rg._advance_ref(ref, commits["new"])
     assert _git(carry_repo, "rev-parse", ref) == commits[expected]
 
 
-def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch):
+@pytest.mark.parametrize("winner", ["newer", "side"])
+def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner):
     # Codex on #2568: another worktree may move the ref between the read and
-    # the compare-and-swap. The lost swap must re-read and decide on what is
-    # there now, here a rewritten base, never report success.
+    # the compare-and-swap. The lost swap re-reads and decides on what is there
+    # now: a newer base or a rewritten one is kept, never overwritten.
     base = _git(carry_repo, "rev-parse", "master")
     _git(carry_repo, "checkout", "-q", "master")
-    (carry_repo / "other.txt").write_text("new\n")
-    _git(carry_repo, "commit", "-q", "-am", "new")
-    new = _git(carry_repo, "rev-parse", "HEAD")
+    commits = {}
+    for name in ("new", "newer"):
+        (carry_repo / "other.txt").write_text(f"{name}\n")
+        _git(carry_repo, "commit", "-q", "-am", name)
+        commits[name] = _git(carry_repo, "rev-parse", "HEAD")
     _git(carry_repo, "checkout", "-q", "-b", "side", base)
     (carry_repo / "other.txt").write_text("side\n")
     _git(carry_repo, "commit", "-q", "-am", "side")
-    side = _git(carry_repo, "rev-parse", "HEAD")
+    commits["side"] = _git(carry_repo, "rev-parse", "HEAD")
     ref = "refs/remotes/origin/master"
     _git(carry_repo, "update-ref", ref, base)
     real_run = rg.subprocess.run
+    raced = []
 
     def racing_run(cmd, *a, **k):
-        if cmd[:2] == ["git", "update-ref"]:
-            _git(carry_repo, "update-ref", ref, side)  # the other worktree wins
+        if cmd[:2] == ["git", "update-ref"] and not raced:
+            raced.append(True)
+            _git(carry_repo, "update-ref", ref, commits[winner])  # the other worktree wins
         return real_run(cmd, *a, **k)
 
     monkeypatch.setattr(rg.subprocess, "run", racing_run)
-    assert rg._advance_ref(ref, new) is False
-    assert _git(carry_repo, "rev-parse", ref) == side
+    rg._advance_ref(ref, commits["new"])
+    assert raced and _git(carry_repo, "rev-parse", ref) == commits[winner]
 
 
-def test_handoff_refuses_when_the_base_was_rewritten(carry_repo, monkeypatch, capsys):
-    # Codex on #2568: if origin/<base> moved to another line of history during
-    # the review, the reviewed key was checked against a base CI no longer reads.
+@pytest.mark.parametrize("retained,expected", [("merges_the_pr", 2), ("rewritten", 0)])
+def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatch,
+                                                         retained, expected):
+    # Codex on #2568: another worktree may leave origin/<base> at a newer or a
+    # rewritten base than the handoff fetched. The key is checked against that
+    # base, the one the second-family pass and CI read: a base that merged the
+    # PR's commit changes the diff (UNREVIEWED); a rewritten base that leaves
+    # the PR's diff alone does not.
     _git(carry_repo, "remote", "add", "origin", str(carry_repo))
     _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
     head = _git(carry_repo, "rev-parse", "HEAD")
     key = rg.diff_key("master", "HEAD")
     _git(carry_repo, "checkout", "-q", "--detach", "master")
-    (carry_repo / "other.txt").write_text("rewritten\n")
-    _git(carry_repo, "commit", "-q", "-am", "a rewritten base another worktree fetched")
+    if retained == "merges_the_pr":
+        _git(carry_repo, "merge", "-q", "--no-edit", "feature")
+    else:
+        (carry_repo / "other.txt").write_text("rewritten\n")
+        _git(carry_repo, "commit", "-q", "-am", "a rewritten base")
     _git(carry_repo, "update-ref", "refs/remotes/origin/master", "HEAD")
-    _git(carry_repo, "checkout", "-q", "feature")
-    _git(carry_repo, "checkout", "-q", "master")
-    (carry_repo / "other.txt").write_text("the base as fetched here\n")
-    _git(carry_repo, "commit", "-q", "-am", "base")
+    if retained == "rewritten":
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("the base as fetched here\n")
+        _git(carry_repo, "commit", "-q", "-am", "base")
     _git(carry_repo, "checkout", "-q", "feature")
     _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
-    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
-    assert "different lines of history" in capsys.readouterr().out
+    assert completed_review_exit("o/r", 1, key, head, 0) == expected
 
 
 @pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])

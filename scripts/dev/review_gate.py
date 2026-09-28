@@ -1650,23 +1650,19 @@ def _is_ancestor(a: str, b: str) -> bool:
                           capture_output=True).returncode == 0
 
 
-def _advance_ref(ref: str, new: str) -> bool:
+def _advance_ref(ref: str, new: str) -> None:
     """Move `ref` forward to `new`, never back: a newer value (another worktree
-    fetched meanwhile) is kept. Compare-and-swap, so a concurrent update wins.
-    False when `ref` holds a value on another line of history (the base was
-    rewritten): the caller then cannot say which base CI will read."""
+    fetched meanwhile), or one on another line of history, is kept.
+    Compare-and-swap, so a concurrent update wins; a lost swap re-reads and
+    decides again. The caller validates against whatever `ref` then holds."""
     for _ in range(3):
         old = git("rev-parse", "--verify", "--quiet", ref, check=False).strip()
-        if old == new or (old and _is_ancestor(new, old)):
-            return True
-        if old and not _is_ancestor(old, new):
-            return False
-        # An empty old value asserts the ref does not exist yet. A lost race
-        # (the ref moved since the read) re-reads and decides again.
+        if old == new or (old and not _is_ancestor(old, new)):
+            return
+        # An empty old value asserts the ref does not exist yet.
         if subprocess.run(["git", "update-ref", ref, new, old],
                           capture_output=True).returncode == 0:
-            return True
-    return False
+            return
 
 
 def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) -> int:
@@ -1690,13 +1686,15 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
         # --base, origin/<base>; a custom --base is the caller's to refresh).
         # CI reads the base as it is now, and a base advance may have added a
         # sensitive path; move that ref forward to this snapshot, as a fetch
-        # would, whether or not the head moved.
-        if not _advance_ref(f"refs/remotes/origin/{info['baseRefName']}",
-                            git("rev-parse", base_ref).strip()):
-            raise SystemExit(f"origin/{info['baseRefName']} and the fetched base are on "
-                             "different lines of history (was the base rewritten?); "
-                             "fetch it and review the current diff")
-        fetched_key = diff_key(base_ref, head_ref)
+        # would, whether or not the head moved. Then check the diff against
+        # the base that ref holds (this snapshot, or a newer or rewritten one
+        # another worktree fetched meanwhile), so the key and the policy come
+        # from the same base.
+        tracking = f"refs/remotes/origin/{info['baseRefName']}"
+        _advance_ref(tracking, git("rev-parse", base_ref).strip())
+        checked_base = (tracking if git("rev-parse", "--verify", "--quiet", tracking,
+                                        check=False).strip() else base_ref)
+        fetched_key = diff_key(checked_base, head_ref)
         fetched_head = git("rev-parse", head_ref).strip()
         current = fetched_key == key
         open_finding = None
@@ -1707,7 +1705,7 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
             # fetched head with that chain, so read it as CI does: a finding
             # posted meanwhile, on any key or native to either head, keeps the
             # PR blocked.
-            equivalents = base_merge_equivalents(base_ref, head_ref)
+            equivalents = base_merge_equivalents(checked_base, head_ref)
             current = current or key in {k for k, _ in equivalents}
             if current:
                 _CARRY[(repo, pr)] = (fetched_key, equivalents)
