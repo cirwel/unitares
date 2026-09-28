@@ -3,9 +3,11 @@
 064 admitted a closure class only on resolved, closed, wont_fix or superseded
 rows. Once the class is stored, the KG lifecycle's resolved -> archived move
 (and archived -> cold) would violate that for every classified row: the AGE
-backend's update rolls back and returns False, which the lifecycle ignores, so
-the row stays resolved and the error repeats every run; the Postgres backend
-raises and the rest of that lifecycle run is lost.
+backend's update rolls back and returns False, which the lifecycle then
+ignored, so the row stayed resolved, was reported archived, and the error
+repeated every run; the Postgres backend raised and the rest of that lifecycle
+run was lost. The lifecycle now counts a refused or raising update as that
+row's failure (tests/test_knowledge_graph_lifecycle.py).
 
 The static half holds the migration's shape. The live half runs against
 governance_test through the suite's own fixture (it skips when that database
@@ -196,10 +198,11 @@ async def test_the_lifecycle_archives_a_classified_resolved_row(
         }
 
         lifecycle = KnowledgeGraphLifecycle(graph=graph)
-        archived, _skipped = await lifecycle._archive_old_resolved(
+        archived = await lifecycle._archive_old_resolved(
             datetime.now(), dry_run=False
         )
-        assert discovery_id in archived
+        assert discovery_id in archived.changed
+        assert discovery_id not in archived.failed
         assert await _row(backend, discovery_id) == {
             "status": "archived",
             "closure_class": "fix_verified",
@@ -236,7 +239,8 @@ async def test_the_lifecycle_moves_a_classified_archived_row_to_cold(
         cold = await KnowledgeGraphLifecycle(graph=graph)._move_to_cold(
             datetime.now(), dry_run=False
         )
-        assert discovery_id in cold
+        assert discovery_id in cold.changed
+        assert discovery_id not in cold.failed
         assert await _row(backend, discovery_id) == {
             "status": "cold",
             "closure_class": "fix_verified",
