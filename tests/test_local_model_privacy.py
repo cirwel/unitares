@@ -191,6 +191,33 @@ async def test_call_model_sends_to_an_external_endpoint_when_privacy_allows(exte
     )
     assert outcome.ok, outcome.failure
     assert fake.call_args.kwargs["base_url"] == EXTERNAL_BASE
+    # The record says where the prompt went, not what ollama:local usually is.
+    assert outcome.inference["privacy_class"] == "external"
+    assert outcome.inference["cost_class"] == "unknown"
+    assert any(w.startswith("local_route_endpoint_external") for w in outcome.inference["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_a_local_endpoint_keeps_the_local_record(monkeypatch):
+    from src.mcp_handlers.support import model_inference
+
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="ok", reasoning=None), finish_reason="stop")],
+        usage=SimpleNamespace(total_tokens=3),
+        model="m",
+    )
+    fake = MagicMock()
+    fake.return_value.chat.completions.create = AsyncMock(return_value=response)
+    fake.return_value.close = AsyncMock()
+    monkeypatch.setattr(model_inference, "OpenAI", fake)
+    outcome = await model_inference.run_model_inference(
+        model_inference.CallModelRequest(
+            prompt="hi", requesting_agent_uuid=None, provider="ollama", privacy="cloud"
+        )
+    )
+    assert outcome.ok, outcome.failure
+    assert outcome.inference["privacy_class"] == "local"
+    assert outcome.inference["warnings"] == []
 
 
 @pytest.mark.asyncio

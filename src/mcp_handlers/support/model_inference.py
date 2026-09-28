@@ -406,16 +406,22 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             },
         )
 
+    # Set on the local route: where the configured endpoint sits (from its URL).
+    local_endpoint = None
+
     # Privacy routing: local unless the caller asked for a lane that is not.
     if provider == "ollama" or (privacy == "local" and not wants_hf):
         # Route to Ollama (local). Model names pass through verbatim so
         # callers get a clean 404 if the model isn't pulled — no silent
         # aliasing to a model that may also be absent.
         base_url = model_base_url()  # OpenAI-compatible base, /v1 included
+        # Classified on every use of the local route, not only under
+        # privacy='local': the inference record reports where the prompt went.
+        local_endpoint = classify_endpoint(base_url)
         if privacy == "local":
             # privacy='local' (stated or defaulted) is a promise about where the
             # prompt goes. Checked from the URL alone, before any request.
-            endpoint = classify_endpoint(base_url)
+            endpoint = local_endpoint
             if not endpoint.is_local:
                 return InferenceOutcome.failed(
                     local_refusal_message(endpoint),
@@ -482,6 +488,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         if ollama_available:
             # Prefer Ollama (local, free, no token needed)
             base_url = model_base_url()
+            local_endpoint = classify_endpoint(base_url)
             api_key = "ollama"
             model = default_local_model() if model == "auto" else model
             provider = "ollama"
@@ -671,6 +678,21 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             ),
             "warnings": [],
         }
+        if (
+            provider == "ollama"
+            and local_endpoint is not None
+            and not local_endpoint.is_local
+        ):
+            # The registry's ollama:local record describes the default, loopback
+            # endpoint. A configured endpoint that classifies external received
+            # this prompt, so the record must say so rather than claim local.
+            inference["privacy_class"] = "external"
+            inference["cost_class"] = "unknown"
+            inference["warnings"].append(
+                "local_route_endpoint_external: the configured model endpoint "
+                f"({local_endpoint.host}) is not on a network the server treats "
+                "as the operator's"
+            )
         
         return InferenceOutcome(
             response=result_text,
