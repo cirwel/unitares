@@ -83,14 +83,18 @@ def test_malformed_authorization_header_is_rejected():
     assert _check_ws_auth(_WS(ip="8.8.8.8", auth="s3cret"), http_api_token="s3cret") is False
 
 
-# ---- Local posture preserved: loopback/Tailscale keep streaming unauthenticated ----
+# ---- Local posture preserved: trusted networks keep streaming unauthenticated ----
 
 def test_loopback_bypasses_without_token():
     # The dashboard on localhost and the phase view must not start 403-ing.
     assert _check_ws_auth(_WS(ip="127.0.0.1"), http_api_token="s3cret") is True
 
 
-def test_tailscale_bypasses_without_token():
+def test_tailscale_needs_a_token_unless_the_operator_lists_it(monkeypatch):
+    # 100.64.0.0/10 is not built in: one operator's tailnet is not every install's.
+    monkeypatch.delenv("UNITARES_TRUSTED_NETWORKS", raising=False)
+    assert _check_ws_auth(_WS(ip="100.101.102.103"), http_api_token="s3cret") is False
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
     assert _check_ws_auth(_WS(ip="100.101.102.103"), http_api_token="s3cret") is True
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -168,12 +169,17 @@ class TestCatalog:
 @pytest.fixture
 def restore_catalog():
     """Put the process-wide catalog back after a test registers extras."""
+    catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
     saved = dict(_catalog)
+    saved_progress = set(catalog_module.progress_series)
     try:
         yield
     finally:
         _catalog.clear()
         _catalog.update(saved)
+        catalog_module.progress_series.clear()
+        catalog_module.progress_series.update(saved_progress)
 
 
 def _write(tmp_path, doc) -> Path:
@@ -408,3 +414,37 @@ class TestQuery:
         with patch("src.agent_storage.get_db", return_value=db):
             result = await query("no.such.metric")
         assert result == []
+
+
+class TestProgressSeriesFlag:
+    def test_unset_marks_nothing(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.unset", "description": "d"},
+            {"name": "test.progress.false", "description": "d", "progress": False},
+        ]}))
+        assert catalog_module.progress_series == set()
+
+    def test_true_marks_the_series(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.yes", "description": "d", "progress": True},
+        ]}))
+        assert catalog_module.progress_series == {"test.progress.yes"}
+
+    def test_non_boolean_progress_skips_the_entry(self, restore_catalog, tmp_path):
+        catalog_module = importlib.import_module("src.fleet_metrics.catalog")
+
+        catalog_module.progress_series.clear()
+        loaded = load_extra_catalog(_write(tmp_path, {"metrics": [
+            {"name": "test.progress.bad", "description": "d", "progress": "yes"},
+            {"name": "test.progress.ok", "description": "d"},
+        ]}))
+        assert [m.name for m in loaded] == ["test.progress.ok"]
+        assert "test.progress.bad" not in _catalog
+        assert catalog_module.progress_series == set()
+
