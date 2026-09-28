@@ -212,10 +212,12 @@ SERVED_SCHEMA_GLOB = "src/mcp_handlers/schemas/*.py"
 SERVED_SCHEMA_FILES = ("src/alias_schema.py",)
 # Schema keywords whose text a caller reads: `description` (describe_tool,
 # and tools/list unless a brief replaces it), `brief` (the authored tools/list
-# short form, in json_schema_extra and in alias overrides) and `examples`
-# (advertised as data). Field(...) takes description= and examples= as
-# keywords; the rest are dict entries.
-SERVED_SCHEMA_KEYS = frozenset({"description", "brief", "examples"})
+# short form, in json_schema_extra and in alias overrides), `examples`
+# (advertised as data) and `title` (served when
+# UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep preserves property titles).
+# Field(...) takes description=, examples= and title= as keywords; the rest
+# are dict entries.
+SERVED_SCHEMA_KEYS = frozenset({"description", "brief", "examples", "title"})
 
 
 def is_served_schema_module(rel: str) -> bool:

@@ -310,6 +310,16 @@ def test_schema_description_read_through_a_module_constant(tmp_path):
     assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0] and ":3:" in hits[0]
 
 
+def test_schema_title_naming_a_resident_is_flagged(tmp_path):
+    # Served when UNITARES_TOOL_SCHEMA_PROPERTY_TITLES=keep keeps titles.
+    src = (
+        "from pydantic import Field\n"
+        'x = Field(None, title="Ask Lumen")\n'
+    )
+    hits = _schema(tmp_path, src)
+    assert len(hits) == 1 and 'fleet identity "Lumen"' in hits[0]
+
+
 def test_a_constant_reassigned_after_the_model_still_counts(tmp_path):
     # The class body captured the first value; the later assignment does not
     # change what the schema serves.
