@@ -1,0 +1,34 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-09-28T07:57:37Z",
+  "verified_date": "2026-09-28",
+  "verifier": "Claude (re-checked after merging master into #2559: identity/handlers.py is byte-identical to the content verified 2026-09-27; PATH 0 Part C still broadcasts identity_hijack_suspected and logs in log mode, and broadcasts then rejects under UNITARES_IDENTITY_STRICT=strict; master's skill change (#2540, dialectic consult) cites no identity source)",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "086516b9f9636671",
+    "unitares/skills/governance-fundamentals/SKILL.md": "5aec85ceeac4aa52",
+    "unitares/skills/governance-lifecycle/SKILL.md": "724d8ac3660ecc1f",
+    "unitares/skills/knowledge-graph/SKILL.md": "71293a5ba9d79686",
+    "unitares/skills/unitares-dashboard/SKILL.md": "e150b8e91b84c46f",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "36cb632881613e42",
+    "unitares/src/mcp_handlers/identity/handlers.py": "923208dfbe84d429",
+    "unitares/src/mcp_handlers/identity/session.py": "f2639212259aa5c7",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "22556d5f115c3582",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "3dcff3cee850f677",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/schemas/identity.py": "35c5919dceac4c44",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "cce173b777ca01c3"
+  },
+  "skill_digest": "5d75aa508232f1f9",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/identity/handlers.py": [
+      "ccd5919013452344"
+    ]
+  }
+}

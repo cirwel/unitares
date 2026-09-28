@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -138,6 +139,40 @@ def mcp_test_server(tmp_path_factory):
         proc.wait(timeout=5)
 
 
+# The UUID of every identity a CLI onboard minted, keyed by the session file
+# that test used, so cli_env's teardown can archive each one. The session file
+# alone misses some: `reset` deletes it, and a second onboard overwrites the
+# first one's uuid.
+_ONBOARDED: dict[str, list[str]] = {}
+
+
+def _session_uuid(session_file: str) -> str | None:
+    try:
+        return json.loads(Path(session_file).read_text()).get("uuid") or None
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _archive_test_agent(server_url: str, agent_uuid: str) -> dict:
+    """Archive one test identity by UUID and return the tool result.
+
+    Only a UUID names an archive target (TARGET_AGENT_UUID_REQUIRED refuses a
+    label). force=true: the test is over, so the liveness guard, which exists
+    so a sweep cannot strand a running workflow, has nothing to protect.
+    """
+    req = urllib.request.Request(
+        f"{server_url}/v1/tools/call",
+        data=json.dumps({
+            "name": "agent",
+            "arguments": {"action": "archive", "agent_id": agent_uuid, "force": True},
+        }).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        body = json.loads(resp.read())
+    return body.get("result") or body
+
+
 @pytest.fixture
 def cli_env(tmp_path, mcp_test_server):
     """Minimal env for the CLI: isolated test-server URL, unique per-test
@@ -147,27 +182,32 @@ def cli_env(tmp_path, mcp_test_server):
     trajectory-verification guard when the test is rerun in the same
     governance_test database.
 
-    Archives the test agent on teardown so the test DB stays tidy.
+    Archives every identity the test onboarded, by UUID, on teardown so the
+    test DB stays tidy, and errors the test if the server refuses one: an
+    archive by display name was refused silently from #2532 on, leaving every
+    one of them active in governance_test.
     """
     env = os.environ.copy()
     env["UNITARES_URL"] = mcp_test_server
     agent_name = _unique_agent_name()
     env["UNITARES_AGENT"] = agent_name
-    env["UNITARES_SESSION_FILE"] = str(tmp_path / "session.json")
+    session_file = str(tmp_path / "session.json")
+    env["UNITARES_SESSION_FILE"] = session_file
     env["UNITARES_TIMEOUT"] = "30"
     yield env
-    try:
-        req = urllib.request.Request(
-            f"{mcp_test_server}/v1/tools/call",
-            data=json.dumps({
-                "name": "agent",
-                "arguments": {"action": "archive", "agent_id": agent_name}
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-        )
-        urllib.request.urlopen(req, timeout=5)
-    except Exception:
-        pass
+    minted = _ONBOARDED.pop(session_file, [])
+    current = _session_uuid(session_file)
+    if current and current not in minted:
+        minted.append(current)
+    refused = {}
+    for agent_uuid in minted:
+        result = _archive_test_agent(mcp_test_server, agent_uuid)
+        if result.get("success") is not True:
+            refused[agent_uuid] = result
+    assert not refused, (
+        f"teardown could not archive {agent_name}'s identities, so they stay "
+        f"active in governance_test: {refused}"
+    )
 
 
 def _run(env, *args, check=True):
@@ -178,6 +218,11 @@ def _run(env, *args, check=True):
         text=True,
         timeout=60,
     )
+    session_file = env.get("UNITARES_SESSION_FILE")
+    if args and args[0] in ("onboard", "o") and result.returncode == 0 and session_file:
+        minted = _session_uuid(session_file)
+        if minted:
+            _ONBOARDED.setdefault(session_file, []).append(minted)
     if check and result.returncode != 0:
         raise AssertionError(
             f"CLI exited {result.returncode}\n"
@@ -275,6 +320,10 @@ def test_onboard_persists_session_and_continuity_token(cli_env, tmp_path):
     assert payload.get("client_session_id"), "session id not persisted"
     # The token is retained for in-process proof-owned calls, not startup resume.
     assert payload.get("continuity_token"), "continuity token not persisted"
+    # The session file carries client_session_id and continuity_token — group/
+    # other-readable would leak them to any other local account.
+    mode = stat.S_IMODE(session_file.stat().st_mode)
+    assert mode == 0o600, f"session file must be 0600, got {oct(mode)}"
 
 
 def test_metrics_after_onboard_shows_eisv(cli_env):

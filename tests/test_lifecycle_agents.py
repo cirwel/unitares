@@ -1043,14 +1043,14 @@ class TestArchiveAgent:
     @pytest.mark.asyncio
     async def test_archive_success(self, server):
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.archive_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({"agent_id": "agent-1"})
+            result = await handle_archive_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             data = _parse(result)
             assert data["success"] is True
             assert data["lifecycle_status"] == "archived"
@@ -1061,11 +1061,11 @@ class TestArchiveAgent:
     @pytest.mark.asyncio
     async def test_archive_already_archived(self, server):
         meta = make_agent_meta(status="archived")
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({"agent_id": "agent-1"})
+            result = await handle_archive_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             text = result[0].text
             assert "already archived" in text.lower()
 
@@ -1073,9 +1073,9 @@ class TestArchiveAgent:
     async def test_archive_not_found(self, server):
         server.agent_metadata = {}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({"agent_id": "agent-1"})
+            result = await handle_archive_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             text = result[0].text
             assert "not found" in text.lower()
 
@@ -1083,11 +1083,11 @@ class TestArchiveAgent:
     async def test_archive_no_ownership_check(self, server):
         """Archive intentionally skips ownership check -- operators/dashboard need to archive others."""
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({"agent_id": "agent-1"})
+            result = await handle_archive_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             text = result[0].text
             assert "archived successfully" in text.lower()
 
@@ -1098,21 +1098,23 @@ class TestArchiveAgent:
 
         with patch_lifecycle_server(server, require_registered=(None, error)):
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({})
+            # A named target that is not registered; with no agent_id at all
+            # the call is refused earlier (test_agent_destructive_explicit_target.py).
+            result = await handle_archive_agent({"agent_id": "bbbbbbbb-0000-4000-8000-000000000002"})
             assert "not registered" in result[0].text
 
     @pytest.mark.asyncio
     async def test_archive_with_custom_reason(self, server):
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.archive_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
             result = await handle_archive_agent({
-                "agent_id": "agent-1", "reason": "Session ended",
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "reason": "Session ended",
             })
             data = _parse(result)
             assert data["reason"] == "Session ended"
@@ -1120,38 +1122,38 @@ class TestArchiveAgent:
     @pytest.mark.asyncio
     async def test_archive_keep_in_memory(self, server):
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
-        server.monitors = {"agent-1": MagicMock()}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
+        server.monitors = {"aaaaaaaa-0000-4000-8000-000000000001": MagicMock()}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.archive_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
             result = await handle_archive_agent({
-                "agent_id": "agent-1", "keep_in_memory": True,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "keep_in_memory": True,
             })
             data = _parse(result)
             assert data["kept_in_memory"] is True
-            assert "agent-1" in server.monitors  # kept
+            assert "aaaaaaaa-0000-4000-8000-000000000001" in server.monitors  # kept
 
     @pytest.mark.asyncio
     async def test_archive_unloads_monitor(self, server):
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
-        server.monitors = {"agent-1": MagicMock()}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
+        server.monitors = {"aaaaaaaa-0000-4000-8000-000000000001": MagicMock()}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.archive_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
             result = await handle_archive_agent({
-                "agent_id": "agent-1", "keep_in_memory": False,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "keep_in_memory": False,
             })
             data = _parse(result)
             assert data["kept_in_memory"] is False
-            assert "agent-1" not in server.monitors  # removed
+            assert "aaaaaaaa-0000-4000-8000-000000000001" not in server.monitors  # removed
 
 
 # ============================================================================
@@ -1166,43 +1168,43 @@ class TestDeleteAgent:
 
     @pytest.mark.asyncio
     async def test_delete_requires_confirm(self, server):
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"agent_id": "agent-1", "confirm": False})
+            result = await handle_delete_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": False})
             text = result[0].text
             assert "confirm" in text.lower()
 
     @pytest.mark.asyncio
     async def test_delete_default_no_confirm(self, server):
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"agent_id": "agent-1"})
+            result = await handle_delete_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             text = result[0].text
             assert "confirm" in text.lower()
 
     @pytest.mark.asyncio
     async def test_delete_pioneer_blocked(self, server):
         meta = make_agent_meta(status="active", tags=["pioneer"])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"agent_id": "agent-1", "confirm": True})
+            result = await handle_delete_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True})
             text = result[0].text
             assert "pioneer" in text.lower() or "cannot delete" in text.lower()
 
     @pytest.mark.asyncio
     async def test_delete_success_no_backup(self, server):
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.delete_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
             result = await handle_delete_agent({
-                "agent_id": "agent-1", "confirm": True, "backup_first": False,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": False,
             })
             data = _parse(result)
             assert data["success"] is True
@@ -1213,9 +1215,9 @@ class TestDeleteAgent:
     async def test_delete_not_found(self, server):
         server.agent_metadata = {}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"agent_id": "agent-1", "confirm": True})
+            result = await handle_delete_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True})
             text = result[0].text
             assert "not found" in text.lower()
 
@@ -1223,12 +1225,12 @@ class TestDeleteAgent:
     async def test_delete_no_ownership_check(self, server):
         """Delete intentionally skips ownership check -- operators/dashboard need to manage agents."""
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)):
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
             result = await handle_delete_agent({
-                "agent_id": "agent-1", "confirm": True,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True,
             })
             text = result[0].text
             assert "deleted successfully" in text.lower()
@@ -1236,18 +1238,18 @@ class TestDeleteAgent:
     @pytest.mark.asyncio
     async def test_delete_removes_monitor(self, server):
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
-        server.monitors = {"agent-1": MagicMock()}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
+        server.monitors = {"aaaaaaaa-0000-4000-8000-000000000001": MagicMock()}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.delete_agent = AsyncMock()
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
             result = await handle_delete_agent({
-                "agent_id": "agent-1", "confirm": True, "backup_first": False,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": False,
             })
-            assert "agent-1" not in server.monitors
+            assert "aaaaaaaa-0000-4000-8000-000000000001" not in server.monitors
 
     @pytest.mark.asyncio
     async def test_delete_not_registered(self, server):
@@ -1256,7 +1258,9 @@ class TestDeleteAgent:
 
         with patch_lifecycle_server(server, require_registered=(None, error)):
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
-            result = await handle_delete_agent({"confirm": True})
+            result = await handle_delete_agent(
+                {"agent_id": "bbbbbbbb-0000-4000-8000-000000000002", "confirm": True}
+            )
             assert "not registered" in result[0].text
 
 
@@ -2443,14 +2447,14 @@ class TestArchiveAgentEdgeCases:
         """Persist-first: if DB write fails, archival returns an error and
         in-memory state is NOT mutated (prevents P011 desync)."""
         meta = make_agent_meta(status="active")
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.archive_agent = AsyncMock(side_effect=RuntimeError("PG down"))
             from src.mcp_handlers.lifecycle.handlers import handle_archive_agent
-            result = await handle_archive_agent({"agent_id": "agent-1"})
+            result = await handle_archive_agent({"agent_id": "aaaaaaaa-0000-4000-8000-000000000001"})
             data = _parse(result)
             assert data.get("error_code") == "ARCHIVE_PERSIST_FAILED"
             # In-memory state must NOT be mutated when DB write fails
@@ -2471,9 +2475,9 @@ class TestDeleteAgentEdgeCases:
     async def test_delete_with_backup(self, server):
         """Lines 906-932: backup_first=True creates backup file before deletion."""
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.delete_agent = AsyncMock()
@@ -2482,7 +2486,7 @@ class TestDeleteAgentEdgeCases:
                  patch("pathlib.Path.mkdir", MagicMock()):
                 from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
                 result = await handle_delete_agent({
-                    "agent_id": "agent-1", "confirm": True, "backup_first": True,
+                    "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": True,
                 })
                 data = _parse(result)
                 assert data["success"] is True
@@ -2493,9 +2497,9 @@ class TestDeleteAgentEdgeCases:
     async def test_delete_backup_failure_continues(self, server):
         """Lines 931-932: backup failure doesn't prevent deletion."""
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.delete_agent = AsyncMock()
@@ -2504,7 +2508,7 @@ class TestDeleteAgentEdgeCases:
                  patch("pathlib.Path.mkdir", MagicMock()):
                 from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
                 result = await handle_delete_agent({
-                    "agent_id": "agent-1", "confirm": True, "backup_first": True,
+                    "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": True,
                 })
                 data = _parse(result)
                 assert data["success"] is True
@@ -2515,15 +2519,15 @@ class TestDeleteAgentEdgeCases:
     async def test_delete_postgres_failure_still_succeeds(self, server):
         """Lines 951-954: PostgreSQL delete failure is logged but doesn't block."""
         meta = make_agent_meta(status="active", tags=[])
-        server.agent_metadata = {"agent-1": meta}
+        server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
-        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+        with patch_lifecycle_server(server, require_registered=("aaaaaaaa-0000-4000-8000-000000000001", None)), \
              patch_agent_storage() as mock_storage, \
              patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True):
             mock_storage.delete_agent = AsyncMock(side_effect=RuntimeError("PG down"))
             from src.mcp_handlers.lifecycle.handlers import handle_delete_agent
             result = await handle_delete_agent({
-                "agent_id": "agent-1", "confirm": True, "backup_first": False,
+                "agent_id": "aaaaaaaa-0000-4000-8000-000000000001", "confirm": True, "backup_first": False,
             })
             data = _parse(result)
             assert data["success"] is True

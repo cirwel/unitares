@@ -9,15 +9,28 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Protocol
 
-# Names defined in agents/chronicler/scrapers.py (SCRAPERS dict). Must
-# stay in sync with that file; if Chronicler adds a series, add it here.
-CHRONICLER_SERIES_NAMES: tuple[str, ...] = (
-    "tokei.unitares.src.code",
-    "tests.unitares.count",
+# Core-catalog product series whose rows count as a metrics producer's work
+# (src/fleet_metrics/catalog.py). A deployment adds its own producer's series
+# by marking them `"progress": true` in its extra catalog file
+# (UNITARES_METRICS_CATALOG_EXTRA); see progress_series_names().
+PRODUCT_PROGRESS_SERIES: tuple[str, ...] = (
     "agents.active.7d",
     "kg.entries.count",
     "checkins.7d",
 )
+
+
+def progress_series_names() -> tuple[str, ...]:
+    """The series names the ``metrics_series`` source counts.
+
+    The core product series plus every extra-catalog series marked
+    ``"progress": true``, in a stable order. Read per call rather than at
+    import, so it reflects the catalog the server actually loaded.
+    """
+    from src.fleet_metrics.catalog import progress_series
+
+    extra = sorted(progress_series.difference(PRODUCT_PROGRESS_SERIES))
+    return PRODUCT_PROGRESS_SERIES + tuple(extra)
 
 
 class ResidentProgressSource(Protocol):
@@ -118,11 +131,12 @@ class EISVSyncSource:
 
 
 class MetricsSeriesSource:
-    """Counts metrics.series rows whose `name` is in the
-    Chronicler-known list, in the window. metrics.series has no agent_id
-    column, so all configured UUIDs receive the same count — Chronicler
-    is the sole writer of these names. If another agent ever starts
-    writing to these names, this assumption breaks; revisit at that time.
+    """Counts metrics.series rows whose `name` is in
+    progress_series_names(), in the window. metrics.series has no agent_id
+    column, so all configured UUIDs receive the same count: the source
+    assumes one resident writes these names (the reference fleet's metrics
+    resident). If another agent ever starts writing to them, this
+    assumption breaks; revisit at that time.
     """
     name = "metrics_series"
 
@@ -140,7 +154,7 @@ class MetricsSeriesSource:
                 WHERE name = ANY($1::text[])
                   AND ts > now() - $2::interval
                 """,
-                list(CHRONICLER_SERIES_NAMES),
+                list(progress_series_names()),
                 window,
             )
         n = int(row["n"]) if row else 0

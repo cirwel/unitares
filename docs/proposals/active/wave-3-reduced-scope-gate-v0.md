@@ -1,7 +1,12 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
-**Status:** ⛔ **PROPOSED — UNRATIFIED as a gate.** The document as a whole still awaits operator
-signature and the council round §8 records as unheld.
+**Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
+same day, before any window started** (§10, Amendment 1). ⛔Ratified is
+not met: the §8 council round was held on 2026-09-27 and the W_pre window (§10 A6) has not started.
+A no-port outcome completes the gate at §7 step 4; a pro-port outcome completes it only after the
+step 5 design pass and a new signature (§10 A10). The signature
+authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
+artifacts are still owed.)
 
 ⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
@@ -510,7 +515,8 @@ nor dissolves it. A later continuously/correlated instrument may make (b1) reada
 serialization primitive may instead fire (b2) and dissolve the port question.
 
 ⛔Spending a council round on the shape of a port that may not happen is precisely the cap spend
-criterion 9's apparatus exists to prevent. **Reopen condition:** a nonzero overlap/refusal is
+criterion 9's apparatus exists to prevent. **Reopen condition** (⛔first clause amended by §10 A4:
+read "an adjudicated harm-class collision" for "a nonzero overlap/refusal"): a nonzero overlap/refusal is
 observed, the operator elects the port on other grounds, or a tail-complete replacement instrument
 makes (b1) readable. ⛔§1.1's recommendation of path (1) stands as a recommendation only and has
 **not** been ratified.
@@ -602,17 +608,18 @@ are now deferred, and the instrument moved to the front.
 
 **Then — the decision this gate was built to inform:**
 
-4. **Read the window against (b1) and (b2).** Collisions make the ownership case on data. Clean
+4. **Read the window against (b1) and (b2)** (⛔as amended by §10: the collision classes of A4, the
+   window of A6, and A7's scope; (b2) cannot fire before step 5, A9). Collisions make the ownership case on data. Clean
    bounded zeros remain informational and do not close the reduced scope; only a tail-complete
    observation can fire (b1), while a shared serialization primitive may independently fire (b2).
    ⛔Whichever result is cited, name which of the four states it rules out and how.
-5. **Only if the port goes live:** reopen §6.5 (scope), choose the §1.2 option, and specify the
+5. **Only if the port becomes eligible** (⛔trigger amended by §10 A10; nothing is built before this step and a new signature): reopen §6.5 (scope), choose the §1.2 option, and specify the
    reassignment serialization §6.1 authorised the direction of. ⛔None of these is owed before
    step 4, and none may be started on the strength of this document.
 
 **Independent of the above, and owed regardless:**
 
-6. **Council round on this document** (§8) — unheld, and named by the go-decision §4 alongside it.
+6. **Council round on this document** (§8) — held 2026-09-27; adopted as §10, Amendment 1.
 7. **Pin criterion 10's resolution half** — needs a `resolved+failed` denominator ≥30, upstream of
    this gate and of anything in it.
 8. **§6.4** — the two missing handoff artifacts remain owed; §6.3 is settled above.
@@ -623,7 +630,170 @@ precisely because it is not one.
 
 ---
 
-## §8 Council pass — owed
+## §8 Council pass — held; design pass owed
 
-⛔Not held. The §4 authorisation names "its design pass and council review" alongside this
-document; neither has run. This gate is not met until they have.
+The council round was held on 2026-09-27 and adopted as §10 (A10 splits this section). The §4
+authorisation names "its design pass and council review" alongside this document; the design pass
+is defined on §1.2's chosen option and runs at §7 step 5, on the pro-port branch only; a no-port
+reading completes the gate at step 4 without it (A10).
+
+---
+
+## §9 Signature
+
+**Signed by the operator, 2026-09-27.** Recorded by Claude at the operator's instruction ("i sign
+gate doc"), against this document as it stood on `master` with no amendment in flight.
+
+What the signature does:
+
+- It ratifies this document **as the reduced-scope gate** that the 2026-08-22 go-decision (§4)
+  required: the inventory in §1 of the two paths the gate may cover, the disconfirmers in §2, the prerequisites in §3, the exit criteria
+  in §4, the stop signs in §5, the six settled §6 dispositions as recorded (the rulings in
+  §6.1, §6.2, §6.3, §6.6 and §6.7, and §6.5's deferral), and the §7 sequence. ⛔§6.4 is not
+  among them: it is still owed, and the signature does not decide it. ⛔Nor does it choose
+  the scope or the design: §1.1's path-(1)-only reduction is a proposal §6.5 deferred, and
+  §1.2's option is open until §7 step 5.
+- ⛔**It does not set the numeric standards.** Every threshold this document labels a proposed
+  prior stays proposed: the §2 disconfirmer priors, the §4 exit criteria's numbers (R1's
+  ≥30-day production window, which §7 step 3 repeats, and R4's boundary-cost threshold), and the
+  (b3) boundary budget; R4 and (b3) cannot be numeric until §1.2 is settled. The operator sets each one
+  before the window is read against it; a standard chosen after the data is in is not a gate.
+- From now on, changing any of those is an amendment to a signed gate. ⛔An amendment must land
+  before any reading that relies on it, never after. The 2026-08-22 order (the RFC amendment
+  first, then the signature) is the precedent.
+
+What it does not do:
+
+- ⛔**It does not authorise building.** §7 still governs: nothing in the reduced scope may be
+  built until steps 4–5 have run and this gate is signed again as amended.
+- ⛔**It does not meet the gate.** §8 says the gate is not met until its design pass and council
+  review have run, and at signing neither had (the council has since been held; see §10).
+- It does not start the §7 window. The window starts at the recorded deploy of the complete
+  instrument, and that slot is still empty.
+- It does not answer §6.4 (non-gating for this scope, still owed), and it does not lift or
+  re-read the (D) halt on the original scope.
+
+---
+
+## §10 Amendment 1 (2026-09-27): adopted from the §8 council round, before any window
+
+**Authority.** The §8 council round was held on 2026-09-27 on the document as signed (its record
+is kept in the operator's local notes archive, since the repository keeps review deliberation out of
+tree). Its verdict was unanimous: the §7 window must not start on the instrument as it then stood.
+The operator adopted its recommendations the same day by delegation ("proceed best", 2026-09-27),
+which includes setting the priors below. This amendment lands **before any window starts**; no
+window has started, and the instrument change it depends on (A5) had not been deployed when it was
+written. Per §9, nothing here is read retroactively.
+
+**A1 — the probe does not close the interval it was credited with (§3.1).** The early saga check and
+the post-write probe matched only in-flight sagas, but sagas commit in milliseconds (p50 6.5 ms,
+p99 84 ms, n=138 at amendment time). A saga that starts after the early check and commits before the
+probe was invisible to both, so the pilot's zero overlaps are *not recordable*, not *genuinely zero*.
+§3.1's description of the probe as covering the interval up to just after the write is withdrawn.
+Overlap evidence comes from the time-correlated check (any saga on the session, in any state,
+created at or after the early check) and from the A2 report.
+
+**A2 — collision defined causally, with a bound.** A **collision** is a write by any A3 writer
+whose cause precedes the sweeper's guarded commit and whose effect lands after it, within a
+**correlation bound of 6 hours** (a session id can be reused by a reopen); or that lands between the
+sweeper's decision read and its commit, so the sweeper acts on stale state. A write's cause is its
+decision time (when its writer read the state it acts on, carried in its A12 attempt record), or a
+saga's `created_at`. A BEAM resolve that meets an already-terminal row
+returns `already_terminal` with no saga row, so collisions are measured from the A12 records and the
+pre-registered read-only report `scripts/ops/wave3_collision_report.py` (including a saga-versus-row
+status join), never from the session row alone, which a reap overwrites. "Observed continuously or
+correlated" in §6.7 and §7 step 1 means this definition.
+
+**A3 — the writer inventory is defined by rule.** A **writer** is every code path, in either
+runtime, that writes a session's `status`, `phase`, `reviewer_agent_id` or `awaiting_facilitation`,
+or moves its `updated_at` (which decides sweep eligibility). That includes the sweeper, the BEAM
+resolve and reviewer paths, BEAM liveness (33 sessions carry `liveness_timeout`), protocol-message
+inserts, and every Python fallback. The set lives in a checked-in inventory that a test compares
+against the code, failing on any unlisted writer. "Both writers" and "either/both writer orderings"
+in §2, §4 and §6 mean every inventory writer; A9's coverage includes all of them; a guarded refusal
+names the winner (`winner_status`, `winner_reason`).
+
+**A4 — contention is not harm.** Every guarded sweeper write that meets a competing writer is
+classified once, in this order of precedence: **harm** (a collision under A2 with an adverse
+consequence: the sweeper overwrote or contradicted the other write's effect or acted on state it had
+changed, or the other write invalidated the sweeper's committed effect, such as a message accepted on
+a session the sweeper had failed), then **contention-divergent** (the final status differs from the sweeper's intent) or
+**contention-benign** (it is the same, including same-value overlaps). A refusal is the terminal
+guard working and is never counted as harm by itself. The first clause of §6.5's reopen condition,
+and "collisions" in §7 step 4, mean an **adjudicated harm-class collision**. This narrows a clause of
+the operator's 2026-08-29 §6.5 ruling, by the operator's 2026-09-27 delegation; the other two
+clauses stand.
+
+**A5 — heartbeats must be classifiable.** Each `dialectic_sweep_cycle` row carries
+`process_boot_id`, a per-boot `cycle_seq` and `instrument_version`, and each periodic cycle is
+bounded by a timeout that still emits a row with `error="timeout"`. A sequence gap inside one boot
+is a lost audit write, a boot change is a restart, and an in-boot silence with no sequence gap is a
+hung loop. The complete instrument is `instrument_version = "wave3-instrument-v2"`.
+
+**A6 — the window, named and denominated in exposure.** The §7 step 3 window is **W_pre**, distinct
+from R1's post-port window. W_pre starts at the first periodic `dialectic_sweep_cycle` row with
+`instrument_version = "wave3-instrument-v2"` written after this amendment is on `master`. The start
+record is that row **together with its `code_commit`** (the running checkout's commit, carried in the
+payload), which must be a commit on `master` at or after this amendment; §7 step 2's slot is filled
+from that pair, not from memory, and a row without a resolvable commit cannot start W_pre. W_pre closes
+when **both** hold: at least **30 calendar days**, and at least **60 guarded sweeper reaps**. Pilot
+rows before that start may inform priors and are never counted.
+
+**A7 — what (b1) can speak for.** Reaps only. Facilitation (about one per month) and reassignment
+(none by the sweeper in the pilot, two in the whole history) will not accrue exposure at any
+practical window length; (b1) makes no claim about them, and they are not evidence either way.
+
+**A8 — priors, set.** Set by the operator's delegation before any window, as choices stated before
+they are applied:
+
+| Standard | Setting |
+|---|---|
+| (b1) window | W_pre (A6): ≥30 days and ≥60 guarded reaps |
+| (b1) heartbeat coverage | ≥95% of W_pre covered by periodic rows with gaps ≤22 min; no unexplained gap >60 min; W_pre extends by any uncovered time; restart gaps are explained by `process_boot_id` |
+| (b1) harm-class collisions | 0 |
+| (b1) failed probes | 0 unadjudicated; a failed probe counts only if the A2 report covers that write |
+| Pro-port threshold (§7 step 4; §6.5) | ≥1 adjudicated harm-class collision makes the port eligible for step 5; contention-divergent is reviewed; contention-benign is telemetry |
+| Correlation bound (A2) | 6 hours |
+| R1 production window | Not settable yet; shape fixed now: ≥30 days, ≥60 BEAM-owned guarded writes, ≥95% BEAM heartbeat coverage |
+| R4, (b3), stop sign #14 | Not settable until §1.2; Python baselines are recorded pre-window (periodic cycle p50 6 ms, p99 31 ms; lazy p50 2 ms, p99 14 ms) |
+| (b5) 25% | Already settled by §6.3; §9's "the §2 priors stay proposed" does not include it |
+
+**A9 — (b2) and R2.** A (b2) serialization primitive is a build item under §7's bar, so (b2) cannot
+fire before step 5; the step 4 reading is against (b1) only. When it is built it must be honoured by
+every A3 writer, and it is measured by writer coverage (a static inventory, 100%, and zero runtime
+bypasses), not by (b1)'s channel. R2's evidence needs a BEAM-side emitter with the §3.1 schema,
+specified at step 5, because R1 disables the Python resolver that emits the current channel.
+
+**A10 — §8, split, and how the gate completes.** The council round is held (2026-09-27). The §7
+step 4 reading has two outcomes. If W_pre fires (b1), it concludes **no port for the reap path**;
+facilitation and reassignment, which (b1) cannot speak for (A7), get an operator disposition
+recorded at step 4, stated as a judgment and not as evidence. With both, the gate is met at step 4
+and no §1.2 option is chosen, so the design pass is not owed. If the pro-port threshold is met
+instead, the port only becomes **eligible**: the gate is met after step 5, when the design pass has
+run on the chosen §1.2 option and the gate has been signed again as amended. Nothing is built before
+then. If W_pre reaches its bound with neither outcome available (coverage below A8, an unexplained
+gap, an unadjudicated failed probe, or any unmatched record under A12), the reading is
+**inconclusive**:
+the named defect is fixed, W_pre extends by the uncovered time, and if the fix changes the
+instrument (a new `instrument_version`), W_pre restarts from the first row at the new version. Hours against the §4
+projection were not tracked for either round and are reported as not measured.
+
+**A11 — consistency.** §9 inventories both paths; §2 and §4 cover path (1) only. The status note's
+"six … closed" counts §6.5's deferral, which is not an answer. "Three orderings" means two
+BEAM-first and one sweeper-first; A3 widens "writer" beyond them.
+
+**A12 — no zero from an incomplete record.** Every inventory writer that runs in Python, or is
+started from Python over HTTP, emits an attempt record before its write and a response record after,
+and the inventory test fails on any writer that does not; BEAM liveness only writes `failed`, so its
+outcomes are benign by construction. Each stream carries its own denominator (responses against
+attempts, the sweeper's per-write records against each cycle's `write_attempt_count`, cycle rows
+against `cycle_seq` within a boot). Every failed emission is counted in-process and reported on the
+next cycle row, and appended (fsynced) to a local file outside the audit database before the process
+continues, so a failure survives the process; the A2 report must read that file for every
+deployment in W_pre, and a missing or unreadable file is inconclusive. A recorded failure makes the
+span from the last complete cycle before it to the first after it **uncovered**, like a heartbeat
+gap: its exposure does not count and W_pre extends. Each response carries the write's effect time
+from the database clock where Python performs the write; a BEAM write started over HTTP is bounded
+by its attempt and response, and one whose bounds straddle the sweeper's commit is **ambiguous**,
+never harm and never a zero. Completeness is 100%: any unmatched unit or ambiguous ordering makes
+the reading inconclusive (A10).

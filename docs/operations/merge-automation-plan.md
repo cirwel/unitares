@@ -1,7 +1,14 @@
 # Merge Automation Plan — branch protection + operator-armed auto-merge
 
-**Status:** plan (not yet applied). Sibling of `ci-issue-surfacing.md`; both are
-steps in a surface → fix → land relay.
+**Status:** SUPERSEDED (2026-09-27); kept as history, do not apply. Landing now
+goes through the merge queue (`scripts/ops/pr-babysitter.sh`): the owning agent
+labels its ready PR `approved-to-merge` and the queue arms one PR at a time
+(`github-workflow-conventions.md` §2 and §4). The branch-protection payload
+below is also out of date: master requires more checks than it lists, and
+`enforce_admins` is on. Do not use it to change protection.
+
+Sibling of `ci-issue-surfacing.md`; both were steps in a surface → fix → land
+relay.
 
 ## Goal and the line we are NOT crossing
 

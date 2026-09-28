@@ -38,9 +38,9 @@ name: Elixir Tests
 #   elixir/sentinel, elixir/lease_plane, elixir/unitares_sdk,
 #   elixir/agent_orchestrator, elixir/dialectic_live, elixir/wave3a_handlers,
 #   db/postgres, tests/vectors, tests/vendored (cross-runtime fixtures the
-#   lease_plane suite reads), docker-compose.yml, Dockerfile, .dockerignore,
-#   .github/workflows/elixir-tests.yml, scripts/ci/elixir_paths_changed.py,
-#   scripts/ci/elixir_gate.py
+#   lease_plane suite reads), docker-compose.yml, docker-compose.admin.yml,
+#   Dockerfile, .dockerignore, .github/workflows/elixir-tests.yml,
+#   scripts/ci/elixir_paths_changed.py, scripts/ci/elixir_gate.py
 #
 # Break-glass: master has enforce_admins on, so a required elixir-gate that is
 # red on every branch (the 2026-08-01 audit-partition shape) is cleared by a
@@ -359,9 +359,14 @@ jobs:
     # Postgres+AGE image the documented quickstart uses; docker-initdb.sh applies
     # every migration during init, and `--wait` blocks on the pg_isready
     # healthcheck, which only passes once init (and therefore the migrations) has
-    # completed.
+    # completed. `mix test` below runs on this runner, not inside the Compose
+    # network, so it needs postgres-age's port actually published to the host —
+    # the admin overlay (docker-compose.admin.yml) is exactly that opt-in; a
+    # GitHub-hosted runner has no other-local-user boundary to weaken by using
+    # it. The base compose file alone no longer publishes 5432 by default (see
+    # docs/DEPLOYMENT_SECURITY.md).
     - name: Bring up Postgres + AGE (migrations auto-applied)
-      run: docker compose up postgres-age -d --wait --build
+      run: docker compose -f docker-compose.yml -f docker-compose.admin.yml up postgres-age -d --wait --build
 
     - name: Set up Elixir / OTP
       uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
