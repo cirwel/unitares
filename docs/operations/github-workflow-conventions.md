@@ -176,7 +176,10 @@ the test run one.
   disposed, and a later CLEAN does not clear it. The `review` check says
   "carried across a base merge from `<sha>`" when a carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any
-  change to an added or removed line stops the carry.
+  change to an added or removed line stops the carry. A PR that touches a
+  second-family path (`review_policy.json`) is never carried: a base merge
+  can change how its unchanged lines behave, so each head's diff is
+  reviewed on its own key.
 - The gate proves a review was recorded, not that it was honest: every agent
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own

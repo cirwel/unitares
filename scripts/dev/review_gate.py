@@ -30,7 +30,8 @@ A base merge that DOES touch the PR's files moves the key even when the PR's
 own lines are unchanged. `base_merge_equivalents` finds the earlier keys that
 describe the same PR change (clean automatic base merges with an unchanged
 `patch_fingerprint`), and `carry_records` reads their records as the head's;
-see their docstrings for exactly what stops the carry.
+see their docstrings for exactly what stops the carry. A diff that touches a
+second-family path is never carried: it is reviewed on its exact key.
 
 The record
 ----------
@@ -297,7 +298,16 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
     yields no equivalents: the head's own key then decides alone. So does a
     chain longer than `CARRY_MAX_BASE_MERGES`: its cut-off tail could hold an
     open finding the carried records would then hide.
+
+    A diff that touches a second-family path (the base's own policy, as the
+    gate reads it) yields no equivalents either: a base merge can change how
+    unchanged lines behave, and on those paths that is reviewed again, not
+    carried (operator decision, 2026-09-28). A diff whose paths cannot be
+    read is treated the same way.
     """
+    changed = changed_paths(base, head)
+    if changed is None or (changed and sensitive_paths(changed, base_policy_paths(base))):
+        return []
     out: list[tuple[str, str]] = []
     try:
         fingerprint = None  # computed only once a base merge is found

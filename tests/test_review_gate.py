@@ -519,6 +519,29 @@ def test_a_chain_past_the_bound_carries_nothing(carry_repo, monkeypatch, merges,
         assert rec is None
 
 
+@pytest.mark.parametrize("policy,changed,carried", [
+    ([], None, 1),                 # no second-family path: the merge carries
+    (["f.txt"], None, 0),          # the PR touches one: nothing carries
+    (["*.py"], None, 1),           # a policy that does not match the PR
+    ([], "unreadable", 0),         # paths unreadable: treated as sensitive
+])
+def test_a_second_family_diff_is_never_carried(carry_repo, monkeypatch, policy, changed,
+                                               carried):
+    # Operator decision, 2026-09-28: on second-family paths a base merge can
+    # change how unchanged lines behave, so each head is reviewed on its own
+    # key. The policy is the base's, as the gate reads it.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: policy)
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS
+                        if changed is None else lambda base, head: None)
+    equivalents = rg.base_merge_equivalents("master", "HEAD")
+    assert len(equivalents) == carried
+    rec, _ = _decide([_record(reviewed_key)])
+    assert (rec is not None) == bool(carried)
+
+
 def test_no_earlier_record_means_nothing_decides(carry_repo):
     _master_edits_next_to_the_pr(carry_repo)
     _git(carry_repo, "merge", "-q", "--no-edit", "master")
