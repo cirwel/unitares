@@ -96,11 +96,6 @@ NOT_IDENTITIES: dict[str, str] = {
     "src/evaluation/resident_validation/model.py":
         '"steward" is a ROLE in VALID_ROLES (dogfood_probe/steward/builder/'
         'reviewer), unrelated to the agent of that name',
-    "src/coordination_events.py":
-        "Service literal — coordination-protocol service ids, drift-tested by "
-        "test_emit_rejects_unknown_service; not agent labels",
-    "src/coordination_failure_emit.py":
-        "same coordination-protocol service ids as coordination_events.py",
     "src/watcher_state_reader.py":
         "legacy filesystem path component (data/watcher) read only for "
         "migration off the pre-#595 location",
