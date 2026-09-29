@@ -18,6 +18,8 @@ A real pause keeps every directive it had.
 """
 from copy import deepcopy
 
+import pytest
+
 from src.governance_glossary import explain_verdict
 from src.mcp_handlers.middleware import envelope_step as ES
 from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
@@ -437,11 +439,12 @@ def test_a_resumed_agents_stale_stop_is_not_reported_as_current():
 
 # --- the server instructions ------------------------------------------------
 
-def test_instructions_state_how_a_pause_actually_ends():
+@pytest.mark.parametrize("mode", ["progressive", "full"])
+def test_instructions_state_how_a_pause_actually_ends(mode):
     """The exits in the code, stated as they are: self_recovery (not at high
     risk), dialectic resolution, an operator or the automatic safety nets,
-    and expiry."""
-    text = build_server_instructions("progressive")
+    and expiry. Both advertisement modes carry the sentence."""
+    text = build_server_instructions(mode)
     sentence = text[text.index("a pause holds governed writes"):]
     sentence = sentence[:sentence.index("expires.") + len("expires.")]
     for exit_route in ("self_recovery (not at high risk)", "dialectic",
@@ -452,18 +455,12 @@ def test_instructions_state_how_a_pause_actually_ends():
     assert "agent(action='resume')" not in text
 
 
-def test_instructions_paragraph_stays_inside_the_client_cutoff():
-    """Claude Code truncates MCP server instructions (about 2,088 bytes reached
-    sessions in September 2026 transcripts). This pinned the reading-paths
-    sentence inside 2,048 characters until 2026-09-28, when the string was cut
-    to at most 1,400 bytes and that sentence left it; the pause sentence is
-    now held inside the new budget instead (tests/test_tool_modes.py pins the
-    budget for every required phrase)."""
-    for mode in ("progressive", "full"):
-        text = build_server_instructions(mode)
-        marker = "or it expires."
-        end = text.index(marker) + len(marker)
-        assert len(text[:end].encode("utf-8")) <= 1400, mode
+# test_instructions_paragraph_stays_inside_the_client_cutoff lived here until
+# 2026-09-28. It held the reading-paths sentence inside Claude Code's
+# truncation point so the pause sentence could not push it out. That sentence
+# left the instructions when the string was cut to 1,400 bytes, and the pause
+# sentence's own position is pinned with every other required phrase by
+# tests/test_tool_modes.py::TestServerInstructionsBudget.
 
 
 # --- the nested behavioral verdict (response_mode='full') ---------------------

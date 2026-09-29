@@ -440,6 +440,13 @@ class TestServerInstructions:
 # that cutoff.
 INSTRUCTIONS_MAX_BYTES = 1400
 
+# Where every required phrase must end. Deliberately a separate constant from
+# the total budget: while the two are equal the position check is implied by
+# the size check, and it only names which phrase fell out. It becomes the
+# binding check if the total budget is ever raised to fit new text, so that
+# raise cannot move a required phrase past the first 1,400 bytes unnoticed.
+REQUIRED_PHRASES_END_BY = 1400
+
 # Phrases an agent must receive, in every advertisement mode.
 _REQUIRED_IN_EVERY_MODE = (
     "UNITARES: a self-hosted, single-operator federation kernel for agent "
@@ -496,7 +503,7 @@ class TestServerInstructionsBudget:
         text = build_server_instructions(mode)
         for phrase in _REQUIRED_IN_EVERY_MODE + _REQUIRED_BY_MODE[mode]:
             assert phrase in text, f"{phrase!r} missing from {mode}"
-            assert _byte_end(text, phrase) <= INSTRUCTIONS_MAX_BYTES, (mode, phrase)
+            assert _byte_end(text, phrase) <= REQUIRED_PHRASES_END_BY, (mode, phrase)
 
     @pytest.mark.parametrize("mode", ["progressive", "full"])
     def test_positioning_pins_are_met_by_the_string_itself(self, mode):
@@ -511,7 +518,7 @@ class TestServerInstructionsBudget:
         for label, alternatives in requirements:
             hits = [term.casefold() for term in alternatives if term.casefold() in folded]
             assert hits, f"{mode}: positioning requirement {label!r} missing"
-            assert _byte_end(folded, hits[0]) <= INSTRUCTIONS_MAX_BYTES, (mode, label)
+            assert _byte_end(folded, hits[0]) <= REQUIRED_PHRASES_END_BY, (mode, label)
 
     def test_progressive_route_is_stated_in_call_order(self):
         text = build_server_instructions("progressive")

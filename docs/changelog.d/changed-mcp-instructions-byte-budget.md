@@ -9,15 +9,20 @@
   descriptions are abridged. The same transcripts showed the text arriving
   twice per session when an agent connects through both a local server and
   the hosted connector, about 297 KB a day of repeated orientation. The
-  rewrite is 1,393 bytes (progressive) and 1,386 bytes (full) and keeps the
+  rewrite is 1,393 bytes (progressive) and 1,386 bytes (full). It keeps the
   product sentence, every positioning phrase the doc-drift lint pins, reading
   before binding, `start_session(force_new=true)` with `client_session_id`
-  threading, declared lineage, the full list of pause exits, the four
-  workflow names, the discovery route and the abridged note. Operator
-  configuration (`UNITARES_TOOL_ADVERTISEMENT=full`, the ignored
-  `GOVERNANCE_TOOL_MODE`) left the string, because an agent cannot set it; the
-  interface contract's advertisement section documents it and now says the
-  instructions string does not. Tests pin the byte budget in both modes and
-  check that each required phrase ends inside it. The interface contract does
-  not hash the instructions, so its version and surface digest do not move.
-  This measures bytes delivered, not any change in agent behavior.
+  threading, declared lineage, the full list of pause exits, the workflow
+  names the tests pin (`start_session`, `sync_state`, `record_result`,
+  `check_working_state`), the discovery route and the abridged note. It no
+  longer mentions `request_review`, `consult` or the `dialectic` action list,
+  the reconstruction-sources paragraph, or the core-versus-advanced
+  reading-paths paragraph; `request_review` and `consult` stay in the initial
+  progressive listing with their own descriptions. Operator configuration
+  (`UNITARES_TOOL_ADVERTISEMENT=full`, the ignored `GOVERNANCE_TOOL_MODE`)
+  left the string, because an agent cannot set it; the interface contract's
+  advertisement section documents it and now says the instructions string
+  does not. Tests pin the byte budget in both modes and check that each
+  required phrase ends inside it. The interface contract does not hash the
+  instructions, so its version and surface digest do not move. This measures
+  bytes delivered, not any change in agent behavior.
