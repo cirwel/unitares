@@ -317,7 +317,7 @@ _register_common_aliases(mcp)
 # ============================================================================
 
 DEFAULT_HOST = default_listen_host()
-DEFAULT_PORT = 8767  # Standard port for unitares governance on Mac (8766 is anima, 8765 was old default)
+DEFAULT_PORT = 8767  # Standard governance port (8765 was the old default)
 
 
 def parse_args():
