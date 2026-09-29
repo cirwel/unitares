@@ -88,7 +88,8 @@ authorization and identity gates remain in force. Both settings are operator
 configuration, so the MCP `instructions` string that agents receive at
 initialize does not name them; this section is where they are documented. That
 string stays within 1,400 UTF-8 bytes in either mode because clients truncate
-it, and it is not part of the capability contract: no digest covers it.
+it. It is not part of the capability contract: neither `surface_sha256` nor
+any `input_schema_sha256` covers it, so rewording it moves no contract digest.
 
 The retained `mode` contract field always reports `full`, because it describes
 the complete capability set. All advertisement modes produce the same surface

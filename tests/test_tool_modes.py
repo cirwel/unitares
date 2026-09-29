@@ -334,7 +334,7 @@ class TestServerInstructions:
     """
 
     def test_names_the_workflow_on_every_profile(self):
-        for mode in ("minimal", "standard", "lite", "full"):
+        for mode in ("progressive", "minimal", "standard", "lite", "full"):
             text = build_server_instructions(mode)
             for name in (
                 "start_session",
