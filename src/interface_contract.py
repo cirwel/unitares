@@ -221,7 +221,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # used. The action enum and descriptions grow; nothing is removed, retyped or
 # renamed. The input digests of dialectic and request_review, and the
 # surface digest, move.
-INTERFACE_CONTRACT_VERSION = "1.24.0"
+# 1.25.0 (2026-09-28), numbered after 1.24.0 (#2564): knowledge and
+# search_shared_memory declare recency_half_life_days for action=search, an
+# opt-in recency weight (default off, operator decision 2026-09-27).
+# search_shared_memory's include_details brief and knowledge's sort_by brief
+# are shortened to stay inside the progressive-surface ratchet. The knowledge
+# and search_shared_memory input digests and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.25.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
