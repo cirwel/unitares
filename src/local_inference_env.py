@@ -335,6 +335,7 @@ def no_redirect_http_client(asynchronous: bool = True, *, local: bool = True):
     - **No environment proxy for a local endpoint** (``local=True``). httpx
       honours ``HTTP_PROXY``/``HTTPS_PROXY`` by default, which would send a
       prompt for ``localhost`` through whatever proxy the environment names.
+      Certificate settings (``SSL_CERT_FILE``, ``SSL_CERT_DIR``) still apply.
       An external endpoint (``local=False``) keeps the environment's proxy,
       which an operator may need to reach it.
 
@@ -343,7 +344,17 @@ def no_redirect_http_client(asynchronous: bool = True, *, local: bool = True):
     import httpx
 
     cls = httpx.AsyncClient if asynchronous else httpx.Client
-    return cls(follow_redirects=False, trust_env=not local)
+    if not local:
+        return cls(follow_redirects=False)
+    # trust_env=False drops the proxy variables but would also drop
+    # SSL_CERT_FILE / SSL_CERT_DIR, so a local HTTPS endpoint behind a private
+    # CA would fail verification. Build the trust store the way httpx does
+    # from the environment, and keep only the proxy discovery off.
+    return cls(
+        follow_redirects=False,
+        trust_env=False,
+        verify=httpx.create_ssl_context(trust_env=True),
+    )
 
 
 def direct_urlopen(request, *, timeout: float):

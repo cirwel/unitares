@@ -30,6 +30,10 @@ from .inference_registry import (
     sha256_text as _sha256_text,
 )
 from src.local_inference_env import (
+    DEFAULT_OLLAMA_BASE,
+    is_ollama_endpoint,
+    ollama_base_url,
+    normalize_ollama_base,
     no_redirect_http_client,
     ENDPOINT_NOT_LOCAL,
     classify_endpoint,
@@ -281,6 +285,16 @@ def _provider_timeout_s() -> float:
     margin for the MCP wrapper.
     """
     return max(1.0, _call_model_timeout() - 5.0)
+
+
+def _configured_endpoint_is_ollama() -> bool:
+    """Whether Ollama-specific recovery advice applies to the configured endpoint:
+    it answered like Ollama, or it is the default Ollama address (a fresh
+    install whose Ollama is simply not running yet)."""
+    return (
+        normalize_ollama_base(ollama_base_url()) == DEFAULT_OLLAMA_BASE
+        or is_ollama_endpoint()
+    )
 
 
 def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
@@ -748,18 +762,31 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             and any(marker in error_msg.lower() for marker in ("connection refused", "connection error", "failed to establish", "connect"))
         ):
             error_code = "MODEL_PROVIDER_UNAVAILABLE"
-            recovery_hint = (
-                "Ollama is not reachable. Start Ollama, or explicitly opt into fallback "
-                "routing with privacy='auto' or privacy='cloud' and provider='hf'."
-            )
+            if await asyncio.to_thread(_configured_endpoint_is_ollama):
+                recovery_hint = (
+                    "Ollama is not reachable. Start Ollama, or explicitly opt into fallback "
+                    "routing with privacy='auto' or privacy='cloud' and provider='hf'."
+                )
+            else:
+                recovery_hint = (
+                    f"The model server at {base_url} is not reachable. Start it, or check "
+                    "UNITARES_MODEL_BASE_URL; or opt into fallback routing with "
+                    "privacy='auto' or privacy='cloud' and provider='hf'."
+                )
         elif "not found" in error_msg.lower() or "invalid" in error_msg.lower():
             error_code = "MODEL_NOT_AVAILABLE"
-            if provider == "ollama":
+            if provider == "ollama" and await asyncio.to_thread(_configured_endpoint_is_ollama):
                 recovery_hint = (
                     f"Model '{model}' is not pulled on this host. "
                     f"Run `ollama list` to see available models, `ollama pull {model}` to fetch it, "
                     "or call with privacy='auto' to allow configured cloud fallback."
                 )
+            elif provider == "ollama":
+                recovery_hint = (
+                    f"Model '{model}' is not served by {base_url}. List what it serves "
+                    "(GET {base}/models, or `unitares model`), then set UNITARES_MODEL_ID; "
+                    "or call with privacy='auto' to allow configured cloud fallback."
+                ).replace("{base}", base_url)
             else:
                 recovery_hint = (
                     f"Model '{model}' not available on this provider. "

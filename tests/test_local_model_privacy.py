@@ -817,3 +817,43 @@ def test_a_stalled_resolver_is_reused_not_multiplied(monkeypatch):
         assert len(calls) == 1
     finally:
         release.set()
+
+
+def test_local_clients_keep_the_environment_ca_while_skipping_proxies(monkeypatch):
+    import httpx
+
+    from src import local_inference_env
+
+    calls = []
+    real = httpx.create_ssl_context
+
+    def spy(*a, **k):
+        calls.append(k.get("trust_env"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(httpx, "create_ssl_context", spy)
+    client = local_inference_env.no_redirect_http_client()
+    assert client.trust_env is False
+    assert calls == [True]  # SSL_CERT_FILE / SSL_CERT_DIR still honoured
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base, is_ollama, expect", [
+    ("http://localhost:11434/v1", False, "Ollama is not reachable"),
+    ("http://10.0.0.5:8000/v1", False, "The model server at http://10.0.0.5:8000/v1 is not reachable"),
+    ("http://10.0.0.5:11434/v1", True, "Ollama is not reachable"),
+])
+async def test_unreachable_hint_names_ollama_only_for_ollama(monkeypatch, base, is_ollama, expect):
+    from src.mcp_handlers.support import model_inference
+
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", base)
+    monkeypatch.setattr(model_inference, "is_ollama_endpoint", lambda *a, **k: is_ollama)
+    fake = MagicMock()
+    fake.return_value.chat.completions.create = AsyncMock(side_effect=Exception("Connection error."))
+    fake.return_value.close = AsyncMock()
+    monkeypatch.setattr(model_inference, "OpenAI", fake)
+    outcome = await model_inference.run_model_inference(
+        model_inference.CallModelRequest(prompt="hi", requesting_agent_uuid=None, provider="ollama")
+    )
+    assert not outcome.ok
+    assert expect in outcome.failure.recovery["action"]
