@@ -25,25 +25,28 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import socket
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
-# Service enum mirrors migration 035's coordination_events_service_check.
-# Drift caught by test_emit_rejects_unknown_service.
-Service = Literal[
-    "sentinel",
-    "governance_mcp",
-    "lease_plane",
-    "vigil",
-    "chronicler",
-    "watcher",
-]
+# A service id is deployment configuration, like the resident roster: any
+# lowercase identifier (a letter, then letters, digits or underscores, at most
+# 63 characters). Migration 072's coordination_events_service_check enforces
+# the same pattern server-side; this is the client-side copy, so a bad id
+# fails here with a clear message instead of as a CHECK violation.
+SERVICE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,62}")
+Service = str
+
+
+def is_valid_service(service: object) -> bool:
+    """True when ``service`` is a well-formed coordination service id."""
+    return isinstance(service, str) and SERVICE_PATTERN.fullmatch(service) is not None
 
 # Wave 0 event_type values. Future families extend the regex in a follow-up
 # migration AND add their values here in the same PR. Drift caught by
@@ -356,7 +359,8 @@ async def emit_event(
     Args:
         pool: an asyncpg connection pool. Caller-supplied so this module
               doesn't take a hard dependency on a specific pool helper.
-        service: emitter identity, must be in the migration-035 service enum.
+        service: emitter identity, a lowercase identifier (SERVICE_PATTERN;
+                 migration 072's CHECK).
         event_type: dotted family.subtype, validated client-side here AND
                     server-side by the namespace CHECK constraint.
         payload: event-type-specific structure. MUST be a dict (mirrors the
@@ -376,6 +380,11 @@ async def emit_event(
     propagate per-site based on whether the emitter caller can afford to
     fail (most can't — they're already in an error path).
     """
+    if not is_valid_service(service):
+        raise ValueError(
+            f"service {service!r} must be a lowercase identifier "
+            "(a letter, then letters, digits or underscores; at most 63 characters)"
+        )
     _validate_event_type(event_type)
     if payload is not None and not isinstance(payload, dict):
         raise ValueError(f"payload must be a dict, got {type(payload).__name__}")
