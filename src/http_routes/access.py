@@ -1017,6 +1017,10 @@ async def _resolve_http_session_binding(
     return agent_uuid
 
 
+# How many ``kwargs`` wrappers dispatch actually unwraps on this path.
+_DISPATCH_UNWRAP_DEPTH = 2
+
+
 async def _resolve_http_bound_agent(
     tool_name: str,
     arguments: dict,
@@ -1039,14 +1043,14 @@ async def _resolve_http_bound_agent(
     # target to the handler, which then refuses. The call is read as
     # dispatch will see it after unwrapping a ``kwargs`` wrapper: the stamp
     # lands on the outer dict, and an action or target inside ``kwargs``
-    # only surfaces later, merged over it. Dispatch unwraps twice and a
-    # handler may unwrap a JSON string once more, so the call is read at
-    # EVERY depth from the outer dict down and any depth that is an unnamed
+    # only surfaces later, merged over it. Dispatch unwraps exactly twice
+    # (the pipeline boundary, then the HTTP fallback), so the call is read at
+    # each depth it can reach, 0 through 2, and any of them that is an unnamed
     # destructive call wins: a deeper ``get`` cannot cancel an outer
-    # ``delete``, and a deeper ``delete`` cannot hide behind an outer ``get``.
+    # ``delete``. A wrapper below that depth is never unwrapped, so it must
+    # not retarget a valid outer call either.
     from src.mcp_handlers.middleware.params_step import (
         _EXPLICIT_TARGET_CALLS,
-        _RESERVED_KEY_KWARGS_DEPTH,
         unwrapped_view,
     )
 
@@ -1054,7 +1058,7 @@ async def _resolve_http_bound_agent(
         _EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id")
         for call in (
             unwrapped_view(arguments, depth)
-            for depth in range(_RESERVED_KEY_KWARGS_DEPTH + 1)
+            for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
         )
     )
     if unnamed_destructive:

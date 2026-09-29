@@ -582,6 +582,23 @@ def test_rest_prebind_reads_every_unwrap_depth(arguments, path, monkeypatch):
     assert "agent_id" not in sent
 
 
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+def test_rest_prebind_ignores_a_wrapper_dispatch_never_unwraps(path, monkeypatch):
+    """A destructive call 3 wrappers deep is inert data: it must not strip the
+    target of a valid outer ``get``."""
+    _bound_to, sent = _rest_prebind(
+        "agent",
+        {
+            "action": "get",
+            "agent_id": TARGET,
+            "kwargs": {"kwargs": {"kwargs": {"action": "delete", "agent_id": ""}}},
+        },
+        path,
+        monkeypatch,
+    )
+    assert sent["agent_id"] == TARGET
+
+
 def test_unwrapped_view_depth_zero_is_the_outer_dict():
     from src.mcp_handlers.middleware.params_step import unwrapped_view
 
