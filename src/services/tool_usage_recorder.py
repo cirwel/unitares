@@ -20,7 +20,9 @@ clamped to the tool's own routing vocabulary.
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Optional, Tuple
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Any, Dict, Iterator, Optional, Tuple
 from uuid import UUID
 
 from src.logging_utils import get_logger
@@ -245,7 +247,7 @@ def resolve_minted_agent_id(tool_name: str, agent_id: Optional[str], result: Any
 _SECONDARY_SELECTOR_FIELDS: Dict[str, str] = {"cirs_protocol": "protocol"}
 
 _ALLOWED_PAYLOAD_KEYS = frozenset(
-    {"action", "canonical_tool", "action_source"}
+    {"action", "canonical_tool", "action_source", "via"}
     | set(_SECONDARY_SELECTOR_FIELDS.values())
 )
 
@@ -296,6 +298,22 @@ def _selector_vocabulary(tool_name: str, field: str) -> frozenset:
 # bypassed by a future edit. 64 is comfortably above the longest real value.
 _MAX_PAYLOAD_VALUE_LEN = 64
 
+# The gateway a call re-entered through, if any. use_tool re-enters the
+# target's own transport path, which records the row under the TARGET's name,
+# so without this a gateway call is indistinguishable from a direct one and
+# use_tool has no row of its own at all. Values are fixed gateway names.
+_ENTRY_GATEWAY: ContextVar[Optional[str]] = ContextVar("tool_usage_entry_gateway", default=None)
+
+
+@contextmanager
+def entered_via(gateway: str) -> Iterator[None]:
+    """Mark tool_usage rows written inside this block with ``via=gateway``."""
+    token = _ENTRY_GATEWAY.set(gateway)
+    try:
+        yield
+    finally:
+        _ENTRY_GATEWAY.reset(token)
+
 
 def _sanitize_payload(payload: Any) -> Optional[Dict[str, str]]:
     """Drop anything not on the allowlist; coerce to flat str->str. Never raises.
@@ -342,7 +360,7 @@ def build_tool_usage_payload(
     ``_middleware_identity_result`` (attached in ``resolve_identity``, before
     the rebind) rather than the handler's later ``arguments["agent_id"]``.
 
-    Shape (max four keys, all ``str``, no nesting):
+    Shape (max five keys, all ``str``, no nesting):
 
       ``action``         the resolved sub-action, clamped to the tool's own
                          ``known_actions`` routing map, or ``action_unlisted``.
@@ -363,6 +381,8 @@ def build_tool_usage_payload(
                          Clamped to the schema's own ``Literal`` or written as
                          ``protocol_unlisted``. Without it ``cirs_protocol``
                          rows merge the protocols that share an action token.
+      ``via``            only when the call re-entered through a gateway
+                         (``use_tool``); the row keeps the target's name.
 
     The test is BOUNDEDNESS, not authorship. Every value here resolves to a
     member of a server-side vocabulary (a routing-table key, a tool-registry
@@ -423,6 +443,10 @@ def build_tool_usage_payload(
                     if token in allowed
                     else _SELECTOR_UNLISTED.format(field=selector_field)
                 )
+
+        gateway = _ENTRY_GATEWAY.get()
+        if gateway:
+            payload["via"] = gateway
 
         return _sanitize_payload(payload)
     except Exception as e:  # pragma: no cover - telemetry must never break a tool
