@@ -311,10 +311,16 @@ _deploy_lib_sha256() {
 # disk full) must demote to "next deploy reloads unnecessarily" — never abort
 # a deploy that already worked (a nonzero exit here would also HOLD every
 # sibling service in a deploy-apply sweep). Always returns 0.
+# The new hash is written beside the sidecar and renamed over it, so a failed
+# write keeps the previous hash instead of leaving an empty file, which the
+# next restart would read as "no baseline" and answer with a kickstart.
 _deploy_lib_write_sidecar() {
-  local tag="$1" state_dir="$2" sidecar="$3" sha="$4"
+  local tag="$1" state_dir="$2" sidecar="$3" sha="$4" tmp
   [[ -n "$sha" ]] || return 0
-  if ! mkdir -p "$state_dir" 2>/dev/null || ! printf '%s' "$sha" > "$sidecar" 2>/dev/null; then
+  tmp="$sidecar.tmp.$$"
+  if ! mkdir -p "$state_dir" 2>/dev/null || [[ -d "$sidecar" ]] \
+      || ! printf '%s' "$sha" > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$sidecar" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null || true
     echo "[$tag] WARNING: could not record the plist-hash sidecar ($sidecar) — the next deploy will do an unnecessary reload." >&2
   fi
   return 0

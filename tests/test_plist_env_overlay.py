@@ -382,3 +382,19 @@ def test_a_failed_reload_is_retried_by_the_next_deploy(tmp_path):
     first = _deploy(tmp_path, plist, overlay, baseline=None, bootstrap_fails=True, check=False)
     assert first[:2] == ["bootout", "bootstrap"]
     assert _deploy(tmp_path, plist, overlay, baseline=None) == ["bootout", "bootstrap"]
+
+
+def test_a_failed_baseline_write_keeps_the_previous_hash(tmp_path):
+    # Codex on #2585: the sidecar write used to truncate before writing, so a
+    # write that failed (a full disk) left it empty. After a refused reload
+    # the next deploy read "no baseline" and kickstarted the stale definition.
+    plist = _plist(tmp_path, {})
+    overlay = _overlay(tmp_path, "A_KEY=v\n")
+    full_disk = ('printf() { if [[ "${2:-}" =~ ^[0-9a-f]{64}$ ]]; then return 1; fi; '
+                 'builtin printf "$@"; }')
+    _deploy(tmp_path, plist, overlay, baseline="0" * 64, prelude=full_disk,
+            bootstrap_fails=True, check=False)
+    state = tmp_path / "state"
+    assert (state / f"{LABEL}.plist.sha256").read_text() == "0" * 64
+    assert [p.name for p in state.iterdir() if ".tmp." in p.name] == []
+    assert _deploy(tmp_path, plist, overlay, baseline=None) == ["bootout", "bootstrap"]
