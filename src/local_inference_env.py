@@ -214,8 +214,6 @@ EXTERNAL = "external"
 ENDPOINT_NOT_LOCAL = "MODEL_ENDPOINT_NOT_LOCAL"
 
 _BUILTIN_LOCAL_HOSTNAMES = frozenset({"localhost", "host.docker.internal"})
-# RFC 4193 unique local addresses: private by definition, like RFC 1918.
-_UNIQUE_LOCAL_V6 = ipaddress.ip_network("fc00::/7")
 _warned_bad_privacy: set[str] = set()
 
 
@@ -280,7 +278,9 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
       leaving).
     - An IP literal is local when it is in the server's trusted networks
       (loopback, RFC 1918, and ``UNITARES_TRUSTED_NETWORKS``; see
-      ``src/trusted_networks.py``) or is an RFC 4193 address.
+      ``src/trusted_networks.py``). That is the same set the REST access
+      checks trust, so "local" means one thing server-wide; an RFC 4193
+      range is local once the operator lists it there.
     - A hostname is local only when it is ``localhost``,
       ``host.docker.internal`` or listed in ``UNITARES_MODEL_LOCAL_HOSTS``
       (comma-separated). Every other name is external, even one that resolves
@@ -299,10 +299,7 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
 
     addr = _ip_literal(host)
     if addr is not None:
-        local = is_trusted_address(addr) or (
-            isinstance(addr, ipaddress.IPv6Address) and addr in _UNIQUE_LOCAL_V6
-        )
-        if local:
+        if is_trusted_address(addr):
             return EndpointPrivacy(LOCAL, target, host, "address in the trusted networks")
         return EndpointPrivacy(
             EXTERNAL,

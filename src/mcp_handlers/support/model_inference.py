@@ -533,6 +533,22 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                     model = f"{model}:fastest"
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
+            elif not await asyncio.to_thread(_configured_endpoint_is_ollama):
+                configured = model_base_url()
+                return InferenceOutcome.failed(
+                    f"No provider available. The model server at {configured} is not "
+                    "reachable and HF_TOKEN is not configured.",
+                    code="MISSING_CONFIG",
+                    category="system_error",
+                    recovery={
+                        "action": (
+                            f"Start the model server at {configured} or check "
+                            "UNITARES_MODEL_BASE_URL, or set HF_TOKEN for the "
+                            "Hugging Face fallback"
+                        ),
+                        "related_tools": ["health_check", "list_inference_hosts"],
+                    },
+                )
             else:
                 return InferenceOutcome.failed(
                     "No provider available. Ollama not running and HF_TOKEN not configured.",

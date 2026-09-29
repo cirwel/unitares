@@ -4059,9 +4059,13 @@ def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
         with urllib.request.urlopen(base + "/models", timeout=timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError) as e:
+        # A named endpoint that does not answer is a problem with the
+        # configuration the operator chose (consult and reviews cannot work),
+        # not an optional feature left off, so it warns rather than skips.
         return CheckResult(
-            name, mode, Status.SKIP,
-            f"{shown}/models did not answer; is the model server running?",
+            name, mode, Status.WARN,
+            f"{shown}/models did not answer; the configured model server is "
+            "unreachable, so consult and local reviews cannot use it",
             detail=str(e),
         )
     data = payload.get("data") if isinstance(payload, dict) else None

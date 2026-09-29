@@ -71,7 +71,6 @@ def test_default_install_is_local(no_dns):
         "http://10.2.3.4:8000/v1",
         "http://172.17.0.1:11434/v1",
         "http://192.168.1.20:1234/v1",
-        "http://[fd12:3456::1]:8000/v1",  # RFC 4193
         "http://[::ffff:127.0.0.1]:11434/v1",  # IPv4-mapped loopback
     ],
 )
@@ -81,7 +80,15 @@ def test_private_ip_literals_are_local(no_dns, url):
 
 @pytest.mark.parametrize(
     "url",
-    ["http://8.8.8.8/v1", "http://100.100.1.2:8000/v1", "http://[2001:db8::1]/v1", "http://[fe80::1]/v1"],
+    [
+        "http://8.8.8.8/v1",
+        "http://100.100.1.2:8000/v1",
+        "http://[2001:db8::1]/v1",
+        "http://[fe80::1]/v1",
+        # RFC 4193 is not local by default: the REST access checks do not
+        # trust it either, and "local" means one thing server-wide.
+        "http://[fd12:3456::1]:8000/v1",
+    ],
 )
 def test_other_ip_literals_are_external(no_dns, url):
     result = env.classify_endpoint(url)
@@ -877,3 +884,28 @@ def test_a_resolver_slower_than_the_budget_still_lets_the_next_probe_connect(mon
     assert inference_registry._resolve_within("slow.internal", 8000, 0.05) == []
     _time.sleep(0.3)  # the lookup finishes in the background
     assert inference_registry._resolve_within("slow.internal", 8000, 0.05) == answer
+
+
+
+def test_a_unique_local_range_is_local_once_it_is_trusted(no_dns, monkeypatch):
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "fd12:3456::/32")
+    assert env.classify_endpoint("http://[fd12:3456::1]:8000/v1").privacy == env.LOCAL
+
+
+@pytest.mark.asyncio
+async def test_auto_routing_names_an_unreachable_non_ollama_server(monkeypatch):
+    from src.mcp_handlers.support import model_inference
+
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://10.0.0.5:8000/v1")
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.delenv("HUGGINGFACE_TOKEN", raising=False)
+    monkeypatch.setattr(model_inference, "_ollama_available", lambda: False)
+    monkeypatch.setattr(model_inference, "is_ollama_endpoint", lambda *a, **k: False)
+    outcome = await model_inference.run_model_inference(
+        model_inference.CallModelRequest(
+            prompt="hi", requesting_agent_uuid=None, provider="auto", privacy="cloud"
+        )
+    )
+    assert outcome.failure.code == "MISSING_CONFIG"
+    assert "http://10.0.0.5:8000/v1" in outcome.failure.message
+    assert "Ollama" not in outcome.failure.recovery["action"]

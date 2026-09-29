@@ -101,11 +101,13 @@ def test_an_endpoint_without_a_named_model_warns(doctor, monkeypatch):
     assert "UNITARES_MODEL_ID" in result.detail
 
 
-def test_unreachable_skips_with_a_clear_message(doctor, monkeypatch):
+def test_an_unreachable_named_endpoint_warns(doctor, monkeypatch):
+    """A configured endpoint that does not answer is a broken configuration,
+    not an optional feature left off, so the doctor warns rather than skips."""
     monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     _serve(monkeypatch, doctor, error=OSError("connection refused"))
     result = doctor.check_model_endpoint(REPO_ROOT)
-    assert result.status == doctor.Status.SKIP
+    assert result.status == doctor.Status.WARN
     assert "did not answer" in result.message
 
 

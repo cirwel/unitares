@@ -162,8 +162,10 @@ knowledge synthesis always count as local. The server sends those only to an
 endpoint it classifies as local, and it decides that from the URL alone,
 never from DNS:
 
-- an IP address is local when it is loopback, in a private RFC 1918 range, an
-  RFC 4193 IPv6 address, or in a network listed in `UNITARES_TRUSTED_NETWORKS`;
+- an IP address is local when it is loopback, in a private RFC 1918 range, or
+  in a network listed in `UNITARES_TRUSTED_NETWORKS` (the same networks the
+  server's own access checks trust; list an IPv6 unique-local range there if
+  your model server uses one);
 - a hostname is local only when it is `localhost`, `host.docker.internal`, or
   listed in `UNITARES_MODEL_LOCAL_HOSTS` (comma-separated). A Compose service
   name such as `vllm`, or a machine on your network such as `gpu-box.lan`, is
