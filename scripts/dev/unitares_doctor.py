@@ -4057,7 +4057,10 @@ def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
     shown = _display_url(base)
     privacy = lie.classify_endpoint(base).privacy
     try:
-        with urllib.request.urlopen(base + "/models", timeout=timeout) as resp:
+        # Reach the endpoint the way the server does: a local one directly,
+        # ignoring HTTP_PROXY, or a healthy local model can read as down.
+        opener = lie.direct_urlopen if privacy == lie.LOCAL else urllib.request.urlopen
+        with opener(base + "/models", timeout=timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError) as e:
         # A named endpoint that does not answer is a problem with the

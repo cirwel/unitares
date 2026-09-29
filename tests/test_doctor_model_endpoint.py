@@ -63,6 +63,10 @@ def _serve(monkeypatch, doctor, payload=None, error=None):
         return _Resp(json.dumps(payload).encode())
 
     monkeypatch.setattr(doctor.urllib.request, "urlopen", fake)
+    # A local endpoint is reached through direct_urlopen, as at runtime.
+    from src import local_inference_env
+
+    monkeypatch.setattr(local_inference_env, "direct_urlopen", fake)
     return seen
 
 
@@ -150,3 +154,37 @@ def test_no_old_names_means_no_lines(doctor):
 def test_display_url_keeps_ipv6_brackets(doctor):
     assert doctor._display_url("http://user:pass@[::1]:11434/v1") == "http://[::1]:11434/v1"
     assert doctor._display_url("http://user:pass@gpu:8000/v1") == "http://gpu:8000/v1"
+
+
+
+def test_a_local_endpoint_is_checked_directly_despite_a_proxy(doctor, monkeypatch):
+    import http.server
+    import threading
+
+    body = json.dumps({"object": "list", "data": [{"id": "qwen3:8b"}]}).encode()
+
+    class Models(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Models)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for key in ("HTTP_PROXY", "http_proxy"):
+            monkeypatch.setenv(key, "http://127.0.0.1:1")
+        for key in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", f"http://127.0.0.1:{server.server_address[1]}/v1")
+        monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
+        result = doctor.check_model_endpoint(REPO_ROOT)
+        assert result.status == doctor.Status.PASS, result.message
+    finally:
+        server.shutdown()
+        server.server_close()
