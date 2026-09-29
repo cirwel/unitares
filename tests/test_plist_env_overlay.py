@@ -50,21 +50,76 @@ def test_sets_missing_and_changed_keys_and_leaves_the_rest(tmp_path):
                            "B_KEY": "100.64.0.0/10"}
 
 
+HAND_WRITTEN = b"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- an operator's note -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>A_KEY</key>
+        <string>v</string>
+    </dict>
+</dict>
+</plist>
+"""
+
+
 def test_an_applied_overlay_is_a_no_op_and_does_not_rewrite(tmp_path):
     # An unchanged plist keeps its hash, so the deploy kickstarts instead of
-    # reloading (deploy-lib.sh's plist-hash sidecar).
-    plist = _plist(tmp_path, {"A_KEY": "v"})
+    # reloading (deploy-lib.sh's plist-hash sidecar). The fixture is not in
+    # plistlib's own layout, so a needless rewrite would show.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(HAND_WRITTEN)
     overlay = _overlay(tmp_path, "A_KEY=v\n")
     before = plist.read_bytes()
     assert overlay_mod.apply_overlay(plist, overlay) == []
     assert plist.read_bytes() == before
 
 
-def test_creates_the_environment_dict_and_keeps_the_mode(tmp_path):
-    plist = _plist(tmp_path, None, mode=0o600)
+@pytest.mark.parametrize("mode", [0o600, 0o644])
+def test_creates_the_environment_dict_and_keeps_the_mode(tmp_path, mode):
+    # 0o644 would come out 0o600 if the mode were not carried over (mkstemp's own).
+    plist = _plist(tmp_path, None, mode=mode)
     overlay_mod.apply_overlay(plist, _overlay(tmp_path, "A_KEY=v\n"))
     assert _env(plist) == {"A_KEY": "v"}
-    assert stat.S_IMODE(plist.stat().st_mode) == 0o600
+    assert stat.S_IMODE(plist.stat().st_mode) == mode
+
+
+def test_a_failed_write_leaves_the_plist_and_no_temp_file(tmp_path, monkeypatch):
+    plist = _plist(tmp_path, {})
+    before = plist.read_bytes()
+
+    def boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(overlay_mod.plistlib, "dump", boom)
+    with pytest.raises(OSError):
+        overlay_mod.apply_overlay(plist, _overlay(tmp_path, "A_KEY=v\n"))
+    assert plist.read_bytes() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "com.unitares.governance-mcp.plist", "governance-mcp.env"]
+
+
+def test_a_symlinked_plist_stays_a_symlink(tmp_path):
+    # The Claude review on #2585: os.replace on the link would detach it.
+    (tmp_path / "real").mkdir()
+    real = _plist(tmp_path / "real", {})
+    link = tmp_path / "link.plist"
+    link.symlink_to(real)
+    overlay_mod.apply_overlay(link, _overlay(tmp_path, "A_KEY=v\n"))
+    assert link.is_symlink() and _env(real) == {"A_KEY": "v"}
+
+
+def test_the_original_bytes_are_kept_before_a_change(tmp_path):
+    # Rewriting through plistlib drops XML comments; the original survives.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(HAND_WRITTEN)
+    backups = tmp_path / "state"
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
+    kept = backups / "com.unitares.governance-mcp.plist.pre-overlay"
+    assert kept.read_bytes() == HAND_WRITTEN
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600
 
 
 def test_dry_run_reports_without_writing(tmp_path):
@@ -74,7 +129,8 @@ def test_dry_run_reports_without_writing(tmp_path):
     assert plist.read_bytes() == before
 
 
-@pytest.mark.parametrize("text", ["no equals sign\n", "lower=1\n", "A_KEY=1\nA_KEY=2\n", "=v\n"])
+@pytest.mark.parametrize("text", ["no equals sign\n", "lower=1\n", "A_KEY=1\nA_KEY=2\n", "=v\n",
+                                  "A_KEY=100.64.0.0/10  # tailnet\n", "A_KEY= v\n"])
 def test_a_malformed_overlay_is_refused_and_the_plist_untouched(tmp_path, text):
     plist = _plist(tmp_path, {"A_KEY": "old"})
     before = plist.read_bytes()
@@ -97,7 +153,7 @@ def test_the_tracked_overlay_parses_and_the_deploy_applies_it():
     values = overlay_mod.parse_overlay(OVERLAY.read_text())
     assert values, "the deployment overlay must set something"
     deploy = DEPLOY.read_text()
-    apply_at = deploy.index("apply_plist_env_overlay.py")
+    apply_at = deploy.index("deploy_lib_apply_env_overlay")
     assert apply_at < deploy.index('deploy_lib_restart_service "$TAG"'), \
         "the overlay must land before the restart that reloads a changed plist"
 
@@ -107,3 +163,55 @@ def test_the_overlay_is_second_family_reviewed():
     import json
     paths = json.loads((REPO / "scripts/dev/review_policy.json").read_text())["second_family_paths"]
     assert "scripts/ops/governance-mcp.env" in paths
+
+
+LIB = REPO / "scripts/ops/deploy-lib.sh"
+LABEL = "com.unitares.governance-mcp"
+
+
+def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None) -> list[str]:
+    """Run deploy-lib's overlay step and then its restart, with a stub
+    launchctl that records its calls. Returns the recorded subcommands."""
+    state = tmp_path / "state"
+    state.mkdir(exist_ok=True)
+    if baseline is not None:
+        (state / f"{LABEL}.plist.sha256").write_text(baseline)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "launchctl.log"
+    stub = bin_dir / "launchctl"
+    # `print` fails: the label is gone after bootout, and the env-key check
+    # treats empty output as "cannot tell". Everything else succeeds.
+    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\nexit 0\n')
+    stub.chmod(0o755)
+    script = (f'set -euo pipefail; . "{LIB}"; '
+              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{SCRIPT}"; '
+              f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"')
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
+           "UNITARES_DEPLOY_STATE_DIR": str(state)}
+    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+    return [line for line in log.read_text().split() if line != "print"]
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("baseline", ["none", "matching"])
+def test_a_changed_overlay_is_reloaded_even_without_a_baseline(tmp_path, baseline):
+    # Codex on #2585: with no plist baseline the restart adopts the current
+    # hash and kickstarts, and a kickstart never re-reads the plist. The
+    # overlay step records the pre-overlay hash so the restart reloads.
+    plist = _plist(tmp_path, {"UNITARES_HTTP_API_TOKEN": "secret"})
+    before = _sha(plist)
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
+                    baseline=None if baseline == "none" else before)
+    assert calls == ["bootout", "bootstrap"]
+    assert (tmp_path / "state" / f"{LABEL}.plist.sha256").read_text() == _sha(plist)
+
+
+def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
+    plist = _plist(tmp_path, {"A_KEY": "v"})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=_sha(plist))
+    assert calls == ["kickstart"]

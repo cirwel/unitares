@@ -9,11 +9,14 @@ this script (``governance-mcp.env``) instead of in hand edits to the live
 plist, so nothing has to be set by hand and a fresh machine gets the same
 values.
 
-The overlay is ``KEY=VALUE`` lines; blank lines and ``#`` comments are
-ignored. Each key is written into the plist's ``EnvironmentVariables`` when
+The overlay is ``KEY=VALUE`` lines; blank lines and ``#`` comment lines are
+ignored. A comment after a value is refused, not stored as part of it. Each key is written into the plist's ``EnvironmentVariables`` when
 it is missing or differs. Keys the overlay does not name are left alone, and
 nothing is ever removed: the plist also holds secrets this file must never
-see. The write is atomic and keeps the plist's file mode.
+see. The write is atomic, keeps the plist's file mode, and goes to the
+symlink's target when the plist is a symlink. Rewriting through plistlib
+drops the plist's XML comments, so before the first change the original bytes
+are copied to a private backup (``--backup-dir``, mode 0600).
 
 A changed plist is picked up by the deploy's restart: ``deploy-lib.sh``
 records the plist's hash after each restart and reloads (rather than
@@ -59,7 +62,12 @@ def parse_overlay(text: str) -> dict[str, str]:
             raise OverlayError(f"line {number}: expected KEY=VALUE, got {raw!r}")
         if key in values:
             raise OverlayError(f"line {number}: {key} is set twice")
-        values[key] = value.rstrip()
+        value = value.rstrip()
+        if re.search(r"\s#", value):
+            raise OverlayError(f"line {number}: put a comment on its own line, not after {key}'s value")
+        if value[:1].isspace():
+            raise OverlayError(f"line {number}: {key}'s value starts with whitespace")
+        values[key] = value
     return values
 
 
@@ -87,9 +95,23 @@ def _write_plist(path: Path, payload: dict[str, Any], *, mode: int) -> None:
         raise
 
 
-def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False) -> list[str]:
+def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
+    """Keep the pre-overlay bytes (comments included) where launchd never
+    looks, readable only by the owner: the plist carries tokens."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    path = backup_dir / f"{target.name}.pre-overlay"
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "wb") as handle:
+        handle.write(original)
+    os.chmod(path, 0o600)
+    return path
+
+
+def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
+                  backup_dir: Path | None = None) -> list[str]:
     """Write the overlay's values into ``plist``; return the keys changed."""
     overlay = parse_overlay(overlay_path.read_text())
+    plist = plist.resolve()  # write the file a symlink points at, keep the link
     try:
         with plist.open("rb") as handle:
             payload = plistlib.load(handle)
@@ -99,6 +121,8 @@ def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False) -> 
         raise OverlayError(f"{plist} is not a dict plist")
     changed = pending_changes(payload, overlay)
     if changed and not dry_run:
+        if backup_dir is not None:
+            _backup(plist.read_bytes(), plist, backup_dir)
         env = payload.setdefault("EnvironmentVariables", {})
         for key in changed:
             env[key] = overlay[key]
@@ -111,9 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plist", type=Path, required=True)
     parser.add_argument("--overlay", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--backup-dir", type=Path,
+                        help="copy the plist's original bytes here before changing it")
     args = parser.parse_args(argv)
     try:
-        changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run)
+        changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run,
+                                backup_dir=args.backup_dir)
     except (OverlayError, OSError) as exc:
         print(f"[env-overlay] cannot apply {args.overlay}: {exc}", file=sys.stderr)
         return 2

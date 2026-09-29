@@ -18,6 +18,8 @@
 #                                  kickstart reuses the cached service
 #                                  definition, so plist env edits silently
 #                                  never load (bit live 2026-08-27)
+#   deploy_lib_apply_env_overlay   write a tracked env overlay into the live
+#                                  plist so the restart above reloads it
 #
 # CONTRACT (enforced by scripts/dev/check-deploy-lib.sh):
 #   - The lock-key derivation below must stay byte-identical to the historical
@@ -341,6 +343,42 @@ _deploy_lib_env_keys_loaded() {
   if [[ -n "$missing" ]]; then
     echo "$missing"
     return 1
+  fi
+  return 0
+}
+
+# ── Environment overlay ──────────────────────────────────────────────────────
+# Write this deployment's tracked environment overlay into the live plist
+# (apply_plist_env_overlay.py) ahead of deploy_lib_restart_service, so that a
+# changed value is RELOADED, not only written. The restart reloads only on a
+# hash MISMATCH; with no baseline yet it adopts the current hash and
+# kickstarts, which would latch the overlaid plist as "already loaded" while
+# the running definition still lacks the new keys. So when the overlay
+# changes the file and no baseline exists, the PRE-overlay hash is recorded
+# as the baseline: the restart then sees a mismatch and reloads. An existing
+# baseline is left alone (a change already mismatches it).
+#
+# The applier keeps the plist's pre-overlay bytes (its comments included) in
+# the state dir before a change. A worktree rollback does not revert values
+# already written: they are deployment configuration, not code.
+#
+# Best-effort: a failure leaves the plist as it was, warns, and returns 0 —
+# the deploy goes on with the old environment, as before the overlay existed.
+# usage: deploy_lib_apply_env_overlay TAG LABEL PLIST OVERLAY APPLIER
+deploy_lib_apply_env_overlay() {
+  local tag="$1" label="$2" plist="$3" overlay="$4" applier="$5"
+  local state_dir sidecar before after
+  [[ -f "$overlay" ]] || return 0
+  state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
+  sidecar="$state_dir/${label}.plist.sha256"
+  before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
+  if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --backup-dir "$state_dir"; then
+    echo "[$tag] WARNING: the environment overlay was not applied; the service keeps its current plist environment." >&2
+    return 0
+  fi
+  after="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
+  if [[ -n "$before" && "$before" != "$after" && ! -s "$sidecar" ]]; then
+    _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$before"
   fi
   return 0
 }

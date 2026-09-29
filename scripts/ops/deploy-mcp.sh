@@ -125,14 +125,11 @@ fi
 # This deployment's environment overlay (scripts/ops/governance-mcp.env, from
 # the worktree just fast-forwarded, so reviewed values only) into the live
 # plist: deployment-specific settings the product does not ship as defaults,
-# without hand edits. A changed plist makes the restart below a RELOAD, so the
-# values load rather than only land on disk. Best-effort: a failure leaves the
-# plist as it was and says so, and the deploy goes on with the old values.
-OVERLAY="$DEPLOY/scripts/ops/governance-mcp.env"
-if [[ -f "$OVERLAY" ]]; then
-  python3 "$DEPLOY/scripts/ops/apply_plist_env_overlay.py" --plist "$PLIST" --overlay "$OVERLAY" \
-    || echo "[deploy-mcp] WARNING: the environment overlay was not applied; the service keeps its current plist environment." >&2
-fi
+# without hand edits. deploy_lib_apply_env_overlay makes sure a change is
+# RELOADED by the restart below, including on a host with no plist baseline.
+deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
+  "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"
+
 
 # kickstart when the plist is unchanged since the last deploy restart; full
 # RELOAD (bootout + bootstrap) when it changed — kickstart reuses the cached
