@@ -8,9 +8,9 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.0.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
-| Published server/container | `v3.0.0` | Verified major release; its breaking changes and upgrade steps are in the compatibility policy below and the [v3.0.0 changelog entry](CHANGELOG.md). Tag, release page, the server and lease-plane images for linux/amd64 and linux/arm64, SPDX SBOMs, and source-bound provenance were verified before GHCR `latest` promotion in [Promote Release run 36342029506](https://github.com/cirwel/unitares/actions/runs/36342029506). The v2.22.0 historical errata remains at [releases/2.22.0-errata.md](releases/2.22.0-errata.md). |
-| `unitares-governance` plugin | `v0.4.18` | Carries the skills bundle for server `v3.0.0`, plus three skill edits merged after that tag (#2527, #2530, #2533): its `skills/` mirrors master at `c3a634f2`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.18). |
+| UNITARES server | `v3.1.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
+| Published server/container | `v3.1.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 36533584670](https://github.com/cirwel/unitares/actions/runs/36533584670). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.1.0). |
+| `unitares-governance` plugin | `v0.4.19` | Carries the skills bundle for server `v3.1.0`: its `skills/` mirrors master at `ef127104`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.19). |
 | `unitares-sdk` | `0.4.0` | Published Python client for resident and custom integrations, released with server v3.0.0. A behavioral minor release: `checkin` reads the verdict from the response envelope, so `GovernanceAgent`'s pause and reject handling (`VerdictError`) can now fire where every verdict used to parse as proceed; `get_metrics().action` is the policy action; `audit_knowledge` no longer requests a model by default; and the async `GovernanceClient` raises `GovernanceToolRefused`, a subclass of `GovernanceConnectionError`, when a tool answers `success: false`. It adds an optional NeMo Relay integration (`unitares-sdk[nemo-relay]`). Install it with `pip install unitares-sdk==0.4.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
 | `unitares-host-adapter` | `0.3` alpha | Separately released host bindings; capabilities vary by host and remain pre-stable. |
 | Paper / reproducibility kit | paper `v6.9.1`, kit `v6.8.1-repro` | Research and evaluation artifacts, not runtime dependencies or server compatibility numbers. |
@@ -35,6 +35,25 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.1.0 removes no registered callable's canonical name, but retires 24
+  unadvertised aliases that only redirected a guessed or pre-consolidation
+  name to one that keeps its own (`status`, `start`, `checkin`, `hello`,
+  `get_agent_api_key`, and 20 more; the full list and replacements are in the
+  [changelog entry](CHANGELOG.md)); each now returns `tool_not_found_error`
+  (#2576). The eight advertised workflow aliases, the complete catalog, and
+  the interface contract's advertised surface digest are unchanged. The HTTP
+  adjudication surface (`/v1/sentinel/adjudication-queue`, `/adjudicate`,
+  `/model-adjudicate`) is removed; it was mounted only by the opt-in
+  `reference-residents` route pack, so a default install is unaffected, and
+  Sentinel's CLI `--resolve`/`--dismiss` paths remain the supported way to
+  record an operator verdict (#2546). Two runtime defaults tighten: the REST
+  local-posture auth bypass no longer trusts `100.64.0.0/10` (Tailscale/CGNAT)
+  by default, so a deployment reached over a tailnet or another overlay must
+  set `UNITARES_TRUSTED_NETWORKS` explicitly or its callers get 401 (#2560);
+  and the Compose stack stops publishing Postgres and Redis to the host and
+  drops container privileges, so a deployment that reached either directly
+  needs the new `docker-compose.admin.yml` overlay (#2580). No database
+  migration is introduced.
 - v3.0.0 preserves lifecycle envelopes; it does not preserve the registered
   callable names, the `dialectic` wire schema, or the database schema.
   `direct_resume_if_safe`, deprecated 2026-01-29 and advertised only in `full`

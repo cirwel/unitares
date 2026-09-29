@@ -37,6 +37,7 @@ import pytest
 from mcp.types import TextContent
 
 from src.mcp_handlers.context import SessionSignals
+from tests.helpers import parse_result
 from tests.no_live_redis import no_live_redis  # noqa: F401
 
 pytestmark = pytest.mark.usefixtures("no_live_redis")
@@ -259,7 +260,8 @@ async def _call(
         reset_session_signals(token)
         registration._tool_wrappers_cache.clear()
 
-    seen["result"] = result
+    # The registered tool returns the text block /mcp/ sends; read its JSON.
+    seen["result"] = parse_result(result)
     seen["resolve_calls"] = target_resolves
     seen["pin_candidates"] = target_pins
     seen["metrics_served"] = metrics.await_count > 0

@@ -245,6 +245,7 @@ def test_handoff_refreshes_the_base_ref_when_only_the_base_moved(carry_repo, mon
         return {"baseRefName": "master", "state": "OPEN"}
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])  # the PR's comments
     assert completed_review_exit("o/r", 1, key, head, 0) == 0
     assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
         _git(carry_repo, "rev-parse", "master")
@@ -517,6 +518,88 @@ def test_a_chain_past_the_bound_carries_nothing(carry_repo, monkeypatch, merges,
     assert (rec is not None and rec.verdict == "FINDINGS") == bool(carried)
     if not carried:
         assert rec is None
+
+
+@pytest.mark.parametrize("policy,changed,carried", [
+    ([], None, 1),                 # no second-family path: the merge carries
+    (["f.txt"], None, 0),          # the PR touches one: nothing carries
+    (["*.py"], None, 1),           # a policy that does not match the PR
+    ([], "unreadable", 0),         # paths unreadable: treated as sensitive
+])
+def test_a_second_family_diff_is_never_carried(carry_repo, monkeypatch, policy, changed,
+                                               carried):
+    # Operator decision, 2026-09-28: on second-family paths a base merge can
+    # change how unchanged lines behave, so each head is reviewed on its own
+    # key. The policy is the base's, as the gate reads it.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: policy)
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS
+                        if changed is None else lambda base, head: None)
+    equivalents = rg.base_merge_equivalents("master", "HEAD")
+    assert len(equivalents) == carried
+    rec, _ = _decide([_record(reviewed_key)])
+    assert (rec is not None) == bool(carried)
+
+
+def _base_merged_pr(carry_repo, monkeypatch):
+    """A PR whose branch GitHub base-merged cleanly: (reviewed_key, key, head),
+    with origin/master and the PR ref set up for the handoff."""
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", "master")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    return reviewed_key, rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("sensitive_now,families", [
+    (False, {"anthropic", "openai"}),
+    (True, {"anthropic"}),
+])
+def test_handoff_rereads_the_carry_when_only_the_base_policy_moved(
+        carry_repo, monkeypatch, sensitive_now, families):
+    # The independent review on #2581: _resolve registered the carry under the
+    # policy it read, but the base's policy can change during the review while
+    # the head stays put. CI then carries nothing for a second-family diff, so
+    # the second-family pass after the handoff must not count the family that
+    # only the old carry supplied.
+    reviewed_key, key, head = _base_merged_pr(carry_repo, monkeypatch)
+    comments = [_record(reviewed_key, reviewer="codex-native", url="codex"),
+                _record(key, reviewer="claude", url="claude")]
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 1),
+                        (key, rg.base_merge_equivalents("master", "HEAD")))
+    assert rg.passing_families(rg.pr_comments("o/r", 1), key) == {"anthropic", "openai"}
+    # The base's policy moves during the review; the head does not.
+    monkeypatch.setattr(rg, "base_policy_paths",
+                        lambda base: ["f.txt"] if sensitive_now else [])
+    assert completed_review_exit("o/r", 1, key, head, 0) == 0
+    assert rg._CARRY[("o/r", 1)][0] == key  # what second_family_pass keys on
+    assert rg.passing_families(rg.pr_comments("o/r", 1), key) == families
+
+
+def test_handoff_reads_a_finding_a_wider_carry_brings_in(carry_repo, monkeypatch):
+    # The independent review on #2581: a policy narrowed during the review
+    # makes a formerly second-family diff carryable, and CI then carries an
+    # open finding from the pre-merge key that a later CLEAN does not clear.
+    # The handoff must read it too, not report done.
+    reviewed_key, key, head = _base_merged_pr(carry_repo, monkeypatch)
+    comments = [_record(reviewed_key, "FINDINGS", 1, reviewer="codex-native", url="finding"),
+                _record(key, reviewer="claude", url="clean")]
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 1),
+                        (key, rg.base_merge_equivalents("master", "HEAD")))
+    assert rg._CARRY[("o/r", 1)][1] == []  # second-family at review start
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])  # narrowed
+    assert completed_review_exit("o/r", 1, key, head, 0) == 1
 
 
 def test_no_earlier_record_means_nothing_decides(carry_repo):

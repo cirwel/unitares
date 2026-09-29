@@ -182,7 +182,7 @@ def _lease_row():
 
 
 def test_forced_release_ingest_attaches_server_computed_evidence(client):
-    with patch("src.http_routes.sentinel._fetch_lease_rows",
+    with patch("src.http_routes.findings._fetch_lease_rows",
                AsyncMock(return_value={FR_LEASE: _lease_row()})):
         r = client.post("/api/findings", json=_fr_payload())
     assert r.status_code == 200
@@ -196,7 +196,7 @@ def test_forced_release_ingest_attaches_server_computed_evidence(client):
 def test_client_supplied_evidence_is_stripped_and_recomputed(client):
     spoofed = _fr_payload(fingerprint="fr-ingest-2",
                           evidence={"assessment": "event_recorded", "forged": True})
-    with patch("src.http_routes.sentinel._fetch_lease_rows", AsyncMock(return_value={})):
+    with patch("src.http_routes.findings._fetch_lease_rows", AsyncMock(return_value={})):
         r = client.post("/api/findings", json=spoofed)
     ev = r.json()["event"]["evidence"]
     assert "forged" not in ev
@@ -204,7 +204,7 @@ def test_client_supplied_evidence_is_stripped_and_recomputed(client):
 
 
 def test_evidence_failure_never_blocks_ingest(client):
-    with patch("src.http_routes.sentinel._fetch_lease_rows",
+    with patch("src.http_routes.findings._fetch_lease_rows",
                AsyncMock(side_effect=RuntimeError("db down"))):
         r = client.post("/api/findings", json=_fr_payload(fingerprint="fr-ingest-3"))
     assert r.status_code == 200
@@ -212,7 +212,7 @@ def test_evidence_failure_never_blocks_ingest(client):
 
 
 def test_non_forced_release_findings_are_untouched(client):
-    with patch("src.http_routes.sentinel._fetch_lease_rows", AsyncMock()) as fetch:
+    with patch("src.http_routes.findings._fetch_lease_rows", AsyncMock()) as fetch:
         r = client.post("/api/findings", json={
             "type": "sentinel_finding", "severity": "high",
             "message": "fleet coherence dipped", "agent_id": "a",
@@ -237,7 +237,7 @@ def _finding(fp, **extra):
 def test_over_long_fingerprint_is_normalized_not_rejected(client):
     import hashlib
 
-    from src.http_routes.sentinel import _FINGERPRINT_MAX_CHARS
+    from src.http_routes.findings import _FINGERPRINT_MAX_CHARS
     long_fp = "lease:" + "x" * 400
     r = client.post("/api/findings", json=_finding(long_fp))
     assert r.status_code == 200 and r.json()["success"] is True
@@ -268,6 +268,6 @@ def test_client_cannot_supply_fingerprint_original(client):
 
 
 def test_kept_original_is_itself_capped(client):
-    from src.http_routes.sentinel import _FINGERPRINT_ORIGINAL_MAX_CHARS
+    from src.http_routes.findings import _FINGERPRINT_ORIGINAL_MAX_CHARS
     event = client.post("/api/findings", json=_finding("q" * 100_000)).json()["event"]
     assert len(event["fingerprint_original"]) == _FINGERPRINT_ORIGINAL_MAX_CHARS

@@ -891,6 +891,41 @@ class TestSearchKnowledgeGraph:
         assert "Open one" in data["_tip"]
 
     @pytest.mark.asyncio
+    async def test_search_list_caps_essay_summaries_without_truncating_detail_read(self, patch_common):
+        """Multi-result search projects summaries; the stored finding stays intact."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import (
+            handle_get_discovery_details,
+            handle_search_knowledge_graph,
+        )
+
+        long_summary = "Historical Claude essay: " + "several claims and context. " * 25
+        discoveries = [
+            make_discovery(id=f"essay-{index}", summary=long_summary, details="Full evidence")
+            for index in range(5)
+        ]
+        mock_graph.query = AsyncMock(return_value=discoveries)
+
+        data = parse_result(await handle_search_knowledge_graph({"include_details": False}))
+        assert data["count"] == 5
+        assert all(len(item["summary"]) <= 200 for item in data["discoveries"])
+        assert all(item["summary"].endswith("...") for item in data["discoveries"])
+        assert len(json.dumps(data, ensure_ascii=False).encode()) < 5_000
+
+        expanded = parse_result(await handle_search_knowledge_graph({"include_details": True}))
+        assert all(item["summary"] == long_summary for item in expanded["discoveries"])
+        assert all(item["details"] == "Full evidence" for item in expanded["discoveries"])
+
+        mock_graph.query = AsyncMock(return_value=[discoveries[0]])
+        auto_expanded = parse_result(await handle_search_knowledge_graph({}))
+        assert auto_expanded["discoveries"][0]["summary"] == long_summary
+        assert auto_expanded["discoveries"][0]["details"] == "Full evidence"
+
+        mock_graph.get_discovery = AsyncMock(return_value=discoveries[0])
+        detail = parse_result(await handle_get_discovery_details({"discovery_id": "essay-0"}))
+        assert detail["discovery"]["summary"] == long_summary
+
+    @pytest.mark.asyncio
     async def test_search_exception_handling(self, patch_common):
         """Exception from graph backend returns error response."""
         mock_mcp_server, mock_graph = patch_common
@@ -1036,7 +1071,7 @@ class TestSearchKnowledgeGraph:
             arguments["query"] = "keyword"
 
         tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
-        result = await tool.run(arguments=arguments, context=None)
+        result = parse_result(await tool.run(arguments=arguments, context=None))
 
         assert result["success"] is True
         payload = result["raw_governance"] if tool_name == "search_shared_memory" else result
@@ -1335,16 +1370,12 @@ class TestFriendlySearchDigest:
 
     @pytest.mark.asyncio
     async def test_withheld_attribution_is_always_marked(self, patch_common):
-        """Swept across label and summary lengths, stale and fresh rows, and
-        lexical and semantic-only result sets: the digest stays inside its
-        budget, and a digest never loses attribution without the marker
-        saying so (live 2026-09-26, 'migration' and 'sentinel lease' lost it
-        on all three digests unmarked)."""
+        """Across varied labels and summaries, attribution stays visible and
+        any omission would still need an explicit marker."""
         mock_mcp_server, mock_graph = patch_common
         withheld_seen = 0
-        # Summaries step 3 characters on each of 3 digests (9 bytes a step
-        # of the attribution-free envelope), so the sweep lands inside any
-        # ~36-byte window below the budget; labels vary what must fit there.
+        # Search-list summaries now cap at 200 characters. Sweep beyond that
+        # boundary to confirm the digest's budget and attribution behavior.
         for summary_len in range(150, 243, 3):
             for label_len in (15, 30, 50):
                 for days_old in (5, 90):
@@ -1371,10 +1402,7 @@ class TestFriendlySearchDigest:
                             if "agent_id" in digest:
                                 row = next(r for r in rows if r.id == digest["discovery_id"])
                                 assert digest["agent_id"] == row.agent_id, case
-        # The tightest cases (semantic-only, every row stale, long labels) do
-        # still withhold a label or a digest's attribution; the sweep must
-        # reach them so the marker equality above is actually exercised.
-        assert withheld_seen
+        assert withheld_seen == 0
 
     @pytest.mark.asyncio
     async def test_coaching_gives_attribution_only_the_room_it_takes(self, patch_common):

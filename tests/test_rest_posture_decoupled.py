@@ -16,6 +16,8 @@ Two changes, pinned here:
 
 from __future__ import annotations
 
+import base64
+
 import pytest
 
 from src.http_routes.access import _check_http_auth, _check_ws_auth
@@ -42,7 +44,12 @@ class _WS(_Req):
         super().__init__(ip=ip, auth=auth, session=session)
         if origin:
             self.headers["origin"] = origin
-        self.query_params = {"token": token} if token else {}
+        self.query_params = {}
+        subprotocols = []
+        if token:
+            b64 = base64.urlsafe_b64encode(token.encode()).decode().rstrip("=")
+            subprotocols = ["unitares.bearer", f"unitares.bearer.{b64}"]
+        self.scope = {"subprotocols": subprotocols}
 
 
 @pytest.fixture(autouse=True)
@@ -173,9 +180,9 @@ def test_ws_strict_session_requires_the_exact_rp_origin(monkeypatch):
     assert access._check_ws_auth(none, http_api_token=None) is False
 
 
-def test_ws_strict_accepts_the_bearer_by_query_param(monkeypatch):
+def test_ws_strict_accepts_the_bearer_by_subprotocol(monkeypatch):
     """Browsers cannot set headers on a WebSocket handshake, so the bearer
-    rides in the query string — unchanged by this refactor."""
+    rides in a Sec-WebSocket-Protocol entry (never the logged query string)."""
     monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", BEARER)
     monkeypatch.setenv("UNITARES_REST_STRICT", "1")
     assert _check_ws_auth(_WS(ip="203.0.113.7", token=BEARER), http_api_token=None) is True

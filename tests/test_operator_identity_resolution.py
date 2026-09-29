@@ -326,8 +326,12 @@ class TestRestPrebindIntegration:
             new_callable=AsyncMock,
             return_value=_resumed(),
         ):
+            # A write that defaults to its caller. archive_agent was the
+            # example here until agent archive and delete stopped taking the
+            # caller as their target (#2532, and over REST since the prebind
+            # leaves their omitted agent_id alone).
             result = await _resolve_http_bound_agent(
-                "archive_agent", arguments, signals
+                "process_agent_update", arguments, signals
             )
 
         assert result == "uuid-operator-1"

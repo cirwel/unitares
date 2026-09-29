@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 
 from ..decorators import mcp_tool
 from ..utils import success_response, error_response
+from src.grounding.class_indicator import NON_REASONING_TAGS
 from src.logging_utils import get_logger
 from .recovery_policy import compute_recovery_margin, read_risk_authority, render_risk
 from src.identity.lineage_semantics import is_non_succession_spawn_reason
@@ -398,8 +399,7 @@ def _detect_stuck_agents(
 
         # Skip autonomous/embodied agents (they manage their own lifecycle)
         agent_tags = getattr(meta, "tags", []) or []
-        skip_tags = {"autonomous", "embodied", "anima"}
-        if skip_tags & set(t.lower() for t in agent_tags):
+        if NON_REASONING_TAGS & set(t.lower() for t in agent_tags):
             continue
 
         # Skip agents with too few updates (likely orphan/test agents)
@@ -778,7 +778,7 @@ async def _archive_superseded_parents(current_time) -> list:
             continue
         # Self-managed agents own their lifecycle — same exclusion as detection.
         agent_tags = getattr(meta, "tags", []) or []
-        if {"autonomous", "embodied", "anima"} & set(t.lower() for t in agent_tags):
+        if NON_REASONING_TAGS & set(t.lower() for t in agent_tags):
             continue
         # Final, conceptually-correct guard: a parent with a LIVE process
         # binding is a running process, not a rotated-out predecessor. A child

@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Mount
 
 from src.connection_tracker import ConnectionTrackingMiddleware
+from src.log_redaction import install_uvicorn_redaction
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import (
     SessionSignals,
@@ -633,6 +634,10 @@ def build_transport_runtime(
             "Public OAuth listener on 127.0.0.1:%d; /mcp OAuth applies there only",
             public_socket.getsockname()[1],
         )
+    # After both Config objects: each Config.__init__ calls configure_logging()
+    # (uvicorn's dictConfig).  Installing the filter after both means it
+    # survives regardless of which Config ran last.
+    install_uvicorn_redaction()
     return McpTransportRuntime(
         app=app,
         session_manager=session_manager,
