@@ -533,12 +533,26 @@ def _reachable_predicate(mode: str):
 
         advertised |= advertised_tool_names_full()
     aliases = list_all_aliases()
+    # A per-action handler (get_discovery_details behind knowledge(action=
+    # 'details')) resolves to the router call that reaches it. This used to
+    # come from the legacy alias for the handler's name; those aliases were
+    # removed on 2026-09-28, so the router's own action table answers now.
+    import src.mcp_handlers  # noqa: F401  (registers the routers)
+    import src.mcp_handlers.consolidated  # noqa: F401
+    from src.mcp_handlers.decorators import _ROUTER_ACTION_HANDLERS
+
+    routed = {}
+    for router, handlers in _ROUTER_ACTION_HANDLERS.items():
+        for action, handler in handlers.items():
+            inner = getattr(handler, "_mcp_tool_name", None)
+            if inner and inner != router:
+                routed.setdefault(inner, (router, action))
 
     def resolve(name):
         alias = aliases.get(name)
-        if alias is None:
-            return (name, None)
-        return (alias.new_name, alias.inject_action)
+        if alias is not None:
+            return (alias.new_name, alias.inject_action)
+        return routed.get(name, (name, None))
 
     advertised_calls = set()
     for name in advertised:

@@ -429,28 +429,29 @@ async def test_health_check_describe_mentions_agent_signature():
         )
 
 
-def test_get_server_info_is_callable():
-    """get_server_info is cross-referenced from health_check's describe text.
-    PR #433 left it register=False with the comment 're-enabled separately
-    per #431'; this guards that the NAME keeps working.
+def test_the_server_info_the_docs_teach_is_callable():
+    """#431: agents read the docs, call the name, and must not hit 'Unknown tool'.
 
-    Asserted on callability rather than registration since 2026-08-29.
-    get_server_info is now an alias to admin(action='server_info') and its own
-    registration was retired -- resolve_alias rewrote the name before handler
-    lookup, so that registration was never dispatched to anyway. What the #431
-    incident was about is agents reading the docs, calling the name, and
-    hitting 'Unknown tool'. That is what this checks.
+    Until 2026-09-28 the docs taught get_server_info, an alias of
+    admin(action='server_info'). The docs now teach the router call, which
+    must dispatch. The alias itself stays callable for the Wave 3a BEAM route,
+    but no served description teaches it.
     """
+    import json
+    from pathlib import Path
+
     from src.mcp_handlers import TOOL_HANDLERS
+    from src.mcp_handlers.decorators import _ROUTER_ACTION_HANDLERS
     from src.mcp_handlers.tool_stability import resolve_tool_alias
 
-    resolved, _alias = resolve_tool_alias("get_server_info")
-    assert resolved in TOOL_HANDLERS, (
-        "get_server_info must stay callable; describe_tool advertises it as "
-        "a related/alternative tool from health_check, get_connection_status, "
-        "get_workspace_health, and the admin toolset banner. If it resolves "
-        "nowhere, agents reading the docs call the name and hit 'Unknown tool'."
+    assert "admin" in TOOL_HANDLERS
+    assert "server_info" in _ROUTER_ACTION_HANDLERS["admin"]
+    assert resolve_tool_alias("get_server_info")[0] == "admin"
+    descriptions = json.loads(
+        (Path(__file__).resolve().parents[1] / "src/tool_descriptions.json").read_text()
     )
+    naming = [k for k, v in descriptions.items() if "get_server_info" in v]
+    assert not naming, f"descriptions still teach get_server_info: {naming}"
 
 
 def test_no_new_describe_cross_refs_to_unreachable_tools():
@@ -563,10 +564,16 @@ async def test_alias_block_dates_a_consolidated_name_and_not_a_workflow_name():
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
 
-    legacy = json.loads((await handle_describe_tool({"tool_name": "list_agents", "lite": True}))[0].text)
-    assert legacy["alias"]["role"] == "compatibility_alias"
-    assert legacy["alias"]["deprecated_since"] == "2026-02-04"
-    assert legacy["alias"]["canonical_tool"] == "agent"
+    # The consolidated (compatibility) aliases were removed on 2026-09-28
+    # except get_server_info, kept for the Wave 3a BEAM route; every other
+    # alias left is a workflow name and carries no retirement date.
+    from src.mcp_handlers.tool_stability import list_all_aliases
+
+    compat = {n for n, a in list_all_aliases().items() if not a.experience}
+    assert compat == {"get_server_info"}
+    kept = json.loads((await handle_describe_tool({"tool_name": "get_server_info", "lite": False}))[0].text)
+    assert kept["alias"]["role"] == "compatibility_alias"
+    assert kept["alias"]["deprecated_since"]
 
     workflow = json.loads((await handle_describe_tool({"tool_name": "sync_state", "lite": False}))[0].text)
     assert workflow["alias"]["role"] == "primary_agent_workflow"
@@ -761,16 +768,34 @@ def test_override_table_carries_no_advertised_name():
 
 
 @pytest.mark.asyncio
-async def test_describe_reports_a_legacy_alias_own_narrower_operation():
+async def test_describe_reports_a_router_action_own_narrower_operation():
+    """agent(action='list') reads though the agent router also deletes.
+
+    Until 2026-09-28 only the legacy name list_agents answered "read"; the
+    class now comes from tool_meta.ACTION_OPERATIONS for the router call.
+    """
     import json
     from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
 
-    legacy = json.loads((await handle_describe_tool({"tool_name": "list_agents", "lite": True}))[0].text)
-    assert legacy["operation"] == "read"  # the agent router it dispatches through is write
+    listing = json.loads((await handle_describe_tool({"tool_name": "agent", "action": "list", "lite": True}))[0].text)
+    assert listing["operation"] == "read"
     router = json.loads((await handle_describe_tool({"tool_name": "agent", "lite": True}))[0].text)
     assert router["operation"] == "write"
-    legacy_write = json.loads((await handle_describe_tool({"tool_name": "submit_thesis", "lite": True}))[0].text)
-    assert legacy_write["operation"] == "write"  # no override: dialectic's class
+    thesis = json.loads((await handle_describe_tool({"tool_name": "dialectic", "action": "thesis", "lite": True}))[0].text)
+    assert thesis["operation"] == "write"  # no declared override: dialectic's class
+
+
+@pytest.mark.asyncio
+async def test_describe_refuses_a_removed_name_and_points_at_the_router_call():
+    import json
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    for name, router, action in [("list_agents", "agent", "list"), ("observe_agent", "observe", "agent"),
+                                 ("submit_thesis", "dialectic", "thesis")]:
+        refusal = json.loads((await handle_describe_tool({"tool_name": name}))[0].text)
+        assert refusal["success"] is False, name
+        assert refusal["error_code"] == "TOOL_NOT_FOUND", name
+        assert f"describe_tool(tool_name='{router}', action='{action}')" in refusal["recovery"]["action"]
 
 
 @pytest.mark.asyncio

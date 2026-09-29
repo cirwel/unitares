@@ -182,15 +182,16 @@ class TestToolOperations:
         assert TOOL_OPERATIONS["operator_resume_agent"] == "admin"
 
     def test_legacy_alias_narrower_than_its_router_declares_its_own_class(self):
-        """TOOL_OPERATIONS is keyed by the roster only (2026-09-07); a legacy
-        alias that pins a read action of a write router says so on its entry."""
-        from src.mcp_handlers.tool_stability import list_all_aliases
+        """TOOL_OPERATIONS is keyed by the roster only (2026-09-07); a read
+        action of a write router declares its own class. That was the legacy
+        alias's entry (list_agents) until the aliases went on 2026-09-28; it is
+        tool_meta.ACTION_OPERATIONS now."""
+        from src.tool_meta import ACTION_OPERATIONS
 
-        aliases = list_all_aliases()
         assert "list_agents" not in TOOL_OPERATIONS
-        assert aliases["list_agents"].operation == "read"
-        assert TOOL_OPERATIONS[aliases["list_agents"].new_name] == "write"
-        assert aliases["cleanup_stale_locks"].operation is None  # same class as admin
+        assert ACTION_OPERATIONS[("agent", "list")] == "read"
+        assert TOOL_OPERATIONS["agent"] == "write"
+        assert ("admin", "cleanup_locks") not in ACTION_OPERATIONS  # same class as admin
 
     def test_all_ops_are_valid(self):
         valid_ops = {"read", "write", "admin"}

@@ -333,7 +333,7 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
         if metadata_count == 0:
             health_report["recommendations"].append("No agent metadata found - ensure process_agent_update is being called")
         if graph_stats.get("total_discoveries", 0) == 0:
-            health_report["recommendations"].append("No discoveries in knowledge graph - ensure store_knowledge_graph is working")
+            health_report["recommendations"].append("No discoveries in knowledge graph - ensure knowledge(action='store') is working")
         if provenance_count == 0 and deep_check:
             health_report["recommendations"].append("No provenance data found - check that provenance capture is enabled")
 
@@ -941,7 +941,7 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
             details={"error_type": "missing_parameter", "parameter": "file_path"},
             recovery={
                 "action": "Provide file_path parameter",
-                "workflow": ["1. Call validate_file_path with file_path parameter", "2. Review response before creating file"]
+                "workflow": ["1. Call admin(action='validate_path') with file_path parameter", "2. Review response before creating file"]
             }
         )]
     

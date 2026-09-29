@@ -856,7 +856,7 @@ async def enrich_anti_stasis_perturbation(ctx: UpdateContext) -> None:
                             "by": question.agent_id
                         },
                         "invitation": "Stable systems need perturbation to grow. Consider engaging with this open question.",
-                        "action": "Use store_knowledge_graph with response_to to contribute your perspective."
+                        "action": "Use knowledge(action='store') with response_to to contribute your perspective."
                     }
                     meta._last_perturbation_update = meta.total_updates
                     logger.debug(f"Perturbed stable agent {ctx.agent_id[:8]}... with open question")
@@ -1150,7 +1150,7 @@ async def enrich_pending_dialectic(ctx: UpdateContext) -> None:
                     "phase": "antithesis",
                     "partner": session.paused_agent_id,
                     "topic": getattr(session, 'topic', None),
-                    "action_needed": "Submit antithesis via submit_antithesis()",
+                    "action_needed": "Submit antithesis via dialectic(action='antithesis')",
                     "created_at": session.created_at.isoformat() if session.created_at else None
                 })
             elif session.paused_agent_id == ctx.agent_id and session.phase == DialecticPhase.SYNTHESIS:
@@ -1160,7 +1160,7 @@ async def enrich_pending_dialectic(ctx: UpdateContext) -> None:
                     "phase": "synthesis",
                     "partner": session.reviewer_agent_id,
                     "topic": getattr(session, 'topic', None),
-                    "action_needed": "Submit synthesis via submit_synthesis()",
+                    "action_needed": "Submit synthesis via dialectic(action='synthesis')",
                     "created_at": session.created_at.isoformat() if session.created_at else None
                 })
 

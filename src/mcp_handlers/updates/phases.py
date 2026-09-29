@@ -757,12 +757,12 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                 recovery={
                     "action": "Cannot recover deleted agents",
                     "related_tools": ["agent"],
-                    "workflow": "Deleted agents are permanently removed. Use list_agents to see available agents."
+                    "workflow": "Deleted agents are permanently removed. Use agent(action='list') to see available agents."
                 },
                 context={
                     "agent_id": agent_id,
                     "status": "deleted",
-                    "note": "Deleted agents cannot be recovered. Use archive_agent instead of delete_agent to preserve agent state."
+                    "note": "Deleted agents cannot be recovered. Use agent(action='archive') instead of agent(action='delete') to preserve agent state."
                 }
             )]
 

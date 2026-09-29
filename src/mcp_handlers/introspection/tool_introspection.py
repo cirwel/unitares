@@ -53,16 +53,22 @@ def _describe_tool_deprecation_block(tool_name: str) -> Dict[str, Any] | None:
     return tool_catalog.describe_tool_deprecation_block(tool_name)
 
 
-def _describe_operation(requested_tool_name: str, tool_name: str, alias_info: Any) -> str:
-    """read / write / admin for the name the caller asked about.
+def _describe_operation(
+    requested_tool_name: str, tool_name: str, alias_info: Any, action: Any = None
+) -> str:
+    """read / write / admin for the call the caller asked about.
 
-    A roster name (registered tool or workflow alias) has its own class. A
-    legacy alias reports the class of the action it pins when that is narrower
-    than its router's (list_agents reads; the agent router also deletes), else
+    A router asked about with an action reports that action's declared class
+    (tool_meta.ACTION_OPERATIONS) when it is narrower than the router's:
+    agent(action='list') reads though the agent router also deletes. A roster
+    name otherwise has its own class. An alias reports the class it pins, else
     the canonical tool's.
     """
+    from src.tool_meta import ACTION_OPERATIONS
     from src.tool_modes import TOOL_OPERATIONS
 
+    if action and (tool_name, action) in ACTION_OPERATIONS:
+        return ACTION_OPERATIONS[(tool_name, action)]
     if requested_tool_name in TOOL_OPERATIONS:
         return TOOL_OPERATIONS[requested_tool_name]
     if alias_info is not None and alias_info.operation:
@@ -920,6 +926,33 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                 },
                 context={"tool_name": requested_tool_name},
             )]
+        # A router's per-action handler keeps its name internally (register=
+        # False) but has not been callable since its legacy alias was removed
+        # (2026-09-28). Describing it would teach a call that dispatch refuses,
+        # so point at the router call that reaches the same handler.
+        if alias_info is None:
+            from .. import TOOL_HANDLERS
+            from ..decorators import _ROUTER_ACTION_HANDLERS
+
+            if tool_name not in TOOL_HANDLERS:
+                routes = [
+                    (router, action)
+                    for router, handlers in _ROUTER_ACTION_HANDLERS.items()
+                    for action, handler in handlers.items()
+                    if getattr(handler, "_mcp_tool_name", None) == tool_name
+                ]
+                if routes:
+                    router, action = routes[0]
+                    return [error_response(
+                        f"Unknown tool: {requested_tool_name}. It is reached as "
+                        f"{router}(action='{action}').",
+                        error_code="TOOL_NOT_FOUND",
+                        recovery={
+                            "action": f"Call describe_tool(tool_name='{router}', action='{action}')",
+                            "related_tools": [router],
+                        },
+                        context={"tool_name": requested_tool_name, "router": router, "action": action},
+                    )]
         stability = get_tool_stability(tool_name).value
 
         from src.tool_descriptions import TOOL_DESCRIPTIONS
@@ -1244,7 +1277,12 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "description": first_line(description),
                     "tier": tool_tier,
                     "tier_note": tier_guidance.get(tool_tier, ""),
-                    "operation": _describe_operation(requested_tool_name, tool_name, alias_info),  # read/write/admin
+                    "operation": _describe_operation(
+                        requested_tool_name,
+                        tool_name,
+                        alias_info,
+                        requested_action or getattr(alias_info, "inject_action", None),
+                    ),  # read/write/admin
                     "stability": stability,  # stable/beta/experimental
                     "parameters": params_simple,
                     "note": "Lite mode - use describe_tool(tool_name=..., lite=false) for full schema"
