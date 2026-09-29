@@ -192,8 +192,8 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "knowledge(action='details', discovery_id='...')."
             ),
             "brief": (
-                "Expand results inline only with response_mode='full'; otherwise "
-                "open one with knowledge(action='details')."
+                "Inline details need response_mode='full'; else open one with "
+                "knowledge(action='details')."
             ),
         },
         # The router's text for these describes the store action (discovery_type
@@ -230,7 +230,7 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
                 "Force retrieval mode for action=search. 'semantic' and 'hybrid' "
                 "fail honestly when unsupported by the active backend."
             ),
-            "brief": "auto, or force fts/semantic/hybrid (refused if unsupported).",
+            "brief": "auto, or force fts/semantic/hybrid.",
         },
         "agent_id_filter": {
             "description": (
