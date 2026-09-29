@@ -67,11 +67,23 @@ def openai_base(url: str) -> str:
     return url
 
 
+def _open(base: str, url: str, timeout: float):
+    """Open ``url`` the way the server will reach ``base``: directly, ignoring
+    HTTP_PROXY/HTTPS_PROXY, when the endpoint classifies local (the runtime's
+    local clients do the same), and through the environment's proxy otherwise.
+    """
+    is_local, _reason = endpoint_is_local(base, {key: os.environ.get(key) for key in _CLASSIFIER_KEYS})
+    if is_local:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return opener.open(url, timeout=timeout)
+    return urllib.request.urlopen(url, timeout=timeout)
+
+
 def list_models(base: str, timeout: float = 3.0) -> list[str] | None:
     """Model ids the server at ``base`` lists on ``GET {base}/models``, or None
     if it did not answer in the OpenAI-compatible shape."""
     try:
-        with urllib.request.urlopen(openai_base(base) + "/models", timeout=timeout) as resp:
+        with _open(base, openai_base(base) + "/models", timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError):
         return None
@@ -96,7 +108,7 @@ def is_ollama(base: str, timeout: float = 1.0) -> bool:
     """True when ``GET {root}/api/version`` answers like Ollama. Gates the
     Ollama-only hints; every other step works for any server."""
     try:
-        with urllib.request.urlopen(ollama_root(base) + "/api/version", timeout=timeout) as resp:
+        with _open(base, ollama_root(base) + "/api/version", timeout) as resp:
             payload = json.load(resp)
     except (urllib.error.URLError, OSError, ValueError):
         return False

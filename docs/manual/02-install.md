@@ -109,7 +109,8 @@ settings:
 Ollama is the server these steps are tested with. Other servers that speak the
 same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
 but they are not yet verified end to end. A URL with no path at all, such as
-`http://gpu-box:11434`, gets `/v1` added.
+`http://gpu-box:11434`, gets `/v1` added. A server that requires an API key is
+not supported yet: the setting for one comes in a later release.
 
 The quickest way is to run, from the checkout, once your model server is
 running and has a model:

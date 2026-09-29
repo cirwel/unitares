@@ -269,6 +269,11 @@ class _Resp:
         return self._body
 
 
+def _patch_open(monkeypatch, fake):
+    """Discovery goes through cm._open, which picks direct or proxied transport."""
+    monkeypatch.setattr(cm, "_open", lambda base, url, timeout: fake(url, timeout=timeout))
+
+
 def test_discovery_lists_models_from_the_openai_compatible_route(monkeypatch):
     seen = []
 
@@ -276,7 +281,7 @@ def test_discovery_lists_models_from_the_openai_compatible_route(monkeypatch):
         seen.append(url)
         return _Resp(b'{"object": "list", "data": [{"id": "qwen3:8b"}, {"id": "gemma4:latest"}]}')
 
-    monkeypatch.setattr(cm.urllib.request, "urlopen", fake_urlopen)
+    _patch_open(monkeypatch, fake_urlopen)
     assert cm.list_models("http://localhost:11434/v1/") == ["gemma4:latest", "qwen3:8b"]
     assert cm.list_models("http://localhost:11434") == ["gemma4:latest", "qwen3:8b"]
     assert cm.list_models("http://vllm.lan:8000/v1") == ["gemma4:latest", "qwen3:8b"]
@@ -288,7 +293,7 @@ def test_discovery_lists_models_from_the_openai_compatible_route(monkeypatch):
 
 
 def test_an_ollama_only_answer_is_not_a_model_list(monkeypatch):
-    monkeypatch.setattr(cm.urllib.request, "urlopen", lambda url, timeout=0: _Resp(b'{"models": [{"name": "x"}]}'))
+    _patch_open(monkeypatch, lambda url, timeout=0: _Resp(b'{"models": [{"name": "x"}]}'))
     assert cm.list_models("http://localhost:11434/v1") is None
 
 
@@ -299,14 +304,14 @@ def test_ollama_detection_reads_api_version_at_the_root(monkeypatch):
         seen.append(url)
         return _Resp(b'{"version": "0.12.0"}')
 
-    monkeypatch.setattr(cm.urllib.request, "urlopen", fake_urlopen)
+    _patch_open(monkeypatch, fake_urlopen)
     assert cm.is_ollama("http://localhost:11434/v1") is True
     assert seen == ["http://localhost:11434/api/version"]
 
     def not_found(url, timeout=0):
         raise cm.urllib.error.HTTPError(url, 404, "nf", {}, None)
 
-    monkeypatch.setattr(cm.urllib.request, "urlopen", not_found)
+    _patch_open(monkeypatch, not_found)
     assert cm.is_ollama("http://vllm.lan:8000/v1") is False
 
 
@@ -345,3 +350,37 @@ def test_rebuild_and_probe_use_the_file_and_model_just_written(tmp_path: Path, s
     env = tmp_path / "staging.env"
     assert cm.main(["--model", "qwen3:8b", "--yes", "--env-file", str(env)]) == 0
     assert all(f == env and s == {cm.BASE_KEY: "http://host.docker.internal:11434/v1", cm.MODEL_KEY: "qwen3:8b"} for f, s in state["seen"])
+
+
+
+def test_discovery_reaches_a_local_endpoint_directly_despite_a_proxy(monkeypatch):
+    """The runtime ignores HTTP_PROXY for a local endpoint; the installer must
+    too, or it reports a working local server as down."""
+    import http.server
+    import threading
+
+    body = b'{"object": "list", "data": [{"id": "qwen3:8b"}]}'
+
+    class Models(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Models)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        for key in ("HTTP_PROXY", "http_proxy"):
+            monkeypatch.setenv(key, "http://127.0.0.1:1")
+        for key in ("NO_PROXY", "no_proxy"):
+            monkeypatch.delenv(key, raising=False)
+        base = f"http://127.0.0.1:{server.server_address[1]}/v1"
+        assert cm.list_models(base) == ["qwen3:8b"]
+    finally:
+        server.shutdown()
+        server.server_close()
