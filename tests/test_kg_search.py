@@ -913,8 +913,13 @@ class TestSearchKnowledgeGraph:
         assert len(json.dumps(data, ensure_ascii=False).encode()) < 5_000
 
         expanded = parse_result(await handle_search_knowledge_graph({"include_details": True}))
-        assert all(len(item["summary"]) <= 200 for item in expanded["discoveries"])
+        assert all(item["summary"] == long_summary for item in expanded["discoveries"])
         assert all(item["details"] == "Full evidence" for item in expanded["discoveries"])
+
+        mock_graph.query = AsyncMock(return_value=[discoveries[0]])
+        auto_expanded = parse_result(await handle_search_knowledge_graph({}))
+        assert auto_expanded["discoveries"][0]["summary"] == long_summary
+        assert auto_expanded["discoveries"][0]["details"] == "Full evidence"
 
         mock_graph.get_discovery = AsyncMock(return_value=discoveries[0])
         detail = parse_result(await handle_get_discovery_details({"discovery_id": "essay-0"}))

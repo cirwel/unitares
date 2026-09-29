@@ -2936,10 +2936,10 @@ def _serialize_search_discoveries(
             display = _resolve_agent_display(document.agent_id)
             display_name = display.get("display_name", document.agent_id)
 
-        # A search is a list of leads. Keep its summary bounded even when the
-        # stored finding is an essay; a single-discovery read retains the full
-        # text, and ranking has already used the original document above.
-        item = {"by": display_name, "summary": _one_line(document.summary, limit=200)}
+        # Summary-only searches are lists of leads. Expanded results promise
+        # full inline content, so keep their original summary as well.
+        summary = document.summary if include_details else _one_line(document.summary, limit=200)
+        item = {"by": display_name, "summary": summary}
         item["authority"] = assess_authority(document).to_dict()
         session_at_write = (provenance or {}).get("writer_session_id_at_write")
         if session_at_write:
