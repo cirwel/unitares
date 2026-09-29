@@ -237,10 +237,19 @@ def test_ctrl_d_at_the_rebuild_prompt_does_not_rebuild(tmp_path: Path, stubs, mo
         ("http://gpu-box.lan:11434", "http://gpu-box.lan:11434/v1"),
         ("https://ollama.example.org", "https://ollama.example.org/v1"),
         ("https://router.example.org/api/v1", "https://router.example.org/api/v1"),
+        # No scheme means http, as the server reads it; the host is still found.
+        ("localhost:11434", "http://host.docker.internal:11434/v1"),
+        ("127.0.0.1:8000/v1", "http://host.docker.internal:8000/v1"),
+        ("gpu-box.lan:11434", "http://gpu-box.lan:11434/v1"),
     ],
 )
 def test_container_base_keeps_the_endpoint_and_translates_only_localhost(host_url, expected):
     assert cm.container_base(host_url) == expected
+
+
+def test_a_schemeless_base_is_probed_over_http():
+    assert cm.openai_base("localhost:11434") == "http://localhost:11434/v1"
+    assert cm.ollama_root("localhost:11434/v1") == "http://localhost:11434"
 
 
 def test_a_custom_endpoint_is_what_the_server_is_given(tmp_path: Path, stubs):

@@ -49,9 +49,18 @@ HOST_OLLAMA = "http://localhost:11434"
 PREFERRED_MODEL = "gemma4:latest"
 
 
+def _with_scheme(url: str) -> str:
+    """``http://`` added when ``url`` names no scheme, as the server does
+    (``src/local_inference_env.py``): ``localhost:11434`` otherwise parses as a
+    path with no host."""
+    if url and "://" not in url:
+        return "http://" + url
+    return url
+
+
 def ollama_root(url: str) -> str:
     """An Ollama URL reduced to its root: no surrounding space, trailing ``/`` or ``/v1``."""
-    url = url.strip().rstrip("/")
+    url = _with_scheme(url.strip().rstrip("/"))
     if url.endswith("/v1"):
         url = url[: -len("/v1")].rstrip("/")
     return url
@@ -60,8 +69,9 @@ def ollama_root(url: str) -> str:
 def openai_base(url: str) -> str:
     """An OpenAI-compatible base URL: no surrounding space or trailing ``/``, and
     ``/v1`` added only when the URL has no path (an Ollama root such as
-    ``http://localhost:11434``). Mirrors src/local_inference_env.py."""
-    url = url.strip().rstrip("/")
+    ``http://localhost:11434``), and ``http://`` when it names no scheme.
+    Mirrors src/local_inference_env.py."""
+    url = _with_scheme(url.strip().rstrip("/"))
     if url and not urlsplit(url).path:
         url += "/v1"
     return url
