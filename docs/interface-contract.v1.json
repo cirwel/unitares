@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "b653581a4b06f548366698e4e505480d190df9504f2137f53f7d15966c096776",
+  "surface_sha256": "294a5c4ee7a8fc4cec2d401b4d0992c1ddf86563e4b2ad58485a9bff6e94cd52",
   "capabilities": [
     {
       "name": "start_session",
@@ -345,7 +345,7 @@
       "name": "call_model",
       "implementation": "call_model",
       "kind": "canonical_tool",
-      "input_schema_sha256": "d71eb0f7f23942b36881eac18c4d0621086c9c4a06a2d8b5b79abfe780f712db",
+      "input_schema_sha256": "30760279f172944a25ddbe207d0c3a69f2846b361db6b35b6db0f18f9d5af86c",
       "transport_names": {
         "mcp_streamable_http": "call_model",
         "rest_v1_tools": "call_model",
