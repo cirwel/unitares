@@ -229,7 +229,7 @@ def test_the_checker_is_not_vacuous(mounted):
         ("relationships.x.related_to", "agent(action='nope')"),  # unrouted action
         ("relationships.x.related_to", "list_agents(action='list')"),  # call against a twin
         ("relationships.x.related_to", "ping_agent"),  # no such tool
-        ("tool_map", "state"),  # an alias word, not a wire name
+        ("tool_map", "state"),  # a retired alias word, not a wire name
     ]
     problems = dead_ends(planted, mounted, actions)
     assert len(problems) == len(planted), problems
@@ -248,7 +248,7 @@ def test_the_tool_map_walk_sees_the_words_that_matter():
     assert "knowledge" in names
     assert "state" not in names, "parenthesised prose is stripped"
     assert "OBSERVABILITY" not in names
-    assert "state" in [value for _, value in _tool_map_names("call state to read the verdict")]
+    assert "sync_state" in [value for _, value in _tool_map_names("call sync_state to report")]
 
 
 def test_parse_call_shape():

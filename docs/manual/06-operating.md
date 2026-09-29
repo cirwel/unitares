@@ -78,6 +78,12 @@ Most readers can skip these; reach for them when the need is specific.
 
 For fleets that coordinate, the **CIRS protocol** ([`../guides/CIRS_PROTOCOL.md`](../guides/CIRS_PROTOCOL.md)) defines the message types agents use to hand off and synchronize. The **lease plane** (port `8788`) is the Elixir/OTP coordination layer for single-writer surfaces. Both are specialized — you don't need them for a basic governed fleet.
 
+## 6.8 Updates and backups
+
+On a Docker install, `./scripts/unitares update --check` reports whether a newer release is published, and `./scripts/unitares update` moves to it. Before it applies any migration it stops the writers and dumps the database to `~/.unitares/backups/` (or `UNITARES_BACKUP_DIR`); a failed migration or rebuild puts the previous release's code back. [Updating](02-install.md#updating) has the full behavior, and the one-time step for installs made before the command existed.
+
+These dumps are taken only when a release brings migrations. They are gzipped plain SQL, readable only by your account, and nothing prunes them, so clear old ones yourself. They are not a backup schedule; for one, run `pg_dump` on a timer yourself.
+
 ---
 
 [← Reading the signals](05-reading-the-signals.md) · [Manual index](README.md) · [Next: Troubleshooting →](07-troubleshooting.md)

@@ -164,8 +164,8 @@ not equally available:
   to it would not close the gap. What is missing is an authenticated,
   session-level resolver class. One option is to set it only through an
   operator-authenticated route (an operator credential or passkey session), as
-  the Sentinel adjudication endpoint already requires for its per-finding
-  verdicts (`src/http_routes/sentinel.py`, #2378). Whether "human" should mean
+  the Sentinel adjudication endpoint required for its per-finding verdicts
+  (#2378; that endpoint was removed on 2026-09-27). Whether "human" should mean
   "operator", or any authenticated human reviewer, is the operator's decision.
   The `awaiting_facilitation` flag (migration 053) marks sessions routed to
   human facilitation; it does not record who resolved them.

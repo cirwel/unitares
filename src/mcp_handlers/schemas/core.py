@@ -31,8 +31,8 @@ ProcessUpdateEpistemicClass = Literal[
 
 
 _COMPLEXITY_ALIAS_HINT = (
-    " For 1-10 or other scales, call a check-in alias (checkin/log/update/"
-    "sync_state) with complexity={'value': N, 'scale': M} or a named level "
+    " For 1-10 or other scales, call sync_state with "
+    "complexity={'value': N, 'scale': M} or a named level "
     "like 'medium'."
 )
 
@@ -86,8 +86,8 @@ def _coerce_unit_string_fields(data: Any, *field_names: str, alias_hint: str = "
     "validation unavailable" — so '5' and 'abc' used to reach handlers
     unvalidated. Coercing here lets the field's own ge/le enforce the 0-1
     range; unparseable strings reject instead of silently degrading.
-    Canonical check-in tools are strict; friendly aliases (checkin/log/
-    update/sync_state) normalize richer vocabulary upstream."""
+    Canonical check-in tools are strict; the sync_state alias normalizes
+    richer vocabulary upstream."""
     if not isinstance(data, dict):
         return data
     coerced = None
@@ -391,8 +391,8 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         ge=0.0,
         le=1.0,
         description=(
-            "Estimated task complexity, strictly 0-1. Check-in aliases "
-            "(checkin/log/update/sync_state) also accept named levels "
+            "Estimated task complexity, strictly 0-1. The sync_state alias "
+            "also accepts named levels "
             "('trivial'|'low'|'medium'|'high'|'very_high') and explicit "
             "scale objects like {'value': 5, 'scale': 10}."
         ),

@@ -181,14 +181,22 @@ register(Metric(
 #
 # A JSON file of the shape
 #
-#   {"metrics": [{"name": "...", "description": "...", "unit": "..."}]}
+#   {"metrics": [{"name": "...", "description": "...", "unit": "...",
+#                 "progress": true}]}
 #
 # whose entries are registered on top of the core layer, `.error` twins
-# included. The reference resident's file is
+# included. `progress` (optional, default false) marks a series whose rows
+# count as its producer's work for the resident-progress `metrics_series`
+# source (src/resident_progress/sources.py); a series that only measures
+# something else, such as repository traffic, leaves it unset. The reference resident's file is
 # agents/chronicler/metrics_catalog.json. Unset (the default) registers
 # nothing, so an install that runs no such producer advertises only product
 # metrics and a POST of any other name is still refused.
 EXTRA_CATALOG_ENV = "UNITARES_METRICS_CATALOG_EXTRA"
+
+# Names of extra-catalog metrics marked `"progress": true`, filled by
+# load_extra_catalog. Empty unless a deployment's file marks some.
+progress_series: set[str] = set()
 
 # Everything one malformed entry can raise while being built or registered:
 # KeyError (name or description absent), TypeError (a field is not a string),
@@ -209,6 +217,8 @@ def _metric_from_entry(entry: object) -> Metric:
             raise TypeError(f"{key} must be a string, got {type(value).__name__}")
     if not name.strip():
         raise ValueError("name must not be empty")
+    if not isinstance(entry.get("progress", False), bool):
+        raise TypeError(f"progress must be a boolean, got {type(entry['progress']).__name__}")
     return Metric(name=name, description=description, unit=unit)
 
 
@@ -256,6 +266,8 @@ def load_extra_catalog(path: str | Path | None = None) -> list[Metric]:
     for index, entry in enumerate(entries):
         try:
             loaded.append(register(_metric_from_entry(entry)))
+            if entry.get("progress") is True:
+                progress_series.add(entry["name"])
         except _ENTRY_ERRORS as e:
             label = entry.get("name") if isinstance(entry, dict) else None
             logger.warning(

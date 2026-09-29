@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -449,22 +450,42 @@ def _alias_rows(path: str, table: str, consts: dict[str, str]) -> list[tuple[str
     raise RuntimeError(f"alias table {path}:{table} is missing")
 
 
+def _pack_route_files() -> list[Path]:
+    """Route-pack handler files the server imports by path from outside SCAN_DIRS.
+
+    ``src/http_routes/packs.py`` names these as ``relative/file.py:attr``; the
+    server loads them when their pack is enabled, so their env reads are
+    runtime flags even though the file lives under ``scripts/``. Read with
+    ``ast`` rather than imported, so the catalog needs no server dependencies.
+    """
+    tree = ast.parse((REPO / "src/http_routes/packs.py").read_text(encoding="utf-8"))
+    scanned = tuple(f"{d}/" for d in SCAN_DIRS)
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            m = re.fullmatch(r"([\w./-]+\.py):\w+", node.value)
+            if m and not m.group(1).startswith(scanned):
+                out.add(m.group(1))
+    return [REPO / rel for rel in sorted(out)]
+
+
 def collect() -> dict[str, Flag]:
     flags: dict[str, Flag] = {}
     module_constants: dict[str, dict[str, str]] = {}
     concrete_effect_types: dict[str, list[str]] = {}
-    for d in SCAN_DIRS:
-        # sorted(): rglob yields in filesystem order, which differs between
-        # APFS and ext4. Two fields below are order-dependent — `purpose` takes
-        # the first non-empty docstring found, and `sites` preserves insertion
-        # order — so an unsorted walk makes this generated file platform-
-        # specific. It then passes `--check` only on whichever OS last ran the
-        # generator: regenerating on macOS reliably reddens CI on Linux, and
-        # vice versa, with a diff that points at flags the author never touched.
-        # Measured 2026-08-06: 4 flags (UNITARES_AGENT_LOCK_BACKEND,
-        # UNITARES_FIRST_RUN, UNITARES_LLM_MODEL, UNITARES_UDS_SOCKET) rendered
-        # differently under the two walk orders.
-        for py in sorted((REPO / d).rglob("*.py")):
+    # sorted(): rglob yields in filesystem order, which differs between
+    # APFS and ext4. Two fields below are order-dependent — `purpose` takes
+    # the first non-empty docstring found, and `sites` preserves insertion
+    # order — so an unsorted walk makes this generated file platform-
+    # specific. It then passes `--check` only on whichever OS last ran the
+    # generator: regenerating on macOS reliably reddens CI on Linux, and
+    # vice versa, with a diff that points at flags the author never touched.
+    # Measured 2026-08-06: 4 flags (UNITARES_AGENT_LOCK_BACKEND,
+    # UNITARES_FIRST_RUN, UNITARES_LLM_MODEL, UNITARES_UDS_SOCKET) rendered
+    # differently under the two walk orders.
+    groups = [sorted((REPO / d).rglob("*.py")) for d in SCAN_DIRS] + [_pack_route_files()]
+    for group in groups:
+        for py in group:
             relative_path = py.relative_to(REPO)
             if "tests" in relative_path.parts or py.name.startswith("test_"):
                 continue
@@ -574,7 +595,7 @@ def render(flags: dict[str, Flag]) -> str:
 
 Catalog of statically resolvable `UNITARES_*` / `GOVERNANCE_*` Python-runtime
 environment reads under `config/`, `src/`, `agents/`, and `governance_core/`
-(plus a curated allowlist of governance-critical unprefixed flags and bounded
+(plus route-pack handler files the server loads from elsewhere, a curated allowlist of governance-critical unprefixed flags and bounded
 inference for indirect/dynamic keys). It covers direct `os.getenv` /
 `os.environ.get` reads, registered wrappers, module-level string keys, and
 literal tuple-loop forwarding allowlists. It does **not** claim to inventory

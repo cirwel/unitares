@@ -10,7 +10,7 @@ Usage:
     python scripts/diagnostics/mcp_call.py process_agent_update agent_id=my_agent update_type=reflection content="Hello world"
 
     # With session binding
-    python scripts/diagnostics/mcp_call.py --session my_session bind_identity agent_id=my_agent
+    python scripts/diagnostics/mcp_call.py --session my_session start_session force_new=true
 
     # Show tool schema
     python scripts/diagnostics/mcp_call.py --describe update_agent_metadata
@@ -332,7 +332,7 @@ def main():
 Examples:
   %(prog)s --list
   %(prog)s --describe process_agent_update
-  %(prog)s --session my_session bind_identity agent_id=my_agent
+  %(prog)s --session my_session start_session force_new=true
   %(prog)s process_agent_update agent_id=test update_type=reflection content="test"
   %(prog)s search_knowledge_graph query=migration limit=5
   %(prog)s update_agent_metadata agent_id=test tags='["tag1","tag2"]'

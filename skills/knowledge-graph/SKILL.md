@@ -79,9 +79,14 @@ matches. Two controls answer "what is new":
   the "what is new since T" read, newest first:
   `search_shared_memory(created_after="2026-09-26T00:00:00Z")`.
 
+- `recency_half_life_days` keeps relevance order but weights it by age: each
+  result's score is multiplied by `0.5 ** (age_days / N)`. Off by default; it
+  needs a query and cannot be combined with `sort_by="created_at"`. Use it when
+  both relevance and freshness matter, and `sort_by` when only freshness does.
+
 An unparseable or inverted window is refused, not ignored. The response echoes
-`sort_by` and the window when they differ from the default. The default order
-is still relevance.
+`sort_by`, the window and `recency_half_life_days` when they differ from the
+default. The default order is still relevance.
 
 Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close
@@ -130,13 +135,13 @@ For more control, use the `knowledge()` tool with an action parameter:
 | `search` | Search by query, tags, or both |
 | `get` | Get one agent's knowledge, or read back a single `discovery_id` |
 | `list` | Raw status aggregate (`epoch_scope`, `including_cold`); its numbers differ from `stats` by design |
-| `update` | Modify an existing discovery (status, content, tags) |
+| `update` | Modify an existing discovery (status, content, tags); a `summary` over 4,003 characters, the most a store keeps, is refused |
 | `details` | Full row with `details` pagination (`offset`, `length` default 2000); `include_response_chain=true` adds the typed response chain (AGE backend only) |
 | `note` | Quick note storage through the unified interface |
 | `cleanup` | Run the lifecycle passes graph-wide (tag canonicalization; `ephemeral`-tagged → archived after 7 days; resolved → archived after 30 days, permanent entries skipped; archived → cold after 90 days). Never deletes; `dry_run` defaults to true |
 | `synthesize` | Roll up a topic's discoveries into a summary row (see below) |
 | `stats` | Lifecycle-bucket statistics |
-| `supersede` | Create a SUPERSEDES edge from `discovery_id` (newer) to `supersedes_id` (older) and flip the older row to `superseded` — AGE backend only; on the default Postgres backend it returns an error |
+| `supersede` | Create a SUPERSEDES edge from `discovery_id` (newer) to `supersedes_id` (older) and flip the older row to `superseded` — AGE backend only; on the default Postgres backend it returns an error. `resolution_notes` are appended to the older row's details as `update` appends them, within the same bound; on a high or critical row only its owner may send them |
 | `promote` | Create a governed claim from an imported-memory `discovery_id`, one or more non-memory `evidence_ids`, an explicit `verification_basis`, and a `decision_standard`; the source remains unchanged |
 | `audit` | Read-only staleness/health scoring (`scope` open \| all \| by_agent, `top_n` default 10) |
 
@@ -226,15 +231,19 @@ Tags are how future agents find your contributions. Be intentional:
 - **Include context**: `postgres`, `eisv`, `dialectic`, `discord-bridge`
 - **Be specific**: `pool-connection-leak` is more useful than `bug`
 - **Be consistent**: Check existing tags before inventing new ones
+- **Keep them short**: a write with more than 50 tags, or a tag over 128
+  characters (both counted after normalization), is refused; descriptive
+  text belongs in `summary` or `details`
 - **Mind the lifecycle tags**: `ephemeral`, `temp`, `scratch`, `test`, `demo`
   archive the entry after 7 days; `permanent`, `foundational`, `architecture`,
   `decision` (and the `architectural_decision` / `learning` / `pattern` types)
   make it permanent, and permanence wins on tie. A durable finding *about* the
   test suite must not carry the `test` tag.
 - **Permanent means retained, not unchangeable**: it stops automatic archival.
-  Superseding an entry deliberately is gated on the permanent TAGS only, so an
-  architectural decision can still be replaced by its next revision — which is
-  that category's normal lifecycle.
+  `store(..., supersedes=<older>)` refuses to supersede an entry only when it
+  carries a permanent TAG, so an architectural decision can still be replaced
+  by its next revision — which is that category's normal lifecycle.
+  `knowledge(action="supersede")` does not check the tags.
 
 ## Closing the Loop
 

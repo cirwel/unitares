@@ -20,6 +20,7 @@ import asyncio
 import json
 import os
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -319,6 +320,10 @@ def test_onboard_persists_session_and_continuity_token(cli_env, tmp_path):
     assert payload.get("client_session_id"), "session id not persisted"
     # The token is retained for in-process proof-owned calls, not startup resume.
     assert payload.get("continuity_token"), "continuity token not persisted"
+    # The session file carries client_session_id and continuity_token — group/
+    # other-readable would leak them to any other local account.
+    mode = stat.S_IMODE(session_file.stat().st_mode)
+    assert mode == 0o600, f"session file must be 0600, got {oct(mode)}"
 
 
 def test_metrics_after_onboard_shows_eisv(cli_env):

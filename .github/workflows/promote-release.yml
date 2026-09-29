@@ -398,6 +398,11 @@ jobs:
           git switch -c "$branch"
           printf '%s\n' "$VERSION" > PUBLISHED_VERSION
           python3 scripts/ops/version_manager.py --update
+          # version_manager moves only the version cell; regenerate the whole
+          # published-server row so no earlier release's prose is carried over.
+          python3 scripts/ci/compat_published_row.py --version "$VERSION" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --release-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$RELEASE_TAG"
           git config user.name "github-actions[bot]"
           git config user.email "41898+github-actions[bot]@users.noreply.github.com"
           git add PUBLISHED_VERSION

@@ -9,6 +9,8 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import ipaddress as _ipaddress
 import secrets
 
@@ -103,8 +105,17 @@ _TRUSTED_NETWORKS = list(BUILTIN_TRUSTED_NETWORKS)
 def _is_trusted_network(request) -> bool:
     """Check if request originates from a trusted network.
 
-    Uses the actual TCP peer address only -- never trust X-Forwarded-For
-    since there is no reverse proxy stripping it before us. A request on the
+    Reads ``request.client``: the TCP peer, except when that peer is a
+    loopback address listed in ``FORWARDED_ALLOW_IPS``
+    (``src/services/mcp_transport_service.py``) and sent X-Forwarded-For,
+    where uvicorn has already replaced it with the caller named there. That
+    rewrite is what stops a same-host reverse proxy that sets the header from
+    passing its callers through on its own loopback address, so the list must
+    cover every loopback address trusted here. It does not help a forwarder
+    that sets no header (socat, an SSH tunnel), nor a proxy on a trusted
+    non-loopback address, whose X-Forwarded-For is ignored: their callers ride
+    the forwarder's own trust. Front those with UNITARES_REST_STRICT or a
+    bearer. A request on the
     public OAuth listener is never trusted: that socket exists to carry the
     public tunnel, so its loopback peer says nothing about the caller.
     """
@@ -139,6 +150,63 @@ def _bearer_from_header(auth: str | None) -> str | None:
     return auth.split(" ", 1)[1].strip()
 
 
+# A browser cannot set headers on a ``WebSocket`` handshake, but it can offer
+# subprotocols, and ``Sec-WebSocket-Protocol`` is a header: it is not part of
+# the request line, so it never reaches uvicorn's handshake log or an edge
+# proxy's URL log the way ``?token=`` did. The client offers the marker plus
+# ``<marker>.<base64url(token)>`` (base64url because a subprotocol must be an
+# RFC 7230 token); the server selects the marker, so the credential is never
+# echoed back in the response.
+WS_BEARER_SUBPROTOCOL = "unitares.bearer"
+_WS_BEARER_PREFIX = WS_BEARER_SUBPROTOCOL + "."
+
+
+def _offered_subprotocols(websocket) -> list[str]:
+    """The client's offered subprotocols, one per entry.
+
+    ASGI says ``scope["subprotocols"]`` is already a list of names, but
+    uvicorn's ``websockets-sansio`` implementation (the one the server runs)
+    passes the raw header value through, so a single entry can still be
+    ``"a, b"``. Split defensively.
+    """
+    scope = getattr(websocket, "scope", None) or {}
+    out: list[str] = []
+    for raw in scope.get("subprotocols") or ():
+        if isinstance(raw, str):
+            out.extend(p.strip() for p in raw.split(",") if p.strip())
+    return out
+
+
+def _bearer_from_subprotocols(websocket) -> str | None:
+    """Extract the bearer a browser offered as a ``Sec-WebSocket-Protocol`` entry."""
+    for proto in _offered_subprotocols(websocket):
+        if not proto.startswith(_WS_BEARER_PREFIX):
+            continue
+        encoded = proto[len(_WS_BEARER_PREFIX):]
+        if not encoded:
+            return None
+        try:
+            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+    return None
+
+
+def ws_accept_subprotocol(websocket) -> str | None:
+    """The subprotocol to select on accept: the marker, if the client offered it.
+
+    A browser that offers subprotocols fails the connection when the server
+    selects none, so the marker has to be echoed whenever it was sent.
+
+    Clients must offer the bare marker (``unitares.bearer``) explicitly
+    alongside the credential entry (``unitares.bearer.<base64token>``); a
+    client that sends only the credential form will receive no subprotocol
+    selection and most browsers will close the connection.
+    """
+    offered = _offered_subprotocols(websocket)
+    return WS_BEARER_SUBPROTOCOL if WS_BEARER_SUBPROTOCOL in offered else None
+
+
 def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     """Bearer token auth for WebSocket endpoints.
 
@@ -146,21 +214,28 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     requires a valid bearer with no IP bypass; the legacy/local posture keeps the
     trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
 
-    A browser cannot set request headers on a ``WebSocket``, so the break-glass
-    bearer rides in the query string (``/ws/eisv?token=…``); non-browser clients
-    may still send the ``Authorization`` header. A DB-validated passkey session
-    is also accepted in local posture when the browser supplies the exact RP
-    Origin.
+    Browsers cannot set request headers on a ``WebSocket``, so the bearer rides
+    in a ``Sec-WebSocket-Protocol`` entry (``unitares.bearer.<base64token>``;
+    see ``WS_BEARER_SUBPROTOCOL`` and ``_bearer_from_subprotocols``).
+    Non-browser clients may use the ``Authorization`` header directly.
+    A DB-validated passkey session is also accepted in local posture when the
+    browser supplies the exact RP Origin.
 
-    Without this, ``/ws/eisv`` was the only route on the server with no auth
-    check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
+    Query-string tokens (``?token=…``) are explicitly not read: uvicorn logs
+    the handshake request line including the query string, so any token placed
+    there would be written to the server log on every connect. The
+    ``QuerySecretRedactionFilter`` in ``log_redaction.py`` catches any
+    credential that reaches the log as a defense-in-depth measure.
+
+    Without this check, ``/ws/eisv`` was the only route on the server with no
+    auth at all: over the tunnel ``GET /v1/residents`` answered 401 while the
     WebSocket handshake answered 101 and streamed the full governance feed
     (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
     unauthenticated caller.
     """
-    tok = websocket.query_params.get("token") or _bearer_from_header(
+    tok = _bearer_from_header(
         websocket.headers.get("authorization") or websocket.headers.get("Authorization")
-    )
+    ) or _bearer_from_subprotocols(websocket)
 
     # Strict posture: bearer, or a validated session from our exact RP origin.
     #
@@ -860,6 +935,10 @@ async def _resolve_http_session_binding(
     return agent_uuid
 
 
+# How many ``kwargs`` wrappers dispatch actually unwraps on this path.
+_DISPATCH_UNWRAP_DEPTH = 2
+
+
 async def _resolve_http_bound_agent(
     tool_name: str,
     arguments: dict,
@@ -867,12 +946,51 @@ async def _resolve_http_bound_agent(
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
     from src.mcp_handlers.context import set_unbound_resolution
-    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     # Each prebind, nested ones included, starts with no resolver result.
     set_unbound_resolution(None)
     if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
+
+    # Every path below stamps the resolved caller into an omitted agent_id.
+    # For a call that must name its own target (agent archive and delete,
+    # the same set /mcp/'s inject_identity leaves alone), that would turn
+    # "no target" into "the caller". Whether the caller named one is read
+    # here, before any path writes it, and the stamp is taken off again once
+    # the caller is bound; a missing key and an empty one both mean no
+    # target to the handler, which then refuses. The call is read as
+    # dispatch will see it after unwrapping a ``kwargs`` wrapper: the stamp
+    # lands on the outer dict, and an action or target inside ``kwargs``
+    # only surfaces later, merged over it. Dispatch unwraps exactly twice
+    # (the pipeline boundary, then the HTTP fallback), so the call is read at
+    # each depth it can reach, 0 through 2, and any of them that is an unnamed
+    # destructive call wins: a deeper ``get`` cannot cancel an outer
+    # ``delete``. A wrapper below that depth is never unwrapped, so it must
+    # not retarget a valid outer call either.
+    from src.mcp_handlers.middleware.params_step import (
+        _EXPLICIT_TARGET_CALLS,
+        unwrapped_view,
+    )
+
+    unnamed_destructive = any(
+        _EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id")
+        for call in (
+            unwrapped_view(arguments, depth)
+            for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
+        )
+    )
+    if unnamed_destructive:
+        try:
+            return await _resolve_http_bound_caller(arguments, signals, tool_name)
+        finally:
+            arguments.pop("agent_id", None)
+    return await _resolve_http_bound_caller(arguments, signals, tool_name)
+
+
+async def _resolve_http_bound_caller(
+    arguments: dict, signals, tool_name: str,
+) -> str | None:
+    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     explicit_agent_id = await _bind_explicit_http_agent(arguments)
     if explicit_agent_id:

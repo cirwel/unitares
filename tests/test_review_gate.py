@@ -26,6 +26,7 @@ read_native_api = rg.read_native
 completed_review_exit = rg.completed_review_exit
 require_open = rg.require_open
 real_disabled_providers = rg.disabled_providers
+_REAL_READ_NATIVE = rg.read_native  # no_cloud_reads stubs it; carry tests opt in
 shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
@@ -113,6 +114,696 @@ def test_key_ignores_local_diff_config(repo):
     _git(repo, "config", "diff.algorithm", "histogram")
     _git(repo, "config", "diff.renames", "copies")
     assert rg.diff_key("master", "HEAD") == before
+
+
+# ---- carrying a review across a base merge that touched the PR's files ----
+
+@pytest.fixture
+def carry_repo(tmp_path, monkeypatch):
+    """master has a five-line file; the feature edits line 3. Master will then
+    edit line 1, next to the PR's line but not on it."""
+    r = tmp_path / "carry"
+    r.mkdir()
+    _git(r, "init", "-q", "-b", "master")
+    _git(r, "config", "user.email", "t@example.invalid")
+    _git(r, "config", "user.name", "t")
+    (r / "f.txt").write_text("one\ntwo\nthree\nfour\nfive\n")
+    (r / "other.txt").write_text("x\n")
+    _git(r, "add", ".")
+    _git(r, "commit", "-q", "-m", "base")
+    _git(r, "checkout", "-q", "-b", "feature")
+    (r / "f.txt").write_text("one\ntwo\nTHREE by the PR\nfour\nfive\n")
+    _git(r, "commit", "-q", "-am", "feature change")
+    monkeypatch.chdir(r)
+    return r
+
+
+def _master_edits_next_to_the_pr(r: Path) -> None:
+    _git(r, "checkout", "-q", "master")
+    (r / "f.txt").write_text("ONE on master\ntwo\nthree\nfour\nfive\n")
+    _git(r, "commit", "-q", "-am", "master edits line 1")
+    _git(r, "checkout", "-q", "feature")
+
+
+def _record(key: str, verdict="CLEAN", findings=0, url="reviewed", reviewer="codex-native"):
+    return _comment(rg.Record(key, verdict, findings, False, reviewer), url=url)
+
+
+def _decide(comments, base="master", head="HEAD"):
+    """What CI decides for `head`: (deciding record, {url: carried-from commit})."""
+    key = rg.diff_key(base, head)
+    carried_comments, carried = rg.carry_records(
+        comments, key, rg.base_merge_equivalents(base, head))
+    return rg.latest_matching(carried_comments, key), carried
+
+
+def _crafted_merge(r: Path, files: dict[str, str]) -> None:
+    """A two-parent commit (HEAD, master) whose tree the author chose freely."""
+    for path, text in files.items():
+        (r / path).write_text(text)
+        _git(r, "add", path)
+    tree = _git(r, "write-tree")
+    commit = _git(r, "commit-tree", tree, "-p", "HEAD", "-p", "master", "-m", "crafted")
+    _git(r, "reset", "-q", "--hard", commit)
+
+
+def test_a_base_merge_next_to_the_pr_moves_the_raw_key_but_carries_the_review(carry_repo):
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.diff_key("master", "HEAD") != reviewed_key  # the #2519 failure
+    assert rg.base_merge_equivalents("master", "HEAD") == [(reviewed_key, reviewed_head)]
+    rec, carried = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN"
+    assert carried == {"reviewed": reviewed_head}
+
+
+@pytest.mark.parametrize("pr_edit,finding_on,expected", [
+    (False, None, 0), (True, None, 2),
+    # A finding on either key keeps CI red: the merged head's own, or the
+    # reviewed key's, which CI carries to the merged head.
+    (False, "merged", 1), (False, "reviewed", 1)])
+def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeypatch, pr_edit,
+                                                             finding_on, expected):
+    # Codex on #2568: CI carries the review across GitHub's base merge, so the
+    # local handoff must not report the same diff UNREVIEWED. The fresh Claude
+    # review: nor report it done while CI, deciding the merged head's key,
+    # still holds a finding posted there during the review.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    comments: list[dict] = []
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        if pr_edit:
+            (carry_repo / "f.txt").write_text(
+                "ONE on master\ntwo\nTHREE edited again\nfour\nfive\n")
+            _git(carry_repo, "commit", "-q", "-am", "unreviewed edit")
+        if finding_on:
+            key = rg.diff_key("master", "HEAD") if finding_on == "merged" else reviewed_key
+            comments.append(_record(key, "FINDINGS", 1, reviewer="claude"))
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    # The real pr_comments, so the handoff's carry registration is what re-keys.
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    # _resolve registered the reviewed key's view. The second-family pass that
+    # follows the handoff still keys on it (Codex on #2568), so afterwards the
+    # view stays under that key but holds CI's own set: the merged head and its
+    # chain. A key _resolve's older walk reached and CI's no longer does
+    # ("older") drops out, or the pass could count a family CI does not.
+    earlier = [("older", "c0ffee")]
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, earlier)})
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == expected
+    if pr_edit:
+        assert rg._CARRY == {("o/r", 1): (reviewed_key, earlier)}
+    else:
+        merged = (rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD"))
+        assert rg._CARRY == {("o/r", 1): (reviewed_key, [merged])}
+    assert _git(carry_repo, "for-each-ref", "refs/review-gate/handoff") == ""
+
+
+def test_handoff_refreshes_the_base_ref_when_only_the_base_moved(carry_repo, monkeypatch):
+    # The independent review on #2568: a base advance with no merge into the PR
+    # leaves the head alone, yet CI reads the new base's policy, so the
+    # second-family pass after the handoff must too.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+
+    def pr_info(*args):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("y\n")
+        _git(carry_repo, "commit", "-q", "-am", "master moves on")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])  # the PR's comments
+    assert completed_review_exit("o/r", 1, key, head, 0) == 0
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
+        _git(carry_repo, "rev-parse", "master")
+
+
+@pytest.mark.parametrize("native_finding", [False, True])
+def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_repo, monkeypatch,
+                                                                       native_finding):
+    # Codex on #2568: a base merge that touches only files outside the PR keeps
+    # the key but moves the head, and CI reads native reviews of the new head.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    merged = {}
+
+    def pr_info(*args):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("y\n")
+        _git(carry_repo, "commit", "-q", "-am", "master edits a file the PR does not")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        merged["head"] = _git(carry_repo, "rev-parse", "HEAD")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    def read_native(repo, pr, key, head, comments):
+        found = native_finding and head == merged["head"]
+        return rg.NativeReview([rg.Record(key, "FINDINGS", 1, False, "codex-native")] if found else [])
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
+    monkeypatch.setattr(rg, "read_native", read_native)
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == (1 if native_finding else 0)
+    assert rg.diff_key("master", "HEAD") == reviewed_key
+    assert rg._CARRY[("o/r", 1)][1][-1] == (reviewed_key, merged["head"])
+    # Codex on #2568: the second-family pass reads its policy from origin/<base>,
+    # which must now be the base the handoff checked, as CI reads it. (The
+    # remote here has no default fetch refspec, so git's opportunistic
+    # remote-tracking update cannot be what moved it.)
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
+        _git(carry_repo, "rev-parse", "master")
+
+
+def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, monkeypatch):
+    # The independent review on #2568: the reviewed head H is itself a base
+    # merge over H0 with the same key. CI at the new head M1 reads native
+    # reviews of H and H0, so the view after the handoff drops only H (read by
+    # the caller directly), never H0.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    h0 = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "other.txt").write_text("y\n")
+    _git(carry_repo, "commit", "-q", "-am", "master edits a file the PR does not")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    h = _git(carry_repo, "rev-parse", "HEAD")
+    assert rg.diff_key("master", "HEAD") == key
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (key, [(key, h0)])})
+    assert completed_review_exit("o/r", 1, key, h, 0) == 0
+    m1 = (rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD"))
+    assert rg._CARRY == {("o/r", 1): (key, [(key, h0), m1])}
+
+
+@pytest.mark.parametrize("start,expected,status", [
+    (None, "new", "ok"), ("old", "new", "ok"), ("newer", "newer", "ahead"),
+    ("side", "side", "diverged")])
+def test_the_base_ref_only_moves_forward(carry_repo, start, expected, status):
+    # Codex on #2568: another worktree may fetch a newer base while the
+    # handoff runs; the handoff must never roll the shared ref back. A value
+    # ahead of ours or on another line of history is kept but reported: it
+    # may be stale (a rewound or rewritten base) or newer, and the handoff
+    # asks the remote again or refuses rather than guess.
+    commits = {"old": _git(carry_repo, "rev-parse", "master")}
+    _git(carry_repo, "checkout", "-q", "master")
+    for name in ("new", "newer"):
+        (carry_repo / "other.txt").write_text(f"{name}\n")
+        _git(carry_repo, "commit", "-q", "-am", name)
+        commits[name] = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", commits["old"])
+    (carry_repo / "other.txt").write_text("side\n")
+    _git(carry_repo, "commit", "-q", "-am", "side")
+    commits["side"] = _git(carry_repo, "rev-parse", "HEAD")
+    ref = "refs/remotes/origin/master"
+    if start:
+        _git(carry_repo, "update-ref", ref, commits[start])
+    assert rg._advance_ref(ref, commits["new"]) == status
+    assert _git(carry_repo, "rev-parse", ref) == commits[expected]
+
+
+def test_a_ref_that_cannot_be_updated_is_reported(carry_repo, monkeypatch, capsys):
+    # The independent review on #2568: a failed update that is not a lost
+    # race (a held lock, a read-only repository) is its own outcome, not a
+    # rewritten base.
+    ref = "refs/remotes/origin/master"
+    old = _git(carry_repo, "rev-parse", "master")
+    _git(carry_repo, "update-ref", ref, old)
+    new = _git(carry_repo, "rev-parse", "feature")
+    real_run = rg.subprocess.run
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, *a, **k: (
+        subprocess.CompletedProcess(cmd, 128, "", "fatal: cannot lock ref")
+        if cmd[:2] == ["git", "update-ref"] else real_run(cmd, *a, **k)))
+    assert rg._advance_ref(ref, new) == "stuck"
+    assert "cannot lock ref" in capsys.readouterr().err
+    assert _git(carry_repo, "rev-parse", ref) == old
+
+
+@pytest.mark.parametrize("winner,status,final", [
+    ("newer", "ahead", "newer"), ("side", "diverged", "side"),
+    # An older value on the same line: only a re-read moves the ref on to ours.
+    ("mid", "ok", "new")])
+def test_a_lost_ref_race_is_decided_again(carry_repo, monkeypatch, winner, status, final):
+    # Codex on #2568: another worktree may move the ref between the read and
+    # the compare-and-swap. The lost swap re-reads and decides on what is there
+    # now: a newer base or a rewritten one is kept, never overwritten.
+    base = _git(carry_repo, "rev-parse", "master")
+    _git(carry_repo, "checkout", "-q", "master")
+    commits = {}
+    for name in ("mid", "new", "newer"):
+        (carry_repo / "other.txt").write_text(f"{name}\n")
+        _git(carry_repo, "commit", "-q", "-am", name)
+        commits[name] = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", base)
+    (carry_repo / "other.txt").write_text("side\n")
+    _git(carry_repo, "commit", "-q", "-am", "side")
+    commits["side"] = _git(carry_repo, "rev-parse", "HEAD")
+    ref = "refs/remotes/origin/master"
+    _git(carry_repo, "update-ref", ref, base)
+    real_run = rg.subprocess.run
+    raced = []
+
+    def racing_run(cmd, *a, **k):
+        if cmd[:2] == ["git", "update-ref"] and not raced:
+            raced.append(True)
+            _git(carry_repo, "update-ref", ref, commits[winner])  # the other worktree wins
+        return real_run(cmd, *a, **k)
+
+    monkeypatch.setattr(rg.subprocess, "run", racing_run)
+    assert rg._advance_ref(ref, commits["new"]) == status
+    assert raced and _git(carry_repo, "rev-parse", ref) == commits[final]
+
+
+@pytest.mark.parametrize("retained,said", [
+    ("merges_the_pr", "head or base diff changed"),
+    ("rewound", "ahead of the base the remote advertises"),
+    ("rewritten", "different lines of history")])
+def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatch, capsys,
+                                                         retained, said):
+    # Codex on #2568: another worktree may leave origin/<base> at a newer base
+    # than the handoff fetched. The key is checked against that base, the one
+    # the second-family pass and CI read, so a base that merged the PR's commit
+    # changes the diff (UNREVIEWED). A ref ahead of the fetched base is newer
+    # only while the remote still advertises it: after a rewind it is stale,
+    # and the handoff refuses. A base on another line of history may be stale
+    # or newer, so the handoff refuses it outright.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "--detach", "master")
+    if retained == "rewritten":
+        (carry_repo / "other.txt").write_text("rewritten\n")
+        _git(carry_repo, "commit", "-q", "-am", "a rewritten base")
+    else:
+        _git(carry_repo, "merge", "-q", "--no-edit", "feature")
+    retained_base = _git(carry_repo, "rev-parse", "HEAD")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", retained_base)
+    if retained == "rewritten":
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "other.txt").write_text("the base as fetched here\n")
+        _git(carry_repo, "commit", "-q", "-am", "base")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    if retained == "merges_the_pr":
+        # The remote reaches the retained base after the handoff's first
+        # fetch: another worktree fetched it in between, so it is current.
+        real_git, fetches = rg.git, []
+
+        def git(*args, **kw):
+            out = real_git(*args, **kw)
+            if args[0] == "fetch" and not fetches:
+                fetches.append(args)
+                _git(carry_repo, "update-ref", "refs/heads/master", retained_base)
+            return out
+
+        monkeypatch.setattr(rg, "git", git)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
+    assert said in capsys.readouterr().out
+    assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == retained_base
+
+
+def test_handoff_refuses_a_base_ref_it_could_not_move(carry_repo, monkeypatch, capsys):
+    # The independent review on #2568: a tracking ref that could not be moved
+    # still holds an older base, which is not the one CI reads.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    key = rg.diff_key("master", "HEAD")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    monkeypatch.setattr(rg, "_advance_ref", lambda ref, new: "stuck")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
+    assert "could not move origin/master" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("exit_code,reported", [(129, True), (1, False)])
+def test_a_base_merge_git_cannot_check_is_refused_and_reported(monkeypatch, capsys,
+                                                               exit_code, reported):
+    # git older than 2.38 has no merge-tree --write-tree (exit 129): nothing is
+    # carried, and the author is told CI may see what this machine cannot. An
+    # ordinary conflict (exit 1) is refused quietly: nothing is being missed.
+    monkeypatch.setattr(rg.subprocess, "run",
+                        lambda *a, **k: subprocess.CompletedProcess(a, exit_code, "", ""))
+    assert rg._clean_auto_merge("abc123", "p", "b") is False
+    assert ("needs git 2.38+" in capsys.readouterr().err) is reported
+
+
+def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_repo, monkeypatch):
+    # Codex on #2568: a second family that reviewed the merged head during the
+    # handoff passes in CI, so the second-family pass after it must see it too.
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    comments = [_record(reviewed_key, reviewer="claude", url="claude")]
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(carry_repo)
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        comments.append(_record(rg.diff_key("master", "HEAD"), reviewer="codex-native",
+                                url="codex"))
+        _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+        return {"baseRefName": "master", "state": "OPEN"}
+
+    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
+    assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == 0
+    assert rg.passing_families(rg.pr_comments("o/r", 1), reviewed_key) == {"anthropic", "openai"}
+
+
+@pytest.mark.parametrize("merges,carried", [(2, 2), (3, 0)])
+def test_a_chain_past_the_bound_carries_nothing(carry_repo, monkeypatch, merges, carried):
+    # Codex on #2568: a chain cut off at the bound would drop its oldest
+    # records, so an open finding there could be hidden by a carried CLEAN.
+    # A chain longer than the bound carries nothing; the head's key decides.
+    monkeypatch.setattr(rg, "CARRY_MAX_BASE_MERGES", 2)
+    comments = [_record(rg.diff_key("master", "HEAD"), "FINDINGS", 1, url="finding")]
+    for n in range(merges):
+        _git(carry_repo, "checkout", "-q", "master")
+        (carry_repo / "f.txt").write_text(f"ONE on master {n}\ntwo\nthree\nfour\nfive\n")
+        _git(carry_repo, "commit", "-q", "-am", f"master edits line 1 ({n})")
+        _git(carry_repo, "checkout", "-q", "feature")
+        _git(carry_repo, "merge", "-q", "--no-edit", "master")
+        if n == 0:
+            comments.append(_record(rg.diff_key("master", "HEAD"), url="clean"))
+    assert len(rg.base_merge_equivalents("master", "HEAD")) == carried
+    rec, _ = _decide(comments)
+    assert (rec is not None and rec.verdict == "FINDINGS") == bool(carried)
+    if not carried:
+        assert rec is None
+
+
+@pytest.mark.parametrize("policy,changed,carried", [
+    ([], None, 1),                 # no second-family path: the merge carries
+    (["f.txt"], None, 0),          # the PR touches one: nothing carries
+    (["*.py"], None, 1),           # a policy that does not match the PR
+    ([], "unreadable", 0),         # paths unreadable: treated as sensitive
+])
+def test_a_second_family_diff_is_never_carried(carry_repo, monkeypatch, policy, changed,
+                                               carried):
+    # Operator decision, 2026-09-28: on second-family paths a base merge can
+    # change how unchanged lines behave, so each head is reviewed on its own
+    # key. The policy is the base's, as the gate reads it.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: policy)
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS
+                        if changed is None else lambda base, head: None)
+    equivalents = rg.base_merge_equivalents("master", "HEAD")
+    assert len(equivalents) == carried
+    rec, _ = _decide([_record(reviewed_key)])
+    assert (rec is not None) == bool(carried)
+
+
+def _base_merged_pr(carry_repo, monkeypatch):
+    """A PR whose branch GitHub base-merged cleanly: (reviewed_key, key, head),
+    with origin/master and the PR ref set up for the handoff."""
+    _git(carry_repo, "remote", "add", "origin", str(carry_repo))
+    _git(carry_repo, "config", "--unset-all", "remote.origin.fetch")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    _git(carry_repo, "update-ref", "refs/remotes/origin/master", "master")
+    _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
+    monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    return reviewed_key, rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("sensitive_now,families", [
+    (False, {"anthropic", "openai"}),
+    (True, {"anthropic"}),
+])
+def test_handoff_rereads_the_carry_when_only_the_base_policy_moved(
+        carry_repo, monkeypatch, sensitive_now, families):
+    # The independent review on #2581: _resolve registered the carry under the
+    # policy it read, but the base's policy can change during the review while
+    # the head stays put. CI then carries nothing for a second-family diff, so
+    # the second-family pass after the handoff must not count the family that
+    # only the old carry supplied.
+    reviewed_key, key, head = _base_merged_pr(carry_repo, monkeypatch)
+    comments = [_record(reviewed_key, reviewer="codex-native", url="codex"),
+                _record(key, reviewer="claude", url="claude")]
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 1),
+                        (key, rg.base_merge_equivalents("master", "HEAD")))
+    assert rg.passing_families(rg.pr_comments("o/r", 1), key) == {"anthropic", "openai"}
+    # The base's policy moves during the review; the head does not.
+    monkeypatch.setattr(rg, "base_policy_paths",
+                        lambda base: ["f.txt"] if sensitive_now else [])
+    assert completed_review_exit("o/r", 1, key, head, 0) == 0
+    assert rg._CARRY[("o/r", 1)][0] == key  # what second_family_pass keys on
+    assert rg.passing_families(rg.pr_comments("o/r", 1), key) == families
+
+
+def test_handoff_reads_a_finding_a_wider_carry_brings_in(carry_repo, monkeypatch):
+    # The independent review on #2581: a policy narrowed during the review
+    # makes a formerly second-family diff carryable, and CI then carries an
+    # open finding from the pre-merge key that a later CLEAN does not clear.
+    # The handoff must read it too, not report done.
+    reviewed_key, key, head = _base_merged_pr(carry_repo, monkeypatch)
+    comments = [_record(reviewed_key, "FINDINGS", 1, reviewer="codex-native", url="finding"),
+                _record(key, reviewer="claude", url="clean")]
+    monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["f.txt"])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 1),
+                        (key, rg.base_merge_equivalents("master", "HEAD")))
+    assert rg._CARRY[("o/r", 1)][1] == []  # second-family at review start
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])  # narrowed
+    assert completed_review_exit("o/r", 1, key, head, 0) == 1
+
+
+def test_no_earlier_record_means_nothing_decides(carry_repo):
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert _decide([]) == (None, {})
+
+
+def test_open_findings_carry_too(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    rec, _ = _decide([_record(reviewed_key, "FINDINGS", 2)])
+    assert rec.verdict == "FINDINGS" and not rec.disposed
+
+
+def test_a_later_clean_on_the_new_key_does_not_clear_a_carried_finding(carry_repo):
+    # Codex P1 on #2568: the head's own record must not hide the equivalent
+    # earlier key's open finding, as a quieter re-run cannot on one diff.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    own = rg.diff_key("master", "HEAD")
+    rec, _ = _decide([_record(reviewed_key, "FINDINGS", 1, url="old"),
+                      _record(own, url="rerun")])
+    assert rec.verdict == "FINDINGS" and not rec.disposed
+
+
+def test_a_disposition_on_the_new_key_answers_a_carried_finding(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    own = rg.diff_key("master", "HEAD")
+    finding = _comment(rg.Record(reviewed_key, "FINDINGS", 2, False, "codex-native"), url="f")
+    disposed = _comment(rg.Record(own, "FINDINGS", 2, True, "codex-native"), url="d")
+    rec, _ = _decide([finding, disposed])
+    assert rec.status()[0] == "success"
+
+
+def test_local_reads_see_carried_records(carry_repo, monkeypatch):
+    # The review/record/dispose commands read through pr_comments, so a
+    # carried finding is visible to `dispose` and `review` alike.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    own = rg.diff_key("master", "HEAD")
+    monkeypatch.setattr(rg, "api_pages", lambda *a: [_record(reviewed_key, "FINDINGS", 1)])
+    monkeypatch.setitem(rg._CARRY, ("o/r", 7), (own, rg.base_merge_equivalents("master", "HEAD")))
+    rec = rg.latest_matching(rg.pr_comments("o/r", 7), own)
+    assert rec is not None and rec.verdict == "FINDINGS"
+    assert rg.latest_matching(rg.pr_comments("o/r", 8), own) is None  # other PRs untouched
+
+
+def test_a_native_finding_on_the_pre_merge_head_carries(carry_repo, monkeypatch):
+    # Codex P1 on #2568: native reviews are bound to a commit, not a key, so
+    # read_native must read the equivalent earlier head's reviews too; else a
+    # later CLEAN on the merged head hides the native finding.
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    head = _git(carry_repo, "rev-parse", "HEAD")
+    own = rg.diff_key("master", "HEAD")
+    review = {"id": 5, "user": {"login": rg.CODEX_BOT, "type": "Bot"},
+              "commit_id": reviewed_head, "state": "COMMENTED",
+              "submitted_at": "2026-09-28T06:00:00Z", "body": "",
+              "html_url": "native-review"}
+    finding = {"id": 50, "pull_request_review_id": 5,
+               "user": {"login": rg.CODEX_BOT, "type": "Bot"},
+               "path": "f.txt", "line": 3, "body": "[P1] bug", "html_url": "inline"}
+    pages = {"reviews": [review], "pulls/7/comments": [finding], "events": [], "reactions": []}
+    monkeypatch.setattr(rg, "api_pages",
+                        lambda ep: next((v for k, v in pages.items() if ep.endswith(k)), []))
+    later_clean = _record(own, url="rerun")
+    later_clean["created_at"] = "2026-09-28T07:00:00Z"
+    monkeypatch.setitem(rg._CARRY, ("o/r", 7), (own, rg.base_merge_equivalents("master", "HEAD")))
+    snapshot = _REAL_READ_NATIVE("o/r", 7, own, head, [later_clean])
+    assert snapshot.carried == {"native-review": reviewed_head}
+    rec = rg.latest_matching([later_clean], own, snapshot.records)
+    assert rec.verdict == "FINDINGS" and not rec.disposed
+    monkeypatch.delitem(rg._CARRY, ("o/r", 7))  # without the carry, the finding is gone
+    assert rg.latest_matching([later_clean], own, _REAL_READ_NATIVE(
+        "o/r", 7, own, head, [later_clean]).records).verdict == "CLEAN"
+
+
+def test_an_edit_to_the_prs_lines_after_the_merge_stops_the_carry(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE edited again\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "author edits the PR line")
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+def test_a_merge_that_rewrites_the_prs_lines_does_not_carry(carry_repo):
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-commit", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE resolved differently\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "merge with an edit")
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+def test_a_crafted_merge_that_moves_the_prs_lines_does_not_carry(carry_repo):
+    # Independent review on #2568: the PR's added line, placed before a check
+    # instead of after it. Same added lines, so the fingerprint matches; the
+    # merge is not git's own automatic merge, so nothing carries.
+    (carry_repo / "f.txt").write_text("one\ntwo\nthree\ngrant_all()\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "PR adds grant_all() after three")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    fingerprint = rg.patch_fingerprint("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _crafted_merge(carry_repo, {
+        "f.txt": "ONE on master\ntwo\ngrant_all()\nthree\nfour\nfive\n"})
+    assert rg.patch_fingerprint("master", "HEAD") == fingerprint  # the text alone cannot tell
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+def test_moving_an_edit_between_identical_lines_does_not_carry(carry_repo):
+    # Codex P1 on #2568: -x/+FEATURE reads the same on either of two x lines.
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "g.txt").write_text("x\nmid\nx\n")
+    _git(carry_repo, "add", "g.txt")
+    _git(carry_repo, "commit", "-q", "-m", "two x lines")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    (carry_repo / "g.txt").write_text("FEATURE\nmid\nx\n")
+    _git(carry_repo, "commit", "-q", "-am", "PR changes the first x")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    before = rg.patch_fingerprint("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _crafted_merge(carry_repo, {
+        "f.txt": "ONE on master\ntwo\nTHREE by the PR\nfour\nfive\n",
+        "g.txt": "x\nmid\nFEATURE\n"})
+    assert rg.patch_fingerprint("master", "HEAD") == before  # the text alone cannot tell
+    assert _decide([_record(reviewed_key)]) == (None, {})
+
+
+def test_a_merge_of_a_branch_not_on_the_base_does_not_carry(carry_repo):
+    # Anything a non-base branch brings in, even a copy of a change master
+    # already has, lands in the PR's diff against the merge base, so the
+    # fingerprint refuses it first; the ancestry check is defence in depth.
+    # The one history only it refuses is a merge of a side branch that
+    # changes nothing (an empty commit): clean, automatic, same fingerprint,
+    # second parent not on the base.
+    reviewed_key = rg.diff_key("master", "HEAD")
+    fingerprint = rg.patch_fingerprint("master", "HEAD")
+    _git(carry_repo, "checkout", "-q", "-b", "side", "HEAD~1")
+    _git(carry_repo, "commit", "-q", "--allow-empty", "-m", "side, empty")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "--no-ff", "side")
+    assert rg.patch_fingerprint("master", "HEAD") == fingerprint
+    assert rg.diff_key("master", "HEAD") == reviewed_key  # same diff, own key...
+    assert rg.base_merge_equivalents("master", "HEAD") == []  # ...but no walk past it
+
+
+def test_the_carry_walks_through_several_base_merges(carry_repo):
+    reviewed_head = _git(carry_repo, "rev-parse", "HEAD")
+    reviewed_key = rg.diff_key("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nthree\nfour\nFIVE on master\n")
+    _git(carry_repo, "commit", "-q", "-am", "master edits line 5")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    rec, carried = _decide([_record(reviewed_key)])
+    assert rec.verdict == "CLEAN" and carried == {"reviewed": reviewed_head}
+
+
+def test_fingerprint_sees_a_binary_change(carry_repo):
+    (carry_repo / "blob.bin").write_bytes(b"\x00\x01\x02")
+    _git(carry_repo, "add", "blob.bin")
+    _git(carry_repo, "commit", "-q", "-m", "binary")
+    before = rg.patch_fingerprint("master", "HEAD")
+    (carry_repo / "blob.bin").write_bytes(b"\x00\x01\x03")
+    _git(carry_repo, "commit", "-q", "-am", "binary edit")
+    # A text diff says only "Binary files differ"; the blob ids must count.
+    assert rg.patch_fingerprint("master", "HEAD") != before
+
+
+def test_fingerprint_counts_content_lines_that_look_like_file_headers(carry_repo):
+    # Independent review on #2568: deleting "-- keep" diffs as "--- keep".
+    _git(carry_repo, "checkout", "-q", "master")
+    (carry_repo / "m.sql").write_text("SELECT 1;\n-- keep\nSELECT 2;\n")
+    _git(carry_repo, "add", "m.sql")
+    _git(carry_repo, "commit", "-q", "-m", "sql")
+    _git(carry_repo, "checkout", "-q", "feature")
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    (carry_repo / "m.sql").write_text("SELECT 1;\n-- keep\nSELECT 3;\n")
+    _git(carry_repo, "commit", "-q", "-am", "PR")
+    before = rg.patch_fingerprint("master", "HEAD")
+    (carry_repo / "m.sql").write_text("SELECT 1;\n++ injected\nSELECT 3;\n")
+    _git(carry_repo, "commit", "-q", "-am", "swap the comment")
+    assert rg.patch_fingerprint("master", "HEAD") != before
+
+
+def test_fingerprint_ignores_context_but_not_changed_lines(carry_repo):
+    before = rg.patch_fingerprint("master", "HEAD")
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, "merge", "-q", "--no-edit", "master")
+    assert rg.patch_fingerprint("master", "HEAD") == before
+    (carry_repo / "f.txt").write_text("ONE on master\ntwo\nTHREE by the PR!\nfour\nfive\n")
+    _git(carry_repo, "commit", "-q", "-am", "edit")
+    assert rg.patch_fingerprint("master", "HEAD") != before
 
 
 @pytest.mark.parametrize("text,expected", [
@@ -395,6 +1086,38 @@ def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeyp
     output = capsys.readouterr().out
     assert "PR #3" in output and "1 review candidate(s)" in output
     assert "no reviews to start" not in output
+
+
+def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
+    # Independent review on #2568: nothing failed if the sweep stopped
+    # registering the base-merge equivalents that pr_comments reads through.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: [])
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    monkeypatch.setattr(rg, "api_pages", lambda *a: [])
+    monkeypatch.setattr(rg, "review_lock", lambda *args: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("launched in dry run"))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=15, dry_run=True)) == 0
+    assert rg._CARRY[("cirwel/repo", 3)] == ("k", [("old", "c0ffee")])
+
+
+def test_local_commands_read_a_prs_records_as_ci_does(monkeypatch):
+    # _resolve serves review, record and dispose; it must register the
+    # equivalents so a carried finding can be disposed and is not re-rolled.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "current_pr", lambda: {
+        "number": 5, "headRefOid": "h", "headRefName": "b", "baseRefName": "master",
+        "state": "OPEN"})
+    monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
+    monkeypatch.setattr(rg, "repo_slug", lambda: "o/r")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    assert rg._resolve(SimpleNamespace(pr=None, base=None)) == (5, "o/r", "k", "b")
+    assert rg._CARRY[("o/r", 5)] == ("k", [("old", "c0ffee")])
 
 
 def test_review_lock_is_exclusive_and_releases(repo):
@@ -782,6 +1505,8 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
         return {"headRefOid": head, "baseRefName": "master", "state": "OPEN"}
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
+    # An amend moves the head, so the handoff reads the PR's records as CI does.
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     assert completed_review_exit("o/r", 1, key, head, 0) == expected
     assert _git(repo, "for-each-ref", "refs/review-gate/handoff") == ""
 
@@ -789,6 +1514,7 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
 @pytest.mark.parametrize("fetch_fails", [False, True])
 def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, fetch_fails):
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     destinations, removed, compared = [], [], []
 
     def git(*args, **kwargs):
@@ -806,7 +1532,12 @@ def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, 
         assert completed_review_exit("o/r", pr, "k", "h", 0) == (2 if fetch_fails else 0)
     assert len(set(destinations)) == 6  # private base AND head, even for the same PR
     assert sorted(removed) == sorted(destinations)
-    assert compared == ([] if fetch_fails else destinations)
+    # The key is computed against the base the tracking ref holds (see
+    # test_handoff_validates_against_the_base_the_ref_holds) and this call's
+    # own private head.
+    heads = [d for d in destinations if d.endswith("/head")]
+    expected = [r for h in heads for r in ("refs/remotes/origin/master", h)]
+    assert compared == ([] if fetch_fails else expected)
 
 
 def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch):
@@ -2230,6 +2961,28 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
     monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
     assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
     assert posted[0][3] == "action_required" and "second model family" in posted[0][4]
+
+
+def test_ci_registers_the_carry_before_reading_native_evidence(monkeypatch):
+    # Independent review on #2568: read_native carries native findings only
+    # when cmd_ci has registered the PR's equivalents first; nothing failed
+    # when that line was removed.
+    monkeypatch.setattr(rg, "_CARRY", {})
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"state": "open", "head": {"sha": "h"},
+                                                    "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    seen = []
+
+    def native(repo, pr, key, head, comments):
+        seen.append(rg._CARRY.get((repo, pr)))
+        return rg.NativeReview([])
+    monkeypatch.setattr(rg, "read_native", native)
+    monkeypatch.setattr(rg, "post_check", lambda *a: None)
+    assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+    assert seen == [("k", [("old", "c0ffee")])]
 
 
 def _second_family_env(monkeypatch, *, changed, families, candidates=("claude", "antigravity")):
