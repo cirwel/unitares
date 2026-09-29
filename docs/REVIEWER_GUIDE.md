@@ -53,7 +53,7 @@ referenced files.
 | Self-relative (z-score vs own Welford baseline) scoring | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
 | Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, reached as `dialectic(action='thesis'/'antithesis'/'synthesis'/'request')` on every transport. Their own names are legacy aliases: REST `/v1/tools/call` and stdio resolve them, `/mcp/` answers `Unknown tool`. Not a stub. |
 | Knowledge graph (discoveries, edges, FTS) | **Live, advisory** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()` (workflow aliases `store_finding`, `search_shared_memory`, `update_finding`) and `search_knowledge_graph`. `store_knowledge_graph` is a legacy alias for `knowledge(action='store')` that REST and stdio resolve and `/mcp/` refuses. AGE relational store is canonical; AGE graph is advisory. |
-| HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-mostly, not read-only: the Security pane (`dashboard/redesign/sections/security.js`) revokes passkeys and dashboard sessions. `POST /v1/sentinel/adjudicate` takes operator verdicts when the `reference-residents` route pack is mounted (`UNITARES_ROUTE_PACKS`; off by default); its view is a deployment extension, not a core tab (see `dashboard/EXTENSIONS.md`). |
+| HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-mostly, not read-only: the Security pane (`dashboard/redesign/sections/security.js`) revokes passkeys and dashboard sessions. The HTTP adjudication surface (the Sentinel queue and its verdict routes) was removed 2026-09-27; the Sentinel CLI (`--resolve`/`--dismiss`) remains the supported path for operator-recorded outcomes. Historical `*_confirmed` / `*_dismissed` outcome rows remain. |
 | ODE / thermodynamic model | **Live but diagnostic only** | Runs in parallel; does **not** drive verdicts (behavioral path overrides). See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
 | BEAM Wave 3a outbound proxy | **Live, optimization-only** | `src/wave3a_beam_proxy.py`. Python in-process dispatch is the authority; BEAM is a routed fast-path that **fails open to Python** on any error (500ms hard timeout). Routing is env-flag-gated (`src/wave3a_routing.py`). Observability: DB coordination events + `unitares_beam_proxy_*` Prometheus metrics. |
 
@@ -79,10 +79,10 @@ the self-relative baseline threshold, so it does not establish predictive value
 or demonstrate the post-warmup model. Use the falsifiability path below for that
 question.
 
-If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports:
+If port `8767` is already in use because a local UNITARES service is running, skip Compose and run `make demo` directly. For a separate Docker stack on alternate host ports (Postgres/Redis aren't published to the host by default, so only the governance server and lease plane ports can collide):
 
 ```bash
-POSTGRES_HOST_PORT=15432 REDIS_HOST_PORT=16379 GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
+GOVERNANCE_HOST_PORT=18767 LEASE_PLANE_HOST_PORT=18788 docker compose up -d --wait
 UNITARES_DEMO_PORT=18767 make demo
 ```
 

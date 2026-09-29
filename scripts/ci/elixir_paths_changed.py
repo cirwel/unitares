@@ -57,11 +57,16 @@ RELEVANT_PREFIXES: tuple[str, ...] = (
 # Single files the suites consume. The docker trio is what the lease_plane
 # job's `docker compose up postgres-age` actually builds and runs against
 # (service name, image, env defaults, initdb mount all live in
-# docker-compose.yml) -- the same set docker-quickstart.yml filters on. The
-# gate's own machinery is here so a broken detector cannot silently skip
-# everything and still pass.
+# docker-compose.yml) -- the same set docker-quickstart.yml filters on.
+# docker-compose.admin.yml joined the set when the lease_plane job started
+# layering it on top of docker-compose.yml to publish postgres-age's port for
+# `mix test` running on the runner (see docs/DEPLOYMENT_SECURITY.md) -- a
+# change to it alone can break that startup the same way a docker-compose.yml
+# change can. The gate's own machinery is here so a broken detector cannot
+# silently skip everything and still pass.
 RELEVANT_FILES: tuple[str, ...] = (
     "docker-compose.yml",
+    "docker-compose.admin.yml",
     "Dockerfile",
     ".dockerignore",
     ".github/workflows/elixir-tests.yml",

@@ -15,7 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 from src.http_routes import access
-from src.http_api import http_automations
+from src.http_routes.packs import resolve_handler
+
+http_automations = resolve_handler("scripts/ops/automation_census_route.py:http_automations")
 
 
 def _req():

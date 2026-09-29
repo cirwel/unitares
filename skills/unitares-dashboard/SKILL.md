@@ -47,11 +47,10 @@ classic dashboard and its allowlist / script-load-chain / `vite` build were
 `MetricColors`, or `Chart.defaults`. The redesign resolver constrains paths and
 file types and has no per-asset allowlist, but it does gate the assets that
 carry governance data rather than presentation: `_AUTHENTICATED_ONLY_FILES`
-holds `snapshot.js` and `PLAN.md`, each served only to an authenticated
-caller. The test is the data class, not the extension. `snapshot.js` has been a
-synthetic fixture since 2026-09-27 and stays gated anyway; `PLAN.md` describes
-the operator's own fleet. `preview.html` (a literal fleet capture) was deleted
-then. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
+holds `snapshot.js`, served only to an authenticated caller. The test is the
+data class, not the extension. `snapshot.js` has been a synthetic fixture since
+2026-09-27 and stays gated anyway. `preview.html` (a literal fleet capture) and
+`PLAN.md` (a design plan describing the operator's fleet) were deleted. Only `snapshot.js` is loaded at runtime. Never bundle a real capture:
 new offline data goes into the synthetic generator in `snapshot.js`. `auth/*.html` is 404 on this
 route (those pages are served via `/auth/*`). Files are read per request, so a restart is
 not needed for static edits. Entry HTML is `no-store`; relative assets receive
@@ -141,9 +140,12 @@ deployment's residents, EISV or version (a fresh install showed the bundled flee
 after one failed read, 2026-09-26). `authFetch` carries same-origin passkey
 session cookies and the optional bearer token. The `/ws/eisv` WebSocket
 connects cookie-first (a browser cannot set headers on a socket); only if that
-handshake fails early and a bearer is available does `ws.js` retry once with
-`?token=` (`DATA.apiToken()`), and every later reconnect starts cookie-first
-again. Badge freshness in the view with
+handshake fails early and a bearer is available does `ws.js` retry once,
+offering the bearer (`DATA.apiToken()`) as a `Sec-WebSocket-Protocol` entry
+(`unitares.bearer` plus `unitares.bearer.<base64url(token)>`), and every later
+reconnect starts cookie-first again. Never put a credential in the socket URL:
+the server does not read `?token=`, uvicorn logs the request line, and a
+tunnel sees the URL. Badge freshness in the view with
 `<span class="src-badge ${source}">${source}</span>`.
 
 ```js
@@ -254,10 +256,10 @@ badge). The WS plumbing lives in `ws.js`.
 ## Mostly read-only — explicit authenticated write surfaces
 
 The redesign sends the read bearer token everywhere; core sections are
-read-only except one area. (A finding-adjudication write endpoint, with
-`X-Unitares-Csrf: 1`, is served only when the `reference-residents` route pack
-is mounted via `UNITARES_ROUTE_PACKS`, and its view is an extension. An
-extension that calls a pack route needs that pack enabled on the server.)
+read-only except one area. (Operator and model adjudication of findings, with
+its queue and verdict routes, was removed 2026-09-27. An extension that calls a
+route-pack route needs that pack enabled on the server via
+`UNITARES_ROUTE_PACKS`.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the

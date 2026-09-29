@@ -21,8 +21,10 @@
 #      stays, so it returns to the queue.
 #   2. Pin the head each newly labelled PR is at (see below), every tick,
 #      whether or not the slot is free.
-#   3. If a PR is still armed (including one the maintainer armed by hand, which
-#      the script never disarms, even while it conflicts), it holds the slot.
+#   3. If a PR is still armed, it holds the slot. After step 1 that can only be
+#      the queue's own arm, or an operator's arm on a PR labelled
+#      operator-armed (PR_QUEUE_OPERATOR_ARMED_LABEL): step 1 disarms every
+#      other arm the queue did not make.
 #      If it is BEHIND and neither the base nor its arming has moved for
 #      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted: a PR
 #      this script armed is disarmed and updated (step 4 re-arms it), one
@@ -37,22 +39,22 @@
 #      jobs re-run once (marked by the retried label); after that it is skipped
 #      until someone removes that label.
 #
-# The approval label is the maintainer's merge decision made ahead of time,
-# exactly like arming, so an agent never applies it (AGENTS.md / CLAUDE.md
-# shared contract). It approves the PR as it stood when the label went on. The
+# The approval label is the merge decision. The agent that owns a PR applies it
+# when it marks the PR ready, never on another agent's PR, and the maintainer
+# vetoes by removing it (AGENTS.md / CLAUDE.md shared contract). It approves the PR as it stood when the label went on. The
 # script pins the head and diff fingerprint it first sees under a label
 # (STATE_FILE); a later head stays covered only while the diff is unchanged
 # (a clean base update), and a commit dated after the label is refused
 # outright. Anything else is stale
-# until the label is re-applied, which pins afresh. A label is pinned only if
+# until the label is removed and re-added, which pins afresh. A label is pinned only if
 # the script sees it within PR_QUEUE_PIN_WINDOW_MIN of going on; an older one
-# with no pin (the script was down, or its state lost) must be re-applied. The
+# with no pin (the script was down, or its state lost) must be removed and re-added. The
 # residual gap: a commit made before the label but pushed before the script
 # first sees it (normally the next tick, never beyond that window) is pinned
 # as approved.
 #
 # Threat model. The pin catches honest mistakes: an agent pushing a follow-up
-# after the maintainer approved, or a stale branch changing under the label.
+# after the PR was approved, or a stale branch changing under the label.
 # It is not a security boundary against a deliberately hostile agent, and does
 # not try to be: every actor here authenticates as the same GitHub account, so
 # such an agent could apply the label itself, or run `gh pr merge --auto`,
@@ -79,7 +81,30 @@ PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 # branch protection requires. `review` is not a required check on master, and
 # its NEUTRAL conclusion means "unreviewed", so without this an agent's label
 # on a PR whose review never ran would merge it.
-REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"  # set it empty to require none
+REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
+# PRs carrying any of these labels are never armed: the operator merges them
+# by hand. `governance-sensitive` is what CI applies to a PR touching an
+# enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
+# merge gate as the control for exactly those diffs.
+OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
+# An arm on a PR carrying this label is the operator's, and the queue leaves
+# it alone (it still holds the slot). Every other arm the queue did not make
+# is disarmed.
+OPERATOR_ARMED_LABEL="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
+operator_only() {  # <pr-json> -> why only the operator may merge it, if so
+  local l
+  # A fork PR: the fleet's own PRs never come from forks, and CI cannot label
+  # one (its token is read-only there), so nothing else would flag it.
+  jq -e '.isCrossRepository == true' <<<"$1" >/dev/null && { echo "a fork"; return 0; }
+  # A PR the operator marked to land outside the queue is never armed by it,
+  # so that label only ever protects the operator's own arm (step 1).
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null \
+    && { echo "$OPERATOR_ARMED_LABEL"; return 0; }
+  for l in $OPERATOR_ONLY_LABELS; do
+    jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
+  done
+  return 1
+}  # set it empty to require none
 DRY_RUN="${PR_QUEUE_DRY_RUN:-0}"
 # Which head each approval covers: "<pr> <head-sha> <labelled-at>" per line.
 STATE_FILE="${PR_QUEUE_STATE_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/unitares/pr-queue-approvals}"
@@ -95,13 +120,31 @@ act() {
   fi
 }
 
+# One PR comment per lasting skip reason and head, so the reason is visible on
+# the PR and not only in this machine's log: whoever looks next (its owner, or
+# an agent adopting it) sees what to do. A hidden marker dedupes; a new push
+# (a new head) gets a fresh notice. PR_QUEUE_NOTIFY=0 turns it off.
+NOTIFY="${PR_QUEUE_NOTIFY:-1}"
+notify() {  # <pr> <reason-key> <head-sha> <message>
+  [ "$NOTIFY" = "1" ] || return 0
+  local marker="<!-- pr-queue-notice $2 ${3:0:12} -->" bodies
+  bodies=$(gh api --paginate "repos/$REPO/issues/$1/comments" --jq '.[].body' 2>/dev/null) || return 0
+  grep -qF -- "$marker" <<<"$bodies" && return 0
+  act gh pr comment "$1" -R "$REPO" --body "$marker
+**Merge queue:** $4" >/dev/null || log "#$1 notice could not be posted"
+}
+
 minutes_since() { jq -rn --arg d "$1" '((now - ($d | fromdateiso8601)) / 60) | floor'; }
 
 command -v jq >/dev/null || { log "jq not found; nothing done"; exit 1; }
 
+# Pin the base before reading the PRs, so the rules, the diffs and the PRs'
+# merge states all describe the same base commit; arming re-checks it.
+tick_base_sha=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || tick_base_sha=""
+
 # gh pr list defaults to 30 results; the queue must see every open PR.
 prs=$(gh pr list -R "$REPO" --state open --limit 500 \
-  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid) \
+  --json number,isDraft,mergeable,mergeStateStatus,autoMergeRequest,baseRefName,labels,statusCheckRollup,body,headRefOid,isCrossRepository) \
   || { log "gh pr list failed; nothing done"; exit 1; }
 
 # Shared jq vocabulary. A check has FAILED when a finished run concluded badly
@@ -145,7 +188,7 @@ approval_times() {
 # SHA instead. A later head stays covered only while the fingerprint matches:
 # commit metadata (committer name, message, even a web-flow signature) is
 # author-controlled or API-mintable, so it cannot prove a commit was only a
-# base update, but the content can. A re-applied label pins afresh.
+# base update, but the content can. A removed-and-re-added label pins afresh.
 # A missing state file reads as no pins; an unreadable one is an error, never
 # "no pins", since that would re-approve whatever head is there now.
 pinned() {  # <pr> <labelled-at> -> "<sha> <fingerprint>"
@@ -201,11 +244,61 @@ unmet_required_checks() {
   echo "${unmet# }"
 }
 
+# The label is best-effort (CI tolerates failing to apply it), so before
+# arming, the queue checks the diff itself against the same manifest CI uses
+# (scripts/dev/check_governance_sensitivity.sh's --diff rules), read from
+# GitHub's compare of base...<head>. It fails closed: no manifest, an
+# unreadable or possibly truncated compare, or a matched file with no patch to
+# inspect all count as sensitive.
+# The manifest is read from the base branch through GitHub, not from this
+# script's checkout: the deploy tree can lag master, and CI judges against
+# master's manifest. PR_QUEUE_SENSITIVITY_MANIFEST names a local file instead
+# (tests; "" disables the check). Read once per tick.
+MANIFEST_PATH_IN_REPO="scripts/dev/governance_sensitivity_manifest.tsv"
+manifest_rows=""
+manifest_state=""  # "", "ok" or "unreadable"
+base_sha=""        # the base's commit this tick judges against, for rules and diff alike
+load_manifest() {
+  [ -n "$manifest_state" ] && return 0
+  if [ -n "${PR_QUEUE_SENSITIVITY_MANIFEST+set}" ]; then
+    if [ -z "$PR_QUEUE_SENSITIVITY_MANIFEST" ]; then manifest_state="off"; return 0; fi
+    manifest_rows=$(cat "$PR_QUEUE_SENSITIVITY_MANIFEST" 2>/dev/null) && manifest_state="ok" || manifest_state="unreadable"
+  else
+    # Pin the base once, so a merge mid-tick cannot pair new rules with an
+    # old diff or the reverse.
+    base_sha="$tick_base_sha"
+    [ -n "$base_sha" ] \
+      && manifest_rows=$(gh api "repos/$REPO/contents/$MANIFEST_PATH_IN_REPO?ref=$base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null) \
+      && [ -n "$manifest_rows" ] && manifest_state="ok" || manifest_state="unreadable"
+  fi
+}
+sensitive_path() {  # <head-sha> -> prints what makes it sensitive; fails when it is not
+  load_manifest
+  [ "$manifest_state" = "off" ] && return 1
+  [ "$manifest_state" = "ok" ] || { echo "the sensitivity manifest could not be read"; return 0; }
+  local cmp path symbol why file patch
+  cmp=$(gh api "repos/$REPO/compare/${base_sha:-$BASE}...$1" 2>/dev/null) \
+    && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
+    || { echo "its diff could not be checked"; return 0; }
+  while IFS=$'\t' read -r path symbol why; do
+    [ -n "$path" ] || continue
+    file=$(jq -c --arg p "$path" 'first(.files[] | select(.filename == $p or .previous_filename == $p)) // empty' <<<"$cmp")
+    [ -n "$file" ] || continue
+    [ "$symbol" = "-" ] && { echo "$path"; return 0; }
+    patch=$(jq -r '.patch // empty' <<<"$file")
+    [ -n "$patch" ] || { echo "$path (no patch to check)"; return 0; }
+    grep -E '^[+-][^+-]' <<<"$patch" | grep -Eq -- "$symbol" && { echo "$path"; return 0; }
+  done < <(grep -v '^#' <<<"$manifest_rows" | grep -v '^[[:space:]]*$')
+  return 1
+}
+
 latest_label_time() {
   local t
   t=$(approval_times "$1") || return 2
   { grep '^L ' <<<"$t" || true; } | cut -d' ' -f2 | sort | tail -1
 }
+
+load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
 
 # --- 1. tidy the slot -----------------------------------------------------------
 # Arms this script made: "<pr> <armed-at>" per line. An armed PR is the
@@ -230,14 +323,37 @@ armed=$(q -c --arg b "$BASE" \
 
 disarmed=" "
 hold_order=0
+# An operator's arm takes the slot: any queue arm alongside it is disarmed (it
+# keeps its label and returns in turn), so there is never more than one arm.
+operator_arm=$(jq -rs --arg l "$OPERATOR_ARMED_LABEL" \
+  '[.[] | select(any(.labels[]?; .name == $l)) | .number] | first // empty' <<<"$armed") \
+  || { log "could not read the armed PRs; nothing done"; exit 1; }
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   reason=""
-  # Only arms this script made are ever disarmed; the maintainer's own arm,
-  # labelled or not, is theirs to manage.
-  armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
-  if ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
+  hand_notice=""
+  # The queue owns arming. An arm it did not make is disarmed, whoever made
+  # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
+  # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
+  # none mergeable, stalled the queue for hours). Its label stays, so the
+  # queue arms it in turn. The operator keeps a way to land a PR outside the
+  # queue: an arm on a PR labelled $OPERATOR_ARMED_LABEL is left alone.
+  # The operator's label is checked before arm attribution: an operator who
+  # re-arms a PR moments after the queue armed it would otherwise match the
+  # queue's own arm record (within its 120 s tolerance) and be disarmed.
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
+  if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
+    reason="it was armed outside the queue"
+    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+  elif [ -n "$operator_arm" ]; then
+    reason="the operator armed #$operator_arm, which takes the slot"
+  elif held_by=$(operator_only "$pr"); then
+    reason="it is labelled $held_by, which only the operator merges"
+  elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then
+    # Also for arms made before this check existed, or before the diff grew.
+    reason="it touches a governance-sensitive surface ($why), which only the operator merges"
+  elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
     reason="CONFLICTING"
@@ -262,6 +378,7 @@ while read -r pr; do
     log "#$n armed but $reason; disarming so it stops holding the queue"
     if act gh pr merge "$n" -R "$REPO" --disable-auto; then
       disarmed="$disarmed$n "
+      [ -n "$hand_notice" ] && notify "$n" hand-armed "$(jq -r .headRefOid <<<"$pr")" "$hand_notice"
     else
       log "#$n disarm failed; nothing else done this tick"
       exit 0
@@ -282,7 +399,7 @@ queued=$(q -c --arg b "$BASE" --arg l "$LABEL" \
               and labelled($l))) | .[]' <<<"$prs") \
   || { log "could not read the queue; nothing done"; exit 1; }
 
-# Order by when the label went on, which is the order the maintainer approved.
+# Order by when the label went on, which is the order the PRs were approved.
 ordered=""
 while read -r pr; do
   [ -n "$pr" ] || continue
@@ -292,7 +409,8 @@ while read -r pr; do
   pushed_at=$(grep '^C ' <<<"$times" | cut -d' ' -f2 | sort | tail -1)
   [ -n "$labelled_at" ] || { log "#$n has no readable label event; skipped"; continue; }
   if [ -n "$pushed_at" ] && [[ "$pushed_at" > "$labelled_at" ]]; then
-    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; re-apply $LABEL to approve it"
+    log "#$n has a commit from $pushed_at, after its approval at $labelled_at; remove and re-add $LABEL to approve it"
+    notify "$n" stale-push "$(jq -r .headRefOid <<<"$pr")" "skipped: a commit from $pushed_at came after the \`$LABEL\` label ($labelled_at), so the approval no longer covers this head. Once validation passes again, the approval needs renewing: remove the label, then add it (AGENTS.md says who may)."
     continue
   fi
   head=$(jq -r .headRefOid <<<"$pr")
@@ -303,7 +421,8 @@ while read -r pr; do
     # what was approved.
     age=$(minutes_since "$labelled_at")
     if [ "$age" -gt "$PIN_WINDOW_MIN" ]; then
-      log "#$n approval at $labelled_at was never pinned and is ${age}m old; re-apply $LABEL to approve its head"
+      log "#$n approval at $labelled_at was never pinned and is ${age}m old; remove and re-add $LABEL to approve its head"
+      notify "$n" unpinned "$head" "skipped: the \`$LABEL\` label went on at $labelled_at, more than ${PIN_WINDOW_MIN} minutes before the queue saw it, so it no longer says which head was approved. It needs renewing: remove the label, then add it (AGENTS.md says who may)."
       continue
     fi
     fp=$(fingerprint "$head") || { log "#$n diff unreadable; cannot record what was approved; skipped"; continue; }
@@ -313,7 +432,8 @@ while read -r pr; do
     if [ "$pinned_sha" != "$head" ]; then
       fp=$(fingerprint "$head") || { log "#$n diff unreadable; skipped"; continue; }
       if [ "$fp" != "$pinned_fp" ]; then
-        log "#$n changed since its approval at ${pinned_sha:0:8}; re-apply $LABEL to approve ${head:0:8}"
+        log "#$n changed since its approval at ${pinned_sha:0:8}; remove and re-add $LABEL to approve ${head:0:8}"
+        notify "$n" changed "$head" "skipped: the change differs from what was approved at \`${pinned_sha:0:8}\` (more than a base update). Once validation passes on \`${head:0:8}\`, the approval needs renewing: remove the \`$LABEL\` label, then add it (AGENTS.md says who may)."
         continue
       fi
       pin "$n" "$head" "$labelled_at" "$fp" || true
@@ -334,6 +454,25 @@ holder=$(q -c --arg b "$BASE" --arg skip "$disarmed" \
    | sort_by(.number) | .[0] // empty' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
+# An operator arm in progress: ship.sh --auto-merge adds the label, then arms,
+# in two calls. A PR carrying the label whose label went on in the last
+# PR_QUEUE_OPERATOR_RESERVE_MIN minutes, not yet armed, reserves the slot, so a
+# tick between the two calls does not arm another PR alongside it. A label
+# older than that with no arm is a leftover and reserves nothing.
+if [ -z "$holder" ]; then
+  reserve_min="${PR_QUEUE_OPERATOR_RESERVE_MIN:-10}"
+  for n in $(jq -r --arg b "$BASE" --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
+                    and any(.labels[]?; .name == $l)) | .number' <<<"$prs"); do
+    at=$(gh api --paginate "repos/$REPO/issues/$n/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
+    if [ -z "$at" ] || [ "$(minutes_since "$at")" -lt "$reserve_min" ]; then
+      log "#$n was just labelled $OPERATOR_ARMED_LABEL and is not armed yet; holding the slot for the operator"
+      exit 0
+    fi
+  done
+fi
+
 if [ -n "$holder" ]; then
   n=$(jq -r .number <<<"$holder")
   # gh marshals a missing time as year 0001; treat that as unknown.
@@ -344,21 +483,27 @@ if [ -n "$holder" ]; then
       && log "#$n has held the queue for ${held}m ($(jq -r .mergeStateStatus <<<"$holder")); needs a look"
   fi
   if [ "$(jq -r .mergeStateStatus <<<"$holder")" = "BEHIND" ]; then
-    moved=$(gh api "repos/$REPO/commits/$BASE" --jq .commit.committer.date) || moved=""
-    if [ -n "$moved" ]; then
-      # Measure from whichever came later: the base moving, or the arming.
-      since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
-      idle=$(minutes_since "$since")
-      if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
-        if armed_by_script "$n" "$armed_at"; then
-          # Same rule as the queue: never stay armed across an unchecked head.
-          # Disarm, update; the queue re-arms it once the new head validates.
-          log "#$n armed and BEHIND, ${idle}m without GitHub updating it; disarming to update"
-          act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
-        else
+    # The operator's label outranks arm attribution here as in the tidy loop:
+    # a re-arm within the tolerance of the queue's own record is still theirs.
+    if ! jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$holder" >/dev/null \
+       && armed_by_script "$n" "$armed_at"; then
+      # No grace for the script's own arm: GitHub's updater can move the head
+      # within a minute, and the arm must not outlive the head it validated.
+      # Disarm now and update; the queue re-arms it once the new head passes.
+      log "#$n armed and BEHIND; disarming to update"
+      act gh pr merge "$n" -R "$REPO" --disable-auto || { log "#$n disarm failed; not updating"; exit 0; }
+      act gh pr update-branch "$n" -R "$REPO" || true
+    else
+      # A hand-armed PR is the operator's: only update it, after the grace.
+      moved=$(gh api "repos/$REPO/commits/$BASE" --jq .commit.committer.date) || moved=""
+      if [ -n "$moved" ]; then
+        # Measure from whichever came later: the base moving, or the arming.
+        since=$(jq -rn --arg a "$moved" --arg b "${armed_at:-$moved}" '[$a, $b] | max')
+        idle=$(minutes_since "$since")
+        if [ "$idle" -ge "$BASE_GRACE_MIN" ]; then
           log "#$n armed and BEHIND, ${idle}m without GitHub updating it; updating"
+          act gh pr update-branch "$n" -R "$REPO" || true
         fi
-        act gh pr update-branch "$n" -R "$REPO" || true
       fi
     fi
   fi
@@ -387,6 +532,20 @@ while read -r _ n head; do
   [ -n "${n:-}" ] || continue
   pr=$(jq -c --argjson n "$n" '.[] | select(.number == $n)' <<<"$prs")
 
+  if held_by=$(operator_only "$pr"); then
+    log "#$n is labelled $held_by; the operator merges it by hand; skipped"
+    notify "$n" operator-only "$head" "not armed: this PR is labelled \`$held_by\`, so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
+  fi
+
+  # Before any wait (mergeability, review): a sensitive PR is never armed, so
+  # waiting on it would hold the order for a PR the queue will not take.
+  if why=$(sensitive_path "$head"); then
+    log "#$n touches a governance-sensitive surface ($why); the operator merges it by hand; skipped"
+    notify "$n" sensitive "$head" "not armed: this diff touches a governance-sensitive surface (\`$why\`, per scripts/dev/governance_sensitivity_manifest.tsv), so the operator merges it by hand (docs/SCOPE_AND_THREAT_MODEL.md). The queue has moved on to the next PR."
+    continue
+  fi
+
   if dep=$(dependency_open "$pr"); then
     log "#$n waits on $dep (merge after); skipped"
     continue
@@ -394,14 +553,19 @@ while read -r _ n head; do
 
   case "$(jq -r .mergeable <<<"$pr")" in
     MERGEABLE) ;;
-    CONFLICTING) log "#$n queued but CONFLICTING; skipped"; continue ;;
+    CONFLICTING)
+      log "#$n queued but CONFLICTING; skipped"
+      notify "$n" conflicting "$head" "skipped: this PR conflicts with master. Once master is merged in and validation passes again, the approval needs renewing (remove the \`$LABEL\` label, then add it), by whoever the delivery contract (AGENTS.md) says may apply it."
+      continue ;;
     # GitHub is still computing mergeability, typically right after a merge.
     # Wait for it rather than letting a later PR jump the order.
     *) exit 0 ;;
   esac
 
+
   if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
+    notify "$n" parked "$head" "skipped: $(q -r 'parked | map(.name // .context) | unique | join(", ")' <<<"$pr") is waiting for approval (ACTION_REQUIRED). A re-run does not clear it; see the check's details."
     continue
   fi
 
@@ -413,6 +577,7 @@ while read -r _ n head; do
     fi
     if jq -e --arg l "$RETRIED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null; then
       log "#$n: $failed check(s) still failing after one retry; skipped until $RETRIED_LABEL is removed"
+      notify "$n" failing "$head" "skipped: $(q -r 'failed | map(.name // .context) | unique | join(", ")' <<<"$pr") still failing after one automatic re-run. Fix it, then remove the \`$RETRIED_LABEL\` label."
       continue
     fi
     runs=$(q -r 'failed | [.[] | (.detailsUrl // .targetUrl // "")
@@ -448,7 +613,10 @@ while read -r _ n head; do
       # Still being evaluated (the review gate posts NEUTRAL, not nothing, for
       # an unreviewed PR): wait rather than let a later PR jump the order.
       *=MISSING*|*=PENDING*) log "#$n waiting on $unmet (must pass before arming)"; exit 0 ;;
-      *) log "#$n: $unmet (must pass before arming); skipped"; continue ;;
+      *)
+        log "#$n: $unmet (must pass before arming); skipped"
+        notify "$n" required "$head" "skipped: \`$unmet\`. The queue arms a PR only after these pass; for \`review\`, run \`scripts/dev/review.sh\` and fix or dispose its findings (NEUTRAL means unreviewed)."
+        continue ;;
     esac
   fi
 
@@ -461,6 +629,36 @@ while read -r _ n head; do
     # no help anyway: it acted for 1 of 16 queue arms on 2026-09-27.
     log "#$n updating before arming (head of queue)"
     act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; retried next tick"
+    exit 0
+  fi
+
+  # Re-read live state just before arming: the tick's snapshot is minutes
+  # old, and an operator arm (ship.sh --auto-merge labels, then arms) may have
+  # started since. Any arm on the base, or a fresh operator-armed label, and
+  # this tick arms nothing.
+  live=$(gh pr list -R "$REPO" --state open --limit 500 --base "$BASE" \
+    --json number,autoMergeRequest,labels) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
+  # PRs this tick just disarmed can still read as armed for a moment.
+  if other=$(jq -r --arg skip "$disarmed" '[.[] | select(.autoMergeRequest != null)
+                 | select(.number as $x | $skip | contains(" \($x) ") | not) | .number] | first // empty' <<<"$live") \
+     && [ -n "$other" ]; then
+    log "#$other was armed since this tick began; nothing armed"
+    exit 0
+  fi
+  for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
+    at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
+    if [ -z "$at" ] || [ "$(minutes_since "$at")" -lt "${PR_QUEUE_OPERATOR_RESERVE_MIN:-10}" ]; then
+      log "#$m was just labelled $OPERATOR_ARMED_LABEL; nothing armed"
+      exit 0
+    fi
+  done
+
+  # The PR data describes the base as it stood when the tick began; if master
+  # has moved since, this PR may be BEHIND now. Leave it to the next tick.
+  now_base=$(gh api "repos/$REPO/commits/$BASE" --jq .sha 2>/dev/null) || now_base=""
+  if [ -z "$tick_base_sha" ] || [ "$now_base" != "$tick_base_sha" ]; then
+    log "#$n: $BASE moved during this tick; nothing armed"
     exit 0
   fi
 

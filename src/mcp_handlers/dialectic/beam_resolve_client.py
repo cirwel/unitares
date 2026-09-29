@@ -16,11 +16,47 @@ import asyncio
 import os
 from typing import Any, Dict, Optional
 
+from src.dialectic_session_writes import (
+    KIND_CREATE,
+    KIND_PHASE,
+    KIND_RESOLVE,
+    KIND_REVIEWER,
+    record_session_write,
+)
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
 
 _TRUTHY = {"1", "true", "yes", "on"}
+
+# `DialecticSaga.resolve` answers a resolve that finds the row already
+# resolved/failed with `{:ok, %{status: existing, saga_id: nil, origin:
+# :already_terminal}}` (dialectic_saga.ex, the `{:error, {:session_terminal,
+# _}}` branch of `do_resolve`). The router serialises it with Jason, which
+# encodes the atom as this string: body `{"ok": true, "status": "<existing>",
+# "saga_id": null, "origin": "already_terminal", ...}`.
+ALREADY_TERMINAL_ORIGIN = "already_terminal"
+
+
+async def _already_terminal_reason(session_id: str) -> Dict[str, Any]:
+    """Read the terminal row's ``resolution_json->>'reason'``, best-effort.
+
+    BEAM wrote no saga row for an already-terminal answer, so this reason is
+    the only durable hint of who got there first (Wave 3 gate council
+    2026-09-27, B2). ``terminal_reason_read=False`` means the read failed and a
+    None reason says nothing; ``True`` with None is consistent with a sweeper
+    reap, which writes no ``resolution_json``.
+    """
+    try:
+        from src.dialectic_db import get_session_terminal_state_async
+
+        row = await get_session_terminal_state_async(session_id)
+        return {"terminal_reason": (row or {}).get("reason"), "terminal_reason_read": True}
+    except Exception as e:
+        logger.debug(
+            f"[BEAM_RESOLVE] already_terminal reason read failed for {session_id[:16]}: {e}"
+        )
+        return {"terminal_reason": None, "terminal_reason_read": False}
 
 
 def beam_resolution_enabled() -> bool:
@@ -70,19 +106,28 @@ async def beam_create_session(
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
-    try:
-        loop = asyncio.get_running_loop()
-        status, body = await loop.run_in_executor(None, _post)
-    except Exception as e:
-        logger.warning(f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}")
+    async with record_session_write(
+        kind=KIND_CREATE, session_id=session_id, default_via="beam", requested=None,
+    ) as rec:
+        try:
+            loop = asyncio.get_running_loop()
+            status, body = await loop.run_in_executor(None, _post)
+        except Exception as e:
+            logger.warning(f"[BEAM_CREATE] call failed for {session_id[:16]}, falling back to Python: {e}")
+            rec.respond(outcome="no_response", error=type(e).__name__)
+            return None
+
+        if status in (200, 201) and isinstance(body, dict) and body.get("ok"):
+            logger.info(f"[BEAM_CREATE] session {session_id[:16]} created on BEAM (created={body.get('created')})")
+            # BEAM answers a duplicate id with ok=true, created=false: no write.
+            rec.respond(outcome="not_written" if body.get("created") is False else "written",
+                        http_status=status)
+            return body
+
+        logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
+        rec.respond(outcome="not_written", http_status=status,
+                    error=body.get("error") if isinstance(body, dict) else None)
         return None
-
-    if status in (200, 201) and isinstance(body, dict) and body.get("ok"):
-        logger.info(f"[BEAM_CREATE] session {session_id[:16]} created on BEAM (created={body.get('created')})")
-        return body
-
-    logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
-    return None
 
 
 def _phase_payload(
@@ -135,17 +180,27 @@ async def beam_update_phase(
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
-    try:
-        loop = asyncio.get_running_loop()
-        status, body = await loop.run_in_executor(None, _post)
-    except Exception as e:
-        logger.warning(f"[BEAM_PHASE] call failed for {session_id[:16]}, falling back: {e}")
-        return None
+    async with record_session_write(
+        kind=KIND_PHASE, session_id=session_id, default_via="beam", requested=phase,
+    ) as rec:
+        try:
+            loop = asyncio.get_running_loop()
+            status, body = await loop.run_in_executor(None, _post)
+        except Exception as e:
+            logger.warning(f"[BEAM_PHASE] call failed for {session_id[:16]}, falling back: {e}")
+            rec.respond(outcome="no_response", error=type(e).__name__)
+            return None
 
-    if status == 200 and isinstance(body, dict) and body.get("ok"):
-        return body
-    logger.warning(f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
-    return None
+        if status == 200 and isinstance(body, dict) and body.get("ok"):
+            # BEAM's update_phase answers :ok for a row that is already
+            # terminal as well as for one it updated (zero rows written), so an
+            # OK here does not prove the phase changed: its effect is unknown.
+            rec.respond(outcome="accepted_effect_unknown", http_status=status)
+            return body
+        logger.warning(f"[BEAM_PHASE] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
+        rec.respond(outcome="not_written", http_status=status,
+                    error=body.get("error") if isinstance(body, dict) else None)
+        return None
 
 
 async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -175,17 +230,24 @@ async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]
             )
             return resp.status_code, (resp.json() if resp.content else {})
 
-    try:
-        loop = asyncio.get_running_loop()
-        status, body = await loop.run_in_executor(None, _post)
-    except Exception as e:
-        logger.warning(f"[BEAM_REVIEWER] call failed for {session_id[:16]}, falling back: {e}")
-        return None
+    async with record_session_write(
+        kind=KIND_REVIEWER, session_id=session_id, default_via="beam", requested=reviewer_agent_id,
+    ) as rec:
+        try:
+            loop = asyncio.get_running_loop()
+            status, body = await loop.run_in_executor(None, _post)
+        except Exception as e:
+            logger.warning(f"[BEAM_REVIEWER] call failed for {session_id[:16]}, falling back: {e}")
+            rec.respond(outcome="no_response", error=type(e).__name__)
+            return None
 
-    if status == 200 and isinstance(body, dict) and body.get("ok"):
-        return body
-    logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
-    return None
+        if status == 200 and isinstance(body, dict) and body.get("ok"):
+            rec.respond(outcome="written", http_status=status)
+            return body
+        logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
+        rec.respond(outcome="not_written", http_status=status,
+                    error=body.get("error") if isinstance(body, dict) else None)
+        return None
 
 
 async def beam_resolve(
@@ -214,6 +276,8 @@ async def beam_resolve(
         return None
 
     base_url = os.getenv("LEASE_PLANE_BASE_URL", "http://127.0.0.1:8788").rstrip("/")
+    # `status` is rebound to the HTTP status code below; keep what was asked.
+    requested_status = status
     payload = {
         "session_id": session_id,
         "paused_agent_id": paused_agent_id,
@@ -240,23 +304,43 @@ async def beam_resolve(
             body = resp.json() if resp.content else {}
             return resp.status_code, body
 
-    try:
-        loop = asyncio.get_running_loop()
-        status, body = await loop.run_in_executor(None, _post)
-    except Exception as e:
-        logger.warning(f"[BEAM_RESOLVE] call failed for {session_id[:16]}, falling back to Python: {e}")
-        return None
+    # One attempt record before the request, one response record after it,
+    # paired by attempt_id (src/dialectic_session_writes.py). Recorded only
+    # when a request is actually made: the early returns above sent nothing.
+    async with record_session_write(
+        kind=KIND_RESOLVE, session_id=session_id, default_via="beam",
+        requested=requested_status,
+    ) as rec:
+        try:
+            loop = asyncio.get_running_loop()
+            status, body = await loop.run_in_executor(None, _post)
+        except Exception as e:
+            logger.warning(f"[BEAM_RESOLVE] call failed for {session_id[:16]}, falling back to Python: {e}")
+            rec.respond(outcome="no_response", error=type(e).__name__)
+            return None
 
-    if status == 200 and isinstance(body, dict) and body.get("ok"):
-        logger.info(
-            f"[BEAM_RESOLVE] session {session_id[:16]} resolved on BEAM "
-            f"(origin={body.get('origin')})"
+        if status == 200 and isinstance(body, dict) and body.get("ok"):
+            logger.info(
+                f"[BEAM_RESOLVE] session {session_id[:16]} resolved on BEAM "
+                f"(origin={body.get('origin')})"
+            )
+            origin = body.get("origin")
+            fields: Dict[str, Any] = {
+                "outcome": "written", "http_status": status, "origin": origin,
+                "reported_status": body.get("status"), "saga_id": body.get("saga_id"),
+            }
+            if origin == ALREADY_TERMINAL_ORIGIN:
+                # Nothing was written: the row was already terminal.
+                fields["outcome"] = "already_terminal"
+                fields.update(await _already_terminal_reason(session_id))
+            rec.respond(**fields)
+            return body
+
+        # 409 saga_in_flight / 404 / 503 / malformed -> fall back to the Python
+        # path, whose B-4 guard still prevents an overwrite.
+        logger.warning(
+            f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )
-        return body
-
-    # 409 saga_in_flight / 404 / 503 / malformed -> fall back to the Python
-    # path, whose B-4 guard still prevents an overwrite.
-    logger.warning(
-        f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
-    )
-    return None
+        rec.respond(outcome="not_written", http_status=status,
+                    error=body.get("error") if isinstance(body, dict) else None)
+        return None

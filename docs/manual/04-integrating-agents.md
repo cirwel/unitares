@@ -169,6 +169,11 @@ components. Their meaning and maturity stages are in
   [`unitares-sdk`](../../agents/sdk/README.md) and its `GovernanceAgent` pattern.
 - Codex and Claude Code lifecycle hooks: use the
   [governance plugin](https://github.com/cirwel/unitares-governance-plugin).
+- Hermes Agent: the `unitares` plugin in the Hermes plugin catalog, installed
+  with `hermes plugins install cirwel/unitares-host-adapter`. At install it asks
+  for `UNITARES_MCP_URL`, your server's endpoint (for example
+  `http://localhost:8767/mcp/`); with it unset, the plugin logs a warning and
+  sends nothing.
 - Other model hosts and thin clients: use the
   [host adapter](https://github.com/cirwel/unitares-host-adapter).
 

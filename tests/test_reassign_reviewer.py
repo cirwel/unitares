@@ -509,9 +509,13 @@ async def test_reassignment_emits_audit_event():
         )
 
     assert result["new_reviewer_id"] == "agent-new"
-    emit.assert_awaited_once()
-    event = emit.await_args.args[0]
-    assert event["event_type"] == "dialectic_reviewer_reassigned"
+    # Other audit rows ride along (each session write records an
+    # attempt/response pair, src/dialectic_session_writes.py); exactly one of
+    # them is the reassignment.
+    reassigned = [c.args[0] for c in emit.await_args_list
+                  if c.args[0]["event_type"] == "dialectic_reviewer_reassigned"]
+    assert len(reassigned) == 1
+    event = reassigned[0]
     # Top-level session_id feeds the indexed audit.events column
     # (review fold: nested-only landed the column NULL).
     assert event["session_id"] == session.session_id

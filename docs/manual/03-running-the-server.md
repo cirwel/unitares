@@ -10,6 +10,8 @@ python src/mcp_server.py --port 8767
 
 Within a few seconds you should see a log line ending like `Uvicorn running on http://127.0.0.1:8767`. Under Docker, `docker compose up -d --wait` starts it for you.
 
+From a Docker checkout, `./scripts/unitares` wraps the same steps: `start` and `stop` bring the stack up and down, and `logs [service]` follows a service's log (the governance server by default). The same script picks the model (`model`, see [Choose a model](02-install.md#choose-a-model-optional)) and moves the install to a new release (`update`, see [Updating](02-install.md#updating)).
+
 **The server binds to `127.0.0.1` only by default** — it is not reachable from your LAN until you opt in (see [§3.5](#35-exposing-beyond-loopback)). That default is intentional: the threat model is internal fleet hygiene, not hostile external clients.
 
 ## 3.2 Ports and services
@@ -59,7 +61,7 @@ Open `http://127.0.0.1:8767/dashboard` (or `/` ). It reads PostgreSQL directly w
 - **Extensions** — a deployment adds its own tabs (residents, automations and the like) from `UNITARES_DASHBOARD_EXT_DIR`; see [`dashboard/EXTENSIONS.md`](../../dashboard/EXTENSIONS.md).
 - **Phase space** at `/phase` — E/I particles, basin contours, flow field, live updates.
 
-Live updates stream over a WebSocket at `/ws/eisv`, falling back to 30-second polling. If `UNITARES_HTTP_API_TOKEN` is configured, append `?token=<token>` (or set `localStorage.unitares_api_token`); write actions under strict-identity mode additionally need an operator token. Implementation detail: [`dashboard/README.md`](../../dashboard/README.md). Screenshots of the maintainer's deployment from before the 2026-09-27 redesign: [`../PRODUCTION_SNAPSHOT.md`](../PRODUCTION_SNAPSHOT.md).
+Live updates stream over a WebSocket at `/ws/eisv`, falling back to 30-second polling. If `UNITARES_HTTP_API_TOKEN` is configured and you are not signed in with a passkey, set `localStorage.unitares_api_token` in the browser console; the dashboard sends it as an `Authorization` header on REST calls and as a `Sec-WebSocket-Protocol` entry on the socket, never in a URL. The socket does not read a `?token=` query (the server logs request lines, and a tunnel or proxy sees the URL). Opening the dashboard once with `?token=<token>` still works as a handoff — the page stores it and scrubs it from the address bar — but that first request line has already carried it. Write actions under strict-identity mode additionally need an operator token. Implementation detail: [`dashboard/README.md`](../../dashboard/README.md). Screenshots of the maintainer's deployment from before the 2026-09-27 redesign: [`../PRODUCTION_SNAPSHOT.md`](../PRODUCTION_SNAPSHOT.md).
 
 ## 3.5 Exposing beyond loopback
 
@@ -114,6 +116,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
+| `UNITARES_OLLAMA_BASE` / `UNITARES_LLM_MODEL` | Ollama root URL (no `/v1`) and model for `consult` and the local reviewer; `UNITARES_OLLAMA_BASE_URL` is read when the first is unset ([Choose a model](02-install.md#choose-a-model-optional)) |
 
 ## 3.7 Run at login (macOS LaunchAgent)
 

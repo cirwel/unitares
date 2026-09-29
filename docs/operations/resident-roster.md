@@ -173,11 +173,24 @@ credential, not merely a lookup hint.
 string literal in any of its four scanned roots — `src/`, `governance_core/`,
 `config/` and `agents/sdk/src/`. Read the roster instead.
 
-Two things bound that reach. It globs `*.py` only, so non-Python files under
-those roots are invisible to it. And it carries a `NOT_IDENTITIES` list of files
-whose matches are homonyms rather than agent names — "steward" as a role in
-`VALID_ROLES`, service ids in `src/coordination_events.py`, and three more —
-which are skipped outright rather than flagged.
+Two things bound that reach. In code, a literal is flagged only when it *is* a
+name, so a route such as `/v1/sentinel/backlog` passes. And it carries a
+`NOT_IDENTITIES` list of files whose matches are homonyms rather than agent
+names — "steward" as a role in `VALID_ROLES`, service ids in
+`src/coordination_events.py`, and three more — which are skipped outright
+rather than flagged.
+
+Text the server delivers verbatim is held to a stricter rule, because it has
+no comments and every word reaches a reader: a resident name anywhere in it, as
+a whole word and in any case, fails. That covers the served dashboard, every
+`skills/*/SKILL.md` and `src/tool_descriptions.json`. It also covers the
+Python that becomes tool input schemas: a `Field`'s `description=` and
+`json_schema_extra` `"brief"`, a schema model's docstring, and the alias
+overrides in `src/alias_schema.py`. `NOT_IDENTITIES` does not apply to that
+text. The served files that already named residents when the rule arrived are
+listed in `SERVED_KNOWN_COUPLINGS`, each with the exact names it holds: they
+are reported on every run, and any name beyond that record fails. Schema text
+has no such entries.
 
 Provenance in a **comment** is deliberately not flagged — a note explaining that
 a threshold has its value because of what a particular resident did on a
@@ -185,7 +198,8 @@ particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
 The guard also prints the couplings that already exist and have not been fixed
-(currently one: `src/http_routes/vigil.py`) on every run, passing or failing —
+(currently none: the last one, the resident-specific Vigil route module, moved
+to `agents/vigil/routes.py` on 2026-09-27) on every run, passing or failing —
 these are reported but do not fail the build. It does not silence them: a guard
 that reported
 "clean" over known coupling would be the same instrument-optimism failure it
@@ -201,8 +215,17 @@ their endpoints.
 
 | Pack | Routes | Enable when |
 |---|---|---|
-| `reference-residents` | `/v1/sentinel/{backlog,summary,adjudication-queue,adjudicate,model-adjudicate}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` (and their backlog / adjudication tooling, e.g. `scripts/ops/model_adjudicator.py`) |
-| `automation-census` | `/api/automations` | you run the `unitares-automations` census ([setup](automation-census-setup.md)) |
+| `reference-residents` | `/v1/sentinel/{backlog,summary}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` |
+| `automation-census` | `/api/automations` | you run the `unitares-automations` census on the server's host ([setup](automation-census-setup.md)); not available in the Docker image |
+
+The pack code lives next to what it serves, not in the installed server
+package: the resident routes in `agents/<resident>/routes.py`, the census route
+beside its tool in `scripts/ops/automation_census_route.py`. The server imports
+a pack's code only when the pack is enabled, so a pip-installed server without
+`agents/` or `scripts/` is unaffected, and a pack whose code is absent (the
+Docker image carries `agents/` but not `scripts/`) is logged and skipped.
+Finding intake (`POST /api/findings`) is core and always mounted
+(`src/http_routes/findings.py`).
 
 A pack name that matches nothing is logged at startup rather than ignored.
 Packs are named for what they serve, never for a resident, for the reason in
@@ -228,6 +251,12 @@ Sentinel-findings and GitHub-traffic series. Unset (the default) registers
 nothing, so an install that runs no such scraper neither lists those names nor
 accepts writes to them. Each entry is `{"name", "description", "unit"}` under a
 top-level `"metrics"` list and gets the same `.error` twin as a core entry.
+An entry may also set `"progress": true`: its rows then count as the
+producer's work for the resident-progress `metrics_series` source, alongside
+the product series `agents.active.7d`, `kg.entries.count` and `checkins.7d`.
+The reference file marks its repository-size and test-count series and leaves
+the GitHub-traffic series unmarked, because those measure the repository, not
+the resident. A `progress` value that is not a boolean skips the entry.
 Data already in `metrics.series` stays readable through `/v1/metrics/series`
 whether or not its name is registered.
 

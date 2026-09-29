@@ -76,15 +76,20 @@ from .persistence import (
 
 
 def _broadcaster():
-    """Lazy accessor for the shared broadcaster. Returns None when broadcaster
-    isn't importable (e.g., unit tests without a live server). Mirrors the
-    helper in persistence.py; kept at module level here so tests patching
-    handlers._broadcaster can intercept cleanly."""
+    """Lazy accessor for the process-wide broadcaster (``broadcaster_instance``),
+    wrapped so the caller never waits on the fan-out (see
+    persistence._ScheduledBroadcaster). Returns None only when src.broadcaster
+    fails to import. Mirrors the helper in persistence.py; kept at module level
+    here so tests patching handlers._broadcaster can intercept cleanly. The
+    import name is held by tests/test_identity_broadcaster_accessor.py: a wrong
+    one is swallowed here and silently drops every identity event this
+    accessor gates."""
     try:
-        from src.broadcaster import broadcaster as _b
-        return _b
+        from src.broadcaster import broadcaster_instance as _b
+        from .persistence import _ScheduledBroadcaster
     except Exception:
         return None
+    return _ScheduledBroadcaster(_b)
 
 
 _s1d_false_reached_logged = False
@@ -2673,7 +2678,8 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             logger.debug(f"[PROCESS_BINDING] onboard scheduling failed (non-fatal): {e}")
 
     # TRAJECTORY IDENTITY: Store genesis signature if provided (optional, non-blocking)
-    # Agents from anima-mcp can include trajectory_signature in their onboard call
+    # An agent whose runtime computes a trajectory signature (an embodied
+    # runtime such as anima-mcp, for one) can include it in its onboard call.
     trajectory_result = None
     trajectory_signature = arguments.get("trajectory_signature")
     if trajectory_signature and isinstance(trajectory_signature, dict):
@@ -3027,7 +3033,7 @@ async def handle_verify_trajectory_identity(arguments: Dict[str, Any]) -> Sequen
         return error_response(
             "trajectory_signature is required",
             recovery={
-                "action": "Include your trajectory signature from anima-mcp",
+                "action": "Include the trajectory signature your runtime computed (a TrajectorySignature dict)",
                 "example": "verify_trajectory_identity(trajectory_signature={...})"
             }
         )

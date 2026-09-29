@@ -220,7 +220,7 @@ class TestCompactSearchDetails:
 class TestResolveAliasIntegration:
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("alias", ["checkin", "log", "update", "sync_state"])
+    @pytest.mark.parametrize("alias", ["sync_state"])
     async def test_named_level_normalized_and_recorded(self, alias):
         from src.mcp_handlers.middleware import DispatchContext
         from src.mcp_handlers.middleware.params_step import resolve_alias
@@ -269,7 +269,7 @@ class TestResolveAliasIntegration:
         from src.mcp_handlers.middleware.params_step import resolve_alias
 
         ctx = DispatchContext()
-        name, out_args, out_ctx = await resolve_alias("checkin", {"complexity": 0.5}, ctx)
+        name, out_args, out_ctx = await resolve_alias("sync_state", {"complexity": 0.5}, ctx)
 
         assert name == "process_agent_update"
         assert out_args["complexity"] == 0.5

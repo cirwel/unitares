@@ -421,10 +421,10 @@ class TestAliasIntegrity:
 
     def test_resolve_tool_alias_returns_target_for_alias(self):
         """resolve_tool_alias for a known alias should return the target."""
-        name, alias_info = resolve_tool_alias("status")
+        name, alias_info = resolve_tool_alias("check_working_state")
         assert name == "get_governance_metrics"
         assert alias_info is not None
-        assert alias_info.old_name == "status"
+        assert alias_info.old_name == "check_working_state"
 
     def test_list_all_aliases_returns_copy(self):
         """list_all_aliases should return a copy, not the original dict."""
