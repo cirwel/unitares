@@ -117,7 +117,7 @@ services:
     # published, or no registry access), Compose builds from the block below
     # instead. On a master checkout the tag names a release, not your source:
     # run `docker compose up --build` to build what you have checked out.
-    image: ghcr.io/cirwel/unitares-lease-plane:v3.0.0
+    image: ghcr.io/cirwel/unitares-lease-plane:v3.1.0
     pull_policy: missing
     build:
       context: .
