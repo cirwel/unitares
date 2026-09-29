@@ -88,42 +88,39 @@ def get_tools_for_mode(mode: str = "full") -> Set[str]:
 
 
 def build_server_instructions(mode: str = None) -> str:
-    """Registry-free orientation, safe during server initialization."""
+    """Registry-free orientation, safe during server initialization.
+
+    Byte budget: at most 1,400 UTF-8 bytes in every mode. Clients truncate
+    this string, and it lands in every connected agent's context once per
+    server. Claude Code transcripts from September 2026 carried only about
+    the first 2,088 bytes of it, so the earlier 3,438-byte text lost its
+    discovery route and its abridged-descriptions note in every session;
+    one agent connected through both a local server and the hosted
+    connector receives it twice. Keep what an agent must act on inside the
+    budget; operator configuration (UNITARES_TOOL_ADVERTISEMENT, the
+    ignored GOVERNANCE_TOOL_MODE) is documented in docs/INTERFACE_CONTRACT.md
+    because an agent cannot set it. tests/test_tool_modes.py pins the budget
+    and the position of every required phrase.
+    """
     requested = str(mode or TOOL_MODE).strip().lower()
     resolved = requested if requested in _VALID_ADVERTISEMENT_MODES else TOOL_MODE
     advertisement_guidance = (
-        "The initial progressive tools/list is intentionally small. It exposes "
-        "the core workflow plus list_tools, describe_tool and use_tool. To use "
-        "a capability omitted from the initial listing: call "
-        "list_tools(lite=true) for its exact name, "
-        "describe_tool(tool_name=..., action=...) for its parameters, then "
-        "use_tool(tool_name=..., arguments={...}). use_tool re-enters the "
-        "target's transport path, including its normal routing, identity, "
-        "validation, authorization and timeout behavior. Operators can set "
-        "UNITARES_TOOL_ADVERTISEMENT=full to "
-        "advertise every schema up front; legacy GOVERNANCE_TOOL_MODE settings "
-        "remain ignored."
+        "The initial progressive tools/list is small. For anything else call "
+        "list_tools(lite=true), then describe_tool(tool_name, action), then "
+        "use_tool(tool_name, arguments); authorization still applies."
         if resolved == "progressive"
         else
-        "This deployment advertises the complete tools/list schema catalog up "
-        "front because UNITARES_TOOL_ADVERTISEMENT=full. list_tools and "
-        "describe_tool still provide compact and one-tool discovery views; "
-        "use_tool remains available but is not needed to reach an omitted "
-        "schema. Legacy GOVERNANCE_TOOL_MODE settings remain ignored."
+        "This server advertises the complete tools/list schema catalog up "
+        "front. list_tools(lite=true) and describe_tool(tool_name, action) "
+        "still work; use_tool remains available but is not needed."
     )
-    return f"""UNITARES: a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. Independent runtimes share one operator-controlled server and authority domain; the kernel keeps their shared accountability record and does not replicate state across independent servers.
+    return f"""UNITARES: a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction. It runs as one operator-controlled server and authority domain and does not replicate state across independent servers.
 
-Reading needs no identity: search_shared_memory works before start_session and returns what earlier agents found, corrected, and left for a successor, so search first. store_finding / update_finding retain durable claims and corrections; search before you write. Full replacement-link traversal requires the AGE backend.
+Reading needs no identity: search_shared_memory works before start_session, so search first and again before you write. Full replacement-link traversal requires the AGE backend.
 
-Writes are attributed. Fresh processes get fresh identities; real lineage records inherited work, not authority or cross-process sameness, and it exists only when declared, never inferred from a shared thread. Bind once with start_session(force_new=true) and keep the returned client_session_id; pass it on every later call so writes are attributable. sync_state submits a work report for state derivation and returns the state estimate, a policy action (proceed, guide, or pause), and a named reason; the original report text is not retained as durable history. proceed and guide are advisory; a pause holds governed writes until self_recovery (not at high risk), dialectic, an operator or a safety net lifts it, or it expires. record_result grades a check-in against a real outcome — without outcomes the estimate is self-report. check_working_state reads the verdict without writing.
+Writes are attributed: bind once with start_session(force_new=true) and pass its client_session_id on every later call. Lineage is declared, never inferred from a shared thread. sync_state returns a state estimate and a policy action (proceed, guide, or pause); the original report text is not retained as durable history. proceed and guide are advisory; a pause holds governed writes until self_recovery (not at high risk), dialectic, an operator or a safety net lifts it, or it expires. record_result grades a check-in against a real outcome; without one the estimate is self-report. check_working_state reads without writing. Advertising a tool does not establish dependency readiness.
 
-request_review opens a structured review and dialectic reads and advances it (action=get / thesis / antithesis / synthesis / list / reassign). consult asks an advisory model.
-
-Reconstruct prior work from retained shared-memory records, review records, export history, and authorized outcome-evidence reads; clients assemble across their different retention and authorization boundaries, and there is no single reconstruction tool. Core workflow and advanced capabilities are reading paths, not tool filters. Behavioral state estimation, policy/recovery, inference, diagnostics, calibration, and administration remain available. Durable operations require configured storage; consult needs configured inference and completed peer review needs a reviewer. Advertising a tool does not establish dependency readiness.
-
-{advertisement_guidance}
-
-Prefer the workflow names above; their raw implementations remain available through full advertisement or use_tool for compatibility and specialized callers. list_tools(lite=true) returns the complete compact capability-name index; list_tools(lite=false) groups rich metadata by category and tier. Parameter descriptions are abridged to their first sentence; describe_tool(tool_name=..., action=...) returns full details and the parameters one router action takes."""
+{advertisement_guidance} Parameter descriptions are abridged; describe_tool has the full text."""
 
 
 def is_claude_desktop_client() -> bool:

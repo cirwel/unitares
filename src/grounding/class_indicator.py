@@ -95,6 +95,22 @@ CLASS_EPHEMERAL = "ephemeral"
 CLASS_ENGAGED_EPHEMERAL = "engaged_ephemeral"
 CLASS_DEFAULT = "default"
 
+# Agents that run deterministic code rather than reason: `autonomous` (a
+# scheduled process: tests, threshold checks, scanners) and `embodied` (a
+# physical substrate or streaming observer). They cannot author a thesis or
+# antithesis, and they own their lifecycle, so the dialectic reviewer pool,
+# auto-triggered dialectic and the stuck sweep all skip them. One set, read by
+# all three, so they cannot drift.
+#
+# `anima` is a deprecated alias of `embodied`: one deployment's embodied
+# runtime registered under that tag before 2026-09-28. It is honoured here only
+# so an agent registered with it alone keeps being skipped. New agents tag
+# themselves `embodied`; the alias goes once no live agent carries it without
+# `embodied`, which is an operator check. It stays in PRIVILEGED_TAGS
+# (lifecycle/mutation.py) while it confers anything.
+DEPRECATED_EMBODIED_ALIAS = "anima"
+NON_REASONING_TAGS = frozenset({"autonomous", CLASS_EMBODIED, DEPRECATED_EMBODIED_ALIAS})
+
 
 def classify_by_label_and_tags(
     label: Optional[str],

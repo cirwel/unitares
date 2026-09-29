@@ -92,7 +92,11 @@ timeout or description ships with its regenerated pages.
    affect neither registration nor discovery. The listing wrapper applies the
    progressive/full advertisement selection and compacts schema annotations;
    it never removes the underlying dispatch path.
-4. Creates FastMCP wrappers for each tool
+4. Creates FastMCP wrappers for each tool. Each returns the tool wrapper's
+   dict as one compact JSON text block (`_mcp_wire_result`), so `/mcp/` sends
+   the same unindented JSON REST does; left a dict, FastMCP would render it
+   with `indent=2`. No tool declares an outputSchema (`structured_output=False`),
+   so that text block is the whole result a client receives.
 5. Injects `client_session_id` for tools in `TOOLS_NEEDING_SESSION_INJECTION`
 6. Registers with `mcp.tool()` decorator
 

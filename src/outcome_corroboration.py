@@ -8,6 +8,7 @@ keep reading outcome_events without a schema migration.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -170,15 +171,43 @@ _TRUSTED_TOOL_SOURCES = {
     "with_checkin",
 }
 
-_TRUSTED_SUBSTRATE_MARKERS = {
+_TRUSTED_SUBSTRATE_MARKERS = frozenset({
     "server_observation",
     "substrate_observation",
     "substrate_interpretation",
     "trajectory_self_validation",
-    "pi_anima_eisv",
     "sensor_sync",
-    "get_lumen_context",
-}
+})
+
+# Markers one deployment's own substrate runtime writes (a tool name, a
+# pipeline id) are deployment configuration, not product vocabulary: an
+# operator lists them in UNITARES_TRUSTED_SUBSTRATE_MARKERS. Until 2026-09-28
+# two such names were built in, so every install trusted one deployment's
+# runtime vocabulary.
+_extra_markers_cache: tuple[str, frozenset[str]] = ("", frozenset())
+
+
+def extra_substrate_markers() -> frozenset[str]:
+    """Substrate markers the operator adds to the built-in set (UNITARES_TRUSTED_SUBSTRATE_MARKERS).
+
+    Comma-separated. Each entry is matched the way the built-in markers are,
+    as a case-insensitive substring of the context's source text, so an entry
+    shorter than three characters is ignored rather than trusting nearly
+    everything.
+    """
+    global _extra_markers_cache
+    raw = os.getenv("UNITARES_TRUSTED_SUBSTRATE_MARKERS", "").strip()
+    if raw == _extra_markers_cache[0]:
+        return _extra_markers_cache[1]
+    markers = frozenset(
+        item for item in (part.strip().lower() for part in raw.split(",")) if len(item) >= 3
+    )
+    _extra_markers_cache = (raw, markers)
+    return markers
+
+
+def _substrate_markers() -> frozenset[str]:
+    return _TRUSTED_SUBSTRATE_MARKERS | extra_substrate_markers()
 
 
 @dataclass(frozen=True)
@@ -336,7 +365,7 @@ def _has_substrate_evidence(detail: Mapping[str, Any], verification_source: str 
     for context in _nested_contexts(detail):
         source = _source_text(context)
         if _has_verified_marker(context) and any(
-            marker in source for marker in _TRUSTED_SUBSTRATE_MARKERS
+            marker in source for marker in _substrate_markers()
         ):
             return True
     return False
@@ -439,7 +468,7 @@ def _verified_fields_from_contexts(
         if not (
             any(s in source for s in _TRUSTED_EXTERNAL_SOURCES)
             or any(s in source for s in _TRUSTED_TOOL_SOURCES)
-            or any(s in source for s in _TRUSTED_SUBSTRATE_MARKERS)
+            or any(s in source for s in _substrate_markers())
             or context.get("verification_source") in {"external_signal", "server_observation"}
         ):
             continue

@@ -23,7 +23,7 @@ import json
 import asyncio
 
 from src.dialectic_protocol import calculate_authority_score, DialecticPhase
-from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS
+from src.grounding.class_indicator import KNOWN_RESIDENT_LABELS, NON_REASONING_TAGS
 from src.logging_utils import get_logger
 from .sweep_context import AUTO_RESOLVE_IN_PROGRESS as _AUTO_RESOLVE_IN_PROGRESS
 
@@ -42,14 +42,12 @@ from src.dialectic_db import (
 logger = get_logger(__name__)
 
 
-# Tags that mark an agent as a non-reasoning substrate with no thesis-response
-# code path. `autonomous` is a RESIDENT_TAG (the cron-driven resident fleet runs
-# deterministic scripts — pytest, threshold checks, regex scanners); `embodied`
-# is the physical-substrate / streaming-observer class; `anima` is the embodied
-# Pi-side persona. None of these can read a thesis and author an antithesis, so
-# none can serve as a dialectic reviewer. Mirrors the paused-agent skip in
-# handle_request_dialectic_review (handlers.py).
-NON_REASONING_TAGS = frozenset({"autonomous", "embodied", "anima"})
+# NON_REASONING_TAGS (imported above, defined once in
+# src/grounding/class_indicator.py, where the deprecated `anima` alias is
+# explained) marks an agent as a non-reasoning substrate with no
+# thesis-response code path. None of these can read a thesis and author an
+# antithesis, so none can serve as a dialectic reviewer. Mirrors the
+# paused-agent skip in handle_request_dialectic_review (handlers.py).
 
 
 def _can_perform_dialectic_review(
