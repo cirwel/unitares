@@ -77,7 +77,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **coordination events:** an install's own agents can record coordination events under their own service id. Migration 035 locked `audit.coordination_events.service` to six emitter ids, four of them the names of one deployment's resident agents, and the sync emitter rewrote any other id to `governance_mcp`. Migration 072 replaces that list, under the same constraint name, with a format rule: a lowercase identifier (a letter, then letters, digits or underscores, at most 63 characters). `src/coordination_events.py` checks the same pattern before the INSERT (`is_valid_service`), and the sync emitter keeps a well-formed id as given and falls back to `governance_mcp` only for a malformed one. Every id 035 admitted still matches, so no row changes (#2582).
 - **fresh installs stop trusting one deployment's runtime vocabulary:** outcome corroboration built in two substrate markers from the reference deployment's embodied runtime (`pi_anima_eisv`, `get_lumen_context`), so every install graded evidence that named them as substrate-observed. They are no longer built in; an operator lists their own runtime's markers in `UNITARES_TRUSTED_SUBSTRATE_MARKERS` (comma-separated, case-insensitive, entries under three characters ignored), and the generic markers such as `sensor_sync` still ship. **Upgrade note:** a deployment whose runtime writes those two markers sets `UNITARES_TRUSTED_SUBSTRATE_MARKERS=pi_anima_eisv,get_lumen_context`, or that evidence grades lower.
 - **one non-reasoning tag set:** the stuck sweep, auto-triggered dialectic and the dialectic reviewer pool each carried their own copy of `{"autonomous", "embodied", "anima"}`. They now read one `NON_REASONING_TAGS` in `src/grounding/class_indicator.py`, where `anima` is documented as a deprecated alias of `embodied`, kept only so an agent registered with it alone is still skipped; it stays privileged (not self-assignable) while it confers anything. The `detect_stuck_agents` description no longer names it, and the server port comment no longer describes one host's port layout (#2582).
-- **MCP server instructions fit the bytes a client actually delivers:** the advertised instructions string was 3,438 bytes (progressive) / 3,144 (full), but Claude Code transcripts show only about the first 2,088 bytes reach the model, so every session silently lost the discovery route (`list_tools`, `describe_tool`, `use_tool`) and the abridged-descriptions note, both past byte 2,500. Rewritten to 1,393 / 1,386 bytes, keeping the product sentence, every doc-drift-pinned positioning phrase, reading before binding, `start_session(force_new=true)` with `client_session_id` threading, declared lineage, the pause-exits sentence, the four workflow names (`start_session`, `sync_state`, `search_shared_memory`, `store_finding`), and the discovery route. Dropped to make room: the `request_review` and `consult` mentions, the dialectic action list, and the reconstruction and reading-paths paragraphs; operator configuration (`UNITARES_TOOL_ADVERTISEMENT`, the ignored `GOVERNANCE_TOOL_MODE`) moves out of the string, since `docs/INTERFACE_CONTRACT.md` already documents it. Tests pin the byte budget in both modes and each required phrase's position inside it. The interface contract does not hash the instructions string, so no version or digest moves (#2588).
+- **MCP server instructions fit a 1,400-byte budget** (agent-facing text only;
+  no tool, schema or digest changes). The `instructions` string every client
+  receives at initialize was 3,438 UTF-8 bytes in progressive mode and 3,144
+  in full mode. Fourteen days of one operator's local Claude Code and Codex
+  transcripts showed Claude Code delivering only about the first 2,088 bytes
+  (read from `mcp_instructions_delta.addedBlocks`), so every Claude Code
+  session lost the tail: the discovery route (`list_tools(lite=true)`, then
+  `describe_tool`, then `use_tool`) and the note that advertised parameter
+  descriptions are abridged. The same transcripts showed the text arriving
+  twice per session when an agent connects through both a local server and
+  the hosted connector, about 297 KB a day of repeated orientation. The
+  rewrite is 1,393 bytes (progressive) and 1,386 bytes (full). It keeps the
+  product sentence, every positioning phrase the doc-drift lint pins, reading
+  before binding, `start_session(force_new=true)` with `client_session_id`
+  threading, declared lineage, the full list of pause exits, the workflow
+  names the tests pin (`start_session`, `sync_state`, `record_result`,
+  `check_working_state`), the discovery route and the abridged note. It no
+  longer mentions `request_review`, `consult` or the `dialectic` action list,
+  the reconstruction-sources paragraph, or the core-versus-advanced
+  reading-paths paragraph; `request_review` and `consult` stay in the initial
+  progressive listing with their own descriptions. Operator configuration
+  (`UNITARES_TOOL_ADVERTISEMENT=full`, the ignored `GOVERNANCE_TOOL_MODE`)
+  left the string, because an agent cannot set it; the interface contract's
+  advertisement section documents it and now says the instructions string
+  does not. Tests pin the byte budget in both modes and check that each
+  required phrase ends inside it. The interface contract does not hash the
+  instructions, so its version and surface digest do not move. This measures
+  bytes delivered, not any change in agent behavior (#2588).
+- **`audit.tool_usage` now counts a call made through `use_tool`:** `use_tool` re-enters its target's own transport path, so a gateway call and a direct call wrote the same row, under the target's name, and `use_tool` itself read as zero uses in the table (verified: a live `use_tool(health_check)` wrote one `health_check` row with an empty payload). The row a gateway call writes now carries a fixed `via=use_tool` payload key so the two are distinguishable; `via` is on the payload's key allowlist and its only value is a gateway name. A direct call's row is unmarked, as before (#2587).
 
 ### Removed
 - **findings:** the HTTP adjudication surface is removed: `GET /v1/sentinel/adjudication-queue`, `POST /v1/sentinel/adjudicate` and `POST /v1/sentinel/model-adjudicate`, the `scripts/ops/model_adjudicator.py` job and its launchd template, and the doctor's `adjudication_feedstock` check with its `UNITARES_OPERATOR_ADJUDICATION` switch. The Sentinel CLI paths (`--resolve`/`--dismiss` via `agents/sentinel/agent.py`) are unchanged and remain the supported way for an operator to record external-truth outcomes. This is a design decision by the maintainer, not a reading of usage: asking a human to judge each finding is performative, because the human would in practice ask a model to verify it, and a model verdict here was only ever telemetry, never an anchor. Removing it loses no evidence: operator verdicts were 2.4% of the external_signal channel, every one `is_bad=false`, and excluding them moved nothing the EISV falsifier reads. Historical `*_confirmed` / `*_dismissed` outcome rows are kept, and the `anchor_all_positive_generator` doctor check still audits them alongside Watcher's own resolve/dismiss labels. Finding intake, the backlog and forced-release evidence are unchanged.
