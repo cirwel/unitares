@@ -130,7 +130,7 @@ the `UNITARES_TRUSTED_NETWORKS` it shares with the access checks (#2560 left
 that one out of Compose because container traffic already arrives through the
 RFC 1918 bridge, but the classifier needs it for an IP-literal model on a
 tailnet peer, and mapping it changes nothing for the access checks); the
-`UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in; the probe timeout; the same set
+`UNITARES_MODEL_ALLOW_INSECURE_HTTP` opt-in; the `UNITARES_MODEL_ALLOW_EXTERNAL` authorization (2.3.1); the probe timeout; the same set
 under `UNITARES_MODEL_FALLBACK_*`; and the key values under their default
 names, `UNITARES_MODEL_API_KEY` and `UNITARES_MODEL_FALLBACK_API_KEY`, so a
 primary and a fallback from different providers each authenticate. A setting that exists but does not reach the process
@@ -205,6 +205,30 @@ operator sets `UNITARES_MODEL_ALLOW_INSECURE_HTTP=1`; otherwise the key would
 cross the network in plaintext on every call. A `local` endpoint may use `http`
 (Ollama on loopback does).
 
+### 2.3.1 Callers that name no privacy
+
+`call_model` and `consult` carry a `privacy` argument; several paths do not:
+`call_local_llm`, the check-in and synthesis paths, the orchestrated
+reviewer's `local` backend and the local resident runner. Today they are local
+by construction, because the only route they have is Ollama. They stay local by
+rule: each is treated as a `privacy='local'` request, so against an `external`
+endpoint it is refused with a named error, `MODEL_EXTERNAL_NOT_AUTHORIZED`,
+that names `UNITARES_MODEL_ALLOW_EXTERNAL`. The alternative, exempting them,
+would send check-in text, review content and resident prompts to a public
+service with no statement from the operator.
+
+`UNITARES_MODEL_ALLOW_EXTERNAL=1` is that statement. It authorizes exactly
+these argument-less callers to use an `external` primary, and it is the
+operator saying the content of governance work may leave their machines. It
+does not change the classification, does not affect `call_model` or `consult`
+(their own `privacy` argument still decides), and defaults to unset. The
+consequence of leaving it unset with a metered primary is that the
+argument-less paths are off and say why, through the abstain and
+not-configured reasons the reviewer and resident already report; an operator
+who wants OpenAI or OpenRouter for consult only gets exactly that. The
+orchestrated reviewer's `external` backend is a separate, explicitly chosen
+backend and is not covered by this rule.
+
 ### 2.4 The cloud fallback is a second endpoint, not a provider
 
 `consult(privacy='cloud_allowed')` and `call_model(privacy='auto'|'cloud')` fall
@@ -276,10 +300,16 @@ release note says what to set first. One rule orders them: no step may let a req
    - the endpoint classification and the `privacy='local'` refusal from 2.3,
      applied to every path that reads the setting, because this is the first
      step in which the base URL can name a machine the operator does not run;
+     the argument-less callers (2.3.1) are treated as `privacy='local'` and
+     refused against an `external` endpoint unless
+     `UNITARES_MODEL_ALLOW_EXTERNAL=1`, with the named
+     `MODEL_EXTERNAL_NOT_AUTHORIZED` error and a test for each of the four
+     caller families;
    - the `docker-compose.yml` mappings for `governance-mcp`, beside the
      existing `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and
      `UNITARES_LLM_MODEL` lines: the two endpoint settings and the classifier's
-     `UNITARES_MODEL_LOCAL_HOSTS` and `UNITARES_MODEL_PRIVACY`, or `.env`
+     `UNITARES_MODEL_LOCAL_HOSTS`, `UNITARES_MODEL_PRIVACY` and
+     `UNITARES_MODEL_ALLOW_EXTERNAL`, or `.env`
      values never reach the server (a model reached by a Compose service name
      such as `vllm` is `local` only when that name is listed);
    - `unitares model`: `scripts/install/choose_model.py` lists models from
@@ -301,7 +331,7 @@ release note says what to set first. One rule orders them: no step may let a req
    - the macOS LaunchAgent template
      (`scripts/ops/com.unitares.governance-mcp.plist`, which today carries
      only `UNITARES_LLM_MODEL`) and its install instructions, with the two
-     endpoint settings and the two classifier settings;
+     endpoint settings, the two classifier settings and the authorization;
    - the doctor check, and the manual and `.env.example` text.
 
    No client changes and no key setting yet: every client still sends a fixed
