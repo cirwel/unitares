@@ -83,14 +83,15 @@ class SettingAlias:
 
 
 # The only place an old name is read. Each entry is removed by the release it
-# names (two minor releases after the one that renamed it); a test fails once
+# names: two minor releases after VERSION when the row was added, so at least
+# one release reads both the old and the new name. A test fails once
 # VERSION reaches that release, so the release cut deletes the row or a
 # reviewed diff moves its date. Order matters within one new name: an earlier
 # row wins over a later one when both are set.
 SETTING_ALIASES: tuple[SettingAlias, ...] = (
-    SettingAlias("UNITARES_OLLAMA_BASE", MODEL_BASE_URL_ENV, "3.2.0"),
-    SettingAlias("UNITARES_OLLAMA_BASE_URL", MODEL_BASE_URL_ENV, "3.2.0"),
-    SettingAlias("UNITARES_LLM_MODEL", MODEL_ENV, "3.2.0"),
+    SettingAlias("UNITARES_OLLAMA_BASE", MODEL_BASE_URL_ENV, "3.3.0"),
+    SettingAlias("UNITARES_OLLAMA_BASE_URL", MODEL_BASE_URL_ENV, "3.3.0"),
+    SettingAlias("UNITARES_LLM_MODEL", MODEL_ENV, "3.3.0"),
 )
 
 # (winning name, its value, other name, its value) disagreements already

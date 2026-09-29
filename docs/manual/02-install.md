@@ -153,7 +153,7 @@ no `UNITARES_MODEL_BASE_URL` line, the checkout predates this step. If it has
 one but `consult` reports a missing dependency, the image predates it; rebuild
 with `--build`.
 
-Older names still work until v3.2.0: `UNITARES_OLLAMA_BASE` and
+Older names still work until v3.3.0: `UNITARES_OLLAMA_BASE` and
 `UNITARES_OLLAMA_BASE_URL` (an Ollama root URL, with or without `/v1`) for the
 endpoint, and `UNITARES_LLM_MODEL` for the model. The new name wins when both
 are set. `scripts/dev/unitares_doctor.py` prints one line for each older name

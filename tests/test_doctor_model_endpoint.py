@@ -138,7 +138,7 @@ def test_one_info_line_per_old_name_in_use(doctor, monkeypatch):
     assert {r.name for r in results} == {"setting_alias:UNITARES_LLM_MODEL", "setting_alias:UNITARES_OLLAMA_BASE"}
     assert all(r.status == doctor.Status.INFO for r in results)
     by_name = {r.name: r.message for r in results}
-    assert "UNITARES_MODEL_ID until v3.2.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
+    assert "UNITARES_MODEL_ID until v3.3.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
     assert "UNITARES_MODEL_BASE_URL" in by_name["setting_alias:UNITARES_OLLAMA_BASE"]
     rendered = doctor.render_text(results, use_color=False)
     assert "i setting_alias:UNITARES_LLM_MODEL" in rendered

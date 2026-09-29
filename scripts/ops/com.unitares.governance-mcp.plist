@@ -193,7 +193,7 @@
         <!-- Model id the endpoint serves (e.g. an Ollama tag on this host).
              Set to a model you actually have, or omit this key to fall back
              to the server default. UNITARES_LLM_MODEL is its older name, read
-             until v3.2.0. -->
+             until v3.3.0. -->
         <key>UNITARES_MODEL_ID</key>
         <string>YOUR_LOCAL_MODEL</string>
         <!-- Hostnames of model servers on your own network, comma-separated.
