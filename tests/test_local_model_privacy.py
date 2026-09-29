@@ -857,3 +857,23 @@ async def test_unreachable_hint_names_ollama_only_for_ollama(monkeypatch, base, 
     )
     assert not outcome.ok
     assert expect in outcome.failure.recovery["action"]
+
+
+def test_a_resolver_slower_than_the_budget_still_lets_the_next_probe_connect(monkeypatch):
+    """A lookup that finishes after its caller gave up is reused by the next
+    probe, so a slow-but-working resolver does not read as down forever."""
+    import time as _time
+
+    from src.mcp_handlers.support import inference_registry
+
+    answer = [(2, 1, 6, "", ("10.0.0.9", 8000))]
+
+    def slow(*_a, **_k):
+        _time.sleep(0.2)
+        return answer
+
+    monkeypatch.setattr(inference_registry.socket, "getaddrinfo", slow)
+    inference_registry._resolve_inflight.pop(("slow.internal", 8000), None)
+    assert inference_registry._resolve_within("slow.internal", 8000, 0.05) == []
+    _time.sleep(0.3)  # the lookup finishes in the background
+    assert inference_registry._resolve_within("slow.internal", 8000, 0.05) == answer

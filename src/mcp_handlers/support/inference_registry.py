@@ -130,43 +130,49 @@ _OLLAMA_PROBE_BUDGET_S = 0.5
 
 
 _resolve_lock = threading.Lock()
-# (host, port) -> (thread, result list) for a lookup still running. At most one
-# resolver thread exists per endpoint: a probe that finds one joins it instead
-# of starting another, so a resolver that never answers costs one thread.
-_resolve_inflight: dict[tuple[str, int], tuple[threading.Thread, list]] = {}
+# (host, port) -> [thread, result list, finished-at or None]. At most one
+# resolver thread exists per endpoint: a probe that finds one running joins it
+# instead of starting another, so a resolver that never answers costs one
+# thread. A lookup that finished after its caller gave up is kept for
+# _RESOLVE_REUSE_S, so a resolver that is merely slower than the probe budget
+# still lets the next probe connect instead of timing out forever.
+_resolve_inflight: dict[tuple[str, int], list] = {}
+_RESOLVE_REUSE_S = 30.0
 
 
 def _resolve_within(host: str, port: int, budget_s: float) -> list:
     """``getaddrinfo`` bounded by ``budget_s``; an empty list when it is not
     answered in time. getaddrinfo has no timeout of its own, and callers run
     this probe on the event loop during auto routing, so a stalled resolver
-    must not hold them past the probe budget. A lookup that is still running
-    is reused by the next probe rather than duplicated.
+    must not hold them past the probe budget.
     """
     key = (host, port)
+    now = time.monotonic()
     with _resolve_lock:
         entry = _resolve_inflight.get(key)
-        # Only a lookup still running is shared; a finished one is stale.
-        if entry is None or not entry[0].is_alive():
-            result: list = []
+        if entry is not None and not entry[0].is_alive():
+            finished_at = entry[2]
+            if entry[1] and finished_at is not None and now - finished_at < _RESOLVE_REUSE_S:
+                return list(entry[1])
+            entry = None  # an old or empty answer: resolve again
+        if entry is None:
+            entry = [None, [], None]
 
-            def run() -> None:
+            def run(slot=entry) -> None:
                 try:
-                    result.extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+                    slot[1].extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
                 except Exception:
                     pass
+                slot[2] = time.monotonic()
 
             worker = threading.Thread(target=run, name="model-endpoint-resolve", daemon=True)
-            entry = (worker, result)
+            entry[0] = worker
             _resolve_inflight[key] = entry
             worker.start()
-    worker, result = entry
+    worker, result = entry[0], entry[1]
     worker.join(budget_s)
     if worker.is_alive():
         return []
-    with _resolve_lock:
-        if _resolve_inflight.get(key) is entry:
-            del _resolve_inflight[key]
     return list(result)
 
 
