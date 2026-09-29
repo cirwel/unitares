@@ -117,10 +117,10 @@ To do the same by hand, install Ollama on the Docker host, pull a model, and
 name both in `.env`:
 
 ```bash
-ollama pull gemma4:latest
+ollama pull <your-model>
 cat >> .env <<'EOF'
 UNITARES_OLLAMA_BASE=http://host.docker.internal:11434
-UNITARES_LLM_MODEL=gemma4:latest
+UNITARES_LLM_MODEL=<your-model>
 EOF
 docker compose up -d --build governance-mcp
 ```
