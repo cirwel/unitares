@@ -4016,7 +4016,8 @@ def _display_url(url: str) -> str:
     parts = urllib.parse.urlsplit(url)
     if parts.username is None and parts.password is None:
         return url
-    netloc = parts.hostname or ""
+    host = parts.hostname or ""
+    netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
     if parts.port:
         netloc += f":{parts.port}"
     return urllib.parse.urlunsplit(parts._replace(netloc=netloc))

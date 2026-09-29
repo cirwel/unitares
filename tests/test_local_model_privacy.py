@@ -909,3 +909,16 @@ async def test_auto_routing_names_an_unreachable_non_ollama_server(monkeypatch):
     assert outcome.failure.code == "MISSING_CONFIG"
     assert "http://10.0.0.5:8000/v1" in outcome.failure.message
     assert "Ollama" not in outcome.failure.recovery["action"]
+
+
+def test_a_url_without_a_scheme_means_http(no_dns, monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "localhost:11434/v1")
+    assert env.model_base_url() == "http://localhost:11434/v1"
+    assert env.classify_endpoint().privacy == env.LOCAL
+    assert env.normalize_ollama_base("gpu-box:11434") == "http://gpu-box:11434"
+
+
+def test_a_non_json_answer_is_not_ollama(monkeypatch):
+    """A 200 with a proxy page is an answer, not silence: not Ollama."""
+    monkeypatch.setattr(env, "direct_urlopen", lambda url, timeout=0: _Resp(b"<html>portal</html>"))
+    assert env._probe_ollama_version("http://10.0.0.7:11434", 0.5) is False

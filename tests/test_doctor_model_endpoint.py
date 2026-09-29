@@ -145,3 +145,8 @@ def test_no_old_names_means_no_lines(doctor):
     checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
     assert checks, "one alias check per table row"
     assert doctor.run_checks(checks, "local") == []
+
+
+def test_display_url_keeps_ipv6_brackets(doctor):
+    assert doctor._display_url("http://user:pass@[::1]:11434/v1") == "http://[::1]:11434/v1"
+    assert doctor._display_url("http://user:pass@gpu:8000/v1") == "http://gpu:8000/v1"

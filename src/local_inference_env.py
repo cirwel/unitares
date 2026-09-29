@@ -136,10 +136,20 @@ def _resolve(new: str, normalize) -> str:
     return winner
 
 
+def _with_scheme(url: str) -> str:
+    """``url`` with ``http://`` added when it names no scheme at all, so
+    ``localhost:11434/v1`` means what an operator writing it meant instead of
+    parsing as a URL with no host (every model server the manual names serves
+    plain HTTP by default)."""
+    if url and "://" not in url:
+        return "http://" + url
+    return url
+
+
 def normalize_ollama_base(value: str | None) -> str:
     """Reduce a model server URL to its root: no surrounding space, no trailing
     ``/`` and no trailing ``/v1``. Returns ``""`` for an empty or missing value."""
-    url = (value or "").strip().rstrip("/")
+    url = _with_scheme((value or "").strip().rstrip("/"))
     if url.endswith("/v1"):
         url = url[: -len("/v1")].rstrip("/")
     return url
@@ -149,7 +159,7 @@ def normalize_model_base_url(value: str | None) -> str:
     """An OpenAI-compatible base URL: trailing ``/`` removed, and ``/v1`` added
     only when the URL has no path at all (an Ollama root such as
     ``http://gpu:11434``). A base with its own path is kept as given."""
-    url = (value or "").strip().rstrip("/")
+    url = _with_scheme((value or "").strip().rstrip("/"))
     if not url:
         return ""
     if not urlsplit(url).path:
@@ -295,7 +305,9 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
             override, target, host, f"{MODEL_PRIVACY_ENV}={override} is set"
         )
     if not host:
-        return EndpointPrivacy(EXTERNAL, target, host, "the URL names no host")
+        return EndpointPrivacy(
+            EXTERNAL, target, host, "the URL names no host; write it as http://host:port/v1"
+        )
 
     addr = _ip_literal(host)
     if addr is not None:
@@ -414,7 +426,9 @@ def _probe_ollama_version(root: str, timeout: float) -> bool | None:
             payload = json.load(resp)
     except urllib.error.HTTPError:
         return False  # the server answered, without the route
-    except (urllib.error.URLError, OSError, ValueError):
+    except ValueError:
+        return False  # it answered, but not with Ollama's JSON (a proxy page, say)
+    except (urllib.error.URLError, OSError):
         return None
     return isinstance(payload, dict) and isinstance(payload.get("version"), str)
 
