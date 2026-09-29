@@ -217,6 +217,13 @@ services:
       UNITARES_DASHBOARD_RP_ID: ${UNITARES_DASHBOARD_RP_ID:-}
       UNITARES_DASHBOARD_ORIGIN: ${UNITARES_DASHBOARD_ORIGIN:-}
       UNITARES_REST_STRICT: ${UNITARES_REST_STRICT:-}
+      # Networks beyond loopback and RFC1918 whose callers skip auth in local
+      # posture (comma-separated CIDRs); e.g. a Tailscale tailnet is
+      # 100.64.0.0/10. Nothing else is trusted by default. See .env.example.
+      UNITARES_TRUSTED_NETWORKS: ${UNITARES_TRUSTED_NETWORKS:-}
+      # Your own substrate runtime's source markers (comma-separated),
+      # trusted beyond the built-in generic ones. See .env.example.
+      UNITARES_TRUSTED_SUBSTRATE_MARKERS: ${UNITARES_TRUSTED_SUBSTRATE_MARKERS:-}
       # Opt-in route packs (src/http_routes/packs.py); empty mounts core routes
       # only. Dashboard extensions: set the variable AND mount that directory
       # into this container, or the extension route has nothing to serve.
