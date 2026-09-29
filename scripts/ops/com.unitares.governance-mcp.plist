@@ -127,7 +127,7 @@
         <string></string>
         <!-- Optional route packs (src/http_routes/packs.py), comma-separated:
              reference-residents  the reference residents' summaries and the
-                                  finding adjudication queue
+                                  finding backlog
              automation-census    /api/automations
              Empty = core routes only. See docs/operations/resident-roster.md. -->
         <key>UNITARES_ROUTE_PACKS</key>
@@ -177,6 +177,13 @@
              Tailscale tailnet sets 100.64.0.0/10, as the reference
              deployment does. -->
         <key>UNITARES_TRUSTED_NETWORKS</key>
+        <string></string>
+        <!-- Source markers your own substrate runtime writes into outcome
+             evidence (comma-separated), trusted beyond the built-in generic
+             ones such as sensor_sync. Empty trusts nothing extra. The
+             reference deployment's embodied runtime sets
+             pi_anima_eisv,get_lumen_context. -->
+        <key>UNITARES_TRUSTED_SUBSTRATE_MARKERS</key>
         <string></string>
         <!-- Local model id for call_model (e.g. an Ollama tag on this host).
              Set to a model you actually have pulled, or omit this key to fall

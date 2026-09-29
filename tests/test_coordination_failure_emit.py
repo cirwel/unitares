@@ -4,7 +4,7 @@ Pins the sync-emit contract that 2A relies on:
   - failure-safe (never raises) — caller is inside an `except` clause
   - writes via the existing audit_logger._write_entry path (sidesteps anyio)
   - validates event_type prefix client-side
-  - falls back to 'governance_mcp' on unknown service (logs WARNING but emits)
+  - falls back to 'governance_mcp' on a malformed service (logs WARNING but emits)
   - mocks audit_logger so the test doesn't depend on a writable JSONL file
 """
 
@@ -19,24 +19,29 @@ import pytest
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
+from src.coordination_events import is_valid_service  # noqa: E402
 from src.coordination_failure_emit import (  # noqa: E402
-    SERVICES,
     emit_coordination_failure_sync,
 )
 
 
-def test_known_services_match_documented_set():
-    """Drift guard: SERVICES MUST mirror PR #342's coordination_events service
-    enum (so when/if Wave 0 step 3 promotes events to the dedicated table, the
-    values port unchanged)."""
-    assert SERVICES == frozenset({
-        "sentinel",
-        "governance_mcp",
-        "lease_plane",
-        "vigil",
-        "chronicler",
-        "watcher",
-    })
+@pytest.mark.parametrize("service,valid", [
+    ("governance_mcp", True),
+    ("my_own_agent", True),          # an adopter's service id, named by them
+    ("a" * 63, True),
+    ("a" * 64, False),
+    ("", False),
+    ("Governance_MCP", False),       # mixed case
+    ("two words", False),
+    ("1starts_with_digit", False),
+    ("dash-ed", False),
+    (None, False),
+])
+def test_service_ids_are_a_format_not_a_roster(service, valid):
+    """Migration 072: which services exist is deployment configuration. Any
+    lowercase identifier is a service id, checked by the same pattern the
+    database CHECK enforces; no roster is shipped."""
+    assert is_valid_service(service) is valid
 
 
 def test_emit_writes_via_audit_logger_with_correct_envelope():
@@ -84,14 +89,27 @@ def test_emit_skips_silently_on_non_string_event_type():
     fake_logger._write_entry.assert_not_called()
 
 
-def test_emit_falls_back_on_unknown_service():
-    """Unknown service still writes — under fallback service. Missing the event
-    would be worse than emitting under a generic service identity."""
+def test_emit_keeps_an_unlisted_well_formed_service():
+    """An adopter's own service id is written as given, not replaced."""
     fake_logger = MagicMock()
     with patch("src.audit_log.audit_logger", fake_logger), \
          patch("src.audit_log.AuditEntry") as fake_entry_cls:
         emit_coordination_failure_sync(
-            service="not_a_real_service",
+            service="my_own_agent",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={"tool_name": "x"},
+        )
+    assert fake_entry_cls.call_args.kwargs["details"]["service"] == "my_own_agent"
+
+
+def test_emit_falls_back_on_malformed_service():
+    """A malformed service still writes — under fallback service. Missing the
+    event would be worse than emitting under a generic service identity."""
+    fake_logger = MagicMock()
+    with patch("src.audit_log.audit_logger", fake_logger), \
+         patch("src.audit_log.AuditEntry") as fake_entry_cls:
+        emit_coordination_failure_sync(
+            service="Not A Service",
             event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
             payload={"tool_name": "x"},
         )

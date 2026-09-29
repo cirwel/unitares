@@ -198,7 +198,8 @@ particular date is the reason the constant is what it is, and deleting it would
 make the code less honest without making it more portable.
 
 The guard also prints the couplings that already exist and have not been fixed
-(currently one: `src/http_routes/vigil.py`) on every run, passing or failing —
+(currently none: the last one, the resident-specific Vigil route module, moved
+to `agents/vigil/routes.py` on 2026-09-27) on every run, passing or failing —
 these are reported but do not fail the build. It does not silence them: a guard
 that reported
 "clean" over known coupling would be the same instrument-optimism failure it
@@ -214,8 +215,17 @@ their endpoints.
 
 | Pack | Routes | Enable when |
 |---|---|---|
-| `reference-residents` | `/v1/sentinel/{backlog,summary,adjudication-queue,adjudicate,model-adjudicate}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` (and their backlog / adjudication tooling, e.g. `scripts/ops/model_adjudicator.py`) |
-| `automation-census` | `/api/automations` | you run the `unitares-automations` census ([setup](automation-census-setup.md)) |
+| `reference-residents` | `/v1/sentinel/{backlog,summary}`, `/v1/watcher/summary`, `/v1/vigil/summary` | you run the reference residents from `agents/` |
+| `automation-census` | `/api/automations` | you run the `unitares-automations` census on the server's host ([setup](automation-census-setup.md)); not available in the Docker image |
+
+The pack code lives next to what it serves, not in the installed server
+package: the resident routes in `agents/<resident>/routes.py`, the census route
+beside its tool in `scripts/ops/automation_census_route.py`. The server imports
+a pack's code only when the pack is enabled, so a pip-installed server without
+`agents/` or `scripts/` is unaffected, and a pack whose code is absent (the
+Docker image carries `agents/` but not `scripts/`) is logged and skipped.
+Finding intake (`POST /api/findings`) is core and always mounted
+(`src/http_routes/findings.py`).
 
 A pack name that matches nothing is logged at startup rather than ignored.
 Packs are named for what they serve, never for a resident, for the reason in

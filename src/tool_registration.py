@@ -10,6 +10,8 @@ FastMCP-registered tools:
 - ``auto_register_all_tools`` / ``_register_common_aliases`` — build typed
   FastMCP wrappers from the schema/alias registries and register them on the
   FastMCP instance.
+- ``_mcp_wire_result`` — render the wrapper's dict as the one compact text
+  block ``/mcp/`` sends, instead of letting FastMCP indent it.
 - ``_advertise_catalog_schema`` — after registration, replace the schema
   FastMCP derived from the typed wrapper with the catalog schema, so ``/mcp/``
   advertises the same bounds, defaults and ``$defs`` as stdio and REST.
@@ -37,6 +39,9 @@ import copy
 import json
 import time
 from typing import Dict
+
+import pydantic_core
+from mcp.types import TextContent
 
 from src.mcp_compat import (
     Context,
@@ -436,9 +441,11 @@ def get_tool_wrapper(tool_name: str):
                 if not nested_delegated:
                     _record(success, error_type=error_type, result=result)
 
-                # Extract structured payload from TextContent response
-                # Many MCP clients enforce outputSchema and require structured output.
-                # Our handlers return JSON in TextContent.text; parse it and return an object.
+                # Handlers return JSON in TextContent.text; parse it and return
+                # the object. use_tool's nested invoker reads this dict, and the
+                # /mcp/ registration renders it back into one compact text block
+                # (_mcp_wire_result). No tool declares an outputSchema: both
+                # registrars pass structured_output=False.
                 if isinstance(result, (list, tuple)) and len(result) > 0:
                     first_result = result[0]
                     if hasattr(first_result, 'text'):
@@ -474,6 +481,54 @@ def get_tool_wrapper(tool_name: str):
         _tool_wrappers_cache[tool_name] = wrapper
 
     return _tool_wrappers_cache[tool_name]
+
+
+def _mcp_wire_result(result):
+    """Render a tool wrapper's dict as the one compact text block /mcp/ sends.
+
+    Handed a dict, FastMCP renders it itself with
+    ``pydantic_core.to_json(result, fallback=str, indent=2)``
+    (``_convert_to_content`` in ``func_metadata``, on both SDK majors). The
+    indentation told no reader anything: it was 13.5% of Claude Code
+    governance tool-result bytes over the 14 days to 2026-09-28. This renders
+    the same value with the same serializer and fallback, minus the indent, so
+    the text differs from before only in whitespace outside strings. FastMCP
+    passes a returned content block through unchanged. REST already answers
+    with compact JSON.
+
+    The text block is all an /mcp/ caller receives. Both registrars pass
+    ``structured_output=False``, so no tool advertises an outputSchema and no
+    result carries structuredContent on either major: compacting the text drops
+    nothing a client reads. Anything other than a dict (a handler whose text
+    parses to a JSON array or scalar) goes to FastMCP as before.
+    """
+    if isinstance(result, dict):
+        return TextContent(
+            type="text",
+            text=pydantic_core.to_json(result, fallback=str).decode(),
+        )
+    return result
+
+
+def _mcp_wire_handlers(get_handler):
+    """``get_handler`` for the /mcp/ registrars: the same call, then
+    :func:`_mcp_wire_result`.
+
+    Only the FastMCP-registered typed wrappers take this. ``get_tool_wrapper``
+    keeps returning the dict, because use_tool's nested invoker reads it, and
+    ``get_handler`` is still called per call, as the typed wrapper always did,
+    so a cleared wrapper cache takes effect on the next call.
+    """
+
+    def get_wire_handler(tool_name: str):
+        handler = get_handler(tool_name)
+
+        async def wire_handler(**kwargs):
+            return _mcp_wire_result(await handler(**kwargs))
+
+        return wire_handler
+
+    return get_wire_handler
 
 
 # ============================================================================
@@ -686,6 +741,9 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
     except Exception:  # pragma: no cover - logging aid only
         advertised = None
 
+    # /mcp/ sends the wrapper's dict as compact text, not FastMCP's indent=2.
+    wire_handlers = _mcp_wire_handlers(get_tool_wrapper)
+
     for tool in tools:
         tool_name = tool.name
         if only_missing:
@@ -710,7 +768,7 @@ def auto_register_all_tools(mcp, *, only_missing: bool = False):
             wrapper = create_typed_wrapper(
                 tool_name=tool_name,
                 input_schema=input_schema,
-                get_handler=get_tool_wrapper,
+                get_handler=wire_handlers,
                 inject_session=inject_session,
                 session_extractor=_session_id_from_ctx,
             )
@@ -793,6 +851,7 @@ def _register_common_aliases(mcp):
     # minimal-mode /mcp/ mount for a caller that knows the name.
     common = workflow_alias_names_for_mode("full")
     advertised_aliases = set(workflow_alias_names_for_mode(TOOL_MODE))
+    wire_handlers = _mcp_wire_handlers(get_tool_wrapper)
     count = 0
     for alias_name in common:
         actual, info = resolve_tool_alias(alias_name)
@@ -810,7 +869,7 @@ def _register_common_aliases(mcp):
             wrapper = create_typed_wrapper(
                 tool_name=alias_name,
                 input_schema=actual_schema,
-                get_handler=get_tool_wrapper,
+                get_handler=wire_handlers,
                 inject_session=TOOLS_NEEDING_SESSION_INJECTION.matches(alias_name),
                 session_extractor=_session_id_from_ctx,
             )
