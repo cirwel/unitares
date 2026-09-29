@@ -230,7 +230,7 @@ sys.path.insert(0, '$PROJECT_DIR')
 from scripts.mcp_sse_client import GovernanceMCPClient
 async def check():
     async with GovernanceMCPClient() as client:
-        result = await client.call_tool("list_agents", {})
+        result = await client.call_tool("agent", {"action": "list"})
         if hasattr(result, 'content'):
             for c in result.content:
                 if hasattr(c, 'text'):
