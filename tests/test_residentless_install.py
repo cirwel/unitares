@@ -367,3 +367,40 @@ def test_default_install_catalog_is_product_only(tmp_path):
     leaked = sorted(n for n in names if n.removesuffix(".error") in declared)
     assert not leaked, f"default catalog advertises operator metrics: {leaked}"
     assert "kg.entries.count" in names  # the product layer still ships
+
+
+def test_an_adopter_service_records_coordination_events(residentless):
+    # Migration 072: a residentless install's own agent records coordination
+    # events under its own service id. Before it, 035's CHECK admitted only
+    # one deployment's six emitter ids, and the sync emitter rewrote any
+    # other id to governance_mcp.
+    from unittest.mock import patch
+
+    from src.coordination_events import is_valid_service
+    from src.coordination_failure_emit import emit_coordination_failure_sync
+
+    assert is_valid_service("my_own_agent")
+    written = MagicMock()
+    with patch("src.audit_log.audit_logger", written), \
+         patch("src.audit_log.AuditEntry") as entry:
+        emit_coordination_failure_sync(
+            service="my_own_agent",
+            event_type="coordination_failure.mcp_handler_timeout.tool_decorator",
+            payload={},
+        )
+    assert entry.call_args.kwargs["details"]["service"] == "my_own_agent"
+
+
+def test_every_non_reasoning_tag_is_privileged():
+    # A tag in NON_REASONING_TAGS exempts an agent from the stuck sweep,
+    # auto-triggered dialectic and the reviewer pool. If an agent could
+    # self-assign one (including the deprecated `anima` alias of `embodied`),
+    # it could opt itself out of all three. The set is defined once and the
+    # three sites read that one object.
+    from src.grounding.class_indicator import NON_REASONING_TAGS
+    from src.mcp_handlers.dialectic import reviewer
+    from src.mcp_handlers.lifecycle import mutation, stuck
+
+    assert NON_REASONING_TAGS <= mutation.PRIVILEGED_TAGS
+    assert reviewer.NON_REASONING_TAGS is NON_REASONING_TAGS
+    assert stuck.NON_REASONING_TAGS is NON_REASONING_TAGS

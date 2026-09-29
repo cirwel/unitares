@@ -2855,6 +2855,13 @@ def build_experience_envelope(
             "low_confidence",
             "search_degraded",
             "tag_filter_dropped",
+            # How the list was ordered and windowed. Present only when the
+            # caller changed the default, so the default digest is unchanged;
+            # without them the friendly alias silently dropped the echo.
+            "sort_by",
+            "created_after",
+            "created_before",
+            "recency_half_life_days",
         )
         # `confidence_note` is not copied here: the envelope lifts it to the
         # top level for every alias (next to search_degraded_message), and a

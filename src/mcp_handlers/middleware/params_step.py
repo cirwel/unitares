@@ -148,6 +148,31 @@ def _bound_identity_aliases(bound_id: str) -> set[str]:
     return aliases
 
 
+def unwrapped_view(
+    arguments: Dict[str, Any], depth: int = _RESERVED_KEY_KWARGS_DEPTH,
+) -> Dict[str, Any]:
+    """The call as dispatch will see it once ``kwargs`` is unwrapped ``depth`` deep.
+
+    A copy: the outer keys, then each ``kwargs`` level (a dict or a JSON-object
+    string) merged over them the way unwrap_kwargs merges, inner keys winning.
+    ``depth`` 0 is the outer dict alone. For a decision that must be made
+    before dispatch unwraps, such as the REST prebind's.
+    """
+    view = {k: v for k, v in arguments.items() if k != "kwargs"}
+    wrapped = arguments.get("kwargs")
+    for _ in range(depth):
+        if isinstance(wrapped, str):
+            try:
+                wrapped = json.loads(wrapped)
+            except _JSON_KWARGS_ERRORS:
+                break
+        if not isinstance(wrapped, dict):
+            break
+        view.update({k: v for k, v in wrapped.items() if k != "kwargs"})
+        wrapped = wrapped.get("kwargs")
+    return view
+
+
 async def unwrap_kwargs(name: str, arguments: Dict[str, Any], ctx) -> Any:
     """Handle MCP clients that wrap arguments in kwargs."""
     if "kwargs" in arguments:
