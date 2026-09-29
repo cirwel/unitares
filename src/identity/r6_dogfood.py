@@ -455,8 +455,9 @@ def _kg_note_payload(
     tool_surface: Any = None,
 ) -> dict[str, Any]:
     return {
-        "name": "store_knowledge_graph",
+        "name": "knowledge",
         "arguments": {
+            "action": "store",
             "discovery_type": "experiment",
             "summary": summary,
             "details": details,
