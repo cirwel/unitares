@@ -9,7 +9,10 @@ Split out of src/http_api.py (see that module for route registration).
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import ipaddress as _ipaddress
+import os
 import secrets
 
 from starlette.responses import JSONResponse
@@ -83,16 +86,90 @@ def _build_http_session_signals(request):
     )
 
 # ---------------------------------------------------------------------------
-# Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
+# Trusted networks: loopback and the private RFC1918 ranges, plus any the
+# operator adds with UNITARES_TRUSTED_NETWORKS
 # ---------------------------------------------------------------------------
+# Built-in set. A Docker Compose install reaches the server through the bridge
+# gateway, which is in 172.16.0.0/12. Overlay or VPN ranges are not built in:
+# 100.64.0.0/10 (the CGNAT range that Tailscale assigns from, and that some
+# ISPs use for their own subscribers) was, which trusted one operator's network
+# layout on every install. An operator on such a network lists it explicitly.
 _TRUSTED_NETWORKS = [
     _ipaddress.ip_network("127.0.0.0/8"),
     _ipaddress.ip_network("::1/128"),
-    _ipaddress.ip_network("100.64.0.0/10"),   # Tailscale CGNAT
     _ipaddress.ip_network("192.168.0.0/16"),
     _ipaddress.ip_network("10.0.0.0/8"),
     _ipaddress.ip_network("172.16.0.0/12"),
 ]
+
+_extra_networks_cache: tuple[str, tuple] = ("", ())
+# A dual-stack socket reports an IPv4 peer as ::ffff:a.b.c.d.
+_IPV4_MAPPED = _ipaddress.ip_network("::ffff:0:0/96")
+
+
+def extra_trusted_networks() -> tuple:
+    """Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS).
+
+    Comma-separated CIDRs or addresses, for example ``100.64.0.0/10`` for a
+    Tailscale tailnet. Unset or empty adds nothing. An entry that does not
+    parse, including a CIDR with host bits set (``203.0.113.7/8``, a likely
+    typo for one host), is logged and skipped, never widened into something
+    broader. A catch-all is honoured, since the operator wrote it, but logged,
+    because it trusts every caller: ``0.0.0.0/0`` or ``::/0``, entries that
+    together cover a whole address family (``0.0.0.0/1,128.0.0.0/1``), or an
+    IPv6 range holding ``::ffff:0:0/96``, which a dual-stack bind reports every
+    IPv4 caller from.
+    """
+    global _extra_networks_cache
+    raw = os.getenv("UNITARES_TRUSTED_NETWORKS", "").strip()
+    if raw == _extra_networks_cache[0]:
+        return _extra_networks_cache[1]
+    nets = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        try:
+            net = _ipaddress.ip_network(item, strict=True)
+        except ValueError:
+            logger.warning(
+                "UNITARES_TRUSTED_NETWORKS: ignoring %r, not an address or a CIDR "
+                "without host bits",
+                item,
+            )
+            continue
+        nets.append(net)
+    # Judge coverage on the collapsed union, so split entries count as one. An
+    # IPv4-mapped IPv6 entry trusts the IPv4 callers it maps (_is_trusted_network
+    # matches both forms), so it counts toward the IPv4 union as well.
+    mapped_v4 = [
+        _ipaddress.ip_network((int(n.network_address) & 0xFFFFFFFF, n.prefixlen - 96))
+        for n in nets
+        if n.version == 6 and n.subnet_of(_IPV4_MAPPED)
+    ]
+    # The built-in networks are trusted too, so they count toward the union:
+    # listing everything outside 10.0.0.0/8 trusts every caller. They never
+    # cover a family on their own, so an empty setting still logs nothing.
+    for version in (4, 6):
+        listed = [n for n in (*_TRUSTED_NETWORKS, *nets) if n.version == version]
+        if version == 4:
+            listed += mapped_v4
+        for net in _ipaddress.collapse_addresses(listed):
+            if net.prefixlen == 0:
+                logger.warning(
+                    "UNITARES_TRUSTED_NETWORKS: %s trusts every caller; local-posture "
+                    "auth is effectively off",
+                    net,
+                )
+            elif version == 6 and _IPV4_MAPPED.subnet_of(net):
+                logger.warning(
+                    "UNITARES_TRUSTED_NETWORKS: %s trusts every caller over IPv4 on a "
+                    "dual-stack bind (::ffff:0:0/96); local-posture auth is "
+                    "effectively off",
+                    net,
+                )
+    _extra_networks_cache = (raw, tuple(nets))
+    return _extra_networks_cache[1]
 
 
 # ---------------------------------------------------------------------------
@@ -102,8 +179,17 @@ _TRUSTED_NETWORKS = [
 def _is_trusted_network(request) -> bool:
     """Check if request originates from a trusted network.
 
-    Uses the actual TCP peer address only -- never trust X-Forwarded-For
-    since there is no reverse proxy stripping it before us. A request on the
+    Reads ``request.client``: the TCP peer, except when that peer is a
+    loopback address listed in ``FORWARDED_ALLOW_IPS``
+    (``src/services/mcp_transport_service.py``) and sent X-Forwarded-For,
+    where uvicorn has already replaced it with the caller named there. That
+    rewrite is what stops a same-host reverse proxy that sets the header from
+    passing its callers through on its own loopback address, so the list must
+    cover every loopback address trusted here. It does not help a forwarder
+    that sets no header (socat, an SSH tunnel), nor a proxy on a trusted
+    non-loopback address, whose X-Forwarded-For is ignored: their callers ride
+    the forwarder's own trust. Front those with UNITARES_REST_STRICT or a
+    bearer. A request on the
     public OAuth listener is never trusted: that socket exists to carry the
     public tunnel, so its loopback peer says nothing about the caller.
     """
@@ -114,9 +200,16 @@ def _is_trusted_network(request) -> bool:
         return False
     try:
         addr = _ipaddress.ip_address(client_ip)
-        return any(addr in net for net in _TRUSTED_NETWORKS)
     except ValueError:
         return False
+    # A dual-stack bind reports an IPv4 peer as ::ffff:a.b.c.d. Match the IPv4
+    # address it carries against the IPv4 networks too, or a listed IPv4 range
+    # (and the built-in ones) would never match on such a socket.
+    candidates = [addr]
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        candidates.append(addr.ipv4_mapped)
+    networks = (*_TRUSTED_NETWORKS, *extra_trusted_networks())
+    return any(a in net for a in candidates for net in networks)
 
 
 def _http_unauthorized():
@@ -139,6 +232,63 @@ def _bearer_from_header(auth: str | None) -> str | None:
     return auth.split(" ", 1)[1].strip()
 
 
+# A browser cannot set headers on a ``WebSocket`` handshake, but it can offer
+# subprotocols, and ``Sec-WebSocket-Protocol`` is a header: it is not part of
+# the request line, so it never reaches uvicorn's handshake log or an edge
+# proxy's URL log the way ``?token=`` did. The client offers the marker plus
+# ``<marker>.<base64url(token)>`` (base64url because a subprotocol must be an
+# RFC 7230 token); the server selects the marker, so the credential is never
+# echoed back in the response.
+WS_BEARER_SUBPROTOCOL = "unitares.bearer"
+_WS_BEARER_PREFIX = WS_BEARER_SUBPROTOCOL + "."
+
+
+def _offered_subprotocols(websocket) -> list[str]:
+    """The client's offered subprotocols, one per entry.
+
+    ASGI says ``scope["subprotocols"]`` is already a list of names, but
+    uvicorn's ``websockets-sansio`` implementation (the one the server runs)
+    passes the raw header value through, so a single entry can still be
+    ``"a, b"``. Split defensively.
+    """
+    scope = getattr(websocket, "scope", None) or {}
+    out: list[str] = []
+    for raw in scope.get("subprotocols") or ():
+        if isinstance(raw, str):
+            out.extend(p.strip() for p in raw.split(",") if p.strip())
+    return out
+
+
+def _bearer_from_subprotocols(websocket) -> str | None:
+    """Extract the bearer a browser offered as a ``Sec-WebSocket-Protocol`` entry."""
+    for proto in _offered_subprotocols(websocket):
+        if not proto.startswith(_WS_BEARER_PREFIX):
+            continue
+        encoded = proto[len(_WS_BEARER_PREFIX):]
+        if not encoded:
+            return None
+        try:
+            return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return None
+    return None
+
+
+def ws_accept_subprotocol(websocket) -> str | None:
+    """The subprotocol to select on accept: the marker, if the client offered it.
+
+    A browser that offers subprotocols fails the connection when the server
+    selects none, so the marker has to be echoed whenever it was sent.
+
+    Clients must offer the bare marker (``unitares.bearer``) explicitly
+    alongside the credential entry (``unitares.bearer.<base64token>``); a
+    client that sends only the credential form will receive no subprotocol
+    selection and most browsers will close the connection.
+    """
+    offered = _offered_subprotocols(websocket)
+    return WS_BEARER_SUBPROTOCOL if WS_BEARER_SUBPROTOCOL in offered else None
+
+
 def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     """Bearer token auth for WebSocket endpoints.
 
@@ -146,21 +296,28 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
     requires a valid bearer with no IP bypass; the legacy/local posture keeps the
     trusted-network bypass and then gates on ``UNITARES_HTTP_API_TOKEN``.
 
-    A browser cannot set request headers on a ``WebSocket``, so the break-glass
-    bearer rides in the query string (``/ws/eisv?token=…``); non-browser clients
-    may still send the ``Authorization`` header. A DB-validated passkey session
-    is also accepted in local posture when the browser supplies the exact RP
-    Origin.
+    Browsers cannot set request headers on a ``WebSocket``, so the bearer rides
+    in a ``Sec-WebSocket-Protocol`` entry (``unitares.bearer.<base64token>``;
+    see ``WS_BEARER_SUBPROTOCOL`` and ``_bearer_from_subprotocols``).
+    Non-browser clients may use the ``Authorization`` header directly.
+    A DB-validated passkey session is also accepted in local posture when the
+    browser supplies the exact RP Origin.
 
-    Without this, ``/ws/eisv`` was the only route on the server with no auth
-    check at all: over the tunnel ``GET /v1/residents`` answered 401 while the
+    Query-string tokens (``?token=…``) are explicitly not read: uvicorn logs
+    the handshake request line including the query string, so any token placed
+    there would be written to the server log on every connect. The
+    ``QuerySecretRedactionFilter`` in ``log_redaction.py`` catches any
+    credential that reaches the log as a defense-in-depth measure.
+
+    Without this check, ``/ws/eisv`` was the only route on the server with no
+    auth at all: over the tunnel ``GET /v1/residents`` answered 401 while the
     WebSocket handshake answered 101 and streamed the full governance feed
     (agent ids, EISV, risk, verdicts, and Lumen's raw sensor payload) to any
     unauthenticated caller.
     """
-    tok = websocket.query_params.get("token") or _bearer_from_header(
+    tok = _bearer_from_header(
         websocket.headers.get("authorization") or websocket.headers.get("Authorization")
-    )
+    ) or _bearer_from_subprotocols(websocket)
 
     # Strict posture: bearer, or a validated session from our exact RP origin.
     #
@@ -189,7 +346,8 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
         origin = websocket.headers.get("origin") or websocket.headers.get("Origin")
         return bool(origin) and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
 
-    # Loopback and Tailscale stay unauthenticated in local posture.
+    # Trusted networks (loopback, RFC1918, UNITARES_TRUSTED_NETWORKS) stay
+    # unauthenticated in local posture.
     if _is_trusted_network(websocket):
         return True
     # An unset local token is deny, not "gate disabled". Passkey sessions and
@@ -205,8 +363,9 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
     a DB-validated dashboard session is required and the trusted-network bypass
     does **not** apply. This closes a real gap: the
     trusted set includes every RFC1918 range (10/8, 192.168/16, 172.16/12) plus
-    Tailscale, so a hosted server behind a cloud proxy (source IP typically
-    ``10.x``) would otherwise bypass auth on the write path. Same token, same
+    any UNITARES_TRUSTED_NETWORKS entries, so a hosted server behind a cloud
+    proxy (source IP typically ``10.x``) would otherwise bypass auth on the
+    write path. Same token, same
     rule, both transports.
 
     Local / self-host default — no MCP bearer configured: trusted networks

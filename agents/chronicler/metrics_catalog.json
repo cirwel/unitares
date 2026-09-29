@@ -1,15 +1,17 @@
 {
-  "_comment": "Chronicler's deployment-specific metric names. The server registers these only when UNITARES_METRICS_CATALOG_EXTRA points at this file (see docs/operations/resident-roster.md); the core catalog in src/fleet_metrics/catalog.py stays product-only. Every name in agents/chronicler/scrapers.py SCRAPERS must be in the core catalog or here, or its daily POST is refused. The github.cirwel.* names are stable keys (renaming a metric orphans its stored series); the org they measure is GITHUB_SCRAPE_ORG in scrapers.py.",
+  "_comment": "Chronicler's deployment-specific metric names. The server registers these only when UNITARES_METRICS_CATALOG_EXTRA points at this file (see docs/operations/resident-roster.md); the core catalog in src/fleet_metrics/catalog.py stays product-only. Every name in agents/chronicler/scrapers.py SCRAPERS must be in the core catalog or here, or its daily POST is refused. The github.cirwel.* names are stable keys (renaming a metric orphans its stored series); the org they measure is GITHUB_SCRAPE_ORG in scrapers.py. Entries marked \"progress\": true also count as this resident's work for the resident-progress metrics_series source; the github.* traffic series deliberately do not.",
   "metrics": [
     {
       "name": "tokei.unitares.src.code",
       "description": "Lines of code (excluding comments/blanks) in unitares/src/ — Python only.",
-      "unit": "lines"
+      "unit": "lines",
+      "progress": true
     },
     {
       "name": "tests.unitares.count",
       "description": "Number of `test_*.py` files in unitares/tests/ — rough proxy for test-surface breadth.",
-      "unit": "files"
+      "unit": "files",
+      "progress": true
     },
     {
       "name": "governance.sentinel.findings.7d",

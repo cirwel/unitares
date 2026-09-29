@@ -1,0 +1,30 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-09-28T10:37:46Z",
+  "verified_date": "2026-09-28",
+  "verifier": "Claude (re-checked knowledge-graph after the #2569 race fix in handlers.py: the supersede row's rule (notes owner-only on a high or critical row) still holds and is now also applied to the read taken just before the flip; no other claim cites the changed functions)",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "fedb9bb095f91ffb",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "84298e88c8781d77",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "273e6d3c346efa8c",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "f33e76c5d5364ce9",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "3dcff3cee850f677",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "196fec644feab35a",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "c4f33d12a062c18d",
+    "unitares/src/mcp_handlers/tool_stability.py": "f710162df0b5d424",
+    "unitares/src/storage/knowledge_graph_age.py": "59ee851a425185e0",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "56130151c725ff06"
+  },
+  "skill_digest": "d16db6f87c8689c4",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/knowledge/handlers.py": [
+      "99c040bc797ef598"
+    ]
+  }
+}

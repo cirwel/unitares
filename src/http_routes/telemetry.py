@@ -548,7 +548,9 @@ async def websocket_eisv_stream(websocket):
         # so an unauthorized caller never reaches the broadcaster at all.
         await websocket.close(code=1008)
         return
-    await broadcaster_instance.connect(websocket)
+    await broadcaster_instance.connect(
+        websocket, subprotocol=access.ws_accept_subprotocol(websocket)
+    )
     try:
         while True:
             # Keep connection alive -- client sends pings, we just listen

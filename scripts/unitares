@@ -71,8 +71,11 @@ if token:
 if parent:
     payload["parent_agent_id"] = parent
     payload["spawn_reason"] = "new_session"
-with open(os.environ["SESSION_FILE"], "w") as f:
+path = os.environ["SESSION_FILE"]
+fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, "w") as f:
     json.dump(payload, f, indent=2)
+os.chmod(path, 0o600)
 '
 }
 

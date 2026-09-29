@@ -377,8 +377,9 @@ def resolve_identity(client) -> None:
             from unitares_sdk.agent import RESIDENT_TAGS
             try:
                 client.call_tool(
-                    "update_agent_metadata",
+                    "agent",
                     {
+                        "action": "update",
                         "agent_id": _watcher_identity["agent_uuid"],
                         "tags": RESIDENT_TAGS,
                     },

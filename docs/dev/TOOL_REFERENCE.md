@@ -75,7 +75,6 @@ Get started - create your identity and set up your session
 - **Identity:** `pre_onboard`
 - **Timeout:** 15s
 - **Workflow alias:** `start_session`
-- **Older names:** `init`, `login`, `register`, `start`
 - **Related:** `identity`, `process_agent_update`
 
 Mint this process-instance's governance identity and return the client_session_id to pass on later calls. A fresh process is a fresh agent: pass force_new=true; a continuity_token without it is refused, since a token is not a cross-process resume credential. Declare parent_agent_id only for a real causal event: if the named parent is still live the call succeeds but the declaration is silently cleared, unless the child is a dispatched subagent or a compaction continuation. To attach this session to an identity minted elsewhere use bind_session. start_session reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged.
@@ -93,7 +92,6 @@ Name/model fields are cosmetic/contextual. The returned uuid is your identity an
 - **Tier** essential · **operation** read · **stability** stable
 - **Identity:** `pre_onboard`
 - **Timeout:** 10s
-- **Older names:** `authenticate`, `bind_identity`, `get_agent_api_key`, `hello`, `quick_start`, `recall_identity`, `session`
 - **Related:** `onboard`, `process_agent_update`, `agent(action='list')`
 
 Resolve which agent this MCP session is bound to, or set a cosmetic display name. Not a plain read: a call carrying no proof argument at all is gated to a fresh mint, so it persists a new agent and reports on that one, marked caller_proven=false. A call carrying only a cosmetic name= skips that gate and can instead infer a co-located binding — pass client_session_id to get your own back. name= persists a cosmetic label only and never looks an agent up. For a fresh process call onboard(force_new=true). continuity_token is per-process ownership proof, not a transport-level claim: carrying it into another process re-opens silent resurrection.
@@ -152,7 +150,6 @@ Main tools for sharing work and getting feedback
 - **Identity:** `required`
 - **Timeout:** 60s
 - **Workflow alias:** `sync_state`
-- **Older names:** `checkin`, `log`, `update`
 - **Related:** `simulate_update`, `get_governance_metrics`, `export(action='history')`
 
 Record a work check-in and get a governance decision: it advances and persists this agent's EISV state, returning proceed or pause. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. get_governance_metrics reads the verdict without writing; simulate_update previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
@@ -164,7 +161,7 @@ WHAT IT DOES:
 - Reports coherence with producer provenance; legacy C(V) is controller telemetry, not health evidence
 
 SEE ALSO:
-- get_governance_metrics / status() - Check current state WITHOUT logging work (read-only)
+- get_governance_metrics - Check current state WITHOUT logging work (read-only)
 - simulate_update - Test governance decision without advancing state (dry-run; still appends an audit event)
 - get_system_history - View historical trends over time
 
@@ -314,15 +311,11 @@ EISV FIELD CONTRACT:
 - **Identity:** `pre_onboard`
 - **Timeout:** 10s; not applied to a REST call by this exact name (see Timeouts above)
 - **Workflow alias:** `check_working_state`
-- **Older names:** `check_status`, `metrics`, `my_status`, `state`, `status`
 - **Related:** `process_agent_update`, `observe(action='agent')`, `export(action='history')`
 
 Read one agent's current governance state: it runs no cycle and mints no identity. It reads your own state only on proof sent with the call (start_session's client_session_id, an X-Session-ID header or a verified continuity_token), never a binding the server inferred; without it, or when it names no agent, the payload is an explicit 'unbound' one rather than a fresh agent. agent_id is not declared on /mcp/, which drops it, and it proves nothing about who is asking. Over REST, directly or through use_tool, it names the agent to read. Through use_tool on /mcp/ it does so unless you are bound as a different agent, which is refused (identity_mismatch); to read another agent while bound, use observe(action='agent', target_agent_id=...). Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
 
-Alias: status()
-
 SEE ALSO:
-- status() - Same tool, shorter name
 - health_check() - System health (server-level, not agent-specific)
 - get_connection_status() - MCP connection status (transport-level)
 - identity() - Agent identity (who you are, not metrics)
@@ -412,7 +405,7 @@ USE CASES:
 
 SEE ALSO:
 - process_agent_update() - Actual update (persists state, logs work)
-- get_governance_metrics / status() - Check current state (read-only)
+- get_governance_metrics - Check current state (read-only)
 - get_system_history() - View historical trends (past data, not simulation)
 
 ALTERNATIVES:
@@ -504,7 +497,7 @@ with the agent's current EISV snapshot. This enables correlation analysis:
 do EISV verdicts and phi values predict real outcomes?
 
 VALID OUTCOME TYPES:
-- drawing_completed: Lumen finished a drawing (score = satisfaction)
+- drawing_completed: an agent finished a drawing (score = satisfaction)
 - drawing_abandoned: Drawing was abandoned before completion
 - test_passed: A test or validation passed
 - test_failed: A test or validation failed
@@ -869,7 +862,6 @@ Store and search discoveries, insights, and notes
 - **Tier** common · **operation** read · **stability** stable
 - **Identity:** `pre_onboard`
 - **Timeout:** 15s
-- **Older names:** `find_similar_discoveries_graph`
 - **Related:** `knowledge(action='store')`, `knowledge(action='details')`
 
 Search the shared cross-agent knowledge graph; prefer knowledge(action='search') or search_shared_memory, which reach this same handler. Full bodies attach only with include_details=true, or automatically when a request that leaves it unset matches three or fewer rows. Archived and cold rows are excluded unless status is set. search_mode 'semantic' or 'hybrid' errors on a backend lacking it rather than downgrading.
@@ -1070,7 +1062,6 @@ DEPENDENCIES:
 - **Workflow alias:** `search_shared_memory` (action `search`)
 - **Workflow alias:** `store_finding` (action `store`)
 - **Workflow alias:** `update_finding` (action `update`)
-- **Older names:** `get_related_discoveries_graph`, `get_response_chain_graph`, `reply_to_question`
 - **Related:** `search_knowledge_graph`, `leave_note`
 
 Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update revises one and appends resolution_notes rather than replacing details. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
@@ -1208,7 +1199,7 @@ ACTIONS:
 
 ~~~text
 EXAMPLES:
-  observe(action="agent", target_agent_id="Lumen")
+  observe(action="agent", target_agent_id="my-agent")
   observe(action="audit_events", event_type="continuity_token_deprecated_accept", since="14d")
   observe(action="outcome_evidence", diagnostic="claim_only_task_completed", since="7d")
   observe(action="bridge", since="24h")
@@ -1509,13 +1500,13 @@ RETURNS:
 ~~~
 
 SEE ALSO:
-- get_governance_metrics / status() - Agent-specific metrics (EISV, risk, coherence)
+- get_governance_metrics - Agent-specific metrics (EISV, risk, coherence)
 - get_server_info - Detailed server process information (PID, uptime, version)
 - get_connection_status - MCP connection status (transport-level)
 - get_workspace_health - Comprehensive workspace health (file system, dependencies)
 
 ALTERNATIVES:
-- Want agent metrics? → Use get_governance_metrics() or status() (agent-level, not system)
+- Want agent metrics? → Use get_governance_metrics() (agent-level, not system)
 - Want server details? → Use get_server_info() (process info, PID, uptime)
 - Want connection status? → Use get_connection_status() (MCP transport health)
 - Want workspace health? → Use get_workspace_health() (file system, dependencies)
@@ -1734,12 +1725,13 @@ Structured peer review and recovery protocol
 - **Workflow alias:** `request_review` (action `request`)
 - **Related:** `request_review`, `process_agent_update`
 
-Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request; consult advises without opening a record.
+Open and advance governed, on-record peer review sessions. get and list serve unbound callers; every other action needs a bound identity, quick fails without issue_description, and thesis, antithesis, synthesis and reassign each need a session_id the schema does not mark required. request refuses with SESSION_EXISTS while your agent already has an active session. For a bound caller get with check_timeout=true becomes a write that can flag the session for facilitation or flip its phase to FAILED. By default an in-process reviewer answers on the local model. The orchestrated reviewer is an operator extension (UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1 and the agent orchestrator); UNITARES_DIALECTIC_REVIEWER_HOST picks its backend (local, codex, claude, antigravity, or external, alias gemini), and a failure there degrades to local inference and records the fallback. request_review is the one-call alias for request. The separate consult tool advises without opening a record; dialectic(action='consult') is different: it files an outside verdict on an existing session as a non-authoritative transcript record.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `antithesis` | required | 10s | `submit_antithesis` |
-| `get` | pre_onboard | 10s | `get_dialectic_session`, `request_exploration_session` |
+| `consult` | required | 10s | — |
+| `get` | pre_onboard | 10s | `get_dialectic_session` |
 | `list` (default) | pre_onboard | 15s | `list_dialectic_sessions` |
 | `quick` | required | 10s | — |
 | `reassign` | required | 15s | `reassign_reviewer` |

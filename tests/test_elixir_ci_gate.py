@@ -64,6 +64,10 @@ SUITES = (
         (["tests/vendored/fermata-governed-effect-ir-v0.schema.json"], True),
         # What the lease_plane job's `docker compose up postgres-age` consumes.
         (["docker-compose.yml"], True),
+        # The admin overlay the same step layers on top to publish postgres-age's
+        # port for `mix test` on the runner (see docs/DEPLOYMENT_SECURITY.md) --
+        # a change to it alone can break that startup too.
+        (["docker-compose.admin.yml"], True),
         (["Dockerfile"], True),
         ([".dockerignore"], True),
         ([".github/workflows/elixir-tests.yml"], True),
@@ -116,9 +120,16 @@ def test_relevant_prefixes_cover_every_suite_directory_the_workflow_runs_in():
 
 def test_docker_compose_usage_implies_docker_files_are_relevant():
     """The lease_plane job builds and runs the compose service; the files that
-    define it must count as suite inputs or a compose-only break passes green."""
+    define it must count as suite inputs or a compose-only break passes green.
+
+    The invocation needs both -f flags (docker-compose.admin.yml publishes
+    postgres-age's port, which mix test on this runner connects to over
+    localhost -- see docs/DEPLOYMENT_SECURITY.md), so it's no longer the
+    literal substring "docker compose up"; -f must precede the subcommand
+    (docker compose CLI rejects -f after "up").
+    """
     text = WORKFLOW.read_text()
-    assert "docker compose up" in text
+    assert "docker compose -f docker-compose.yml -f docker-compose.admin.yml up" in text
     for rel_file in ("docker-compose.yml", "Dockerfile", ".dockerignore"):
         assert rel_file in paths_changed.RELEVANT_FILES, rel_file
 

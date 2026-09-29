@@ -140,9 +140,12 @@ deployment's residents, EISV or version (a fresh install showed the bundled flee
 after one failed read, 2026-09-26). `authFetch` carries same-origin passkey
 session cookies and the optional bearer token. The `/ws/eisv` WebSocket
 connects cookie-first (a browser cannot set headers on a socket); only if that
-handshake fails early and a bearer is available does `ws.js` retry once with
-`?token=` (`DATA.apiToken()`), and every later reconnect starts cookie-first
-again. Badge freshness in the view with
+handshake fails early and a bearer is available does `ws.js` retry once,
+offering the bearer (`DATA.apiToken()`) as a `Sec-WebSocket-Protocol` entry
+(`unitares.bearer` plus `unitares.bearer.<base64url(token)>`), and every later
+reconnect starts cookie-first again. Never put a credential in the socket URL:
+the server does not read `?token=`, uvicorn logs the request line, and a
+tunnel sees the URL. Badge freshness in the view with
 `<span class="src-badge ${source}">${source}</span>`.
 
 ```js
@@ -253,10 +256,10 @@ badge). The WS plumbing lives in `ws.js`.
 ## Mostly read-only — explicit authenticated write surfaces
 
 The redesign sends the read bearer token everywhere; core sections are
-read-only except one area. (A finding-adjudication write endpoint, with
-`X-Unitares-Csrf: 1`, is served only when the `reference-residents` route pack
-is mounted via `UNITARES_ROUTE_PACKS`, and its view is an extension. An
-extension that calls a pack route needs that pack enabled on the server.)
+read-only except one area. (Operator and model adjudication of findings, with
+its queue and verdict routes, was removed 2026-09-27. An extension that calls a
+route-pack route needs that pack enabled on the server via
+`UNITARES_ROUTE_PACKS`.)
 
 - **Security**: live-only accessors inspect/logout/revoke dashboard sessions,
   revoke passkeys, and mint enrollment codes. Session operations require the

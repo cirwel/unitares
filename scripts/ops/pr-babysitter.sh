@@ -21,8 +21,10 @@
 #      stays, so it returns to the queue.
 #   2. Pin the head each newly labelled PR is at (see below), every tick,
 #      whether or not the slot is free.
-#   3. If a PR is still armed (including one the maintainer armed by hand, which
-#      the script never disarms, even while it conflicts), it holds the slot.
+#   3. If a PR is still armed, it holds the slot. After step 1 that can only be
+#      the queue's own arm, or an operator's arm on a PR labelled
+#      operator-armed (PR_QUEUE_OPERATOR_ARMED_LABEL): step 1 disarms every
+#      other arm the queue did not make.
 #      If it is BEHIND and neither the base nor its arming has moved for
 #      PR_QUEUE_BASE_GRACE_MIN minutes, GitHub's updater has not acted: a PR
 #      this script armed is disarmed and updated (step 4 re-arms it), one
@@ -85,11 +87,19 @@ REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
 # enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
 # merge gate as the control for exactly those diffs.
 OPERATOR_ONLY_LABELS="${PR_QUEUE_OPERATOR_ONLY_LABELS-governance-sensitive}"
+# An arm on a PR carrying this label is the operator's, and the queue leaves
+# it alone (it still holds the slot). Every other arm the queue did not make
+# is disarmed.
+OPERATOR_ARMED_LABEL="${PR_QUEUE_OPERATOR_ARMED_LABEL:-operator-armed}"
 operator_only() {  # <pr-json> -> why only the operator may merge it, if so
   local l
   # A fork PR: the fleet's own PRs never come from forks, and CI cannot label
   # one (its token is read-only there), so nothing else would flag it.
   jq -e '.isCrossRepository == true' <<<"$1" >/dev/null && { echo "a fork"; return 0; }
+  # A PR the operator marked to land outside the queue is never armed by it,
+  # so that label only ever protects the operator's own arm (step 1).
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null \
+    && { echo "$OPERATOR_ARMED_LABEL"; return 0; }
   for l in $OPERATOR_ONLY_LABELS; do
     jq -e --arg l "$l" 'any(.labels[]?; .name == $l)' <<<"$1" >/dev/null && { echo "$l"; return 0; }
   done
@@ -313,15 +323,36 @@ armed=$(q -c --arg b "$BASE" \
 
 disarmed=" "
 hold_order=0
+# An operator's arm takes the slot: any queue arm alongside it is disarmed (it
+# keeps its label and returns in turn), so there is never more than one arm.
+operator_arm=$(jq -rs --arg l "$OPERATOR_ARMED_LABEL" \
+  '[.[] | select(any(.labels[]?; .name == $l)) | .number] | first // empty' <<<"$armed") \
+  || { log "could not read the armed PRs; nothing done"; exit 1; }
 while read -r pr; do
   [ -n "$pr" ] || continue
   n=$(jq -r .number <<<"$pr")
   reason=""
-  # Only arms this script made are ever disarmed; the maintainer's own arm,
-  # labelled or not, is theirs to manage.
-  armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")" || continue
-  if held_by=$(operator_only "$pr"); then
+  hand_notice=""
+  # The queue owns arming. An arm it did not make is disarmed, whoever made
+  # it: agents never arm (AGENTS.md), and a hand-arm holds the queue's one
+  # slot while usually not being mergeable (2026-09-27: seven hand-armed PRs,
+  # none mergeable, stalled the queue for hours). Its label stays, so the
+  # queue arms it in turn. The operator keeps a way to land a PR outside the
+  # queue: an arm on a PR labelled $OPERATOR_ARMED_LABEL is left alone.
+  # The operator's label is checked before arm attribution: an operator who
+  # re-arms a PR moments after the queue armed it would otherwise match the
+  # queue's own arm record (within its 120 s tolerance) and be disarmed.
+  jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
+  if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
+    reason="it was armed outside the queue"
+    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+  elif [ -n "$operator_arm" ]; then
+    reason="the operator armed #$operator_arm, which takes the slot"
+  elif held_by=$(operator_only "$pr"); then
     reason="it is labelled $held_by, which only the operator merges"
+  elif why=$(sensitive_path "$(jq -r .headRefOid <<<"$pr")"); then
+    # Also for arms made before this check existed, or before the diff grew.
+    reason="it touches a governance-sensitive surface ($why), which only the operator merges"
   elif ! q -e --arg l "$LABEL" 'labelled($l)' <<<"$pr" >/dev/null; then
     reason="its $LABEL label was removed"  # removing the label withdraws the approval
   elif [ "$(jq -r .mergeable <<<"$pr")" = "CONFLICTING" ]; then
@@ -347,6 +378,7 @@ while read -r pr; do
     log "#$n armed but $reason; disarming so it stops holding the queue"
     if act gh pr merge "$n" -R "$REPO" --disable-auto; then
       disarmed="$disarmed$n "
+      [ -n "$hand_notice" ] && notify "$n" hand-armed "$(jq -r .headRefOid <<<"$pr")" "$hand_notice"
     else
       log "#$n disarm failed; nothing else done this tick"
       exit 0
@@ -422,6 +454,25 @@ holder=$(q -c --arg b "$BASE" --arg skip "$disarmed" \
    | sort_by(.number) | .[0] // empty' <<<"$prs") \
   || { log "could not read the open PRs; nothing done"; exit 1; }
 
+# An operator arm in progress: ship.sh --auto-merge adds the label, then arms,
+# in two calls. A PR carrying the label whose label went on in the last
+# PR_QUEUE_OPERATOR_RESERVE_MIN minutes, not yet armed, reserves the slot, so a
+# tick between the two calls does not arm another PR alongside it. A label
+# older than that with no arm is a leftover and reserves nothing.
+if [ -z "$holder" ]; then
+  reserve_min="${PR_QUEUE_OPERATOR_RESERVE_MIN:-10}"
+  for n in $(jq -r --arg b "$BASE" --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.isDraft == false and .baseRefName == $b and .autoMergeRequest == null
+                    and any(.labels[]?; .name == $l)) | .number' <<<"$prs"); do
+    at=$(gh api --paginate "repos/$REPO/issues/$n/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
+    if [ -z "$at" ] || [ "$(minutes_since "$at")" -lt "$reserve_min" ]; then
+      log "#$n was just labelled $OPERATOR_ARMED_LABEL and is not armed yet; holding the slot for the operator"
+      exit 0
+    fi
+  done
+fi
+
 if [ -n "$holder" ]; then
   n=$(jq -r .number <<<"$holder")
   # gh marshals a missing time as year 0001; treat that as unknown.
@@ -432,7 +483,10 @@ if [ -n "$holder" ]; then
       && log "#$n has held the queue for ${held}m ($(jq -r .mergeStateStatus <<<"$holder")); needs a look"
   fi
   if [ "$(jq -r .mergeStateStatus <<<"$holder")" = "BEHIND" ]; then
-    if armed_by_script "$n" "$armed_at"; then
+    # The operator's label outranks arm attribution here as in the tidy loop:
+    # a re-arm within the tolerance of the queue's own record is still theirs.
+    if ! jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$holder" >/dev/null \
+       && armed_by_script "$n" "$armed_at"; then
       # No grace for the script's own arm: GitHub's updater can move the head
       # within a minute, and the arm must not outlive the head it validated.
       # Disarm now and update; the queue re-arms it once the new head passes.
@@ -508,6 +562,7 @@ while read -r _ n head; do
     *) exit 0 ;;
   esac
 
+
   if [ "$(q 'parked | length' <<<"$pr")" -gt 0 ]; then
     log "#$n has a check waiting for approval (ACTION_REQUIRED); skipped"
     notify "$n" parked "$head" "skipped: $(q -r 'parked | map(.name // .context) | unique | join(", ")' <<<"$pr") is waiting for approval (ACTION_REQUIRED). A re-run does not clear it; see the check's details."
@@ -565,7 +620,6 @@ while read -r _ n head; do
     esac
   fi
 
-
   if [ "$(jq -r .mergeStateStatus <<<"$pr")" = "BEHIND" ]; then
     # Update first, unarmed, and arm the updated head only once it has been
     # re-validated (approval fingerprint, required checks) on a later tick. The
@@ -577,6 +631,28 @@ while read -r _ n head; do
     act gh pr update-branch "$n" -R "$REPO" || log "#$n update failed; retried next tick"
     exit 0
   fi
+
+  # Re-read live state just before arming: the tick's snapshot is minutes
+  # old, and an operator arm (ship.sh --auto-merge labels, then arms) may have
+  # started since. Any arm on the base, or a fresh operator-armed label, and
+  # this tick arms nothing.
+  live=$(gh pr list -R "$REPO" --state open --limit 500 --base "$BASE" \
+    --json number,autoMergeRequest,labels) || { log "could not re-read the open PRs; nothing armed"; exit 0; }
+  # PRs this tick just disarmed can still read as armed for a moment.
+  if other=$(jq -r --arg skip "$disarmed" '[.[] | select(.autoMergeRequest != null)
+                 | select(.number as $x | $skip | contains(" \($x) ") | not) | .number] | first // empty' <<<"$live") \
+     && [ -n "$other" ]; then
+    log "#$other was armed since this tick began; nothing armed"
+    exit 0
+  fi
+  for m in $(jq -r --arg l "$OPERATOR_ARMED_LABEL" '.[] | select(any(.labels[]?; .name == $l)) | .number' <<<"$live"); do
+    at=$(gh api --paginate "repos/$REPO/issues/$m/timeline" 2>/dev/null | jq -r --arg l "$OPERATOR_ARMED_LABEL" \
+      '.[] | select(.event == "labeled" and .label.name == $l) | .created_at' | sort | tail -1) || at=""
+    if [ -z "$at" ] || [ "$(minutes_since "$at")" -lt "${PR_QUEUE_OPERATOR_RESERVE_MIN:-10}" ]; then
+      log "#$m was just labelled $OPERATOR_ARMED_LABEL; nothing armed"
+      exit 0
+    fi
+  done
 
   # The PR data describes the base as it stood when the tick began; if master
   # has moved since, this PR may be BEHIND now. Leave it to the next tick.

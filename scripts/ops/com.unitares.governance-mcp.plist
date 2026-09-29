@@ -127,7 +127,7 @@
         <string></string>
         <!-- Optional route packs (src/http_routes/packs.py), comma-separated:
              reference-residents  the reference residents' summaries and the
-                                  finding adjudication queue
+                                  finding backlog
              automation-census    /api/automations
              Empty = core routes only. See docs/operations/resident-roster.md. -->
         <key>UNITARES_ROUTE_PACKS</key>
@@ -171,6 +171,13 @@
         <string>GENERATE_YOUR_OWN_TOKEN</string>
         <key>UNITARES_CONTINUITY_TOKEN_SECRET</key>
         <string>GENERATE_YOUR_OWN_SECRET</string>
+        <!-- Networks, beyond loopback and the RFC1918 private ranges, whose
+             callers skip auth in local posture (comma-separated CIDRs).
+             Empty trusts nothing extra. A host whose callers reach it over a
+             Tailscale tailnet sets 100.64.0.0/10, as the reference
+             deployment does. -->
+        <key>UNITARES_TRUSTED_NETWORKS</key>
+        <string></string>
         <!-- Local model id for call_model (e.g. an Ollama tag on this host).
              Set to a model you actually have pulled, or omit this key to fall
              back to the server default. -->
