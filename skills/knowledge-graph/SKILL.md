@@ -85,8 +85,8 @@ matches. Two controls answer "what is new":
   both relevance and freshness matter, and `sort_by` when only freshness does.
 
 An unparseable or inverted window is refused, not ignored. The response echoes
-`sort_by` and the window when they differ from the default. The default order
-is still relevance.
+`sort_by`, the window and `recency_half_life_days` when they differ from the
+default. The default order is still relevance.
 
 Default search is authority-aware. Imported memory rows remain searchable, but
 their `authority.tier="imported_context"` marker down-ranks them in close

@@ -625,7 +625,7 @@ class KnowledgeParams(AgentIdentityMixin):
             "With no query this is the 'what is new since T' read. A timestamp "
             "without an offset is taken as UTC."
         ),
-        json_schema_extra={"brief": "search: created after this ISO time."},
+        json_schema_extra={"brief": "search: created after ISO time."},
     )
     recency_half_life_days: Optional[float] = Field(
         None,
@@ -637,7 +637,7 @@ class KnowledgeParams(AgentIdentityMixin):
             "many days old keeps half its score. Above 0, at most 36500. Off by "
             "default. Not combinable with sort_by='created_at'."
         ),
-        json_schema_extra={"brief": "search: score halves per N days of age."},
+        json_schema_extra={"brief": "search: score halves per N days."},
     )
     created_before: Optional[str] = Field(
         None,
