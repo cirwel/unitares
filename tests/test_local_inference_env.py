@@ -336,7 +336,16 @@ def test_every_local_model_setting_reaches_every_reader(monkeypatch):
     makes that install look configured while the reader never sees it."""
     import yaml
 
-    compose = yaml.safe_load((REPO / "docker-compose.yml").read_text())
+    class _UniqueKeys(yaml.SafeLoader):
+        """safe_load keeps the last of two equal keys; Compose refuses the file."""
+
+        def construct_mapping(self, node, deep=False):
+            keys = [self.construct_object(k, deep=deep) for k, _ in node.value]
+            dupes = {k for k in keys if keys.count(k) > 1}
+            assert not dupes, f"docker-compose.yml defines {sorted(dupes)} twice in one mapping"
+            return super().construct_mapping(node, deep=deep)
+
+    compose = yaml.load((REPO / "docker-compose.yml").read_text(), Loader=_UniqueKeys)
     compose_env = compose["services"]["governance-mcp"]["environment"]
     plist = (REPO / "scripts/ops/com.unitares.governance-mcp.plist").read_text()
 
@@ -354,7 +363,7 @@ def test_every_local_model_setting_reaches_every_reader(monkeypatch):
 
     for name in env.LOCAL_MODEL_SETTINGS:
         assert compose_env.get(name) == "${%s:-}" % name, f"{name} not mapped in docker-compose.yml"
-        assert f"<key>{name}</key>" in plist, f"{name} missing from the LaunchAgent template"
+        assert plist.count(f"<key>{name}</key>") == 1, f"{name} not in the LaunchAgent template exactly once"
         assert spawn.get(name) == values[name], f"{name} not forwarded to the orchestrated reviewer"
 
 

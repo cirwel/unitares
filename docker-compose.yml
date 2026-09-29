@@ -257,11 +257,9 @@ services:
       UNITARES_MODEL_ID: ${UNITARES_MODEL_ID:-}
       UNITARES_MODEL_LOCAL_HOSTS: ${UNITARES_MODEL_LOCAL_HOSTS:-}
       UNITARES_MODEL_PRIVACY: ${UNITARES_MODEL_PRIVACY:-}
-      # The classifier also reads the trusted-network list, so a model on a
-      # tailnet peer (100.64.0.0/10) is local once that range is listed. It
-      # changes nothing for the REST access checks here: container traffic
-      # arrives through the RFC 1918 Docker bridge, which is trusted already.
-      UNITARES_TRUSTED_NETWORKS: ${UNITARES_TRUSTED_NETWORKS:-}
+      # The classifier also reads UNITARES_TRUSTED_NETWORKS (mapped above), so a
+      # model on a tailnet peer (100.64.0.0/10) is local once that range is
+      # listed there.
       UNITARES_OLLAMA_BASE: ${UNITARES_OLLAMA_BASE:-}
       UNITARES_OLLAMA_BASE_URL: ${UNITARES_OLLAMA_BASE_URL:-}
       UNITARES_LLM_MODEL: ${UNITARES_LLM_MODEL:-}
