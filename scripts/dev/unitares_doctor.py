@@ -3673,18 +3673,6 @@ def _local_inference_env(repo_root: Path):
         return None
 
 
-def _display_url(url: str) -> str:
-    """``url`` without any ``user:password@`` part."""
-    parts = urllib.parse.urlsplit(url)
-    if parts.username is None and parts.password is None:
-        return url
-    host = parts.hostname or ""
-    netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
-    if parts.port:
-        netloc += f":{parts.port}"
-    return urllib.parse.urlunsplit(parts._replace(netloc=netloc))
-
-
 def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
     """Does the configured model endpoint answer ``GET {base}/models`` and list
     the configured model?
@@ -3716,7 +3704,7 @@ def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
 
     base = lie.model_base_url()
     model = lie.default_local_model()
-    shown = _display_url(base)
+    shown = lie.display_url(base)
     privacy = lie.classify_endpoint(base).privacy
     try:
         # Reach the endpoint the way the server does: a local one directly,

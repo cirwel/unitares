@@ -31,6 +31,7 @@ from .inference_registry import (
 )
 from src.local_inference_env import (
     DEFAULT_OLLAMA_BASE,
+    display_url,
     is_ollama_endpoint,
     ollama_base_url,
     normalize_ollama_base,
@@ -534,7 +535,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
             elif not await asyncio.to_thread(_configured_endpoint_is_ollama):
-                configured = model_base_url()
+                configured = display_url(model_base_url())
                 return InferenceOutcome.failed(
                     f"No provider available. The model server at {configured} is not "
                     "reachable and HF_TOKEN is not configured.",
@@ -576,7 +577,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     try:
         started = time.monotonic()
 
-        logger.debug(f"Calling model '{model}' via {base_url} for task_type='{task_type}'")
+        logger.debug(f"Calling model '{model}' via {display_url(base_url)} for task_type='{task_type}'")
 
         # Use AsyncOpenAI rather than an executor-wrapped sync client. The
         # latter keeps running after task cancellation, so a cold or wedged
@@ -783,7 +784,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 )
             else:
                 recovery_hint = (
-                    f"The model server at {base_url} is not reachable. Start it, or check "
+                    f"The model server at {display_url(base_url)} is not reachable. Start it, or check "
                     "UNITARES_MODEL_BASE_URL; or opt into fallback routing with "
                     "privacy='auto' or privacy='cloud' and provider='hf'."
                 )
@@ -797,10 +798,10 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 )
             elif provider == "ollama":
                 recovery_hint = (
-                    f"Model '{model}' is not served by {base_url}. List what it serves "
+                    f"Model '{model}' is not served by {display_url(base_url)}. List what it serves "
                     "(GET {base}/models, or `unitares model`), then set UNITARES_MODEL_ID; "
                     "or call with privacy='auto' to allow configured cloud fallback."
-                ).replace("{base}", base_url)
+                ).replace("{base}", display_url(base_url))
             else:
                 recovery_hint = (
                     f"Model '{model}' not available on this provider. "

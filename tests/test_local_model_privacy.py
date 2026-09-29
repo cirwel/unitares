@@ -850,6 +850,8 @@ def test_local_clients_keep_the_environment_ca_while_skipping_proxies(monkeypatc
     ("http://localhost:11434/v1", False, "Ollama is not reachable"),
     ("http://10.0.0.5:8000/v1", False, "The model server at http://10.0.0.5:8000/v1 is not reachable"),
     ("http://10.0.0.5:11434/v1", True, "Ollama is not reachable"),
+    # Credentials in the URL's userinfo stay out of the agent-visible hint.
+    ("http://user:key@10.0.0.5:8000/v1", False, "The model server at http://10.0.0.5:8000/v1 is not reachable"),
 ])
 async def test_unreachable_hint_names_ollama_only_for_ollama(monkeypatch, base, is_ollama, expect):
     from src.mcp_handlers.support import model_inference
@@ -865,6 +867,7 @@ async def test_unreachable_hint_names_ollama_only_for_ollama(monkeypatch, base, 
     )
     assert not outcome.ok
     assert expect in outcome.failure.recovery["action"]
+    assert "key@" not in str(outcome.failure.recovery) + str(outcome.failure.message)
 
 
 def test_a_resolver_slower_than_the_budget_still_lets_the_next_probe_connect(monkeypatch):

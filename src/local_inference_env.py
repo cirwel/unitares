@@ -41,7 +41,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from src.trusted_networks import is_trusted_address
 
@@ -410,6 +410,19 @@ def local_refusal_message(classification: EndpointPrivacy) -> str:
         f"Set {MODEL_PRIVACY_ENV}=local only if the server runs on a machine you "
         "operate."
     )
+
+
+def display_url(url: str) -> str:
+    """``url`` without any ``user:password@`` part, for text an agent or a log
+    reader sees: a base URL can carry credentials in its userinfo."""
+    parts = urlsplit(url)
+    if parts.username is None and parts.password is None:
+        return url
+    host = parts.hostname or ""
+    netloc = f"[{host}]" if ":" in host else host  # an IPv6 literal keeps its brackets
+    if parts.port:
+        netloc += f":{parts.port}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 def require_local_endpoint(url: str | None = None) -> EndpointPrivacy:
