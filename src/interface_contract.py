@@ -227,11 +227,12 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # search_shared_memory's include_details brief and knowledge's sort_by brief
 # are shortened to stay inside the progressive-surface ratchet. The knowledge
 # and search_shared_memory input digests and the surface digest move.
-# 1.26.0 (2026-09-28), numbered after 1.25.0 (#2564): parameter description
+# 1.26.0 (2026-09-28), numbered after 1.25.0 (#2564): parameter descriptions
 # only. call_model's provider says ollama is the configured local endpoint
 # (an OpenAI-compatible server, Ollama by default) and hf the Hugging Face
-# router: the local endpoint setting can now name a server other than Ollama,
-# so provider="ollama" can reach one. No value is added, removed or renamed,
+# router, and its model names UNITARES_MODEL_ID: the local endpoint setting
+# can now name a server other than Ollama, so provider="ollama" can reach
+# one. No value is added, removed or renamed,
 # and the default is unchanged; call_model's input digest and the surface
 # digest move.
 INTERFACE_CONTRACT_VERSION = "1.26.0"
