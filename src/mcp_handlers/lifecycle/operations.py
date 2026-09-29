@@ -650,7 +650,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     Use include_all=true to review any agent inactive for max_age_days (default: 3 days).
 
     Automatic archival is disabled by default. This tool reports what would be
-    archived; use archive_agent for deliberate manual archival.
+    archived; use agent(action='archive') for deliberate manual archival.
     """
     from src.agent_lifecycle import _agent_age_hours, auto_agent_archival_enabled
 

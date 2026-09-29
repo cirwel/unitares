@@ -359,17 +359,17 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_loop_detection_for_expensive_reads(self):
-        """Loop detection triggers for list_agents after 20+ calls in 60 seconds."""
+        """Loop detection triggers for agent(action='list') after 20+ calls in 60 seconds."""
         ctx = _make_ctx()
 
         # Fill the history with 20 recent timestamps
         now = time.time()
-        history = _tool_call_history["list_agents"]
+        history = _tool_call_history["agent:list"]
         for i in range(20):
             history.append(now - 1)  # All within last 60 seconds
 
         # Next call should trigger loop detection
-        result = await check_rate_limit("list_agents", {}, ctx)
+        result = await check_rate_limit("agent", {"action": "list"}, ctx)
         assert _is_short_circuit(result)
         text = _extract_text(result)
         assert "loop detected" in text.lower() or "rate limit" in text.lower()
@@ -378,7 +378,7 @@ class TestCheckRateLimit:
     async def test_loop_detection_old_calls_expire(self):
         """Old calls outside the 60-second window are cleaned up."""
         ctx = _make_ctx()
-        history = _tool_call_history["list_agents"]
+        history = _tool_call_history["agent:list"]
 
         # Add 25 calls that are all older than 60 seconds
         old_time = time.time() - 120
@@ -386,7 +386,7 @@ class TestCheckRateLimit:
             history.append(old_time)
 
         # Should pass since old calls are cleaned up
-        result = await check_rate_limit("list_agents", {}, ctx)
+        result = await check_rate_limit("agent", {"action": "list"}, ctx)
         assert not _is_short_circuit(result)
 
     @pytest.mark.asyncio

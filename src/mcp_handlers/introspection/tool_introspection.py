@@ -1033,8 +1033,9 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
             # A workflow alias describes itself with its migration note, which
             # is the text tools/list serves for it (build_alias_tool_definition).
             # The override table holds dispatch-only alias names only, so it
-            # answers here for names that are never on the wire (list_agents)
-            # and cannot put a second description on an advertised one.
+            # answers here for names that are never on the wire
+            # (get_server_info) and cannot put a second description on an
+            # advertised one.
             description = (
                 tool_catalog.TOOL_DESCRIPTION_OVERRIDES.get(requested_tool_name)
                 or expand_description_pointers(alias_info.migration_note)

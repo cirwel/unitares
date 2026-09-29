@@ -711,7 +711,7 @@ async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[Te
             # Provide summary instead of full calibration data
             response["calibration"] = {
                 "note": "Calibration data excluded to reduce response size. Set include_calibration=true to get full calibration metrics.",
-                "related_tool": "check_calibration"
+                "related_tool": "calibration(action='check')"
             }
         
         return success_response(response)
@@ -926,7 +926,7 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
     
     Policies checked:
     - Test scripts (test_*.py, demo_*.py) must be in tests/ directory
-    - Markdown files in docs/analysis/, docs/fixes/, etc. should use store_knowledge_graph() instead
+    - Markdown files in docs/analysis/, docs/fixes/, etc. should use knowledge(action='store') instead
     - New markdown files should be on approved list or ≥500 words
     
     Returns:

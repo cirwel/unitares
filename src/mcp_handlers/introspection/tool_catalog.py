@@ -229,9 +229,14 @@ WORKFLOWS: Dict[str, List[str]] = {
 # warned that an argument-less call may mint and persist a new identity, and
 # the `dialectic` entry was a hand-maintained action list that had drifted
 # twice. test_override_table_carries_no_advertised_name pins the scope.
-# Empty since 2026-09-28: every entry described a pre-consolidation name whose
-# alias was removed, and no call reaches those names any more.
-TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {}
+# Since 2026-09-28 it holds only get_server_info: every other entry described
+# a pre-consolidation name whose alias was removed.
+TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
+    # The one dispatch-only alias left after the 2026-09-28 cut (kept for the
+    # Wave 3a BEAM route); without this it would describe itself with its
+    # migration note.
+    "get_server_info": "ℹ️ Server version, PID, uptime, health",
+}
 
 
 COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
