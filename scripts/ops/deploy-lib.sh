@@ -356,9 +356,13 @@ _deploy_lib_env_keys_loaded() {
 # the running definition still lacks the new keys. An existing baseline can
 # also already equal the overlaid bytes: an operator who blanked an overlay
 # key by hand and reloaded left the sidecar at the pre-edit hash, which is
-# what the overlay writes back. So whenever the overlay changes the file, the
-# PRE-overlay hash is recorded as the baseline: the restart then always sees a
-# mismatch and reloads.
+# what the overlay writes back. So whenever the overlay changes the file it
+# sets DEPLOY_LIB_FORCE_RELOAD=1, which deploy_lib_restart_service honours
+# whatever the sidecar says. The change is detected with cksum (POSIX), so it
+# holds without a sha256 tool too. It also records the PRE-overlay hash as the
+# baseline, best-effort: if this deploy's reload then fails, the next deploy
+# still sees a mismatch and reloads, even though the overlay no longer
+# changes anything by then.
 #
 # The applier keeps the plist's pre-overlay bytes (its comments included) in
 # the state dir before a change. A worktree rollback does not revert values
@@ -369,39 +373,45 @@ _deploy_lib_env_keys_loaded() {
 # usage: deploy_lib_apply_env_overlay TAG LABEL PLIST OVERLAY APPLIER
 deploy_lib_apply_env_overlay() {
   local tag="$1" label="$2" plist="$3" overlay="$4" applier="$5"
-  local state_dir sidecar before after
+  local state_dir sidecar before after before_sum after_sum
   [[ -f "$overlay" ]] || return 0
   state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
   sidecar="$state_dir/${label}.plist.sha256"
   before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
+  before_sum="$(cksum < "$plist" 2>/dev/null || true)"
   if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --backup-dir "$state_dir"; then
     echo "[$tag] WARNING: the environment overlay was not applied; the service keeps its current plist environment." >&2
     return 0
   fi
   after="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
-  if [[ -n "$before" && "$before" != "$after" ]]; then
-    _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$before"
+  after_sum="$(cksum < "$plist" 2>/dev/null || true)"
+  if [[ "$before_sum" != "$after_sum" || ( -n "$before" && "$before" != "$after" ) ]]; then
+    DEPLOY_LIB_FORCE_RELOAD=1
+    [[ -z "$before" ]] || _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$before"
   fi
   return 0
 }
 
 deploy_lib_restart_service() {
   local tag="$1" domain="$2" label="$3" plist="$4"
-  local state_dir sidecar cur_sha old_sha attempt err missing
+  local state_dir sidecar cur_sha old_sha attempt err missing force
   state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
   sidecar="$state_dir/${label}.plist.sha256"
   cur_sha="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   old_sha="$(cat "$sidecar" 2>/dev/null || true)"
+  # Set by deploy_lib_apply_env_overlay when it changed the plist this run:
+  # reload whatever the sidecar says (it may not have been writable).
+  force="${DEPLOY_LIB_FORCE_RELOAD:-0}"
 
   # No hash tool: drift is undetectable — keep the old, reliable behavior and
   # say so, rather than reloading blind on every deploy.
-  if [[ -z "$cur_sha" ]]; then
+  if [[ -z "$cur_sha" && "$force" != 1 ]]; then
     echo "[$tag] WARNING: no sha256 tool found — plist drift is NOT being detected; kickstarting." >&2
     launchctl kickstart -k "$domain/$label"
     return $?
   fi
 
-  if [[ -n "$old_sha" && "$cur_sha" == "$old_sha" ]]; then
+  if [[ "$force" != 1 && -n "$old_sha" && "$cur_sha" == "$old_sha" ]]; then
     echo "[$tag] restarting $label (plist unchanged since last deploy restart — kickstart)"
     launchctl kickstart -k "$domain/$label"
     return $?
@@ -409,7 +419,7 @@ deploy_lib_restart_service() {
 
   # A missing baseline is not evidence the plist changed — adopt and kickstart
   # (see the policy comment above). Only a MISMATCH triggers the reload.
-  if [[ -z "$old_sha" ]]; then
+  if [[ "$force" != 1 && -z "$old_sha" ]]; then
     echo "[$tag] restarting $label (no plist baseline recorded — adopting the current hash; kickstart)"
     _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$cur_sha"
     launchctl kickstart -k "$domain/$label"

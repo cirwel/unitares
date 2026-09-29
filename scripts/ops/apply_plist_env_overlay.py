@@ -101,16 +101,28 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     looks, readable only by the owner: the plist carries tokens.
 
     Written once: a later change would otherwise replace the hand-written
-    original with an already-rewritten copy. An existing backup is kept."""
+    original with an already-rewritten copy. An existing backup is kept. The
+    bytes go to a synced temporary file first and only a complete copy is
+    linked to the final name (atomically, failing if it exists), so a full
+    disk or an interrupted write never leaves a truncated "original"."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     path = backup_dir / f"{target.name}.pre-overlay"
-    try:
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
+    if path.exists():
         return path
-    with os.fdopen(descriptor, "wb") as handle:
-        handle.write(original)
-    os.chmod(path, 0o600)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=backup_dir)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(original)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass  # another run published one first; keep it
+    finally:
+        temporary.unlink(missing_ok=True)
     return path
 
 

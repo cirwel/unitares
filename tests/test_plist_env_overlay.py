@@ -111,6 +111,27 @@ def test_a_symlinked_plist_stays_a_symlink(tmp_path):
     assert link.is_symlink() and _env(real) == {"A_KEY": "v"}
 
 
+def test_a_failed_backup_leaves_no_partial_original(tmp_path, monkeypatch):
+    # Codex on #2585: a backup cut short (a full disk) must not be kept as the
+    # write-once original, and the plist must not be rewritten without one.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(HAND_WRITTEN)
+    backups = tmp_path / "state"
+    real_fsync = overlay_mod.os.fsync
+
+    def full_disk(fd):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(overlay_mod.os, "fsync", full_disk)
+    with pytest.raises(OSError):
+        overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
+    assert list(backups.iterdir()) == []
+    assert plist.read_bytes() == HAND_WRITTEN
+    monkeypatch.setattr(overlay_mod.os, "fsync", real_fsync)
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
+    assert (backups / "com.unitares.governance-mcp.plist.pre-overlay").read_bytes() == HAND_WRITTEN
+
+
 def test_the_original_bytes_are_kept_before_a_change(tmp_path):
     # Rewriting through plistlib drops XML comments; the original survives.
     plist = tmp_path / "com.unitares.governance-mcp.plist"
@@ -226,6 +247,28 @@ def test_a_hand_edit_the_overlay_undoes_is_reloaded(tmp_path):
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=baseline)
     assert _sha(plist) == baseline  # the overlay wrote the recorded bytes back
     assert calls == ["bootout", "bootstrap"]
+
+
+def test_a_change_reloads_even_when_the_baseline_cannot_be_written(tmp_path):
+    # Codex on #2585: the sidecar write is best-effort. If the state dir
+    # rejects it, the restart must still reload rather than adopt the
+    # overlaid hash and kickstart.
+    plist = _plist(tmp_path, {})
+    state = tmp_path / "state"
+    (state / f"{LABEL}.plist.sha256").mkdir(parents=True)  # the sidecar cannot be written
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "launchctl.log"
+    stub = bin_dir / "launchctl"
+    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\nexit 0\n')
+    stub.chmod(0o755)
+    script = (f'set -euo pipefail; . "{LIB}"; '
+              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{_overlay(tmp_path, "A_KEY=v")}" "{SCRIPT}"; '
+              f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"')
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
+           "UNITARES_DEPLOY_STATE_DIR": str(state)}
+    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+    assert [c for c in log.read_text().split() if c != "print"] == ["bootout", "bootstrap"]
 
 
 def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
