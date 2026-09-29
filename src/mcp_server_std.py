@@ -505,7 +505,10 @@ async def _call_local_tool(
     agent_id = arguments.get('agent_id') if isinstance(arguments, dict) else None
     session_id = arguments.get('client_session_id') if isinstance(arguments, dict) else None
     if agent_id and HEARTBEAT_CONFIG.enabled:
-        should_trigger, trigger_reason = activity_tracker.track_tool_call(agent_id, name)
+        action = arguments.get('action') if isinstance(arguments, dict) else None
+        should_trigger, trigger_reason = activity_tracker.track_tool_call(
+            agent_id, name, str(action).lower() if action else None
+        )
 
         if should_trigger and not _HEARTBEAT_LIGHTWEIGHT_CALLS.matches(name, arguments):
             try:
