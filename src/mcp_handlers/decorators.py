@@ -611,11 +611,13 @@ def resolve_call_operation(tool_name: str, arguments) -> CallOperation:
        no name, takes the router's class, which is the most privileged among
        its actions, so the fallback errs toward write.
     2. A roster tool carries its own class.
-    3. A per-action handler named by a legacy alias takes the alias's class,
+    3. A router action declared in ``tool_meta.ACTION_OPERATIONS`` takes that
+       class, whether the call names the router or the handler behind it.
+    4. A per-action handler named by a legacy alias takes the alias's class,
        else its router's.
-    4. A per-action handler with neither takes the class of the router that
-       routes to it.
-    5. Anything else is unknown: ``operation`` None.
+    5. A per-action handler with none of these takes the class of the router
+       that routes to it.
+    6. Anything else is unknown: ``operation`` None.
     """
     try:
         call = _resolve_call_operation(tool_name, arguments)
@@ -639,6 +641,11 @@ def _resolve_call_operation(tool_name: str, arguments) -> CallOperation:
         return _handler_operation(tool_name)
 
     _canonical, action = _resolve_canonical_and_action(tool_name, arguments)
+    from src.tool_meta import ACTION_OPERATIONS
+
+    declared = ACTION_OPERATIONS.get((tool_name, action)) if action else None
+    if declared:
+        return CallOperation(operation=declared, tool=tool_name, action=action)
     handler = actions.get(action) if action else None
     inner = getattr(handler, "_mcp_tool_name", None)
     operation = None
@@ -678,8 +685,17 @@ def _handler_operation(name: str) -> CallOperation:
     ]
     if not routes:
         return CallOperation(operation=None, tool=name)
-    classes = [TOOL_OPERATIONS[router] for router, _ in routes if router in TOOL_OPERATIONS]
+    from src.tool_meta import ACTION_OPERATIONS
+
     router, action = routes[0]
+    declared = [ACTION_OPERATIONS[route] for route in routes if route in ACTION_OPERATIONS]
+    if len(declared) == len(routes):
+        return CallOperation(
+            operation=max(declared, key=lambda c: _OPERATION_RANK.get(c, 1)),
+            tool=router,
+            action=action,
+        )
+    classes = [TOOL_OPERATIONS[router] for router, _ in routes if router in TOOL_OPERATIONS]
     return CallOperation(
         operation=(
             max(classes, key=lambda c: _OPERATION_RANK.get(c, 1)) if classes else None
