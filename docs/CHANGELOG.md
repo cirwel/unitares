@@ -39,6 +39,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **resident progress:** the `metrics_series` progress source no longer carries a hardcoded list that named one deployment's repository metrics. It counts the core catalog's product series (`agents.active.7d`, `kg.entries.count`, `checkins.7d`) plus every series a deployment's extra metrics catalog (`UNITARES_METRICS_CATALOG_EXTRA`) marks `"progress": true`. The reference Chronicler's `agents/chronicler/metrics_catalog.json` marks its repository-size and test-count series, so a deployment that points the variable at that file counts exactly the five series it counted before and its progress verdict does not change; the GitHub-traffic series stay unmarked because they measure the repository rather than the resident. An install with no extra catalog counts only the three product series. Deployments that copied the reference catalog into their own file should add `"progress": true` to the series that stand for their metrics resident's work; without it, those rows stop counting toward progress and a resident whose only output is those series can read as flat. A non-boolean `progress` value skips that entry with a warning (#2574).
 - **review gate:** a review is no longer carried across a base merge when the PR touches a second-family path (the paths `scripts/dev/review_policy.json` lists, read from the base branch). A base merge that moves the diff key of such a PR now needs a fresh review on the new key rather than carrying the old one, as before the carry. A base merge that leaves the PR's files untouched keeps the key, and its records still count. A PR whose changed paths cannot be read is treated the same way. Every other PR keeps the carry across clean automatic base merges (operator decision, 2026-09-28) (#2581).
 - **review gate:** the review round cap is switched off. Every round gets a full review however many came before, and the `review` check shows only the round count. The mechanism is kept behind `ROUND_CAP_ENABLED` in `scripts/dev/review_gate.py`, and its tests still run, so it can be switched back on without being rebuilt.
+- **`/mcp/` tool results are compact JSON text** (no API change). The MCP
+  transport parsed each handler's JSON into a dict and returned it to
+  FastMCP, which rendered it back to text with `indent=2`. Every `/mcp/`
+  result therefore reached the agent's context indented, one array element
+  per line, while REST (`/v1/tools/call`) already answered compactly. The
+  registered tools now hand FastMCP one text block rendered by the same
+  serializer with the same fallback and no indent
+  (`src/tool_registration.py`, `_mcp_wire_result`), so the text differs from
+  before only in whitespace outside strings and parses to the same value.
+  Nothing else changes on the wire: every tool registers with
+  `structured_output=False`, so no tool advertises an outputSchema and no
+  result carries structuredContent, on mcp 1.x or 2.x; the text block was
+  and remains the whole result. The non-JSON fallback
+  (`{"success": true, "text": ...}`) and the wrapper's error envelope keep
+  their shape. `get_tool_wrapper` still returns the dict that `use_tool`'s
+  nested invoker reads. Measured basis: over 14 days of one deployment's
+  local Claude Code transcripts, indentation was 13.5% of governance
+  tool-result bytes (about 19.5 KB a day), 11.7% since 2026-09-26, and
+  largest on `describe_tool` (23%), `list_tools` (20%) and
+  `check_working_state` (15%). Tokens saved are fewer than bytes, because
+  runs of spaces tokenize cheaply. The SDK's check-in and metrics readers
+  are pinned to resolve the verdict, coherence, risk and E/I/S/V from the
+  compact text (`tests/test_mcp_text_compact.py`) (#2590).
 
 ### Fixed
 - **agent archive and delete act only on the agent a call names (#2532):** `agent(action='delete', confirm=true)` sent without `agent_id` deleted the caller's own agent, and `agent(action='archive')` without one archived it. Dispatch's identity step wrote the session's id into `agent_id` for every call that is not a browse, and `describe_tool(lite=true)` hid `agent_id` on both actions, so a caller that followed the lite view sent exactly that call. A second route led to the same place: an `agent_id` that resolves to no registered agent, such as a typo or a label the server does not hold, fell back to the caller's bound agent inside `require_registered_agent`, so `archive(agent_id='<typo>')` archived the caller. Now dispatch no longer injects the session's id for `archive` or `delete`, including through the legacy `archive_agent` and `delete_agent` names and the `op` selector. A call with no `agent_id` (or a blank one) is refused with `TARGET_AGENT_REQUIRED`, whose recovery says to pass `agent_id` and how to find it. Only the target's own UUID selects it: a UUID no agent holds is refused with `TARGET_AGENT_NOT_FOUND`, and anything that is not a UUID (a label, a public id, or a legacy row's non-UUID key) is refused with `TARGET_AGENT_UUID_REQUIRED`. A public id is shared by most identities that carry one, and review of this change found that `delete(agent_id='<shared handle>')` would otherwise delete whichever holder the metadata cache listed first. Naming yourself by your own UUID still works. The lite view of `archive` and `delete` lists `agent_id` as required at call time, and `delete`'s `confirm` too. The lite view of `get` and `resume` lists `agent_id` as their optional target. `get`, `update`, `resume` and `release_presence` keep their session default. Interface contract 1.23.0 (after #2517's 1.22.0): `agent`'s `agent_id` description changes, which moves its input digest and the surface digest. No parameter is added, removed, retyped or renamed.
