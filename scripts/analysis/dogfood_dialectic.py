@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Dogfood: onboard → request_dialectic_review → submit_thesis
+Dogfood: onboard → dialectic(action=request) → dialectic(action=thesis)
 Verifies UUID stays consistent across dialectic flow (same as onboard/identity).
 """
 
@@ -62,8 +62,9 @@ def main():
     session_id = client_session_id
 
     # 2. Request dialectic review
-    print("\n2. request_dialectic_review(client_session_id=...) ...")
-    r2 = call_tool(URL, "request_dialectic_review", {
+    print("\n2. dialectic(action=request, client_session_id=...) ...")
+    r2 = call_tool(URL, "dialectic", {
+        "action": "request",
         "client_session_id": session_id,
         "topic": "Dogfood: UUID consistency test",
         "session_type": "recovery",
@@ -98,8 +99,9 @@ def main():
         print(f"   OK: paused_agent_id matches onboard UUID")
 
     # 3. Submit thesis (no explicit agent_id - should use session-bound)
-    print("\n3. submit_thesis(session_id=..., client_session_id=...) [no agent_id] ...")
-    r3 = call_tool(URL, "submit_thesis", {
+    print("\n3. dialectic(action=thesis, session_id=..., client_session_id=...) [no agent_id] ...")
+    r3 = call_tool(URL, "dialectic", {
+        "action": "thesis",
         "client_session_id": session_id,
         "session_id": dialectic_session_id,
         "message": "Dogfood thesis: UUID should match onboard.",
@@ -125,7 +127,8 @@ def main():
     if not submitter:
         # Fetch session to verify transcript
         print("   Fetching session to verify transcript...")
-        r4 = call_tool(URL, "get_dialectic_session", {
+        r4 = call_tool(URL, "dialectic", {
+            "action": "get",
             "client_session_id": session_id,
             "session_id": dialectic_session_id,
         }, session_id=session_id)
