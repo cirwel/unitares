@@ -142,7 +142,7 @@ additions merge cleanly. -->
 | `UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS` | `''` | Resolve a governance URL without sending credentials over remote HTTP. | agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | `''` | Alias of UNITARES_MODEL until v3.2.0 | src/local_inference_env.py |
+| `UNITARES_LLM_MODEL` | `''` | Alias of UNITARES_MODEL_ID until v3.2.0 | src/local_inference_env.py |
 | `UNITARES_LOCK_DIR` | `None (no reader fallback)` | — | src/state_locking.py |
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
@@ -156,10 +156,10 @@ additions merge cleanly. -->
 | `UNITARES_METRICS_CATALOG_EXTRA` | `''` | Register the metrics declared in a deployment's extra catalog file | src/fleet_metrics/catalog.py |
 | `UNITARES_METRICS_URL` | `DEFAULT_URL` | read by main() | agents/chronicler/agent.py |
 | `UNITARES_MIRROR_SIGNAL_EMIT` | `'1'` | Phase 0 mirror-effectiveness instrumentation (mirror-effectiveness-measurement-v0) | src/mcp_handlers/response_formatter.py |
-| `UNITARES_MODEL` | `''` | Model id the local model endpoint serves; default gemma4:latest | src/local_inference_env.py |
 | `UNITARES_MODEL_ADJUDICATION_COOLDOWN_H` | `'168'` | — | src/http_routes/sentinel.py |
 | `UNITARES_MODEL_ADJUDICATOR_TOKEN` | `''` | POST /v1/sentinel/model-adjudicate — record a MODEL's verdict on a queue item | src/http_routes/sentinel.py |
 | `UNITARES_MODEL_BASE_URL` | `''` | OpenAI-compatible base URL of the local model endpoint, /v1 included; default http://localhost:11434/v1 | src/local_inference_env.py |
+| `UNITARES_MODEL_ID` | `''` | Model id the local model endpoint serves; default gemma4:latest | src/local_inference_env.py |
 | `UNITARES_MODEL_LOCAL_HOSTS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:194); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:204, src/local_inference_env.py) | Hostnames the model endpoint classifier treats as local, comma-separated | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_MODEL_PRIVACY` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:194); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:204, src/local_inference_env.py) | local or external: overrides the model endpoint's classification | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/local_inference_env.py |
 | `UNITARES_NX_FAIL_CLOSED` | `''` | read by _nx_fail_closed_enabled() | src/mcp_handlers/identity/persistence.py |

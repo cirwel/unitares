@@ -129,25 +129,45 @@ _ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": 
 _OLLAMA_PROBE_BUDGET_S = 0.5
 
 
+_resolve_lock = threading.Lock()
+# (host, port) -> (thread, result list) for a lookup still running. At most one
+# resolver thread exists per endpoint: a probe that finds one joins it instead
+# of starting another, so a resolver that never answers costs one thread.
+_resolve_inflight: dict[tuple[str, int], tuple[threading.Thread, list]] = {}
+
+
 def _resolve_within(host: str, port: int, budget_s: float) -> list:
     """``getaddrinfo`` bounded by ``budget_s``; an empty list when it is not
     answered in time. getaddrinfo has no timeout of its own, and callers run
     this probe on the event loop during auto routing, so a stalled resolver
-    must not hold them past the probe budget. The resolver thread is a
-    daemon: a lookup that never returns is abandoned, not waited for.
+    must not hold them past the probe budget. A lookup that is still running
+    is reused by the next probe rather than duplicated.
     """
-    result: list = []
+    key = (host, port)
+    with _resolve_lock:
+        entry = _resolve_inflight.get(key)
+        # Only a lookup still running is shared; a finished one is stale.
+        if entry is None or not entry[0].is_alive():
+            result: list = []
 
-    def run() -> None:
-        try:
-            result.extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
-        except Exception:
-            pass
+            def run() -> None:
+                try:
+                    result.extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+                except Exception:
+                    pass
 
-    worker = threading.Thread(target=run, name="model-endpoint-resolve", daemon=True)
-    worker.start()
+            worker = threading.Thread(target=run, name="model-endpoint-resolve", daemon=True)
+            entry = (worker, result)
+            _resolve_inflight[key] = entry
+            worker.start()
+    worker, result = entry
     worker.join(budget_s)
-    return list(result) if not worker.is_alive() else []
+    if worker.is_alive():
+        return []
+    with _resolve_lock:
+        if _resolve_inflight.get(key) is entry:
+            del _resolve_inflight[key]
+    return list(result)
 
 
 def _probe_ollama_socket() -> bool:

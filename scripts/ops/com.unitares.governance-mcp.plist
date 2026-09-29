@@ -187,7 +187,7 @@
              Set to a model you actually have, or omit this key to fall back
              to the server default. UNITARES_LLM_MODEL is its older name, read
              until v3.2.0. -->
-        <key>UNITARES_MODEL</key>
+        <key>UNITARES_MODEL_ID</key>
         <string>YOUR_LOCAL_MODEL</string>
         <!-- Hostnames of model servers on your own network, comma-separated.
              A privacy='local' request is sent only to an endpoint the server

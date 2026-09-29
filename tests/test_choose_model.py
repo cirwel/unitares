@@ -20,18 +20,18 @@ from scripts.install import choose_model as cm
 def test_appends_both_settings_to_an_empty_env():
     out = cm.update_env_text("", {cm.BASE_KEY: "http://host.docker.internal:11434/v1", cm.MODEL_KEY: "gemma4:latest"})
     assert "UNITARES_MODEL_BASE_URL=http://host.docker.internal:11434/v1" in out.splitlines()
-    assert "UNITARES_MODEL=gemma4:latest" in out.splitlines()
+    assert "UNITARES_MODEL_ID=gemma4:latest" in out.splitlines()
 
 
 def test_replaces_existing_values_and_keeps_every_other_line():
-    before = "POSTGRES_PASSWORD=secret\nUNITARES_MODEL=old:1b\n# UNITARES_MODEL_BASE_URL=http://example\nGOVERNANCE_HOST_PORT=18767\n"
+    before = "POSTGRES_PASSWORD=secret\nUNITARES_MODEL_ID=old:1b\n# UNITARES_MODEL_BASE_URL=http://example\nGOVERNANCE_HOST_PORT=18767\n"
     out = cm.update_env_text(before, {cm.BASE_KEY: "http://host.docker.internal:11434/v1", cm.MODEL_KEY: "qwen3:8b"})
     lines = out.splitlines()
     assert "POSTGRES_PASSWORD=secret" in lines
     assert "GOVERNANCE_HOST_PORT=18767" in lines
     assert "# UNITARES_MODEL_BASE_URL=http://example" in lines  # a commented example is left alone
-    assert lines.count("UNITARES_MODEL=qwen3:8b") == 1
-    assert "UNITARES_MODEL=old:1b" not in lines
+    assert lines.count("UNITARES_MODEL_ID=qwen3:8b") == 1
+    assert "UNITARES_MODEL_ID=old:1b" not in lines
     assert lines.count("UNITARES_MODEL_BASE_URL=http://host.docker.internal:11434/v1") == 1
 
 
@@ -42,7 +42,7 @@ def test_is_idempotent():
 
 
 def test_clear_removes_only_the_owned_keys():
-    before = "A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL=y\nUNITARES_OLLAMA_BASE_URL=z\n"
+    before = "A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL_ID=y\nUNITARES_OLLAMA_BASE_URL=z\n"
     out = cm.update_env_text(before, {cm.BASE_KEY: None, cm.MODEL_KEY: None})
     assert out.splitlines() == ["A=1", "UNITARES_OLLAMA_BASE_URL=z"]
 
@@ -93,7 +93,7 @@ def test_writes_env_rebuilds_and_confirms_the_server_reaches_the_model(tmp_path:
     assert cm.main(["--yes", "--env-file", str(env)]) == 0
     text = env.read_text()
     assert "UNITARES_MODEL_BASE_URL=http://host.docker.internal:11434/v1" in text
-    assert "UNITARES_MODEL=gemma4:latest" in text
+    assert "UNITARES_MODEL_ID=gemma4:latest" in text
     assert "POSTGRES_PASSWORD=secret" in text
     assert calls[0] == ["up", "-d", "--build", "--wait", "governance-mcp"]
     assert calls[1][:3] == ["exec", "-T", "governance-mcp"]
@@ -136,7 +136,7 @@ def test_no_rebuild_only_writes_env(tmp_path: Path, stubs):
     _, calls = stubs
     env = tmp_path / ".env"
     assert cm.main(["--model", "qwen3:8b", "--yes", "--no-rebuild", "--env-file", str(env)]) == 0
-    assert "UNITARES_MODEL=qwen3:8b" in env.read_text()
+    assert "UNITARES_MODEL_ID=qwen3:8b" in env.read_text()
     assert calls == []
 
 
@@ -163,14 +163,14 @@ def test_writing_replaces_the_older_names_this_script_wrote(tmp_path: Path, stub
     lines = env.read_text().splitlines()
     assert "UNITARES_OLLAMA_BASE=http://host.docker.internal:11434" not in lines
     assert "UNITARES_LLM_MODEL=old:1b" not in lines
-    assert "UNITARES_MODEL=qwen3:8b" in lines and "A=1" in lines
+    assert "UNITARES_MODEL_ID=qwen3:8b" in lines and "A=1" in lines
     assert "Replaced the older" in capsys.readouterr().out
 
 
 def test_clear(tmp_path: Path, capsys):
     env = tmp_path / ".env"
     env.write_text(
-        "A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL=y\nUNITARES_OLLAMA_BASE=x\n"
+        "A=1\nUNITARES_MODEL_BASE_URL=x\nUNITARES_MODEL_ID=y\nUNITARES_OLLAMA_BASE=x\n"
         "UNITARES_LLM_MODEL=y\nUNITARES_OLLAMA_BASE_URL=http://stale:11434\n"
     )
     assert cm.main(["--clear", "--env-file", str(env)]) == 0
@@ -213,7 +213,7 @@ def test_declining_the_rebuild_writes_env_only(tmp_path: Path, stubs, monkeypatc
     _tty(monkeypatch, ["", "n"])
     env = tmp_path / ".env"
     assert cm.main(["--env-file", str(env)]) == 0
-    assert "UNITARES_MODEL=gemma4:latest" in env.read_text()
+    assert "UNITARES_MODEL_ID=gemma4:latest" in env.read_text()
     assert calls == []
 
 
@@ -333,7 +333,7 @@ def test_compose_gets_the_chosen_env_file_and_values_not_inherited_ones(tmp_path
     assert cmd[:6] == ["docker", "compose", "--project-directory", str(cm.REPO_ROOT), "--env-file", str(env_file)]
     assert cwd == cm.REPO_ROOT
     assert env["UNITARES_MODEL_BASE_URL"] == "http://host.docker.internal:11434/v1"
-    assert env["UNITARES_MODEL"] == "qwen3:8b"
+    assert env["UNITARES_MODEL_ID"] == "qwen3:8b"
     # An older name exported in the shell would outrank nothing, but it would
     # still reach the container and read as a second answer; it is dropped.
     for old in ("UNITARES_OLLAMA_BASE", "UNITARES_LLM_MODEL", "UNITARES_OLLAMA_BASE_URL"):

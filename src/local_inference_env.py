@@ -11,7 +11,7 @@ Settings (the documented names):
   server, including ``/v1`` (``http://localhost:11434/v1`` for Ollama on this
   machine, which is the default). A value with no path at all gets ``/v1``
   added, so a bare Ollama root still works.
-- ``UNITARES_MODEL``: the model id the endpoint serves. Default
+- ``UNITARES_MODEL_ID``: the model id the endpoint serves. Default
   ``gemma4:latest`` for now; a later release removes the default.
 - ``UNITARES_MODEL_LOCAL_HOSTS`` and ``UNITARES_MODEL_PRIVACY``: see
   ``classify_endpoint`` below.
@@ -52,7 +52,7 @@ DEFAULT_MODEL_BASE_URL = DEFAULT_OLLAMA_BASE + "/v1"
 DEFAULT_LOCAL_MODEL = "gemma4:latest"
 
 MODEL_BASE_URL_ENV = "UNITARES_MODEL_BASE_URL"
-MODEL_ENV = "UNITARES_MODEL"
+MODEL_ENV = "UNITARES_MODEL_ID"
 MODEL_LOCAL_HOSTS_ENV = "UNITARES_MODEL_LOCAL_HOSTS"
 MODEL_PRIVACY_ENV = "UNITARES_MODEL_PRIVACY"
 TRUSTED_NETWORKS_ENV = "UNITARES_TRUSTED_NETWORKS"
@@ -201,7 +201,7 @@ def ollama_openai_base_url() -> str:
 
 
 def default_local_model() -> str:
-    """Model for local inference: ``UNITARES_MODEL``, else its alias, else gemma4:latest."""
+    """Model for local inference: ``UNITARES_MODEL_ID``, else its alias, else gemma4:latest."""
     return _resolve(MODEL_ENV, lambda _name, v: v.strip()) or DEFAULT_LOCAL_MODEL
 
 

@@ -767,12 +767,12 @@ def test_reviewer_spawn_always_carries_the_servers_resolved_endpoint(monkeypatch
     environment must not reach the child: the resolved values always override."""
     from src.mcp_handlers.dialectic import orchestrator_dispatch as od
 
-    for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL", "UNITARES_OLLAMA_BASE",
+    for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL_ID", "UNITARES_OLLAMA_BASE",
                  "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
         monkeypatch.delenv(name, raising=False)
     spec = od._build_spec("s", {"root_cause": "r", "proposed_conditions": [], "reasoning": ""}, None)
     assert spec["env"]["UNITARES_MODEL_BASE_URL"] == env.model_base_url()
-    assert spec["env"]["UNITARES_MODEL"] == env.default_local_model()
+    assert spec["env"]["UNITARES_MODEL_ID"] == env.default_local_model()
 
 
 def test_a_stalled_resolver_cannot_hold_the_probe(monkeypatch):
@@ -793,5 +793,27 @@ def test_a_stalled_resolver_cannot_hold_the_probe(monkeypatch):
     try:
         assert inference_registry._probe_ollama_socket() is False
         assert _time.monotonic() - started < 0.9
+    finally:
+        release.set()
+
+
+def test_a_stalled_resolver_is_reused_not_multiplied(monkeypatch):
+    import threading as _threading
+
+    from src.mcp_handlers.support import inference_registry
+
+    release = _threading.Event()
+    calls = []
+
+    def stalled(*_a, **_k):
+        calls.append(1)
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(inference_registry.socket, "getaddrinfo", stalled)
+    try:
+        for _ in range(4):
+            assert inference_registry._resolve_within("models.internal", 8000, 0.05) == []
+        assert len(calls) == 1
     finally:
         release.set()

@@ -8,7 +8,7 @@ attribution (same boundary as the #1424 fix's ``audit_only``: instrumenting a
 surface must not enrol it in a behavioral feed nobody measured). It DOES share
 the local-inference plane with ``call_model`` via ``inference_registry``: one
 base URL (``UNITARES_MODEL_BASE_URL``), one default model
-(``UNITARES_MODEL``), one cached availability probe, one provenance hash.
+(``UNITARES_MODEL_ID``), one cached availability probe, one provenance hash.
 Non-blocking and graceful-failure by design.
 
 Every call here is local by nature: it carries governance state about an agent

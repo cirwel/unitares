@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "dev" / "unitares_doctor.py"
 NAMES = (
     "UNITARES_MODEL_BASE_URL",
-    "UNITARES_MODEL",
+    "UNITARES_MODEL_ID",
     "UNITARES_MODEL_LOCAL_HOSTS",
     "UNITARES_MODEL_PRIVACY",
     "UNITARES_OLLAMA_BASE",
@@ -76,7 +76,7 @@ def test_nothing_configured_skips_without_a_request(doctor, monkeypatch):
 
 def test_lists_the_configured_model(doctor, monkeypatch):
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://vllm.lan:8000/v1")
-    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     seen = _serve(monkeypatch, doctor, {"data": [{"id": "qwen3:8b"}, {"id": "other"}]})
     result = doctor.check_model_endpoint(REPO_ROOT)
     assert result.status == doctor.Status.PASS, result
@@ -85,7 +85,7 @@ def test_lists_the_configured_model(doctor, monkeypatch):
 
 
 def test_a_model_the_endpoint_does_not_list_warns(doctor, monkeypatch):
-    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     _serve(monkeypatch, doctor, {"data": [{"id": "gemma4:latest"}]})
     result = doctor.check_model_endpoint(REPO_ROOT)
     assert result.status == doctor.Status.WARN
@@ -98,11 +98,11 @@ def test_an_endpoint_without_a_named_model_warns(doctor, monkeypatch):
     result = doctor.check_model_endpoint(REPO_ROOT)
     assert result.status == doctor.Status.WARN
     assert "no model is named" in result.message
-    assert "UNITARES_MODEL" in result.detail
+    assert "UNITARES_MODEL_ID" in result.detail
 
 
 def test_unreachable_skips_with_a_clear_message(doctor, monkeypatch):
-    monkeypatch.setenv("UNITARES_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     _serve(monkeypatch, doctor, error=OSError("connection refused"))
     result = doctor.check_model_endpoint(REPO_ROOT)
     assert result.status == doctor.Status.SKIP
@@ -111,14 +111,14 @@ def test_unreachable_skips_with_a_clear_message(doctor, monkeypatch):
 
 def test_a_non_openai_answer_warns(doctor, monkeypatch):
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://localhost:11434/v1")
-    monkeypatch.setenv("UNITARES_MODEL", "m")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "m")
     _serve(monkeypatch, doctor, {"models": [{"name": "m"}]})
     assert doctor.check_model_endpoint(REPO_ROOT).status == doctor.Status.WARN
 
 
 def test_credentials_in_the_url_are_not_printed(doctor, monkeypatch):
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://user:secret@vllm.lan:8000/v1")
-    monkeypatch.setenv("UNITARES_MODEL", "m")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "m")
     _serve(monkeypatch, doctor, {"data": [{"id": "m"}]})
     result = doctor.check_model_endpoint(REPO_ROOT)
     assert "secret" not in result.message + result.detail
@@ -132,7 +132,7 @@ def test_one_info_line_per_old_name_in_use(doctor, monkeypatch):
     assert {r.name for r in results} == {"setting_alias:UNITARES_LLM_MODEL", "setting_alias:UNITARES_OLLAMA_BASE"}
     assert all(r.status == doctor.Status.INFO for r in results)
     by_name = {r.name: r.message for r in results}
-    assert "UNITARES_MODEL until v3.2.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
+    assert "UNITARES_MODEL_ID until v3.2.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
     assert "UNITARES_MODEL_BASE_URL" in by_name["setting_alias:UNITARES_OLLAMA_BASE"]
     rendered = doctor.render_text(results, use_color=False)
     assert "i setting_alias:UNITARES_LLM_MODEL" in rendered

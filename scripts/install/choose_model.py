@@ -35,7 +35,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_KEY = "UNITARES_MODEL_BASE_URL"
-MODEL_KEY = "UNITARES_MODEL"
+MODEL_KEY = "UNITARES_MODEL_ID"
 # Names this script wrote before the endpoint became any OpenAI-compatible
 # server. They are aliases now (src/local_inference_env.py), so writing the new
 # names removes them rather than leaving two answers in .env.

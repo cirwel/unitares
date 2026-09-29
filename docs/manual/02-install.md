@@ -104,7 +104,7 @@ settings:
 | Setting | Meaning | Default |
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | `http://localhost:11434/v1` (Ollama on the same machine) |
-| `UNITARES_MODEL` | Model id the server serves | `gemma4:latest`, a default a later release removes |
+| `UNITARES_MODEL_ID` | Model id the server serves | `gemma4:latest`, a default a later release removes |
 
 Ollama is the server these steps are tested with. Other servers that speak the
 same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
@@ -133,7 +133,7 @@ both in `.env`:
 ollama pull gemma4:latest
 cat >> .env <<'EOF'
 UNITARES_MODEL_BASE_URL=http://host.docker.internal:11434/v1
-UNITARES_MODEL=gemma4:latest
+UNITARES_MODEL_ID=gemma4:latest
 EOF
 docker compose up -d --build governance-mcp
 ```
