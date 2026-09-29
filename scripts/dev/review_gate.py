@@ -30,7 +30,8 @@ A base merge that DOES touch the PR's files moves the key even when the PR's
 own lines are unchanged. `base_merge_equivalents` finds the earlier keys that
 describe the same PR change (clean automatic base merges with an unchanged
 `patch_fingerprint`), and `carry_records` reads their records as the head's;
-see their docstrings for exactly what stops the carry.
+see their docstrings for exactly what stops the carry. A diff that touches a
+second-family path is never carried: it is reviewed on its exact key.
 
 The record
 ----------
@@ -297,7 +298,20 @@ def base_merge_equivalents(base: str, head: str) -> list[tuple[str, str]]:
     yields no equivalents: the head's own key then decides alone. So does a
     chain longer than `CARRY_MAX_BASE_MERGES`: its cut-off tail could hold an
     open finding the carried records would then hide.
+
+    A diff that touches a second-family path (the base's own policy, as the
+    gate reads it) yields no equivalents either: a base merge that moves the
+    diff key is reviewed again on those paths, not carried (operator
+    decision, 2026-09-28). A diff whose paths cannot be read is treated the
+    same way. This is about the carry only: a base merge that leaves the
+    PR's files untouched keeps the diff key, so a record on that key still
+    counts, as it always has (native Codex reviews are bound to their commit
+    regardless). Binding second-family evidence to the head was considered
+    and not adopted (operator decision, 2026-09-28).
     """
+    changed = changed_paths(base, head)
+    if changed is None or (changed and sensitive_paths(changed, base_policy_paths(base))):
+        return []
     out: list[tuple[str, str]] = []
     try:
         fingerprint = None  # computed only once a base merge is found
@@ -1757,6 +1771,18 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
                                                 (fetched_key, fetched_head)])
                 if latest and latest.verdict == "FINDINGS" and not latest.disposed:
                     open_finding = latest
+        elif current:
+            # The head did not move, but the base may have. CI decides this
+            # head with the carry computed against the base it reads now,
+            # which can differ from _resolve's: a policy change on the base
+            # can make the diff second-family (carrying less) or not (carrying
+            # more). Register that set for the second-family pass, and read
+            # the findings through it as CI does, since a larger carry can
+            # bring in an open finding the review never saw.
+            _CARRY[(repo, pr)] = (key, base_merge_equivalents(checked_base, head_ref))
+            latest = current_record(repo, pr, key, head, pr_comments(repo, pr))
+            if latest and latest.verdict == "FINDINGS" and not latest.disposed:
+                open_finding = latest
     except SystemExit as exc:
         print(f"[review] UNREVIEWED: cannot confirm the current PR diff: {exc}; retry review.sh")
         return UNREVIEWED

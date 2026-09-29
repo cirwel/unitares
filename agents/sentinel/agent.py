@@ -967,8 +967,8 @@ async def adjudicate_finding(
     args = build_resolution_outcome_args(
         "sentinel_finding", status, fingerprint, agent.agent_uuid, reason
     )
-    # Stamp the surface, mirroring the dashboard path in
-    # src/http_routes/sentinel.py. Without this the two operator routes were
+    # Stamp the surface, mirroring the retired dashboard path (the operator
+    # adjudication route, removed 2026-09-27). Without this the two operator routes were
     # only HALF distinguishable: dashboard writes carried
     # adjudicated_via="dashboard" and CLI writes carried nothing, so "absent"
     # conflated "came through the CLI" with "written before the marker

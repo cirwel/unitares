@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.http_api import _watcher_findings_path, _watcher_summary_from_rows
+from agents.watcher.routes import _watcher_findings_path, _watcher_summary_from_rows
 
 
 class TestFindingsPathMatchesWriter:

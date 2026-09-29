@@ -93,10 +93,6 @@ ROUTE_REGISTRARS = (
     "src.http_api",
     "src.mcp_handlers.wave3a_probe",
     "src.mcp_handlers.wave3a_admin",
-    # Opt-in route packs (UNITARES_ROUTE_PACKS). Read even though the shipped
-    # default mounts none: a deployment that enables a pack exposes these
-    # routes, so each must be gated like the rest.
-    "src.http_routes.packs",
 )
 
 
@@ -114,6 +110,12 @@ def _registered_get_routes() -> list[tuple[str, object]]:
         mod = importlib.import_module(mod_name)
         source = inspect.getsource(mod)
         out.extend(_get_routes_in(mod, source))
+    # Opt-in route packs (UNITARES_ROUTE_PACKS), resolved through their table.
+    # Read even though the shipped default mounts none: a deployment that
+    # enables a pack exposes these routes, so each must be gated like the rest.
+    from src.http_routes import packs
+    for routes in packs.pack_routes().values():
+        out.extend((r.path, r.endpoint) for r in routes if "GET" in (r.methods or ()))
     return out
 
 
@@ -163,7 +165,9 @@ def _get_routes_in(mod, source: str) -> list[tuple[str, object]]:
 # the Risk tab no longer needs the Chronicler resident). Gated.
 # 53 -> 54: /v1/eisv/agents (latest check-in per agent from the EISV ring, for
 # the Overview feed and the Risk picker). Gated like /v1/eisv/recent.
-EXPECTED_GET_ROUTES = 54
+# 54 -> 53: /v1/sentinel/adjudication-queue removed with operator and model
+# adjudication (2026-09-27). Its two POST siblings were never counted here.
+EXPECTED_GET_ROUTES = 53
 
 
 def test_route_registry_is_readable():
