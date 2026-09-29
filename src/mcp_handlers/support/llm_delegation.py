@@ -181,15 +181,20 @@ async def call_local_llm(
         started = time.monotonic()
 
         def _call_sync():
-            response = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=max_tokens,
-                temperature=temperature,
-                timeout=timeout,
-                **extra_kwargs,
-            )
-            return response.choices[0].message.content
+            # A client per call, so close it here rather than leave its
+            # connection pool to the garbage collector.
+            try:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    timeout=timeout,
+                    **extra_kwargs,
+                )
+                return response.choices[0].message.content
+            finally:
+                client.close()
 
         result = await asyncio.wait_for(
             loop.run_in_executor(None, _call_sync),

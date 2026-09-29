@@ -76,6 +76,17 @@ DEFAULT_PROTOCOL = (
 CORE_PATH = REPO_ROOT / "scripts/eval/orientation_constraint_set.py"
 RUNNER_PATH = Path(__file__).resolve()
 DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
+
+
+def _configured_ollama_base() -> str:
+    """The server's model endpoint root when one is configured (new name or
+    alias, through the shared resolver), else this protocol's default."""
+    from src import local_inference_env as lie
+
+    names = (lie.MODEL_BASE_URL_ENV, *(a.old for a in lie.SETTING_ALIASES if a.new == lie.MODEL_BASE_URL_ENV))
+    if any((os.environ.get(n) or "").strip() for n in names):
+        return lie.ollama_base_url()
+    return DEFAULT_OLLAMA_BASE
 DEFAULT_MODEL = "gemma4:latest"
 
 
@@ -894,7 +905,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     enroll.add_argument("--operator-id", default=os.environ.get("USER", "unknown"))
     enroll.add_argument(
         "--ollama-base",
-        default=os.environ.get("UNITARES_OLLAMA_BASE", DEFAULT_OLLAMA_BASE),
+        default=_configured_ollama_base(),
     )
     enroll.add_argument("--model", default=DEFAULT_MODEL)
     enroll.add_argument("--temperature", type=float, default=0.2)

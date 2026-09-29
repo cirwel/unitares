@@ -333,6 +333,22 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
+_ssl_context_cache: tuple[tuple, object] | None = None
+
+
+def _env_ssl_context():
+    """The environment's trust store as httpx builds it, reused while
+    ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` are unchanged: loading the CA bundle
+    on every inference call is measurable latency."""
+    global _ssl_context_cache
+    import httpx
+
+    key = (os.environ.get("SSL_CERT_FILE"), os.environ.get("SSL_CERT_DIR"))
+    if _ssl_context_cache is None or _ssl_context_cache[0] != key:
+        _ssl_context_cache = (key, httpx.create_ssl_context(trust_env=True))
+    return _ssl_context_cache[1]
+
+
 def no_redirect_http_client(asynchronous: bool = True, *, local: bool = True):
     """An httpx client for the OpenAI SDK that keeps a prompt where it was sent.
 
@@ -363,7 +379,7 @@ def no_redirect_http_client(asynchronous: bool = True, *, local: bool = True):
     return cls(
         follow_redirects=False,
         trust_env=False,
-        verify=httpx.create_ssl_context(trust_env=True),
+        verify=_env_ssl_context(),
     )
 
 

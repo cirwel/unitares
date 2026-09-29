@@ -7,9 +7,9 @@ precision/recall at the caution and high-risk thresholds. This is the "usage and
 testing on local models" step: it is deliberately small and falsifiable (cf.
 ``eisv_skeptic_report.py``), not a proof. No DB, no paid API.
 
-The regex path runs anywhere. The ``--llm`` path needs a local Ollama
-(``UNITARES_OLLAMA_BASE``, default http://localhost:11434) and the configured
-``UNITARES_LLM_MODEL``; if it is unreachable the backend falls back to the floor
+The regex path runs anywhere. The ``--llm`` path needs the local model endpoint
+(``UNITARES_MODEL_BASE_URL``, default Ollama at http://localhost:11434/v1) and
+the configured ``UNITARES_MODEL_ID``; if it is unreachable the backend falls back to the floor
 and the harness says so rather than failing.
 
 Usage:

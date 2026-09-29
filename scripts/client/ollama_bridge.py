@@ -46,11 +46,14 @@ import sys
 from smolagents import tool, ToolCollection, OpenAIServerModel, CodeAgent
 
 # Defaults match repo conventions: UNITARES_MCP_URL (client URL, cf.
-# scripts/dev/with_checkin.py) and UNITARES_LLM_MODEL (cf. the call_model /
-# llm_delegation local path). Endpoints are config, not identity.
+# scripts/dev/with_checkin.py) and UNITARES_MODEL_ID (cf. the call_model /
+# llm_delegation local path; UNITARES_LLM_MODEL is its older name, read until
+# v3.3.0). Endpoints are config, not identity.
 DEFAULT_MCP_URL = os.getenv("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 DEFAULT_OLLAMA_URL = os.getenv("UNITARES_OLLAMA_URL", "http://127.0.0.1:11434/v1")
-DEFAULT_MODEL = os.getenv("UNITARES_LLM_MODEL", "gemma4:latest")
+DEFAULT_MODEL = (
+    os.getenv("UNITARES_MODEL_ID") or os.getenv("UNITARES_LLM_MODEL") or "gemma4:latest"
+)
 
 # Valid spawn_reason values per the v2 ontology. "new_session" is the honest
 # fresh default (no parent); the rest are causal and expect a parent_agent_id.

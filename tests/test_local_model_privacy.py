@@ -839,6 +839,7 @@ def test_local_clients_keep_the_environment_ca_while_skipping_proxies(monkeypatc
         return real(*a, **k)
 
     monkeypatch.setattr(httpx, "create_ssl_context", spy)
+    monkeypatch.setattr(local_inference_env, "_ssl_context_cache", None)
     client = local_inference_env.no_redirect_http_client()
     assert client.trust_env is False
     assert calls == [True]  # SSL_CERT_FILE / SSL_CERT_DIR still honoured
@@ -922,3 +923,35 @@ def test_a_non_json_answer_is_not_ollama(monkeypatch):
     """A 200 with a proxy page is an answer, not silence: not Ollama."""
     monkeypatch.setattr(env, "direct_urlopen", lambda url, timeout=0: _Resp(b"<html>portal</html>"))
     assert env._probe_ollama_version("http://10.0.0.7:11434", 0.5) is False
+
+
+def test_the_local_trust_store_is_built_once_per_cert_setting(monkeypatch):
+    import httpx
+
+    from src import local_inference_env as lie
+
+    built = []
+    real = httpx.create_ssl_context
+    monkeypatch.setattr(httpx, "create_ssl_context", lambda **kw: built.append(kw) or real(**kw))
+    monkeypatch.setattr(lie, "_ssl_context_cache", None)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    for _ in range(3):
+        lie.no_redirect_http_client(asynchronous=False).close()
+    assert len(built) == 1
+    # A changed certificate setting is picked up, not masked by the cache.
+    monkeypatch.setenv("SSL_CERT_DIR", "/nonexistent-ca-dir")
+    lie.no_redirect_http_client(asynchronous=False).close()
+    assert len(built) == 2
+
+
+def test_the_delegation_client_is_closed_after_its_call(monkeypatch):
+    import asyncio
+
+    from src.mcp_handlers.support import llm_delegation
+
+    client = MagicMock()
+    client.chat.completions.create.return_value.choices = [MagicMock(message=MagicMock(content="ok"))]
+    monkeypatch.setattr(llm_delegation, "local_endpoint_refusal", lambda: None)
+    monkeypatch.setattr(llm_delegation, "_get_ollama_client", lambda: client)
+    assert asyncio.run(llm_delegation.call_local_llm("hi")) == "ok"
+    client.close.assert_called_once()
