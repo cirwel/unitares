@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from mcp.types import TextContent
 
+from tests.helpers import parse_result
+
 
 def _run_args(run_method, arguments):
     """Positional args for the internal Tool.run across mcp 1.x/2.x.
@@ -125,6 +127,8 @@ async def test_sync_state_mcp_wrapper_uses_alias_middleware(monkeypatch):
         ),
         convert_result=False,
     )
+    # The registered tool returns the text block /mcp/ sends; read its JSON.
+    result = parse_result(result)
 
     assert captured["complexity"] == 0.5
     assert result["tool"] == "sync_state"
@@ -213,6 +217,8 @@ async def test_search_shared_memory_suppresses_detail_serialization_upstream(
         ),
         convert_result=False,
     )
+    # The registered tool returns the text block /mcp/ sends; read its JSON.
+    result = parse_result(result)
 
     assert captured["action"] == "search"
     assert captured["response_mode"] == "lean"
