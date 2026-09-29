@@ -67,12 +67,20 @@ def openai_base(url: str) -> str:
     return url
 
 
+# The env file's text, set by main() before discovery, so the transport choice
+# below sees the same classifier settings the server will (see
+# composed_classifier_values). Empty when there is no env file.
+_discovery_env_text = ""
+
+
 def _open(base: str, url: str, timeout: float):
     """Open ``url`` the way the server will reach ``base``: directly, ignoring
     HTTP_PROXY/HTTPS_PROXY, when the endpoint classifies local (the runtime's
     local clients do the same), and through the environment's proxy otherwise.
+    Classified with the settings the server will get: a shell export over
+    the env file.
     """
-    is_local, _reason = endpoint_is_local(base, {key: os.environ.get(key) for key in _CLASSIFIER_KEYS})
+    is_local, _reason = endpoint_is_local(base, composed_classifier_values(_discovery_env_text))
     if is_local:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         return opener.open(url, timeout=timeout)
@@ -324,6 +332,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"✓ Removed the model settings ({BASE_KEY}, {MODEL_KEY} and their older names) from {env_file}. Rebuild to apply: docker compose up -d --build governance-mcp")
         return 0
 
+    global _discovery_env_text
+    _discovery_env_text = env_file.read_text() if env_file.exists() else ""
     base = openai_base(args.base_url)
     models = list_models(base)
     ollama = is_ollama(base) if models is not None else False

@@ -384,3 +384,22 @@ def test_discovery_reaches_a_local_endpoint_directly_despite_a_proxy(monkeypatch
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_discovery_transport_uses_the_env_file_classifier_settings(monkeypatch):
+    """A host made local only by the env file is still reached directly."""
+    calls = []
+
+    class Opener:
+        def open(self, url, timeout=0):
+            calls.append(("direct", url))
+            return _Resp(b'{"object": "list", "data": [{"id": "m"}]}')
+
+    monkeypatch.setattr(cm.urllib.request, "build_opener", lambda *a: Opener())
+    monkeypatch.setattr(
+        cm.urllib.request, "urlopen", lambda url, timeout=0: calls.append(("proxied", url))
+    )
+    monkeypatch.delenv("UNITARES_MODEL_LOCAL_HOSTS", raising=False)
+    monkeypatch.setattr(cm, "_discovery_env_text", "UNITARES_MODEL_LOCAL_HOSTS=gpu-box.lan\n")
+    assert cm.list_models("http://gpu-box.lan:8000/v1") == ["m"]
+    assert calls == [("direct", "http://gpu-box.lan:8000/v1/models")]
