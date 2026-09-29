@@ -562,6 +562,35 @@ def test_rest_prebind_reads_a_nested_kwargs_wrapper(path, monkeypatch):
     assert "agent_id" not in sent
 
 
+@pytest.mark.parametrize("path", ["operator", "sticky", "session"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # wrapper form: the destructive action only exists inside kwargs
+        {"kwargs": {"action": "delete", "confirm": True}},
+        {"kwargs": json.dumps({"action": "delete", "confirm": True})},
+        # a deeper ``get`` must not cancel an outer delete (dispatch unwraps twice)
+        {
+            "action": "delete",
+            "confirm": True,
+            "kwargs": {"kwargs": {"kwargs": {"action": "get"}}},
+        },
+    ],
+)
+def test_rest_prebind_reads_every_unwrap_depth(arguments, path, monkeypatch):
+    _bound_to, sent = _rest_prebind("agent", arguments, path, monkeypatch)
+    assert "agent_id" not in sent
+
+
+def test_unwrapped_view_depth_zero_is_the_outer_dict():
+    from src.mcp_handlers.middleware.params_step import unwrapped_view
+
+    nested = {"a": 1, "kwargs": {"a": 2, "kwargs": {"a": 3}}}
+    assert unwrapped_view(nested, 0) == {"a": 1}
+    assert unwrapped_view(nested, 1) == {"a": 2}
+    assert unwrapped_view(nested, 2) == {"a": 3}
+
+
 def test_unwrapped_view_merges_like_unwrap_kwargs():
     from src.mcp_handlers.middleware.params_step import unwrapped_view
 
