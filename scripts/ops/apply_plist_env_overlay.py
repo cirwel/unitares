@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Apply this deployment's environment overlay to a LaunchAgent plist.
+
+The product ships neutral defaults: a setting that only makes sense on one
+deployment (a tailnet range the auth bypass should trust, the markers one's
+own substrate runtime writes) is read from the environment, empty by default.
+This operator's deployment keeps its values in a tracked overlay file beside
+this script (``governance-mcp.env``) instead of in hand edits to the live
+plist, so nothing has to be set by hand and a fresh machine gets the same
+values.
+
+The overlay is ``KEY=VALUE`` lines; blank lines and ``#`` comments are
+ignored. Each key is written into the plist's ``EnvironmentVariables`` when
+it is missing or differs. Keys the overlay does not name are left alone, and
+nothing is ever removed: the plist also holds secrets this file must never
+see. The write is atomic and keeps the plist's file mode.
+
+A changed plist is picked up by the deploy's restart: ``deploy-lib.sh``
+records the plist's hash after each restart and reloads (rather than
+kickstarts) the service when it differs, so a new value is loaded, not only
+written.
+
+Only key names are printed, never values: the plist carries tokens, and a
+future overlay entry might too.
+
+usage: apply_plist_env_overlay.py --plist PATH --overlay PATH [--dry-run]
+exit:  0 applied or already in place; 2 on a bad overlay or plist.
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import plistlib
+import re
+import stat
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any
+
+_KEY = re.compile(r"[A-Z][A-Z0-9_]*")
+
+
+class OverlayError(ValueError):
+    """The overlay or the plist cannot be applied as written."""
+
+
+def parse_overlay(text: str) -> dict[str, str]:
+    """``KEY=VALUE`` lines, in order. A value is taken verbatim after the
+    first ``=`` (trailing whitespace dropped); quotes are not interpreted."""
+    values: dict[str, str] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        key = key.strip()
+        if not sep or not _KEY.fullmatch(key):
+            raise OverlayError(f"line {number}: expected KEY=VALUE, got {raw!r}")
+        if key in values:
+            raise OverlayError(f"line {number}: {key} is set twice")
+        values[key] = value.rstrip()
+    return values
+
+
+def pending_changes(payload: dict[str, Any], overlay: dict[str, str]) -> list[str]:
+    """Keys whose value in the plist is missing or differs from the overlay."""
+    env = payload.get("EnvironmentVariables") or {}
+    if not isinstance(env, dict):
+        raise OverlayError("EnvironmentVariables is not a dict")
+    return [key for key, value in overlay.items() if env.get(key) != value]
+
+
+def _write_plist(path: Path, payload: dict[str, Any], *, mode: int) -> None:
+    """Atomically replace ``path`` with ``payload``, keeping ``mode``."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, mode)
+        with os.fdopen(descriptor, "wb") as handle:
+            plistlib.dump(payload, handle, fmt=plistlib.FMT_XML, sort_keys=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+
+def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False) -> list[str]:
+    """Write the overlay's values into ``plist``; return the keys changed."""
+    overlay = parse_overlay(overlay_path.read_text())
+    try:
+        with plist.open("rb") as handle:
+            payload = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
+        raise OverlayError(f"cannot read {plist}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise OverlayError(f"{plist} is not a dict plist")
+    changed = pending_changes(payload, overlay)
+    if changed and not dry_run:
+        env = payload.setdefault("EnvironmentVariables", {})
+        for key in changed:
+            env[key] = overlay[key]
+        _write_plist(plist, payload, mode=stat.S_IMODE(plist.stat().st_mode))
+    return changed
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    parser.add_argument("--plist", type=Path, required=True)
+    parser.add_argument("--overlay", type=Path, required=True)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run)
+    except (OverlayError, OSError) as exc:
+        print(f"[env-overlay] cannot apply {args.overlay}: {exc}", file=sys.stderr)
+        return 2
+    verb = "would set" if args.dry_run else "set"
+    if changed:
+        print(f"[env-overlay] {verb} in {args.plist.name}: {', '.join(changed)}")
+    else:
+        print(f"[env-overlay] {args.plist.name} already carries the overlay")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
