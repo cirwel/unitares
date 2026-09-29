@@ -147,6 +147,30 @@ def test_the_original_bytes_are_kept_before_a_change(tmp_path):
     assert kept.read_bytes() == HAND_WRITTEN
 
 
+def test_the_backup_entry_is_synced_before_the_plist_is_replaced(tmp_path, monkeypatch):
+    # Codex on #2585: syncing the file does not persist its new name, so the
+    # backup directory is synced before the plist rewrite.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(HAND_WRITTEN)
+    backups = tmp_path / "state"
+    events: list[str] = []
+    real_fsync, real_replace = overlay_mod.os.fsync, overlay_mod.os.replace
+
+    def fsync(fd):
+        if stat.S_ISDIR(overlay_mod.os.fstat(fd).st_mode):
+            events.append("sync-dir")
+        return real_fsync(fd)
+
+    def replace(src, dst):
+        events.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(overlay_mod.os, "fsync", fsync)
+    monkeypatch.setattr(overlay_mod.os, "replace", replace)
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
+    assert events == ["sync-dir", "replace"]
+
+
 def test_dry_run_reports_without_writing(tmp_path):
     plist = _plist(tmp_path, {})
     before = plist.read_bytes()
@@ -174,6 +198,16 @@ def test_values_are_never_printed(tmp_path):
     assert "A_KEY" in result.stdout and "sekrit-value" not in result.stdout + result.stderr
 
 
+@pytest.mark.parametrize("text", ["a_key=sekrit-value\n", "sekrit-value\n"])
+def test_a_refused_line_does_not_print_its_value(tmp_path, text):
+    # Codex on #2585: a mistyped key must not echo the value it guards.
+    result = subprocess.run([sys.executable, str(SCRIPT), "--plist", str(_plist(tmp_path, {})),
+                             "--overlay", str(_overlay(tmp_path, text))],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "line 1" in result.stderr and "sekrit-value" not in result.stdout + result.stderr
+
+
 def test_the_tracked_overlay_parses_and_the_deploy_applies_it():
     values = overlay_mod.parse_overlay(OVERLAY.read_text())
     assert values, "the deployment overlay must set something"
@@ -194,9 +228,13 @@ LIB = REPO / "scripts/ops/deploy-lib.sh"
 LABEL = "com.unitares.governance-mcp"
 
 
-def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None) -> list[str]:
+def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
+            applier: Path = SCRIPT, prelude: str = "", bootstrap_fails: bool = False,
+            check: bool = True) -> list[str]:
     """Run deploy-lib's overlay step and then its restart, with a stub
-    launchctl that records its calls. Returns the recorded subcommands."""
+    launchctl that records its calls. Returns the recorded subcommands of
+    this run. ``prelude`` runs after deploy-lib is sourced (to stub one of
+    its helpers)."""
     state = tmp_path / "state"
     state.mkdir(exist_ok=True)
     if baseline is not None:
@@ -204,17 +242,20 @@ def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "launchctl.log"
+    log.write_text("")
     stub = bin_dir / "launchctl"
     # `print` fails: the label is gone after bootout, and the env-key check
-    # treats empty output as "cannot tell". Everything else succeeds.
-    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\nexit 0\n')
+    # treats empty output as "cannot tell". Everything else succeeds, unless
+    # bootstrap is told to fail.
+    failing = "[ \"$1\" = bootstrap ] && exit 5\n" if bootstrap_fails else ""
+    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\n{failing}exit 0\n')
     stub.chmod(0o755)
-    script = (f'set -euo pipefail; . "{LIB}"; '
-              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{SCRIPT}"; '
+    script = (f'set -euo pipefail; . "{LIB}"; {prelude}\n'
+              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{applier}"; '
               f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"')
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
            "UNITARES_DEPLOY_STATE_DIR": str(state)}
-    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
+    subprocess.run(["bash", "-c", script], env=env, check=check, capture_output=True, text=True)
     return [line for line in log.read_text().split() if line != "print"]
 
 
@@ -275,3 +316,41 @@ def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
     plist = _plist(tmp_path, {"A_KEY": "v"})
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=_sha(plist))
     assert calls == ["kickstart"]
+
+
+def test_a_change_the_applier_wrote_before_failing_is_reloaded(tmp_path):
+    # The independent review on #2585: the applier can fail after its write
+    # (a dead stdout pipe). The deploy must compare the plist anyway, not
+    # take the failure as "nothing written" and kickstart.
+    applier = tmp_path / "applier.py"
+    applier.write_text(f"import subprocess, sys\n"
+                       f"subprocess.run([sys.executable, {str(SCRIPT)!r}, *sys.argv[1:]], check=True)\n"
+                       f"sys.exit(1)\n")
+    plist = _plist(tmp_path, {})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=None, applier=applier)
+    assert _env(plist) == {"A_KEY": "v"}
+    assert calls == ["bootout", "bootstrap"]
+
+
+def test_a_matching_baseline_that_cannot_be_rewritten_still_reloads(tmp_path):
+    # The independent review on #2585: a hand edit the overlay undoes leaves
+    # the recorded hash equal to the plist the overlay writes back. When the
+    # pre-overlay sidecar write also fails, only the force flag keeps the
+    # restart from kickstarting.
+    baseline = _sha(_plist(tmp_path, {"A_KEY": "v"}))
+    plist = _plist(tmp_path, {"A_KEY": ""})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=baseline,
+                    prelude="_deploy_lib_write_sidecar() { return 0; }")
+    assert _sha(plist) == baseline
+    assert calls == ["bootout", "bootstrap"]
+
+
+def test_a_failed_reload_is_retried_by_the_next_deploy(tmp_path):
+    # The independent review on #2585: the pre-overlay hash is what makes the
+    # next deploy reload when this one's reload failed, because the overlay
+    # then finds nothing left to change.
+    plist = _plist(tmp_path, {})
+    overlay = _overlay(tmp_path, "A_KEY=v\n")
+    first = _deploy(tmp_path, plist, overlay, baseline=None, bootstrap_fails=True, check=False)
+    assert first[:2] == ["bootout", "bootstrap"]
+    assert _deploy(tmp_path, plist, overlay, baseline=None) == ["bootout", "bootstrap"]

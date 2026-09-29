@@ -379,9 +379,11 @@ deploy_lib_apply_env_overlay() {
   sidecar="$state_dir/${label}.plist.sha256"
   before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   before_sum="$(cksum < "$plist" 2>/dev/null || true)"
+  # A failure is reported, but the plist is compared either way: the applier
+  # can fail after its write (a dead stdout pipe, an interrupt), and a written
+  # change must still be reloaded.
   if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --backup-dir "$state_dir"; then
-    echo "[$tag] WARNING: the environment overlay was not applied; the service keeps its current plist environment." >&2
-    return 0
+    echo "[$tag] WARNING: the environment overlay step failed; any change it wrote is still reloaded below." >&2
   fi
   after="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   after_sum="$(cksum < "$plist" 2>/dev/null || true)"

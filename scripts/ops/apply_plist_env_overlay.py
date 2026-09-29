@@ -60,7 +60,8 @@ def parse_overlay(text: str) -> dict[str, str]:
         key, sep, value = line.partition("=")
         key = key.strip()
         if not sep or not _KEY.fullmatch(key):
-            raise OverlayError(f"line {number}: expected KEY=VALUE, got {raw!r}")
+            # The line is not echoed: a mistyped key would print its value.
+            raise OverlayError(f"line {number}: expected an upper-case KEY=VALUE line")
         if key in values:
             raise OverlayError(f"line {number}: {key} is set twice")
         value = value.rstrip()
@@ -96,6 +97,15 @@ def _write_plist(path: Path, payload: dict[str, Any], *, mode: int) -> None:
         raise
 
 
+def _fsync_directory(directory: Path) -> None:
+    """Make a new directory entry durable: syncing the file does not."""
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     """Keep the pre-overlay bytes (comments included) where launchd never
     looks, readable only by the owner: the plist carries tokens.
@@ -104,7 +114,9 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     original with an already-rewritten copy. An existing backup is kept. The
     bytes go to a synced temporary file first and only a complete copy is
     linked to the final name (atomically, failing if it exists), so a full
-    disk or an interrupted write never leaves a truncated "original"."""
+    disk or an interrupted write never leaves a truncated "original". The
+    directory is synced before returning, so the plist is never rewritten
+    ahead of a backup that a power loss could still take back."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     path = backup_dir / f"{target.name}.pre-overlay"
     if path.exists():
@@ -121,6 +133,7 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
             os.link(temporary, path)
         except FileExistsError:
             pass  # another run published one first; keep it
+        _fsync_directory(backup_dir)  # the new name must outlive a crash
     finally:
         temporary.unlink(missing_ok=True)
     return path
