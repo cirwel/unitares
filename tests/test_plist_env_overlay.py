@@ -167,8 +167,36 @@ def test_the_backup_entry_is_synced_before_the_plist_is_replaced(tmp_path, monke
 
     monkeypatch.setattr(overlay_mod.os, "fsync", fsync)
     monkeypatch.setattr(overlay_mod.os, "replace", replace)
+    backups.mkdir()
     overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
     assert events == ["sync-dir", "replace"]
+
+
+def test_a_new_backup_directory_is_synced_into_its_parents(tmp_path, monkeypatch):
+    # Codex on #2585: on a fresh host the state directory is created here, and
+    # its own entry must be durable before the plist is replaced, or a crash
+    # can keep the rewritten plist and lose the backup directory with it.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(HAND_WRITTEN)
+    backups = tmp_path / "home" / "state"
+    synced: list[object] = []  # directory (device, inode) pairs, in order
+    real_fsync, real_replace = overlay_mod.os.fsync, overlay_mod.os.replace
+
+    def fsync(fd):
+        info = overlay_mod.os.fstat(fd)
+        if stat.S_ISDIR(info.st_mode):
+            synced.append((info.st_dev, info.st_ino))
+        return real_fsync(fd)
+
+    def replace(src, dst):
+        synced.append("replace")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(overlay_mod.os, "fsync", fsync)
+    monkeypatch.setattr(overlay_mod.os, "replace", replace)
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
+    ident = [(d.stat().st_dev, d.stat().st_ino) for d in (tmp_path, tmp_path / "home", backups)]
+    assert synced == [*ident, "replace"]
 
 
 def test_dry_run_reports_without_writing(tmp_path):

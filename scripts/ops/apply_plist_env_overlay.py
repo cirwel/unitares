@@ -106,6 +106,18 @@ def _fsync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
+def _make_directory_durably(directory: Path) -> None:
+    """Create ``directory`` and any missing parents, syncing the parent of
+    each one created so the new entries outlive a crash too."""
+    missing = []
+    while not directory.exists():
+        missing.append(directory)
+        directory = directory.parent
+    for created in reversed(missing):
+        created.mkdir(exist_ok=True)
+        _fsync_directory(created.parent)
+
+
 def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     """Keep the pre-overlay bytes (comments included) where launchd never
     looks, readable only by the owner: the plist carries tokens.
@@ -117,7 +129,7 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     disk or an interrupted write never leaves a truncated "original". The
     directory is synced before returning, so the plist is never rewritten
     ahead of a backup that a power loss could still take back."""
-    backup_dir.mkdir(parents=True, exist_ok=True)
+    _make_directory_durably(backup_dir)
     path = backup_dir / f"{target.name}.pre-overlay"
     if path.exists():
         return path
