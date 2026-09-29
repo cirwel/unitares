@@ -35,6 +35,25 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.1.0 removes no registered callable's canonical name, but retires 24
+  unadvertised aliases that only redirected a guessed or pre-consolidation
+  name to one that keeps its own (`status`, `start`, `checkin`, `hello`,
+  `get_agent_api_key`, and 20 more; the full list and replacements are in the
+  [changelog entry](CHANGELOG.md)); each now returns `tool_not_found_error`
+  (#2576). The eight advertised workflow aliases, the complete catalog, and
+  the interface contract's advertised surface digest are unchanged. The HTTP
+  adjudication surface (`/v1/sentinel/adjudication-queue`, `/adjudicate`,
+  `/model-adjudicate`) is removed; it was mounted only by the opt-in
+  `reference-residents` route pack, so a default install is unaffected, and
+  Sentinel's CLI `--resolve`/`--dismiss` paths remain the supported way to
+  record an operator verdict (#2546). Two runtime defaults tighten: the REST
+  local-posture auth bypass no longer trusts `100.64.0.0/10` (Tailscale/CGNAT)
+  by default, so a deployment reached over a tailnet or another overlay must
+  set `UNITARES_TRUSTED_NETWORKS` explicitly or its callers get 401 (#2560);
+  and the Compose stack stops publishing Postgres and Redis to the host and
+  drops container privileges, so a deployment that reached either directly
+  needs the new `docker-compose.admin.yml` overlay (#2580). No database
+  migration is introduced.
 - v3.0.0 preserves lifecycle envelopes; it does not preserve the registered
   callable names, the `dialectic` wire schema, or the database schema.
   `direct_resume_if_safe`, deprecated 2026-01-29 and advertised only in `full`
