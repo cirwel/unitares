@@ -453,12 +453,17 @@ def test_instructions_state_how_a_pause_actually_ends():
 
 
 def test_instructions_paragraph_stays_inside_the_client_cutoff():
-    """Claude Code truncates MCP server instructions at 2048 characters.
-    Before this change the reading-paths sentence ended at 2016; the pause
-    sentence must not push it past the cutoff."""
-    text = build_server_instructions("progressive")
-    marker = "Core workflow and advanced capabilities are reading paths, not tool filters."
-    assert text.index(marker) + len(marker) <= 2048
+    """Claude Code truncates MCP server instructions (about 2,088 bytes reached
+    sessions in September 2026 transcripts). This pinned the reading-paths
+    sentence inside 2,048 characters until 2026-09-28, when the string was cut
+    to at most 1,400 bytes and that sentence left it; the pause sentence is
+    now held inside the new budget instead (tests/test_tool_modes.py pins the
+    budget for every required phrase)."""
+    for mode in ("progressive", "full"):
+        text = build_server_instructions(mode)
+        marker = "or it expires."
+        end = text.index(marker) + len(marker)
+        assert len(text[:end].encode("utf-8")) <= 1400, mode
 
 
 # --- the nested behavioral verdict (response_mode='full') ---------------------

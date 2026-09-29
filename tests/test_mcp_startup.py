@@ -86,7 +86,10 @@ def test_server_carries_instructions_naming_the_unadvertised_surface():
     assert instructions, "the server must ship an instructions string"
     assert instructions == build_server_instructions()
     assert "start_session" in instructions
-    assert "complete compact capability-name index" in instructions
+    # Pinned "complete compact capability-name index" until 2026-09-28. That
+    # phrase described list_tools' response, which list_tools states itself;
+    # the 1,400-byte instructions budget keeps only the call that reaches it.
+    assert "list_tools(lite=true)" in instructions
     assert "use_tool" in instructions
 
 
