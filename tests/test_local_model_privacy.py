@@ -243,7 +243,7 @@ async def test_internal_lane_sends_nothing_to_an_external_endpoint(external_endp
         llm_delegation, "_get_ollama_client", MagicMock(side_effect=AssertionError("client built"))
     )
     monkeypatch.setattr(
-        "urllib.request.urlopen", MagicMock(side_effect=AssertionError("request sent"))
+        "src.mcp_handlers.support.llm_delegation.direct_urlopen", MagicMock(side_effect=AssertionError("request sent"))
     )
     monkeypatch.setattr(
         llm_delegation, "_ollama_available", MagicMock(side_effect=AssertionError("probe sent"))
@@ -356,7 +356,7 @@ def test_detection_is_one_cached_version_probe(monkeypatch):
         calls.append((url, timeout))
         return _Resp(b'{"version": "0.12.0"}')
 
-    monkeypatch.setattr(env.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(env, "direct_urlopen", fake)
     assert env.is_ollama_endpoint() is True
     assert env.is_ollama_endpoint() is True
     assert calls == [("http://localhost:11434/api/version", env.LOCAL_PROBE_TIMEOUT_S)]
@@ -366,35 +366,35 @@ def test_detection_says_no_for_a_server_without_the_route(monkeypatch):
     def not_found(url, timeout=0):
         raise env.urllib.error.HTTPError(url, 404, "nf", {}, None)
 
-    monkeypatch.setattr(env.urllib.request, "urlopen", not_found)
+    monkeypatch.setattr(env, "direct_urlopen", not_found)
     assert env.is_ollama_endpoint("http://vllm.lan:8000/v1") is False
-    monkeypatch.setattr(env.urllib.request, "urlopen", lambda url, timeout=0: _Resp(b'{"object": "x"}'))
+    monkeypatch.setattr(env, "direct_urlopen", lambda url, timeout=0: _Resp(b'{"object": "x"}'))
     assert env.is_ollama_endpoint("http://other.lan:8000/v1") is False
 
     def silent(url, timeout=0):
         raise env.urllib.error.URLError("timed out")
 
-    monkeypatch.setattr(env.urllib.request, "urlopen", silent)
+    monkeypatch.setattr(env, "direct_urlopen", silent)
     assert env.is_ollama_endpoint("http://nobody.lan:8000/v1") is False
 
 
 def test_a_busy_ollama_that_misses_the_budget_stays_ollama(monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(env.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(env.urllib.request, "urlopen", lambda url, timeout=0: _Resp(b'{"version": "0.12.0"}'))
+    monkeypatch.setattr(env, "direct_urlopen", lambda url, timeout=0: _Resp(b'{"version": "0.12.0"}'))
     assert env.is_ollama_endpoint() is True
 
     def silent(url, timeout=0):
         raise env.urllib.error.URLError("timed out")
 
-    monkeypatch.setattr(env.urllib.request, "urlopen", silent)
+    monkeypatch.setattr(env, "direct_urlopen", silent)
     clock[0] += 10  # past the cache
     assert env.is_ollama_endpoint() is True
 
     def not_found(url, timeout=0):
         raise env.urllib.error.HTTPError(url, 404, "nf", {}, None)
 
-    monkeypatch.setattr(env.urllib.request, "urlopen", not_found)
+    monkeypatch.setattr(env, "direct_urlopen", not_found)
     clock[0] += 10
     assert env.is_ollama_endpoint() is False  # an answer without the route is definitive
 
@@ -405,7 +405,7 @@ async def test_structured_call_skips_api_chat_when_not_ollama(monkeypatch):
 
     monkeypatch.setattr(llm_delegation, "is_ollama_endpoint", lambda: False)
     monkeypatch.setattr(
-        "urllib.request.urlopen", MagicMock(side_effect=AssertionError("/api/chat attempted"))
+        "src.mcp_handlers.support.llm_delegation.direct_urlopen", MagicMock(side_effect=AssertionError("/api/chat attempted"))
     )
     assert await llm_delegation.call_local_llm_structured([{"role": "user", "content": "p"}], {}) is None
 
@@ -421,7 +421,7 @@ async def test_structured_call_uses_api_chat_on_ollama(monkeypatch):
         return _Resp(b'{"message": {"content": "{\\"a\\": 1}"}}')
 
     monkeypatch.setattr(llm_delegation, "is_ollama_endpoint", lambda: True)
-    monkeypatch.setattr("urllib.request.urlopen", fake)
+    monkeypatch.setattr("src.mcp_handlers.support.llm_delegation.direct_urlopen", fake)
     assert await llm_delegation.call_local_llm_structured([{"role": "user", "content": "p"}], {}) == {"a": 1}
     assert seen == ["http://localhost:11434/api/chat"]
 
@@ -588,7 +588,8 @@ class _RedirectHarness:
                 length = int(self.headers.get("Content-Length", "0"))
                 self.rfile.read(length)
                 self.send_response(307)
-                self.send_header("Location", target_url + self.path)
+                # A fixed path: the redirect target does not echo the request.
+                self.send_header("Location", target_url + "/v1/chat/completions")
                 self.send_header("Content-Length", "0")
                 self.end_headers()
 
@@ -688,3 +689,74 @@ def test_the_availability_probe_has_one_budget_across_addresses(monkeypatch):
     started = _time.monotonic()
     assert inference_registry._probe_ollama_socket() is False
     assert _time.monotonic() - started < 0.9
+
+
+
+# --- no environment proxy for a local endpoint --------------------------------
+
+
+def test_local_clients_ignore_environment_proxies_external_ones_keep_them():
+    from src.local_inference_env import no_redirect_http_client
+
+    assert no_redirect_http_client().trust_env is False
+    assert no_redirect_http_client(asynchronous=False).trust_env is False
+    assert no_redirect_http_client(local=False).trust_env is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base, trusts_env", [
+    ("http://localhost:11434/v1", False),
+    (EXTERNAL_BASE, True),
+])
+async def test_call_model_client_proxy_policy_follows_the_classification(monkeypatch, base, trusts_env):
+    from src.mcp_handlers.support import model_inference
+
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", base)
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="ok", reasoning=None), finish_reason="stop")],
+        usage=SimpleNamespace(total_tokens=3),
+        model="m",
+    )
+    fake = MagicMock()
+    fake.return_value.chat.completions.create = AsyncMock(return_value=response)
+    fake.return_value.close = AsyncMock()
+    monkeypatch.setattr(model_inference, "OpenAI", fake)
+    await model_inference.run_model_inference(
+        model_inference.CallModelRequest(
+            prompt="hi", requesting_agent_uuid=None, provider="ollama", privacy="cloud"
+        )
+    )
+    assert fake.call_args.kwargs["http_client"].trust_env is trusts_env
+
+
+def test_native_route_reaches_a_local_server_directly_despite_a_proxy(monkeypatch):
+    import http.server
+    import threading
+
+    from src.local_inference_env import direct_urlopen
+
+    class Ok(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Ok)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # A proxy that accepts nothing: going through it would fail.
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:1")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        url = f"http://127.0.0.1:{server.server_address[1]}/api/version"
+        with direct_urlopen(url, timeout=2) as resp:
+            assert resp.read() == b"ok"
+    finally:
+        server.shutdown()
+        server.server_close()

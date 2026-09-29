@@ -323,21 +323,35 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
-def no_redirect_http_client(asynchronous: bool = True):
-    """An httpx client that does not follow redirects, for the OpenAI SDK.
+def no_redirect_http_client(asynchronous: bool = True, *, local: bool = True):
+    """An httpx client for the OpenAI SDK that keeps a prompt where it was sent.
 
-    The SDK follows redirects by default and re-sends the POST, prompt
-    included, to the new location. The endpoint was classified from its own
-    URL, so a 307 or 308 to another host would carry a local-privacy prompt
-    somewhere nothing checked. An OpenAI-compatible server has no reason to
-    redirect a completion call; with this client the redirect is returned as
-    an error instead. httpx is imported here so this module stays importable
-    without it.
+    - **No redirects.** The SDK follows redirects by default and re-sends the
+      POST, prompt included, to the new location. The endpoint was classified
+      from its own URL, so a 307 or 308 to another host would carry a
+      local-privacy prompt somewhere nothing checked. An OpenAI-compatible
+      server has no reason to redirect a completion call; the redirect comes
+      back as an error instead.
+    - **No environment proxy for a local endpoint** (``local=True``). httpx
+      honours ``HTTP_PROXY``/``HTTPS_PROXY`` by default, which would send a
+      prompt for ``localhost`` through whatever proxy the environment names.
+      An external endpoint (``local=False``) keeps the environment's proxy,
+      which an operator may need to reach it.
+
+    httpx is imported here so this module stays importable without it.
     """
     import httpx
 
     cls = httpx.AsyncClient if asynchronous else httpx.Client
-    return cls(follow_redirects=False)
+    return cls(follow_redirects=False, trust_env=not local)
+
+
+def direct_urlopen(request, *, timeout: float):
+    """``urllib.request.urlopen`` without environment proxies, for a local
+    endpoint's native routes (``/api/chat``, ``/api/version``): urllib, like
+    httpx, would otherwise route through ``HTTP_PROXY``."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(request, timeout=timeout)
 
 
 class EndpointNotLocalError(RuntimeError):
@@ -388,7 +402,7 @@ _ollama_detect_lock = threading.Lock()
 def _probe_ollama_version(root: str, timeout: float) -> bool | None:
     """True/False for an answer that says Ollama or not; None for no answer."""
     try:
-        with urllib.request.urlopen(root + "/api/version", timeout=timeout) as resp:
+        with direct_urlopen(root + "/api/version", timeout=timeout) as resp:
             payload = json.load(resp)
     except urllib.error.HTTPError:
         return False  # the server answered, without the route

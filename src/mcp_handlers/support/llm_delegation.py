@@ -46,6 +46,7 @@ from .inference_registry import (
     sha256_text,
 )
 from src.local_inference_env import (
+    direct_urlopen,
     no_redirect_http_client,
     classify_endpoint,
     is_ollama_endpoint,
@@ -277,7 +278,7 @@ async def call_local_llm_structured(
         req = urllib.request.Request(
             url, data=payload, headers={"Content-Type": "application/json"}
         )
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with direct_urlopen(req, timeout=timeout) as r:
             resp = json.load(r)
         return resp.get("message", {}).get("content")
 

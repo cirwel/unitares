@@ -558,9 +558,13 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             api_key=api_key,
             timeout=request.timeout_s,
             max_retries=0,
-            # Never follow a redirect: the prompt would go to a host nothing
-            # classified (see no_redirect_http_client).
-            http_client=no_redirect_http_client(),
+            # Never follow a redirect, and never send a local endpoint's
+            # prompt through an environment proxy (no_redirect_http_client).
+            # The Hugging Face router and an external endpoint keep the
+            # environment's proxy.
+            http_client=no_redirect_http_client(
+                local=local_endpoint is not None and local_endpoint.is_local
+            ),
         )
         try:
             async with asyncio.timeout(request.timeout_s):
