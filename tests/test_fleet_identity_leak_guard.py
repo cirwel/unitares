@@ -57,11 +57,14 @@ def test_shipped_tree_carries_no_operator_domain():
     assert hits == []
 
 
-def test_name_exemptions_do_not_exempt_the_domain():
+def test_name_exemptions_do_not_exempt_the_domain(monkeypatch):
     # NOT_IDENTITIES / KNOWN_COUPLINGS exist for resident-name homonyms and
     # deferred couplings. A domain hit in those files must still fail.
+    # KNOWN_COUPLINGS is empty since 2026-09-27, so the coupled case uses a
+    # fixture entry: the rule must hold for whatever is added there next.
     exempt = next(iter(guard.NOT_IDENTITIES))
-    coupled = next(iter(guard.KNOWN_COUPLINGS))
+    coupled = "src/example_known_coupling.py"
+    monkeypatch.setitem(guard.KNOWN_COUPLINGS, coupled, "test fixture")
     domain_hit = f'  {exempt}:1: hardcoded operator domain "cirwel.org" in a string literal'
     name_hit = f'  {exempt}:2: hardcoded fleet identity "Sentinel" in a string literal'
 

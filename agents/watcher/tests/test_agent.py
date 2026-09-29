@@ -394,9 +394,9 @@ def test_write_findings_atomic_crash_leaves_previous_file_intact(
 # ---------------------------------------------------------------------------
 # watcher_finding attribution — the row must name a resident, not a slug
 # ---------------------------------------------------------------------------
-# `audit.events.agent_id` is what http_sentinel_adjudicate resolves through
-# _finding_producer_uuid to decide whose EISV an adjudicated outcome is booked
-# against. A slug is unadjudicatable (the endpoint 422s rather than mis-book),
+# `audit.events.agent_id` decides whose EISV an outcome about the finding is
+# booked against (first relied on by the operator adjudication endpoint, removed
+# 2026-09-27). A slug is unadjudicatable (the endpoint 422s rather than mis-book),
 # so a slug row is a refutable claim that can never become an anchor. Measured
 # 2026-08-20 over 30d: watcher_finding wrote the slug on 17/17 rows while
 # watcher_resolution_finding wrote a real UUID on 7/7.

@@ -13,7 +13,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 import src.audit_db as audit_db
-from src.http_api import http_sentinel_backlog
+from agents.sentinel.routes import http_sentinel_backlog
 
 
 @pytest.fixture(autouse=True)

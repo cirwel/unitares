@@ -243,3 +243,13 @@ def test_dynamic_flags_are_linked_to_runtime_constants_and_effect_payloads():
         name for name in flags if name.startswith(f"{binding_base}_")
     }
     assert catalogued == expected
+
+
+def test_route_pack_files_outside_scan_dirs_are_catalogued():
+    # A route pack can name a handler by file path outside SCAN_DIRS (the
+    # automation census lives in scripts/ops/). The server still loads it, so
+    # its env reads are runtime flags and belong in docs/FLAGS.md.
+    files = {p.relative_to(fc.REPO).as_posix() for p in fc._pack_route_files()}
+    assert "scripts/ops/automation_census_route.py" in files
+    assert not any(f.startswith(tuple(f"{d}/" for d in fc.SCAN_DIRS)) for f in files)
+    assert "UNITARES_AUTOMATION_CENSUS_PATH" in fc.collect()

@@ -290,8 +290,7 @@ async def http_harness_outcome(request):
     (#1345). The REST tool-call path deliberately refuses a cross-fingerprint
     ``client_session_id`` echo (hijack-guard fail-closed, #1325), which
     orphaned hook delivery; this endpoint accepts explicit attribution under
-    the operator credential instead — the same trust model as
-    /v1/sentinel/adjudicate. Attribution is operator-asserted: the server
+    the operator credential instead. Attribution is operator-asserted: the server
     records the row against ``agent_uuid`` as given and does not attempt
     session resolution, so the caller owns pointing at the right identity.
 

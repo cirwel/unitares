@@ -105,29 +105,12 @@ def test_snapshot_bundle_is_not_public():
     assert "SNAPSHOT" not in r.text
 
 
-@pytest.mark.parametrize("path", ["PLAN.md"])
-def test_reference_artifacts_are_not_public(path):
-    """PLAN.md describes the operator's own fleet. It shipped public (with
-    preview.html, a literal fleet capture since deleted) because the gate was a
-    filename set and these landed beside the file it named. Nothing loads it at
-    runtime, so gating it takes no rendering path with it."""
-    r = _redesign_client(("203.0.113.7", 44444)).get(f"/dashboard/redesign/{path}")
-    assert r.status_code == 401
-
-
-@pytest.mark.parametrize("path", ["PLAN.md"])
-def test_reference_artifacts_served_to_trusted_caller(path):
-    r = _redesign_client(("127.0.0.1", 50000)).get(f"/dashboard/redesign/{path}")
-    assert r.status_code == 200
-
-
 def test_gate_covers_every_reference_artifact_under_the_shell():
     """A filename set is only as good as its next reader. This pins the whole
     set, so a file added beside these fails here rather than shipping
-    public, which is exactly how preview.html and PLAN.md got out."""
-    assert dashboard_routes._AUTHENTICATED_ONLY_FILES == {
-        "snapshot.js", "PLAN.md",
-    }
+    public, which is exactly how preview.html and PLAN.md got out (both since
+    deleted)."""
+    assert dashboard_routes._AUTHENTICATED_ONLY_FILES == {"snapshot.js"}
 
 
 def test_presentation_assets_stay_public():
