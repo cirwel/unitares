@@ -606,3 +606,23 @@ def test_the_guessed_keys_really_do_not_count():
     assert _public_grade(
         {"test_exit_code": 0, "artifact_hash": "abc", "external_verifier_id": "v"}
     ) == CLAIM_ONLY
+
+
+@pytest.mark.parametrize("setting,grade_is_substrate", [
+    ("", False),                           # a fresh install trusts no runtime's names
+    ("my_runtime_eisv", True),             # the operator lists their runtime's marker
+    ("other_marker, My_Runtime_EISV", True),  # comma list, case-insensitive
+    ("my", False),                         # too short to be a marker: ignored
+])
+def test_a_deployment_runtime_marker_is_operator_config(monkeypatch, setting,
+                                                        grade_is_substrate):
+    # Until 2026-09-28 two markers from one deployment's runtime were built in,
+    # so every install trusted that runtime's vocabulary. They are now listed
+    # per deployment in UNITARES_TRUSTED_SUBSTRATE_MARKERS.
+    monkeypatch.setenv("UNITARES_TRUSTED_SUBSTRATE_MARKERS", setting)
+    result = assess_outcome_corroboration(
+        "task_completed",
+        {"source": "my_runtime_eisv", "substrate_verified": True},
+        "agent_reported_tool_result", ceiling=NO_CEILING,
+    )
+    assert (result.grade == "substrate_observed") is grade_is_substrate
