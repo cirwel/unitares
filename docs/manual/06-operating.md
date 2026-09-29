@@ -54,11 +54,7 @@ UNITARES has run continuously in production since November 2025 on a **single-op
 
 Read thresholds with `config(action="get")`; change them with `config(action="set", thresholds={...})` (writes are identity-gated). Defaults and margin computation live in [`config/governance_config.py`](../../config/governance_config.py). Prefer leaving defaults in place until the falsifiability harness ([chapter 5](05-reading-the-signals.md#57-dont-trust-these-numbers-blindly)) tells you a change helps on *your* fleet.
 
-## 6.5 Operator constraint: no paid LLM API budget
-
-A standing project constraint worth knowing as an operator: **do not adopt features that require a paid model API** (`ANTHROPIC_API_KEY` etc.). The supported automation paths are free/self-hosted — the local Ollama detector for Watcher, `GITHUB_TOKEN`-only CI, and deterministic CLI tools. Dialectic's "LLM-assisted antithesis" uses a *local* LLM for this reason.
-
-## 6.6 The operations doc map
+## 6.5 The operations doc map
 
 Most readers can skip these; reach for them when the need is specific.
 
@@ -74,7 +70,7 @@ Most readers can skip these; reach for them when the need is specific.
 | [`lease-plane-operator-runbook.md`](../operations/lease-plane-operator-runbook.md) | Elixir lease-plane operations |
 | [`github-workflow-conventions.md`](../operations/github-workflow-conventions.md) | Branch naming + draft-PR delivery contract |
 
-## 6.7 Multi-agent coordination (advanced)
+## 6.6 Multi-agent coordination (advanced)
 
 For fleets that coordinate, the **CIRS protocol** ([`../guides/CIRS_PROTOCOL.md`](../guides/CIRS_PROTOCOL.md)) defines the message types agents use to hand off and synchronize. The **lease plane** (port `8788`) is the Elixir/OTP coordination layer for single-writer surfaces. Both are specialized — you don't need them for a basic governed fleet.
 

@@ -334,7 +334,7 @@ class TestServerInstructions:
     """
 
     def test_names_the_workflow_on_every_profile(self):
-        for mode in ("minimal", "standard", "lite", "full"):
+        for mode in ("progressive", "minimal", "standard", "lite", "full"):
             text = build_server_instructions(mode)
             for name in (
                 "start_session",
@@ -348,11 +348,33 @@ class TestServerInstructions:
         text = build_server_instructions("progressive")
         assert "initial progressive tools/list" in text
         assert "use_tool" in text
-        assert "UNITARES_TOOL_ADVERTISEMENT=full" in text
-        assert "settings remain ignored" in text
         assert "authorization" in text
         assert "stakes" not in text
         assert "Not listed here" not in text
+
+    def test_operator_configuration_lives_in_the_operator_docs(self):
+        """Advertisement settings are operator configuration an agent cannot act on.
+
+        Until 2026-09-28 the instructions named UNITARES_TOOL_ADVERTISEMENT=full
+        and the ignored GOVERNANCE_TOOL_MODE, and these pins asserted both were
+        present. They sat in the tail that Claude Code never delivered, so the
+        notes moved to the interface contract's advertisement section and the
+        pins moved with them.
+        """
+        for mode in ("progressive", "full"):
+            text = build_server_instructions(mode)
+            assert "UNITARES_TOOL_ADVERTISEMENT" not in text, mode
+            assert "GOVERNANCE_TOOL_MODE" not in text, mode
+        doc = " ".join(
+            (project_root / "docs" / "INTERFACE_CONTRACT.md")
+            .read_text(encoding="utf-8")
+            .split()
+        )
+        section = doc[doc.index("## Complete catalog, progressive advertisement"):]
+        section = section.split(" ## ", 1)[0]
+        assert "`UNITARES_TOOL_ADVERTISEMENT=full` advertises every schema up front" in section
+        assert "Legacy `GOVERNANCE_TOOL_MODE` values are ignored" in section
+        assert "MCP `instructions` string" in section
 
     def test_instructions_offer_reading_before_binding(self):
         """A first-contact agent learns it can read before what it must do.
@@ -409,3 +431,106 @@ class TestServerInstructions:
 
         monkeypatch.setattr(tool_modes, "advertised_tool_names_full", _explode)
         assert tool_modes.build_server_instructions("standard")
+
+
+# The instructions byte budget. Claude Code transcripts (14 days to 2026-09-28)
+# carried only about the first 2,088 bytes of this string, so the 3,438-byte
+# text it replaced lost its discovery route and its abridged note in every
+# session. The budget keeps the whole string, not only its head, well inside
+# that cutoff.
+INSTRUCTIONS_MAX_BYTES = 1400
+
+# Where every required phrase must end. Deliberately a separate constant from
+# the total budget: while the two are equal the position check is implied by
+# the size check, and it only names which phrase fell out. It becomes the
+# binding check if the total budget is ever raised to fit new text, so that
+# raise cannot move a required phrase past the first 1,400 bytes unnoticed.
+REQUIRED_PHRASES_END_BY = 1400
+
+# Phrases an agent must receive, in every advertisement mode.
+_REQUIRED_IN_EVERY_MODE = (
+    "UNITARES: a self-hosted, single-operator federation kernel for agent "
+    "identity, claims and evidence, review, outcomes, and reconstruction.",
+    "search_shared_memory works before start_session",
+    "start_session(force_new=true)",
+    "client_session_id",
+    "never inferred from a shared thread",
+    "a pause holds governed writes until self_recovery (not at high risk), "
+    "dialectic, an operator or a safety net lifts it, or it expires.",
+    "sync_state",
+    "record_result",
+    "check_working_state",
+    "list_tools(lite=true)",
+    "describe_tool(",
+    "abridged",
+)
+_REQUIRED_BY_MODE = {
+    "progressive": ("initial progressive tools/list", "use_tool("),
+    # Full advertisement lists every schema, so use_tool is named as available
+    # rather than given a call shape.
+    "full": ("complete tools/list schema catalog up front", "use_tool remains available"),
+}
+
+
+def _byte_end(text: str, phrase: str) -> int:
+    """UTF-8 byte offset at which the first occurrence of ``phrase`` ends."""
+    index = text.index(phrase)
+    return len(text[: index + len(phrase)].encode("utf-8"))
+
+
+def _load_doc_drift():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "check_doc_drift",
+        project_root / "scripts" / "diagnostics" / "check_doc_drift.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestServerInstructionsBudget:
+    """The whole string fits the budget, and nothing required falls outside it."""
+
+    @pytest.mark.parametrize("mode", ["progressive", "full"])
+    def test_fits_the_byte_budget(self, mode):
+        size = len(build_server_instructions(mode).encode("utf-8"))
+        assert size <= INSTRUCTIONS_MAX_BYTES, f"{mode}: {size} bytes"
+
+    @pytest.mark.parametrize("mode", ["progressive", "full"])
+    def test_every_required_phrase_ends_inside_the_budget(self, mode):
+        text = build_server_instructions(mode)
+        for phrase in _REQUIRED_IN_EVERY_MODE + _REQUIRED_BY_MODE[mode]:
+            assert phrase in text, f"{phrase!r} missing from {mode}"
+            assert _byte_end(text, phrase) <= REQUIRED_PHRASES_END_BY, (mode, phrase)
+
+    @pytest.mark.parametrize("mode", ["progressive", "full"])
+    def test_positioning_pins_are_met_by_the_string_itself(self, mode):
+        """check_doc_drift reads the whole source file, docstrings included.
+
+        The pins exist for the text an agent receives, so the string alone
+        must satisfy every one of them, inside the budget.
+        """
+        requirements = _load_doc_drift().PUBLIC_POSITIONING_CHECKS["src/tool_modes.py"]
+        text = build_server_instructions(mode)
+        folded = text.casefold()
+        for label, alternatives in requirements:
+            hits = [term.casefold() for term in alternatives if term.casefold() in folded]
+            assert hits, f"{mode}: positioning requirement {label!r} missing"
+            assert _byte_end(folded, hits[0]) <= REQUIRED_PHRASES_END_BY, (mode, label)
+
+    def test_progressive_route_is_stated_in_call_order(self):
+        text = build_server_instructions("progressive")
+        assert (
+            text.index("list_tools(lite=true)")
+            < text.index("describe_tool(")
+            < text.index("use_tool(")
+        )
+
+    @pytest.mark.parametrize("mode", ["progressive", "full"])
+    def test_outward_wording_rules(self, mode):
+        text = build_server_instructions(mode)
+        assert "agent(action='resume')" not in text
+        assert "thermodynamic" not in text.casefold()
+        assert "—" not in text, "no em dashes in the instructions"

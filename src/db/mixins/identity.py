@@ -443,7 +443,7 @@ class IdentityMixin:
 
         Per v3.3-C: transitions are explicit operator actions. This method
         does not validate operator authority — gate that at the call site
-        (e.g. an admin handler with `X-Anima-Admin` header check).
+        (e.g. an admin-authenticated handler).
 
         Timestamp semantics:
         - `earned_at` is **idempotent** — stamped only on the first

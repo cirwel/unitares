@@ -407,7 +407,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "include_archived", "include_cold", "exclude_agent_labels",
                 "min_similarity", "operator", "include_provenance",
                 "agent_id_filter", "authority_mode", "semantic", "sort_by",
-                "created_after", "created_before",
+                "created_after", "created_before", "recency_half_life_days",
         ),
         "get": (
                 "discovery_id", "include_details", "include_provenance",
@@ -616,7 +616,7 @@ class KnowledgeParams(AgentIdentityMixin):
             "search_mode=semantic or hybrid. Without a query, results are "
             "already newest first."
         ),
-        json_schema_extra={"brief": "search order: relevance, or created_at (newest text matches first)."},
+        json_schema_extra={"brief": "search order: relevance, or created_at (newest matches first)."},
     )
     created_after: Optional[str] = Field(
         None,
@@ -625,7 +625,19 @@ class KnowledgeParams(AgentIdentityMixin):
             "With no query this is the 'what is new since T' read. A timestamp "
             "without an offset is taken as UTC."
         ),
-        json_schema_extra={"brief": "search: created after this ISO time."},
+        json_schema_extra={"brief": "search: created after ISO time."},
+    )
+    recency_half_life_days: Optional[float] = Field(
+        None,
+        gt=0,
+        le=36500,
+        description=(
+            "Opt-in recency weight for action=search with a query: each result's "
+            "relevance is multiplied by 0.5 ** (age_days / this), so a result this "
+            "many days old keeps half its score. Above 0, at most 36500. Off by "
+            "default. Not combinable with sort_by='created_at'."
+        ),
+        json_schema_extra={"brief": "search: score halves per N days."},
     )
     created_before: Optional[str] = Field(
         None,

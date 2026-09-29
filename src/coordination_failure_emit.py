@@ -38,18 +38,12 @@ import logging
 from datetime import datetime
 from typing import Any
 
-logger = logging.getLogger(__name__)
+# Service ids are deployment configuration: any lowercase identifier, checked
+# with the same pattern migration 072 enforces on audit.coordination_events.
+# coordination_events imports only the standard library at module level.
+from src.coordination_events import is_valid_service
 
-# Service identifiers — kept in sync with PR #342's coordination_events service
-# enum so when/if we promote to the dedicated table, the values port unchanged.
-SERVICES: frozenset[str] = frozenset({
-    "sentinel",
-    "governance_mcp",
-    "lease_plane",
-    "vigil",
-    "chronicler",
-    "watcher",
-})
+logger = logging.getLogger(__name__)
 
 
 def emit_coordination_failure_sync(
@@ -69,9 +63,10 @@ def emit_coordination_failure_sync(
     swallowed with WARNING-level logging.
 
     Args:
-        service: emitter identity, MUST be in SERVICES. Unknown service silently
-                 falls back to 'governance_mcp' with a WARNING (we log AND emit;
-                 missing the event would be worse than emitting with a fallback).
+        service: emitter identity, a lowercase identifier (is_valid_service).
+                 A malformed id falls back to 'governance_mcp' with a WARNING
+                 (we log AND emit; missing the event would be worse than
+                 emitting with a fallback).
         event_type: dotted namespace, MUST start with 'coordination_failure.'
                     per the v0.3 council convergence on event_type discipline.
                     Validated by prefix-match only — caller is trusted to use
@@ -89,10 +84,10 @@ def emit_coordination_failure_sync(
         )
         return
 
-    effective_service = service if service in SERVICES else "governance_mcp"
+    effective_service = service if is_valid_service(service) else "governance_mcp"
     if effective_service != service:
         logger.warning(
-            "[coord-failure-emit] unknown service %r, falling back to 'governance_mcp'", service
+            "[coord-failure-emit] malformed service %r, falling back to 'governance_mcp'", service
         )
 
     try:
@@ -270,7 +265,7 @@ async def _emit_to_coordination_events_async(
 
         await emit_event(
             pool,
-            service=service,  # type: ignore[arg-type]  # validated against SERVICES upstream
+            service=service,  # validated by is_valid_service upstream
             event_type=event_type,
             payload=payload,
             agent_id=agent_id,

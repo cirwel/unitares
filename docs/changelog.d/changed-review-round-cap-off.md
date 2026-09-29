@@ -1,1 +1,0 @@
-- **review gate:** the review round cap is switched off. Every round gets a full review however many came before, and the `review` check shows only the round count. The mechanism is kept behind `ROUND_CAP_ENABLED` in `scripts/dev/review_gate.py`, and its tests still run, so it can be switched back on without being rebuilt.

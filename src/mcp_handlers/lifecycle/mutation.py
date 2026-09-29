@@ -10,6 +10,7 @@ from mcp.types import TextContent
 from datetime import datetime, timezone
 
 from src import agent_storage
+from src.grounding.class_indicator import DEPRECATED_EMBODIED_ALIAS
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from ..utils import (
     require_registered_agent,
@@ -49,7 +50,10 @@ PRIVILEGED_TAGS = frozenset({
     "autonomous",
     "protected",
     "pioneer",
-    "anima",
+    # Deprecated alias of `embodied` (src/grounding/class_indicator.py); it
+    # still exempts an agent from the stuck sweep and dialectic, so it may not
+    # be self-assigned either.
+    DEPRECATED_EMBODIED_ALIAS,
 })
 
 

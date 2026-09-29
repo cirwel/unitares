@@ -16,7 +16,7 @@ The clone pin below names the latest verified public release, which can lag
 the source version while a release is being prepared.
 
 ```bash
-git clone --branch v3.0.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.1.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make coordination-demo
@@ -117,10 +117,10 @@ To do the same by hand, install Ollama on the Docker host, pull a model, and
 name both in `.env`:
 
 ```bash
-ollama pull gemma4:latest
+ollama pull <your-model>
 cat >> .env <<'EOF'
 UNITARES_OLLAMA_BASE=http://host.docker.internal:11434
-UNITARES_LLM_MODEL=gemma4:latest
+UNITARES_LLM_MODEL=<your-model>
 EOF
 docker compose up -d --build governance-mcp
 ```
