@@ -27,6 +27,7 @@ from mcp.types import TextContent
 from starlette.requests import Request
 
 from src.mcp_handlers.context import SessionSignals
+from tests.helpers import parse_result
 
 AGENT_UUID = "1856bb5c-2553-4523-809b-a5d26bbd58d1"
 OTHER_UUID = "5a0e3c1d-77b2-4f10-9c3e-0d9a1b2c3d4e"
@@ -229,7 +230,8 @@ async def mcp_call(
         reset_session_signals(token)
         registration._tool_wrappers_cache.clear()
 
-    seen["result"] = result
+    # The registered tool returns the text block /mcp/ sends; read its JSON.
+    seen["result"] = parse_result(result)
     seen["resolve_calls"] = target_resolves
     seen["metrics_served"] = metrics.await_count > 0
     seen["metrics_for"] = [call.args[0] for call in metrics.await_args_list]

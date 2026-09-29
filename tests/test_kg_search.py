@@ -1071,7 +1071,7 @@ class TestSearchKnowledgeGraph:
             arguments["query"] = "keyword"
 
         tool = mcp_server.mcp._tool_manager.get_tool(tool_name)
-        result = await tool.run(arguments=arguments, context=None)
+        result = parse_result(await tool.run(arguments=arguments, context=None))
 
         assert result["success"] is True
         payload = result["raw_governance"] if tool_name == "search_shared_memory" else result
