@@ -120,6 +120,10 @@ def test_the_original_bytes_are_kept_before_a_change(tmp_path):
     kept = backups / "com.unitares.governance-mcp.plist.pre-overlay"
     assert kept.read_bytes() == HAND_WRITTEN
     assert stat.S_IMODE(kept.stat().st_mode) == 0o600
+    # Codex on #2585: a second change must not replace the original with the
+    # already-rewritten copy.
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=x\n"), backup_dir=backups)
+    assert kept.read_bytes() == HAND_WRITTEN
 
 
 def test_dry_run_reports_without_writing(tmp_path):

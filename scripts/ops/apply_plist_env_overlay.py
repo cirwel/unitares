@@ -16,7 +16,8 @@ nothing is ever removed: the plist also holds secrets this file must never
 see. The write is atomic, keeps the plist's file mode, and goes to the
 symlink's target when the plist is a symlink. Rewriting through plistlib
 drops the plist's XML comments, so before the first change the original bytes
-are copied to a private backup (``--backup-dir``, mode 0600).
+are copied to a private backup (``--backup-dir``, mode 0600), written once and
+never overwritten.
 
 A changed plist is picked up by the deploy's restart: ``deploy-lib.sh``
 records the plist's hash after each restart and reloads (rather than
@@ -97,10 +98,16 @@ def _write_plist(path: Path, payload: dict[str, Any], *, mode: int) -> None:
 
 def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     """Keep the pre-overlay bytes (comments included) where launchd never
-    looks, readable only by the owner: the plist carries tokens."""
+    looks, readable only by the owner: the plist carries tokens.
+
+    Written once: a later change would otherwise replace the hand-written
+    original with an already-rewritten copy. An existing backup is kept."""
     backup_dir.mkdir(parents=True, exist_ok=True)
     path = backup_dir / f"{target.name}.pre-overlay"
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path
     with os.fdopen(descriptor, "wb") as handle:
         handle.write(original)
     os.chmod(path, 0o600)
