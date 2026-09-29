@@ -236,6 +236,33 @@ def test_a_refused_line_does_not_print_its_value(tmp_path, text):
     assert "line 1" in result.stderr and "sekrit-value" not in result.stdout + result.stderr
 
 
+def test_an_undecodable_overlay_is_refused_without_its_bytes(tmp_path):
+    # The independent review on #2585: a decode error used to escape as a
+    # traceback quoting the offending byte of a value.
+    plist = _plist(tmp_path, {})
+    overlay = tmp_path / "governance-mcp.env"
+    overlay.write_bytes(b"A_KEY=caf\xe9-value\n")
+    result = subprocess.run([sys.executable, str(SCRIPT), "--plist", str(plist),
+                             "--overlay", str(overlay)], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
+    assert "0xe9" not in result.stderr and "caf" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("body", [b"<?xml version='1.0'?><plist><dict><key>A</key>",
+                                  b"not a plist at all"])
+def test_an_unreadable_plist_is_refused_with_exit_2(tmp_path, body):
+    # The independent review on #2585: malformed XML raised ExpatError, which
+    # the handler did not catch.
+    plist = tmp_path / "com.unitares.governance-mcp.plist"
+    plist.write_bytes(body)
+    result = subprocess.run([sys.executable, str(SCRIPT), "--plist", str(plist),
+                             "--overlay", str(_overlay(tmp_path, "A_KEY=v\n"))],
+                            capture_output=True, text=True)
+    assert result.returncode == 2 and "Traceback" not in result.stderr
+    assert plist.read_bytes() == body
+
+
 def test_the_tracked_overlay_parses_and_the_deploy_applies_it():
     values = overlay_mod.parse_overlay(OVERLAY.read_text())
     assert values, "the deployment overlay must set something"

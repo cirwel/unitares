@@ -41,6 +41,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+from xml.parsers.expat import ExpatError
 
 _KEY = re.compile(r"[A-Z][A-Z0-9_]*")
 
@@ -154,13 +155,18 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
 def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
                   backup_dir: Path | None = None) -> list[str]:
     """Write the overlay's values into ``plist``; return the keys changed."""
-    overlay = parse_overlay(overlay_path.read_text())
+    try:
+        text = overlay_path.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        # The decoder's message quotes the offending byte: say where, not what.
+        raise OverlayError(f"{overlay_path} is not UTF-8") from None
+    overlay = parse_overlay(text)
     plist = plist.resolve()  # write the file a symlink points at, keep the link
     try:
         with plist.open("rb") as handle:
             payload = plistlib.load(handle)
-    except (OSError, plistlib.InvalidFileException, ValueError) as exc:
-        raise OverlayError(f"cannot read {plist}: {exc}") from exc
+    except (OSError, plistlib.InvalidFileException, ValueError, ExpatError) as exc:
+        raise OverlayError(f"cannot read {plist}: {type(exc).__name__}") from None
     if not isinstance(payload, dict):
         raise OverlayError(f"{plist} is not a dict plist")
     changed = pending_changes(payload, overlay)
