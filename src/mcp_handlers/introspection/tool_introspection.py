@@ -796,10 +796,14 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # Wave 3a routing, REST target-specific prebinding, and stdio activity plus
     # telemetry behavior instead of approximating them in this handler.
     from src.mcp_handlers.context import get_nested_tool_invoker
+    from src.services.tool_usage_recorder import entered_via
 
     invoker = get_nested_tool_invoker()
     if invoker is not None:
-        transport_result = await invoker(target, nested)
+        # The target's row is the only one this call writes; mark it so a
+        # gateway call is distinguishable from a direct one.
+        with entered_via("use_tool"):
+            transport_result = await invoker(target, nested)
         if isinstance(transport_result, (list, tuple)):
             return transport_result
         return [TextContent(
@@ -822,7 +826,8 @@ async def handle_use_tool(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         resolve_minted_agent_id,
     )
 
-    usage_payload = build_tool_usage_payload(target, nested)
+    with entered_via("use_tool"):
+        usage_payload = build_tool_usage_payload(target, nested)
     started = _time.monotonic()
     try:
         result = await dispatch_tool(target, nested)
