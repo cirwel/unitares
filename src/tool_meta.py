@@ -302,6 +302,34 @@ TOOL_TIERS: Dict[str, Set[str]] = {
     tier: {m.name for m in TOOL_META if m.tier == tier} for tier in TIERS
 }
 TOOL_OPERATIONS: Dict[str, str] = {m.name: m.operation for m in TOOL_META}
+
+
+# Per-action read/write class for router actions narrower than their router.
+# The router's own class is the most privileged among its actions (agent
+# archives and deletes, so agent is write), which is right for an
+# unclassified action but wrong for these reads. Until 2026-09-28 the only
+# record of these classes was the legacy alias entries (list_agents carried
+# operation='read'); the alias table is being retired, so the class is
+# declared here, keyed on the call it describes. resolve_call_operation reads
+# it for a router call and for the per-action handler behind one.
+ACTION_OPERATIONS: Dict[Tuple[str, str], str] = {
+    ("admin", "connections"): "read",
+    ("admin", "debug_context"): "read",
+    ("admin", "reset_monitor"): "write",
+    ("admin", "server_info"): "read",
+    ("admin", "telemetry"): "read",
+    ("admin", "tool_usage"): "read",
+    ("admin", "validate_path"): "read",
+    ("agent", "get"): "read",
+    ("agent", "list"): "read",
+    ("calibration", "check"): "read",
+    ("export", "history"): "read",
+    ("knowledge", "details"): "read",
+    ("knowledge", "get"): "read",
+    ("knowledge", "list"): "read",
+    ("knowledge", "stats"): "read",
+    ("observe", "telemetry"): "read",
+}
 TOOL_CATEGORIES: Dict[str, Set[str]] = {
     category: {m.name for m in TOOL_META if m.category == category} for category in CATEGORIES
 }
