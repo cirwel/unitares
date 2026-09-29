@@ -215,6 +215,19 @@ def test_a_changed_overlay_is_reloaded_even_without_a_baseline(tmp_path, baselin
     assert (tmp_path / "state" / f"{LABEL}.plist.sha256").read_text() == _sha(plist)
 
 
+def test_a_hand_edit_the_overlay_undoes_is_reloaded(tmp_path):
+    # The independent review on #2585: the operator blanked an overlay key by
+    # hand and reloaded, so the recorded hash is of the plist the overlay is
+    # about to write back. The restart must still reload, or the blank value
+    # stays live while the plist on disk says otherwise.
+    overlaid = _plist(tmp_path, {"A_KEY": "v"})
+    baseline = _sha(overlaid)
+    plist = _plist(tmp_path, {"A_KEY": ""})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=baseline)
+    assert _sha(plist) == baseline  # the overlay wrote the recorded bytes back
+    assert calls == ["bootout", "bootstrap"]
+
+
 def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
     plist = _plist(tmp_path, {"A_KEY": "v"})
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=_sha(plist))

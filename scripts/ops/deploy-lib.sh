@@ -353,10 +353,12 @@ _deploy_lib_env_keys_loaded() {
 # changed value is RELOADED, not only written. The restart reloads only on a
 # hash MISMATCH; with no baseline yet it adopts the current hash and
 # kickstarts, which would latch the overlaid plist as "already loaded" while
-# the running definition still lacks the new keys. So when the overlay
-# changes the file and no baseline exists, the PRE-overlay hash is recorded
-# as the baseline: the restart then sees a mismatch and reloads. An existing
-# baseline is left alone (a change already mismatches it).
+# the running definition still lacks the new keys. An existing baseline can
+# also already equal the overlaid bytes: an operator who blanked an overlay
+# key by hand and reloaded left the sidecar at the pre-edit hash, which is
+# what the overlay writes back. So whenever the overlay changes the file, the
+# PRE-overlay hash is recorded as the baseline: the restart then always sees a
+# mismatch and reloads.
 #
 # The applier keeps the plist's pre-overlay bytes (its comments included) in
 # the state dir before a change. A worktree rollback does not revert values
@@ -377,7 +379,7 @@ deploy_lib_apply_env_overlay() {
     return 0
   fi
   after="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
-  if [[ -n "$before" && "$before" != "$after" && ! -s "$sidecar" ]]; then
+  if [[ -n "$before" && "$before" != "$after" ]]; then
     _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$before"
   fi
   return 0
