@@ -178,6 +178,13 @@
              deployment does. -->
         <key>UNITARES_TRUSTED_NETWORKS</key>
         <string></string>
+        <!-- Source markers your own substrate runtime writes into outcome
+             evidence (comma-separated), trusted beyond the built-in generic
+             ones such as sensor_sync. Empty trusts nothing extra. The
+             reference deployment's embodied runtime sets
+             pi_anima_eisv,get_lumen_context. -->
+        <key>UNITARES_TRUSTED_SUBSTRATE_MARKERS</key>
+        <string></string>
         <!-- The local model endpoint: any OpenAI-compatible server, with /v1
              in the URL. Empty = Ollama on this machine
              (http://localhost:11434/v1). -->

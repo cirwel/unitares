@@ -223,6 +223,7 @@ additions merge cleanly. -->
 | `UNITARES_TRACEMALLOC` | `''` | — | src/mcp_server.py |
 | `UNITARES_TRACEMALLOC_FRAMES` | `'5'` | — | src/mcp_server.py |
 | `UNITARES_TRUSTED_NETWORKS` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:194); `''` (src/mcp_handlers/dialectic/orchestrator_dispatch.py:204, src/trusted_networks.py) | Networks the operator adds to the built-in trusted set (UNITARES_TRUSTED_NETWORKS) | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/trusted_networks.py |
+| `UNITARES_TRUSTED_SUBSTRATE_MARKERS` | `''` | Substrate markers the operator adds to the built-in set (UNITARES_TRUSTED_SUBSTRATE_MARKERS) | src/outcome_corroboration.py |
 | `UNITARES_UDS_SOCKET` | `None (no reader fallback)` | Start the optional kernel-attested resident listener. | src/services/mcp_transport_service.py, agents/sdk/src/unitares_sdk/agent.py (+2 more) |
 | `UNITARES_WATCHER_DATA_DIR` | `None (no reader fallback)` | Checkout-independent home for Watcher's local state (reader's view) | src/watcher_state_reader.py, agents/watcher/_util.py |
 | `UNITARES_WATCHER_LOG_FILE` | `None (no reader fallback)` | read by log() | agents/watcher/_util.py |
