@@ -37,6 +37,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import os
 import socket
+import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
@@ -128,6 +129,27 @@ _ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": 
 _OLLAMA_PROBE_BUDGET_S = 0.5
 
 
+def _resolve_within(host: str, port: int, budget_s: float) -> list:
+    """``getaddrinfo`` bounded by ``budget_s``; an empty list when it is not
+    answered in time. getaddrinfo has no timeout of its own, and callers run
+    this probe on the event loop during auto routing, so a stalled resolver
+    must not hold them past the probe budget. The resolver thread is a
+    daemon: a lookup that never returns is abandoned, not waited for.
+    """
+    result: list = []
+
+    def run() -> None:
+        try:
+            result.extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+        except Exception:
+            pass
+
+    worker = threading.Thread(target=run, name="model-endpoint-resolve", daemon=True)
+    worker.start()
+    worker.join(budget_s)
+    return list(result) if not worker.is_alive() else []
+
+
 def _probe_ollama_socket() -> bool:
     """True when a TCP connection to the configured endpoint succeeds.
 
@@ -140,9 +162,8 @@ def _probe_ollama_socket() -> bool:
     # One budget for the whole probe, not per address: a name with several
     # A/AAAA records must not stretch it to 0.5 s x the record count.
     deadline = time.monotonic() + _OLLAMA_PROBE_BUDGET_S
-    try:
-        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
-    except Exception:
+    addresses = _resolve_within(host, port, _OLLAMA_PROBE_BUDGET_S)
+    if not addresses:
         return False
     for family, socktype, proto, _canon, sockaddr in addresses:
         remaining = deadline - time.monotonic()

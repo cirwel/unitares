@@ -220,16 +220,21 @@ def test_orchestrator_forwards_the_new_name_when_several_are_set(monkeypatch):
 
 
 @pytest.mark.parametrize("unset_value", [None, "", "  "])
-def test_orchestrator_leaves_the_host_to_the_orchestrator_when_the_server_sets_none(
+def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
     monkeypatch, unset_value
 ):
+    """A server on defaults still forwards its resolved endpoint and model, so
+    the child cannot fall back to a stale value in the orchestrator's own
+    environment. Older names are never forwarded; the new ones outrank them."""
     names = ("UNITARES_MODEL_BASE_URL", "UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL",
              "UNITARES_MODEL", "UNITARES_LLM_MODEL")
     if unset_value is not None:
         for name in names:
             monkeypatch.setenv(name, unset_value)
     spawn = _reviewer_spawn_env()
-    for name in names:
+    assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
+    assert spawn["UNITARES_MODEL"] == "gemma4:latest"
+    for name in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
         assert name not in spawn
 
 

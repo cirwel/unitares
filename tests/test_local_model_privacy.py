@@ -760,3 +760,38 @@ def test_native_route_reaches_a_local_server_directly_despite_a_proxy(monkeypatc
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_reviewer_spawn_always_carries_the_servers_resolved_endpoint(monkeypatch):
+    """With the server on defaults, a stale endpoint in the orchestrator's own
+    environment must not reach the child: the resolved values always override."""
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL", "UNITARES_OLLAMA_BASE",
+                 "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    spec = od._build_spec("s", {"root_cause": "r", "proposed_conditions": [], "reasoning": ""}, None)
+    assert spec["env"]["UNITARES_MODEL_BASE_URL"] == env.model_base_url()
+    assert spec["env"]["UNITARES_MODEL"] == env.default_local_model()
+
+
+def test_a_stalled_resolver_cannot_hold_the_probe(monkeypatch):
+    import threading as _threading
+    import time as _time
+
+    from src.mcp_handlers.support import inference_registry
+
+    release = _threading.Event()
+
+    def stalled(*_a, **_k):
+        release.wait(5)
+        return []
+
+    monkeypatch.setattr(inference_registry.socket, "getaddrinfo", stalled)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://models.internal:8000/v1")
+    started = _time.monotonic()
+    try:
+        assert inference_registry._probe_ollama_socket() is False
+        assert _time.monotonic() - started < 0.9
+    finally:
+        release.set()

@@ -27,7 +27,6 @@ from typing import Any, Dict, Optional
 from src.local_inference_env import (
     MODEL_BASE_URL_ENV,
     MODEL_ENV,
-    aliases_for,
     default_local_model,
     model_base_url,
 )
@@ -204,17 +203,15 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     for name in _CLASSIFIER_SETTINGS:
         env[name] = os.environ.get(name, "")
 
-    # Local model endpoint and model: forward what THIS server resolved
-    # (src/local_inference_env.py) under the new name, rather than raw values.
-    # The child runs this release, so the new name outranks every older one it
-    # might inherit from the orchestrator daemon, and the reviewer cannot land
-    # on a different endpoint or model than the server. Only when the server
-    # sets the setting under some name: otherwise the child keeps whatever the
-    # orchestrator provides, as before.
-    for new, resolve in ((MODEL_BASE_URL_ENV, model_base_url), (MODEL_ENV, default_local_model)):
-        names = (new, *(alias.old for alias in aliases_for(new)))
-        if any(os.environ.get(name, "").strip() for name in names):
-            env[new] = resolve()
+    # Local model endpoint and model: always forward what THIS server
+    # resolved (src/local_inference_env.py), defaults included, under the new
+    # names. The child runs this release, so the new names outrank any older
+    # or stale value it would otherwise inherit from the orchestrator daemon's
+    # environment. Forwarding only explicit settings let a server on defaults
+    # spawn a reviewer that used the orchestrator's own endpoint, which could
+    # classify local and receive a thesis the server never classified.
+    env[MODEL_BASE_URL_ENV] = model_base_url()
+    env[MODEL_ENV] = default_local_model()
 
     # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
     # the reviewer's env. The reviewer submits its antithesis/synthesis via the
