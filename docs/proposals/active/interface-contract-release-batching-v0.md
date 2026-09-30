@@ -1,7 +1,7 @@
 # Interface-contract release batching v0 — one release per server release, not per PR
 
-Status: Draft v0, design-only, awaiting operator decision
-Date: 2026-09-27
+Status: Draft v1, design-only, awaiting operator decision
+Date: 2026-09-30 (initial measurement: 2026-09-27)
 
 ## Problem
 
@@ -68,26 +68,39 @@ requests describe their surface change in a fragment. The release cut folds
 the fragments in and sets the number. This mirrors the changelog.
 
 1. **Fragments.** A PR that moves the surface adds one file,
-   `docs/interface-contract.d/<kind>-<slug>.md`, where `<kind>` is `added`
+   `src/interface_contract_fragments/<kind>-<slug>.md`, where `<kind>` is `added`
    (a compatible addition: new capability, parameter or accepted value),
    `changed` (a description or a validation tightening that moves digests) or
    `breaking` (needs a new schema family or a deprecation window, per the
    existing rule). The body is the clause as it would appear in the release
    list: what moved, which input digests and the surface digest move, and
    what does not change for an existing caller. A unique file name cannot
-   conflict.
-2. **The artifact stays exact.** `docs/interface-contract.v1.json` is still
-   regenerated in the PR, so `test_checked_in_contract_matches_runtime` keeps
-   proving the checked-in contract matches the catalog and the digests stay
-   honest. Only its `version` stays put. The digests are recomputed from
-   the catalog, so a later PR that regenerates on a moved base does not
-   conflict on the version line and gets the correct digests by running the
-   generator.
+   conflict. The directory is a Python package whose Markdown files are
+   included as package data; installed builds read it through
+   `importlib.resources`, not a presumed repository checkout. Wheel and sdist
+   tests must verify that source and installed builds count the same fragments.
+2. **Separate the runtime contract from the released artifact.** Ordinary
+   PRs do not regenerate `docs/interface-contract.v1.json`. It describes the
+   last interface release. `build_interface_contract()` still computes the
+   exact current catalog and digests for negotiation on every build, including
+   unreleased builds. PR-time tests must compare that result with the actual
+   transport catalog, independently recomputing per-capability and surface
+   hashes; they must never substitute the frozen artifact for the live catalog.
+   The existing exact artifact/runtime parity assertion becomes a release
+   check, required whenever no fragments remain and on every release cut.
+   Simply dropping that assertion without the transport and digest checks is
+   not this proposal. Neither the digest nor a fragment count is written to a
+   shared artifact by ordinary PRs, so concurrent surface PRs do not conflict
+   on those fields.
 3. **Unreleased marker.** While fragments are pending, the negotiated
    contract says so without inventing a number:
    `version` stays at the last released number, and a new field,
    `unreleased_changes: <count>`, reports how many surface changes sit on top
-   of it. A client that only reads `version` is unaffected. An operator
+   of it. The count is computed from installed fragment resources each time
+   the runtime contract is built, never cached in a tracked generated file.
+   Two independently added fragments therefore count as two after merging.
+   It is a count of fragment files, not capabilities or deployment activity.
+   A client that only reads `version` is unaffected. An operator
    running `master` can see that the surface has moved since the release.
    This is an additive field, which is itself a compatible change, and it is
    the last one made the old way.
@@ -96,13 +109,20 @@ the fragments in and sets the number. This mirrors the changelog.
    minor increment if any fragment is `added` or `changed`, and a stop if any
    is `breaking`, because that needs an operator decision. It appends the
    fragments to the release list and the history comment under the new
-   number, and it deletes them. The release PR regenerates the artifact once.
+   number, and it deletes them. The release PR regenerates the artifact once,
+   with `unreleased_changes: 0`, and must pass exact artifact/runtime parity.
+   Release cuts claim the release surface so no two assemblers write it at once.
 5. **Guard.** A check in the Release Seams workflow, modeled on
    `scripts/ci/changelog_direct_edit.py`, fails an ordinary PR that changes
    `INTERFACE_CONTRACT_VERSION` or the release paragraph, and fails a PR
-   whose regenerated artifact moves `surface_sha256` without adding a
-   fragment. Release trees, where `VERSION` is untagged, are exempt, the same
-   test the changelog guard uses.
+   the released artifact. It compares base and head runtime catalogs and
+   requires a new fragment whenever the surface digest moves. The check also
+   runs on the merged candidate so an automatically merged branch is checked
+   against the catalog it will actually ship. The assembler's release PR is
+   the explicit exception: it changes the release files, consumes fragments,
+   and passes exact artifact/runtime parity. The implementation must define
+   and test how that release exception is authorized, rather than treating any
+   ordinary version edit as permission to bypass the guard.
 
 ## What does not change
 
@@ -110,17 +130,20 @@ the fragments in and sets the number. This mirrors the changelog.
   shape change needs a new family.
 - The compatibility rule: renaming, removing or changing the meaning of a
   capability still needs a new family or a deprecation window.
-- Per-capability and surface digests, their computation and the parity tests.
-- The history already written: 1.2.0 to 1.20.0 stay as recorded.
+- Per-capability and surface digests and their computation. Their comparison
+  with the transport catalog remains a PR-time invariant; released-artifact
+  equality becomes the release invariant described above.
+- Every interface release already recorded at the migration cut stays recorded.
 
 ## Migration
 
-- Pick the release that closes the per-PR era. Master currently negotiates
-  1.20.0 while the published server says 1.1.0, so the next server release
-  ships 1.20.0 (or 1.21.0 if #2490 lands first under the old rule) as its
-  negotiated interface. The fragment rule applies to PRs opened after this
-  proposal merges.
-- An open PR that already claims a number, #2490 today, is renumbered once by
+- Pick the implementation release that closes the per-PR era, preserving the
+  interface number reached under the existing rule at that cut. The 1.20.0
+  master / 1.1.0 published comparison above is the September 27 snapshot,
+  not an instruction to restore an older interface number. The fragment rule
+  begins only after its implementation lands; merging this design document
+  changes no rule, generator, packaging or test.
+- An open PR that already claims a number at that cut is renumbered once by
   its owner under the old rule, or converted to a fragment. That is the
   owner's call, per the branch-ownership rule
   (`docs/operations/github-workflow-conventions.md`, *Branch ownership*).
@@ -135,9 +158,16 @@ the fragments in and sets the number. This mirrors the changelog.
 - **Derive the number from the digest.** Unique by construction, but a
   client can't compare two digests by age, and it breaks `unitares-resident`'s
   semver check.
-- **Only generate the artifact at release.** This would remove the conflict
-  but also the PR-time proof that the checked-in contract matches the
-  catalog, which is the check that caught F12.
+- **Keep regenerating the artifact in every PR while freezing its version.**
+  Rejected: concurrent PRs still collide on `surface_sha256`. If their identical
+  `unreleased_changes: 1` edits merge automatically, the resulting artifact
+  says one while two fragments exist. This retains the original review race
+  and can break parity on master. Draft v0 proposed this; v1 replaces it with
+  the separated runtime/release checks above.
+- **Only generate the artifact at release without replacement PR checks.**
+  Rejected: that would discard the transport/catalog parity that caught F12.
+  The proposed release-only artifact requires independent PR-time transport
+  and digest checks and installed-resource tests.
 - **Number by date (`1.20260927.0`).** Two PRs on one day still collide, and
   it changes the meaning of minor for every client.
 
@@ -147,9 +177,10 @@ the fragments in and sets the number. This mirrors the changelog.
    recommendation is yes.
 2. Add the `unreleased_changes` field, or leave `master` silent until
    release. The recommendation is to add it: an operator on `master` should
-   not see 1.20.0 describe a surface that has moved since.
-3. Whether #2490 lands under the old rule first. That is the owner's call;
-   the proposal works either way.
+   not see the last released number describe a moved surface without a marker.
+3. Adopt the separated PR-time runtime/transport checks and release-time
+   artifact check, including fragment packaging. Freezing only the version
+   while retaining per-PR artifact regeneration does not solve the collision.
 
 No implementation starts until the operator decides. The implementation
 would be one PR with the assembler, the guard, the field, the README for the
