@@ -120,7 +120,9 @@ def test_a_failed_backup_leaves_no_partial_original(tmp_path, monkeypatch):
     real_fsync = overlay_mod.os.fsync
 
     def full_disk(fd):
-        raise OSError(28, "No space left on device")
+        if stat.S_ISREG(overlay_mod.os.fstat(fd).st_mode):
+            raise OSError(28, "No space left on device")
+        return real_fsync(fd)
 
     monkeypatch.setattr(overlay_mod.os, "fsync", full_disk)
     with pytest.raises(OSError):
@@ -267,7 +269,7 @@ def test_the_tracked_overlay_parses_and_the_deploy_applies_it():
     values = overlay_mod.parse_overlay(OVERLAY.read_text())
     assert values, "the deployment overlay must set something"
     deploy = DEPLOY.read_text()
-    apply_at = deploy.index("deploy_lib_apply_env_overlay")
+    apply_at = deploy.index('if ! deploy_lib_apply_env_overlay "$TAG"')
     assert apply_at < deploy.index('deploy_lib_restart_service "$TAG"'), \
         "the overlay must land before the restart that reloads a changed plist"
 
@@ -479,4 +481,16 @@ def test_missing_applier_aborts_before_restart(tmp_path):
     original = plist.read_bytes()
     assert _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
                    baseline=None, applier=tmp_path / "missing.py", check=False) == []
+    assert plist.read_bytes() == original
+
+
+@pytest.mark.parametrize("character", ["\x01", "\ufffe"])
+def test_invalid_xml_value_returns_clean_error_and_keeps_plist(tmp_path, character):
+    plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
+    result = subprocess.run([sys.executable, str(SCRIPT), "--plist", str(plist),
+                             "--overlay", str(_overlay(tmp_path, f"A_KEY=v{character}\n"))],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "Traceback" not in result.stderr
     assert plist.read_bytes() == original

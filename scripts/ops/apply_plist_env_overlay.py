@@ -66,6 +66,8 @@ def parse_overlay(text: str) -> dict[str, str]:
         if key in values:
             raise OverlayError(f"line {number}: {key} is set twice")
         value = value.rstrip()
+        if any((ord(char) < 32 and char not in "\t\r\n") or ord(char) in {0xFFFE, 0xFFFF} for char in value):
+            raise OverlayError(f"line {number}: {key}'s value contains an XML control character")
         if re.search(r"\s#", value):
             raise OverlayError(f"line {number}: put a comment on its own line, not after {key}'s value")
         if value[:1].isspace():
