@@ -7,7 +7,7 @@ scripts/dev/review-local.sh --pr 2585
 scripts/dev/review-local.sh --pr 2585 --second-family --record
 ```
 
-Qwen3-Coder-Next is the default code specialist. `--second-family` selects Gemma4,
+Gemma4 is the validated default on this host. `--second-family` also selects Gemma4,
 which the existing review gate recognizes as Google family. Qwen currently has no
 recognized family credit. Both modes review the full diff with immutable repository
 read/search tools; neither is a targeted fix verifier. A second family only completes
@@ -17,14 +17,14 @@ Install Ollama and the models before running. No paid API or external endpoint i
 used. Override installed model names per repository:
 
 ```sh
-git config review.localModel qwen3-coder-next-64k:latest
+git config review.localModel gemma4:latest
 git config review.localSecondModel gemma4:latest
 git config review.verifier ollama:gemma4:latest
 ```
 
 The last setting serves the existing **targeted fix verifier**, not full-review
-credit. Model-family recognition follows the actual model name; an arbitrary alias
-does not earn Google credit. Pass `--model NAME` for a single run.
+credit. The runner verifies the installed model architecture before assigning family credit;
+renaming a different architecture cannot earn Google credit. Pass `--model NAME` for a single run.
 
 `--repo PATH` selects the repository without switching branches. The runner fetches
 the PR head/base, sends the complete diff, and allows only read/search against the
@@ -55,3 +55,9 @@ Keep that checkout available until the shortcut is repointed to a merged checkou
 
 The canonical gate is imported from the runner checkout, never from the PR being reviewed.
 After #2596 merges, update that checkout or repoint the shortcut to a checkout containing both changes.
+
+Qwen is opt-in: `git review-local --pr NUMBER --model qwen3-coder-next-64k:latest`.
+The installed Qwen model repeated identical tools in the initial pilots; Gemma completed
+a full review of #2585. Repeating an identical tool more than twice fails UNREVIEWED.
+Gemma supplies Google credit alongside a passing Codex/OpenAI or Claude/Anthropic review;
+two Gemma runs are still one family. Tool messages follow the [Ollama API](https://docs.ollama.com/capabilities/tool-calling).

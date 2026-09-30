@@ -111,3 +111,12 @@ def test_symlink_is_not_followed(repo):
     head = local.command('git', 'rev-parse', 'HEAD', cwd=path).strip()
     with pytest.raises(ValueError, match='regular tracked'):
         local.read_file(path, head, {'path': 'link'})
+
+
+def test_repeated_tool_loop_fails_early(repo):
+    path, head = repo
+    def repeated(*args):
+        return {'done': True, 'message': {'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': 'call-1', 'function': {'name': 'read_file', 'arguments': {'path': 'file.py'}}}]}}
+    with pytest.raises(ValueError, match='without progress'):
+        local.review(path, head, 'diff', 'qwen', 'http://localhost', 65536, 10, repeated)

@@ -130,6 +130,7 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
                 {'role': 'user', 'content': f'PR head: {head}\nComplete diff:\n{diff}'}]
     deadline = time.monotonic() + budget
     reads = 0
+    seen_calls: dict[str, int] = {}
     last = {}
     for _ in range(40):
         if len(json.dumps(messages).encode()) + 8192 > context:
@@ -161,6 +162,10 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
         for call in calls:
             function = call['function']
             name, arguments = function['name'], function['arguments']
+            signature = json.dumps({'name': name, 'arguments': arguments}, sort_keys=True)
+            seen_calls[signature] = seen_calls.get(signature, 0) + 1
+            if seen_calls[signature] > 2:
+                raise ValueError('Repeated identical tool calls without progress; UNREVIEWED')
             if isinstance(arguments, str):
                 arguments = json.loads(arguments)
             try:
@@ -173,7 +178,10 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
                     raise ValueError('Unknown tool; only read_file and search available')
             except (ValueError, KeyError, subprocess.SubprocessError) as exc:
                 output = f'TOOL ERROR: {exc}'
-            messages.append({'role': 'tool', 'tool_name': name, 'content': output})
+            result_message = {'role': 'tool', 'tool_name': name, 'content': output}
+            if call.get('id'):
+                result_message['tool_call_id'] = call['id']
+            messages.append(result_message)
     raise ValueError('Tool round budget exhausted; UNREVIEWED')
 
 
@@ -215,7 +223,7 @@ def main(argv=None) -> int:
     repo = Path(command('git', 'rev-parse', '--show-toplevel', cwd=args.repo).strip())
     model = args.model or config(repo, 'review.localSecondModel' if args.second_family else
                                 'review.localModel', 'gemma4:latest' if args.second_family else
-                                'qwen3-coder-next-64k:latest')
+                                'gemma4:latest')
     if not re.fullmatch(r'[A-Za-z0-9_.:/+-]+', model):
         raise ValueError('Invalid Ollama model name')
     url = endpoint(os.environ.get('OLLAMA_HOST', 'http://127.0.0.1:11434'))
