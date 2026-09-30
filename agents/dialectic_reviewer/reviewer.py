@@ -763,7 +763,10 @@ async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
         "max_tokens": int(os.getenv("UNITARES_DIALECTIC_REVIEW_MAX_TOKENS", "1024")),
         "temperature": 0.2,
     }
-    resp = await client.chat.completions.create(**kwargs)
+    # The supplied HTTP client has no destructor to close it; release its
+    # connections on every exit, cancellation included.
+    async with client:
+        resp = await client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content or ""
 
 

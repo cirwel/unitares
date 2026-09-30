@@ -985,3 +985,25 @@ def test_a_stalled_version_lookup_is_bounded_and_keeps_the_previous_answer(monke
         assert _time.monotonic() - started < 0.9
     finally:
         release.set()
+
+
+def test_a_stalled_version_lookup_is_joined_not_multiplied(monkeypatch):
+    import threading as _threading
+
+    release = _threading.Event()
+    started = []
+
+    def stalled(root, timeout):
+        started.append(root)
+        release.wait(5)
+
+    monkeypatch.setattr(env, "_probe_ollama_version", stalled)
+    monkeypatch.setattr(env, "_ollama_detect_cache", {})
+    monkeypatch.setattr(env, "_ollama_probe_inflight", {})
+    try:
+        for _ in range(3):
+            env.is_ollama_endpoint("http://models.internal:8000", timeout=0.02)
+            env._ollama_detect_cache.clear()  # the 5 s cache expiring
+        assert started == ["http://models.internal:8000"]
+    finally:
+        release.set()

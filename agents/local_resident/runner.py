@@ -87,12 +87,15 @@ async def call_local_model(
         # A redirect would re-send the prompt to an unclassified host.
         http_client=no_redirect_http_client(),
     )
-    resp = await client.chat.completions.create(
-        model=model or DEFAULT_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    # The supplied HTTP client has no destructor to close it; leave the block
+    # (including on cancellation) with its connections released.
+    async with client:
+        resp = await client.chat.completions.create(
+            model=model or DEFAULT_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
     return extract_model_text(resp.choices[0].message)
 
 

@@ -426,3 +426,8 @@ def test_discovery_transport_uses_the_env_file_classifier_settings(monkeypatch):
 )
 def test_env_values_are_read_as_compose_reads_them(line, expected):
     assert cm.read_env_value(line + "\n", "KEY") == expected
+
+
+def test_a_quoted_value_followed_by_a_comment_loses_its_quotes():
+    assert cm.read_env_value('KEY="vllm" # compose service\n', "KEY") == "vllm"
+    assert cm.read_env_value("KEY='vllm'   # x \"y\"\n", "KEY") == "vllm"

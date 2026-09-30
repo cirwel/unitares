@@ -463,22 +463,31 @@ def _probe_ollama_version(root: str, timeout: float) -> bool | None:
     return isinstance(payload, dict) and isinstance(payload.get("version"), str)
 
 
+_ollama_probe_inflight: dict[str, tuple[threading.Thread, list]] = {}
+
+
 def _bounded_probe(root: str, timeout: float) -> bool | None:
     """``_probe_ollama_version`` with a wall-clock bound on the whole attempt.
 
     urllib's timeout covers connect and read but not the name lookup, so a
     stalled resolver could hold the probe far past ``timeout``. The probe runs
     in a daemon thread and is abandoned after ``timeout`` plus a small margin:
-    "no answer", which keeps the previous result. The caller's 5 s cache bounds
-    how many abandoned threads a dead resolver can leave behind.
+    "no answer", which keeps the previous result. A probe still running for
+    this root is waited on again, not joined by a second one, so a dead
+    resolver costs one thread per root, not one per cache expiry.
     """
-    box: list[bool | None] = []
-    worker = threading.Thread(
-        target=lambda: box.append(_probe_ollama_version(root, timeout)),
-        name="ollama-version-probe",
-        daemon=True,
-    )
-    worker.start()
+    with _ollama_detect_lock:
+        running = _ollama_probe_inflight.get(root)
+        if running is None or not running[0].is_alive():
+            box: list[bool | None] = []
+            worker = threading.Thread(
+                target=lambda: box.append(_probe_ollama_version(root, timeout)),
+                name="ollama-version-probe",
+                daemon=True,
+            )
+            running = _ollama_probe_inflight[root] = (worker, box)
+            worker.start()
+    worker, box = running
     worker.join(timeout + 0.25)
     return box[0] if box else None
 

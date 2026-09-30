@@ -197,8 +197,9 @@ def _compose_value(raw: str) -> str:
     """A value as Compose reads it from an env file: matching surrounding quotes
     are removed, and an unquoted value ends at a ``#`` that follows a space."""
     value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
+    quoted = re.fullmatch(r"""(["'])(.*?)\1(?:\s+#.*)?""", value)
+    if quoted:
+        return quoted.group(2)
     return re.split(r"\s#", value, maxsplit=1)[0].strip()
 
 
