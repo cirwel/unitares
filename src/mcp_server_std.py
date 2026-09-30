@@ -504,7 +504,8 @@ async def _call_local_tool(
     # Activity tracking for auto-heartbeat
     from src.mcp_handlers.middleware.params_step import unwrapped_view
     from src.mcp_handlers.decorators import resolve_canonical_action_and_source
-    tracking_args = unwrapped_view(arguments, depth=1) if isinstance(arguments, dict) else {}
+    # The runner and parameter middleware each unwrap one kwargs layer.
+    tracking_args = unwrapped_view(arguments, depth=2) if isinstance(arguments, dict) else {}
     agent_id = tracking_args.get('agent_id')
     session_id = tracking_args.get('client_session_id')
     if agent_id and HEARTBEAT_CONFIG.enabled:
