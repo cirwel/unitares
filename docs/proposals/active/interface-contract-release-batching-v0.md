@@ -30,7 +30,7 @@ Measured on 2026-09-27 against `origin/master` at `3177b94ef`:
 - The published server, v2.22.1 (tagged 2026-09-08), negotiates interface
   **1.1.0**. `master` negotiates **1.20.0**. Nineteen interface releases have
   landed since that tag, and none has shipped in a published server release.
-- Twenty-one commits have moved the constant since 2026-08-26, up to three a
+- Twenty first-parent commits have moved the constant since 2026-08-26, up to three a
   day (2026-09-08, 2026-09-25). Three entries already carry a "numbered after"
   note because their PR lost a race: 1.17.0 after #2435, 1.19.0 after #2470
   and 1.20.0 after #2472.
@@ -70,9 +70,11 @@ the fragments in and sets the number. This mirrors the changelog.
 1. **Fragments.** A PR that moves the surface adds one file,
    `src/interface_contract_fragments/<kind>-<slug>.md`, where `<kind>` is `added`
    (a compatible addition: new capability, parameter or accepted value),
-   `changed` (a description or a validation tightening that moves digests) or
+   `changed` (a description or advertised-schema correction that does not
+   shrink the runtime-accepted input domain) or
    `breaking` (needs a new schema family or a deprecation window, per the
-   existing rule). The body is the clause as it would appear in the release
+   existing rule). A tighter maximum or removed accepted enum value is
+   breaking even if the schema digest changes. The body is the clause as it would appear in the release
    list: what moved, which input digests and the surface digest move, and
    what does not change for an existing caller. A unique file name cannot
    conflict. The directory is a Python package whose Markdown files are
@@ -115,8 +117,15 @@ the fragments in and sets the number. This mirrors the changelog.
 5. **Guard.** A check in the Release Seams workflow, modeled on
    `scripts/ci/changelog_direct_edit.py`, fails an ordinary PR that changes
    `INTERFACE_CONTRACT_VERSION` or the release paragraph, and fails a PR
-   that edits the released artifact. It compares base and head runtime catalogs and
-   requires a new fragment whenever the surface digest moves. The check also
+   that edits the released artifact. It compares the entire base and head negotiated contract, excluding only
+   release bookkeeping (`version` and `unreleased_changes`). This includes
+   capabilities and their digests, advertisement, transports, lifecycle
+   envelopes and limits: `surface_sha256` alone hashes only capabilities.
+   Every semantic contract change requires a matching fragment. Conversely,
+   a new fragment without a corresponding semantic change fails. Reverting
+   an unreleased change must remove or amend its original fragment, not
+   retain a stale release claim; tests must cover both directions and
+   change-then-revert sequences. The check also
    runs on the merged candidate so an automatically merged branch is checked
    against the catalog it will actually ship. The assembler's release PR is
    the explicit exception: it changes the release files, consumes fragments,
