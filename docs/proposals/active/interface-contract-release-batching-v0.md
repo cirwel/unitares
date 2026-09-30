@@ -153,12 +153,19 @@ the fragments in and sets the number. This mirrors the changelog.
    dependencies, not only handler entrypoints: for example, changes in
    `src/knowledge_graph.py` can alter `knowledge` behavior without changing its
    handler. Catalog entry coverage alone is insufficient. Until dependency
-   coverage can be demonstrated, changes under `src/`, `governance_core/`,
-   `config/` and `db/postgres/migrations/` conservatively require either a
+   coverage can be demonstrated, every changed repository path conservatively
+   requires either a
    capability-linked fragment and compatibility evidence or an explicit
-   no-behavior-change attestation with compatibility evidence. Negative-control
+   no-behavior-change attestation with compatibility evidence. The fallback
+   includes runtime-loaded assets such as `skills/*/SKILL.md`, package resources,
+   dependency declarations and deployment/build inputs; source-root enumeration
+   is not complete dependency coverage. A path may be excluded only when a
+   tested manifest classification establishes that it cannot affect the deployed
+   capability behavior or output. Unclassified paths retain the fallback.
+   Negative-control
    tests must change a transitive service, a configuration default and a
-   migration while preserving the catalog, and prove each fails without the
+   migration, a runtime-loaded skill and an unclassified asset while preserving
+   the catalog, and prove each fails without the
    required evidence. Mechanical
    edits require an explicit no-behavior-change attestation with compatibility
    tests, rather than silently bypassing this signal. Tests must include a
