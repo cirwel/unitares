@@ -159,7 +159,7 @@ def test_make_rollup_node_caps_related_to_at_max_members():
 
 @pytest.mark.asyncio
 async def test_generate_narrative_deterministic_when_llm_disabled():
-    members = [{"summary": "x", "type": "note", "status": "open"}]
+    members = [{"id": "d0", "summary": "x", "type": "note", "status": "open"}]
     text, source = await syn._generate_narrative("t", members, [], use_llm=False)
     assert source == "deterministic"
     assert "t" in text
@@ -168,13 +168,14 @@ async def test_generate_narrative_deterministic_when_llm_disabled():
 @pytest.mark.asyncio
 async def test_generate_narrative_uses_llm_when_available(monkeypatch):
     async def fake_llm(*args, **kwargs):
-        return "  Compounded narrative.  "
+        assert "status" in kwargs["messages"][1]["content"]
+        return {"statements": [{"text": "  Compounded narrative.  ", "references": [1]}]}
 
-    monkeypatch.setattr(syn, "call_local_llm", fake_llm)
-    members = [{"summary": "x", "type": "note", "status": "open"}]
+    monkeypatch.setattr(syn, "call_local_llm_structured", fake_llm)
+    members = [{"id": "d0", "summary": "x", "type": "note", "status": "open"}]
     text, source = await syn._generate_narrative("t", members, ["u"], use_llm=True)
     assert source == "llm"
-    assert text == "Compounded narrative."  # stripped
+    assert text == "Compounded narrative. [d0]"
 
 
 @pytest.mark.asyncio
@@ -182,8 +183,8 @@ async def test_generate_narrative_falls_back_when_llm_returns_none(monkeypatch):
     async def fake_llm(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(syn, "call_local_llm", fake_llm)
-    members = [{"summary": "x", "type": "note", "status": "open"}]
+    monkeypatch.setattr(syn, "call_local_llm_structured", fake_llm)
+    members = [{"id": "d0", "summary": "x", "type": "note", "status": "open"}]
     text, source = await syn._generate_narrative("t", members, [], use_llm=True)
     assert source == "deterministic"
 
@@ -289,3 +290,87 @@ async def test_synthesize_topics_sweeps_candidates_and_isolates_errors(monkeypat
     assert result["rollups_written"] == 1
     assert len(result["errors"]) == 1
     assert result["errors"][0]["topic"] == "bad"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response", [
+    {"statements": [{"text": "Invented resolution", "references": []}]},
+    {"statements": [{"text": "Invented resolution", "references": [2]}]},
+    {"statements": [{"text": "Invented resolution", "references": [0]}]},
+    {"statements": [{"text": "Invented resolution", "references": [True]}]},
+    {"statements": [{"text": "Invented resolution", "references": ["1"]}]},
+    {"statements": [{"text": " ", "references": [1]}]},
+    {"statements": [{"text": "Supported", "references": [1]},
+                    {"text": "Invented resolution", "references": [99]}]},
+    {"statements": ["Invented resolution"]},
+    {"statements": []},
+    {"statements": [{"text": "x", "references": [1]}] * 7},
+    "Unstructured, uncited prose",
+])
+async def test_untraceable_narrative_falls_back_without_persisting_claims(monkeypatch, response):
+    async def fake_llm(**kwargs):
+        return response
+
+    monkeypatch.setattr(syn, "call_local_llm_structured", fake_llm)
+    graph = FakeGraph({"pool": [_disc("d0", "Pool remains open", ["pool"])]})
+    await syn.synthesize_topic(graph, "pool", min_members=1)
+    written = graph.added[0]
+    assert written.provenance["synthesis"]["summary_source"] == "deterministic"
+    assert "Invented resolution" not in written.details
+    assert "Pool remains open" in written.details
+    assert "[d0]" in written.details
+
+
+@pytest.mark.asyncio
+async def test_narrative_keeps_late_summary_evidence_and_resolved_status(monkeypatch):
+    summary = "Original incident context. " * 8 + "Fixed and verified in PR #123."
+
+    async def fake_llm(**kwargs):
+        import json
+        evidence = json.loads(kwargs["messages"][1]["content"])["discoveries"]
+        assert evidence[0]["summary"] == summary
+        assert evidence[0]["status"] == "resolved"
+        return {"statements": [{"text": "The incident was fixed in PR #123.", "references": [1]}]}
+
+    monkeypatch.setattr(syn, "call_local_llm_structured", fake_llm)
+    members = [_disc("incident-id", summary, ["pool"], status="resolved").to_dict()]
+    narrative, source = await syn._generate_narrative("pool", members, [], use_llm=True)
+    assert source == "llm"
+    assert "[incident-id]" in narrative
+    fallback = syn.build_deterministic_summary("pool", members, [])
+    assert "Fixed and verified in PR #123." in fallback
+    assert "(resolved)" in fallback
+
+
+@pytest.mark.asyncio
+async def test_citations_match_persisted_edges_and_never_cite_unshown_members(monkeypatch):
+    members = [_disc(f"d{i}", f"summary {i}", ["pool"])
+               for i in range(syn.MAX_MEMBERS_PER_ROLLUP + 2)]
+
+    async def fake_llm(**kwargs):
+        import json
+        evidence = json.loads(kwargs["messages"][1]["content"])["discoveries"]
+        assert len(evidence) == syn.MAX_MEMBERS_PER_ROLLUP
+        return {"statements": [{"text": "Two discoveries agree.", "references": [1, 12, 1]}]}
+
+    monkeypatch.setattr(syn, "call_local_llm_structured", fake_llm)
+    graph = FakeGraph({"pool": members})
+    await syn.synthesize_topic(graph, "pool")
+    written = graph.added[0]
+    assert written.details.startswith("Two discoveries agree. [d0] [d11]")
+    assert "d0" in written.related_to and "d11" in written.related_to
+    assert "d12" not in written.related_to
+
+
+@pytest.mark.asyncio
+async def test_missing_member_identity_uses_fallback_without_inference(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    inference = AsyncMock()
+    monkeypatch.setattr(syn, "call_local_llm_structured", inference)
+    narrative, source = await syn._generate_narrative(
+        "pool", [{"summary": "An observation without identity"}], [], use_llm=True
+    )
+    assert source == "deterministic"
+    assert "An observation without identity" in narrative
+    inference.assert_not_awaited()
