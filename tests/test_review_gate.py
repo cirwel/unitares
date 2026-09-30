@@ -1936,8 +1936,8 @@ def test_rounds_count_distinct_reviewed_commits_across_evidence_kinds():
     reviews, inline = _rounds((1, "a" * 40, "2026-09-23T01:00:00Z", ["P2"]),
                               (2, "b" * 40, "2026-09-23T02:00:00Z", ["P2", "P2"]))
     clean = _native_comment("c" * 40, when="2026-09-23T03:00:00Z")
-    completion, _ = _native_completion("d" * 40)  # activity row completed 13:10
-    rounds = rg.codex_rounds([clean, completion], reviews, inline)
+    completion, reaction = _native_completion("d" * 40)  # completion plus actual clean evidence
+    rounds = rg.codex_rounds([clean, completion], reviews, inline, reactions=[reaction])
     assert rounds.count == 4 and rounds.last_head.startswith("ddddddd") and not rounds.last_findings
     # The latest round decides what the cap answers.
     rounds = rg.codex_rounds([], reviews, inline)
@@ -3625,3 +3625,43 @@ def test_targeted_completion_keeps_captured_objects_when_head_changes(repo, monk
     assert rg.capped_review(SimpleNamespace(base='master'),'o/r',1,key,head,rounds) == 0
     assert posted[0].head==head and posted[0].base==base
     assert posted[0].head != _git(repo,'rev-parse','HEAD')
+
+
+def test_actual_full_cli_invocations_have_distinct_ids_even_identical_text(repo, monkeypatch):
+    key=rg.diff_key('master','HEAD');posted=[]
+    monkeypatch.setattr(rg,'run_reviewer',lambda *a:('Examined complete diff and callers.\nVERDICT: CLEAN','exit 0'))
+    monkeypatch.setattr(rg,'post_record',lambda pr,r,*a:posted.append(r))
+    for _ in range(2):
+        assert rg._review_locked(SimpleNamespace(base='master',budget=30),1,key,'codex') == 0
+    assert posted[0].review_id != posted[1].review_id
+    assert rg.codex_rounds([_comment(r) for r in [*posted,posted[0]]],[],[]).count == 2
+
+
+def test_external_identity_reuse_on_different_objects_does_not_reset_budget():
+    a=full_record('a','CLEAN',0,False,'codex',review_id='external-run')
+    b=full_record('b','CLEAN',0,False,'codex',head='c'*40,review_id='external-run')
+    assert rg.codex_rounds([_comment(a),_comment(b)],[],[]).count == 2
+
+
+def test_completed_native_activity_without_review_evidence_is_unknown_not_full():
+    completion,reaction=_native_completion('a'*40)
+    rounds=rg.codex_rounds([completion],[],[])
+    assert rounds.count == 0 and rounds.unknown_history
+    rounds=rg.codex_rounds([completion],[],[],reactions=[reaction])
+    assert rounds.count == 1 and not rounds.unknown_history
+    reaction['created_at']='2000-01-01T00:00:00Z'
+    assert rg.codex_rounds([completion],[],[],reactions=[reaction]).count == 0
+
+
+def test_submitted_full_review_answers_completed_only_history_without_duplicate():
+    completion,_=_native_completion('a'*40)
+    reviews,inline=_rounds((1,'a'*40,'2026-09-23T01:00:00Z',['P2']))
+    rounds=rg.codex_rounds([completion],reviews,inline)
+    assert rounds.count == 1 and not rounds.unknown_history
+
+
+def test_malformed_native_reaction_does_not_become_full_evidence():
+    completion,reaction=_native_completion('a'*40)
+    reaction['created_at']='bad timestamp'
+    rounds=rg.codex_rounds([completion],[],[],reactions=[reaction])
+    assert rounds.count == 0 and rounds.unknown_history

@@ -625,7 +625,7 @@ class CodexRounds:
 
 
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
-                 events: list[dict] = ()) -> CodexRounds:
+                 events: list[dict] = (), reactions: list[dict] = ()) -> CodexRounds:
     """Count completed full reviews across sources without resetting on retarget.
 
     Native artifacts deduplicate by their actual reviewed commit. Local and
@@ -635,6 +635,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     """
     runs: dict[str, tuple[float, str, list[dict]]] = {}
     unknown_history = False
+    completed_without_evidence: set[str] = set()
 
     def seen(commit: str, when: str, findings: list[dict]) -> None:
         t = timestamp(when)
@@ -654,7 +655,10 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         body = c.get("body") or ""
         commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
         if commit:
-            seen(commit[1], c.get("updated_at") or c.get("created_at", ""), [])
+            if re.match(r"^Codex Review: Didn['’]t find any major issues\.", body):
+                seen(commit[1], c.get("updated_at") or c.get("created_at", ""), [])
+            else:
+                completed_without_evidence.add(commit[1][:7])
         if "<!-- codex-pull-request-review-summary -->" in body:
             for line in body.splitlines():
                 fields = line.split("|")
@@ -662,7 +666,20 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
                     row = re.search(r"`([0-9a-f]+)`", fields[3])
                     done = re.search(r'<relative-time datetime="([^"]+)"', fields[2])
                     if row:
-                        seen(row[1], done[1] if done else c.get("updated_at", ""), [])
+                        author_id = (c.get("user") or {}).get("id")
+                        clean = False
+                        for r in reactions:
+                            try:
+                                clean |= bool(done and author_id and r.get("content") == "+1"
+                                              and (r.get("user") or {}).get("id") == author_id
+                                              and (r.get("user") or {}).get("login") == CODEX_BOT
+                                              and timestamp(r.get("created_at", "")) >= timestamp(done[1]) > 0)
+                            except (ValueError, TypeError):
+                                continue  # malformed evidence is never clean
+                        if clean:
+                            seen(row[1], done[1], [])
+                        else:
+                            completed_without_evidence.add(row[1][:7])
     for review in reviews:
         if not is_codex_bot(review) or review.get("state") == "PENDING" or not review.get("commit_id"):
             continue
@@ -689,12 +706,13 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if rec.reviewer == "codex-native":
             seen(rec.head, c.get("created_at", ""), [])
             continue
-        identity = rec.review_id or f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.key}"
+        identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
         findings = [{"body": rec_text} for rec_text in re.findall(
             r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", c.get("body", ""))]
         if rec.verdict == "FINDINGS" and not findings:
             findings = [{"body": "unlabelled finding; full review required"}]
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings))
+    unknown_history |= bool(completed_without_evidence - runs.keys())
     answered_at = 0.0
     for c in comments:
         if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
@@ -823,7 +841,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             earlier = native_records(comments, reviews, inline, events, key, commit, reactions)
             snapshot.records.extend(earlier.records)
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
-    snapshot.rounds = codex_rounds(comments, reviews, inline, events)
+    snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
     return snapshot
 
 
@@ -2356,6 +2374,7 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     out_dir = Path(CACHE_DIR) / key / reviewer
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
+    review_run_id = uuid.uuid4().hex  # every actual invocation is a distinct full round
     reviewed_head_oid = git("rev-parse", "HEAD").strip()
     reviewed_base_oid = git("rev-parse", args.base).strip()
     if diff_key(reviewed_base_oid, reviewed_head_oid) != key:
@@ -2393,7 +2412,8 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         rec = Record(key, verdict, n, False, reviewer,
                      model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
-    stamp_record(rec, args.base, "full", text, head=reviewed_head_oid, base_oid=reviewed_base_oid)
+    stamp_record(rec, args.base, "full", text, argparse.Namespace(review_id=review_run_id),
+                 head=reviewed_head_oid, base_oid=reviewed_base_oid)
     authorization = getattr(args, "authorize_full_review", None)
     if authorization:
         text = f"Explicit additional full-review authorization: {authorization}\n\n" + text
