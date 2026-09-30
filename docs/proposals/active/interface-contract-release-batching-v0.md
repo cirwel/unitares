@@ -171,6 +171,33 @@ the fragments in and sets the number. This mirrors the changelog.
    tests, rather than silently bypassing this signal. Tests must include a
    handler-only meaning change whose catalog remains byte-identical, both
    with and without the required fragment and compatibility evidence.
+   Attestations are unique tracked JSON files at
+   `.github/interface-contract-attestations/<slug>.json`, validated against a
+   versioned schema. Each records `kind` (`behavior_change` or
+   `no_behavior_change`), exact repository-relative `paths`, affected
+   `capabilities`, a nonempty `rationale`, `fragment` (required for a behavior
+   change, null otherwise), and nonempty `checks` referencing allowlisted
+   static-check IDs or pytest node IDs under `tests/`. No arbitrary shell
+   command is accepted. Ordinary documentation, test and CI edits can name
+   relevant static checks rather than an unrelated runtime compatibility test.
+   The guard derives changed paths from the base/head diff, requires coverage
+   of every non-metadata path, validates capability names against both catalogs,
+   and checks fragment references and consistency with the dependency manifest.
+   New or modified attestation JSON is metadata only after schema validation;
+   it cannot exempt guard, schema or manifest implementation changes themselves.
+   Existing attestations unchanged in this PR do not cover new edits. Wildcards,
+   missing paths, unknown checks or capabilities, dangling fragment references,
+   and conflicting attestations fail closed. A no-behavior-change assertion
+   cannot override an observed catalog/advertisement change or a required
+   deprecation gate, and remains subject to the ordinary independent PR review.
+   CI executes the selected checks through trusted workflow code and produces
+   an evidence artifact containing the actual candidate SHA, attestation content
+   hashes, check IDs and results. The guard accepts only successful evidence
+   produced in that run for that exact candidate, including the merged candidate;
+   committed claims that tests ran, stale artifacts and skipped checks do not
+   count. Negative controls cover each refusal and a valid documentation-only
+   attestation. This is a proposed implementation requirement, not an existing
+   source of validated evidence.
    A breaking fragment cannot authorize a breaking merge:
    the PR-time gate must verify the required new schema family or an
    implemented deprecation transition before that change reaches master.
