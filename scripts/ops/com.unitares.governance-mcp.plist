@@ -174,8 +174,9 @@
         <!-- Networks, beyond loopback and the RFC1918 private ranges, whose
              callers skip auth in local posture (comma-separated CIDRs).
              Empty trusts nothing extra. A host whose callers reach it over a
-             Tailscale tailnet sets 100.64.0.0/10, as the reference
-             deployment does. -->
+             Tailscale tailnet sets 100.64.0.0/10. The reference
+             deployment's value comes from scripts/ops/governance-mcp.env,
+             which deploy-mcp.sh applies on every deploy. -->
         <key>UNITARES_TRUSTED_NETWORKS</key>
         <string></string>
         <!-- Source markers your own substrate runtime writes into outcome
