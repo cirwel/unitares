@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, List, Optional
 
-from src.governance_glossary import EISV_INLINE_SUMMARY
 from src.tool_meta import tool_relationships
 from src.mcp_handlers.identity_bootstrap import SET_DISPLAY_NAME_CALL
 
