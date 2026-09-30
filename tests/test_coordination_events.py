@@ -341,16 +341,49 @@ async def test_emit_event_rejects_non_dict_payload(pool):
 
 
 @pytest.mark.asyncio
-async def test_emit_event_rejects_unknown_service_via_db(pool):
-    """Service enum is enforced server-side by CHECK. The Service Literal
-    type catches it at the type-checker level; here we exercise the DB
-    rejection path (the type system isn't enforced at runtime)."""
-    with pytest.raises(asyncpg.exceptions.CheckViolationError) as exc_info:
+async def test_emit_event_accepts_an_unlisted_service_id(pool):
+    """Migration 072: a well-formed service id the server does not list (an
+    adopter's own agent) is recorded as given."""
+    await _cleanup(pool)
+    event_id = await emit_event(
+        pool,
+        service="my_own_agent",
+        event_type=COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
+        agent_id=_TEST_AGENT_ID,
+    )
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT service FROM audit.coordination_events WHERE event_id = $1",
+            event_id,
+        )
+    assert row["service"] == "my_own_agent"
+    await _cleanup(pool)
+
+
+@pytest.mark.asyncio
+async def test_emit_event_rejects_a_malformed_service_via_validator(pool):
+    """The client-side check fails before the INSERT, with a clear message."""
+    with pytest.raises(ValueError, match="lowercase identifier"):
         await emit_event(
             pool,
-            service="not_a_real_service",  # type: ignore[arg-type]
+            service="Not A Service",
             event_type=COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
         )
+
+
+@pytest.mark.asyncio
+async def test_the_service_check_rejects_a_malformed_id_via_db(pool):
+    """The database enforces the same format (migration 072's CHECK) for a
+    writer that bypasses emit_event."""
+    async with pool.acquire() as conn:
+        with pytest.raises(asyncpg.exceptions.CheckViolationError) as exc_info:
+            await conn.execute(
+                "INSERT INTO audit.coordination_events"
+                " (ts, event_id, service, event_type, payload, context)"
+                " VALUES (now(), gen_random_uuid(), $1, $2, '{}'::jsonb, '{}'::jsonb)",
+                "Not A Service",
+                COORDINATION_FAILURE_ASYNCPG_CONNECT_ERROR,
+            )
     assert "service" in str(exc_info.value).lower()
 
 

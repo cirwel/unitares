@@ -1017,6 +1017,10 @@ async def _resolve_http_session_binding(
     return agent_uuid
 
 
+# How many ``kwargs`` wrappers dispatch actually unwraps on this path.
+_DISPATCH_UNWRAP_DEPTH = 2
+
+
 async def _resolve_http_bound_agent(
     tool_name: str,
     arguments: dict,
@@ -1024,12 +1028,51 @@ async def _resolve_http_bound_agent(
 ) -> str | None:
     """Resolve an existing identity before dispatching a direct HTTP tool."""
     from src.mcp_handlers.context import set_unbound_resolution
-    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     # Each prebind, nested ones included, starts with no resolver result.
     set_unbound_resolution(None)
     if not isinstance(arguments, dict) or _skips_http_prebind(tool_name):
         return None
+
+    # Every path below stamps the resolved caller into an omitted agent_id.
+    # For a call that must name its own target (agent archive and delete,
+    # the same set /mcp/'s inject_identity leaves alone), that would turn
+    # "no target" into "the caller". Whether the caller named one is read
+    # here, before any path writes it, and the stamp is taken off again once
+    # the caller is bound; a missing key and an empty one both mean no
+    # target to the handler, which then refuses. The call is read as
+    # dispatch will see it after unwrapping a ``kwargs`` wrapper: the stamp
+    # lands on the outer dict, and an action or target inside ``kwargs``
+    # only surfaces later, merged over it. Dispatch unwraps exactly twice
+    # (the pipeline boundary, then the HTTP fallback), so the call is read at
+    # each depth it can reach, 0 through 2, and any of them that is an unnamed
+    # destructive call wins: a deeper ``get`` cannot cancel an outer
+    # ``delete``. A wrapper below that depth is never unwrapped, so it must
+    # not retarget a valid outer call either.
+    from src.mcp_handlers.middleware.params_step import (
+        _EXPLICIT_TARGET_CALLS,
+        unwrapped_view,
+    )
+
+    unnamed_destructive = any(
+        _EXPLICIT_TARGET_CALLS.matches(tool_name, call) and not call.get("agent_id")
+        for call in (
+            unwrapped_view(arguments, depth)
+            for depth in range(_DISPATCH_UNWRAP_DEPTH + 1)
+        )
+    )
+    if unnamed_destructive:
+        try:
+            return await _resolve_http_bound_caller(arguments, signals, tool_name)
+        finally:
+            arguments.pop("agent_id", None)
+    return await _resolve_http_bound_caller(arguments, signals, tool_name)
+
+
+async def _resolve_http_bound_caller(
+    arguments: dict, signals, tool_name: str,
+) -> str | None:
+    from src.mcp_handlers.decorators import get_call_identity_requirement
 
     explicit_agent_id = await _bind_explicit_http_agent(arguments)
     if explicit_agent_id:
