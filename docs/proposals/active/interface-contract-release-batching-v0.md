@@ -133,7 +133,10 @@ the fragments in and sets the number. This mirrors the changelog.
    capabilities and their digests, advertisement, transports, lifecycle
    envelopes and limits: `surface_sha256` alone hashes only capabilities.
    The comparison also includes the actual advertised top-level tool
-   descriptions, which the contract builder and its digests currently omit.
+   descriptions and MCP annotations, which the contract builder and its
+   digests currently omit. An annotation-only change to readOnlyHint,
+   destructiveHint or idempotentHint requires a fragment even when no schema
+   or handler changes; negative-control tests must prove that requirement.
    Every semantic contract or advertised-description change requires a
    matching fragment. Catalog comparison is only the structural signal:
    behavior can change while schemas, digests and descriptions stay identical.
@@ -186,9 +189,14 @@ the fragments in and sets the number. This mirrors the changelog.
   not an instruction to restore an older interface number. The fragment rule
   begins only after its implementation lands; merging this design document
   changes no rule, generator, packaging or test.
-- An open PR that already claims a number at that cut is renumbered once by
-  its owner under the old rule, or converted to a fragment. That is the
-  owner's call, per the branch-ownership rule
+- An open PR that already claims a number may be renumbered once by its
+  owner under the old rule only if it merges before the implementation cut.
+  Every such PR still open after the cut must be converted to a fragment by
+  its owner; the new guard rejects old-style version, release-paragraph and
+  artifact edits. There is no grandfathering exception. Migration tests must
+  cover rejection of a stale numbered PR after the cut and acceptance of its
+  fragment conversion. The branch edits remain the owner's responsibility,
+  per the branch-ownership rule
   (`docs/operations/github-workflow-conventions.md`, *Branch ownership*).
 - `RELEASE_PROCESS.md` step 2 gains one command, next to
   `changelog_assemble.py`.
