@@ -47,15 +47,19 @@ A moved `input_schema_sha256` is what tells a hash-pinning client to re-pin.
 
 Two facts limit what a per-PR number buys:
 
-1. **No client reads the minor number.** The one negotiating client in the
+1. **No client distinguishes supported minor releases above its floor.** The one negotiating client in the
    workspace, `unitares-resident` (`src/unitares_resident/contract.py`), checks
-   the schema family, a minimum of 1.1.0 and a maximum major of 1. The host
+   the schema family, the full version tuple against a minimum of 1.1.0,
+   and a maximum major of 1. It rejects 1.0.9 and accepts 1.1.0. The host
    adapter and the SDK do not read the version. Nothing branches on 1.14.0
    vs 1.19.0.
 2. **Hash-pinning clients re-pin on the digests, not on the number.** The
    per-capability `input_schema_sha256` values and `surface_sha256` are
-   computed from the catalog, in `build_interface_contract()`, and they move
-   whenever the surface moves, whatever the version says.
+   computed from input schemas in `build_interface_contract()` and move
+   when those schemas move, whatever the version says. Top-level tool
+   descriptions can change without moving either digest. The current
+   negotiation summary returns only the aggregate digest; obtaining current
+   per-capability pins requires the full-contract retrieval added below.
 
 A deployment sees the version change only when it upgrades the server, so the
 unit a client can observe is the server release. Nineteen numbers between two
@@ -84,8 +88,15 @@ the fragments in and sets the number. This mirrors the changelog.
 2. **Separate the runtime contract from the released artifact.** Ordinary
    PRs do not regenerate `docs/interface-contract.v1.json`. It describes the
    last interface release. `build_interface_contract()` still computes the
-   exact current catalog and digests for negotiation on every build, including
-   unreleased builds. PR-time tests must compare that result with the actual
+   exact current catalog and digests on every build, including unreleased
+   builds. The implementation must add an explicit read-only full-contract
+   retrieval option to `list_tools`, including capabilities and their
+   `input_schema_sha256` values. The default summary remains compact.
+   Hash-pinning clients opt into the full result and re-pin from that live
+   catalog, rather than a frozen checked-in artifact. Source, installed and
+   remote-transport tests must verify these pins equal the actual schemas.
+   This new retrieval option is an additive migration change under the
+   existing numbering rule. PR-time tests must compare that result with the actual
    transport catalog, independently recomputing per-capability and surface
    hashes; they must never substitute the frozen artifact for the live catalog.
    The existing exact artifact/runtime parity assertion becomes a release
@@ -121,7 +132,15 @@ the fragments in and sets the number. This mirrors the changelog.
    release bookkeeping (`version` and `unreleased_changes`). This includes
    capabilities and their digests, advertisement, transports, lifecycle
    envelopes and limits: `surface_sha256` alone hashes only capabilities.
-   Every semantic contract change requires a matching fragment. Conversely,
+   The comparison also includes the actual advertised top-level tool
+   descriptions, which the contract builder and its digests currently omit.
+   Every semantic contract or advertised-description change requires a
+   matching fragment. A breaking fragment cannot authorize a breaking merge:
+   the PR-time gate must verify the required new schema family or an
+   implemented deprecation transition before that change reaches master.
+   An operator authorization is recorded explicitly and cannot silently
+   redefine v1 compatibility; deferring the decision to release assembly
+   would allow master to reject previously valid inputs under the old family. Conversely,
    a new fragment without a corresponding semantic change fails. Reverting
    an unreleased change must remove or amend its original fragment, not
    retain a stale release claim; tests must cover both directions and
