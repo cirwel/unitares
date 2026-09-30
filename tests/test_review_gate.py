@@ -30,6 +30,14 @@ _REAL_READ_NATIVE = rg.read_native  # no_cloud_reads stubs it; carry tests opt i
 shipped_round_cap_enabled = rg.ROUND_CAP_ENABLED
 
 
+def full_record(*args, **kwargs):
+    """These fixtures represent full reviews with explicit object evidence."""
+    kwargs.setdefault("head", "a" * 40)
+    kwargs.setdefault("base", "b" * 40)
+    kwargs.setdefault("scope", "full")
+    return rg.Record(*args, **kwargs)
+
+
 @pytest.fixture(autouse=True)
 def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
@@ -38,9 +46,7 @@ def no_cloud_reads(monkeypatch):
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
     # The tracked provider switch reflects today's outages; unit tests pin it.
     monkeypatch.setattr(rg, "disabled_providers", lambda: {})
-    # The round cap is switched off in the shipped config (ROUND_CAP_ENABLED);
-    # the cap tests pin it on so the mechanism stays tested for re-enabling.
-    # The tests of the shipped default set it off explicitly.
+    # Pin the approved bounded policy; switch-off compatibility has its own tests.
     monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", True)
     # Whether the agy CLI is installed must not change unit behaviour.
     monkeypatch.setattr(rg, "optional_cli_installed", lambda p: p not in rg.OPTIONAL_CLI)
@@ -146,7 +152,7 @@ def _master_edits_next_to_the_pr(r: Path) -> None:
 
 
 def _record(key: str, verdict="CLEAN", findings=0, url="reviewed", reviewer="codex-native"):
-    return _comment(rg.Record(key, verdict, findings, False, reviewer), url=url)
+    return _comment(full_record(key, verdict, findings, False, reviewer), url=url)
 
 
 def _decide(comments, base="master", head="HEAD"):
@@ -274,7 +280,7 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
 
     def read_native(repo, pr, key, head, comments):
         found = native_finding and head == merged["head"]
-        return rg.NativeReview([rg.Record(key, "FINDINGS", 1, False, "codex-native")] if found else [])
+        return rg.NativeReview([full_record(key, "FINDINGS", 1, False, "codex-native")] if found else [])
 
     monkeypatch.setattr(rg, "gh_json", pr_info)
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])
@@ -633,8 +639,8 @@ def test_a_disposition_on_the_new_key_answers_a_carried_finding(carry_repo):
     _master_edits_next_to_the_pr(carry_repo)
     _git(carry_repo, "merge", "-q", "--no-edit", "master")
     own = rg.diff_key("master", "HEAD")
-    finding = _comment(rg.Record(reviewed_key, "FINDINGS", 2, False, "codex-native"), url="f")
-    disposed = _comment(rg.Record(own, "FINDINGS", 2, True, "codex-native"), url="d")
+    finding = _comment(full_record(reviewed_key, "FINDINGS", 2, False, "codex-native"), url="f")
+    disposed = _comment(full_record(own, "FINDINGS", 2, True, "codex-native"), url="d")
     rec, _ = _decide([finding, disposed])
     assert rec.status()[0] == "success"
 
@@ -830,7 +836,7 @@ def _comment(rec, association="OWNER", url="u", text="1. fixed in abc\n2. rebutt
 
 
 def test_marker_roundtrip():
-    rec = rg.Record("k" * 64, "FINDINGS", 3, True, "codex")
+    rec = full_record("k" * 64, "FINDINGS", 3, True, "codex")
     got = rg.parse_record(rg.render_marker(rec) + "\nbody")
     assert (got.key, got.verdict, got.findings, got.disposed, got.reviewer) == \
         (rec.key, "FINDINGS", 3, True, "codex")
@@ -839,9 +845,9 @@ def test_marker_roundtrip():
 def test_latest_matching_record_wins_and_other_keys_are_ignored():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 2, False, "codex"), url="first"),
-        _comment(rg.Record("other" * 12, "CLEAN", 0, False, "codex"), url="stale"),
-        _comment(rg.Record(k, "FINDINGS", 2, True, "codex"), url="disposed"),
+        _comment(full_record(k, "FINDINGS", 2, False, "codex"), url="first"),
+        _comment(full_record("other" * 12, "CLEAN", 0, False, "codex"), url="stale"),
+        _comment(full_record(k, "FINDINGS", 2, True, "codex"), url="disposed"),
     ]
     got = rg.latest_matching(comments, k)
     assert got.url == "disposed" and got.status()[0] == "success"
@@ -849,8 +855,8 @@ def test_latest_matching_record_wins_and_other_keys_are_ignored():
 
 def test_untrusted_authors_cannot_post_a_record():
     k = "k" * 64
-    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "x"), association="NONE"),
-                _comment(rg.Record(k, "CLEAN", 0, False, "x"), association="CONTRIBUTOR")]
+    comments = [_comment(full_record(k, "CLEAN", 0, False, "x"), association="NONE"),
+                _comment(full_record(k, "CLEAN", 0, False, "x"), association="CONTRIBUTOR")]
     assert rg.latest_matching(comments, k) is None
 
 
@@ -861,11 +867,11 @@ def test_untrusted_authors_cannot_post_a_record():
     ("FAILED", False, "pending"),
 ])
 def test_status_mapping(verdict, disposed, state):
-    assert rg.Record("k", verdict, 1, disposed, "codex").status()[0] == state
+    assert full_record("k", verdict, 1, disposed, "codex").status()[0] == state
 
 
 def test_reviewer_is_the_other_model():
-    assert rg.default_reviewer("codex/fix-x") == "claude"
+    assert rg.default_reviewer("codex/fix-x") == "codex"
     assert rg.default_reviewer("claude/fix-x") == "codex"
     assert rg.default_reviewer("kenny/fix-x") == "codex"
 
@@ -886,7 +892,7 @@ def test_an_empty_dispositions_record_does_not_clear_the_gate():
     # Codex's finding on #2318: a disposed=1 marker over an empty body turned
     # the check green. CI must judge the body, not trust the marker.
     k = "k" * 64
-    comments = [_comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="")]
+    comments = [_comment(full_record(k, "FINDINGS", 1, True, "codex"), text="")]
     assert rg.latest_matching(comments, k).status()[0] == "pending"
 
 
@@ -895,8 +901,8 @@ def test_a_later_clean_on_the_same_diff_does_not_clear_open_findings():
     # says CLEAN must not drop a finding that was never fixed or disposed.
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="findings"),
-        _comment(rg.Record(k, "CLEAN", 0, False, "claude"), url="clean"),
+        _comment(full_record(k, "FINDINGS", 1, False, "codex"), url="findings"),
+        _comment(full_record(k, "CLEAN", 0, False, "claude"), url="clean"),
     ]
     got = rg.latest_matching(comments, k)
     assert got.url == "findings" and got.status()[0] == "pending"
@@ -905,9 +911,9 @@ def test_a_later_clean_on_the_same_diff_does_not_clear_open_findings():
 def test_disposed_findings_then_clean_is_clean():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 1, False, "codex")),
-        _comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="1. rebutted: x"),
-        _comment(rg.Record(k, "CLEAN", 0, False, "codex"), url="clean"),
+        _comment(full_record(k, "FINDINGS", 1, False, "codex")),
+        _comment(full_record(k, "FINDINGS", 1, True, "codex"), text="1. rebutted: x"),
+        _comment(full_record(k, "CLEAN", 0, False, "codex"), url="clean"),
     ]
     assert rg.latest_matching(comments, k).url == "clean"
 
@@ -917,14 +923,14 @@ def test_one_disposition_answers_one_findings_record():
     # earlier, unanswered FINDINGS(1) on the same diff.
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="first"),
-        _comment(rg.Record(k, "FINDINGS", 2, False, "claude"), url="second"),
-        _comment(rg.Record(k, "FINDINGS", 2, True, "claude"), url="disp2",
+        _comment(full_record(k, "FINDINGS", 1, False, "codex"), url="first"),
+        _comment(full_record(k, "FINDINGS", 2, False, "claude"), url="second"),
+        _comment(full_record(k, "FINDINGS", 2, True, "claude"), url="disp2",
                  text="1. fixed\n2. rebutted: y"),
     ]
     got = rg.latest_matching(comments, k)
     assert got.url == "first" and got.status()[0] == "pending"
-    comments.append(_comment(rg.Record(k, "FINDINGS", 1, True, "codex"),
+    comments.append(_comment(full_record(k, "FINDINGS", 1, True, "codex"),
                              url="disp1", text="1. fixed"))
     assert rg.latest_matching(comments, k).status()[0] == "success"
 
@@ -932,8 +938,8 @@ def test_one_disposition_answers_one_findings_record():
 def test_a_disposition_with_the_wrong_count_answers_nothing():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 2, False, "codex")),
-        _comment(rg.Record(k, "FINDINGS", 1, True, "codex"), text="1. fixed"),
+        _comment(full_record(k, "FINDINGS", 2, False, "codex")),
+        _comment(full_record(k, "FINDINGS", 1, True, "codex"), text="1. fixed"),
     ]
     assert rg.latest_matching(comments, k).status()[0] == "pending"
 
@@ -976,8 +982,8 @@ def test_a_failed_rerun_does_not_hide_open_findings():
     # Codex round 11 on #2318: FAILED after FINDINGS made dispose unreachable.
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FINDINGS", 1, False, "codex"), url="findings"),
-        _comment(rg.Record(k, "FAILED", 0, False, "claude"), url="failed"),
+        _comment(full_record(k, "FINDINGS", 1, False, "codex"), url="findings"),
+        _comment(full_record(k, "FAILED", 0, False, "claude"), url="failed"),
     ]
     got = rg.latest_matching(comments, k)
     assert got.url == "findings" and got.verdict == "FINDINGS" and not got.disposed
@@ -995,7 +1001,8 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
 
 
 def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
-    return {"number": n, "isDraft": draft, "author": {"login": login},
+    return {"labels": [{"name": "review-requested"}] if draft else [],
+            "number": n, "isDraft": draft, "author": {"login": login},
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
@@ -1023,11 +1030,11 @@ def test_foreground_joins_running_review_and_returns_its_result(repo, monkeypatc
     comments = []
     monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
     monkeypatch.setattr(rg, "_review_locked", lambda *args: pytest.fail("duplicated running review"))
-    with rg.review_lock(key) as background:
+    with rg.review_lock("pr-1") as background:
         assert background.held
 
         def finish_review(seconds):
-            comments.append(_comment(rg.Record(key, verdict, 1, False, "claude")))
+            comments.append(_comment(full_record(key, verdict, 1, False, "claude")))
             background.__exit__()
 
         monkeypatch.setattr(rg.time, "sleep", finish_review)
@@ -1038,13 +1045,14 @@ def test_foreground_joins_running_review_and_returns_its_result(repo, monkeypatc
 def test_join_timeout_does_not_claim_review_completion(repo, monkeypatch, capsys):
     key = "k" * 64
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "owner/repo", key, "codex/change"))
-    with rg.review_lock(key):
+    with rg.review_lock("pr-1"):
         assert rg.cmd_review(SimpleNamespace(reviewer=None, fresh=False, budget=0)) == rg.UNREVIEWED
     assert "no completed review joined" in capsys.readouterr().out
 
 
 def test_review_returns_findings_text_to_the_working_agent(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "diff_text", lambda *args: "diff")
     monkeypatch.setattr(rg, "git", lambda *args: "abcd")
     finding = "1. file.py:3 loses the result on timeout.\nVERDICT: FINDINGS(1)"
@@ -1058,6 +1066,7 @@ def test_review_returns_findings_text_to_the_working_agent(tmp_path, monkeypatch
 
 def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "diff_text", lambda *args: "diff")
     monkeypatch.setattr(rg, "git", lambda *args: "abcd")
     monkeypatch.setattr(rg, "run_reviewer", lambda *args: ("Weekly limit reached", "exit 1"))
@@ -1151,16 +1160,17 @@ def test_a_lock_is_released_when_its_holder_dies(repo):
 def test_failed_runs_counts_only_failed_records_for_the_key():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
-        _comment(rg.Record(k, "FAILED", 0, False, "codex")),
-        _comment(rg.Record("x" * 64, "FAILED", 0, False, "codex")),
-        _comment(rg.Record(k, "FAILED", 0, False, "codex"), association="NONE"),
+        _comment(full_record(k, "FAILED", 0, False, "codex")),
+        _comment(full_record(k, "FAILED", 0, False, "codex")),
+        _comment(full_record("x" * 64, "FAILED", 0, False, "codex")),
+        _comment(full_record(k, "FAILED", 0, False, "codex"), association="NONE"),
     ]
     assert rg.failed_runs(comments, k) == 2
     assert rg.failed_runs(comments, k, "claude") == 0
 
 
 def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     calls, records = [], []
     def reviewer(provider, prompt, out_dir, budget, materials=None):
         calls.append(provider)
@@ -1169,12 +1179,12 @@ def test_quota_failure_falls_back_then_skips_provider_across_diffs(repo, monkeyp
     monkeypatch.setattr(rg, "run_reviewer", reviewer)
     monkeypatch.setattr(rg, "post_record", lambda *args: records.append(args[1]))
     args = SimpleNamespace(base="master", budget=30, reviewer=None)
-    assert rg.review_with_fallback(args, 1, "first", "claude") == 0
-    assert calls == ["claude", "codex"]
-    assert [rec.verdict for rec in records] == ["FAILED", "CLEAN"]
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert calls == ["claude"]
+    assert [rec.verdict for rec in records] == ["FAILED"]
     calls.clear()
-    assert rg.review_with_fallback(args, 2, "second", "claude") == 0
-    assert calls == ["codex"]
+    assert rg.review_with_fallback(args, 2, "k", "claude") == rg.UNREVIEWED
+    assert calls == []
     assert "skipping claude: quota cooldown" in capsys.readouterr().out
 
 
@@ -1189,8 +1199,8 @@ def test_exhaustion_of_one_provider_does_not_block_the_other(repo, monkeypatch):
     calls = []
     monkeypatch.setattr(rg, "_review_locked", lambda *args: calls.append(args[-1]) or 0)
     args = SimpleNamespace(budget=30, failed_providers={"claude"})
-    assert rg.review_with_fallback(args, 1, "k", "claude") == 0
-    assert calls == ["codex"]
+    assert rg.review_with_fallback(args, 1, "k", "claude") == rg.UNREVIEWED
+    assert calls == []
 
 
 def test_both_unavailable_return_explicit_unreviewed(repo, monkeypatch, capsys):
@@ -1202,11 +1212,12 @@ def test_both_unavailable_return_explicit_unreviewed(repo, monkeypatch, capsys):
 
 
 def test_explicit_provider_retry_recovers_and_clears_cooldown(repo, monkeypatch):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     rg.remember_unavailable("codex", "weekly limit", "exit 1")
     calls = []
     def reviewer(provider, *args):
         calls.append(provider)
-        return "VERDICT: CLEAN", "exit 0"
+        return "Checked all changed lines and their callers.\nVERDICT: CLEAN", "exit 0"
     monkeypatch.setattr(rg, "run_reviewer", reviewer)
     monkeypatch.setattr(rg, "post_record", lambda *args: None)
     args = SimpleNamespace(base="master", budget=30, reviewer="codex")
@@ -1344,7 +1355,7 @@ def test_native_findings_survive_later_clean_until_disposed(repo):
     snapshot = rg.native_records([_native_comment(head)], [review], inline, [], "k", head)
     rec = rg.latest_matching([], "k", snapshot.records)
     assert rec.verdict == "FINDINGS" and "1. a.py:4" in rec.text
-    disposition = _comment(rg.Record("k", "FINDINGS", 1, True, "codex-native"), text="1. rebutted: caller validates input")
+    disposition = _comment(full_record("k", "FINDINGS", 1, True, "codex-native"), text="1. rebutted: caller validates input")
     disposition["created_at"] = "2026-09-23T12:12:00Z"
     assert rg.latest_matching([disposition], "k", snapshot.records).status()[0] == "success"
     # Dismissing/deleting inline comments isn't a reasoned disposition.
@@ -1354,7 +1365,7 @@ def test_native_findings_survive_later_clean_until_disposed(repo):
 
 
 def _disposition(findings, cited_url, text="1. rebutted: measured bound"):
-    rec = rg.Record("k", "FINDINGS", findings, True, "codex-native")
+    rec = full_record("k", "FINDINGS", findings, True, "codex-native")
     body = (rg.render_marker(rec)
             + f"\n### Review record — dispositions for FINDINGS({findings}) — {cited_url}\n\n"
             + text)
@@ -1391,11 +1402,11 @@ def test_a_native_disposition_never_consumes_a_different_same_count_finding(nati
     # FINDINGS(1); disposing the native one must leave the local one open,
     # whether or not a base merge has since hidden the native evidence.
     review_url = "https://github.com/cirwel/unitares/pull/9#pullrequestreview-77"
-    local = _comment(rg.Record("k", "FINDINGS", 1, False, "claude"), url="local")
+    local = _comment(full_record("k", "FINDINGS", 1, False, "claude"), url="local")
     local["created_at"] = "2026-09-24T08:00:00Z"
     native = []
     if native_visible:
-        native_rec = rg.Record("k", "FINDINGS", 1, False, "codex-native")
+        native_rec = full_record("k", "FINDINGS", 1, False, "codex-native")
         native_rec.url, native_rec.text, native_rec.created_at = review_url, "", "2026-09-24T08:30:00Z"
         native = [native_rec]
     d = _disposition(1, review_url)
@@ -1405,7 +1416,7 @@ def test_a_native_disposition_never_consumes_a_different_same_count_finding(nati
 
 def test_a_new_finding_after_an_orphaned_native_disposition_still_opens():
     d = _disposition(1, "https://github.com/cirwel/unitares/pull/2361#pullrequestreview-5302128003")
-    later = _comment(rg.Record("k", "FINDINGS", 1, False, "claude"), url="later")
+    later = _comment(full_record("k", "FINDINGS", 1, False, "claude"), url="later")
     later["created_at"] = "2026-09-24T10:00:00Z"
     got = rg.latest_matching([d, later], "k", [])
     assert got.url == "later" and not got.disposed
@@ -1435,14 +1446,14 @@ def test_native_thread_reply_is_not_a_new_finding(repo):
 
 def test_fresh_does_not_reroll_unresolved_findings(repo, monkeypatch):
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
-    monkeypatch.setattr(rg, "pr_comments", lambda *args: [_comment(rg.Record("k", "FINDINGS", 1, False, "claude"))])
+    monkeypatch.setattr(rg, "pr_comments", lambda *args: [_comment(full_record("k", "FINDINGS", 1, False, "claude"))])
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("rerolled findings"))
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=True)) == 1
 
 
 def test_outage_does_not_erase_a_completed_review():
-    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "codex")),
-                _comment(rg.Record("k", "FAILED", 0, False, "claude"))]
+    comments = [_comment(full_record("k", "CLEAN", 0, False, "codex")),
+                _comment(full_record("k", "FAILED", 0, False, "claude"))]
     assert rg.latest_matching(comments, "k").verdict == "CLEAN"
 
 
@@ -1462,7 +1473,7 @@ def test_late_native_findings_reach_author_after_local_fallback(repo, monkeypatc
     monkeypatch.setattr(rg, "native_enabled", lambda: False)
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     completed = []
-    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "url", "1. Late finding")
+    finding = full_record("k", "FINDINGS", 1, False, "codex-native", "url", "1. Late finding")
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding] if completed else []))
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: completed.append(True) or 0)
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
@@ -1476,7 +1487,7 @@ def test_ci_preserves_existing_check_when_native_evidence_is_unreadable(monkeypa
     monkeypatch.setattr(rg, "gh_json", lambda *args: {"state": "open", "head": {"sha": "h"}, "base": {"ref": "master"}})
     monkeypatch.setattr(rg, "git", lambda *args: "")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
-    comments = [_comment(rg.Record("k", prior, 1, False, "claude"))] if prior else []
+    comments = [_comment(full_record("k", prior, 1, False, "claude"))] if prior else []
     monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
     def incomplete(*args):
         raise SystemExit("GitHub reviews endpoint unavailable")
@@ -1544,7 +1555,7 @@ def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     comments, posted = [], []
     monkeypatch.setattr(rg, "pr_comments", lambda *args: comments)
-    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "native-url", "completed head + fresh reaction")
+    clean = full_record("k", "CLEAN", 0, False, "codex-native", "native-url", "completed head + fresh reaction")
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("reviewed again"))
     def post(pr, rec, heading, text):
@@ -1562,7 +1573,7 @@ def test_joining_native_clean_publishes_one_durable_ci_trigger(repo, monkeypatch
 def test_published_review_evidence_cannot_dispatch_incidental_bot_commands(monkeypatch):
     posted = []
     monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kwargs: posted.append(kwargs["input"]))
-    rg.post_record(1, rg.Record("k", "CLEAN", 0, False, "codex-native"), "CLEAN",
+    rg.post_record(1, full_record("k", "CLEAN", 0, False, "codex-native"), "CLEAN",
                    "Reviewed commit: abc1234\nExample: @codex review or @CODEX address that feedback.")
     assert "@codex" not in posted[0].lower()
     assert "Reviewed commit: abc1234" in posted[0]
@@ -1572,7 +1583,7 @@ def test_published_review_evidence_cannot_dispatch_incidental_bot_commands(monke
 
 def test_native_receipt_write_racing_a_push_cannot_complete_an_old_diff(monkeypatch):
     posted = []
-    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
+    clean = full_record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
     monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(True))
     # The remote diff changes during the receipt write. The final validation
     # must observe that change, not reuse a successful pre-publication check.
@@ -1588,7 +1599,7 @@ def test_sweep_records_native_clean_without_starting_another_review(repo, monkey
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
-    clean = rg.Record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
+    clean = full_record("k", "CLEAN", 0, False, "codex-native", "url", "clean evidence")
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean]))
     posted = []
     monkeypatch.setattr(rg, "post_record", lambda *args: posted.append(args))
@@ -1606,7 +1617,7 @@ def test_closed_pr_stops_before_native_request_or_record(monkeypatch, state):
     with pytest.raises(rg.ClosedPullRequest):
         rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", "h")
     with pytest.raises(rg.ClosedPullRequest):
-        rg.post_record(1, rg.Record("k", "CLEAN", 0, False, "codex"), "CLEAN", "review output")
+        rg.post_record(1, full_record("k", "CLEAN", 0, False, "codex"), "CLEAN", "review output")
 
 
 def test_merged_pr_command_stops_without_telling_author_to_retry(monkeypatch, capsys):
@@ -1623,7 +1634,7 @@ def test_native_findings_are_visible_and_disposable_without_dispatch_opt_in(repo
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "native_enabled", lambda: False)
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
-    finding = rg.Record("k", "FINDINGS", 1, False, "codex-native", "review-url", "1. Real native finding")
+    finding = full_record("k", "FINDINGS", 1, False, "codex-native", "review-url", "1. Real native finding")
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([finding]))
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: pytest.fail("hid native findings"))
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
@@ -1674,7 +1685,7 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     posted = []
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: posted.append(kw["input"]))
-    clean = rg.Record("k", "CLEAN", 0, False, "codex-native")
+    clean = full_record("k", "CLEAN", 0, False, "codex-native")
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([clean] if posted else []))
     assert rg.join_native(SimpleNamespace(budget=90), "o/r", 1, "k", head) == clean
     assert len(posted) == 1 and f"head={head} key=k" in posted[0]
@@ -1702,8 +1713,8 @@ def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, b
     attempts = []
     monkeypatch.setattr(rg, "_review_locked", lambda args, pr, key, provider:
                         attempts.append((provider, args.budget)) or 0)
-    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=budget, fresh=False)) == 0
-    assert len(attempts) == 1 and attempts[0][1] > 0
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=budget, fresh=False)) == (rg.UNREVIEWED if activity == "running" else 0)
+    assert not attempts if activity == "running" else len(attempts) == 1 and attempts[0][1] > 0
     assert clock[0] - 1000 <= budget / 2
     assert len(requests) <= (1 if activity == "missing" else 0)
 
@@ -1717,7 +1728,8 @@ def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, runni
                                                         "created_at": "2000-01-01T00:00:00Z"}])
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: pytest.fail("duplicate request"))
-    assert rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", head) is None
+    rec = rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", head)
+    assert rec.reviewer == "codex-native-pending" if running else rec is None
 
 
 def test_join_native_rejects_a_push_during_review(repo, monkeypatch):
@@ -1732,7 +1744,7 @@ def test_join_native_rejects_a_push_during_review(repo, monkeypatch):
     ("FINDINGS", True, "success"),
 ])
 def test_check_distinguishes_outages_from_findings(verdict, disposed, expected):
-    rec = rg.Record("k", verdict, 1, disposed, "codex") if verdict else None
+    rec = full_record("k", verdict, 1, disposed, "codex") if verdict else None
     conclusion, text = rg.review_check(rec)
     assert conclusion == expected
     if expected == "neutral":
@@ -1959,9 +1971,9 @@ def test_check_description_shows_the_round():
     assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
 
 
-def test_round_cap_ships_switched_off():
-    # Operator decision, 2026-09-27: every round gets a full review.
-    assert shipped_round_cap_enabled is False
+def test_round_cap_ships_enabled():
+    # Operator decision 2026-09-30 supersedes uncapped full-review loops.
+    assert shipped_round_cap_enabled is True
 
 
 def test_switched_off_cap_never_caps_a_p2_fix_loop(monkeypatch):
@@ -2005,24 +2017,19 @@ def test_past_the_cap_without_a_verifier_spends_nothing_and_says_unreviewed(repo
     posted = _capped(repo, monkeypatch)
     assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
     out = capsys.readouterr().out
-    assert not posted and "round cap reached (3 of 3" in out and "review.sh dispose" in out
+    assert not posted and "budget exhausted" in out and "authorize-full-review" in out
 
 
 def test_past_the_cap_verified_fixes_record_clean_and_name_their_limit(repo, monkeypatch):
-    posted = _capped(repo, monkeypatch, "ollama:gemma4:latest", ["reasoning\nADDRESSED"] * 2)
-    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 0
-    (rec, text), = posted
-    assert rec.verdict == "CLEAN" and rec.reviewer == "fix-verify:ollama:gemma4:latest"
-    assert "did not review the new lines" in text and rg.parse_verdict(text) == ("CLEAN", 0)
+    posted = _capped(repo, monkeypatch, "ollama:m", ["ADDRESSED"] * 2)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+    assert not posted
 
 
 def test_past_the_cap_unaddressed_findings_stay_open_and_disposable(repo, monkeypatch):
-    posted = _capped(repo, monkeypatch, "ollama:gemma4:latest", ["NOT_ADDRESSED", "ADDRESSED"])
-    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == 1
-    (rec, text), = posted
-    assert (rec.verdict, rec.findings) == ("FINDINGS", 1) and rg.parse_verdict(text) == ("FINDINGS", 1)
-    # Numbered so `review.sh dispose` can answer exactly the open ones.
-    assert re.search(r"^1\. NOT ADDRESSED: a\.txt:1", text, re.M)
+    posted = _capped(repo, monkeypatch, "ollama:m", ["ADDRESSED"] * 2)
+    assert rg.cmd_review(SimpleNamespace(reviewer=None, budget=30, fresh=False)) == rg.UNREVIEWED
+    assert not posted
 
 
 def test_an_unusable_verifier_is_unreviewed_not_clean(repo, monkeypatch):
@@ -2035,7 +2042,9 @@ def test_an_explicit_reviewer_spends_a_round_past_the_cap(repo, monkeypatch):
     _capped(repo, monkeypatch)
     ran = []
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: ran.append(True) or 0)
-    rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False))
+    assert rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False)) == rg.UNREVIEWED
+    assert not ran
+    assert rg.cmd_review(SimpleNamespace(reviewer="codex", budget=30, fresh=False, authorize_full_review="operator requested")) == 0
     assert ran
 
 
@@ -2053,7 +2062,7 @@ def test_a_retarget_stops_the_cap():
     assert rg.codex_rounds([], reviews, inline).capped()
     events = [{"event": "base_ref_changed", "created_at": "2026-09-23T03:30:00Z"}]
     later, more = _codex_review(4, "4" * 40, "2026-09-23T04:00:00Z", findings=["P2"])
-    assert rg.codex_rounds([], reviews + [later], inline + more, events).count == 0
+    assert rg.codex_rounds([], reviews + [later], inline + more, events).count == 4
 
 def test_plain_text_severity_labels_are_severe():
     rounds = rg.CodexRounds(3, "a" * 40, [{"body": "[P1] loses data"}])
@@ -2065,7 +2074,7 @@ def test_a_push_after_a_fix_verification_gets_a_full_review():
     # PR #2401 review round 2: re-verifying the same old fixes on a later
     # push would pass new lines no reviewer read.
     reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
-    verified = _comment(rg.Record("k4", "CLEAN", 0, False, "fix-verify:ollama:m"))
+    verified = _comment(full_record("k4", "CLEAN", 0, False, "fix-verify:ollama:m"))
     verified["created_at"] = "2026-09-23T04:00:00Z"
     rounds = rg.codex_rounds([verified], reviews, inline)
     assert rounds.count == 3 and rounds.answered_since and not rounds.capped()
@@ -2107,11 +2116,11 @@ def test_a_disposed_round_is_answered_and_not_another_round():
     # PR #2401, round 5: after disposing round 3, unrelated work needs a full
     # review, and the disposition record is not itself a local round.
     reviews, inline = _rounds(*[(i, str(i) * 40, f"2026-09-23T0{i}:00:00Z", ["P2"]) for i in (1, 2, 3)])
-    disposed = _comment(rg.Record("k3", "FINDINGS", 1, True, "codex-native"), text="1. deferred to #9")
+    disposed = _comment(full_record("k3", "FINDINGS", 1, True, "codex-native"), text="1. deferred to #9")
     disposed["created_at"] = "2026-09-23T04:00:00Z"
     rounds = rg.codex_rounds([disposed], reviews, inline)
     assert rounds.count == 3 and rounds.answered_since and not rounds.capped()
-    local = _comment(rg.Record("k5", "FINDINGS", 1, True, "codex"), text="1. rebutted")
+    local = _comment(full_record("k5", "FINDINGS", 1, True, "codex"), text="1. rebutted")
     local["created_at"] = "2026-09-23T05:00:00Z"
     assert rg.codex_rounds([local], [], []).count == 0
 
@@ -2141,15 +2150,15 @@ def test_the_hf_token_never_reaches_argv(monkeypatch, tmp_path):
 def test_local_fallback_records_are_not_rounds():
     # PR #2401 rounds 4-7: a local record names no commit, start time or
     # per-finding severity, so counting it opened a new gap each time.
-    comments = [_comment(rg.Record(f"k{i}", "FINDINGS", 1, False, r), text="1. [P2] bug")
+    comments = [_comment(full_record(f"k{i}", "FINDINGS", 1, False, r), text="1. [P2] bug")
                 for i, r in enumerate(["codex", "claude", "codex"])]
-    assert rg.codex_rounds(comments, [], []).count == 0
+    assert rg.codex_rounds(comments, [], []).count == 3
 
 
 def test_dispose_emit_answers_the_open_record_ci_reads(repo, tmp_path, capsys):
     _pushed(repo, tmp_path)
     key = rg.diff_key("origin/master", "HEAD")
-    open_rec = _comment(rg.Record(key, "FINDINGS", 2, False, "subagent:x"), url="open")
+    open_rec = _comment(full_record(key, "FINDINGS", 2, False, "subagent:x"), url="open")
     open_rec["created_at"] = "2026-09-25T01:00:00Z"
     (tmp_path / "d.txt").write_text("1. fixed in abc123\n2. rebutted: measured, see thread\n")
     assert rg.main(["dispose", str(tmp_path / "d.txt"), "--emit", "--findings", "2",
@@ -2191,11 +2200,11 @@ def test_a_disabled_provider_is_skipped_unless_asked_for(monkeypatch, capsys):
     monkeypatch.setattr(rg, "provider_cooldown", lambda p: None)
     ran = []
     monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or 0)
-    assert rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None), 1, "k", "codex") == 0
-    assert ran == ["claude"] and "disabled repo-wide" in capsys.readouterr().out
+    assert rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None), 1, "k", "codex") == rg.UNREVIEWED
+    assert ran == [] and "disabled repo-wide" in capsys.readouterr().out
     ran.clear()
     rg.review_with_fallback(SimpleNamespace(budget=30, reviewer="codex"), 1, "k", "codex")
-    assert ran == ["codex"]
+    assert ran == []
 
 
 def test_every_provider_the_tracked_file_lists_is_disabled():
@@ -2257,7 +2266,7 @@ def test_antigravity_is_preferred_cross_family_when_installed(monkeypatch):
     assert rg.reviewer_candidates("claude/x") == ["codex", "antigravity", "claude"]
     monkeypatch.setattr(rg, "disabled_providers", lambda: {"codex": "out"})
     assert rg.default_reviewer("claude/x") == "antigravity"
-    assert rg.reviewer_candidates("antigravity/x") == ["claude", "antigravity"]
+    assert rg.reviewer_candidates("antigravity/x") == ["antigravity", "claude"]
 
 
 def test_antigravity_is_skipped_when_agy_is_absent(monkeypatch):
@@ -2272,7 +2281,7 @@ def test_fallback_after_codex_is_now_antigravity_not_claude(monkeypatch):
     ran = []
     monkeypatch.setattr(rg, "_review_locked", lambda a, pr, key, p: ran.append(p) or rg.UNREVIEWED)
     rg.review_with_fallback(SimpleNamespace(budget=30, reviewer=None, branch="claude/x"), 1, "k", "codex")
-    assert ran == ["codex", "antigravity"]
+    assert ran == ["codex"]
 
 
 def _agy_materials(repo):
@@ -2524,6 +2533,7 @@ def test_output_limit_detection_needs_error_status_and_a_conversation():
 
 
 def test_a_resumed_agy_review_is_recorded_end_to_end(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     """Through _review_locked, not run_reviewer alone: a resumed success must
     land as a real verdict, not FAILED/UNREVIEWED."""
     monkeypatch.chdir(tmp_path)
@@ -2594,6 +2604,7 @@ def test_a_resume_carries_every_flag_of_the_first_launch(monkeypatch, tmp_path):
 
 
 def test_an_unrecovered_truncation_is_recorded_as_failed_not_clean(tmp_path, monkeypatch):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(rg, "diff_text", lambda *args: "diff --git a/x b/x\n+x\n")
     monkeypatch.setattr(rg, "git", lambda *args: "abcd")
@@ -2827,6 +2838,7 @@ def test_a_bare_verdict_that_stays_bare_is_not_recorded(monkeypatch, tmp_path):
 
 
 def test_any_reviewers_bare_verdict_falls_back_instead_of_recording(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
     """Not only agy: a verdict nobody can check is never posted as a review."""
     monkeypatch.setattr(rg, "REVIEW_MIN_REASONING_CHARS", _REAL_FLOOR)
     monkeypatch.chdir(tmp_path)
@@ -2923,14 +2935,14 @@ def test_an_unreadable_policy_warns_and_requires_nothing(monkeypatch, tmp_path, 
 def test_passing_families_counts_trusted_passing_records_only():
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
-        _comment(rg.Record(k, "CLEAN", 0, False, "claude"), association="NONE"),  # untrusted
-        _comment(rg.Record("x" * 64, "CLEAN", 0, False, "claude")),               # other diff
-        _comment(rg.Record(k, "FINDINGS", 2, False, "claude")),                   # open findings
-        _comment(rg.Record(k, "FAILED", 0, False, "claude")),
+        _comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
+        _comment(full_record(k, "CLEAN", 0, False, "claude"), association="NONE"),  # untrusted
+        _comment(full_record("x" * 64, "CLEAN", 0, False, "claude")),               # other diff
+        _comment(full_record(k, "FINDINGS", 2, False, "claude")),                   # open findings
+        _comment(full_record(k, "FAILED", 0, False, "claude")),
     ]
     assert rg.passing_families(comments, k) == {"google"}
-    native = [rg.Record(k, "CLEAN", 0, False, "codex-native")]
+    native = [full_record(k, "CLEAN", 0, False, "codex-native")]
     assert rg.passing_families(comments, k, native) == {"google", "openai"}
 
 
@@ -2954,7 +2966,7 @@ def test_ci_holds_a_single_family_pass_on_a_sensitive_diff(monkeypatch, capsys):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
-    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high"))]
+    comments = [_comment(full_record("k", "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     posted = []
@@ -3029,8 +3041,8 @@ def test_a_fix_verification_receipt_is_not_a_family():
     it did not review the new lines; it must not complete two families."""
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
-        _comment(rg.Record(k, "CLEAN", 0, False, "fix-verify:claude")),
+        _comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.1-pro-high")),
+        _comment(full_record(k, "CLEAN", 0, False, "fix-verify:claude")),
     ]
     assert rg.passing_families(comments, k) == {"google"}
 
@@ -3042,8 +3054,8 @@ def test_review_with_fallback_reports_which_provider_completed(monkeypatch):
     monkeypatch.setattr(rg, "_review_locked",
                         lambda a, pr, key, p: rg.UNREVIEWED if p == "antigravity" else 0)
     args = SimpleNamespace(budget=30, reviewer=None, branch="x/y")
-    assert rg.review_with_fallback(args, 1, "k", "antigravity") == 0
-    assert args.completed_by == "claude"
+    assert rg.review_with_fallback(args, 1, "k", "antigravity") == rg.UNREVIEWED
+    assert not hasattr(args, "completed_by")
 
 
 
@@ -3070,7 +3082,7 @@ def test_unreadable_changed_paths_fail_closed_in_ci(monkeypatch):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: None)
     monkeypatch.setattr(rg, "base_policy_paths", lambda base: [])
     monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
-    comments = [_comment(rg.Record("k", "CLEAN", 0, False, "claude"))]
+    comments = [_comment(full_record("k", "CLEAN", 0, False, "claude"))]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
     posted = []
@@ -3122,8 +3134,8 @@ def test_a_same_family_review_recorded_under_a_plain_name_does_not_complete_the_
     """Claude on #2504 (P2)."""
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "claude")),
-        _comment(rg.Record(k, "CLEAN", 0, False, "opus-subagent")),
+        _comment(full_record(k, "CLEAN", 0, False, "claude")),
+        _comment(full_record(k, "CLEAN", 0, False, "opus-subagent")),
     ]
     assert rg.passing_families(comments, k) == {"anthropic"}
 
@@ -3218,12 +3230,12 @@ def test_an_emitted_disposition_cannot_credit_a_family_that_never_reviewed():
     disposed FINDINGS counts only against its original open record."""
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "codex-native")),
-        _comment(rg.Record(k, "FINDINGS", 1, False, "codex")),
-        _comment(rg.Record(k, "FINDINGS", 1, True, "claude"), text="1. fixed in abc"),
+        _comment(full_record(k, "CLEAN", 0, False, "codex-native")),
+        _comment(full_record(k, "FINDINGS", 1, False, "codex")),
+        _comment(full_record(k, "FINDINGS", 1, True, "claude"), text="1. fixed in abc"),
     ]
     assert rg.passing_families(comments, k) == {"openai"}
-    comments.append(_comment(rg.Record(k, "FINDINGS", 1, False, "claude")))
+    comments.append(_comment(full_record(k, "FINDINGS", 1, False, "claude")))
     assert rg.passing_families(comments, k) == {"openai", "anthropic"}
 
 
@@ -3231,11 +3243,11 @@ def test_the_codex_receipt_posts_even_when_another_family_is_clean(monkeypatch):
     """Claude on #2504 (P2): any CLEAN suppressed the codex-native receipt, so
     CI never re-ran and held a PR two families had passed."""
     k = "k" * 64
-    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude"))]
+    comments = [_comment(full_record(k, "CLEAN", 0, False, "claude"))]
     posted = []
     monkeypatch.setattr(rg, "post_record", lambda *a: posted.append(a))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, r: r)
-    rec = rg.Record(k, "CLEAN", 0, False, "codex-native", "url", "clean")
+    rec = full_record(k, "CLEAN", 0, False, "codex-native", "url", "clean")
     rg.finish_record("o/r", 1, k, "h", rec, comments)
     assert posted and posted[0][1].reviewer == "codex-native"
 
@@ -3260,16 +3272,16 @@ def test_a_disposed_native_codex_review_counts_for_openai():
     """Claude on #2504 (P1): native reviews are GitHub reviews, not comments,
     so their dispositions never matched an original and OpenAI never counted."""
     k = "k" * 64
-    native = [rg.Record(k, "FINDINGS", 2, False, "codex-native",
+    native = [full_record(k, "FINDINGS", 2, False, "codex-native",
                         "https://github.com/o/r/pull/1#pullrequestreview-9")]
-    disposition = rg.Record(k, "FINDINGS", 2, True, "codex-native")
+    disposition = full_record(k, "FINDINGS", 2, True, "codex-native")
     body_text = ("dispositions for FINDINGS(2) — https://github.com/o/r/pull/1#pullrequestreview-9\n"
                  "1. rebutted: x\n2. fixed in abc")
-    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude")),
+    comments = [_comment(full_record(k, "CLEAN", 0, False, "claude")),
                 _comment(disposition, text=body_text)]
     assert rg.passing_families(comments, k, native) == {"anthropic", "openai"}
     # Citing a review that IS in view but with a different count earns nothing.
-    native.append(rg.Record(k, "FINDINGS", 3, False, "codex-native",
+    native.append(full_record(k, "FINDINGS", 3, False, "codex-native",
                             "https://github.com/o/r/pull/1#pullrequestreview-8"))
     comments[1] = _comment(disposition, text=body_text.replace("review-9", "review-8"))
     assert rg.passing_families(comments, k, native) == {"anthropic"}
@@ -3282,9 +3294,9 @@ def test_a_disposed_native_review_still_counts_after_a_base_only_merge():
     k = "k" * 64
     body_text = ("dispositions for FINDINGS(2) — https://github.com/o/r/pull/1#pullrequestreview-9\n"
                  "1. rebutted: x\n2. fixed in abc")
-    comments = [_comment(rg.Record(k, "CLEAN", 0, False, "claude")),
-                _comment(rg.Record(k, "FINDINGS", 2, True, "codex-native"), text=body_text)]
-    assert rg.passing_families(comments, k, native=[]) == {"anthropic", "openai"}
+    comments = [_comment(full_record(k, "CLEAN", 0, False, "claude")),
+                _comment(full_record(k, "FINDINGS", 2, True, "codex-native"), text=body_text)]
+    assert rg.passing_families(comments, k, native=[]) == {"anthropic"}
 
 
 
@@ -3294,14 +3306,14 @@ def test_an_antigravity_review_counts_by_the_model_it_ran():
     k = "k" * 64
     def fam(model):
         return rg.passing_families(
-            [_comment(rg.Record(k, "CLEAN", 0, False, "antigravity", model=model))], k)
+            [_comment(full_record(k, "CLEAN", 0, False, "antigravity", model=model))], k)
     assert fam("gemini-3.1-pro-high") == {"google"}
     assert fam("claude-sonnet-4-6") == {"anthropic"}
     assert fam("gpt-oss-120b-medium") == {"openai"}
     assert fam("default") == {"google"}
     assert fam("") == set()  # a record without its model counts as none
     rec = rg.parse_record(rg.render_marker(
-        rg.Record(k, "CLEAN", 0, False, "antigravity", model="claude-sonnet-4-6")))
+        full_record(k, "CLEAN", 0, False, "antigravity", model="claude-sonnet-4-6")))
     assert rec.model == "claude-sonnet-4-6"
 
 
@@ -3329,9 +3341,9 @@ def test_a_disposed_antigravity_review_counts_by_its_models_family():
     agy review never counted; it now borrows the original review's model."""
     k = "k" * 64
     comments = [
-        _comment(rg.Record(k, "CLEAN", 0, False, "codex")),
-        _comment(rg.Record(k, "FINDINGS", 2, False, "antigravity", model="gemini-3.1-pro-high")),
-        _comment(rg.Record(k, "FINDINGS", 2, True, "antigravity"), text="1. fixed in a\n2. rebutted: b"),
+        _comment(full_record(k, "CLEAN", 0, False, "codex")),
+        _comment(full_record(k, "FINDINGS", 2, False, "antigravity", model="gemini-3.1-pro-high")),
+        _comment(full_record(k, "FINDINGS", 2, True, "antigravity"), text="1. fixed in a\n2. rebutted: b"),
     ]
     assert rg.passing_families(comments, k) == {"openai", "google"}
 
@@ -3348,7 +3360,7 @@ def test_agy_named_records_and_two_family_names():
     """Claude on #2504 (P3): any agy/antigravity name counts by its model, and
     a name that says two families says none."""
     k = "k" * 64
-    rec = lambda name, model="": rg.Record(k, "CLEAN", 0, False, name, model=model)
+    rec = lambda name, model="": full_record(k, "CLEAN", 0, False, name, model=model)
     assert rg.record_family(rec("agy")) is None
     assert rg.record_family(rec("antigravity-review", "claude-sonnet-4-6")) == "anthropic"
     assert rg.reviewer_family("claude-then-gpt") is None
@@ -3361,7 +3373,7 @@ def test_cmd_review_exits_3_on_a_sensitive_diff_with_one_family(monkeypatch, cap
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "claude/x"))
     monkeypatch.setattr(rg, "native_enabled", lambda: False)
     monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
-    clean = rg.Record("k", "CLEAN", 0, False, "claude", "url", "reviewed: the gate and its tests")
+    clean = full_record("k", "CLEAN", 0, False, "claude", "url", "reviewed: the gate and its tests")
     comments = [_comment(clean)]
     monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
     monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
@@ -3387,7 +3399,7 @@ def test_a_malformed_agy_model_is_never_written_into_a_marker(monkeypatch):
     assert rg.marker_model("gemini-3.1-pro-high") == "gemini-3.1-pro-high"
     assert rg.marker_model("x reviewer=codex") == ""
     assert rg.marker_model("a>b") == ""
-    rec = rg.Record("k" * 64, "CLEAN", 0, False, "antigravity",
+    rec = full_record("k" * 64, "CLEAN", 0, False, "antigravity",
                     model=rg.marker_model("x reviewer=codex"))
     back = rg.parse_record(rg.render_marker(rec))
     assert back.reviewer == "antigravity" and rg.record_family(back) is None
@@ -3417,7 +3429,7 @@ def test_record_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_
 
 
 def test_record_completing_the_second_family_exits_0(monkeypatch, tmp_path):
-    _sensitive_manual(monkeypatch, comments=[_comment(rg.Record("k", "CLEAN", 0, False, "codex"))])
+    _sensitive_manual(monkeypatch, comments=[_comment(full_record("k", "CLEAN", 0, False, "codex"))])
     review = tmp_path / "review.txt"
     review.write_text("Examined the OAuth token exchange end to end.\nVERDICT: CLEAN\n")
     args = SimpleNamespace(independent=True, emit=False, file=str(review),
@@ -3426,7 +3438,7 @@ def test_record_completing_the_second_family_exits_0(monkeypatch, tmp_path):
 
 
 def test_dispose_on_a_sensitive_diff_reports_the_missing_family(monkeypatch, tmp_path, capsys):
-    open_findings = rg.Record("k", "FINDINGS", 1, False, "codex", "url", "1. x")
+    open_findings = full_record("k", "FINDINGS", 1, False, "codex", "url", "1. x")
     _sensitive_manual(monkeypatch, comments=[_comment(open_findings)])
     monkeypatch.setattr(rg, "current_record", lambda *a: open_findings)
     rebuttal = tmp_path / "dispose.txt"
@@ -3444,3 +3456,172 @@ def test_the_large_mixed_files_are_deliberately_off_the_list():
     for path in ("src/mcp_server.py", "src/mcp_handlers/updates/phases.py",
                  "src/mcp_handlers/decorators.py", "src/mcp_handlers/stakes_table.py"):
         assert rg.sensitive_paths([path], globs) == [], path
+
+# September 30 bounded-review policy: legacy evidence remains explicitly legacy.
+def test_legacy_completed_history_requires_escalation_without_invented_objects():
+    legacy = rg.Record('k', 'CLEAN', 0, False, 'codex')
+    parsed = rg.parse_record(rg.render_marker(legacy))
+    assert parsed.scope == 'legacy' and not parsed.head and not parsed.base
+    rounds = rg.codex_rounds([_comment(legacy)], [], [])
+    assert rounds.count == 0 and rounds.unknown_history
+    assert rg.passing_families([_comment(legacy)], 'k') == set()
+
+
+def test_full_rounds_deduplicate_receipts_and_exclude_failed_fix_dispositions():
+    full = full_record('k', 'FINDINGS', 1, False, 'codex', review_id='run-1')
+    duplicate = full_record('k', 'FINDINGS', 1, False, 'codex', review_id='run-1')
+    external = full_record('other', 'CLEAN', 0, False, 'claude', review_id='run-2')
+    failed = full_record('k', 'FAILED', 0, False, 'antigravity', review_id='failed')
+    disposed = full_record('k', 'FINDINGS', 1, True, 'codex', review_id='run-1')
+    fix = full_record('k', 'CLEAN', 0, False, 'independent-codex', scope='fix')
+    comments = [_comment(r, text='1. [P2] bug') for r in [full, duplicate, external, failed, disposed, fix]]
+    assert rg.codex_rounds(comments, [], []).count == 2
+
+
+@pytest.mark.parametrize('scope,source_severity,expected', [('full','P2',True), ('legacy','P2',False), ('full','P1',False)])
+def test_targeted_coverage_requires_full_minor_source(scope, source_severity, expected):
+    source = full_record('old', 'FINDINGS', 1, False, 'codex', scope=scope)
+    fix = full_record('new', 'CLEAN', 0, False, 'codex-human', scope='fix', from_head=source.head, from_key='old')
+    comments = [_comment(source, text=f'1. [{source_severity}] bug')]
+    assert rg.fix_coverage_valid(fix, comments) is expected
+    # A targeted CLEAN never establishes even the first security family.
+    assert rg.passing_families(comments + [_comment(fix)], 'new') == set()
+
+
+def test_invalid_targeted_receipt_is_unreviewed_in_cli_and_evidence(monkeypatch):
+    fix = full_record('new', 'CLEAN', 0, False, 'codex-human', scope='fix', from_head='c'*40, from_key='old')
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    assert rg._after_manual_record(SimpleNamespace(), 'o/r', 1, 'new', 'x', fix) == rg.UNREVIEWED
+    assert rg.latest_matching([_comment(fix)], 'new').verdict == 'FAILED'
+
+
+@pytest.mark.parametrize('forced', [{'reviewer':'codex','fresh':False}, {'reviewer':None,'fresh':True}])
+def test_forced_local_review_cannot_overlap_native(repo, monkeypatch, forced):
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1,'o/r','k','codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'read_native', lambda *a: rg.NativeReview([], running=True))
+    monkeypatch.setattr(rg, '_review_locked', lambda *a: pytest.fail('overlapping reviewer'))
+    assert rg.cmd_review(SimpleNamespace(budget=30, **forced)) == rg.UNREVIEWED
+
+
+def test_draft_sweep_requires_explicit_request():
+    now = rg.timestamp('2026-09-19T01:00:00Z')
+    prs = [{**_pr(1,draft=True),'labels':[]}, _pr(2,draft=True), _pr(3),
+           {**_pr(4,draft=True),'labels':[{'name':'review-requested'},{'name':'no-auto-review'}]}]
+    assert [p['number'] for p in rg.sweep_candidates(prs,'cirwel',now,0)] == [2,3]
+
+
+@pytest.mark.parametrize('paths,expected', [(['docs/proposals/x.md'], True), (['docs/proposals/nested/x.md'], True),
+    (['docs/proposals/x.md','src/auth.py'],False), (['docs/proposals/x.py'],False), (['docs/operations/x.md'],False), ([],False)])
+def test_advisory_proposal_classification_is_narrow_and_trusted(monkeypatch, paths, expected):
+    monkeypatch.setattr(rg, 'git', lambda *a,**k: '{"proposal_advisory":true}')
+    assert rg.proposal_advisory(paths, 'trusted-base') is expected
+    monkeypatch.setattr(rg, 'git', lambda *a,**k: '{"proposal_advisory":false}')
+    assert not rg.proposal_advisory(paths, 'trusted-base')
+
+
+def test_temporary_provider_outage_expires(monkeypatch, tmp_path):
+    f=tmp_path/'providers.json'
+    f.write_text('{"disabled":{"antigravity":{"reason":"quota","retry_after":"2026-10-01T00:00:00Z"},"claude":"org"}}')
+    monkeypatch.setattr(rg, 'PROVIDERS_FILE', f)
+    monkeypatch.setattr(rg.time, 'time', lambda: rg.timestamp('2026-09-30T00:00:00Z'))
+    assert real_disabled_providers() == {'antigravity':'quota','claude':'org'}
+    monkeypatch.setattr(rg.time, 'time', lambda: rg.timestamp('2026-10-01T00:00:00Z'))
+    assert real_disabled_providers() == {'claude':'org'}
+
+
+def test_local_completion_stamps_captured_head_and_base_during_push(repo, monkeypatch):
+    oldhead=_git(repo,'rev-parse','HEAD'); base=_git(repo,'rev-parse','master'); key=rg.diff_key('master','HEAD')
+    records=[]
+    def review(*a):
+        (repo/'a.txt').write_text('new work during review\n')
+        _git(repo,'commit','-qam','new work')
+        return 'Examined the complete changed diff and relevant callers.\nVERDICT: CLEAN','exit 0'
+    monkeypatch.setattr(rg,'run_reviewer',review)
+    monkeypatch.setattr(rg,'post_record',lambda pr,r,*a: records.append(r))
+    assert rg._review_locked(SimpleNamespace(base='master',budget=30),1,key,'codex') == 0
+    assert records[0].head == oldhead and records[0].base == base
+    assert records[0].head != _git(repo,'rev-parse','HEAD')
+
+
+def test_targeted_verifier_covers_entire_delta_and_rejects_new_work(repo, monkeypatch):
+    old=_git(repo,'rev-parse','HEAD'); base=_git(repo,'rev-parse','master')
+    source=full_record(rg.diff_key('master','HEAD'),'FINDINGS',1,False,'codex',head=old,base=base)
+    comments=[_comment(source,text='1. [P2] a.txt:1 bug')]
+    (repo/'a.txt').write_text('a fixed\n'); _git(repo,'commit','-qam','fix')
+    head=_git(repo,'rev-parse','HEAD'); key=rg.diff_key('master','HEAD')
+    _git(repo,'config','review.verifier','ollama:m')
+    prompts=[]; replies=iter(['FIXES_ONLY','REGRESSION_CLEAN','ADDRESSED']); posted=[]
+    monkeypatch.setattr(rg,'pr_comments',lambda *a:comments)
+    monkeypatch.setattr(rg,'ask_verifier',lambda v,p: prompts.append(p) or next(replies))
+    monkeypatch.setattr(rg,'post_record',lambda pr,r,h,t: posted.append(r))
+    rounds=rg.CodexRounds(1,old,[{'body':'[P2] bug','path':'a.txt','line':1}])
+    args=SimpleNamespace(base='master')
+    assert rg.capped_review(args,'o/r',1,key,head,rounds) == 0
+    assert posted[0].scope == 'fix' and posted[0].from_head == old
+    assert 'ALL changed lines' in prompts[0] and '+a fixed' in prompts[0]
+    assert rg.fix_coverage_valid(posted[0],comments)
+    assert rg.passing_families([_comment(posted[0])],key) == set()
+    posted.clear(); monkeypatch.setattr(rg,'ask_verifier',lambda *a:'NEW_WORK')
+    assert rg.capped_review(args,'o/r',1,key,head,rounds) == rg.UNREVIEWED
+    assert not posted
+
+
+def test_disposed_targeted_findings_without_full_source_cannot_pass():
+    fix=full_record('k','FINDINGS',1,True,'codex',scope='fix',from_head='c'*40,from_key='old')
+    assert rg.latest_matching([_comment(fix,text='1. rebutted: checked')],'k').status()[0] != 'success'
+
+
+def test_dispose_preserves_targeted_provenance(repo, monkeypatch, tmp_path):
+    fix=full_record('k','FINDINGS',1,False,'fix-verify:ollama:m',scope='fix',from_head='c'*40,from_key='old')
+    monkeypatch.setattr(rg,'_resolve',lambda a:(1,'o/r','k','x'))
+    monkeypatch.setattr(rg,'pr_comments',lambda *a:[])
+    monkeypatch.setattr(rg,'current_record',lambda *a:fix)
+    monkeypatch.setattr(rg,'_after_manual_record',lambda a,r,p,k,b,rec: 0 if (rec.from_head,rec.from_key)==(fix.from_head,fix.from_key) else 2)
+    posted=[];monkeypatch.setattr(rg,'post_record',lambda p,r,*a:posted.append(r))
+    f=tmp_path/'dispositions.txt';f.write_text('1. rebutted: exercised regression')
+    assert rg.cmd_dispose(SimpleNamespace(file=str(f),emit=False)) == 0
+    assert posted[0].scope == 'fix' and posted[0].from_head == fix.from_head and posted[0].from_key == 'old'
+
+
+@pytest.mark.parametrize('regression',['REGRESSION_FINDINGS','uncertain',''])
+def test_a_fix_that_addresses_bug_but_has_regressions_is_unreviewed(repo, monkeypatch, regression):
+    old=_git(repo,'rev-parse','HEAD');(repo/'a.txt').write_text('a fixed but broken elsewhere\n');_git(repo,'commit','-qam','fix')
+    head=_git(repo,'rev-parse','HEAD');_git(repo,'config','review.verifier','ollama:m')
+    replies=iter(['FIXES_ONLY',regression]);prompts=[]
+    monkeypatch.setattr(rg,'ask_verifier',lambda v,p:prompts.append(p) or next(replies))
+    monkeypatch.setattr(rg,'post_record',lambda *a:pytest.fail('approved a regression'))
+    rounds=rg.CodexRounds(1,old,[{'body':'[P2] bug','path':'a.txt','line':1}])
+    assert rg.capped_review(SimpleNamespace(base='master'),'o/r',1,rg.diff_key('master','HEAD'),head,rounds) == rg.UNREVIEWED
+    assert 'regression implications' in prompts[1] and '+a fixed but broken elsewhere' in prompts[1]
+
+
+def test_active_native_review_of_previous_head_also_blocks_new_local_work(repo, monkeypatch):
+    marker='<!-- codex-pull-request-review-summary -->\n| **Code Review** | **Running** | `aaaaaaa` |'
+    active={'body':marker,'user':{'login':rg.CODEX_BOT,'type':'Bot'}}
+    assert rg.native_activity_running([active])
+    monkeypatch.setattr(rg,'_resolve',lambda a:(1,'o/r','k','codex/x'))
+    monkeypatch.setattr(rg,'pr_comments',lambda *a:[active])
+    monkeypatch.setattr(rg,'_review_locked',lambda *a:pytest.fail('overlapped previous native head'))
+    assert rg.cmd_review(SimpleNamespace(reviewer='codex',fresh=True,budget=30)) == rg.UNREVIEWED
+
+
+def test_targeted_completion_keeps_captured_objects_when_head_changes(repo, monkeypatch):
+    old=_git(repo,'rev-parse','HEAD');base=_git(repo,'rev-parse','master')
+    source=full_record(rg.diff_key('master','HEAD'),'FINDINGS',1,False,'codex',head=old,base=base)
+    comments=[_comment(source,text='1. [P2] a.txt:1 bug')]
+    (repo/'a.txt').write_text('a fixed\n');_git(repo,'commit','-qam','fix')
+    head=_git(repo,'rev-parse','HEAD');key=rg.diff_key('master','HEAD');_git(repo,'config','review.verifier','ollama:m')
+    replies=iter(['FIXES_ONLY','REGRESSION_CLEAN','ADDRESSED']);posted=[]
+    def verifier(v,p):
+        answer=next(replies)
+        if answer=='ADDRESSED':
+            (repo/'a.txt').write_text('new work after fix\n');_git(repo,'commit','-qam','new work')
+        return answer
+    monkeypatch.setattr(rg,'ask_verifier',verifier)
+    monkeypatch.setattr(rg,'pr_comments',lambda *a:comments)
+    monkeypatch.setattr(rg,'post_record',lambda pr,r,*a:posted.append(r))
+    rounds=rg.CodexRounds(1,old,[{'body':'[P2] bug','path':'a.txt','line':1}])
+    assert rg.capped_review(SimpleNamespace(base='master'),'o/r',1,key,head,rounds) == 0
+    assert posted[0].head==head and posted[0].base==base
+    assert posted[0].head != _git(repo,'rev-parse','HEAD')
