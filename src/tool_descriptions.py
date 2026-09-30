@@ -179,7 +179,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
     "dialectic": (
         "Open and advance governed, on-record peer review sessions. To OPEN a "
         "review, use request_review; this lane can change governance state. "
-        "For off-record advice, use consult. get and "
+        "For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and "
         "list serve unbound callers; every other action needs a bound "
         "identity, quick fails without issue_description, and thesis, "
         "antithesis, synthesis and reassign each need a session_id the "
