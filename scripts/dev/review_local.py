@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Fresh, read-only Ollama PR review; canonical records only on explicit request."""
+"""Fresh, read-only Ollama PR review; canonical records only on explicit request.
+
+Usage and shared configuration: docs/operations/local-pr-review.md.
+"""
 from __future__ import annotations
 
 import argparse
