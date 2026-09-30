@@ -135,7 +135,22 @@ the fragments in and sets the number. This mirrors the changelog.
    The comparison also includes the actual advertised top-level tool
    descriptions, which the contract builder and its digests currently omit.
    Every semantic contract or advertised-description change requires a
-   matching fragment. A breaking fragment cannot authorize a breaking merge:
+   matching fragment. Catalog comparison is only the structural signal:
+   behavior can change while schemas, digests and descriptions stay identical.
+   The implementation must maintain an explicit capability-to-handler-path
+   manifest and require compatibility tests plus a fragment for changes to
+   those behavior-bearing paths. A behavior-only fragment names the affected
+   capability, prior and new behavior, and the compatibility tests proving
+   preservation or an implemented deprecation transition. Such evidence is
+   a corresponding semantic change for the converse check below; an unchanged
+   catalog cannot reject a justified behavior-only fragment. The manifest
+   includes shared dispatch, validation and authorization paths and its
+   coverage is tested against the registered capability catalog. Mechanical
+   edits require an explicit no-behavior-change attestation with compatibility
+   tests, rather than silently bypassing this signal. Tests must include a
+   handler-only meaning change whose catalog remains byte-identical, both
+   with and without the required fragment and compatibility evidence.
+   A breaking fragment cannot authorize a breaking merge:
    the PR-time gate must verify the required new schema family or an
    implemented deprecation transition before that change reaches master.
    An operator authorization is recorded explicitly and cannot silently
