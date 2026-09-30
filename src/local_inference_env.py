@@ -269,12 +269,12 @@ def _privacy_override() -> str | None:
 
 def _ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
-        addr = ipaddress.ip_address(host.split("%", 1)[0])
+        # Kept as written: is_trusted_address tries an IPv4-mapped address both
+        # as itself and as the IPv4 it carries, so a listed ::ffff: range and a
+        # listed IPv4 range both match, as they do for the REST checks.
+        return ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:
         return None
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        return addr.ipv4_mapped
-    return addr
 
 
 def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
@@ -463,6 +463,26 @@ def _probe_ollama_version(root: str, timeout: float) -> bool | None:
     return isinstance(payload, dict) and isinstance(payload.get("version"), str)
 
 
+def _bounded_probe(root: str, timeout: float) -> bool | None:
+    """``_probe_ollama_version`` with a wall-clock bound on the whole attempt.
+
+    urllib's timeout covers connect and read but not the name lookup, so a
+    stalled resolver could hold the probe far past ``timeout``. The probe runs
+    in a daemon thread and is abandoned after ``timeout`` plus a small margin:
+    "no answer", which keeps the previous result. The caller's 5 s cache bounds
+    how many abandoned threads a dead resolver can leave behind.
+    """
+    box: list[bool | None] = []
+    worker = threading.Thread(
+        target=lambda: box.append(_probe_ollama_version(root, timeout)),
+        name="ollama-version-probe",
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout + 0.25)
+    return box[0] if box else None
+
+
 def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_TIMEOUT_S) -> bool:
     """True when ``GET {root}/api/version`` answers like Ollama. Cached for 5 s.
 
@@ -479,7 +499,7 @@ def is_ollama_endpoint(root: str | None = None, *, timeout: float = LOCAL_PROBE_
         cached = _ollama_detect_cache.get(root)
         if cached is not None and (now - cached[0]) < _OLLAMA_DETECT_TTL_S:
             return cached[1]
-    answer = _probe_ollama_version(root, timeout)
+    answer = _bounded_probe(root, timeout)
     result = answer if answer is not None else bool(cached and cached[1])
     with _ollama_detect_lock:
         _ollama_detect_cache[root] = (time.monotonic(), result)

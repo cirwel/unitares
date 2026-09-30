@@ -958,3 +958,30 @@ def test_the_delegation_client_is_closed_after_its_call(monkeypatch):
     monkeypatch.setattr(llm_delegation, "_get_ollama_client", lambda: client)
     assert asyncio.run(llm_delegation.call_local_llm("hi")) == "ok"
     client.close.assert_called_once()
+
+
+def test_an_ipv4_mapped_endpoint_matches_a_trusted_mapped_range(no_dns, monkeypatch):
+    # The REST checks trust ::ffff:100.64.0.0/106; the classifier must agree
+    # instead of unwrapping the literal to an IPv4 outside every listed range.
+    url = "http://[::ffff:100.100.1.2]:8000/v1"
+    assert env.classify_endpoint(url).privacy == env.EXTERNAL
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "::ffff:6440:0/106")
+    assert env.classify_endpoint(url).privacy == env.LOCAL
+    # A listed IPv4 range still matches the same mapped form.
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "100.64.0.0/10")
+    assert env.classify_endpoint(url).privacy == env.LOCAL
+
+
+def test_a_stalled_version_lookup_is_bounded_and_keeps_the_previous_answer(monkeypatch):
+    import threading as _threading
+    import time as _time
+
+    release = _threading.Event()
+    monkeypatch.setattr(env, "_probe_ollama_version", lambda root, timeout: release.wait(5))
+    monkeypatch.setattr(env, "_ollama_detect_cache", {"http://models.internal:8000": (0.0, True)})
+    started = _time.monotonic()
+    try:
+        assert env.is_ollama_endpoint("http://models.internal:8000", timeout=0.05) is True
+        assert _time.monotonic() - started < 0.9
+    finally:
+        release.set()

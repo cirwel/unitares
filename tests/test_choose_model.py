@@ -412,3 +412,17 @@ def test_discovery_transport_uses_the_env_file_classifier_settings(monkeypatch):
     monkeypatch.setattr(cm, "_discovery_env_text", "UNITARES_MODEL_LOCAL_HOSTS=gpu-box.lan\n")
     assert cm.list_models("http://gpu-box.lan:8000/v1") == ["m"]
     assert calls == [("direct", "http://gpu-box.lan:8000/v1/models")]
+
+
+@pytest.mark.parametrize(
+    "line, expected",
+    [
+        ('KEY="gpu-box.lan"', "gpu-box.lan"),
+        ("KEY='gpu-box.lan'", "gpu-box.lan"),
+        ("KEY=gpu-box.lan # the lab box", "gpu-box.lan"),
+        ('KEY="a # b"', "a # b"),
+        ("KEY=plain", "plain"),
+    ],
+)
+def test_env_values_are_read_as_compose_reads_them(line, expected):
+    assert cm.read_env_value(line + "\n", "KEY") == expected

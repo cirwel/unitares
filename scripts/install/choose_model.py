@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.error
@@ -188,8 +189,17 @@ def read_env_value(text: str, key: str) -> str | None:
             continue
         k, v = line.split("=", 1)
         if k.strip() == key:
-            return v.strip()
+            return _compose_value(v)
     return None
+
+
+def _compose_value(raw: str) -> str:
+    """A value as Compose reads it from an env file: matching surrounding quotes
+    are removed, and an unquoted value ends at a ``#`` that follows a space."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return re.split(r"\s#", value, maxsplit=1)[0].strip()
 
 
 def ask(prompt: str, default: str, on_eof: str | None = None) -> str:
