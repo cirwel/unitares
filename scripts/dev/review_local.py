@@ -224,6 +224,23 @@ def assert_current(initial: dict, current: dict):
         raise ValueError('PR head/base changed or PR closed; rerun before recording')
 
 
+def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
+    count = 0
+    for run in cache.glob(f'pr-{pr}-*'):
+        try:
+            receipt = json.loads((run / 'manifest.json').read_text())
+            if receipt['pr'] != pr or receipt['status'] not in ('CLEAN', 'FINDINGS', 'UNREVIEWED'):
+                raise ValueError('Invalid local receipt')
+            if receipt['status'] in ('CLEAN', 'FINDINGS'):
+                if not receipt.get('head') or not receipt.get('base'):
+                    raise ValueError('Missing local provenance')
+                if receipt.get('review_id', run.name) not in posted_ids:
+                    count += 1
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f'Local review history incomplete at {run}; escalate before another review') from exc
+    return count
+
+
 def config(repo: Path, key: str, default: str) -> str:
     result = subprocess.run(['git', 'config', '--get', key], cwd=repo,
                             capture_output=True, text=True)
@@ -279,7 +296,14 @@ def main(argv=None) -> int:
             slug = gate.repo_slug()
             comments = gate.pr_comments(slug, args.pr)
             rounds = gate.pr_rounds(slug, args.pr, key, head, comments)
-            if gate.ROUND_CAP_ENABLED and (rounds.count >= gate.ROUND_CAP or
+            posted_ids = set()
+            for comment in comments:
+                if comment.get('author_association') in gate.TRUSTED_ASSOCIATIONS:
+                    record = gate.parse_record(comment.get('body', ''))
+                    if record and getattr(record, 'scope', '') == 'full':
+                        posted_ids.add(getattr(record, 'review_id', ''))
+            local_rounds = local_completed_rounds(cache, args.pr, posted_ids) if gate.ROUND_CAP_ENABLED else 0
+            if gate.ROUND_CAP_ENABLED and (rounds.count + local_rounds >= gate.ROUND_CAP or
                                           getattr(rounds, 'unknown_history', False)):
                 raise ValueError('Full-review budget exhausted or history unknown; use gate escalation')
             if gate.read_native(slug, args.pr, key, head, comments).running:
@@ -301,7 +325,7 @@ def main(argv=None) -> int:
         (run / 'diff.patch').write_text(diff)
         print(f'Local full review: {model}, PR #{args.pr}, artifacts {run}', flush=True)
         manifest = {'pr': args.pr, 'head': head, 'base': base, 'model': model,
-                    'context': args.context, 'budget': args.budget, 'architecture': architecture,
+                    'context': args.context, 'budget': args.budget, 'architecture': architecture, 'review_id': uuid.uuid4().hex,
                     'diff_sha256': hashlib.sha256(diff.encode()).hexdigest(), 'seeded_source_paths': list(source_context), 'status': 'UNREVIEWED'}
         try:
             text, transcript, metrics = review(repo, head, diff, model, url, args.context, args.budget, transcript_path=run / 'transcript.json', source_context=source_context)
@@ -323,7 +347,7 @@ def main(argv=None) -> int:
                     reviewer = ('gemma-local' if architecture.startswith('gemma') else
                                 'qwen-local' if architecture.startswith('qwen') else 'ollama-local')
                     record = gate.Record(key, parsed[0], parsed[1], False, reviewer, model=model,
-                                         head=head, base=base, scope='full', review_id=uuid.uuid4().hex)
+                                         head=head, base=base, scope='full', review_id=manifest['review_id'])
                     evidence = f'Model `{model}` · immutable head `{head}` · base `{base}`\n\n' + text
                     gate.post_record(args.pr, record, f'{parsed[0]} (independent local full review)', evidence)
                     manifest['recorded'] = True

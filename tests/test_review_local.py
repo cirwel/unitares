@@ -152,3 +152,24 @@ def test_supplied_source_is_immutable_and_delivered_to_reviewer(repo):
 def test_unavailable_seed_does_not_manufacture_source_inspection(repo):
     path, head = repo
     assert local.seed_source(path, head, ['missing.py']) == {}
+
+
+def test_unposted_completed_reviews_spend_budget_without_double_counting(tmp_path):
+    import json
+    for i, status in enumerate(['CLEAN', 'FINDINGS', 'UNREVIEWED', 'CLEAN']):
+        run = tmp_path / f'pr-123-{i}'
+        run.mkdir()
+        (run / 'manifest.json').write_text(json.dumps({'pr': 123, 'status': status,
+            'head': 'head', 'base': 'base', 'review_id': f'review-{i}'}))
+    assert local.local_completed_rounds(tmp_path, 123, {'review-3'}) == 2
+    assert local.local_completed_rounds(tmp_path, 124, set()) == 0
+
+
+@pytest.mark.parametrize('data', [None, '{broken', '{}'])
+def test_incomplete_local_review_history_fails_closed(tmp_path, data):
+    run = tmp_path / 'pr-123-interrupted'
+    run.mkdir()
+    if data is not None:
+        (run / 'manifest.json').write_text(data)
+    with pytest.raises(ValueError, match='history incomplete'):
+        local.local_completed_rounds(tmp_path, 123, set())
