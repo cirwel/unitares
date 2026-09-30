@@ -1282,7 +1282,10 @@ async def handle_describe_tool(arguments: Dict[str, Any]) -> Sequence[TextConten
                         requested_tool_name,
                         tool_name,
                         alias_info,
-                        requested_action or getattr(alias_info, "inject_action", None),
+                        # An alias pins its action: the schema returned below describes
+                        # that action, so a conflicting requested action must not
+                        # change the reported operation.
+                        getattr(alias_info, "inject_action", None) or requested_action,
                     ),  # read/write/admin
                     "stability": stability,  # stable/beta/experimental
                     "parameters": params_simple,

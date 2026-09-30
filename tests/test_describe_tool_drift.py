@@ -818,3 +818,15 @@ async def test_describe_tool_handler_default_matches_the_advertised_default():
     bare.pop("server_time", None)
     full.pop("server_time", None)
     assert bare == full
+
+
+@pytest.mark.asyncio
+async def test_a_workflow_alias_keeps_its_injected_operation_despite_a_requested_action():
+    from src.mcp_handlers.introspection.tool_introspection import handle_describe_tool
+
+    plain = json.loads((await handle_describe_tool({"tool_name": "store_finding", "lite": True}))[0].text)
+    conflicting = json.loads(
+        (await handle_describe_tool({"tool_name": "store_finding", "action": "get", "lite": True}))[0].text
+    )
+    data = lambda r: r.get("data", r)  # noqa: E731 - envelope or bare payload
+    assert data(conflicting)["operation"] == data(plain)["operation"] != "read"
