@@ -19,6 +19,7 @@ import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import ListToolsResult
 
 from unitares_sdk._mcp_httpx import mcp_httpx
 from unitares_sdk.client import GovernanceClient
@@ -98,6 +99,7 @@ async def test_connect_builds_uds_transport_when_uds_path_set(
 
     mock_session_cm = AsyncMock()
     mock_session = AsyncMock()
+    mock_session.list_tools.return_value = ListToolsResult(tools=[])
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
@@ -136,6 +138,7 @@ async def test_connect_skips_uds_transport_when_no_uds_path(
 
     mock_session_cm = AsyncMock()
     mock_session = AsyncMock()
+    mock_session.list_tools.return_value = ListToolsResult(tools=[])
     mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session_cm.__aexit__ = AsyncMock(return_value=False)
 
