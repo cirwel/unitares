@@ -1561,6 +1561,22 @@ class TestCallToolHandler:
     """Tests for the MCP call_tool handler."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize('arguments', [
+        {'agent_id': 'a1', 'action': 'file'},
+        {'agent_id': 'a1', 'op': 'file'},
+        {'agent_id': 'a1', 'kwargs': {'action': 'file'}},
+        {'kwargs': '{"agent_id":"a1","action":"file"}'},
+        {'agent_id': 'a1', 'action': 'history', 'kwargs': {'action': 'file'}},
+    ])
+    async def test_activity_tracking_uses_dispatched_router_action(self, arguments):
+        from src.mcp_server_std import _call_local_tool
+        with patch('src.mcp_server_std.HEARTBEAT_CONFIG.enabled', True), \
+                patch('src.mcp_server_std.activity_tracker.track_tool_call', return_value=(False, None)) as track, \
+                patch('src.mcp_handlers.dispatch_tool', new_callable=AsyncMock, return_value=[]):
+            await _call_local_tool('export', arguments)
+        track.assert_called_once_with('a1', 'export', 'file')
+
+    @pytest.mark.asyncio
     async def test_dispatch_to_handler(self):
         """Should dispatch to handler registry and return result."""
         from src.mcp_server_std import call_tool

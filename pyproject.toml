@@ -61,7 +61,7 @@ full = [
     # reviewer; it reaches local Ollama's /v1 endpoint by default, and a paid
     # provider is only ever an operator opt-in. Both modules guard the import.
     # Floor 1.55.3: earlier releases pass `proxies=` to httpx 0.28's Client.
-    "openai>=1.55.3,<3.0.0",
+    "openai>=1.55.3,<4.0.0",
 ]
 # Semantic search for the knowledge graph. Separate from `full` because
 # sentence-transformers requires torch, whose Linux wheel metadata pulls
