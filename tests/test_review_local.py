@@ -188,3 +188,11 @@ def test_cloud_models_are_rejected_before_source_is_sent(model, metadata):
 def test_validated_local_architecture_does_not_depend_on_alias():
     assert local.local_model_architecture('custom-alias', {'details': {'format': 'gguf'},
         'model_info': {'general.architecture': 'gemma4'}, 'capabilities': ['tools']}) == 'gemma4'
+
+
+def test_unexpected_crash_exits_unreviewed_not_findings(monkeypatch, capsys):
+    def boom(argv=None):
+        raise KeyError('message')
+    monkeypatch.setattr(local, 'main', boom)
+    assert local.run([]) == 2
+    assert 'UNREVIEWED: KeyError' in capsys.readouterr().err

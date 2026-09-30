@@ -371,9 +371,13 @@ def main(argv=None) -> int:
             (run / 'manifest.json').write_text(json.dumps(manifest, indent=2))
 
 
-if __name__ == '__main__':
+def run(argv=None) -> int:
     try:
-        sys.exit(main())
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        print(f'UNREVIEWED: {exc}', file=sys.stderr)
-        sys.exit(2)
+        return main(argv)
+    except Exception as exc:  # exit 1 means FINDINGS; any crash must be UNREVIEWED
+        print(f'UNREVIEWED: {type(exc).__name__}: {exc}', file=sys.stderr)
+        return 2
+
+
+if __name__ == '__main__':
+    sys.exit(run())
