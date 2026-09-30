@@ -148,7 +148,18 @@ the fragments in and sets the number. This mirrors the changelog.
    a corresponding semantic change for the converse check below; an unchanged
    catalog cannot reject a justified behavior-only fragment. The manifest
    includes shared dispatch, validation and authorization paths and its
-   coverage is tested against the registered capability catalog. Mechanical
+   coverage is tested against the registered capability catalog.
+   The manifest must also cover transitive service, configuration and migration
+   dependencies, not only handler entrypoints: for example, changes in
+   `src/knowledge_graph.py` can alter `knowledge` behavior without changing its
+   handler. Catalog entry coverage alone is insufficient. Until dependency
+   coverage can be demonstrated, changes under `src/`, `governance_core/`,
+   `config/` and `db/postgres/migrations/` conservatively require either a
+   capability-linked fragment and compatibility evidence or an explicit
+   no-behavior-change attestation with compatibility evidence. Negative-control
+   tests must change a transitive service, a configuration default and a
+   migration while preserving the catalog, and prove each fails without the
+   required evidence. Mechanical
    edits require an explicit no-behavior-change attestation with compatibility
    tests, rather than silently bypassing this signal. Tests must include a
    handler-only meaning change whose catalog remains byte-identical, both
