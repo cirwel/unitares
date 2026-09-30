@@ -173,3 +173,18 @@ def test_incomplete_local_review_history_fails_closed(tmp_path, data):
         (run / 'manifest.json').write_text(data)
     with pytest.raises(ValueError, match='history incomplete'):
         local.local_completed_rounds(tmp_path, 123, set())
+
+
+@pytest.mark.parametrize('model, metadata', [
+    ('gemma4:cloud', {}), ('qwen:480b-cloud', {}),
+    ('innocent-alias', {'remote_host': 'https://ollama.com'}),
+    ('innocent-alias', {'remote_model': 'gemma4:31b'}),
+])
+def test_cloud_models_are_rejected_before_source_is_sent(model, metadata):
+    with pytest.raises(ValueError, match='Cloud-backed'):
+        local.local_model_architecture(model, metadata)
+
+
+def test_validated_local_architecture_does_not_depend_on_alias():
+    assert local.local_model_architecture('custom-alias', {'details': {'format': 'gguf'},
+        'model_info': {'general.architecture': 'gemma4'}, 'capabilities': ['tools']}) == 'gemma4'

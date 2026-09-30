@@ -40,6 +40,18 @@ def endpoint(value: str) -> str:
     return value.rstrip('/')
 
 
+def local_model_architecture(model: str, info: dict) -> str:
+    if (model.lower().endswith((':cloud', '-cloud')) or info.get('remote_host') or
+            info.get('remote_model')):
+        raise ValueError('Cloud-backed models are forbidden for local PR source review')
+    if info.get('details', {}).get('format') != 'gguf':
+        raise ValueError('Local review requires installed GGUF model metadata')
+    architecture = info.get('model_info', {}).get('general.architecture', '')
+    if not architecture or 'tools' not in info.get('capabilities', []):
+        raise ValueError('Installed local model must advertise architecture and tool support')
+    return architecture
+
+
 def safe_path(value: str) -> str:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or '..' in path.parts or ':' in value or '\\' in value:
@@ -276,13 +288,11 @@ def main(argv=None) -> int:
         except BlockingIOError:
             raise ValueError('Another local review is running; retry after it completes') from None
         model_info = api(url, '/api/show', {'model': model}, 30)
-        architecture = model_info.get('model_info', {}).get('general.architecture', '')
+        architecture = local_model_architecture(model, model_info)
         args.context = args.context or 131072
         maximum = model_info.get('model_info', {}).get(f'{architecture}.context_length', 0)
         if not 16384 <= args.context <= min(maximum, 131072) or not 1 <= args.budget <= 3600:
             raise ValueError('Context unsupported by installed model or budget outside 1..3600 seconds')
-        if 'tools' not in model_info.get('capabilities', []):
-            raise ValueError('Installed model does not advertise tool support')
         info = pr_info(repo, args.pr)
         if info['state'] != 'OPEN':
             raise ValueError('PR must be open')
