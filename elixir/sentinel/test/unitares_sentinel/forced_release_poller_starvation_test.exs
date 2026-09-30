@@ -74,7 +74,16 @@ defmodule UnitaresSentinel.ForcedReleasePollerStarvationTest do
         )
       )
 
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
+    # The poller is linked to the test process and dies with it, so it can
+    # exit between the alive check and the stop: tolerate that, as
+    # supervision_restart_test.exs does.
+    on_exit(fn ->
+      try do
+        if Process.alive?(pid), do: GenServer.stop(pid)
+      catch
+        :exit, _ -> :ok
+      end
+    end)
     pid
   end
 
