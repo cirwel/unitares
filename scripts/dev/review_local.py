@@ -177,8 +177,8 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
     raise ValueError('Tool round budget exhausted; UNREVIEWED')
 
 
-def gate_module(repo: Path = ROOT):
-    spec = importlib.util.spec_from_file_location('local_review_gate', repo / 'scripts/dev/review_gate.py')
+def gate_module():
+    spec = importlib.util.spec_from_file_location('local_review_gate', ROOT / 'scripts/dev/review_gate.py')
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -208,7 +208,7 @@ def main(argv=None) -> int:
     parser.add_argument('--repo', type=Path, default=Path.cwd())
     parser.add_argument('--model', help='Explicit installed Ollama model')
     parser.add_argument('--second-family', action='store_true', help='Use Gemma / Google full reviewer')
-    parser.add_argument('--context', type=int, help='Default: Qwen 65536, Gemma 131072')
+    parser.add_argument('--context', type=int, help='Default: 131072 on this 128 GiB host')
     parser.add_argument('--budget', type=int, default=1800, help='Total seconds, including generation')
     parser.add_argument('--record', action='store_true', help='Post a canonical full-review record')
     args = parser.parse_args(argv)
@@ -232,7 +232,7 @@ def main(argv=None) -> int:
             raise ValueError('Another local review is running; retry after it completes') from None
         model_info = api(url, '/api/show', {'model': model}, 30)
         architecture = model_info.get('model_info', {}).get('general.architecture', '')
-        args.context = args.context or (131072 if architecture.startswith('gemma') else 65536)
+        args.context = args.context or 131072
         maximum = model_info.get('model_info', {}).get(f'{architecture}.context_length', 0)
         if not 16384 <= args.context <= min(maximum, 131072) or not 1 <= args.budget <= 3600:
             raise ValueError('Context unsupported by installed model or budget outside 1..3600 seconds')
@@ -242,7 +242,7 @@ def main(argv=None) -> int:
         if info['state'] != 'OPEN':
             raise ValueError('PR must be open')
         head, base = info['headRefOid'], info['baseRefOid']
-        gate = gate_module(repo)
+        gate = gate_module()
         old = Path.cwd()
         try:
             os.chdir(repo)
