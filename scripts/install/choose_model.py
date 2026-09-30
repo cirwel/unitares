@@ -261,10 +261,18 @@ def compose(args: list[str], env_file: Path, settings: dict[str, str]) -> subpro
 
 
 def server_reaches_model(env_file: Path, settings: dict[str, str]) -> bool:
-    """True when the server, from inside its container, sees the chosen model listed."""
+    """True when the server, from inside its container, sees the chosen model listed.
+
+    Follows the runtime's proxy policy: an endpoint the server classifies local
+    is reached directly, ignoring HTTP_PROXY, as inference does; an external one
+    keeps the container's proxy settings."""
+    env_values = composed_classifier_values(env_file.read_text() if env_file.exists() else "")
+    env_values.update({k: settings[k] for k in _CLASSIFIER_KEYS if k in settings})
+    local, _reason = endpoint_is_local(settings[BASE_KEY], env_values)
+    opener = "urllib.request.build_opener(urllib.request.ProxyHandler({})).open" if local else "urllib.request.urlopen"
     probe = (
         "import json,os,sys,urllib.request;"
-        f"listed=json.load(urllib.request.urlopen(os.environ['{BASE_KEY}'].rstrip('/')+'/models',timeout=5));"
+        f"listed=json.load({opener}(os.environ['{BASE_KEY}'].rstrip('/')+'/models',timeout=5));"
         f"sys.exit(0 if os.environ['{MODEL_KEY}'] in [m.get('id') for m in listed.get('data',[])] else 1)"
     )
     return compose(["exec", "-T", "governance-mcp", "python", "-c", probe], env_file, settings).returncode == 0

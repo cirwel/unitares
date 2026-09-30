@@ -478,6 +478,11 @@ def _bounded_probe(root: str, timeout: float) -> bool | None:
     """
     with _ollama_detect_lock:
         running = _ollama_probe_inflight.get(root)
+        if running is not None and not running[0].is_alive() and running[1]:
+            # A probe that finished after its caller gave up: its answer is the
+            # newest one, so use it rather than discarding it for a fresh probe.
+            del _ollama_probe_inflight[root]
+            return running[1][0]
         if running is None or not running[0].is_alive():
             box: list[bool | None] = []
             worker = threading.Thread(
@@ -489,6 +494,11 @@ def _bounded_probe(root: str, timeout: float) -> bool | None:
             worker.start()
     worker, box = running
     worker.join(timeout + 0.25)
+    if worker.is_alive():
+        return None
+    with _ollama_detect_lock:  # consumed: the next expiry probes afresh
+        if _ollama_probe_inflight.get(root) == running:
+            del _ollama_probe_inflight[root]
     return box[0] if box else None
 
 

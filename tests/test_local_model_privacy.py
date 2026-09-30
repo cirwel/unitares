@@ -1007,3 +1007,52 @@ def test_a_stalled_version_lookup_is_joined_not_multiplied(monkeypatch):
         assert started == ["http://models.internal:8000"]
     finally:
         release.set()
+
+
+def test_a_version_answer_that_arrives_late_is_used_then_reprobed(monkeypatch):
+    import threading as _threading
+
+    gate = _threading.Event()
+    answers = iter([True, False])
+
+    def slow(root, timeout):
+        gate.wait(5)
+        return next(answers)
+
+    monkeypatch.setattr(env, "_probe_ollama_version", slow)
+    monkeypatch.setattr(env, "_ollama_detect_cache", {})
+    monkeypatch.setattr(env, "_ollama_probe_inflight", {})
+    root = "http://models.internal:8000"
+    assert env.is_ollama_endpoint(root, timeout=0.02) is False  # no answer yet
+    gate.set()
+    worker = env._ollama_probe_inflight[root][0]
+    worker.join(2)
+    env._ollama_detect_cache.clear()
+    assert env.is_ollama_endpoint(root, timeout=0.02) is True  # the late answer
+    env._ollama_detect_cache.clear()
+    assert env.is_ollama_endpoint(root, timeout=0.5) is False  # then a new probe
+
+
+def test_a_blackholed_first_address_does_not_starve_the_second(monkeypatch):
+    from src.mcp_handlers.support import inference_registry as reg
+
+    connects = []
+
+    class Sock:
+        def __init__(self, family, *a):
+            self.family = family
+
+        def settimeout(self, t):
+            connects.append((self.family, t))
+
+        def connect_ex(self, addr):
+            return 0 if self.family == "v4" else 1
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(reg.socket, "socket", Sock)
+    monkeypatch.setattr(reg, "_ollama_host_port", lambda: ("models.internal", 8000))
+    monkeypatch.setattr(reg, "_resolve_within", lambda *a: [("v6", 1, 6, "", ("::2", 8000)), ("v4", 1, 6, "", ("10.0.0.2", 8000))])
+    assert reg._probe_ollama_socket() is True
+    assert connects[0][1] <= reg._OLLAMA_PROBE_BUDGET_S / 2 + 0.01

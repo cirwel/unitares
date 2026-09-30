@@ -191,10 +191,13 @@ def _probe_ollama_socket() -> bool:
     addresses = _resolve_within(host, port, _OLLAMA_PROBE_BUDGET_S)
     if not addresses:
         return False
-    for family, socktype, proto, _canon, sockaddr in addresses:
+    for index, (family, socktype, proto, _canon, sockaddr) in enumerate(addresses):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             return False
+        # Each address gets an equal share of what is left, so a blackholed
+        # first address (an unroutable AAAA, say) cannot starve a working one.
+        remaining /= len(addresses) - index
         try:
             sock = socket.socket(family, socktype, proto)
         except Exception:

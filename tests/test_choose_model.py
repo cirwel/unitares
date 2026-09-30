@@ -431,3 +431,18 @@ def test_env_values_are_read_as_compose_reads_them(line, expected):
 def test_a_quoted_value_followed_by_a_comment_loses_its_quotes():
     assert cm.read_env_value('KEY="vllm" # compose service\n', "KEY") == "vllm"
     assert cm.read_env_value("KEY='vllm'   # x \"y\"\n", "KEY") == "vllm"
+
+
+@pytest.mark.parametrize("base, bypasses_proxy", [
+    ("http://localhost:11434/v1", True),
+    ("https://api.example.com/v1", False),
+])
+def test_container_check_follows_the_runtime_proxy_policy(monkeypatch, tmp_path, base, bypasses_proxy):
+    seen = []
+    monkeypatch.setattr(cm, "compose", lambda args, env_file, settings: seen.append(args[-1]) or subprocess.CompletedProcess(args, 0))
+    for key in cm._CLASSIFIER_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("")
+    assert cm.server_reaches_model(env_file, {cm.BASE_KEY: base, cm.MODEL_KEY: "m"})
+    assert ("ProxyHandler({})" in seen[0]) is bypasses_proxy
