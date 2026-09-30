@@ -185,6 +185,10 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
     raise ValueError('Tool round budget exhausted; UNREVIEWED')
 
 
+def binary_diff(diff: str) -> bool:
+    return bool(re.search(r'^GIT binary patch$', diff, re.M))
+
+
 def gate_module():
     spec = importlib.util.spec_from_file_location('local_review_gate', ROOT / 'scripts/dev/review_gate.py')
     module = importlib.util.module_from_spec(spec)
@@ -271,7 +275,7 @@ def main(argv=None) -> int:
         command('git', 'fetch', '--quiet', 'origin', head, base, cwd=repo)
         diff = command('git', 'diff', '--no-ext-diff', '--no-renames', '--binary',
                        f'{base}...{head}', cwd=repo)
-        if 'GIT binary patch' in diff:
+        if binary_diff(diff):
             raise ValueError('Binary changes require another reviewer; UNREVIEWED')
         run = cache / f'pr-{args.pr}-{head[:12]}-{time.time_ns()}'
         run.mkdir()

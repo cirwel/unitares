@@ -120,3 +120,15 @@ def test_repeated_tool_loop_fails_early(repo):
             {'id': 'call-1', 'function': {'name': 'read_file', 'arguments': {'path': 'file.py'}}}]}}
     with pytest.raises(ValueError, match='without progress'):
         local.review(path, head, 'diff', 'qwen', 'http://localhost', 65536, 10, repeated)
+
+
+def test_binary_patch_literal_in_source_is_not_a_binary_change():
+    assert not local.binary_diff("diff --git a/check.py b/check.py\n+if 'GIT binary patch' in diff:\n")
+
+
+def test_actual_git_binary_patch_is_rejected(repo):
+    path, head = repo
+    (path / 'binary').write_bytes(b'\x00payload')
+    subprocess.run(['git', 'add', 'binary'], cwd=path, check=True)
+    diff = local.command('git', 'diff', '--cached', '--binary', head, cwd=path)
+    assert local.binary_diff(diff)
