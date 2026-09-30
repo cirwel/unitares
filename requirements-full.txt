@@ -28,7 +28,7 @@ cryptography>=41.0.0,<51.0.0
 # only ever an opt-in the operator configures. Both modules guard the import and
 # answer DEPENDENCY_MISSING without it. Floor 1.55.3: earlier releases pass
 # `proxies=` to httpx.Client, which httpx 0.28 removed.
-openai>=1.55.3,<3.0.0
+openai>=1.55.3,<4.0.0
 
 # Operational dependencies (optional but recommended)
 psutil>=5.9.0,<8.0.0
