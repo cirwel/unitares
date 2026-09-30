@@ -468,20 +468,32 @@ def stamp_record(rec: Record, base_ref: str, scope: str, text: str, args=None,
         rec.from_key = diff_key(base_ref, rec.from_head)
 
 
-def fix_coverage_valid(rec: Record, comments: list[dict]) -> bool:
-    """A targeted receipt can complete ordinary minor fixes, never new work."""
+def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] = ()) -> bool:
+    """Minor targeted coverage needs actual full source evidence, not invented native base."""
     if rec.scope != "fix" or not all((rec.head, rec.base, rec.from_head, rec.from_key)):
         return False
-    for c in comments:
-        source = parse_record(c.get("body", ""))
-        if (c.get("author_association") in TRUSTED_ASSOCIATIONS and source
-                and source.full() and source.head == rec.from_head
-                and source.base == rec.base and source.key == rec.from_key
+    sources = [(parse_record(c.get("body", "")), c.get("body", ""), False) for c in comments
+               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+    sources += [(r, r.text, True) for r in native]
+    for source, body, actual_native in sources:
+        full = source and (source.full() or (actual_native and source.reviewer == "codex-native"
+                                            and source.scope == "full" and source.head))
+        if (full and source.head == rec.from_head and source.key == rec.from_key
+                and (actual_native or source.base == rec.base)
                 and source.verdict == "FINDINGS" and source.findings > 0):
-            body = c.get("body", "")
-            labels = re.findall(r"\[P[0-3]\]|!\[P[0-3] Badge\]", body)
-            return len(labels) >= source.findings and not SEVERE_BADGE_RE.search(body)
+            labels = SEVERITY_LABEL_RE.findall(body)
+            if len(labels) >= source.findings and not SEVERE_BADGE_RE.search(body):
+                return True
     return False
+
+
+def targeted_coverage_valid(repo: str, pr: int, rec: Record, comments: list[dict]) -> bool:
+    if fix_coverage_valid(rec, comments):
+        return True
+    if not rec.from_key or not rec.from_head:
+        return False
+    return fix_coverage_valid(rec, comments,
+                              read_native(repo, pr, rec.from_key, rec.from_head, comments).records)
 
 
 def proposal_advisory(paths: list[str] | None, base: str) -> bool:
@@ -511,7 +523,7 @@ def latest_matching(comments: list[dict], key: str,
         body = c.get("body", "")
         rec = parse_record(body)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
-            if rec.scope == "fix" and rec.status()[0] == "success" and not fix_coverage_valid(rec, comments):
+            if rec.scope == "fix" and rec.status()[0] == "success" and not fix_coverage_valid(rec, comments, native):
                 rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
@@ -707,8 +719,15 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [])
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        findings = [{"body": rec_text} for rec_text in re.findall(
-            r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", c.get("body", ""))]
+        body = c.get("body", "")
+        titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
+        findings = []
+        for i, title in enumerate(titles):
+            finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
+            location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
+            if location:
+                finding.update(path=location[1], line=int(location[2]))
+            findings.append(finding)
         if rec.verdict == "FINDINGS" and not findings:
             findings = [{"body": "unlabelled finding; full review required"}]
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings))
@@ -841,6 +860,23 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             earlier = native_records(comments, reviews, inline, events, key, commit, reactions)
             snapshot.records.extend(earlier.records)
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
+    for c in comments:
+        rec = parse_record(c.get("body", ""))
+        if not rec or rec.key != key or c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        source_key, source_head = (rec.from_key, rec.from_head) if rec.scope == "fix" else (rec.key, rec.head)
+        if not source_head or not source_key or (rec.scope != "fix" and rec.reviewer != "codex-native"):
+            continue
+        try:
+            if git("merge-base", source_head, head, check=False).strip() != source_head:
+                continue
+            if rec.scope == "fix" and diff_key(rec.base, source_head) != source_key:
+                continue
+        except subprocess.SubprocessError:
+            continue
+        actual = native_records(comments, reviews, inline, events, source_key, source_head, reactions)
+        known = {(r.key, r.head, r.url) for r in snapshot.records}
+        snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known)
     snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
     return snapshot
 
@@ -1092,9 +1128,18 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
             original = originals.get((rec.reviewer, rec.findings))
             if original:
                 rec.scope, rec.head, rec.base = original.scope, original.head, original.base
-        if rec is None or rec.key != key or not rec.full():
-            continue
         body = c.get("body", "")
+        if rec is not None:
+            if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
+                continue  # targeted receipts never satisfy a full model family
+            rec.text = body
+        native_source = next((r for r in native if rec and r.key == key and r.scope == "full" and r.head
+                              and r.reviewer == "codex-native" and rec.reviewer == "codex-native"
+                              and ((rec.disposed and r.url == _cited_native_review(rec) and r.findings == rec.findings)
+                                   or (rec.verdict == "CLEAN" and rec.scope == "full" and rec.head == r.head
+                                       and r.verdict == "CLEAN"))), None)
+        if rec is None or rec.key != key or not (rec.full() or native_source):
+            continue
         answers_a_review = (rec.reviewer, rec.findings) in originals
         if not answers_a_review and rec.reviewer == "codex-native":
             rec.text = body
@@ -2044,7 +2089,7 @@ def cmd_review(args) -> int:
                 # After an ordinary findings round, verify fixes instead of
                 # automatically commissioning another full pass. A clean last
                 # round followed by new work still needs a fresh full review.
-                if rounds.last_findings and not rounds.answered_since and not getattr(args, "authorize_full_review", None):
+                if rounds.last_findings and not rounds.answered_since and not args.fresh and not getattr(args, "authorize_full_review", None):
                     sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
@@ -2274,8 +2319,15 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
               "authorized full review; do not describe unverified fixes as clean.")
         return UNREVIEWED
     reviewed_base_oid = git("rev-parse", args.base).strip()
+    rec = Record(key, "CLEAN", 0, False, f"fix-verify:{verifier}")
+    stamp_record(rec, reviewed_base_oid, "fix", "pending targeted review",
+                 argparse.Namespace(reviewed_from=last, fixes_only=True), head=head, base_oid=reviewed_base_oid)
+    comments = pr_comments(repo, pr)
+    if not targeted_coverage_valid(repo, pr, rec, comments):
+        print("[review] UNREVIEWED: prior full source unavailable; no verifier calls spent. Request --fresh within the budget or escalate.")
+        return UNREVIEWED
     diff = git("diff", last, head)
-    if len(diff) > VERIFY_DIFF_LIMIT:
+    if len(diff) + len(json.dumps(rounds.last_findings)) > VERIFY_DIFF_LIMIT:
         print("[review] UNREVIEWED: fix delta exceeds verifier context; no truncated verification")
         return UNREVIEWED
     results = []
@@ -2315,7 +2367,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     stamp_record(rec, reviewed_base_oid, "fix", "\n".join(lines),
                  argparse.Namespace(reviewed_from=last, fixes_only=True),
                  head=head, base_oid=reviewed_base_oid)
-    if not open_ and not fix_coverage_valid(rec, pr_comments(repo, pr)):
+    if not open_ and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: prior full review lacks matching head/base/scope evidence; record a full review or escalate")
         return UNREVIEWED
     post_record(pr, rec, f"{rec.verdict if not open_ else f'FINDINGS({len(open_)})'} "
@@ -2467,7 +2519,7 @@ def cmd_record(args) -> int:
     pr, repo, key, branch = resolved
     rec = Record(key, verdict, n, False, args.reviewer_name)
     stamp_record(rec, args.base, getattr(args, "scope", "full"), text, args)
-    if rec.scope == "fix" and not fix_coverage_valid(rec, pr_comments(repo, pr)):
+    if rec.scope == "fix" and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: no valid full source review; targeted receipt not posted")
         return UNREVIEWED
     post_record(pr, rec, heading, text)
@@ -2478,7 +2530,7 @@ def cmd_record(args) -> int:
 def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: Record) -> int:
     """record and dispose finish like a review run: a passing result on a
     security-sensitive diff still needs a second model family (exit 3)."""
-    if rec.scope == "fix" and not fix_coverage_valid(rec, pr_comments(repo, pr)):
+    if rec.scope == "fix" and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: targeted receipt lacks a valid prior full review at the declared head/base")
         return UNREVIEWED
     if rec.status()[0] != "success":

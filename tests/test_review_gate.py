@@ -3586,7 +3586,10 @@ def test_dispose_preserves_targeted_provenance(repo, monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('regression',['REGRESSION_FINDINGS','uncertain',''])
 def test_a_fix_that_addresses_bug_but_has_regressions_is_unreviewed(repo, monkeypatch, regression):
-    old=_git(repo,'rev-parse','HEAD');(repo/'a.txt').write_text('a fixed but broken elsewhere\n');_git(repo,'commit','-qam','fix')
+    old=_git(repo,'rev-parse','HEAD')
+    source=full_record(rg.diff_key('master','HEAD'),'FINDINGS',1,False,'codex',head=old,base=_git(repo,'rev-parse','master'))
+    monkeypatch.setattr(rg,'pr_comments',lambda *a:[_comment(source,text='1. [P2] bug')])
+    (repo/'a.txt').write_text('a fixed but broken elsewhere\n');_git(repo,'commit','-qam','fix')
     head=_git(repo,'rev-parse','HEAD');_git(repo,'config','review.verifier','ollama:m')
     replies=iter(['FIXES_ONLY',regression]);prompts=[]
     monkeypatch.setattr(rg,'ask_verifier',lambda v,p:prompts.append(p) or next(replies))
@@ -3665,3 +3668,98 @@ def test_malformed_native_reaction_does_not_become_full_evidence():
     reaction['created_at']='bad timestamp'
     rounds=rg.codex_rounds([completion],[],[],reactions=[reaction])
     assert rounds.count == 0 and rounds.unknown_history
+
+
+def test_real_native_disposition_retains_family_without_inventing_base():
+    k='k'; url='https://github.com/o/r/pull/1#pullrequestreview-9'
+    original=rg.Record(k,'FINDINGS',1,False,'codex-native',url,'1. a.py:1 [P2] bug',head='a'*40,scope='full')
+    disposed=rg.Record(k,'FINDINGS',1,True,'codex-native',head='a'*40,scope='full')
+    comments=[_comment(full_record(k,'CLEAN',0,False,'claude')),
+              _comment(disposed,text=f'dispositions for FINDINGS(1) — {url}\n1. rebutted: checked')]
+    assert rg.passing_families(comments,k,[original]) == {'openai','anthropic'}
+    assert not original.base and not disposed.base
+    assert rg.passing_families(comments,k,[]) == {'anthropic'}
+    disposed.scope='legacy'; disposed.head=''
+    comments[1]=_comment(disposed,text=f'dispositions for FINDINGS(1) — {url}\n1. rebutted: checked')
+    assert rg.passing_families(comments,k,[original]) == {'openai','anthropic'}
+
+
+@pytest.mark.parametrize('retarget',[False,True])
+def test_native_clean_receipt_after_unchanged_key_merge_uses_actual_source(carry_repo, monkeypatch, retarget):
+    old=_git(carry_repo,'rev-parse','HEAD');key=rg.diff_key('master','HEAD')
+    _git(carry_repo,'checkout','-q','master');(carry_repo/'other.txt').write_text('moved\n')
+    _git(carry_repo,'commit','-qam','base');_git(carry_repo,'checkout','-q','feature');_git(carry_repo,'merge','-q','--no-edit','master')
+    head=_git(carry_repo,'rev-parse','HEAD');assert key == rg.diff_key('master','HEAD')
+    receipt=rg.Record(key,'CLEAN',0,False,'codex-native',head=old,scope='full')
+    comments=[_comment(receipt),_comment(full_record(key,'CLEAN',0,False,'claude'))]
+    review={'id':9,'user':{'login':rg.CODEX_BOT,'type':'Bot'},'commit_id':old,'state':'APPROVED',
+            'submitted_at':'2026-09-30T20:00:00Z','body':'','html_url':'native-9'}
+    pages={'reviews':[review],'comments':[],'events':[{'event':'base_ref_changed'}] if retarget else []}
+    monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
+    snapshot=_REAL_READ_NATIVE('o/r',1,key,head,comments)
+    assert rg.passing_families(comments,key,snapshot.records) == ({'anthropic'} if retarget else {'anthropic','openai'})
+    assert not receipt.base
+
+
+def test_native_minor_findings_are_valid_targeted_source_but_not_current_full_family():
+    source=rg.Record('old','FINDINGS',1,False,'codex-native',text='1. a.py:1 [P2] bug\nTrigger input explanation.',head='a'*40,scope='full')
+    fix=full_record('new','CLEAN',0,False,'fix-verify:ollama:m',scope='fix',from_head='a'*40,from_key='old')
+    assert not rg.fix_coverage_valid(fix,[])
+    assert rg.fix_coverage_valid(fix,[],[source])
+    assert rg.latest_matching([_comment(fix)],'new',[source]).status()[0] == 'success'
+    assert rg.passing_families([_comment(fix)],'new',[source]) == set()
+
+
+def test_native_targeted_verification_uses_real_source_before_spending(repo, monkeypatch):
+    old=_git(repo,'rev-parse','HEAD');oldkey=rg.diff_key('master','HEAD')
+    source=rg.Record(oldkey,'FINDINGS',1,False,'codex-native',text='1. a.txt:1 [P2] bug',head=old,scope='full')
+    (repo/'a.txt').write_text('a fixed\n');_git(repo,'commit','-qam','fix');head=_git(repo,'rev-parse','HEAD')
+    _git(repo,'config','review.verifier','ollama:m');monkeypatch.setattr(rg,'pr_comments',lambda *a:[])
+    monkeypatch.setattr(rg,'read_native',lambda *a:rg.NativeReview([source]))
+    replies=iter(['FIXES_ONLY','REGRESSION_CLEAN','ADDRESSED']);posted=[]
+    monkeypatch.setattr(rg,'ask_verifier',lambda *a:next(replies));monkeypatch.setattr(rg,'post_record',lambda pr,r,*a:posted.append(r))
+    rounds=rg.CodexRounds(1,old,[{'body':'[P2] bug','path':'a.txt','line':1}])
+    assert rg.capped_review(SimpleNamespace(base='master'),'o/r',1,rg.diff_key('master','HEAD'),head,rounds) == 0
+    assert posted[0].scope == 'fix' and not source.base
+    posted.clear();monkeypatch.setattr(rg,'read_native',lambda *a:rg.NativeReview([]))
+    monkeypatch.setattr(rg,'ask_verifier',lambda *a:pytest.fail('spent verifier without valid source'))
+    assert rg.capped_review(SimpleNamespace(base='master'),'o/r',1,rg.diff_key('master','HEAD'),head,rounds) == rg.UNREVIEWED
+    assert not posted
+
+
+def test_local_multiline_findings_remain_complete_in_targeted_inputs():
+    text='[P2] a.py:7 Bug title\n\nInput zero trips the caller. Preserve the guard.\n\n[P2] b.py:9 Other title\n\nThe second failure has a distinct input.\nVERDICT: FINDINGS(2)'
+    source=full_record('k','FINDINGS',2,False,'codex',review_id='r')
+    rounds=rg.codex_rounds([_comment(source,text=text)],[],[])
+    assert len(rounds.last_findings) == 2
+    assert 'Input zero trips the caller. Preserve the guard.' in rounds.last_findings[0]['body']
+    assert 'a.py:7' in rounds.last_findings[0]['body']
+    assert (rounds.last_findings[0]['path'],rounds.last_findings[0]['line']) == ('a.py',7)
+    assert 'The second failure has a distinct input.' in rounds.last_findings[1]['body']
+
+
+def test_targeted_native_disposition_cannot_count_as_full_family():
+    url='https://github.com/o/r/pull/1#pullrequestreview-9'
+    source=rg.Record('k','FINDINGS',1,False,'codex-native',url,'[P2] bug',head='a'*40,scope='full')
+    fix=full_record('k','FINDINGS',1,True,'codex-native',scope='fix',from_head='a'*40,from_key='k')
+    comments=[_comment(fix,text=f'dispositions for FINDINGS(1) — {url}\n1. rebutted: checked')]
+    assert rg.passing_families(comments,'k',[source]) == set()
+
+
+def test_ci_reads_actual_native_source_for_targeted_receipt_without_current_full_credit(repo, monkeypatch):
+    old=_git(repo,'rev-parse','HEAD');base=_git(repo,'rev-parse','master');oldkey=rg.diff_key('master','HEAD')
+    (repo/'a.txt').write_text('a fixed\n');_git(repo,'commit','-qam','fix');head=_git(repo,'rev-parse','HEAD');key=rg.diff_key('master','HEAD')
+    fix=rg.Record(key,'CLEAN',0,False,'fix-verify:ollama:m',head=head,base=base,scope='fix',from_head=old,from_key=oldkey)
+    comments=[_comment(fix)]
+    review={'id':9,'user':{'login':rg.CODEX_BOT,'type':'Bot'},'commit_id':old,'state':'COMMENTED',
+            'submitted_at':'2026-09-30T20:00:00Z','body':'','html_url':'native-9'}
+    inline={'user':{'login':rg.CODEX_BOT,'type':'Bot'},'pull_request_review_id':9,'path':'a.txt','line':1,
+            'body':'[P2] bug\nTrigger input explanation.','html_url':'inline-9'}
+    pages={'reviews':[review],'comments':[inline],'events':[]}
+    monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
+    snapshot=_REAL_READ_NATIVE('o/r',1,key,head,comments)
+    assert rg.latest_matching(comments,key,snapshot.records).status()[0] == 'success'
+    assert rg.passing_families(comments,key,snapshot.records) == set()
+    assert any(r.head==old and r.key==oldkey and not r.base for r in snapshot.records)
+    fix.from_key='wrong';snapshot=_REAL_READ_NATIVE('o/r',1,key,head,[_comment(fix)])
+    assert rg.latest_matching([_comment(fix)],key,snapshot.records).status()[0] != 'success'
