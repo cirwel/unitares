@@ -127,8 +127,12 @@ fi
 # plist: deployment-specific settings the product does not ship as defaults,
 # without hand edits. deploy_lib_apply_env_overlay makes sure a change is
 # RELOADED by the restart below, including on a host with no plist baseline.
-deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
-  "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"
+if ! deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
+  "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"; then
+  echo "[deploy-mcp] FAILED — required overlay did not apply; rolling worktree back to ${PREV:0:8}." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  exit 1
+fi
 
 
 # kickstart when the plist is unchanged since the last deploy restart; full

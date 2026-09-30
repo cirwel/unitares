@@ -76,7 +76,7 @@ def parse_overlay(text: str) -> dict[str, str]:
 
 def pending_changes(payload: dict[str, Any], overlay: dict[str, str]) -> list[str]:
     """Keys whose value in the plist is missing or differs from the overlay."""
-    env = payload.get("EnvironmentVariables") or {}
+    env = payload.get("EnvironmentVariables", {})
     if not isinstance(env, dict):
         raise OverlayError("EnvironmentVariables is not a dict")
     return [key for key, value in overlay.items() if env.get(key) != value]
@@ -132,7 +132,8 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     ahead of a backup that a power loss could still take back."""
     _make_directory_durably(backup_dir)
     path = backup_dir / f"{target.name}.pre-overlay"
-    if path.exists():
+    if path.exists() or path.is_symlink():
+        _validate_backup(path)
         return path
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=backup_dir)
     temporary = Path(temporary_name)
@@ -145,11 +146,23 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
         try:
             os.link(temporary, path)
         except FileExistsError:
-            pass  # another run published one first; keep it
+            _validate_backup(path)  # another run published one first
         _fsync_directory(backup_dir)  # the new name must outlive a crash
     finally:
         temporary.unlink(missing_ok=True)
     return path
+
+
+def _validate_backup(path: Path) -> None:
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) & 0o077:
+        raise OverlayError("existing backup must be a private regular file")
+    try:
+        payload = plistlib.loads(path.read_bytes())
+    except (plistlib.InvalidFileException, ValueError, ExpatError):
+        raise OverlayError("existing backup is not a valid plist") from None
+    if not isinstance(payload, dict):
+        raise OverlayError("existing backup is not a dict plist")
 
 
 def apply_overlay(plist: Path, overlay_path: Path, *, dry_run: bool = False,
@@ -185,21 +198,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plist", type=Path, required=True)
     parser.add_argument("--overlay", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--check", action="store_true", help="do not write; exit 3 when changes are pending")
     parser.add_argument("--backup-dir", type=Path,
                         help="copy the plist's original bytes here before changing it")
     args = parser.parse_args(argv)
     try:
-        changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run,
+        changed = apply_overlay(args.plist, args.overlay, dry_run=args.dry_run or args.check,
                                 backup_dir=args.backup_dir)
     except (OverlayError, OSError) as exc:
         print(f"[env-overlay] cannot apply {args.overlay}: {exc}", file=sys.stderr)
         return 2
-    verb = "would set" if args.dry_run else "set"
+    verb = "would set" if args.dry_run or args.check else "set"
     if changed:
         print(f"[env-overlay] {verb} in {args.plist.name}: {', '.join(changed)}")
     else:
         print(f"[env-overlay] {args.plist.name} already carries the overlay")
-    return 0
+    return 3 if args.check and changed else 0
 
 
 if __name__ == "__main__":

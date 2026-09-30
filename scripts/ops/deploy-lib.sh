@@ -374,22 +374,43 @@ _deploy_lib_env_keys_loaded() {
 # the state dir before a change. A worktree rollback does not revert values
 # already written: they are deployment configuration, not code.
 #
-# Best-effort: a failure leaves the plist as it was, warns, and returns 0 —
-# the deploy goes on with the old environment, as before the overlay existed.
+# A required overlay failure aborts the deploy. Before mutation, record and
+# verify the old hash so a failed reload remains detectable on the next run.
 # usage: deploy_lib_apply_env_overlay TAG LABEL PLIST OVERLAY APPLIER
 deploy_lib_apply_env_overlay() {
   local tag="$1" label="$2" plist="$3" overlay="$4" applier="$5"
-  local state_dir sidecar before after before_sum after_sum
+  local state_dir sidecar before after before_sum after_sum status
   [[ -f "$overlay" ]] || return 0
   state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
   sidecar="$state_dir/${label}.plist.sha256"
   before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   before_sum="$(cksum < "$plist" 2>/dev/null || true)"
+  status=0
+  python3 "$applier" --plist "$plist" --overlay "$overlay" --check || status=$?
+  if [[ "$status" != 0 && "$status" != 3 ]]; then
+    echo "[$tag] ERROR: cannot validate the required environment overlay." >&2
+    return 1
+  fi
+  if [[ "$status" == 3 ]]; then
+    # Refuse before changing the plist if retry state cannot be recorded.
+    # Otherwise a later reload failure could be mistaken for first adoption.
+    [[ -n "$before" ]] || { echo "[$tag] ERROR: cannot hash the pre-overlay plist." >&2; return 1; }
+    _deploy_lib_write_sidecar "$tag" "$state_dir" "$sidecar" "$before"
+    if [[ "$(cat "$sidecar" 2>/dev/null || true)" != "$before" ]]; then
+      echo "[$tag] ERROR: cannot preserve the pre-overlay hash; plist unchanged." >&2
+      return 1
+    fi
+  fi
   # A failure is reported, but the plist is compared either way: the applier
   # can fail after its write (a dead stdout pipe, an interrupt), and a written
   # change must still be reloaded.
   if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --backup-dir "$state_dir"; then
-    echo "[$tag] WARNING: the environment overlay step failed; any change it wrote is still reloaded below." >&2
+    # A stdout failure after a complete write is harmless only when a
+    # second read proves all required values are present.
+    if ! python3 "$applier" --plist "$plist" --overlay "$overlay" --check; then
+      echo "[$tag] ERROR: the required environment overlay was not applied." >&2
+      return 1
+    fi
   fi
   after="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"
   after_sum="$(cksum < "$plist" 2>/dev/null || true)"

@@ -345,26 +345,19 @@ def test_a_hand_edit_the_overlay_undoes_is_reloaded(tmp_path):
     assert calls == ["bootout", "bootstrap"]
 
 
-def test_a_change_reloads_even_when_the_baseline_cannot_be_written(tmp_path):
-    # Codex on #2585: the sidecar write is best-effort. If the state dir
-    # rejects it, the restart must still reload rather than adopt the
-    # overlaid hash and kickstart.
+def test_an_unwritable_baseline_aborts_before_overlay_and_reload(tmp_path):
     plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
     state = tmp_path / "state"
-    (state / f"{LABEL}.plist.sha256").mkdir(parents=True)  # the sidecar cannot be written
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    log = tmp_path / "launchctl.log"
-    stub = bin_dir / "launchctl"
-    stub.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\n[ "$1" = print ] && exit 1\nexit 0\n')
-    stub.chmod(0o755)
-    script = (f'set -euo pipefail; . "{LIB}"; '
-              f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{_overlay(tmp_path, "A_KEY=v")}" "{SCRIPT}"; '
-              f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"')
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
-           "UNITARES_DEPLOY_STATE_DIR": str(state)}
-    subprocess.run(["bash", "-c", script], env=env, check=True, capture_output=True, text=True)
-    assert [c for c in log.read_text().split() if c != "print"] == ["bootout", "bootstrap"]
+    (state / f"{LABEL}.plist.sha256").mkdir(parents=True)
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
+                    baseline=None, bootstrap_fails=True, check=False)
+    assert calls == []
+    assert plist.read_bytes() == original
+    # The next deploy must still see pending changes, rather than adopt a
+    # modified disk definition whose first reload failed.
+    (state / f"{LABEL}.plist.sha256").rmdir()
+    assert _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=None) == ["bootout", "bootstrap"]
 
 
 def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
@@ -401,15 +394,15 @@ def test_a_change_the_applier_wrote_before_failing_is_reloaded(tmp_path):
     # take the failure as "nothing written" and kickstart.
     applier = tmp_path / "applier.py"
     applier.write_text(f"import subprocess, sys\n"
-                       f"subprocess.run([sys.executable, {str(SCRIPT)!r}, *sys.argv[1:]], check=True)\n"
-                       f"sys.exit(1)\n")
+                       f"result = subprocess.run([sys.executable, {str(SCRIPT)!r}, *sys.argv[1:]])\n"
+                       f"sys.exit(result.returncode if '--check' in sys.argv else 1)\n")
     plist = _plist(tmp_path, {})
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=None, applier=applier)
     assert _env(plist) == {"A_KEY": "v"}
     assert calls == ["bootout", "bootstrap"]
 
 
-def test_a_matching_baseline_that_cannot_be_rewritten_still_reloads(tmp_path):
+def test_a_matching_baseline_that_cannot_be_rewritten_aborts(tmp_path):
     # The independent review on #2585: a hand edit the overlay undoes leaves
     # the recorded hash equal to the plist the overlay writes back. When the
     # pre-overlay sidecar write also fails, only the force flag keeps the
@@ -417,9 +410,9 @@ def test_a_matching_baseline_that_cannot_be_rewritten_still_reloads(tmp_path):
     baseline = _sha(_plist(tmp_path, {"A_KEY": "v"}))
     plist = _plist(tmp_path, {"A_KEY": ""})
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=baseline,
-                    prelude="_deploy_lib_write_sidecar() { return 0; }")
-    assert _sha(plist) == baseline
-    assert calls == ["bootout", "bootstrap"]
+                    prelude="_deploy_lib_write_sidecar() { return 0; }", check=False)
+    assert _env(plist) == {"A_KEY": ""}
+    assert calls == []
 
 
 def test_a_failed_reload_is_retried_by_the_next_deploy(tmp_path):
@@ -447,3 +440,43 @@ def test_a_failed_baseline_write_keeps_the_previous_hash(tmp_path):
     assert (state / f"{LABEL}.plist.sha256").read_text() == "0" * 64
     assert [p.name for p in state.iterdir() if ".tmp." in p.name] == []
     assert _deploy(tmp_path, plist, overlay, baseline=None) == ["bootout", "bootstrap"]
+
+
+@pytest.mark.parametrize("invalid", [[], "", 0, False])
+def test_falsey_invalid_environment_is_rejected_without_rewrite(tmp_path, invalid):
+    plist = _plist(tmp_path, invalid)
+    before = plist.read_bytes()
+    result = subprocess.run([sys.executable, str(SCRIPT), "--plist", str(plist),
+                             "--overlay", str(_overlay(tmp_path, "A_KEY=v\n"))],
+                            capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "EnvironmentVariables is not a dict" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert plist.read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["directory", "corrupt", "symlink", "dangling", "public"])
+def test_invalid_existing_backup_prevents_rewrite(tmp_path, kind):
+    plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
+    backups = tmp_path / "state"
+    backups.mkdir()
+    kept = backups / f"{plist.name}.pre-overlay"
+    if kind == "directory":
+        kept.mkdir()
+    elif kind in {"symlink", "dangling"}:
+        kept.symlink_to(plist if kind == "symlink" else tmp_path / "missing")
+    else:
+        kept.write_bytes(b"invalid" if kind == "corrupt" else original)
+        kept.chmod(0o644 if kind == "public" else 0o600)
+    with pytest.raises(overlay_mod.OverlayError):
+        overlay_mod.apply_overlay(plist, _overlay(tmp_path, "A_KEY=v\n"), backup_dir=backups)
+    assert plist.read_bytes() == original
+
+
+def test_missing_applier_aborts_before_restart(tmp_path):
+    plist = _plist(tmp_path, {})
+    original = plist.read_bytes()
+    assert _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
+                   baseline=None, applier=tmp_path / "missing.py", check=False) == []
+    assert plist.read_bytes() == original
