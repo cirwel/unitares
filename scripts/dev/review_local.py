@@ -124,12 +124,14 @@ def chat(url: str, payload: dict, timeout: float) -> dict:
 
 
 def review(repo: Path, head: str, diff: str, model: str, url: str,
-           context: int, budget: int, transport=chat, transcript_path: Path | None = None) -> tuple[str, list, dict]:
+           context: int, budget: int, transport=chat, transcript_path: Path | None = None, source_context: dict | None = None) -> tuple[str, list, dict]:
     # A UTF-8 byte per token is intentionally conservative, including tool JSON and output.
     messages = [{'role': 'system', 'content': PROMPT},
                 {'role': 'user', 'content': f'PR head: {head}\nComplete diff:\n{diff}'}]
+    if source_context:
+        messages[1]['content'] += '\n\nRead-only source context supplied by the runner (not model-requested tool calls):\n' + '\n\n'.join(source_context.values())
     deadline = time.monotonic() + budget
-    reads = 0
+    reads = len(source_context or {})
     seen_calls: dict[str, int] = {}
     last = {}
     for _ in range(40):
@@ -183,6 +185,20 @@ def review(repo: Path, head: str, diff: str, model: str, url: str,
                 result_message['tool_call_id'] = call['id']
             messages.append(result_message)
     raise ValueError('Tool round budget exhausted; UNREVIEWED')
+
+
+def seed_source(repo: Path, head: str, paths: list[str]) -> dict[str, str]:
+    contexts = {}
+    # Prefer production source, then tests/docs; failures remain available to explicit tools.
+    ordered = sorted(paths, key=lambda p: (p.startswith(('tests/', 'docs/')), p))
+    for path in ordered:
+        try:
+            contexts[path] = read_file(repo, head, {'path': path, 'line_count': 160})
+        except (ValueError, KeyError, subprocess.SubprocessError):
+            continue
+        if len(contexts) == 3:
+            break
+    return contexts
 
 
 def binary_diff(diff: str) -> bool:
@@ -277,15 +293,18 @@ def main(argv=None) -> int:
                        f'{base}...{head}', cwd=repo)
         if binary_diff(diff):
             raise ValueError('Binary changes require another reviewer; UNREVIEWED')
+        paths = command('git', 'diff', '--name-only', '-z', '--diff-filter=ACMR',
+                        f'{base}...{head}', cwd=repo).rstrip('\x00').split('\x00')
+        source_context = seed_source(repo, head, paths)
         run = cache / f'pr-{args.pr}-{head[:12]}-{time.time_ns()}'
         run.mkdir()
         (run / 'diff.patch').write_text(diff)
         print(f'Local full review: {model}, PR #{args.pr}, artifacts {run}', flush=True)
         manifest = {'pr': args.pr, 'head': head, 'base': base, 'model': model,
                     'context': args.context, 'budget': args.budget, 'architecture': architecture,
-                    'diff_sha256': hashlib.sha256(diff.encode()).hexdigest(), 'status': 'UNREVIEWED'}
+                    'diff_sha256': hashlib.sha256(diff.encode()).hexdigest(), 'seeded_source_paths': list(source_context), 'status': 'UNREVIEWED'}
         try:
-            text, transcript, metrics = review(repo, head, diff, model, url, args.context, args.budget, transcript_path=run / 'transcript.json')
+            text, transcript, metrics = review(repo, head, diff, model, url, args.context, args.budget, transcript_path=run / 'transcript.json', source_context=source_context)
             (run / 'transcript.json').write_text(json.dumps(transcript, indent=2))
             (run / 'review.txt').write_text(text)
             parsed = gate.parse_verdict(text)

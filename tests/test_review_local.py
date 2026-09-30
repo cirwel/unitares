@@ -132,3 +132,23 @@ def test_actual_git_binary_patch_is_rejected(repo):
     subprocess.run(['git', 'add', 'binary'], cwd=path, check=True)
     diff = local.command('git', 'diff', '--cached', '--binary', head, cwd=path)
     assert local.binary_diff(diff)
+
+
+def test_supplied_source_is_immutable_and_delivered_to_reviewer(repo):
+    path, head = repo
+    contexts = local.seed_source(path, head, ['file.py'])
+    def reply(url, payload, timeout):
+        prompt = payload['messages'][1]['content']
+        assert '1: original' in prompt
+        assert 'SECRET' not in prompt
+        assert 'not model-requested' in prompt
+        return {'done': True, 'done_reason': 'stop', 'message': {'role': 'assistant',
+                'content': 'Reviewed supplied source context.\nVERDICT: CLEAN'}}
+    text, _, _ = local.review(path, head, 'full diff', 'gemma', 'http://localhost',
+                              16384, 10, reply, source_context=contexts)
+    assert 'VERDICT: CLEAN' in text
+
+
+def test_unavailable_seed_does_not_manufacture_source_inspection(repo):
+    path, head = repo
+    assert local.seed_source(path, head, ['missing.py']) == {}

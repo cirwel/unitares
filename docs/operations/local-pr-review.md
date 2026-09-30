@@ -27,8 +27,8 @@ credit. The runner verifies the installed model architecture before assigning fa
 renaming a different architecture cannot earn Google credit. Pass `--model NAME` for a single run.
 
 `--repo PATH` selects the repository without switching branches. The runner fetches
-the PR head/base, sends the complete diff, and allows only read/search against the
-frozen head. It never edits source, runs repository commands supplied by a model,
+the PR head/base, sends the complete diff, supplies source context from up to three changed files, and allows only read/search against the
+frozen head. Supplied context is labelled as runner-provided, never as model-requested tool calls. It never edits source, runs repository commands supplied by a model,
 or activates hooks/skills. Model output and provenance stay under the repository's
 common Git directory in `local-reviews/`. Source is sent only to a loopback Ollama
 HTTP endpoint; proxies and redirects are disabled. One local review runs at a time
@@ -37,7 +37,7 @@ across repositories to avoid simultaneous large-model loads.
 Default context is 131,072 tokens for both models on the 128 GiB review host with a conservative byte-based admission budget;
 `--context 131072` supports larger reviews if the model and available memory permit.
 Default total generation budget is 1,800 seconds (`--budget`, maximum 3,600).
-Context overflow, missing source inspection, incomplete generation, malformed output,
+Context overflow, missing source context/inspection, incomplete generation, malformed output,
 and tool/time exhaustion fail as UNREVIEWED. No truncated full diff earns a pass.
 
 Review without `--record` first when trying a new model. `--record` requires the provenance-aware gate from PR #2596 in the runner checkout and explicitly posts
