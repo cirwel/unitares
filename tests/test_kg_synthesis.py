@@ -364,12 +364,13 @@ async def test_citations_match_persisted_edges_and_never_cite_unshown_members(mo
 
 @pytest.mark.asyncio
 async def test_missing_member_identity_uses_fallback_without_inference(monkeypatch):
-    async def fail_if_called(**kwargs):
-        raise AssertionError("unattributable evidence must not be sent for synthesis")
+    from unittest.mock import AsyncMock
 
-    monkeypatch.setattr(syn, "call_local_llm_structured", fail_if_called)
+    inference = AsyncMock()
+    monkeypatch.setattr(syn, "call_local_llm_structured", inference)
     narrative, source = await syn._generate_narrative(
         "pool", [{"summary": "An observation without identity"}], [], use_llm=True
     )
     assert source == "deterministic"
     assert "An observation without identity" in narrative
+    inference.assert_not_awaited()
