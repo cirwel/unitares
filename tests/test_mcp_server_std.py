@@ -1567,6 +1567,12 @@ class TestCallToolHandler:
         {'agent_id': 'a1', 'kwargs': {'action': 'file'}},
         {'kwargs': '{"agent_id":"a1","action":"file"}'},
         {'agent_id': 'a1', 'action': 'history', 'kwargs': {'action': 'file'}},
+        {'agent_id': 'a1', 'action': 'history', 'kwargs': {
+            'agent_id': 'a2', 'action': 'history',
+            'kwargs': {'agent_id': 'a1', 'action': 'file'},
+        }},
+        {'agent_id': 'a2', 'kwargs': '{"agent_id":"a2","action":"history",'
+         '"kwargs":"{\\"agent_id\\":\\"a1\\",\\"action\\":\\"file\\"}"}'},
     ])
     async def test_activity_tracking_uses_dispatched_router_action(self, arguments):
         from src.mcp_server_std import _call_local_tool
