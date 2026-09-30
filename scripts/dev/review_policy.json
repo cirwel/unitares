@@ -30,7 +30,9 @@
     "agents/dialectic_reviewer/host_backends.py",
     "scripts/dev/review_gate.py",
     "scripts/dev/review_policy.json",
-    ".github/workflows/review-gate.yml"
+    ".github/workflows/review-gate.yml",
+    "scripts/ops/governance-mcp.env",
+    "scripts/ops/apply_plist_env_overlay.py"
   ],
   "_boundary": "Listed: the core gates, files whose main job is an authentication or authorisation decision (OAuth, identity and auth modules and schema, the REST strict-identity gate, dialectic authorization, API keys, effect grants, lease authorization, identity attestation, the MCP authorization gate and its listener config, the BEAM auth plugs and the routers that mount them, the middleware step list), plus the strong-model host adapter and agy client, the dialectic reviewer's backends, and the review gate itself. Deliberately NOT listed (operator decision 2026-09-27, to keep the cost down): large, often-edited files that hold an access decision among much else: mcp_server.py (auth wiring), mcp_handlers/updates/phases.py (the sync_state write gate), mcp_handlers/decorators.py (which calls need identity), mcp_handlers/stakes_table.py (which need a governance verdict); also files with a single incidental check (http_routes/sentinel.py, mcp_server_std.py, dialectic_protocol.py, mcp_handlers/wave3a_probe.py, mcp_handlers/consolidated.py) and record-integrity signers (dialectic_receipt.py, skill_attestations.py). Adding the four large files back raised coverage from 22% to 27% of code commits. Cost, measured 2026-09-27 over the previous 60 days: 135 of 623 commits touching src/, elixir/ or scripts/dev/ (22%), 9% of all commits. Audited across src/ and elixir/ by grepping for strict-identity refusals, compare_digest, CSRF, WebAuthn, trusted-network checks, signing, attestation, credential minting and verification, and reading each candidate's module docstring. A dispose --emit or hand-rendered record from a TRUSTED author is not verified beyond its shape; the rule guards against honest single-family review, not against a maintainer who could equally post a false CLEAN."
 }

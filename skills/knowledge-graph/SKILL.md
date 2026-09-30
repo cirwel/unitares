@@ -324,6 +324,14 @@ layer maintained over the base discovery nodes.
   id `rollup::<topic>`, tagged `rollup`), so they upsert in place across runs and
   are found by normal search — e.g. `knowledge(action="search", tags=["rollup"])`.
 
+Generated rollup statements carry discovery IDs for their supporting sources.
+The server checks that every reference belongs to the bounded source sample;
+missing or invalid references cause a deterministic source-list fallback.
+Use those IDs to inspect the evidence before relying on a generated claim:
+reference validation establishes traceability, not factual entailment. The
+sample is capped at 12 discoveries and each summary excerpt at 1,000 characters,
+so a rollup does not establish that the whole topic has been covered.
+
 Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
 write** — a per-write LLM pass across a multi-agent fleet is exactly the
 high-frequency-noise anti-pattern this graph avoids.
