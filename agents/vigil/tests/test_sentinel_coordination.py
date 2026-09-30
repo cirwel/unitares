@@ -238,6 +238,36 @@ class TestSentinelTriggerNamesMatchEmittedTypes:
 
 class TestRunCycleCoordination:
     @pytest.mark.asyncio
+    async def test_cycle_requests_metrics_that_reach_the_log(self, monkeypatch):
+        from unitares_sdk.client import GovernanceClient
+
+        _patch_health_checks(monkeypatch)
+        agent = _make_agent(with_audit=False)
+        agent.load_state = lambda: {}
+        agent.save_state = lambda state: None
+        client = _full_mock_client(search_results=[])
+        cycle = await agent.run_cycle(client)
+
+        async def sync_state(tool_name, arguments):
+            assert tool_name == "sync_state"
+            envelope = {"success": True, "state_summary": {"action": "proceed"}}
+            if arguments["response_mode"] == "full":
+                envelope["raw_governance"] = {"metrics": {
+                    "E": 0.7, "I": 0.8, "S": 0.2, "V": -0.1,
+                    "coherence": 0.48,
+                }}
+            return envelope
+
+        sdk = GovernanceClient()
+        sdk.call_tool = AsyncMock(side_effect=sync_state)
+        checkin = await sdk.checkin(cycle.summary, response_mode=cycle.response_mode)
+        logged = []
+        monkeypatch.setattr(_hb_module, "log", logged.append)
+        await agent.on_after_checkin(client, checkin, cycle)
+        assert any("E=0.700 I=0.800 S=0.200 V=-0.100" in line for line in logged)
+        assert agent._cycle_state["coherence"] == 0.48
+
+    @pytest.mark.asyncio
     async def test_audit_triggering_finding_forces_groundskeeper(self, monkeypatch):
         _patch_health_checks(monkeypatch)
 
@@ -254,6 +284,9 @@ class TestRunCycleCoordination:
         result = await agent.run_cycle(client)
 
         assert result is not None
+        # The log consumer needs canonical E/I/S/V, which compact sync_state
+        # responses omit. Request them on the original check-in, not a second write.
+        assert result.response_mode == "full"
         # Groundskeeper ran despite with_audit=False
         client.audit_knowledge.assert_awaited()
         # Finding and the forced-audit marker both appear in the check-in summary
