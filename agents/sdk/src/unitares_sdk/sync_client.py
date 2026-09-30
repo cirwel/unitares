@@ -214,6 +214,7 @@ class SyncGovernanceClient:
         if fields["risk"] is not None:
             result_data.setdefault("risk", fields["risk"])
         metrics = fields["metrics"]
+        result_data["metrics"] = metrics
 
         # RFC §7.13: emit substrate observation alongside process_agent_update
         # (mirrors UnitaresClient.checkin). Failure observational-only.
