@@ -285,7 +285,7 @@ LABEL = "com.unitares.governance-mcp"
 
 def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
             applier: Path = SCRIPT, prelude: str = "", bootstrap_fails: bool = False,
-            check: bool = True) -> list[str]:
+            check: bool = True, postlude: str = "") -> list[str]:
     """Run deploy-lib's overlay step and then its restart, with a stub
     launchctl that records its calls. Returns the recorded subcommands of
     this run. ``prelude`` runs after deploy-lib is sourced (to stub one of
@@ -307,7 +307,7 @@ def _deploy(tmp_path: Path, plist: Path, overlay: Path, *, baseline: str | None,
     stub.chmod(0o755)
     script = (f'set -euo pipefail; . "{LIB}"; {prelude}\n'
               f'deploy_lib_apply_env_overlay t {LABEL} "{plist}" "{overlay}" "{applier}"; '
-              f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"')
+              f'deploy_lib_restart_service t gui/501 {LABEL} "{plist}"; {postlude}')
     env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path),
            "UNITARES_DEPLOY_STATE_DIR": str(state)}
     subprocess.run(["bash", "-c", script], env=env, check=check, capture_output=True, text=True)
@@ -371,6 +371,28 @@ def test_an_unchanged_overlay_keeps_the_kickstart(tmp_path):
     plist = _plist(tmp_path, {"A_KEY": "v"})
     calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"), baseline=_sha(plist))
     assert calls == ["kickstart"]
+
+
+@pytest.mark.parametrize("apply_sibling_overlay", [False, True])
+def test_overlay_reload_does_not_leak_to_a_sibling_service(tmp_path, apply_sibling_overlay):
+    sibling_dir = tmp_path / "sibling"
+    sibling_dir.mkdir()
+    sibling = _plist(sibling_dir, {"A_KEY": "v"})
+    sibling_label = "com.example.sibling"
+    sibling_overlay = _overlay(sibling_dir, "A_KEY=v\n")
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / f"{sibling_label}.plist.sha256").write_text(_sha(sibling))
+    postlude = ""
+    if apply_sibling_overlay:
+        postlude += (f'deploy_lib_apply_env_overlay t {sibling_label} "{sibling}" '
+                     f'"{sibling_overlay}" "{SCRIPT}"; ')
+    postlude += f'deploy_lib_restart_service t gui/501 {sibling_label} "{sibling}"'
+
+    plist = _plist(tmp_path, {})
+    calls = _deploy(tmp_path, plist, _overlay(tmp_path, "A_KEY=v\n"),
+                    baseline=None, postlude=postlude)
+    assert calls == ["bootout", "bootstrap", "kickstart"]
 
 
 def test_a_change_the_applier_wrote_before_failing_is_reloaded(tmp_path):

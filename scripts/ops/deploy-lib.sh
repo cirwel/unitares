@@ -410,6 +410,10 @@ deploy_lib_restart_service() {
   # Set by deploy_lib_apply_env_overlay when it changed the plist this run:
   # reload whatever the sidecar says (it may not have been writable).
   force="${DEPLOY_LIB_FORCE_RELOAD:-0}"
+  # Consume the overlay's one-restart request before any return path. A
+  # deploy sweep can restart another service in this same shell, including
+  # one with no overlay, and must not carry this service's reload into it.
+  unset DEPLOY_LIB_FORCE_RELOAD
 
   # No hash tool: drift is undetectable — keep the old, reliable behavior and
   # say so, rather than reloading blind on every deploy.
