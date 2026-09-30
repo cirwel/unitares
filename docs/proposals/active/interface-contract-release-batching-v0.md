@@ -122,7 +122,13 @@ the fragments in and sets the number. This mirrors the changelog.
    minor increment if any fragment is `added` or `changed`, and a stop if any
    is `breaking`, because that needs an operator decision. It appends the
    fragments to the release list and the history comment under the new
-   number, and it deletes them. The release PR regenerates the artifact once,
+   number, and it deletes them. In the same release candidate it removes
+   their associated behavior-change attestations from the active attestation
+   directory; Git history retains both as provenance. It also retires active
+   no-behavior-change attestations, which are PR-time evidence rather than
+   permanent release inputs. Tests must prove a cut consumes linked records
+   together, leaves no dangling fragment references, and rejects a partial cut.
+   The release PR regenerates the artifact once,
    with `unreleased_changes: 0`, and must pass exact artifact/runtime parity.
    Release cuts claim the release surface so no two assemblers write it at once.
 5. **Guard.** A check in the Release Seams workflow, modeled on
@@ -206,7 +212,9 @@ the fragments in and sets the number. This mirrors the changelog.
    would allow master to reject previously valid inputs under the old family. Conversely,
    a new fragment without a corresponding semantic change fails. Reverting
    an unreleased change must remove or amend its original fragment, not
-   retain a stale release claim; tests must cover both directions and
+   retain a stale release claim. Associated attestations must be removed or
+   updated in the same revert so their fragment references and changed-path
+   claims remain consistent; tests must cover both directions and
    change-then-revert sequences. The check also
    runs on the merged candidate so an automatically merged branch is checked
    against the catalog it will actually ship. The assembler's release PR is
