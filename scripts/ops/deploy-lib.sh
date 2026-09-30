@@ -380,7 +380,10 @@ _deploy_lib_env_keys_loaded() {
 deploy_lib_apply_env_overlay() {
   local tag="$1" label="$2" plist="$3" overlay="$4" applier="$5"
   local state_dir sidecar before after before_sum after_sum status
-  [[ -f "$overlay" ]] || return 0
+  if [[ ! -f "$overlay" ]]; then
+    echo "[$tag] ERROR: required environment overlay is missing or not a file ($overlay)." >&2
+    return 1
+  fi
   state_dir="${UNITARES_DEPLOY_STATE_DIR:-$HOME/.unitares/deploy-state}"
   sidecar="$state_dir/${label}.plist.sha256"
   before="$(_deploy_lib_sha256 "$plist" 2>/dev/null || true)"

@@ -54,6 +54,11 @@ def parse_overlay(text: str) -> dict[str, str]:
     """``KEY=VALUE`` lines, in order. A value is taken verbatim after the
     first ``=`` (trailing whitespace dropped); quotes are not interpreted."""
     values: dict[str, str] = {}
+    # splitlines/strip consume several forbidden XML controls; refuse them
+    # before tokenization so malformed values cannot be silently truncated.
+    if any((ord(char) < 32 and char not in "\t\r\n") or ord(char) in {0xFFFE, 0xFFFF}
+           for char in text):
+        raise OverlayError("overlay contains an XML control character")
     for number, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -133,9 +138,16 @@ def _backup(original: bytes, target: Path, backup_dir: Path) -> Path:
     directory is synced before returning, so the plist is never rewritten
     ahead of a backup that a power loss could still take back."""
     _make_directory_durably(backup_dir)
+    # The shell sidecar writer (or an interrupted earlier run) may already
+    # have created these directories without syncing their entries. Existence
+    # alone is not durability; persist the whole ancestor chain before using
+    # this directory as the recovery store.
+    for parent in backup_dir.resolve().parents:
+        _fsync_directory(parent)
     path = backup_dir / f"{target.name}.pre-overlay"
     if path.exists() or path.is_symlink():
         _validate_backup(path)
+        _fsync_directory(backup_dir)  # retry a failed publish sync too
         return path
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=backup_dir)
     temporary = Path(temporary_name)

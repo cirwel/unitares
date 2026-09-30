@@ -111,6 +111,25 @@ def test_a_symlinked_plist_stays_a_symlink(tmp_path):
     assert link.is_symlink() and _env(real) == {"A_KEY": "v"}
 
 
+@pytest.mark.parametrize('control', ['\x0b', '\x0c', '\x1c', '\x1d', '\x1e', '\x1f'])
+def test_controls_cannot_split_or_truncate_overlay_values(control):
+    with pytest.raises(overlay_mod.OverlayError):
+        overlay_mod.parse_overlay(f'A_KEY=prefix{control}#suffix\n')
+
+
+@pytest.mark.parametrize('kind', ['missing', 'directory', 'dangling'])
+def test_required_overlay_must_be_a_file(tmp_path, kind):
+    plist = _plist(tmp_path, {})
+    before = plist.read_bytes()
+    overlay = tmp_path / 'absent-overlay.env'
+    if kind == 'directory':
+        overlay.mkdir()
+    elif kind == 'dangling':
+        overlay.symlink_to(tmp_path / 'missing-target')
+    assert _deploy(tmp_path, plist, overlay, baseline=None, check=False) == []
+    assert plist.read_bytes() == before
+
+
 def test_a_failed_backup_leaves_no_partial_original(tmp_path, monkeypatch):
     # Codex on #2585: a backup cut short (a full disk) must not be kept as the
     # write-once original, and the plist must not be rewritten without one.
@@ -171,7 +190,8 @@ def test_the_backup_entry_is_synced_before_the_plist_is_replaced(tmp_path, monke
     monkeypatch.setattr(overlay_mod.os, "replace", replace)
     backups.mkdir()
     overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
-    assert events == ["sync-dir", "replace"]
+    assert events[-2:] == ["sync-dir", "replace"]
+    assert all(event == "sync-dir" for event in events[:-1])
 
 
 def test_a_new_backup_directory_is_synced_into_its_parents(tmp_path, monkeypatch):
@@ -198,7 +218,51 @@ def test_a_new_backup_directory_is_synced_into_its_parents(tmp_path, monkeypatch
     monkeypatch.setattr(overlay_mod.os, "replace", replace)
     overlay_mod.apply_overlay(plist, _overlay(tmp_path, "B_KEY=w\n"), backup_dir=backups)
     ident = [(d.stat().st_dev, d.stat().st_ino) for d in (tmp_path, tmp_path / "home", backups)]
-    assert synced == [*ident, "replace"]
+    assert synced[:2] == ident[:2]
+    assert synced[-2:] == [ident[-1], "replace"]
+    assert all(directory in synced[:-1] for directory in ident)
+
+
+def test_existing_state_directory_ancestors_are_synced_before_rewrite(tmp_path, monkeypatch):
+    plist = _plist(tmp_path, {})
+    backups = tmp_path / 'home' / 'state'
+    backups.mkdir(parents=True)  # the shell sidecar path creates it first
+    synced = []
+    real_sync = overlay_mod._fsync_directory
+
+    def sync(directory):
+        synced.append(directory)
+        real_sync(directory)
+
+    monkeypatch.setattr(overlay_mod, '_fsync_directory', sync)
+    overlay_mod.apply_overlay(plist, _overlay(tmp_path, 'A_KEY=v\n'), backup_dir=backups)
+    assert backups.parent in synced and tmp_path in synced
+
+
+def test_retry_syncs_an_existing_backup_after_publish_sync_failure(tmp_path, monkeypatch):
+    plist = tmp_path / 'com.unitares.governance-mcp.plist'
+    plist.write_bytes(HAND_WRITTEN)
+    backups = tmp_path / 'state'
+    real_sync = overlay_mod._fsync_directory
+
+    def fail_backup_sync(directory):
+        if directory == backups:
+            raise OSError('directory sync failed')
+        real_sync(directory)
+
+    monkeypatch.setattr(overlay_mod, '_fsync_directory', fail_backup_sync)
+    overlay = _overlay(tmp_path, 'B_KEY=w\n')
+    with pytest.raises(OSError):
+        overlay_mod.apply_overlay(plist, overlay, backup_dir=backups)
+    assert (backups / f'{plist.name}.pre-overlay').exists()
+    assert plist.read_bytes() == HAND_WRITTEN
+    # A second run must retry the failed sync rather than accepting existence.
+    with pytest.raises(OSError):
+        overlay_mod.apply_overlay(plist, overlay, backup_dir=backups)
+    assert plist.read_bytes() == HAND_WRITTEN
+    monkeypatch.setattr(overlay_mod, '_fsync_directory', real_sync)
+    overlay_mod.apply_overlay(plist, overlay, backup_dir=backups)
+    assert _env(plist)['B_KEY'] == 'w'
 
 
 def test_dry_run_reports_without_writing(tmp_path):
