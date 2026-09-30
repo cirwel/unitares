@@ -115,7 +115,7 @@ the fragments in and sets the number. This mirrors the changelog.
 5. **Guard.** A check in the Release Seams workflow, modeled on
    `scripts/ci/changelog_direct_edit.py`, fails an ordinary PR that changes
    `INTERFACE_CONTRACT_VERSION` or the release paragraph, and fails a PR
-   the released artifact. It compares base and head runtime catalogs and
+   that edits the released artifact. It compares base and head runtime catalogs and
    requires a new fragment whenever the surface digest moves. The check also
    runs on the merged candidate so an automatically merged branch is checked
    against the catalog it will actually ship. The assembler's release PR is
