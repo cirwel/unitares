@@ -146,9 +146,15 @@ routes:
 Planning arithmetic, not a power analysis. For a paired comparison at
 α = 0.05 two-sided and 80% power, families n ≈ 7.84·σd²/δ².
 
-- **Binary per-family success.** With σd² of 0.3 to 0.4 and a 15-point
-  effect, n is about 105 to 140 families.
-- **Fractional scores.** With σd near 0.3, n is about 31.
+**The target effect δ is not chosen here.** It is the smallest D−B difference
+worth detecting, and choosing it is an operator decision (D1). The figures
+below use δ = 15 percentage points purely for illustration. n scales with
+1/δ²: δ = 10 points needs 2.25 times as many families, and δ = 20 points about
+0.56 times as many.
+
+- **Binary per-family success.** With σd² of 0.3 to 0.4 and δ = 15 points, n
+  is about 105 to 140 families.
+- **Fractional scores.** With σd near 0.3 and δ = 15 points, n is about 31.
 - **Construction load.** Each family needs at least four difficulty-matched,
   unfamiliar, sealed variants. That is roughly 124 to 560 hand-built variants
   plus four multi-agent episodes per family.
@@ -197,7 +203,7 @@ Planning arithmetic, not a power analysis. For a paired comparison at
 
 | # | Decision | Recommendation |
 |---|---|---|
-| D1 | **Feasibility gate first.** Fix, before building anything, the family count, construction hours and spend above which the study is infeasible as registered | Set it now. Use the Section 2.4 arithmetic with the variance assumption stated as an assumption |
+| D1 | **Feasibility gate first.** Fix, before building anything, the family count, construction hours and spend above which the study is infeasible as registered | Set it now. First freeze the target effect δ as an explicit operator choice, then apply the Section 2.4 arithmetic with the variance stated as an assumption. The 31 to 140 range holds only at δ = 15 points |
 | D2 | **Amend the protocol (v0.1) or not.** Points an amendment would settle: (a) agent-invoked reconstruction; (b) arm B including ordinary note handoff; (c) arm D's review by an in-arm peer on the matched model, charged to the common budget; (d) whether arms A and C are kept, since they roughly double cost while the primary contrast is D−B; (e) the route for a live-model probe | Amend before any build. Without (a) to (c), D−B does not test the product claim |
 | D3 | **Blinding route** | Code-frozen adjudication with coded arm labels, or a second person. If neither, say in the enrollment that the integrity conditions cannot be met |
 | D4 | **Containment substrate** | Per-arm containers with an outbound allowlist. A Linux host would also allow OpenShell-style kernel enforcement |
