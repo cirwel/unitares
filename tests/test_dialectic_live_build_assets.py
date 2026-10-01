@@ -4,7 +4,7 @@
 asset build may fall back to the previous digest (lenient, every boot) or
 must fail (--strict, deploys). These tests run the real script in a scratch
 app directory with `mix` and the CLI-repair helper stubbed. The `mix` stub
-follows the `assets.digest` alias contract in mix.exs: refuse unless the
+follows the `phx.digest` alias contract in mix.exs: refuse unless the
 script's build lock is held, clear the marker, digest, write the marker only
 on success.
 """
@@ -27,7 +27,7 @@ set -eu
 app="$PWD"
 case "$1" in
   assets.compile) sleep "${COMPILE_SLEEP:-0}"; exit "${COMPILE_RC:-0}" ;;
-  assets.digest)
+  phx.digest)
     [ "${DIALECTIC_LIVE_ASSETS_LOCKED:-}" = 1 ] || { echo "digest without the build lock" >&2; exit 98; }
     rm -f "$app/_build/assets-digest.ok"
     sleep "${DIGEST_SLEEP:-0}"

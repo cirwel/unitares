@@ -19,8 +19,9 @@
 # rewrites digested files (and .gz variants) in place, so after a failure
 # neither the old nor the new build is known to be whole.
 #
-# DIGEST_OK says the digest on disk finished. The `assets.digest` mix alias
-# owns it (cleared before phx.digest, written after it succeeds; mix.exs).
+# DIGEST_OK says the digest on disk finished. The project's `phx.digest`
+# alias owns it (cleared before Phoenix's digest, written after it succeeds;
+# mix.exs).
 #
 # A lock serializes builds: launchd can restart the service (and so run this
 # script) while the deploy script is building, and two interleaved digests
@@ -29,7 +30,7 @@
 # stale-lock recovery to race. bash has no flock builtin and macOS has no
 # flock(1), so perl (present on macOS and CI runners) takes it on the
 # inherited descriptor; the lock belongs to the open file description and
-# outlives the perl process. The `assets.digest` alias refuses to run unless
+# outlives the perl process. The `phx.digest` alias refuses to run unless
 # DIALECTIC_LIVE_ASSETS_LOCKED is set, so this script is the one digest path.
 set -euo pipefail
 
@@ -75,4 +76,4 @@ if [ "$compiled" -eq 0 ]; then
   exit 1
 fi
 
-mix assets.digest
+mix phx.digest

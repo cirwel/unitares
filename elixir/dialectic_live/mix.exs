@@ -90,12 +90,13 @@ defmodule DialecticLive.MixProject do
         "tailwind dialectic_live --minify",
         "esbuild dialectic_live --minify"
       ],
-      # The marker says the digest on disk finished. It is cleared before
-      # phx.digest and written only after it succeeds, so an interrupted
-      # digest never leaves a stale one. Only scripts/build-assets.sh may run
-      # this (it holds the build lock); see clear_digest_marker/1.
-      "assets.digest": [&clear_digest_marker/1, "phx.digest", &write_digest_marker/1],
-      "assets.deploy": ["assets.compile", "assets.digest"],
+      # Wraps Phoenix's own phx.digest (an alias may call the task it is
+      # named after), so every digest in this project goes through it: only
+      # scripts/build-assets.sh may run one (it holds the build lock), and
+      # the marker saying the digest finished is cleared first and written
+      # only on success. See clear_digest_marker/1.
+      "phx.digest": [&clear_digest_marker/1, "phx.digest", &write_digest_marker/1],
+      "assets.deploy": ["assets.compile", "phx.digest"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end
@@ -108,7 +109,7 @@ defmodule DialecticLive.MixProject do
       Mix.raise(
         "build assets with scripts/build-assets.sh (--strict to fail on any error); " <>
           "it serializes builds and owns the digest marker, so mix assets.deploy " <>
-          "and assets.digest do not run on their own"
+          "and phx.digest do not run on their own"
       )
     end
 
