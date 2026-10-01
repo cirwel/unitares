@@ -54,11 +54,25 @@ mix deps.get --only "$MIX_ENV"
 # only a self-heal; deploy-dialectic-live.sh builds assets itself and fails
 # hard there, before it restarts anything. So serve the last digested build
 # and say so. With no previous build there is nothing to serve: fail.
+#
+# phx.digest writes cache_manifest.json BEFORE the digested files it names,
+# so after a failed digest the manifest on disk may point at files that were
+# never written. Keep a copy of the last good one (in _build/: gitignored,
+# and outside priv/static so phx.digest never digests it) and restore it.
 MANIFEST="$APP_DIR/priv/static/cache_manifest.json"
+GOOD_MANIFEST="$APP_DIR/_build/cache_manifest.json.last-good"
+mkdir -p "$APP_DIR/_build"
+if [ -f "$MANIFEST" ]; then
+  cp -p "$MANIFEST" "$GOOD_MANIFEST"
+else
+  rm -f "$GOOD_MANIFEST"
+fi
 if ! { "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.deploy; }; then
-  if [ -f "$MANIFEST" ]; then
+  if [ -f "$GOOD_MANIFEST" ]; then
+    cp -p "$GOOD_MANIFEST" "$MANIFEST"
     echo "[start] WARNING: asset build failed; serving the previous build ($(date -r "$MANIFEST" '+%Y-%m-%d %H:%M'))" >&2
   else
+    rm -f "$MANIFEST"
     echo "[start] FATAL: asset build failed and there is no previous build to serve" >&2
     exit 1
   fi
