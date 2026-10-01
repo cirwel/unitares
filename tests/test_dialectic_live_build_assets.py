@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import signal
 import subprocess
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ case "$1" in
   assets.digest)
     [ "${DIALECTIC_LIVE_ASSETS_LOCKED:-}" = 1 ] || { echo "digest without the build lock" >&2; exit 98; }
     rm -f "$app/_build/assets-digest.ok"
+    sleep "${DIGEST_SLEEP:-0}"
     echo "{\\"digest\\": \\"new\\"}" > "$app/priv/static/cache_manifest.json"
     [ "${DIGEST_RC:-0}" -eq 0 ] || exit "$DIGEST_RC"
     mkdir -p "$app/_build" && touch "$app/_build/assets-digest.ok"
@@ -195,3 +197,39 @@ def test_lock_is_held_for_the_whole_build(tmp_path: Path) -> None:
         assert held, "build lock was not held while the build ran"
     finally:
         assert build.wait(timeout=30) == 0
+
+
+def _lock_is_held(app: Path) -> bool:
+    with open(app / "_build" / "assets-build.lock", "a") as probe:
+        try:
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        return False
+
+
+def test_digest_outliving_a_killed_wrapper_keeps_the_lock(tmp_path: Path) -> None:
+    # The digest step inherits the lock fd, so killing only the wrapper must
+    # not let a second build in while the digest is still writing.
+    app = _app(tmp_path, previous_build=True)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "MIX_ENV": "prod",
+        "DIGEST_SLEEP": "4",
+    }
+    build = subprocess.Popen(
+        [str(app / "scripts" / "build-assets.sh")],
+        cwd=app,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        time.sleep(1.5)
+        build.send_signal(signal.SIGKILL)  # the wrapper only; the mix stub lives on
+        build.wait(timeout=10)
+        assert _lock_is_held(app), "lock released while the digest was still running"
+    finally:
+        os.killpg(build.pid, signal.SIGKILL)

@@ -56,9 +56,11 @@ if ! perl -MFcntl=:flock -e '
 fi
 export DIALECTIC_LIVE_ASSETS_LOCKED=1
 
-# Children get fd 9 closed: anything they leave running would hold the lock.
+# Children inherit fd 9 on purpose: a step that outlives a killed wrapper
+# (a digest still writing) keeps holding the lock. None of them leaves a
+# daemon behind (mix runs without distribution; tailwind/esbuild are one-shot).
 compiled=1
-{ "$APP_DIR/scripts/prepare-asset-binaries.sh" 9>&- && mix assets.compile 9>&-; } || compiled=0
+{ "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.compile; } || compiled=0
 
 if [ "$compiled" -eq 0 ]; then
   if [ "$STRICT" -eq 0 ] && [ -f "$DIGEST_OK" ] && [ -f "$MANIFEST" ]; then
@@ -73,4 +75,4 @@ if [ "$compiled" -eq 0 ]; then
   exit 1
 fi
 
-mix assets.digest 9>&-
+mix assets.digest

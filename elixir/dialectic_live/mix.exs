@@ -112,7 +112,16 @@ defmodule DialecticLive.MixProject do
       )
     end
 
-    File.rm(@digest_marker)
+    case File.rm(@digest_marker) do
+      :ok ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("could not clear #{@digest_marker}: #{:file.format_error(reason)}")
+    end
   end
 
   defp write_digest_marker(_args) do
