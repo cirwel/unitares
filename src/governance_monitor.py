@@ -164,6 +164,25 @@ from src.monitor_prediction import (
 )
 
 
+
+def claim_confidence_source(confidence_metadata, agent_state, *, simulation: bool) -> str:
+    """Where an auto_attest row's confidence came from, for claim scoring.
+
+    Only 'reported' is the caller's own claim. 'external' in
+    confidence_metadata means caller-supplied and is renamed so it cannot be
+    read as external_signal; a simulation is not a check-in; a value the
+    server clamped (weak identity) is no longer what was claimed.
+    """
+    if simulation:
+        return "simulated"
+    source = (confidence_metadata or {}).get("source")
+    if source != "external":
+        return f"derived:{source or 'unknown'}"
+    if isinstance(agent_state, dict) and agent_state.get("confidence_dampened"):
+        return "reported_dampened"
+    return "reported"
+
+
 class UNITARESMonitor:
     """
     UNITARES v1.0 Governance Monitor
@@ -1667,6 +1686,12 @@ class UNITARESMonitor:
             decision=decision['action'],
             details={
                 'reason': decision.get('reason', ''),
+                # Claim provenance for external-grounding calibration: a
+                # derived value scored against outcomes is circular.
+                'confidence_source': claim_confidence_source(
+                    confidence_metadata, agent_state, simulation=self._simulation_active,
+                ),
+                'epistemic_class': agent_state.get('epistemic_class') if isinstance(agent_state, dict) else None,
                 'coherence': float(self.state.coherence),
                 'void_active': void_active,
                 'unitares_verdict': unitares_verdict,
