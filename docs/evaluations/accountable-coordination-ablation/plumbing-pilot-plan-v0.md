@@ -203,7 +203,7 @@ Planning arithmetic, not a power analysis. For a paired comparison at
 | D4 | **Containment substrate** | Per-arm containers with an outbound allowlist. A Linux host would also allow OpenShell-style kernel enforcement |
 | D5 | **Model access for isolated agents** | An isolated Claude child is metered-API only. Decide between a metered budget and a Codex-only harness, whose model identity is not reported on the exec path |
 | D6 | **Arm C's policy boundary** | Decide whether a setting that exists only inside the sealed experiment stack may disable pause gating and governance envelopes for C. The protocol forbids any production or agent-selectable switch |
-| D7 | **Exception to "no additional PostgreSQL"** | Per-arm, per-family stacks mean many Postgres instances. Record the waiver in the enrollment and scope it in `CLAUDE.md` if granted |
+| D7 | **Exception to "no additional PostgreSQL"** | Per-arm, per-family stacks mean many Postgres instances. Record the waiver in the enrollment. If granted, add the same scoped rule to both `CLAUDE.md` and `AGENTS.md`: the prohibition sits in their shared contract, which `scripts/dev/check-shared-contract.sh` keeps byte-identical |
 
 ## 6. Side finding: local database trust
 
