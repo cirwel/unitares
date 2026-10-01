@@ -1,6 +1,8 @@
 # Review gate proportionality (v0)
 
-Status: Proposed, design-only. Merging this document does not change the gate.
+Status: Proposal. Item 3 (the operator waiver) is built in this PR, bounded as
+described in `docs/operations/github-workflow-conventions.md`; items 1, 2 and 4
+are not built.
 
 Date: 2026-09-30
 
@@ -59,6 +61,6 @@ on every round.
 
 ## 5. Build order
 
-Not started. Each step edits `review_gate.py` or `review_policy.json`, both of
+Item 3 is built. The others are not started. Each step edits `review_gate.py` or `review_policy.json`, both of
 which are on the second-family list, so each needs its own two-family review.
 Land after #2596 so the gate is edited once.
