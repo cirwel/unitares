@@ -92,7 +92,8 @@ defmodule DialecticLive.MixProject do
       ],
       # The marker says the digest on disk finished. It is cleared before
       # phx.digest and written only after it succeeds, so an interrupted
-      # digest, by this alias or by assets.deploy, never leaves a stale one.
+      # digest never leaves a stale one. Only scripts/build-assets.sh may run
+      # this (it holds the build lock); see clear_digest_marker/1.
       "assets.digest": [&clear_digest_marker/1, "phx.digest", &write_digest_marker/1],
       "assets.deploy": ["assets.compile", "assets.digest"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
@@ -102,7 +103,17 @@ defmodule DialecticLive.MixProject do
   # Read by scripts/build-assets.sh (DIGEST_OK); keep the two paths in step.
   @digest_marker Path.join(__DIR__, "_build/assets-digest.ok")
 
-  defp clear_digest_marker(_args), do: File.rm(@digest_marker)
+  defp clear_digest_marker(_args) do
+    if System.get_env("DIALECTIC_LIVE_ASSETS_LOCKED") != "1" do
+      Mix.raise(
+        "build assets with scripts/build-assets.sh (--strict to fail on any error); " <>
+          "it serializes builds and owns the digest marker, so mix assets.deploy " <>
+          "and assets.digest do not run on their own"
+      )
+    end
+
+    File.rm(@digest_marker)
+  end
 
   defp write_digest_marker(_args) do
     File.mkdir_p!(Path.dirname(@digest_marker))

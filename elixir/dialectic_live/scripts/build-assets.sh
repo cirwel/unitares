@@ -20,12 +20,17 @@
 # neither the old nor the new build is known to be whole.
 #
 # DIGEST_OK says the digest on disk finished. The `assets.digest` mix alias
-# owns it (cleared before phx.digest, written after it succeeds; mix.exs),
-# so `mix assets.deploy` run by hand keeps it honest too.
+# owns it (cleared before phx.digest, written after it succeeds; mix.exs).
 #
 # A lock serializes builds: launchd can restart the service (and so run this
 # script) while the deploy script is building, and two interleaved digests
-# could leave one's marker beside the other's half-written output.
+# could leave one's marker beside the other's half-written output. It is a
+# kernel flock(2) on fd 9, so a holder that dies releases it and there is no
+# stale-lock recovery to race. bash has no flock builtin and macOS has no
+# flock(1), so perl (present on macOS and CI runners) takes it on the
+# inherited descriptor; the lock belongs to the open file description and
+# outlives the perl process. The `assets.digest` alias refuses to run unless
+# DIALECTIC_LIVE_ASSETS_LOCKED is set, so this script is the one digest path.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -40,26 +45,20 @@ LOCK="$APP_DIR/_build/assets-build.lock"
 LOCK_WAIT="${DIALECTIC_LIVE_ASSETS_LOCK_WAIT:-300}"
 
 mkdir -p "$APP_DIR/_build"
-waited=0
-until mkdir "$LOCK" 2>/dev/null; do
-  holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-    echo "[assets] removing stale build lock (pid $holder is gone)" >&2
-    rm -rf "$LOCK"
-    continue
-  fi
-  if [ "$waited" -ge "$LOCK_WAIT" ]; then
-    echo "[assets] FATAL: another asset build still holds $LOCK after ${LOCK_WAIT}s" >&2
-    exit 1
-  fi
-  sleep 1
-  waited=$((waited + 1))
-done
-echo "$$" > "$LOCK/pid"
-trap 'rm -rf "$LOCK"' EXIT
+exec 9>>"$LOCK"
+if ! perl -MFcntl=:flock -e '
+  open(my $fh, ">&=", 9) or die "fd 9: $!\n";
+  my $deadline = time + $ARGV[0];
+  until (flock($fh, LOCK_EX | LOCK_NB)) { exit 1 if time >= $deadline; sleep 1 }
+' "$LOCK_WAIT"; then
+  echo "[assets] FATAL: another asset build still holds $LOCK after ${LOCK_WAIT}s" >&2
+  exit 1
+fi
+export DIALECTIC_LIVE_ASSETS_LOCKED=1
 
+# Children get fd 9 closed: anything they leave running would hold the lock.
 compiled=1
-{ "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.compile; } || compiled=0
+{ "$APP_DIR/scripts/prepare-asset-binaries.sh" 9>&- && mix assets.compile 9>&-; } || compiled=0
 
 if [ "$compiled" -eq 0 ]; then
   if [ "$STRICT" -eq 0 ] && [ -f "$DIGEST_OK" ] && [ -f "$MANIFEST" ]; then
@@ -74,4 +73,4 @@ if [ "$compiled" -eq 0 ]; then
   exit 1
 fi
 
-mix assets.digest
+mix assets.digest 9>&-

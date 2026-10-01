@@ -4,14 +4,17 @@
 asset build may fall back to the previous digest (lenient, every boot) or
 must fail (--strict, deploys). These tests run the real script in a scratch
 app directory with `mix` and the CLI-repair helper stubbed. The `mix` stub
-follows the `assets.digest` alias contract in mix.exs: clear the marker,
-digest, write the marker only on success.
+follows the `assets.digest` alias contract in mix.exs: refuse unless the
+script's build lock is held, clear the marker, digest, write the marker only
+on success.
 """
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -22,8 +25,9 @@ MIX_STUB = """#!/usr/bin/env bash
 set -eu
 app="$PWD"
 case "$1" in
-  assets.compile) exit "${COMPILE_RC:-0}" ;;
+  assets.compile) sleep "${COMPILE_SLEEP:-0}"; exit "${COMPILE_RC:-0}" ;;
   assets.digest)
+    [ "${DIALECTIC_LIVE_ASSETS_LOCKED:-}" = 1 ] || { echo "digest without the build lock" >&2; exit 98; }
     rm -f "$app/_build/assets-digest.ok"
     echo "{\\"digest\\": \\"new\\"}" > "$app/priv/static/cache_manifest.json"
     [ "${DIGEST_RC:-0}" -eq 0 ] || exit "$DIGEST_RC"
@@ -51,7 +55,9 @@ def _app(tmp_path: Path, *, previous_build: bool) -> Path:
     mix.write_text(MIX_STUB)
     mix.chmod(0o755)
     if previous_build:
-        (app / "priv" / "static" / "cache_manifest.json").write_text('{"digest": "old"}')
+        (app / "priv" / "static" / "cache_manifest.json").write_text(
+            '{"digest": "old"}'
+        )
         (app / "_build" / "assets-digest.ok").touch()
     return app
 
@@ -92,10 +98,11 @@ def test_clean_build_digests_and_marks(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert "new" in _manifest(app)
     assert _marker(app)
-    assert not (app / "_build" / "assets-build.lock").exists()
 
 
-def test_lenient_compile_failure_serves_completed_previous_build(tmp_path: Path) -> None:
+def test_lenient_compile_failure_serves_completed_previous_build(
+    tmp_path: Path,
+) -> None:
     app = _app(tmp_path, previous_build=True)
     proc = _run(app, COMPILE_RC="1")
     assert proc.returncode == 0, proc.stderr
@@ -143,24 +150,48 @@ def test_digest_failure_is_fatal_and_clears_the_marker(tmp_path: Path) -> None:
     assert "no completed previous build" in proc.stderr
 
 
-def test_live_lock_holder_blocks_a_second_build(tmp_path: Path) -> None:
+def test_held_lock_blocks_a_second_build(tmp_path: Path) -> None:
     app = _app(tmp_path, previous_build=True)
-    lock = app / "_build" / "assets-build.lock"
-    lock.mkdir()
-    (lock / "pid").write_text(str(os.getpid()))
-    proc = _run(app)
+    with open(app / "_build" / "assets-build.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        proc = _run(app)
     assert proc.returncode == 1
     assert "still holds" in proc.stderr
-    assert lock.exists()
+    assert "old" in _manifest(app)
 
 
-def test_stale_lock_is_reclaimed(tmp_path: Path) -> None:
+def test_lock_is_released_when_the_build_exits(tmp_path: Path) -> None:
     app = _app(tmp_path, previous_build=False)
-    lock = app / "_build" / "assets-build.lock"
-    lock.mkdir()
-    # Above pid_max on macOS and Linux, so never a live process.
-    (lock / "pid").write_text("2147483646")
-    proc = _run(app)
-    assert proc.returncode == 0, proc.stderr
-    assert "stale build lock" in proc.stderr
-    assert not lock.exists()
+    assert _run(app).returncode == 0
+    with open(app / "_build" / "assets-build.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
+
+
+def test_lock_is_held_for_the_whole_build(tmp_path: Path) -> None:
+    # perl takes the flock and exits; the lock must stay with the script's fd.
+    app = _app(tmp_path, previous_build=False)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "MIX_ENV": "prod",
+        "COMPILE_SLEEP": "3",
+    }
+    build = subprocess.Popen(
+        [str(app / "scripts" / "build-assets.sh")],
+        cwd=app,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(1.5)
+        with open(app / "_build" / "assets-build.lock", "a") as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                held = True
+            else:
+                held = False
+        assert held, "build lock was not held while the build ran"
+    finally:
+        assert build.wait(timeout=30) == 0
