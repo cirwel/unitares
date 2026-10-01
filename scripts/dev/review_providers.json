@@ -3,10 +3,6 @@
   "disabled": {
     "claude": {
       "reason": "Organization access disabled; operator must confirm restoration before re-enabling."
-    },
-    "antigravity": {
-      "reason": "Gemini quota outage observed September30; bounded retry after the advertised reset.",
-      "retry_after": "2026-10-01T21:20:00Z"
     }
   }
 }
