@@ -1,16 +1,16 @@
 # Forecast-bound calibration mirror (v0)
 
-**Status:** DRAFT proposal, 2026-10-01. Documentation only. This document
+**Status:** DRAFT decision record, 2026-10-01, revised the same day after
+adversarial design review (Section 8). Documentation only. This document
 changes no runtime behavior, schema, flag, default, threshold, response shape,
-or registered protocol. Merging it authorizes nothing; each phase in
-[Section 8](#8-phases-and-what-each-needs) needs its own operator decision.
-**Scope:** how an agent can get a calibration readout on its own confidence
-that rewards reporting what it actually believes, and that the agent cannot
-improve by gaming its inputs.
+or registered protocol, and it authorizes nothing.
+**Recommendation:** do **not** build the forecast mirror first drafted here.
+Section 6 explains why and names the options that remain.
+**Scope:** whether UNITARES can give an agent a calibration readout that makes
+honest confidence reporting its best strategy, rather than only harmless.
 **Inputs:** PR #2603 (claim provenance on `auto_attest`, merged 2026-10-01);
-KG finding `2026-10-01T05:54:28.762573+00:00` (the external mirror can never
-reach its floor); the outcome-binding assurance case
-([`outcome-binding-v0.md`](../../evaluations/assurance-cases/outcome-binding-v0.md));
+KG finding `2026-10-01T05:54:28.762573+00:00`; the outcome-binding assurance
+case ([`outcome-binding-v0.md`](../../evaluations/assurance-cases/outcome-binding-v0.md));
 the fixture-conflation decision packet
 ([`outcome-fixture-conflation-decision-packet-v0.md`](../archive/outcome-fixture-conflation-decision-packet-v0.md));
 the outcome-grounding stop rule
@@ -20,297 +20,274 @@ the outcome-grounding stop rule
 
 ## 1. The question
 
-Two ways to stop an agent gaming a self-report:
+There are two ways to stop an agent from gaming a self-report:
 
-1. Make the report carry no payoff, so gaming gains nothing.
-2. Make honest reporting the agent's best strategy, so it does not want to game.
+1. **Can't gain.** The report carries no payoff, so gaming buys nothing.
+2. **Doesn't want to.** Honest reporting is the agent's best strategy.
 
 UNITARES already does (1) for confidence: calibration readouts are mirror
-only, with no verdict, risk, or trust-tier effect. That keeps the report
-safe, but it gives the agent no reason to report carefully. This proposal is
-about (2).
+only, with no verdict, risk, or trust-tier effect. The first draft of this
+document set out to reach (2) with a proper scoring rule (Brier) applied to
+forecasts bound before their outcome.
 
-A proper scoring rule such as the Brier score gives (2), but only when four
-conditions hold:
+## 2. The finding: (2) needs stakes, and stakes need a resolver the agent cannot reach
 
-| # | Condition | Why it is needed |
+A strictly proper scoring rule makes honest reporting the unique best
+response **only for a forecaster whose utility rises with the score**. Strip
+every payoff, as UNITARES deliberately does, and every report is equally
+good. The rule then provides (1), not (2).
+
+If the agent does value its own number, for example because a model treats
+any displayed score as something to improve, the cheapest strategies are not
+honest hard forecasts:
+
+- forecasting a rerun after already seeing it pass;
+- forecasting commands whose outcome the agent controls;
+- not forecasting at all;
+- quietly abandoning forecasts that start to look wrong, so they expire unscored.
+
+Proper scoring is incentive-compatible only when these conditions all hold:
+
+| # | Condition | Status on this deployment |
 |---|---|---|
-| C1 | The forecast is committed before the outcome exists | Otherwise the "forecast" can be read off the result |
-| C2 | The outcome label is produced by someone other than the forecaster | Otherwise the forecaster writes both sides of the score |
-| C3 | The scored value is the agent's own report, not a server estimate | Scoring a derived or clamped value scores the server, not the agent |
-| C4 | Every committed forecast stays in the denominator | Otherwise the agent resolves only the forecasts that went well |
+| C1 | Forecast committed before the outcome, with an ordering the server can verify | **Not met.** Outcomes carry server receipt time, not execution time (`src/db/mixins/tool_usage.py:161-165`) |
+| C2 | Outcome produced by a party the forecaster cannot write as | **Not met.** See below |
+| C3 | The scored value is the agent's own report, with no other effect | **Not met.** Check-in `confidence` already drives λ1 gating, continuity signals, and the drift vector (`governance_monitor.py:1235-1271`, `:1397-1427`) |
+| C4 | Every committed forecast is scored, including abandoned ones | **Not met.** An unresolved forecast has no label to score |
+| C5 | The forecaster does not choose which questions are asked | **Not met.** The agent picks what to forecast |
+| C6 | The forecaster cannot steer the outcome after forecasting | **Not met** for any target that is the agent's own code or command |
+| C7 | The score has some value to the forecaster | **Deliberately not met**: nothing rides on calibration |
 
-A fifth condition sits outside the scoring rule: **nothing besides the mirror
-may ride on the score**. Once a verdict, a trust tier, or a ranking depends
-on it, the agent is better off optimizing the number than reporting its
-belief.
+**C2 is the binding constraint here.** The only external producer is the
+harness outcome hook (`~/scripts/hooks/outcome-tracker.sh`, operator
+fleet-ops, not this repo). It reads `UNITARES_OPERATOR_TOKEN` from a file
+owned by the same OS user every agent process runs as, and agents routinely
+edit that directory. `POST /v1/harness/outcome` accepts a caller-chosen
+`agent_uuid`, `verification_source`, and `detail`
+(`src/http_routes/substrate.py:331`, `:345-361`). Any agent on the host can
+therefore post the "external" grade for its own forecast. No mechanism inside
+the server can fix that; it needs process isolation that a single-user host
+does not have.
 
-## 2. What exists today
+**C7 conflicts with the rest of UNITARES.** Adding stakes to repair C7 would
+make C2 through C6 load-bearing, and reopen the gaming problem (1) solved.
+The two goals pull against each other: with no stakes there is no incentive,
+and with stakes there is something to game.
 
-The plumbing for C1 is mostly built. Each condition below is checked against
-`master` at `4e4540b82` and the live database on 2026-10-01 (read-only).
+## 3. What exists today (verified)
 
-**Forecast minting (C1, C3 partly met).**
-- A check-in that carries a caller `confidence` mints a `prediction_id`
+Each item was checked against `master` at `4e4540b82` and the live database
+on 2026-10-01, read-only.
+
+**Forecast minting.**
+- A check-in carrying caller `confidence` mints a `prediction_id`
   (`src/monitor_calibration.py:87-91`).
-- Server-derived confidence is never registered
-  (`monitor_calibration.py:26-27`; `governance_monitor.py:1210`).
-- The registered value is taken after the weak-identity clamp
-  (`phases.py:849-853`), and the registry does not record that a clamp
-  happened (`monitor_prediction.py:28-37`).
-- The id comes back in every response mode except `minimal`
-  (`update_response_service.py:40-43`; `envelope_step.py:2966`).
+- Server-derived confidence is never registered (`:26-27`).
+- The registered value is the post-clamp one: weak identities are capped at
+  0.55 (`src/mcp_handlers/updates/phases.py:849-853`).
+- The registry (`src/monitor_prediction.py:28-37`) stores no provenance.
+- It lives in monitor memory plus a per-agent file snapshot
+  (`governance_monitor.py:449-458`, `:532-547`), with a 3600 s TTL. Nothing
+  reaches the database at mint.
 
-**Forecast durability (C4 not met).**
-- The registry lives in the monitor's memory and its per-agent file snapshot
-  (`governance_monitor.py:449-458`, `:532-547`), with a 3600 s TTL.
-- Nothing reaches the database at mint time. A forecast that never receives
-  an outcome leaves no durable trace, so the denominator in C4 cannot be
-  reconstructed. `scripts/analysis/prospective_prediction_cohort.py:45-47`
-  records the same limit.
-
-**Outcome binding (C2 not met).**
-- `audit.outcome_prediction_bindings` (migration 070) holds at most one
-  canonical outcome per `(agent_id, prediction_id)`.
-- Only two paths carry a `prediction_id`, and both are self-report:
+**Outcome binding.**
+- `audit.outcome_prediction_bindings` (migration 070) holds one canonical
+  outcome per `(agent_id, prediction_id)`.
+- Only self-report paths carry a `prediction_id`:
   - public `record_result`, forced to `agent_reported_tool_result`
     (`outcome_events.py:898-899`);
-  - the Phase-5 evidence emitter (`phases.py:2402`), which runs in `shadow`
-    on the maintainer deployment, so its rows are calibration-excluded.
-- The external path, `POST /v1/harness/outcome`, ignores `prediction_id` on
-  purpose (`src/http_routes/substrate.py:305-311`). It takes an
-  operator-asserted `agent_uuid` with no work correlation, so binding "any
-  open prediction of that agent" would launder an unrelated outcome into
-  calibration. PR #1445 removed exactly that.
+  - the Phase-5 emitter (`phases.py:2400`), which runs in `shadow` on the
+    maintainer deployment.
+- The harness route ignores `prediction_id` on purpose (`substrate.py:388`;
+  rationale at `:305-311`, #1445).
 
-**The only per-agent readout shown to agents.**
-- `enrich_external_grounding` (`enrichments.py:258-306`) shows a Brier score
-  over `external_signal` outcomes.
-- It joins each outcome to the agent's latest reported confidence in the
-  previous 24 h (`tool_usage.py:579-593`). That is a time join, not a
-  binding, so C1 and C4 fail by construction.
-- Its floors (`MIN_N=10`, `MIN_BATCHES=3`) have never been met.
+**The harness hook as a resolver.**
+- It fires only on commands matching `pytest|test-cache\.sh`
+  (`outcome-tracker.sh:130`).
+- It stores the first 400 characters of the command (`:149`).
+- It sends the classifier's label and parsed counts, not an exit code
+  (`:150-152`).
+- It withholds failures whose command text carries "induced" markers, or
+  whose command writes a test file (`classify_test_outcome.py:207-215`).
+  Passes are never withheld.
+- It drops `test-cache.sh` cache hits (`:182-185`).
+- It posts fire-and-forget, with no retry (`outcome-tracker.sh:109-113`).
 
-### Live counts (all time unless stated, read 2026-10-01)
+### Live counts (read 2026-10-01)
 
 | Quantity | Value |
 |---|---|
-| Outcomes bound through the registry | 448, across 212 agents |
-| of which Phase-5 shadow rows (excluded) | 293, across 79 agents |
-| of which other rows (`record_result`) | 155 |
-| Bound rows per agent (all 448) | p50 1, max 20 |
+| Outcomes bound through the registry, all time | 448, across 212 agents (p50 1 per agent, max 20) |
+| of which Phase-5 shadow rows (calibration-excluded) | 293, across 79 agents |
+| of which other bound rows | 155, across 135 agents (p50 1, max 3) |
 | Agents with 10 or more non-excluded bound rows | 0 |
-| Non-excluded bound rows graded by the forecaster itself (`agent_reported_tool_result`) | 151 of 155 |
-| Bound rows from `external_signal` | 4, all dated 2026-05-30 to 2026-06-16, before #1445 |
+| Non-excluded bound rows graded by the forecaster itself | 151 of 155 |
+| Bound rows from `external_signal` | 4: 2026-06-16 (two), 2026-06-26, 2026-08-02 |
 | Non-excluded bound `task_*`/`test_*` rows, last 30 days | 21 |
-| Outcome label among non-excluded bound rows | 153 good, 2 bad |
+| Harness `test_*` outcomes, last 30 days | 2,957 across 120 agents (p50 8 per agent, max 702) |
+| of which stored command is exactly 400 characters (truncated) | 2,088 (71%) |
+| of which command pipes into `tail`, `head`, `grep` or `tee` | 1,294 (44%) |
 
-So binding a score to a registered forecast is not enough on its own. Of the
-rows that would pass C1 today, 97% fail C2: the agent graded its own
-forecast. And with a median of one bound outcome per agent, no per-agent
-calibration curve is reachable at current volume.
+Of the rows that already have a registered forecast, 151 of 155 were graded
+by the agent that made the forecast. A median of one bound outcome per agent
+means no per-agent calibration curve is reachable at current volume, with or
+without this design.
 
-## 3. Design principles
+## 4. The design that was reviewed, and why it fails
 
-- **P1. Forecasts name what they predict.** A forecast carries a *target*: a
-  concrete event, declared at mint time, that a party other than the
-  forecaster can resolve. Binding is by target, not by time window and not
-  by "the agent's open prediction". This answers #1445: the work correlation
-  the harness route lacks is supplied by the forecast itself, before the
-  outcome exists.
-- **P2. Resolution comes from outside the forecaster.** Only a resolver the
-  agent does not author can close a targeted forecast. The forecaster's own
-  `record_result` never resolves one.
-- **P3. Every forecast is durable from mint.** Registration writes a record
-  at mint time. An unresolved forecast stays visible as unresolved; it is
-  never scored and never dropped.
-- **P4. Score the agent's own words.** The scored value is the confidence the
-  agent sent, before any server clamp. The clamp is recorded beside it.
-- **P5. The mirror is the only consumer.** Forecast records and their
-  resolutions feed the agent-facing mirror and an offline operator table,
-  nothing else: no verdict, no risk, no trust tier, no EISV input, no
-  `calibration_checker` bins, no sequential e-process, and no rows in
-  `audit.outcome_events`. See [Section 6](#6-interaction-with-registered-protocols).
-- **P6. No pooling across identities.** The readout is per identity. Pooling
-  by harness or model key was considered and rejected (PR #2603): the key is
-  caller-assertable, and a pooled score is not proper for any one agent.
+The first draft proposed the following. It is retained here so the review is
+legible.
 
-## 4. Mechanism
+- An optional `forecast_target = {kind: "command", ref}` argument on the
+  check-in, carried alongside `confidence`: "the next run of this exact
+  command exits 0".
+- A `forecast.registered` row in `audit.events` at mint.
+- Resolution by the harness route, matching a digest of the command.
+- A mirror line and per-identity tally on the next check-in.
+- An offline operator table.
+- A park rule: stop if fewer than 20 forecasts resolve in the first 30 days.
 
-### 4.1 Targeted forecast
+Adversarial review found that it fails every condition in Section 2:
 
-`sync_state` / `process_agent_update` gain one optional argument:
+- **C1.** Matching on "minted before the outcome's timestamp" uses server
+  receipt time. A delayed or replayed POST can resolve a forecast minted
+  after the result was known, and a server `outcome_id` does not deduplicate
+  executions.
+- **C2.** See Section 2. "Same trust as other `external_signal` rows" is not
+  much trust: all 2,957 of those rows in 30 days are `calibration_excluded`.
+- **C3.**
+  - Riding on check-in `confidence` puts every forecast into λ1 gating,
+    continuity signals, the drift vector, and the tactical registry. That
+    last one lets a self-graded `record_result` bind the same id and train
+    calibration with a different label.
+  - An honest low forecast therefore changes the agent's own EISV inputs.
+  - Scoring the pre-clamp value would also contradict #2603, which treats a
+    clamped value as not the agent's claim.
+- **C4.**
+  - Mean Brier over resolved forecasts only is not a proper score of the
+    forecasts made.
+  - An agent can abandon a likely loser just by changing the command text.
+    `pytest -q x` does not match `pytest x -q`.
+  - The hook's outcome-dependent withholding makes passes more likely to
+    resolve than failures.
+- **The event scored is not the event forecast.**
+  - 71% of stored commands are truncated, so a full-command digest can never
+    match them.
+  - The label is the classifier's parsed pytest summary, not the shell exit
+    status, and 44% of commands are pipelines.
+- **Ordering and attribution.**
+  - Several open forecasts on one command resolve against different runs.
+  - Concurrent sessions and subagents sharing a UUID resolve each other's
+    forecasts.
+  - A dropped POST shifts "the next run" to a later one.
+- **Durability.**
+  - `audit.events` writes are fire-and-forget by design
+    (`src/audit_log.py:688-743`).
+  - The table has no key on forecast or terminal state, so "resolves at most
+    once" is not enforced.
+  - Partitions drop at 180 days (`db/postgres/partitions.sql:568`).
+  - The `confidence` column defaults to 1.0 and would leak into the
+    audit-trail fallback (`src/db/mixins/audit.py:261-291`).
+- **Reach.** The only resolver is a Claude Code hook on one host. Codex,
+  SDK residents, and other installs have none.
+- **The park rule.**
+  - It would retire a capability on a usage count from a phase agents cannot
+    see. That is the conflation `CLAUDE.md` *Measurement authority* forbids.
+  - It could also be met by one agent rerunning a passing command twenty
+    times.
+- **Stop-rule interaction.** Asking agents to send more `confidence` changes
+  which check-ins carry reported confidence inside the 2026-12-01 read
+  window. So the claim that no input to that read changes was false.
 
-```text
-forecast_target = {"kind": "command", "ref": "<exact command text>"}
-```
+## 5. What a sound version would need
 
-It is accepted only together with a caller `confidence`, and it means: *my
-confidence that the next run of this exact command in this session exits
-0.* v0 has exactly one kind. Others, such as the CI conclusion for a commit
-SHA, are deferred (Section 9).
+These are prerequisites, not a design. Each is a separate decision.
 
-`command` comes first because external resolution for it already exists.
-The harness hook posts outcomes for observed test commands, carrying the
-command text in `detail.command`. In the last 30 days that is 2,957
-`external_signal` test outcomes across about 120 agents (p50 8 per agent). A
-forecast that names its command removes the need for the hook's own
-classification of what counts as a test. That matters: 1,309 of those 2,957
-rows, 44%, are not test-runner commands at all (for example, inline Python
-edit scripts recorded as `test_passed`). The target is matched against the
-declared command, not against the hook's label.
+- **A separate forecast namespace.** A forecast is its own verb, with its
+  own id, never the check-in `confidence`, never in the tactical registry,
+  and never consumable by `record_result`.
+- **Execution receipts from outside the agent's write authority.**
+  - Each receipt carries a full-command digest, the exit status, the start
+    and end times, and a receipt nonce.
+  - The producer is a process the agent's OS user cannot impersonate.
+  - On a single-user host that needs sandboxing UNITARES does not provide.
+- **A durable, keyed store.**
+  - A table keyed on forecast id, with an atomic open-to-terminal
+    transition and its own retention.
+  - Registration acknowledged before the forecast id is returned.
+- **Server-chosen questions, or scoring over all observed runs.** This keeps
+  the agent from choosing what is asked, which C5 requires.
+- **Stakes the agent values.** Without this, items 1 to 4 buy (1) again,
+  not (2), and this is the one that conflicts with UNITARES' mirror-only
+  posture.
 
-### 4.2 Durable registration
+## 6. Recommendation and options
 
-At mint, the server writes one `audit.events` row, `event_type =
-'forecast.registered'`:
+**Recommendation: A.** The question this document set out to answer has a
+clean answer: (2) is not reachable while UNITARES keeps calibration
+payoff-free, and keeping it payoff-free is the right call for a
+single-operator kernel whose agents share an OS user with their observers.
 
-| Field | Value |
-|---|---|
-| `agent_id`, `prediction_id` | as minted |
-| `reported_confidence` | the caller's value before the weak-identity clamp |
-| `registered_confidence` | the value the registry holds |
-| `clamped` | whether the clamp changed it |
-| `target` | `{kind, ref_digest}`; the raw command stays out of the audit row |
-| `minted_at` | wall clock |
-| `expires_at` | mint + TTL |
+- **A. Record and stop (recommended).**
+  - Keep #2603's mirror as is.
+  - Treat "can't gain" as the achieved property, and say so where gaming
+    resistance is described.
+  - Fix nothing in the forecast path.
+- **B. Build the receipts channel only,** if another consumer needs honest
+  execution records: full command digest, exit status, no truncation, no
+  withholding. It is independently useful (finding F5), but it does not
+  deliver (2) without the rest of Section 5.
+- **C. Pursue (2).**
+  - Requires every Section 5 item, including stakes. That reverses a
+    standing design choice.
+  - It belongs in an operator decision, not a proposal.
 
-`audit.events` is used rather than a new table, so Phase 1 needs no
-migration, as `mirror_signal.emit` did in the mirror-effectiveness work. A
-forecast without a target is still minted as today and gets no
-`forecast.registered` row. It is never scored by this mirror.
-
-### 4.3 Resolution
-
-When the harness route receives an outcome for `agent_uuid` with
-`detail.command`, the server finds that agent's earliest open targeted
-forecast whose `ref_digest` matches the command's digest. It must be minted
-before the outcome's timestamp and not yet expired. If one matches, the
-server writes `event_type = 'forecast.resolved'` with `prediction_id`,
-`outcome` (exit 0 or not), the outcome's `outcome_id`, and the Brier term.
-
-Each forecast resolves at most once, and only the earliest match counts. A
-forecast that expires unmatched gets `forecast.expired` on the next sweep, or
-lazily on read. Nothing in this path writes `audit.outcome_events`, touches
-the binding ledger, or calls a calibration channel.
-
-### 4.4 The mirror
-
-On the forecaster's next check-in, the response carries one line per
-resolution since its last check-in, then a tally:
-
-```text
-forecast: 0.85 that `<command>` exits 0 -> it failed (Brier 0.72)
-forecasts this identity: 6 registered, 4 resolved, 2 unresolved; mean Brier 0.11 over 4
-```
-
-- **No verdict words.** No "well calibrated", no "overconfident". Below 10
-  resolutions the tally shows counts and the mean only.
-- **Coverage is always shown.** Registered, resolved and unresolved counts
-  appear together, so selective forecasting is visible to the agent itself.
-- **Silent when there is nothing to report.** No targeted forecasts means no
-  line, the same rule `enrich_external_grounding` follows.
-
-### 4.5 Operator table
-
-An offline script, in the mold of `scripts/dev/mirror_effectiveness_reeval.py`,
-reads the two event types and reports the following. It is operator-facing
-only.
-
-- Per identity and fleet-wide: registered, resolved, expired, mean Brier, and
-  a reliability table.
-- Grouping only by server-recorded fields. `model_type` is caller-supplied,
-  so any grouping by it is labelled as such.
-
-## 5. Threats and responses
-
-| Threat | Response | Residual |
-|---|---|---|
-| Forecast after seeing the result (C1) | The match must be the first run of the declared command *after* mint. Runs before mint cannot resolve it | The agent can run the command, see it pass, then forecast the rerun at 0.99. That is an honest, uninformative forecast. The score is good and teaches nothing. Accepted |
-| Grade your own forecast (C2) | `record_result` never resolves a targeted forecast; only the harness outcome path does | The harness hook runs in the agent's own client. Its outcome is the command's real exit code, not the agent's prose, so this is substrate observation, not self-report |
-| Choose a command whose outcome you control (`true`, `exit 1`) | Nothing rides on the score (P5). Gaming yields only a nicer number the agent shows itself | Accepted, by design. The aim is that honest reporting is the cheapest path, not that gaming is impossible |
-| Resolve only the forecasts that went well (C4) | Every targeted forecast is durable from mint; unresolved and expired counts are always shown | None within the TTL |
-| Score a server value (C3) | The pre-clamp `reported_confidence` is scored; derived confidence never registers | None |
-| Fabricated or replayed `prediction_id` | Only ids with a `forecast.registered` row resolve; `prediction_id` is server-minted and resolution never takes it from the caller | None for this mirror. The binding ledger's own gap is out of scope (Section 7, F2) |
-| Spoofed harness outcome | The harness route is operator-gated (`substrate.py:314-321`) | Same trust as every `external_signal` row today |
-| Abstain: never forecast | Abstention is free here, and stays visible to the operator table | Accepted. An incentive to forecast would be a payoff, which P5 forbids |
-| Pooling by an assertable key | Not done (P6) | None |
-
-## 6. Interaction with registered protocols
-
-- **Stop rule (#1425) and the 2026-12-01 read.** The read draws on
-  `audit.outcome_events` and the anchors under `--anchor-scope trusted`. This
-  design writes neither: resolutions live in `audit.events` only, and the
-  harness outcome row is written exactly as today. No cohort, label, or
-  threshold the read uses changes. That is why P5 keeps forecast resolutions
-  out of `outcome_events` and out of the calibration channels, at least until
-  the operator decides otherwise after the read.
-- **Independent-operator cohort preregistration.** Its condition 4 requires
-  that a producer with no genuine confidence sends none. That is unchanged:
-  the harness hook still sends no confidence, and the forecast is the
-  agent's own.
-- **`cal_I` and the EISV estimate.** Untouched. Forecast records never enter
-  `calibration_checker` or the sequential tracker.
+Whatever the choice, the "doesn't want to" lever available today is not a
+score. It is what the agent is told: the record is for its own use, and
+nothing rides on the number. That is a framing claim about LLM agents, not a
+mechanism, and it is untested here.
 
 ## 7. Findings recorded while scoping (not fixed here)
 
 - **F1. Post-hoc confidence trains calibration.**
   - Bound rows whose confidence came from the `record_result` argument
     (`argument_fallback`, and `missing_prediction` or `ttl_expired_fallback`
-    with an argument) train every calibration channel exactly as registry
-    rows do (`outcome_events.py:403-409`, `:641-702`).
-  - That confidence is stated at outcome time, possibly after the result is
-    known.
-  - Changing it moves `cal_I` inside the registered read window, so it is
+    with an argument) train every calibration channel as registry rows do
+    (`outcome_events.py:403-409`, `:641-702`).
+  - That confidence is stated at outcome time.
+  - Changing it moves `cal_I` inside the registered read window, so this is
     flagged, not fixed.
-- **F2. A fabricated `prediction_id` still claims a row in the binding
-  ledger** (`outcome_events.py:536-564`). The assurance case already scopes
-  authorship out; the row itself is new information.
+- **F2. A fabricated `prediction_id` still claims a binding-ledger row**
+  (`outcome_events.py:536-564`); there is no registry check before the claim.
 - **F3. Phase-5 `enable` mode would produce post-hoc `registry` rows that are
-  not calibration-excluded** (`phases.py:246-281`). The maintainer deployment
-  runs `shadow` today, so this is latent.
-- **F4. A stale comment.** `governance_monitor.py:2069` says the registry is
-  in-memory only; the file snapshot (`:532-547`) has persisted it since the
-  restart fix. KG finding `2026-09-24T10:22:28.558342+00:00` describes the
-  pre-fix state.
-- **F5. 44% of harness `test_*` outcomes are not test-runner commands.** In
-  the last 30 days, 1,309 of 2,957 are not test-runner commands (pattern:
-  pytest, test-cache, npm, cargo, go, mix, unittest). Section 4.1 sidesteps
-  this; anything that reads those labels as test results does not.
-- **F6. Per-agent sequential e-process state is computed and never read.**
-  `sequential_calibration.py:386-414` updates `agent_states`; every
-  production caller of `compute_metrics` is fleet-only.
+  not calibration-excluded** (`phases.py:246-281`). The maintainer
+  deployment runs `shadow`, so this is latent.
+- **F4. Stale comment.** `governance_monitor.py:2069` says the registry is
+  in-memory only, but the file snapshot has persisted it since #2411. KG
+  finding `2026-09-24T10:22:28.558342+00:00` describes the pre-fix state.
+- **F5. The harness hook's outcome record is lossy.**
+  - `detail.command` is cut to 400 characters (71% of rows in 30 days).
+  - The label is the classifier's, not an exit status.
+  - Failures with "induced" markers are withheld, while passes are not.
+  - Anyone reading `detail.command` as the full command, or reading the
+    labels as unbiased, should know this. (An earlier draft read the
+    truncation as 44% of rows not being test runs. That reading was wrong:
+    the hook gates on the full command before truncating.)
+- **F6. Per-agent sequential e-process state is persisted and used only for
+  class rollups** (`sequential_calibration.py:394-402`, rebucket at
+  `:659-693`). It is never shown per agent; every production
+  `compute_metrics` caller is fleet-only.
 
-## 8. Phases and what each needs
+## 8. Review record
 
-Each phase is separately authorized and separately revertible. None changes
-an existing response field.
+Three independent passes plus a second model family reviewed the first draft
+(commit `fb630a00e`) on 2026-10-01. All were read-only.
 
-| Phase | Change | Needs |
-|---|---|---|
-| 0 | This document | Operator read |
-| 1 | `forecast_target` argument; `forecast.registered` rows; pre-clamp value carried to the registry. Flag `UNITARES_FORECAST_TARGETS`, default off | Correctness review; no migration |
-| 2 | Harness-route resolver; `forecast.resolved` / `forecast.expired` rows | Correctness review; shadow first (resolutions written, nothing shown) |
-| 3 | Mirror line and tally on the next check-in | Operator decision after Phase 2 data |
-| 4 | Offline operator table | Any time after Phase 2 |
+| Pass | Result |
+|---|---|
+| Adversarial design review | 17 findings (7 P1). Established the C7 point (no stakes, no incentive), C2 reachability of the operator token, C3 side effects of check-in confidence, C4 abandonment, C5 and C6 omissions, truncation, and the park-rule flaw |
+| Code-claim verification | About 35 citations confirmed. Corrected: F6, durability and retention of `audit.events`, the `confidence` column default, session enforcement, resolver label versus exit code, and citation drift |
+| Live-data verification | 13 numbers confirmed. Corrected: the `external_signal` dates and the F5 interpretation (truncation, not misclassification) |
+| Codex (`gpt-6-astra`) | FINDINGS(9), 4 P1. Isolation breach via check-in confidence, missing exit code and truncation, ordering and replay, and selective resolution. Agrees with the passes above |
 
-**Park criterion, stated before data.** If 30 days after Phase 2 is enabled
-fewer than 20 targeted forecasts have resolved across all identities, stop at
-Phase 2. Record the count, and do not build Phase 3. Uptake is voluntary:
-plugin hooks must not send confidence, so only agents that choose to forecast
-produce rows.
-
-## 9. Deliberately not proposed
-
-- **Other target kinds** (CI conclusion for a SHA, PR merge, a named test
-  ID). CI needs a server-side GitHub observer that does not exist. Add kinds
-  only after `command` shows uptake.
-- **Any payoff for good calibration**: trust tier, risk, routing, ranking.
-  That would break P5 and turn the score into a target.
-- **Cross-identity pooling**, including through declared lineage. A declared
-  parent is caller-asserted, and inheriting a record would let an agent
-  choose its ancestry for a better number.
-- **Repairing F1 to F6** inside this work. Each is its own decision, and F1
-  touches the registered read window.
-- **Changing `enrich_external_grounding`.** It stays as PR #2603 left it:
-  honest and silent. If Phase 3 ships, retiring it is a separate decision.
+The draft's mechanism is superseded by Sections 2, 4 and 6 of this revision.
