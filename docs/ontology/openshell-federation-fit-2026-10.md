@@ -8,7 +8,8 @@ verdict there is changed.
 (`github.com/NVIDIA/openshell`) does what UNITARES does "better", and whether
 it copied UNITARES, after meeting an NVIDIA employee in 2026-09.
 **Method:** full-history clone of OpenShell at `8091f66` (2026-10-01, 1,599
-commits) and a read of its `docs/`, `rfc/` and `examples/` READMEs. The
+commits) and a read of its `docs/`, `rfc/` and `examples/` READMEs, with a search of
+its `proto/`. The
 UNITARES side is read from `README.md` and `docs/PRODUCT_DEFINITION.md`. Docs
 were read, not products; nothing here was run.
 
@@ -18,8 +19,8 @@ were read, not products; nothing here was run.
 
 - **No evidence of copying.** OpenShell's first commit is 2026-01-29;
   UNITARES's is 2025-11-20. Neither date is close to the 2026-09 meeting. Its
-  code is Rust and gRPC around kernel sandboxing; it uses none of UNITARES's
-  distinctive concepts (EISV, dialectic adjudication, claims bound to
+  repository is Rust and gRPC around kernel sandboxing, and its docs, RFCs and
+  protos use none of UNITARES's distinctive concepts (EISV, dialectic adjudication, claims bound to
   outcomes, process lineage). The overlap is shared vocabulary that this whole
   field uses ("governance", "fleets of agents", "audit").
 - **Different layer.** OpenShell decides what an agent *may* do: sandbox
@@ -98,7 +99,9 @@ dependency (the execution-cost policy in `CLAUDE.md`).
 - **Value.** No seam has been exercised. Whether an OpenShell operator wants a
   claims-and-outcomes record is the same buyer question that
   `competitive-analysis-2026-09.md` leaves open.
-- **Docs only.** OpenShell's docs were read, not its code. Field names come
+- **Docs, RFCs and protos only.** OpenShell's docs and RFCs were read and its
+  protos searched; its implementation code was not read. The one "lineage" in
+  its protos is session-token lineage, not process lineage. Field names come
   from its documentation and may drift.
 
 ## Open questions carried forward
@@ -111,5 +114,7 @@ dependency (the execution-cost policy in `CLAUDE.md`).
    anything from OpenShell's gateway-minted, sandbox-scoped JWT design as
    prior art? The proposal deliberately excludes a third-party credential
    runtime; that decision is unchanged here.
-3. Would an OpenShell contributor or deployer be the "operator other than the
-   maintainer" that the roadmap's standing gate asks for?
+3. Would an OpenShell deployer running the record be one route to the
+   independent draws the roadmap's #1607 cohort needs? The roadmap treats an
+   operator other than the maintainer as "one route to independence, not a
+   precondition".
