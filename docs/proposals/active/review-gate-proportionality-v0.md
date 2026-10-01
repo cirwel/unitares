@@ -49,8 +49,12 @@ on every round.
 
 - `scripts/dev/review_policy.json` is still read from the base ref, so a PR
   cannot remove itself from the list.
-- Two families stay required for changes that alter an authentication or
-  authorisation decision.
+- Two families stay required above the waiver's size limit. The gate counts
+  changed lines on the sensitive paths; it does not tell a help string from a
+  two-line change to an auth decision. A small behavioural change can be
+  waived too, so the operator's judgement, stated in the reason and shown with
+  the waived hunks, is the check on that. Item 2 (a behaviour test on the
+  hunks) would automate part of it and is not built.
 - An agent never waives its own PR.
 
 ## 4. Open questions

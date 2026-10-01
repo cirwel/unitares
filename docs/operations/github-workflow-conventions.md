@@ -377,7 +377,9 @@ voids it; the gate counts the changed lines on the sensitive paths from git and
 refuses past 20 (`waiver.max_changed_lines` in the policy file, read from the
 base ref); a PR carries at most 2 (`waiver.max_per_pr`); and the gate's own
 files (`review_gate.py`, `review_policy.json`, `review.sh`,
-`review-gate.yml`) can never be waived. The comment shows the waived hunks and
+`review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
+behavioural change on a sensitive path can be waived too, so read the hunks
+before you waive. The comment shows the waived hunks and
 the reason. The gate cannot tell who posted it, since every agent uses the
 operator's account, so an agent runs `waive` only when the operator says to.
 
