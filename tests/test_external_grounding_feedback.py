@@ -73,6 +73,32 @@ async def test_calibration_query_parses_row_and_casts_decimals():
 
 
 @pytest.mark.asyncio
+async def test_calibration_query_scores_only_reported_agent_authored_claims():
+    """Server-derived confidence scored against outcomes is circular, and the
+    confidence column on non-check-in events is not a claim at all. Authorship
+    must be explicit: a row with no epistemic_class never defaults in."""
+    conn = _FakeConn({"n": 0})
+    db = _Harness(conn)
+    await db.get_agent_external_calibration("agent-1")
+    sql, _ = conn.calls[0]
+    assert "e.event_type = 'auto_attest'" in sql
+    assert "e.payload->>'confidence_source' = 'reported'" in sql
+    assert "e.payload->>'epistemic_class' = 'agent_report'" in sql
+    assert "COALESCE(e.payload" not in sql
+
+
+@pytest.mark.asyncio
+async def test_calibration_query_honours_calibration_excluded():
+    """The mirror must not score outcomes the outcome protocol itself refuses
+    for calibration (scraped confidence, unbound harness rows)."""
+    conn = _FakeConn({"n": 0})
+    db = _Harness(conn)
+    await db.get_agent_external_calibration("agent-1")
+    sql, _ = conn.calls[0]
+    assert "o.detail->>'calibration_excluded'" in sql
+
+
+@pytest.mark.asyncio
 async def test_calibration_query_returns_none_when_nothing_accrued():
     conn = _FakeConn({"n": 0, "n_batches": 0, "mean_claim": None,
                       "success_rate": None, "brier": None})
@@ -185,3 +211,16 @@ async def test_enrichment_skips_without_agent_id():
     with patch("src.db.get_db", return_value=db):
         await enrich_external_grounding(ctx)
     db.get_agent_external_calibration.assert_not_awaited()
+
+
+from src.governance_monitor import claim_confidence_source  # noqa: E402
+
+
+def test_claim_source_only_reported_counts():
+    ext = {"source": "external"}
+    assert claim_confidence_source(ext, {}, simulation=False) == "reported"
+    assert claim_confidence_source(ext, {}, simulation=True) == "simulated"
+    assert claim_confidence_source(
+        ext, {"confidence_dampened": True}, simulation=False) == "reported_dampened"
+    assert claim_confidence_source({"source": "observed"}, {}, simulation=False) == "derived:observed"
+    assert claim_confidence_source(None, None, simulation=False) == "derived:unknown"
