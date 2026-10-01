@@ -44,7 +44,10 @@ export GOVERNANCE_TOOLS_URL="${GOVERNANCE_TOOLS_URL:-http://127.0.0.1:8767/v1/to
 export GOVERNANCE_START_FIREHOSE="${GOVERNANCE_START_FIREHOSE:-true}"
 
 # Self-heal deps + assets on restart (cheap no-op when already current).
+# prepare-asset-binaries.sh fetches missing asset CLIs and re-signs any macOS
+# kills on exec; see that script for why.
 mix deps.get --only "$MIX_ENV"
+"$APP_DIR/scripts/prepare-asset-binaries.sh"
 mix assets.deploy
 
 exec mix phx.server
