@@ -44,7 +44,10 @@ export GOVERNANCE_TOOLS_URL="${GOVERNANCE_TOOLS_URL:-http://127.0.0.1:8767/v1/to
 export GOVERNANCE_START_FIREHOSE="${GOVERNANCE_START_FIREHOSE:-true}"
 
 # Self-heal deps + assets on restart (cheap no-op when already current).
+# build-assets.sh is lenient here: if only the CSS/JS compile fails and the
+# last digest completed, it keeps serving that build instead of exiting into
+# a KeepAlive restart loop. See that script.
 mix deps.get --only "$MIX_ENV"
-mix assets.deploy
+"$APP_DIR/scripts/build-assets.sh"
 
 exec mix phx.server

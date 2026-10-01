@@ -31,6 +31,9 @@ class UpdateContext:
     response_text: str = ""
     complexity: float = 0.5
     confidence: Optional[float] = None
+    # True when the server clamped the caller's confidence (weak identity), so
+    # the value recorded is no longer the caller's own claim.
+    confidence_dampened: bool = False
     epistemic_class: str = "agent_report"
     ethical_drift: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0])
     task_type: str = "mixed"
