@@ -122,6 +122,19 @@ if [[ -f "$MIGRATE" ]]; then
   fi
 fi
 
+# This deployment's environment overlay (scripts/ops/governance-mcp.env, from
+# the worktree just fast-forwarded, so reviewed values only) into the live
+# plist: deployment-specific settings the product does not ship as defaults,
+# without hand edits. deploy_lib_apply_env_overlay makes sure a change is
+# RELOADED by the restart below, including on a host with no plist baseline.
+if ! deploy_lib_apply_env_overlay "$TAG" "$LABEL" "$PLIST" \
+  "$DEPLOY/scripts/ops/governance-mcp.env" "$DEPLOY/scripts/ops/apply_plist_env_overlay.py"; then
+  echo "[deploy-mcp] FAILED — required overlay did not apply; rolling worktree back to ${PREV:0:8}." >&2
+  git -C "$DEPLOY" reset --hard "$PREV"
+  exit 1
+fi
+
+
 # kickstart when the plist is unchanged since the last deploy restart; full
 # RELOAD (bootout + bootstrap) when it changed — kickstart reuses the cached
 # service definition, so a plist env edit silently never loads (2026-08-27).
