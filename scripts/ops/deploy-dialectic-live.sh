@@ -53,8 +53,7 @@ echo "[deploy] compiling dialectic_live + assets (MIX_ENV=prod; surfaces errors 
   export MIX_ENV=prod
   mix deps.get --only prod
   mix compile
-  scripts/prepare-asset-binaries.sh
-  mix assets.deploy
+  scripts/build-assets.sh --strict
 )
 
 echo "[deploy] restarting $LABEL"
@@ -89,10 +88,9 @@ else
   # Without this the app just crash-loops under KeepAlive with no recovery.
   echo "[deploy] Rolling the worktree back to ${PREV:0:8} and restarting." >&2
   git -C "$DEPLOY" reset --hard "$PREV"
-  # PREV may predate prepare-asset-binaries.sh; skip it there.
+  # PREV may predate build-assets.sh; fall back to the plain alias there.
   ( cd "$DEPLOY/elixir/dialectic_live" && export MIX_ENV=prod && mix compile \
-      && { [ ! -x scripts/prepare-asset-binaries.sh ] || scripts/prepare-asset-binaries.sh; } \
-      && mix assets.deploy ) || \
+      && if [ -x scripts/build-assets.sh ]; then scripts/build-assets.sh --strict; else mix assets.deploy; fi ) || \
     echo "[deploy] WARNING: rollback rebuild failed — the node may not come back cleanly." >&2
   launchctl kickstart -k "gui/$UID_NUM/$LABEL"
   echo "[deploy] rolled back. Investigate:" >&2
