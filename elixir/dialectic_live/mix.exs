@@ -84,11 +84,13 @@ defmodule DialecticLive.MixProject do
       setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind dialectic_live", "esbuild dialectic_live"],
-      "assets.deploy": [
+      # scripts/build-assets.sh runs these two steps separately: a failed
+      # compile leaves the previous digest servable, a failed digest does not.
+      "assets.compile": [
         "tailwind dialectic_live --minify",
-        "esbuild dialectic_live --minify",
-        "phx.digest"
+        "esbuild dialectic_live --minify"
       ],
+      "assets.deploy": ["assets.compile", "phx.digest"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

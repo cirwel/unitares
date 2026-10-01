@@ -44,38 +44,10 @@ export GOVERNANCE_TOOLS_URL="${GOVERNANCE_TOOLS_URL:-http://127.0.0.1:8767/v1/to
 export GOVERNANCE_START_FIREHOSE="${GOVERNANCE_START_FIREHOSE:-true}"
 
 # Self-heal deps + assets on restart (cheap no-op when already current).
-# prepare-asset-binaries.sh fetches missing asset CLIs and re-signs any macOS
-# kills on exec; see that script for why.
+# build-assets.sh is lenient here: if only the CSS/JS compile fails and the
+# last digest completed, it keeps serving that build instead of exiting into
+# a KeepAlive restart loop. See that script.
 mix deps.get --only "$MIX_ENV"
-
-# A failed asset build must not take the service down when a previous build
-# is still on disk: under KeepAlive a fatal error here is an endless restart
-# loop (~13.5k on 2026-09-30, from one killed tailwind CLI). The rebuild is
-# only a self-heal; deploy-dialectic-live.sh builds assets itself and fails
-# hard there, before it restarts anything. So serve the last digested build
-# and say so. With no previous build there is nothing to serve: fail.
-#
-# phx.digest writes cache_manifest.json BEFORE the digested files it names,
-# so after a failed digest the manifest on disk may point at files that were
-# never written. Keep a copy of the last good one (in _build/: gitignored,
-# and outside priv/static so phx.digest never digests it) and restore it.
-MANIFEST="$APP_DIR/priv/static/cache_manifest.json"
-GOOD_MANIFEST="$APP_DIR/_build/cache_manifest.json.last-good"
-mkdir -p "$APP_DIR/_build"
-if [ -f "$MANIFEST" ]; then
-  cp -p "$MANIFEST" "$GOOD_MANIFEST"
-else
-  rm -f "$GOOD_MANIFEST"
-fi
-if ! { "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.deploy; }; then
-  if [ -f "$GOOD_MANIFEST" ]; then
-    cp -p "$GOOD_MANIFEST" "$MANIFEST"
-    echo "[start] WARNING: asset build failed; serving the previous build ($(date -r "$MANIFEST" '+%Y-%m-%d %H:%M'))" >&2
-  else
-    rm -f "$MANIFEST"
-    echo "[start] FATAL: asset build failed and there is no previous build to serve" >&2
-    exit 1
-  fi
-fi
+"$APP_DIR/scripts/build-assets.sh"
 
 exec mix phx.server
