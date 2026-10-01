@@ -21,7 +21,10 @@ name: Review Gate
 # re-evaluates through issue_comment using the trusted base workflow instead.
 #
 # GITHUB_TOKEN only; no model is called here (execution-cost policy). The
-# review itself runs on the author's side.
+# review itself runs on the author's side: one full ordinary review, targeted
+# minor-fix follow-up, and three full rounds before explicit escalation.
+# Sensitive diffs still need two full model families. Trusted-base policy may
+# classify Markdown-only docs/proposals changes as advisory. CI calls no model.
 
 on:
   pull_request_target:

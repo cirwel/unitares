@@ -133,9 +133,8 @@ which. It is now a command and a status check, the way `test-cache.sh` made
 the test run one.
 
 - `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
-  reviewer session, preferring the other model (Claude for `codex/*`, Codex
-  otherwise) and falling back to the available provider, read-only, within a
-  shared 30-minute budget, and posts a **review record**
+  reviewer session, defaulting to pinned Codex Sol medium, read-only, within
+  a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
   runs the same command without waiting for an operator prompt. If a review
@@ -149,8 +148,8 @@ the test run one.
   This check replaces the legacy commit status; old heads may still show
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
-- Findings: fix and push (the new diff is reviewed; the
-  [round cap](#round-cap) is currently switched off), or post rebuttals with
+- Findings: fix and push (the new diff is reviewed; targeted minor-fix verification follows one full review; the
+  [round cap](#round-cap) bounds full rounds), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -188,17 +187,19 @@ the test run one.
 - Bot PRs (dependabot) get no exemption: the incident that motivated "no
   mechanical exemption" was a dependency bump. Nobody has to remember them
   either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
-  from the owner's account or dependabot, **including drafts**, after 15
-  minutes without an update. A draft restricts readiness and merging; it must
-  not prevent the review needed to reach readiness. `no-auto-review` holds
+  from the owner's account or dependabot after 15 minutes without an update.
+  Drafts require the owner's explicit `review-requested` label; unfinished
+  drafts are excluded by default. `no-auto-review` holds
   automatic review of intentionally unfinished work. Outside contributors'
   PRs get a human first. A lock in the git common dir keeps the sweep and an
-  author's review from running the same diff twice. Failed runs retry at most
+  author's review from running on the same PR concurrently across heads/worktrees. Failed runs retry at most
   three times per provider per diff; unresolved findings and exhausted retries are reported
   as author follow-up in the sweep log, never silently treated as clean.
 
 Quota, authentication, and startup failures put that provider on a one-hour
-cooldown shared across worktrees; the other provider is tried immediately.
+cooldown shared across worktrees. One provider is attempted per invocation;
+there is no automatic paid cascade. Temporary provider disables may name a
+`retry_after` UTC expiry; organization access disables remain until restored.
 `--reviewer codex` or `--reviewer claude` explicitly retries after access is
 restored. Findings stop routing: another model cannot erase an inconvenient
 review. Separate output directories preserve each attempt.
@@ -224,9 +225,11 @@ the operator does not need to request reviews or chase their comments.
 `review.sh` first reads native completion evidence for the current commit. If
 nothing has started after 30 seconds, it posts one `@codex review` request
 bound to the head and diff; this covers drafts that automatic review misses.
-It waits up to ten minutes within the total review budget before using the
-local fallback. Existing requests are reused, and an expired request is not
-posted again on each sweep. `--reviewer` explicitly selects the local path;
+It waits up to ten minutes within the total review budget. A known running
+native review returns pending rather than starting a local fallback, including
+with `--fresh` or `--reviewer`. Only absent/terminal unavailable native runs
+allow a local attempt. Existing requests are reused, and an expired request is not
+posted again on each sweep. `--reviewer` selects the local provider (without overlapping native work);
 `--fresh` can re-review clean evidence but cannot bypass unresolved findings.
 
 The adapter recognizes the official Codex bot's submitted reviews and explicit
@@ -271,72 +274,40 @@ fallback validation.
 
 #### Round cap
 
-> **Switched off since 2026-09-27 (operator decision).** `ROUND_CAP_ENABLED`
-> in `review_gate.py` is `False`: every round gets a full review however many
-> came before, and the `review` check shows only the count ("review round 4").
-> The rest of this section describes the mechanism as it works when the
-> switch is set back to `True`. It is kept, and its tests still run, so it can
-> be switched back on without being rebuilt.
+Operator decision, 2026-09-30: `ROUND_CAP_ENABLED=True` supersedes the
+September 27 uncapped setting. A PR gets three completed **full** review rounds
+across native, local and external sources. Each local/external receipt records
+its captured head, base, scope and review identity; native artifacts supply
+actual reviewed commit evidence. Duplicate receipts and dispositions do not
+count again. FAILED attempts and targeted fix verification are not full rounds.
+A base change can invalidate coverage but does not replenish the budget.
+Legacy records with insufficient provenance remain legacy: they are neither
+invented full reviews nor a fresh budget. Unknown history requires escalation.
 
-When enabled, a PR gets **three full review rounds** (`ROUND_CAP` in `review_gate.py`). A
-round is one completed native Codex run, counted by the distinct commits
-Codex names. Codex can post a result three ways: a submitted review, a clean
-comment, or a completed activity row. All three count. These don't count: a
-reply inside an existing thread, the receipt that records a native result, a
-disposition, a fix verification, and a local fallback record. A local record
-names no commit, no start time and no per-finding severity, and counting it
-opened a new gap each time it was tried on #2401. After any base change the
-cap no longer applies: the gate stops trusting native evidence then, because
-a native run does not say which base it reviewed. The `review` check shows
-the count ("review round 2 of 3").
+Ordinary code needs one independent full review, then targeted verification of
+minor fixes. The verifier must examine all changed lines and regression
+implications, independently confirm no regressions or uncertainty, answer the
+prior findings, and explicitly attest no unrelated new work. `git config review.verifier ollama:<model>` opts into a local verifier;
+no verifier is required or started by default. A separate independent human or
+model can instead record `record <file> --independent --reviewer-name <who>
+--scope fix --reviewed-from <sha> --fixes-only`. A matching prior full findings
+receipt with minor severity is required. Targeted scope never counts as a full
+review or either security family. New work, uncertain scope, or work after a
+clean result requires fresh full review. Without verification, keep UNREVIEWED.
 
-Why: every run spends the same subscription quota that authoring does. In the
-first ~14 hours of native review (2026-09-23/24) there were 137 Codex runs
-across 27 PRs. Four PRs used 64 of them: #2380 (20), #2387 (18), #2378 (16),
-#2376 (10). Twelve PRs finished in two runs or fewer. The long runs did not
-converge because each fix added new text or code for Codex to flag. Those later
-findings were usually valid but minor, and the quota they cost was the scarce
-resource.
+At three full rounds, stop paid requests and escalate unresolved issues. P0/P1
+and security findings remain blockers; budget exhaustion never manufactures
+approval. Only explicit operator authorization permits an additional round:
+`review.sh --authorize-full-review "operator request and reason"`. The reason
+is recorded visibly with the result. `--fresh` and `--reviewer` alone do not
+bypass the cap. Council/dialectic is optional escalation, not another automatic
+review loop. Deterministic tests, lint and CI remain required.
 
-The rule is for fix loops only:
-
-- A **P0/P1** in the last round always gets another full run after its fix.
-- A **clean** last round is not a fix loop. A push after it is new work, and
-  new work gets a full review.
-- Past the cap, with only P2s open, `review.sh` does not request Codex and
-  does not start the local fallback, which spends the same quota. The
-  fallback runs only when native review is unavailable, and its own rounds are
-  bounded by the review budget, not by this cap. Answer the
-  remaining findings in one batch:
-  - **Don't push:** dispose them on the reviewed diff with
-    `review.sh dispose` (fixed later in #N, or rebutted). This costs no model
-    call.
-  - **Push fixes:** if `git config review.verifier` is set, `review.sh` asks
-    that model whether each finding is addressed by the fix commits. It posts
-    a diff-bound record with the reviewer `fix-verify:<model>`. Findings it
-    judges unaddressed stay open as `FINDINGS(n)` for fixing or disposing.
-    It checks the fixes only, not the new lines for new problems, and the
-    record says so. A round is answered once it is disposed
-    or its fixes are verified, and it gets only **one** answer: any push after
-    that may be new work and gets a full review.
-    With no verifier configured, a push past the cap is
-    UNREVIEWED. The author says so and disposes, or deliberately spends a
-    round.
-- `review.sh --reviewer codex` (or `claude`) deliberately spends a round past
-  the cap. Use it when the fixes changed enough that they need a real review.
-
-The verifier is opt-in, like `review.native`. `ollama:<model>` runs on the
-local Ollama server and costs nothing. `hf:<model>` uses the Hugging Face
-router, which is metered, so it is never the default. On 139 real
-finding/fix pairs from this repo, `gemma4:latest` caught 59 of 66 non-fixes
-and passed 56 of 73 real fixes. So about 1 in 9 unaddressed P2s past the cap
-is accepted as fixed. The record lists every finding it marked addressed, so
-that can be spot-checked. The evaluation is in the PR that added the cap. On
-this operator's machine, run once:
-
-```bash
-git config review.verifier ollama:gemma4:latest
-```
+Markdown-only changes under `docs/proposals/**` receive advisory review when
+the **trusted base** policy enables it. Runtime, policy and auth changes cannot
+qualify. Findings remain visible for the proposal's author; design suggestions
+do not block merging a proposal. Merging it does not authorize implementation,
+which requires correctness review under the ordinary/security rules above.
 
 #### Review provider availability
 
@@ -345,8 +316,9 @@ that are down. A provider listed under `disabled` is skipped by
 `review.sh`'s default choice, by its local fallback, and (for Codex) by native
 review, in every checkout, so an outage no longer costs each session a failed
 attempt per hour of cooldown. Agents without local tooling read the same file
-before posting `@codex review`. An explicit `review.sh --reviewer <name>`
-still tries a disabled provider. Re-enable it by deleting its entry.
+before posting `@codex review`. Explicit `--reviewer` does not retry a disabled
+provider. Restore access before removing durable entries; temporary quota
+entries expire at their recorded `retry_after` UTC time.
 
 <a id="second-family-review"></a>
 **Second-family review for security-sensitive paths.** A diff that touches a
@@ -398,9 +370,9 @@ family then found two P2 defects; the `agy` isolation hole (standing grants in
 
 **Antigravity (`agy`) as a reviewer.** `review.sh` can review with Google's
 Antigravity CLI on the operator's subscription login, with no API key. It is
-used only when the `agy` command is installed. The ordering prefers a model
-family other than the branch's author prefix: for a `claude/` branch it is
-Codex, then Antigravity, then Claude, minus anything disabled above.
+used only when the `agy` command is installed. The default ordering is Codex, then Antigravity, then Claude, minus unavailable
+providers. Only one is attempted per invocation; selecting a distinct family
+for a sensitive diff remains explicit.
 
 It is deliberately **not** run inside the checkout. A PR can carry
 `.agents/` hooks, rules and project permission rules, and `agy` loads those
@@ -473,10 +445,11 @@ operator's), the environment-independent path is a PR comment:
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
-   When the [round cap](#round-cap) is switched on, it applies here too: after
-   three rounds with only P2s open, do not post `@codex review` again; hand
-   the remaining findings off for disposition the same way. A P1 fix still
-   gets its request. The cap is currently switched off.
+   The enabled [round cap](#round-cap) applies here too: after three completed
+   full rounds, stop requests and escalate unresolved findings. Ordinary minor
+   fixes may receive honest targeted verification; security needs full current
+   coverage from two families. P0/P1 remain blockers, and an additional full
+   round requires explicit operator authorization with a recorded reason.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -534,9 +507,9 @@ Codex usage limit left such sessions with no way to finish a PR (#2423).
    open record with that count and displays the reviewer you passed. Copy both
    from the open record exactly, or the record misattributes.
 
-A same-model subagent is the weakest reviewer this gate accepts: it shares the
-author's model and blind spots. Prefer native Codex or another model when one
-is available, and name the reviewer honestly in `--reviewer-name`.
+A fresh same-model context is valid independent coverage for ordinary code.
+Security-sensitive diffs require a distinct full model family as well. Name
+the reviewer honestly in `--reviewer-name`.
 
 The working agent reads the result, addresses findings, waits for CI, and
 marks **its own** PR ready before declaring completion. A detached review
@@ -845,7 +818,7 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review round 3 done, only P2s open | Fix and request another round; the [round cap](#round-cap) is switched off |
+| Review round 3 done | Escalate unresolved findings; another full round needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping
@@ -858,3 +831,13 @@ this entirely).
 - **Claude (web/cloud harness):** the harness already enforces the convention
   (fixed `claude/...` branch + draft PR). Keep work on that branch; let the
   draft PR be the delivery artifact.
+
+Local Codex review uses invocation-local `--ignore-user-config --ephemeral`,
+disables hooks/plugins, preserves authentication and execution rules, and uses
+a read-only sandbox. Defaults are `gpt-6.1-sol`, medium effort, and a 30-minute
+full-review budget; `--codex-model` and `--codex-effort` override only this call.
+The installed CLI must support these flags; unsupported startup is UNREVIEWED,
+never a silent return to global model/MCP/hooks configuration. No global user
+configuration is changed. The CI review workflow reads evidence and calls no
+paid model. A policy PR does not change the installed sweep until it is merged
+and refreshed by the owning deployment command.
