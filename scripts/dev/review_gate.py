@@ -1033,6 +1033,137 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
             f"from {missing} (have: {have}); run review.sh again")
 
 
+# --- operator waiver of the second family ---------------------------------
+#
+# A bounded exception to the two-family rule, not a way around review:
+#   - it never replaces the FIRST review: one family must already pass this
+#     exact diff, so a waiver without a review is refused;
+#   - it is bound to the diff key, so any push that changes the diff voids it;
+#   - it covers only a small change to the sensitive paths (changed lines there,
+#     counted by this gate from git, not read from the comment), because the
+#     rule exists for changes to an auth decision, not a renamed help string;
+#   - it never covers the gate's own files, which cannot waive themselves;
+#   - a PR can carry at most a few of them, and each shows the waived hunks and
+#     the stated reason on the PR.
+# The record is a comment, and every agent here posts through the operator's
+# account, so the gate cannot tell who typed it (see "What the gate does NOT
+# establish"). Agents must not post one unless the operator said to.
+
+WAIVER_MARKER = "unitares-review-waiver v1"
+WAIVER_RE = re.compile(r"<!--\s*unitares-review-waiver v1 key=(?P<key>[0-9a-f]+)\s*-->")
+WAIVER_DEFAULTS = {"max_changed_lines": 20, "max_per_pr": 2}
+WAIVER_MIN_REASON = 20
+# Fixed in code so a policy edit cannot add itself to the waivable set.
+WAIVER_NEVER = ("scripts/dev/review_gate.py", "scripts/dev/review_policy.json",
+                "scripts/dev/review.sh", ".github/workflows/review-gate.yml")
+
+
+def waiver_policy(text: str | None = None) -> dict:
+    """Waiver limits from the policy file (on a PR, as merged on its base).
+    A missing or malformed ``waiver`` block means the defaults."""
+    out = {**WAIVER_DEFAULTS, "never_waive": list(WAIVER_NEVER)}
+    try:
+        raw = json.loads(text if text is not None else POLICY_FILE.read_text())
+    except (OSError, ValueError):
+        return out
+    block = raw.get("waiver") if isinstance(raw, dict) else None
+    if not isinstance(block, dict):
+        return out
+    for name in WAIVER_DEFAULTS:
+        value = block.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            out[name] = value
+    extra = block.get("never_waive")
+    if isinstance(extra, list):
+        out["never_waive"] += [g for g in extra if isinstance(g, str)]
+    return out
+
+
+def base_waiver_policy(base: str) -> dict:
+    for ref in (base, "origin/master", "origin/main"):
+        try:
+            proc = _launch(["git", "show", f"{ref}:scripts/dev/{POLICY_FILE.name}"],
+                           capture_output=True, text=True)
+        except Exception:  # noqa: BLE001 - try the next source
+            continue
+        if proc.returncode == 0:
+            return waiver_policy(proc.stdout)
+    return waiver_policy()
+
+
+def sensitive_changed_lines(base: str, head: str, sensitive: list[str]) -> int | None:
+    """Added plus removed lines on ``sensitive``, from git; None when unknown
+    (a binary change or an unreadable diff is never small)."""
+    try:
+        proc = _launch(["git", "diff", "--numstat", "--no-renames", f"{base}...{head}", "--", *sensitive],
+                       capture_output=True, text=True)
+    except Exception:  # noqa: BLE001
+        return None
+    if proc.returncode != 0:
+        return None
+    total = 0
+    for line in proc.stdout.splitlines():
+        added, _, rest = line.partition("\t")
+        removed = rest.partition("\t")[0]
+        if not (added.isdigit() and removed.isdigit()):
+            return None
+        total += int(added) + int(removed)
+    return total
+
+
+def waiver_refusal(sensitive: list[str], families: set[str], lines: int | None,
+                   policy: dict) -> str | None:
+    """Why a waiver cannot apply to this diff, or None when it can."""
+    if not sensitive or sensitive == ["(changed paths unreadable)"]:
+        return "no readable sensitive paths to waive"
+    if not families:
+        return "no family has passed this diff yet; a waiver replaces the second review, never the first"
+    held = [p for p in sensitive
+            if any(fnmatch.fnmatchcase(p, g) for g in policy["never_waive"])]
+    if held:
+        return f"{held[0]} is part of the review gate and cannot be waived"
+    if lines is None:
+        return "the size of the change on the sensitive paths could not be read"
+    if lines > policy["max_changed_lines"]:
+        return (f"{lines} changed lines on the sensitive paths exceeds the waivable "
+                f"limit of {policy['max_changed_lines']}; get a second family or split the PR")
+    return None
+
+
+def waiver_reason(body: str) -> str:
+    m = re.search(r"^Reason:[ \t]*(.+)$", body or "", re.M)
+    return m.group(1).strip() if m else ""
+
+
+def active_waiver(comments: list[dict], key: str, policy: dict) -> str | None:
+    """The reason of a valid waiver for ``key``, or None. Counts every trusted
+    waiver on the PR against the cap, so reposting cannot extend it."""
+    posted = [c for c in comments
+              if c.get("author_association") in TRUSTED_ASSOCIATIONS and WAIVER_RE.search(c.get("body") or "")]
+    if len(posted) > policy["max_per_pr"]:
+        return None
+    for c in posted:
+        m = WAIVER_RE.search(c["body"])
+        reason = waiver_reason(c["body"])
+        if m.group("key") == key and len(reason) >= WAIVER_MIN_REASON:
+            return reason
+    return None
+
+
+def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, sensitive: list[str],
+                 families: set[str], lines: int | None, policy: dict) -> tuple[str, str]:
+    """``held`` is second_family_check's action_required; lift it when a valid,
+    in-bounds waiver names this diff."""
+    if held[0] != "action_required" or waiver_refusal(sensitive, families, lines, policy):
+        return held
+    reason = active_waiver(comments, key, policy)
+    if reason is None:
+        return held
+    have = ", ".join(sorted(families))
+    return ("success", f"second family waived by the operator ({lines} changed line(s) on "
+                       f"{sensitive[0]}; have: {have}): {reason[:120]}")
+
+
 def disabled_providers() -> dict[str, str]:
     """Providers the repo marks unavailable, name -> reason (tracked file).
 
@@ -2307,6 +2438,48 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
                               passed_family=record_family(rec))
 
 
+def cmd_waive(args) -> int:
+    """Post an operator waiver of the second family for this diff, when in bounds."""
+    reason = (args.reason or "").strip()
+    if len(reason) < WAIVER_MIN_REASON:
+        raise SystemExit(f"review_gate: waive needs --reason of at least {WAIVER_MIN_REASON} "
+                         "characters saying why the second family is not needed here")
+    if not args.operator_approved:
+        raise SystemExit("review_gate: waive needs --operator-approved: only the operator may "
+                         "waive a review, and an agent runs this only when told to")
+    pr, repo, key, branch = _resolve(args)
+    head = git("rev-parse", "HEAD").strip()
+    changed = changed_paths(args.base, head)
+    sensitive = (sensitive_paths(changed, base_policy_paths(args.base)) if changed is not None
+                 else ["(changed paths unreadable)"])
+    comments = pr_comments(repo, pr)
+    families = passing_families(comments, key, read_native(repo, pr, key, head, comments).records)
+    policy = base_waiver_policy(args.base)
+    lines = sensitive_changed_lines(args.base, head, sensitive)
+    refusal = waiver_refusal(sensitive, families, lines, policy)
+    if refusal:
+        print(f"[review] cannot waive: {refusal}")
+        return 1
+    already = [c for c in comments if c.get("author_association") in TRUSTED_ASSOCIATIONS
+               and WAIVER_RE.search(c.get("body") or "")]
+    if len(already) >= policy["max_per_pr"]:
+        print(f"[review] cannot waive: this PR already carries {len(already)} waiver(s) "
+              f"(limit {policy['max_per_pr']}); split the PR or get a second family")
+        return 1
+    hunks = git("diff", "--no-renames", f"{args.base}...{head}", "--", *sensitive, check=False)
+    if len(hunks) > 6000:
+        hunks = hunks[:6000] + "\n… (truncated)"
+    body = (f"<!-- {WAIVER_MARKER} key={key} -->\n### Second family waived by the operator\n\n"
+            f"Diff key `{key[:12]}` · {lines} changed line(s) on "
+            f"{', '.join(sensitive)} · families that passed: {', '.join(sorted(families))}\n\n"
+            f"Reason: {reason}\n\nThis applies to this diff only; any push that changes the diff "
+            f"voids it. Waived hunks:\n\n```diff\n{hunks.strip()}\n```\n")
+    _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"], input=body, text=True,
+            check=True, capture_output=True)
+    print(f"[review] waiver posted for diff {key[:12]} on PR #{pr}; the review check re-evaluates")
+    return 0
+
+
 def cmd_dispose(args) -> int:
     if getattr(args, "emit", False):
         return _dispose_emit(args)
@@ -2555,8 +2728,14 @@ def cmd_ci(args) -> int:
     globs = base_policy_paths(f"origin/{base_ref}")
     sensitive = (sensitive_paths(changed, globs) if changed is not None
                  else ["(changed paths unreadable)"])
-    conclusion, desc = second_family_check(
-        conclusion, desc, sensitive, passing_families(comments, key, snapshot.records))
+    families = passing_families(comments, key, snapshot.records)
+    held = second_family_check(conclusion, desc, sensitive, families)
+    if held[0] != conclusion:
+        held = apply_waiver(
+            held, comments, key, sensitive, families,
+            sensitive_changed_lines(f"origin/{base_ref}", head, sensitive),
+            base_waiver_policy(f"origin/{base_ref}"))
+    conclusion, desc = held
     carried = {**carried, **snapshot.carried}
     if rec is not None and rec.url in carried:
         desc += f" · carried across a base merge from {carried[rec.url][:7]}"
@@ -2604,6 +2783,12 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--reviewer", help="with --emit: the open record's reviewer")
     d.add_argument("--cites", help="with --emit: the open record's URL (comment or native review)")
 
+    wv = sub.add_parser("waive", help="operator: waive the second family for a small change to a sensitive path")
+    wv.add_argument("--reason", required=True, help="why the second family is not needed (20+ characters)")
+    wv.add_argument("--operator-approved", action="store_true",
+                    help="attest the operator asked for this waiver")
+    wv.add_argument("--base", default=argparse.SUPPRESS)
+
     sub.add_parser("key", help="print the diff key for HEAD")
 
     sw = sub.add_parser("sweep", help="review one quiet PR, including drafts (scheduled)")
@@ -2621,7 +2806,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     try:
-        return {"review": cmd_review, "record": cmd_record, "dispose": cmd_dispose,
+        return {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
                 "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")
