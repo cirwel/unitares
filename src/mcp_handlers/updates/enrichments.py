@@ -261,8 +261,9 @@ async def enrich_external_grounding(ctx: UpdateContext) -> None:
 
     The one piece of self-knowledge an agent cannot derive from its own
     context: whether its claims actually verify. Scores only
-    external_signal outcomes (never self-reported ones) against the agent's
-    own prior audit-trail confidence claims, and self-discloses
+    external_signal outcomes (never self-reported ones) against confidence
+    the agent itself reported on prior check-ins (never server-derived), and
+    self-discloses
     insufficiency below the sample floor instead of going silent — the
     floor counts distinct sessions, not rows, because adjudication batches
     are not independent samples (unitares#1370).

@@ -390,3 +390,41 @@ def test_simulation_is_excluded_from_counter_and_restores_real_observation():
         "absolute_floor_observation"
     ] == simulated
     assert monitor._last_absolute_floor_observation is real_observation
+
+
+def test_auto_attest_stamps_claim_provenance_for_external_grounding():
+    """External-grounding calibration may only score confidence the caller
+    reported; the auto_attest row must say which it was."""
+    _, _, reported_log = _run_with_observer(None, run_label="claim-reported")
+    details = reported_log.call_args.kwargs["details"]
+    assert details["confidence_source"] == "reported"
+    assert "epistemic_class" in details
+
+    monitor = UNITARESMonitor("test-claim-derived", load_state=False)
+    monitor.last_update = datetime(2020, 1, 1)
+    with (
+        patch(
+            "src.governance_monitor.compute_behavioral_sensor_eisv",
+            return_value={"E": 0.5, "I": 0.5, "S": 0.2},
+        ),
+        patch("src.governance_monitor.audit_logger.log_auto_attest") as derived_log,
+    ):
+        monitor.process_update(_agent_state())
+    assert derived_log.call_args.kwargs["details"]["confidence_source"].startswith("derived:")
+
+
+def test_auto_attest_marks_simulation_and_dampened_claims():
+    monitor = UNITARESMonitor("test-claim-sim", load_state=False)
+    monitor.last_update = datetime(2020, 1, 1)
+    dampened = dict(_agent_state(), epistemic_class="agent_report", confidence_dampened=True)
+    with (
+        patch(
+            "src.governance_monitor.compute_behavioral_sensor_eisv",
+            return_value={"E": 0.5, "I": 0.5, "S": 0.2},
+        ),
+        patch("src.governance_monitor.audit_logger.log_auto_attest") as log,
+    ):
+        monitor.simulate_update(_agent_state(), confidence=0.9)
+        assert log.call_args.kwargs["details"]["confidence_source"] == "simulated"
+        monitor.process_update(dampened, confidence=0.55)
+        assert log.call_args.kwargs["details"]["confidence_source"] == "reported_dampened"

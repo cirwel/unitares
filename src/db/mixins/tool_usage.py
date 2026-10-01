@@ -540,10 +540,22 @@ class ToolUsageMixin:
 
         For each of the agent's `verification_source='external_signal'` task/test
         outcomes, the most recent prior confidence claim from `audit.events`
-        (within ``claim_window_hours``) is the claim being scored — the same
-        per-agent audit-trail source `get_latest_confidence_before` uses, so a
-        claim is never borrowed across agents. Self-reported outcomes are
-        deliberately excluded so the feedback cannot be self-referential.
+        (within ``claim_window_hours``) is the claim being scored, so a claim is
+        never borrowed across agents. Self-reported outcomes are deliberately
+        excluded so the feedback cannot be self-referential.
+
+        Only a claim counts: an `auto_attest` row stamped
+        `confidence_source='reported'`. That is the confidence's own
+        provenance; it does not depend on `epistemic_class`, which records who
+        composed the summary (an SDK resident's substrate summary can carry a
+        genuine confidence estimate). Scoring server-derived confidence
+        against outcomes is circular, simulated and server-clamped values are
+        stamped otherwise, and the confidence column on other event types is
+        not a claim. Rows written
+        before the stamp existed carry no source and never count. Outcomes the
+        outcome protocol marked `calibration_excluded` (e.g. scraped
+        confidence, unbound harness rows) are excluded here too, so this
+        mirror cannot score what calibration itself refuses.
 
         Returns aggregate stats plus `n_batches` (distinct sessions) because
         adjudication batches are not independent samples (unitares#1370), or
@@ -558,6 +570,7 @@ class ToolUsageMixin:
                         FROM audit.outcome_events o
                         WHERE o.agent_id = $1
                           AND o.verification_source = 'external_signal'
+                          AND COALESCE(o.detail->>'calibration_excluded', 'false') <> 'true'
                           AND o.outcome_type IN
                               ('task_completed','task_failed','test_passed','test_failed')
                         ORDER BY o.ts DESC
@@ -571,6 +584,8 @@ class ToolUsageMixin:
                             FROM audit.events e
                             WHERE e.agent_id = $1
                               AND e.confidence IS NOT NULL AND e.confidence > 0
+                              AND e.event_type = 'auto_attest'
+                              AND e.payload->>'confidence_source' = 'reported'
                               AND e.ts <= ext.ts
                               AND e.ts > ext.ts - ($3 * interval '1 hour')
                             ORDER BY e.ts DESC
@@ -595,7 +610,8 @@ class ToolUsageMixin:
                     "success_rate": round(float(row["success_rate"]), 3),
                     "brier": round(float(row["brier"]), 4),
                 }
-            except Exception:
+            except Exception as exc:
+                logger.info("external calibration query failed: %s", exc)
                 return None
 
     async def query_tool_usage(
