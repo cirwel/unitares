@@ -2459,7 +2459,9 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
 
 def cmd_waive(args) -> int:
     """Post an operator waiver of the second family for this diff, when in bounds."""
-    reason = (args.reason or "").strip()
+    # One line: the record is parsed line by line, so a multiline reason would
+    # post a waiver that CI then rejects, and spend one of the PR's slots.
+    reason = " ".join((args.reason or "").split())
     if len(reason) < WAIVER_MIN_REASON:
         raise SystemExit(f"review_gate: waive needs --reason of at least {WAIVER_MIN_REASON} "
                          "characters saying why the second family is not needed here")

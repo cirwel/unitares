@@ -3572,3 +3572,22 @@ def test_local_review_accepts_the_same_waiver_ci_does(monkeypatch, capsys):
 def test_the_workflow_wakes_on_a_waiver_comment():
     text = (Path(__file__).parents[1] / ".github/workflows/review-gate.yml").read_text()
     assert "unitares-review-waiver v1" in text
+
+
+def test_a_multiline_reason_is_posted_as_one_line_that_ci_accepts(monkeypatch):
+    posted = []
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "c" * 64, "b"))
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "HEAD" if "rev-parse" in a else "")
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "base_waiver_policy", lambda base: rg.waiver_policy())
+    monkeypatch.setattr(rg, "sensitive_changed_lines", lambda *a: 2)
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [_comment(rg.Record("c" * 64, "CLEAN", 0, False, "codex"))])
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **k: posted.append(k["input"]))
+    args = SimpleNamespace(reason="Help text only:\nRename the tool in the help string.",
+                           operator_approved=True, pr=None, base="origin/master")
+    assert rg.cmd_waive(args) == 0
+    assert len(rg.waiver_reason(posted[0])) >= rg.WAIVER_MIN_REASON
+    assert rg.active_waiver([{"author_association": "OWNER", "body": posted[0]}], "c" * 64,
+                            rg.waiver_policy())
