@@ -43,8 +43,30 @@ export GOVERNANCE_WS_URL="${GOVERNANCE_WS_URL:-ws://127.0.0.1:8767/ws/eisv}"
 export GOVERNANCE_TOOLS_URL="${GOVERNANCE_TOOLS_URL:-http://127.0.0.1:8767/v1/tools/call}"
 export GOVERNANCE_START_FIREHOSE="${GOVERNANCE_START_FIREHOSE:-true}"
 
+# macOS 27 SIGKILLs the linker-signed (ad-hoc) tailwind CLI on exec, so
+# assets.deploy dies with 137 and launchd restarts us every ThrottleInterval
+# forever (2026-09-30: ~13.5k loops). Re-signing ad-hoc clears it. esbuild is
+# unaffected today; it gets the same check because it is fetched the same way.
+heal_asset_binaries() {
+  [ "$(uname -s)" = "Darwin" ] || return 0
+  local bin rc
+  for bin in _build/tailwind-* _build/esbuild-*; do
+    [ -x "$bin" ] || continue
+    rc=0
+    "$bin" --help >/dev/null 2>&1 || rc=$?
+    if [ "$rc" -eq 137 ]; then
+      echo "[start] $bin killed on exec (137); re-signing ad-hoc" >&2
+      codesign --force -s - "$bin"
+    fi
+  done
+}
+
 # Self-heal deps + assets on restart (cheap no-op when already current).
+# assets.setup fetches missing asset CLIs first so a fresh download is
+# checked before assets.deploy runs it.
 mix deps.get --only "$MIX_ENV"
+mix assets.setup
+heal_asset_binaries
 mix assets.deploy
 
 exec mix phx.server
