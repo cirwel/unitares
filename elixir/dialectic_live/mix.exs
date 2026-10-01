@@ -90,8 +90,22 @@ defmodule DialecticLive.MixProject do
         "tailwind dialectic_live --minify",
         "esbuild dialectic_live --minify"
       ],
-      "assets.deploy": ["assets.compile", "phx.digest"],
+      # The marker says the digest on disk finished. It is cleared before
+      # phx.digest and written only after it succeeds, so an interrupted
+      # digest, by this alias or by assets.deploy, never leaves a stale one.
+      "assets.digest": [&clear_digest_marker/1, "phx.digest", &write_digest_marker/1],
+      "assets.deploy": ["assets.compile", "assets.digest"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+  end
+
+  # Read by scripts/build-assets.sh (DIGEST_OK); keep the two paths in step.
+  @digest_marker Path.join(__DIR__, "_build/assets-digest.ok")
+
+  defp clear_digest_marker(_args), do: File.rm(@digest_marker)
+
+  defp write_digest_marker(_args) do
+    File.mkdir_p!(Path.dirname(@digest_marker))
+    File.touch!(@digest_marker)
   end
 end

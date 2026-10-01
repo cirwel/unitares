@@ -19,10 +19,13 @@
 # rewrites digested files (and .gz variants) in place, so after a failure
 # neither the old nor the new build is known to be whole.
 #
-# The marker records that the digest on disk finished. It is removed before
-# phx.digest runs and created after it succeeds, so an interrupted digest
-# (killed, disk full) leaves no marker and the next boot cannot mistake
-# its half-written output for a previous build.
+# DIGEST_OK says the digest on disk finished. The `assets.digest` mix alias
+# owns it (cleared before phx.digest, written after it succeeds; mix.exs),
+# so `mix assets.deploy` run by hand keeps it honest too.
+#
+# A lock serializes builds: launchd can restart the service (and so run this
+# script) while the deploy script is building, and two interleaved digests
+# could leave one's marker beside the other's half-written output.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,6 +36,27 @@ STRICT=0
 
 MANIFEST="$APP_DIR/priv/static/cache_manifest.json"
 DIGEST_OK="$APP_DIR/_build/assets-digest.ok"
+LOCK="$APP_DIR/_build/assets-build.lock"
+LOCK_WAIT="${DIALECTIC_LIVE_ASSETS_LOCK_WAIT:-300}"
+
+mkdir -p "$APP_DIR/_build"
+waited=0
+until mkdir "$LOCK" 2>/dev/null; do
+  holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
+    echo "[assets] removing stale build lock (pid $holder is gone)" >&2
+    rm -rf "$LOCK"
+    continue
+  fi
+  if [ "$waited" -ge "$LOCK_WAIT" ]; then
+    echo "[assets] FATAL: another asset build still holds $LOCK after ${LOCK_WAIT}s" >&2
+    exit 1
+  fi
+  sleep 1
+  waited=$((waited + 1))
+done
+echo "$$" > "$LOCK/pid"
+trap 'rm -rf "$LOCK"' EXIT
 
 compiled=1
 { "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.compile; } || compiled=0
@@ -50,7 +74,4 @@ if [ "$compiled" -eq 0 ]; then
   exit 1
 fi
 
-mkdir -p "$APP_DIR/_build"
-rm -f "$DIGEST_OK"
-mix phx.digest
-touch "$DIGEST_OK"
+mix assets.digest
