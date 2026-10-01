@@ -1050,7 +1050,9 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
 # establish"). Agents must not post one unless the operator said to.
 
 WAIVER_MARKER = "unitares-review-waiver v1"
-WAIVER_RE = re.compile(r"<!--\s*unitares-review-waiver v1 key=(?P<key>[0-9a-f]+)\s*-->")
+# Anchored to the start of the comment: a marker quoted in prose or a code fence
+# (a discussion of waivers, a rejected example) is not a waiver.
+WAIVER_RE = re.compile(r"\A\s*<!--\s*unitares-review-waiver v1 key=(?P<key>[0-9a-f]+)\s*-->")
 WAIVER_DEFAULTS = {"max_changed_lines": 20, "max_per_pr": 2}
 WAIVER_MIN_REASON = 20
 # Fixed in code so a policy edit cannot add itself to the waivable set.
