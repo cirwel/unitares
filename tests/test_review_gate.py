@@ -3460,15 +3460,16 @@ def _waiver(key, reason="help string only; no auth decision changes", associatio
 
 def test_a_waiver_lifts_the_hold_for_a_small_change_after_one_family_passed():
     k = "c" * 64
-    out = rg.apply_waiver(_HELD, [_waiver(k)], k, _PATHS, {"openai"}, 2, _POLICY)
+    out = rg.apply_waiver(_HELD, [_waiver(k)], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY)
     assert out[0] == "success" and "waived by the operator" in out[1] and "openai" in out[1]
 
 
 @pytest.mark.parametrize("case", ["no_family", "too_big", "unknown_size", "other_diff",
-                                  "untrusted", "short_reason", "gate_file", "over_cap"])
+                                  "untrusted", "short_reason", "gate_file", "unlisted_gate_file", "over_cap"])
 def test_a_waiver_out_of_bounds_changes_nothing(case):
     k = "c" * 64
     comments, families, lines, paths = [_waiver(k)], {"openai"}, 2, _PATHS
+    changed = _PATHS
     if case == "no_family":
         families = set()
     elif case == "too_big":
@@ -3482,16 +3483,18 @@ def test_a_waiver_out_of_bounds_changes_nothing(case):
     elif case == "short_reason":
         comments = [_waiver(k, reason="ok")]
     elif case == "gate_file":
-        paths = ["scripts/dev/review_gate.py"]
+        changed = ["scripts/dev/review_gate.py", *_PATHS]
+    elif case == "unlisted_gate_file":
+        changed = ["scripts/dev/review.sh", *_PATHS]  # not a sensitive path, still a gate file
     elif case == "over_cap":
         comments = [_waiver("a" * 64), _waiver("b" * 64), _waiver(k)]
-    assert rg.apply_waiver(_HELD, comments, k, paths, families, lines, _POLICY) == _HELD
+    assert rg.apply_waiver(_HELD, comments, k, changed, paths, families, lines, _POLICY) == _HELD
 
 
 def test_a_waiver_never_upgrades_a_check_that_was_not_held():
     k = "c" * 64
     pending = ("pending", "1 finding(s) need fixes or dispositions")
-    assert rg.apply_waiver(pending, [_waiver(k)], k, _PATHS, {"openai"}, 1, _POLICY) == pending
+    assert rg.apply_waiver(pending, [_waiver(k)], k, _PATHS, _PATHS, {"openai"}, 1, _POLICY) == pending
 
 
 def test_policy_can_tighten_but_not_unlist_the_gate_files():
@@ -3548,3 +3551,24 @@ def test_ci_accepts_a_bounded_waiver_and_refuses_a_large_or_missing_one(monkeypa
     assert ok[3] == "success" and "waived by the operator" in ok[4]
     assert _ci_with_waiver(monkeypatch, lines=500)[3] == "action_required"
     assert _ci_with_waiver(monkeypatch, lines=3, waiver=False)[3] == "action_required"
+
+
+def test_local_review_accepts_the_same_waiver_ci_does(monkeypatch, capsys):
+    key = "c" * 64
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "base_waiver_policy", lambda base: rg.waiver_policy())
+    monkeypatch.setattr(rg, "sensitive_changed_lines", lambda *a: 2)
+    comments = [_comment(rg.Record(key, "CLEAN", 0, False, "codex")), _waiver(key)]
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    args = SimpleNamespace(base="origin/master", branch="b")
+    assert rg.second_family_pass(args, "o/r", 1, key, "h", 0) == 0
+    assert "waived by the operator" in capsys.readouterr().out
+    comments.pop()  # without the waiver the same diff still needs the second family
+    assert rg.second_family_pass(args, "o/r", 1, key, "h", 0) == rg.NEEDS_SECOND_FAMILY
+
+
+def test_the_workflow_wakes_on_a_waiver_comment():
+    text = (Path(__file__).parents[1] / ".github/workflows/review-gate.yml").read_text()
+    assert "unitares-review-waiver v1" in text

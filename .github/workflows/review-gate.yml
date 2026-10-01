@@ -54,6 +54,7 @@ jobs:
         github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event.issue.pull_request &&
         (github.event.action != 'created' || contains(github.event.comment.body, 'unitares-review v1') ||
+          contains(github.event.comment.body, 'unitares-review-waiver v1') ||
           github.event.comment.user.login == 'chatgpt-codex-connector[bot]'))
     runs-on: ubuntu-latest
     timeout-minutes: 5

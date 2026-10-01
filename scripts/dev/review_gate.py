@@ -1111,14 +1111,17 @@ def sensitive_changed_lines(base: str, head: str, sensitive: list[str]) -> int |
     return total
 
 
-def waiver_refusal(sensitive: list[str], families: set[str], lines: int | None,
-                   policy: dict) -> str | None:
-    """Why a waiver cannot apply to this diff, or None when it can."""
-    if not sensitive or sensitive == ["(changed paths unreadable)"]:
+def waiver_refusal(changed: list[str] | None, sensitive: list[str], families: set[str],
+                   lines: int | None, policy: dict) -> str | None:
+    """Why a waiver cannot apply to this diff, or None when it can.
+
+    The gate-file exclusion reads ALL changed paths, not only the sensitive
+    ones: review.sh is a gate file that the policy does not list as sensitive."""
+    if changed is None or not sensitive or sensitive == ["(changed paths unreadable)"]:
         return "no readable sensitive paths to waive"
     if not families:
         return "no family has passed this diff yet; a waiver replaces the second review, never the first"
-    held = [p for p in sensitive
+    held = [p for p in changed
             if any(fnmatch.fnmatchcase(p, g) for g in policy["never_waive"])]
     if held:
         return f"{held[0]} is part of the review gate and cannot be waived"
@@ -1150,11 +1153,12 @@ def active_waiver(comments: list[dict], key: str, policy: dict) -> str | None:
     return None
 
 
-def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, sensitive: list[str],
-                 families: set[str], lines: int | None, policy: dict) -> tuple[str, str]:
+def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, changed: list[str] | None,
+                 sensitive: list[str], families: set[str], lines: int | None,
+                 policy: dict) -> tuple[str, str]:
     """``held`` is second_family_check's action_required; lift it when a valid,
     in-bounds waiver names this diff."""
-    if held[0] != "action_required" or waiver_refusal(sensitive, families, lines, policy):
+    if held[0] != "action_required" or waiver_refusal(changed, sensitive, families, lines, policy):
         return held
     reason = active_waiver(comments, key, policy)
     if reason is None:
@@ -1162,6 +1166,17 @@ def apply_waiver(held: tuple[str, str], comments: list[dict], key: str, sensitiv
     have = ", ".join(sorted(families))
     return ("success", f"second family waived by the operator ({lines} changed line(s) on "
                        f"{sensitive[0]}; have: {have}): {reason[:120]}")
+
+
+def waiver_reason_for(comments: list[dict], key: str, changed: list[str] | None,
+                      sensitive: list[str], families: set[str], base: str, head: str) -> str | None:
+    """The reason of a valid, in-bounds waiver for this diff, or None. Local
+    review.sh uses the same call CI does, so the two never disagree."""
+    policy = base_waiver_policy(base)
+    if waiver_refusal(changed, sensitive, families,
+                      sensitive_changed_lines(base, head, sensitive), policy):
+        return None
+    return active_waiver(comments, key, policy)
 
 
 def disabled_providers() -> dict[str, str]:
@@ -2148,6 +2163,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         families.add(passed_family)
     if len(families) >= 2:
         return result
+    waived = waiver_reason_for(comments, key, changed, sensitive, families, base, head)
+    if waived:
+        print(f"[review] second family waived by the operator ({waived[:120]}); CI accepts it")
+        return result
     candidates = second_family_candidates(
         getattr(args, "branch", "") or "", families, comments, key,
         set(getattr(args, "failed_providers", set()) or set()))
@@ -2456,7 +2475,7 @@ def cmd_waive(args) -> int:
     families = passing_families(comments, key, read_native(repo, pr, key, head, comments).records)
     policy = base_waiver_policy(args.base)
     lines = sensitive_changed_lines(args.base, head, sensitive)
-    refusal = waiver_refusal(sensitive, families, lines, policy)
+    refusal = waiver_refusal(changed, sensitive, families, lines, policy)
     if refusal:
         print(f"[review] cannot waive: {refusal}")
         return 1
@@ -2732,7 +2751,7 @@ def cmd_ci(args) -> int:
     held = second_family_check(conclusion, desc, sensitive, families)
     if held[0] != conclusion:
         held = apply_waiver(
-            held, comments, key, sensitive, families,
+            held, comments, key, changed, sensitive, families,
             sensitive_changed_lines(f"origin/{base_ref}", head, sensitive),
             base_waiver_policy(f"origin/{base_ref}"))
     conclusion, desc = held
