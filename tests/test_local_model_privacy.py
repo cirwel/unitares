@@ -1056,3 +1056,18 @@ def test_a_blackholed_first_address_does_not_starve_the_second(monkeypatch):
     monkeypatch.setattr(reg, "_resolve_within", lambda *a: [("v6", 1, 6, "", ("::2", 8000)), ("v4", 1, 6, "", ("10.0.0.2", 8000))])
     assert reg._probe_ollama_socket() is True
     assert connects[0][1] <= reg._OLLAMA_PROBE_BUDGET_S / 2 + 0.01
+
+
+@pytest.mark.parametrize("secret_url", [
+    "http://user:s3cret@localhost:8000/v1",
+    "user:s3cret@localhost:8000/v1",
+])
+def test_a_disagreement_warning_never_logs_endpoint_credentials(monkeypatch, caplog, secret_url):
+    monkeypatch.setattr(env, "_warned_disagreements", set())
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", secret_url)
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://other-host:11434/v1")
+    with caplog.at_level("WARNING"):
+        env.model_base_url()
+    assert "disagree" in caplog.text
+    assert "s3cret" not in caplog.text
+    assert "localhost:8000" in caplog.text  # the host stays, so the warning is still useful

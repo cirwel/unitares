@@ -36,6 +36,7 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -113,6 +114,15 @@ def old_names_in_use() -> list[SettingAlias]:
     return [a for a in SETTING_ALIASES if _env(a.old)]
 
 
+_USERINFO_RE = re.compile(r"^([a-z][a-z0-9+.-]*://)?[^/@\s]*@", re.I)
+
+
+def _redact_userinfo(value: str) -> str:
+    """``value`` without a leading ``user:password@``, with or without a scheme:
+    a setting that disagrees is logged, and a base URL can carry credentials."""
+    return _USERINFO_RE.sub(lambda m: m.group(1) or "", value)
+
+
 def _resolve(new: str, normalize) -> str:
     """Value of ``new``, else of its aliases in table order; ``""`` when none is set.
 
@@ -132,7 +142,8 @@ def _resolve(new: str, normalize) -> str:
                 _warned_disagreements.add(key)
                 logger.warning(
                     "%s (%s) and %s (%s) disagree; using %s. Set one of them.",
-                    winner_name, winner, other_name, other, winner_name,
+                    winner_name, _redact_userinfo(winner),
+                    other_name, _redact_userinfo(other), winner_name,
                 )
     return winner
 
