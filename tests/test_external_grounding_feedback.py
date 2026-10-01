@@ -75,16 +75,17 @@ async def test_calibration_query_parses_row_and_casts_decimals():
 @pytest.mark.asyncio
 async def test_calibration_query_scores_only_reported_agent_authored_claims():
     """Server-derived confidence scored against outcomes is circular, and the
-    confidence column on non-check-in events is not a claim at all. Authorship
-    must be explicit: a row with no epistemic_class never defaults in."""
+    confidence column on non-check-in events is not a claim at all. The claim
+    is gated on the confidence's own provenance, never on epistemic_class
+    (summary authorship): an SDK resident's substrate summary can carry a
+    genuine confidence estimate."""
     conn = _FakeConn({"n": 0})
     db = _Harness(conn)
     await db.get_agent_external_calibration("agent-1")
     sql, _ = conn.calls[0]
     assert "e.event_type = 'auto_attest'" in sql
     assert "e.payload->>'confidence_source' = 'reported'" in sql
-    assert "e.payload->>'epistemic_class' = 'agent_report'" in sql
-    assert "COALESCE(e.payload" not in sql
+    assert "epistemic_class" not in sql
 
 
 @pytest.mark.asyncio

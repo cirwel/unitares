@@ -545,9 +545,13 @@ class ToolUsageMixin:
         excluded so the feedback cannot be self-referential.
 
         Only a claim counts: an `auto_attest` row stamped
-        `confidence_source='reported'` on an `agent_report` check-in. Scoring
-        server-derived confidence against outcomes is circular, and the
-        confidence column on other event types is not a claim. Rows written
+        `confidence_source='reported'`. That is the confidence's own
+        provenance; it does not depend on `epistemic_class`, which records who
+        composed the summary (an SDK resident's substrate summary can carry a
+        genuine confidence estimate). Scoring server-derived confidence
+        against outcomes is circular, simulated and server-clamped values are
+        stamped otherwise, and the confidence column on other event types is
+        not a claim. Rows written
         before the stamp existed carry no source and never count. Outcomes the
         outcome protocol marked `calibration_excluded` (e.g. scraped
         confidence, unbound harness rows) are excluded here too, so this
@@ -582,7 +586,6 @@ class ToolUsageMixin:
                               AND e.confidence IS NOT NULL AND e.confidence > 0
                               AND e.event_type = 'auto_attest'
                               AND e.payload->>'confidence_source' = 'reported'
-                              AND e.payload->>'epistemic_class' = 'agent_report'
                               AND e.ts <= ext.ts
                               AND e.ts > ext.ts - ($3 * interval '1 hour')
                             ORDER BY e.ts DESC
