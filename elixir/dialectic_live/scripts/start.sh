@@ -47,7 +47,21 @@ export GOVERNANCE_START_FIREHOSE="${GOVERNANCE_START_FIREHOSE:-true}"
 # prepare-asset-binaries.sh fetches missing asset CLIs and re-signs any macOS
 # kills on exec; see that script for why.
 mix deps.get --only "$MIX_ENV"
-"$APP_DIR/scripts/prepare-asset-binaries.sh"
-mix assets.deploy
+
+# A failed asset build must not take the service down when a previous build
+# is still on disk: under KeepAlive a fatal error here is an endless restart
+# loop (~13.5k on 2026-09-30, from one killed tailwind CLI). The rebuild is
+# only a self-heal; deploy-dialectic-live.sh builds assets itself and fails
+# hard there, before it restarts anything. So serve the last digested build
+# and say so. With no previous build there is nothing to serve: fail.
+MANIFEST="$APP_DIR/priv/static/cache_manifest.json"
+if ! { "$APP_DIR/scripts/prepare-asset-binaries.sh" && mix assets.deploy; }; then
+  if [ -f "$MANIFEST" ]; then
+    echo "[start] WARNING: asset build failed; serving the previous build ($(date -r "$MANIFEST" '+%Y-%m-%d %H:%M'))" >&2
+  else
+    echo "[start] FATAL: asset build failed and there is no previous build to serve" >&2
+    exit 1
+  fi
+fi
 
 exec mix phx.server
