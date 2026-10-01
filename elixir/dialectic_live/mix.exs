@@ -84,12 +84,49 @@ defmodule DialecticLive.MixProject do
       setup: ["deps.get", "assets.setup", "assets.build"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind dialectic_live", "esbuild dialectic_live"],
-      "assets.deploy": [
+      # scripts/build-assets.sh runs these two steps separately: a failed
+      # compile leaves the previous digest servable, a failed digest does not.
+      "assets.compile": [
         "tailwind dialectic_live --minify",
-        "esbuild dialectic_live --minify",
-        "phx.digest"
+        "esbuild dialectic_live --minify"
       ],
+      # Wraps Phoenix's own phx.digest (an alias may call the task it is
+      # named after), so every digest in this project goes through it: only
+      # scripts/build-assets.sh may run one (it holds the build lock), and
+      # the marker saying the digest finished is cleared first and written
+      # only on success. See clear_digest_marker/1.
+      "phx.digest": [&clear_digest_marker/1, "phx.digest", &write_digest_marker/1],
+      "assets.deploy": ["assets.compile", "phx.digest"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+  end
+
+  # Read by scripts/build-assets.sh (DIGEST_OK); keep the two paths in step.
+  @digest_marker Path.join(__DIR__, "_build/assets-digest.ok")
+
+  defp clear_digest_marker(_args) do
+    if System.get_env("DIALECTIC_LIVE_ASSETS_LOCKED") != "1" do
+      Mix.raise(
+        "build assets with scripts/build-assets.sh (--strict to fail on any error); " <>
+          "it serializes builds and owns the digest marker, so mix assets.deploy " <>
+          "and phx.digest do not run on their own"
+      )
+    end
+
+    case File.rm(@digest_marker) do
+      :ok ->
+        :ok
+
+      {:error, :enoent} ->
+        :ok
+
+      {:error, reason} ->
+        Mix.raise("could not clear #{@digest_marker}: #{:file.format_error(reason)}")
+    end
+  end
+
+  defp write_digest_marker(_args) do
+    File.mkdir_p!(Path.dirname(@digest_marker))
+    File.touch!(@digest_marker)
   end
 end

@@ -850,6 +850,7 @@ def transform_inputs(ctx: UpdateContext) -> Optional[Sequence[TextContent]]:
         original_confidence = ctx.confidence
         ctx.confidence = min(ctx.confidence, 0.55)
         if ctx.confidence != original_confidence:
+            ctx.confidence_dampened = True
             ctx.warnings.append(
                 f"Identity assurance is weak ({ctx.identity_assurance.get('session_source')}); "
                 f"confidence dampened from {original_confidence:.2f} to {ctx.confidence:.2f}."
@@ -924,6 +925,7 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
         "response_text": ctx.response_text,
         "complexity": ctx.complexity,
         "epistemic_class": ctx.epistemic_class,
+        "confidence_dampened": ctx.confidence_dampened,
     }
     ctx.submitted_afferents = None
     try:

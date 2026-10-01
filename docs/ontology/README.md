@@ -55,6 +55,7 @@ So `r1-verify-lineage-claim.md` resolves row R1 in `plan.md`; `s1-continuity-tok
 - [`competitive-survival-audit-2026-09.md`](competitive-survival-audit-2026-09.md) — product-level keep/merge/stop audit against A2A, NeMo Relay, cloud control planes, and observability standards
 - [`neohorse-1-triage-2026-09.md`](neohorse-1-triage-2026-09.md) — NeoHorse-1 (arXiv:2609.08183); training-plane neighbor, not encroaching, but it collides on the word *harness*
 - [`competitive-analysis-2026-09.md`](competitive-analysis-2026-09.md) — claims falsification audit and market map: every public claim typed and classed against the strongest substitute opened (cloud agent platforms, A2A, NeMo Relay, AgentLens, the IETF audit-trail draft); supersedes the June map as the market map, the June paper-positioning verdicts stand
+- [`openshell-federation-fit-2026-10.md`](openshell-federation-fit-2026-10.md) — NVIDIA OpenShell read in full history: provenance check (no evidence of copying; first commits 2026-01-29 vs 2025-11-20), the enforcement-versus-record layer split, and four candidate opt-in federation seams (gateway `post_commit`, OCSF ingest, in-sandbox MCP, subagent lineage)
 - [`frontier-brief-2026-09-24.md`](frontier-brief-2026-09-24.md) — source check of an operator-supplied weekly frontier brief (Anthropic oversight metrics, OpenAI assessment principles, WorkWorlds, RoboHarm) and a mapping of its recommendations onto existing work; names the context-provisioning gap in the registered coordination ablation
 
 **Dated records**:
