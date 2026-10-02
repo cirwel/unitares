@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-02T05:58:55Z",
+  "verified_date": "2026-10-02",
+  "verifier": "claude (PR #2611): re-checked governance-lifecycle against the phases.py change; the diff only replaces the substring keyword test in _post_update_auto_outcome with word-start regexes; the skill makes no claim about auto-emitted outcome labels, and its check-in/confidence/record_result guidance is unaffected",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "82a2d21673dac84f",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "665769655248cbaa",
+    "unitares/src/mcp_handlers/identity/handlers.py": "6bafb43dd2dc40ef",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "382a9fef840baf06",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "21588db986cf1eef",
+    "unitares/src/mcp_handlers/updates/phases.py": "4080d56cabc16cbd",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "1a2d7782ab306af3"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/updates/phases.py": [
+      "377db448d52b7692"
+    ]
+  }
+}
