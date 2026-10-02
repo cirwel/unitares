@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Make the tailwind/esbuild CLIs in _build/ present and executable before
-# `mix assets.deploy` runs them. Called by scripts/start.sh on every boot and
-# by scripts/ops/deploy-dialectic-live.sh before it restarts the service.
+# `mix assets.deploy` runs them. Called by scripts/build-assets.sh whenever it
+# builds: on every deploy, and on a boot that finds the build stale.
 # Expects MIX_ENV in the environment, like its callers.
 #
 # Why: macOS 27 SIGKILLs the linker-signed (ad-hoc) tailwind CLI on exec,
@@ -12,8 +12,8 @@
 #
 # Heal BEFORE assets.setup as well as after: `tailwind.install --if-missing`
 # decides "missing" by running `--help`, so a killed binary would otherwise be
-# deleted and re-downloaded (linker-signed again) on every boot, and an
-# offline boot would fail where a re-sign alone would have worked.
+# deleted and re-downloaded (linker-signed again) on every build, and an
+# offline build would fail where a re-sign alone would have worked.
 set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
