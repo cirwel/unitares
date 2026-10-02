@@ -1121,11 +1121,6 @@ def missing_parameter_error(
             "aliases": "You can also use: 'note', 'text', 'content', 'message', 'insight', 'finding', 'learning'",
             "quick_fix": "Add summary parameter: leave_note(summary='Your note text')"
         }
-    elif tool_name == "store_knowledge_graph":
-        examples = {
-            "example": "knowledge(action='store', summary='Discovery description', tags=['tag1'])",
-            "quick_fix": "Add summary parameter: knowledge(action='store', summary='Your discovery')"
-        }
     
     details = {
         "error_type": "missing_parameter",

@@ -830,3 +830,16 @@ async def test_a_workflow_alias_keeps_its_injected_operation_despite_a_requested
     )
     data = lambda r: r.get("data", r)  # noqa: E731 - envelope or bare payload
     assert data(conflicting)["operation"] == data(plain)["operation"] != "read"
+
+
+def test_every_description_key_names_a_registered_tool_or_alias():
+    """tool_descriptions.json is looked up by registered tool name. A key for a
+    name that is neither registered nor an alias is unreachable text that
+    describe_tool cannot serve (the 37 removed legacy aliases left 35 of them)."""
+    from src.mcp_handlers.tool_stability import list_all_aliases
+    from src.tool_descriptions import TOOL_DESCRIPTIONS
+    from src.tool_schemas import get_tool_definitions
+
+    reachable = {t.name for t in get_tool_definitions()} | set(list_all_aliases())
+    orphans = sorted(k for k in TOOL_DESCRIPTIONS if k not in reachable)
+    assert not orphans, f"unreachable description keys: {orphans}"

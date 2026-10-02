@@ -363,11 +363,6 @@ class TestMissingParameterError:
         # details are spread into response via response.update(sanitized_details)
         assert "examples" in data
 
-    def test_store_knowledge_graph_examples(self):
-        result = missing_parameter_error("summary", tool_name="store_knowledge_graph")
-        data = _parse_error(result)
-        assert "examples" in data
-
     def test_generic_no_examples(self):
         result = missing_parameter_error("agent_id", tool_name="some_random_tool")
         data = _parse_error(result)
