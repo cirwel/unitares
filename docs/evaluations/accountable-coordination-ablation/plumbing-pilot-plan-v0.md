@@ -4,11 +4,12 @@
 (Section 8). Documentation only. Nothing here is built, run, enrolled, or
 authorized by merging this document.
 **Protocol:** [`accountable-coordination-ablation-v0`](../../proposals/registered/accountable-coordination-ablation-v0.md)
-(registered at #2249, `74bd59cd`). This plan does not amend it.
-**Recommendation:** do **not** build the pilot yet. Review showed that the
-registered treatments cannot be faithfully run on this host as specified, and
-that the confirmatory study is probably beyond a solo operator. Section 5
-lists what has to be decided first, in order.
+(registered at #2249, `74bd59cd`). This record amends nothing.
+**Outcome:** the operator recorded a feasibility stop on 2026-10-01
+(Section 5.1). Review showed that the registered treatments cannot be run
+faithfully on this host as specified, and the power arithmetic in Section 2.4
+puts the confirmatory study beyond a single operator. Nothing was built or
+run.
 
 ---
 
@@ -168,6 +169,33 @@ below use δ = 15 percentage points purely for illustration. n scales with
   which the protocol requires publishing. That would read as evidence of no
   value when it is evidence of nothing.
 
+**Correction to the fractional-score figure.** The figure of about 31 families
+assumes a graded score with σd near 0.3. Repository tasks often carry only one
+to three fail-to-pass tests, which makes a fractional score close to binary,
+so that figure is optimistic. The normal-approximation ranges above (about
+31, 105 to 140, and the "31 to 140" in D1) are superseded by the exact table
+below.
+
+**Exact power for roughly pass/fail scores.** For binary paired scores the
+primary test reduces to a sign test on the tasks where the arms differ. Power
+of the exact two-sided test at α = 0.05, by enumeration, for a D−B effect δ
+when a fraction of tasks differ between arms:
+
+| δ | Tasks that differ | n = 20 | n = 40 | n = 60 | n = 100 | n = 150 |
+|---|---|---|---|---|---|---|
+| 0.15 | 15% (all favour D) | 0.07 | 0.57 | 0.90 | 1.00 | 1.00 |
+| 0.15 | 30% | 0.10 | 0.31 | 0.50 | 0.75 | 0.92 |
+| 0.15 | 40% | 0.10 | 0.24 | 0.37 | 0.62 | 0.81 |
+| 0.20 | 30% | 0.20 | 0.57 | 0.80 | 0.96 | 1.00 |
+| 0.25 | 40% | 0.29 | 0.67 | 0.86 | 0.98 | 1.00 |
+
+How many tasks differ between arms is not known. The first row is the most
+favourable case possible at δ = 0.15. Even there, 40 tasks gives 57% power.
+By enumeration, 80% power at δ = 0.15 needs 52 tasks in that most favourable
+case and 148 when 40% of tasks differ. For variance alone: with differences in
+{−1, 0, 1} and mean δ, the variance is at least δ(1−δ), so the normal
+approximation needs at least 7.84(1−δ)/δ ≈ 45 families at δ = 0.15.
+
 ## 3. Reusable pieces (corrected)
 
 | Need | Existing piece |
@@ -210,6 +238,42 @@ below use δ = 15 percentage points purely for illustration. n scales with
 | D5 | **Model access for isolated agents** | An isolated Claude child is metered-API only. Decide between a metered budget and a Codex-only harness, whose model identity is not reported on the exec path |
 | D6 | **Arm C's policy boundary** | Decide whether a setting that exists only inside the sealed experiment stack may disable pause gating and governance envelopes for C. The protocol forbids any production or agent-selectable switch |
 | D7 | **Exception to "no additional PostgreSQL"** | Per-arm, per-family stacks mean many Postgres instances. Record the waiver in the enrollment. If granted, add the same scoped rule to both `CLAUDE.md` and `AGENTS.md`: the prohibition sits in their shared contract, which `scripts/dev/check-shared-contract.sh` keeps byte-identical |
+
+### 5.1 Outcome (2026-10-01)
+
+The operator's answers on 2026-10-01:
+
+- **First answer.** The operator replied "proceed" to a list of recommended
+  answers to D1 to D7. On that basis a v0.1 amendment was drafted:
+  - two arms, B against D;
+  - the same task in both arms, in per-episode containers;
+  - code-frozen adjudication;
+  - an arm-B-only planning probe;
+  - a feasibility gate computed from the probe's run-to-run variance, at δ = 0.15
+    and a cap of 40 tasks.
+- **Review of the draft.** An adversarial design review and Codex reviewed the
+  draft independently, with 14 findings each. Both found the gate unsound:
+  - A B-versus-B probe never observes arm D, so it cannot establish power for
+    D−B. A probe in which B fails every task gives zero variance and a sample
+    size with about 7% power.
+  - A chi-square bound assumes normal data, which roughly pass/fail
+    differences are not.
+  - With δ = 0.15, a cap of 40 tasks cannot be met even in the most favourable
+    case (Section 2.4).
+
+  The reviews also found that the draft overstated blinding and attributed to
+  the operator choices, such as δ and the caps, that had only been given
+  "proceed".
+- **Second answer.** Shown the power table, the operator chose to record a
+  feasibility stop rather than register a larger fixed-sample study
+  (about 150 tasks), a 25-point minimum effect, or an exploratory run. The
+  v0.1 draft was withdrawn before merge. The stop is recorded in the protocol's
+  amendment log.
+
+D1 to D7 are therefore closed without being applied. No waiver of the
+PostgreSQL rule (D7) was granted or needed. The stop is not a study result.
+Reopening needs a new premise, such as a second operator or a task source large
+enough for a fixed sample in the power range above, and a new protocol version.
 
 ## 6. Side finding: local database trust
 
