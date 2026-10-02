@@ -20,6 +20,7 @@ from src.mcp_handlers.support.antigravity_cli_client import (
     ENV_ALLOWLIST as _AGY_ENV_ALLOWLIST,
     agy_env as _agy_env,
     isolated_home as _isolated_home,
+    parse_output as _parse_agy_output,
 )
 from src.mcp_handlers.support.host_adapter import (
     extract_cli_result,
@@ -462,6 +463,47 @@ def resolve_antigravity_cli() -> Optional[str]:
     return None
 
 
+# How much of agy's own explanation a failure carries into the stored warning.
+_AGY_REASON_CHARS = 300
+
+
+def _agy_log_error(home: str) -> str:
+    """The last error- or fatal-level line of agy's own log under ``home``.
+
+    agy logs in glog format ("E1002 14:11:36.079954 66 file.go:12] msg") to
+    $HOME/.gemini/antigravity-cli/log/. The home is a per-run temporary
+    directory, so this must be read before it is deleted. Never raises."""
+    try:
+        logs = sorted(Path(home, ".gemini", "antigravity-cli", "log").glob("cli-*.log"),
+                      key=lambda f: f.stat().st_mtime)
+        if not logs:
+            return ""
+        lines = logs[-1].read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if line[:1] in ("E", "F") and line[1:5].isdigit():
+            return line.strip()
+    return ""
+
+
+def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
+    """agy's own words for a nonzero exit, best source first: the JSON error,
+    the last stderr line, then the last error line of its log. Live instance:
+    10-01, session c7d1cc8d24773ffd stored only "Antigravity CLI exited 3",
+    with stderr discarded and the log deleted with the temporary home, so the
+    cause of the fallback could not be recovered."""
+    data = _parse_agy_output(stdout.decode(errors="replace"))
+    said = str(data.get("error") or "").strip()
+    if not said:
+        said = next((line.strip() for line in
+                     reversed(stderr.decode(errors="replace").splitlines())
+                     if line.strip()), "")
+    if not said:
+        said = _agy_log_error(home)
+    return said[:_AGY_REASON_CHARS]
+
+
 async def _reap_group(proc: Any) -> None:
     """Kill agy's whole process group and wait briefly; never raises."""
     try:
@@ -512,7 +554,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
                 env=agy_env(home),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
                 # Own process group: a timeout must reach agy's sandbox children,
                 # or one holding stdout keeps communicate() waiting forever.
                 start_new_session=True,
@@ -520,7 +562,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
             return fail(f"Antigravity CLI spawn failed: {type(exc).__name__}")
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             await _reap_group(proc)
             return fail(f"Antigravity CLI exceeded {timeout_s:g}s timeout",
@@ -528,10 +570,14 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
             await _reap_group(proc)
             return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
+        if proc.returncode != 0:
+            # Inside the with: the log fallback reads the temporary home.
+            said = _agy_exit_reason(stdout or b"", stderr or b"", home)
+            return fail(f"Antigravity CLI exited {proc.returncode}"
+                        + (f": {said}" if said else ""),
+                        latency_ms=int((time.monotonic() - started) * 1000))
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    if proc.returncode != 0:
-        return fail(f"Antigravity CLI exited {proc.returncode}", latency_ms=latency_ms)
     raw = stdout.decode(errors="replace").strip()
     try:
         data = json.loads(raw.splitlines()[-1]) if raw else {}
