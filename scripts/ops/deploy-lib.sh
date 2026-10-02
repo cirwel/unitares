@@ -515,6 +515,25 @@ deploy_lib_restart_service() {
   return 1
 }
 
+# ── Log lines written since a byte offset ────────────────────────────────────
+# usage: deploy_lib_log_size LOG            -> current size in bytes (0 if absent)
+#        deploy_lib_log_grep_since LOG OFFSET ERE
+# Prints the first line written after OFFSET that matches ERE; returns 0 if one
+# matched, 1 otherwise. Take the size before a restart and grep after it, so a
+# check reads only what the new process logged and never re-reports an old
+# boot. Secret-free on purpose: a service can say it came up degraded in its
+# own log even when its health endpoint needs a bearer.
+deploy_lib_log_size() {
+  if [[ -f "$1" ]]; then wc -c < "$1" | tr -d ' '; else echo 0; fi
+}
+deploy_lib_log_grep_since() {
+  local log="$1" offset="$2" ere="$3"
+  [[ -f "$log" ]] || return 1
+  # Process substitution, not a pipe: under pipefail an early-exiting
+  # `grep -m 1` SIGPIPEs tail and the pipeline would report no match.
+  grep -m 1 -E "$ere" < <(tail -c "+$((offset + 1))" "$log")
+}
+
 # ── Bounded verify poll ──────────────────────────────────────────────────────
 # usage: deploy_lib_poll ATTEMPTS INTERVAL_SECONDS CMD [ARGS...]
 # Runs CMD every INTERVAL seconds up to ATTEMPTS times; returns 0 on the first

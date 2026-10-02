@@ -760,6 +760,32 @@ else bad "restart_service: sidecar-write failure tolerance (rc=$rc8)"; fi
 ) && ok "[guard] deploy-orchestrator.sh runs a migration preflight before restarting" \
   || bad "deploy-orchestrator.sh migration preflight guard"
 
+# ── log grep since offset: reads only what was written after the offset ──
+(
+  set -euo pipefail; . "$LIB"
+  L="$SB/orch.log"
+  [[ "$(deploy_lib_log_size "$L")" == 0 ]] || exit 9               # absent log -> 0
+  printf 'old boot: agent orchestrator durable idempotency database is not configured; keyed spawns will fail closed\n' > "$L"
+  off="$(deploy_lib_log_size "$L")"
+  ! deploy_lib_log_grep_since "$L" "$off" 'not configured' >/dev/null  # old boot is not re-reported
+  printf 'ok line\n[warning] orchestrator idempotency sweep failed: :database_not_started\n' >> "$L"
+  got="$(deploy_lib_log_grep_since "$L" "$off" 'orchestrator idempotency .*(unavailable|failed|exited)')"
+  [[ "$got" == *"sweep failed"* ]]
+  ! deploy_lib_log_grep_since "$SB/missing.log" 0 'x' >/dev/null    # missing log -> no match
+  # A match near the start of a large tail must still return 0 under pipefail.
+  big="$SB/big.log"; { echo "orchestrator idempotency reserve unavailable: x"; yes filler | head -n 200000; } > "$big"
+  deploy_lib_log_grep_since "$big" 0 'reserve unavailable' >/dev/null
+) && ok "log grep since offset reports only new lines" || bad "log grep since offset"
+
+# ── [guard] deploy-orchestrator.sh checks the new boot's log for idempotency ──
+(
+  set -euo pipefail
+  DO="$(dirname "$LIB")/deploy-orchestrator.sh"
+  grep -q 'LOG_OFFSET="$(deploy_lib_log_size' "$DO"
+  grep -q 'deploy_lib_log_grep_since "$LOG" "$LOG_OFFSET"' "$DO"
+) && ok "[guard] deploy-orchestrator.sh warns when the new boot logs an idempotency problem" \
+  || bad "deploy-orchestrator.sh idempotency log guard"
+
 echo; echo "passed=$pass failed=$fail"
 rm -rf "$SB"
 exit "$((fail > 0))"
