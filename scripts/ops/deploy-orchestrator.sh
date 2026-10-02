@@ -32,6 +32,16 @@
 #    check stays unauthenticated on purpose — a deploy script should not need a
 #    secret to confirm a process is serving.
 #
+# 4. A serving orchestrator can still be degraded. Keyed spawns (an
+#    Idempotency-Key header, which the dialectic dispatch sends) fail closed
+#    with idempotency_unavailable when the durable ledger has no database URL
+#    (docs/operations/agent-orchestrator-idempotency.md). The authenticated
+#    /v1/health reports it, but per note 3 this script reads no secret, so it
+#    reads what the new process wrote to its own log instead and WARNS. It does
+#    not fail the deploy: unkeyed spawns still work, and the fix is config.
+#    Shipped 2026-08-28 (#1953); first noticed 2026-10-02, five weeks later,
+#    because nothing between "deploy OK" and a refused spawn said so.
+#
 # No lease-plane nudge: that exists because ff-ing the SHARED unitares-deploy
 # tree moves source under other running BEAM nodes. This worktree is this
 # service's alone, so there is nothing else to disturb.
@@ -43,6 +53,7 @@ APP_SUBDIR="elixir/agent_orchestrator"
 LABEL="com.unitares.agent-orchestrator"
 PLIST="${UNITARES_ORCHESTRATOR_PLIST:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 PORT="${AGENT_ORCHESTRATOR_HTTP_PORT:-8789}"
+LOG="${UNITARES_ORCHESTRATOR_LOG:-$HOME/Library/Logs/unitares-agent-orchestrator.log}"
 UID_NUM="$(id -u)"
 TAG="deploy-orch"
 
@@ -155,6 +166,7 @@ fi
 # the service DOWN, so a single unguarded bootstrap can end a "successful"
 # deploy with no orchestrator running at all.
 echo "[$TAG] restarting $LABEL (bootout + bootstrap — kickstart would reuse the old service definition)"
+LOG_OFFSET="$(deploy_lib_log_size "$LOG")"
 launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
 if ! launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null; then
   echo "[$TAG] first bootstrap failed (the documented I/O footgun) — retrying"
@@ -177,6 +189,17 @@ verify_orchestrator() {
 
 if deploy_lib_poll 20 3 verify_orchestrator; then
   echo "[$TAG] OK — orchestrator serving on :$PORT from $DEPLOY @ $(git -C "$DEPLOY" rev-parse --short HEAD)"
+  # Note 4. The not-configured warning is logged at boot, before the port
+  # answers, so it is already there; a configured-but-unreachable database
+  # shows up only once a reserve or the minute sweep runs.
+  if idem_line="$(deploy_lib_log_grep_since "$LOG" "$LOG_OFFSET" \
+      'durable idempotency database is not configured|orchestrator idempotency .*(unavailable|failed|exited)')"; then
+    echo "[$TAG] WARN — orchestrator is serving, but keyed spawns will fail closed:" >&2
+    echo "[$TAG]     $idem_line" >&2
+    echo "[$TAG] Set AGENT_ORCHESTRATOR_DATABASE_URL (or GOVERNANCE_DATABASE_URL / DB_POSTGRES_URL)" >&2
+    echo "[$TAG] where start.sh reads it, then re-run with --force." >&2
+    echo "[$TAG] See docs/operations/agent-orchestrator-idempotency.md." >&2
+  fi
 else
   echo "[$TAG] FAILED — orchestrator did not answer on :$PORT after restart." >&2
   echo "[$TAG] Check: launchctl list | grep $LABEL ; tail ~/Library/Logs/unitares-agent-orchestrator.log" >&2
