@@ -108,17 +108,25 @@ def test_a_prompt_line_that_looks_like_a_log_level_is_not_an_error(monkeypatch):
     assert error.endswith("token refresh failed: invalid_grant")
 
 
-def test_a_failing_reason_extraction_still_falls_back(monkeypatch):
-    # Review of 3bea1cfa7 (P2): deeply nested JSON raises RecursionError, not
-    # ValueError; the diagnostic must never cost the local fallback. Raised
-    # directly: the nesting depth that overflows varies by interpreter build.
+def test_a_source_that_raises_does_not_silence_the_next(monkeypatch):
+    # Review of 3bea1cfa7 (codex P2): deeply nested JSON raises RecursionError,
+    # not ValueError. Review of f0b173a3d (antigravity): guarding the whole
+    # extraction dropped the stderr and log reasons with it. Raised directly:
+    # the nesting depth that overflows varies by interpreter build.
     def deep(_text):
         raise RecursionError("maximum recursion depth exceeded")
 
     monkeypatch.setattr(hb, "_parse_agy_output", deep)
     _spawn(monkeypatch, b"{}", returncode=3, stderr=b"usable")
     result = asyncio.run(hb.call_antigravity_backend("P"))
-    assert result.text is None and result.error == "Antigravity CLI exited 3"
+    assert result.text is None and result.error == "Antigravity CLI exited 3: usable"
+
+    def broken_log(_home):
+        raise OSError("unreadable")
+
+    monkeypatch.setattr(hb, "_agy_log_error", broken_log)
+    _spawn(monkeypatch, b"{}", returncode=3)
+    assert asyncio.run(hb.call_antigravity_backend("P")).error == "Antigravity CLI exited 3"
 
 
 def test_the_exit_reason_is_bounded(monkeypatch):

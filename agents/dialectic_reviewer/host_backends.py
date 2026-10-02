@@ -496,16 +496,25 @@ def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
     the last stderr line, then the last error line of its log. Live instance:
     10-01, session c7d1cc8d24773ffd stored only "Antigravity CLI exited 3",
     with stderr discarded and the log deleted with the temporary home, so the
-    cause of the fallback could not be recovered."""
-    data = _parse_agy_output(stdout.decode(errors="replace"))
-    said = str(data.get("error") or "").strip()
-    if not said:
-        said = next((line.strip() for line in
-                     reversed(stderr.decode(errors="replace").splitlines())
+    cause of the fallback could not be recovered. Never raises."""
+    def json_error() -> str:
+        data = _parse_agy_output(stdout.decode(errors="replace"))
+        return str(data.get("error") or "") if isinstance(data, dict) else ""
+
+    def last_stderr_line() -> str:
+        return next((line for line in reversed(stderr.decode(errors="replace").splitlines())
                      if line.strip()), "")
-    if not said:
-        said = _agy_log_error(home)
-    return said[:_AGY_REASON_CHARS]
+
+    # Each source is best-effort on its own: one that raises (deeply nested
+    # JSON raises RecursionError, not ValueError) must not silence the next.
+    for source in (json_error, last_stderr_line, lambda: _agy_log_error(home)):
+        try:
+            said = source().strip()
+        except Exception:  # noqa: BLE001 - a diagnostic must never block the fallback
+            continue
+        if said:
+            return said[:_AGY_REASON_CHARS]
+    return ""
 
 
 async def _reap_group(proc: Any) -> None:
@@ -576,10 +585,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
             return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
         if proc.returncode != 0:
             # Inside the with: the log fallback reads the temporary home.
-            try:
-                said = _agy_exit_reason(stdout or b"", stderr or b"", home)
-            except Exception:  # noqa: BLE001 - a diagnostic must never block the fallback
-                said = ""
+            said = _agy_exit_reason(stdout or b"", stderr or b"", home)
             return fail(f"Antigravity CLI exited {proc.returncode}"
                         + (f": {said}" if said else ""),
                         latency_ms=int((time.monotonic() - started) * 1000))
