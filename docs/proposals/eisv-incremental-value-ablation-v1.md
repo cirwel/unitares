@@ -291,6 +291,10 @@ The following rules apply.
   operator-gated harness endpoint) is entered in the independence registry with
   its emission path before any of its events counts toward the primary
   endpoint. Until then its events are secondary-only, as for any new label type.
+  The current contract does not enforce this: it accepts any primary event
+  whose `producer_class` is one of the allowed classes. Pilot collection may
+  not be enabled until the registry binding listed under *Required
+  implementation checks* exists.
 - **Unresolved at window close.** A test failure counts toward the primary
   endpoint only if it is still unresolved when the prediction window closes. A
   passing run of the same test on the same task inside the window resolves it,
@@ -702,6 +706,13 @@ Before the pilot is enabled:
 - reject primary labels whose producer is governance policy, lifecycle state,
   or agent self-report, even when their verification source says
   `server_observation`;
+- bind a named-producer registry into the pinned manifest and contract, and
+  reject any event with `counts_toward_primary=true` whose producer and
+  emission path are not registered there; `producer_class` alone, as asserted
+  by the emitter, does not admit an event (0.3.1);
+- enforce the 0.3.1 attribution rules mechanically: a primary test failure
+  carries its attribution to the episode's own change, and failures sharing
+  one recorded root cause resolve to one event;
 - verify prediction timestamps precede every linked outcome timestamp;
 - test duplicate prediction and event IDs;
 - test all censoring paths; and
