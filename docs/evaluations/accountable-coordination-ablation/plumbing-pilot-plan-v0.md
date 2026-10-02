@@ -4,11 +4,15 @@
 (Section 8). Documentation only. Nothing here is built, run, enrolled, or
 authorized by merging this document.
 **Protocol:** [`accountable-coordination-ablation-v0`](../../proposals/registered/accountable-coordination-ablation-v0.md)
-(registered at #2249, `74bd59cd`). This plan does not amend it.
-**Recommendation:** do **not** build the pilot yet. Review showed that the
+(registered at #2249, `74bd59cd`), amended to v0.1 on the basis of this
+record in the same pull request. This record itself amends nothing.
+**Recommendation:** do **not** build the v0 design. Review showed that the
 registered treatments cannot be faithfully run on this host as specified, and
 that the confirmatory study is probably beyond a solo operator. Section 5
-lists what has to be decided first, in order.
+lists the decisions; Section 5.1 records how they were taken. Under v0.1 the
+next steps are the containment build, the plumbing pilot and an arm-B-only
+planning probe, and a registered feasibility gate decides whether the study
+continues.
 
 ---
 
@@ -168,6 +172,23 @@ below use δ = 15 percentage points purely for illustration. n scales with
   which the protocol requires publishing. That would read as evidence of no
   value when it is evidence of nothing.
 
+**Correction to the fractional-score figure.** The figure of about 31 families
+assumes a graded score with σd near 0.3. Repository tasks often carry only one
+to three fail-to-pass tests, which makes a fractional score close to binary,
+so that figure is optimistic. v0.1 therefore replaces the assumed variance
+with one measured by an arm-B-only replicate probe. Running the same task in
+both arms removes variant construction and variant-difficulty noise, and it is
+the main source of any variance reduction.
+
+**What the registered gate implies.** With δ = 0.15 and the cap of 40 tasks,
+the probe's replicate-difference variance must be at most about 0.063 at
+k = 8 probe tasks (about 0.083 at k = 20). For near-binary scores that means
+two runs of the same arm-B setup must agree on almost every probe task: at
+k = 8, a single disagreement exceeds it. Run-to-run disagreement of that size
+is common for live agents, so the most likely outcome is a feasibility stop,
+reached for the cost of the probe rather than a confirmatory study. More probe
+tasks give a tighter estimate.
+
 ## 3. Reusable pieces (corrected)
 
 | Need | Existing piece |
@@ -210,6 +231,22 @@ below use δ = 15 percentage points purely for illustration. n scales with
 | D5 | **Model access for isolated agents** | An isolated Claude child is metered-API only. Decide between a metered budget and a Codex-only harness, whose model identity is not reported on the exec path |
 | D6 | **Arm C's policy boundary** | Decide whether a setting that exists only inside the sealed experiment stack may disable pause gating and governance envelopes for C. The protocol forbids any production or agent-selectable switch |
 | D7 | **Exception to "no additional PostgreSQL"** | Per-arm, per-family stacks mean many Postgres instances. Record the waiver in the enrollment. If granted, add the same scoped rule to both `CLAUDE.md` and `AGENTS.md`: the prohibition sits in their shared contract, which `scripts/dev/check-shared-contract.sh` keeps byte-identical |
+
+### 5.1 Decisions taken (2026-10-01)
+
+The operator accepted the recommendations below. Items that change the study
+are registered in protocol v0.1; the rest are operating decisions for the
+build.
+
+| # | Decision |
+|---|---|
+| D1 | δ = 0.15. Infeasible above 40 tasks, above 150 logged build hours, or above a spend cap written into the probe record before the probe starts. Variance is measured, not assumed (protocol v0.1, feasibility gate) |
+| D2 | Amended to v0.1: (a) agent-invoked reconstruction; (b) arm B gains note handoff and a declared shared worktree; (c) D's review by an in-arm peer on the matched model, server-side reviewers disabled; (d) arms A and C dropped; (e) an arm-B-only planning probe on permanently ineligible tasks. Also: the same task runs in both arms |
+| D3 | Code-frozen adjudication on coded labels, a sealed arm mapping and a zero intervention budget; one operator disclosed in publication |
+| D4 | Per-episode containers with egress limited to the model endpoint and, in D, the episode's own stack; no host credentials, configuration or connectors |
+| D5 | Fixed at enrollment. Preferred: Codex CLI inside the containers with the model pinned in configuration and recorded as configured, since exec output does not report the serving model, and only its auth file mounted read-only. Check the provider's terms for subscription auth inside containers first. Fallback: the metered Claude API under a hard cap |
+| D6 | Moot: arm C is dropped |
+| D7 | Granted, scoped to Postgres inside experiment containers only, never on the host, destroyed with its volumes after each episode. The matching text in `CLAUDE.md` and `AGENTS.md` lands with the first change that creates such a stack, so the prohibition is not loosened while nothing needs it |
 
 ## 6. Side finding: local database trust
 
