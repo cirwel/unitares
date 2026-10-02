@@ -5,13 +5,17 @@ build on disk is the one for this checkout, builds otherwise, and on a failed
 build either falls back to what is on disk (lenient, every boot) or fails
 (--strict, deploys). These tests run the real script inside a scratch git
 checkout with `mix` and the CLI-repair helper stubbed. Like phx.digest, the
-`mix` stub rewrites the manifest with new content on every build.
+`mix` stub writes a digested file and a manifest naming it, with new content
+on every build.
 """
 
 from __future__ import annotations
 
+import fcntl
+import hashlib
 import os
 import subprocess
+import time
 from pathlib import Path
 
 
@@ -23,15 +27,18 @@ set -eu
 echo "$*" >> "$MIX_CALLS"
 case "$1" in
   assets.deploy)
+    sleep "${BUILD_SLEEP:-0}"
     [ "${BUILD_RC:-0}" -eq 0 ] || exit "$BUILD_RC"
-    mkdir -p priv/static
-    echo "{\\"digest\\": \\"$(date +%s)-$$-$RANDOM\\"}" > priv/static/cache_manifest.json
+    id="$(date +%s)-$$-$RANDOM"
+    mkdir -p priv/static/assets
+    echo "css $id" > "priv/static/assets/app-$id.css"
+    echo "{\\"latest\\": {\\"assets/app.css\\": \\"assets/app-$id.css\\"}}" > priv/static/cache_manifest.json
     ;;
   *) echo "unexpected mix $*" >&2; exit 99 ;;
 esac
 """
 
-GITIGNORE = "/_build/\n/priv/static/cache_manifest.json\n"
+GITIGNORE = "/_build/\n/priv/static/cache_manifest.json\n/priv/static/assets/\n"
 
 
 def _git(cwd: Path, *args: str) -> None:
@@ -83,6 +90,7 @@ def _run(app: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
         "PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}",
         "MIX_ENV": "prod",
         "MIX_CALLS": str(tmp / "mix-calls"),
+        "DIALECTIC_LIVE_ASSETS_LOCK_WAIT": "2",
         **env,
     }
     # Outside a checkout, git must not find an enclosing repository.
@@ -234,3 +242,129 @@ def test_strict_failure_fails_even_with_a_build_on_disk(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert "(--strict)" in proc.stderr
     assert not _stamp(app).exists()
+
+
+def test_missing_digested_file_rebuilds_despite_stamp(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    for digested in (app / "priv" / "static" / "assets").iterdir():
+        digested.unlink()
+    assert _run(app).returncode == 0
+    assert _builds(app) == 2
+
+
+def _lock(app: Path):
+    return open(app / "_build" / "assets-build.lock", "a")
+
+
+def test_held_lock_at_boot_serves_the_build_on_disk(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    with _lock(app) as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        proc = _run(app)
+    assert proc.returncode == 0, proc.stderr
+    assert "still holds" in proc.stderr
+    assert "serving the build already on disk" in proc.stderr
+    assert _builds(app) == 1
+
+
+def test_held_lock_fails_a_strict_build(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    with _lock(app) as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        proc = _run(app, "--strict")
+    assert proc.returncode == 1
+    assert "still holds" in proc.stderr
+    assert _builds(app) == 1
+
+
+def test_lock_is_released_when_the_build_exits(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    with _lock(app) as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
+
+
+def test_lock_is_held_for_the_whole_build(tmp_path: Path) -> None:
+    # perl takes the flock and exits; the lock must stay with the script's fd.
+    app = _app(tmp_path)
+    tmp = app.parent.parent.parent
+    env = {
+        **os.environ,
+        "PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "MIX_ENV": "prod",
+        "MIX_CALLS": str(tmp / "mix-calls"),
+        "BUILD_SLEEP": "3",
+    }
+    build = subprocess.Popen(
+        [str(app / "scripts" / "build-assets.sh")],
+        cwd=app,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        time.sleep(1.5)
+        with _lock(app) as probe:
+            try:
+                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                held = True
+            else:
+                held = False
+        assert held, "build lock was not held while the build ran"
+    finally:
+        assert build.wait(timeout=30) == 0
+
+
+def test_boot_that_waited_out_another_build_finds_it_current(
+    tmp_path: Path,
+) -> None:
+    # The stamp is checked after the lock is taken, so a boot that queued
+    # behind a deploy build does not build again.
+    app = _app(tmp_path)
+    tmp = app.parent.parent.parent
+    (app / "_build").mkdir()
+    held = _lock(app)
+    fcntl.flock(held, fcntl.LOCK_EX)
+    env = {
+        **os.environ,
+        "PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "MIX_ENV": "prod",
+        "MIX_CALLS": str(tmp / "mix-calls"),
+        "DIALECTIC_LIVE_ASSETS_LOCK_WAIT": "30",
+    }
+    boot = subprocess.Popen(
+        [str(app / "scripts" / "build-assets.sh")],
+        cwd=app,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        time.sleep(1)
+        # The "other build" finishes while the boot waits.
+        digested = app / "priv" / "static" / "assets" / "app-other.css"
+        digested.parent.mkdir(parents=True)
+        digested.write_text("css other\n")
+        _manifest(app).write_text(
+            '{"latest": {"assets/app.css": "assets/app-other.css"}}\n'
+        )
+        tree = subprocess.run(
+            ["git", "rev-parse", "HEAD:elixir/dialectic_live"],
+            cwd=app.parent.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        checksum = hashlib.sha256(_manifest(app).read_bytes()).hexdigest()
+        (app / "_build" / "assets.stamp").write_text(f"{tree} {checksum}\n")
+    finally:
+        held.close()
+    out, err = boot.communicate(timeout=30)
+    assert boot.returncode == 0, err
+    assert "build is current" in out
+    assert _builds(app) == 0
