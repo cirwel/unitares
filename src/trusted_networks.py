@@ -1,13 +1,13 @@
 """The networks this server treats as the operator's own.
 
-One definition, two readers: the REST and dashboard WebSocket access checks
-(``src/http_routes/access.py``) trust a caller whose peer address is in this
-set, and the local model endpoint classifier (``src/local_inference_env.py``)
-calls an endpoint ``local`` when its IP literal is in it. Keeping both on this
-module means "local" cannot mean two different things in one server.
+The REST and dashboard WebSocket access checks (``src/http_routes/access.py``)
+trust a caller whose peer address is in this set. It lives in its own module,
+not in the routes module, so that other server code can ask the same question
+without importing the web stack: the local model endpoint work builds on it
+next, so that "local" means one thing in one server.
 
-Stdlib only: the agent processes import ``src.local_inference_env``, which
-imports this, and neither may pull in the web stack.
+Stdlib only, for the same reason: a process that imports this must not pull in
+the web stack.
 """
 
 from __future__ import annotations
