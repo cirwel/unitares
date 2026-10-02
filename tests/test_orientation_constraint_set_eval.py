@@ -379,3 +379,29 @@ def test_render_arm_exposes_the_registered_manifest(scenarios):
     assert control.fact_tuples == treatment.fact_tuples
     assert control.fact_manifest_digest == treatment.fact_manifest_digest
     assert deepcopy(control.payload) == control.payload
+
+
+_ENROLL = ["enroll", "--output", "o.json", "--output-dir", "out", "--analyst-id", "a"]
+
+
+@pytest.mark.parametrize("name", [
+    "UNITARES_MODEL_BASE_URL",
+    "UNITARES_OLLAMA_BASE",
+    "UNITARES_OLLAMA_BASE_URL",
+])
+def test_enrollment_default_stays_ollama_specific_whatever_the_server_endpoint(monkeypatch, name):
+    """Enrollment reads Ollama's /api/tags and model digest, so the generic
+    model endpoint (or its older names) must not redirect its default."""
+    from scripts.eval import run_orientation_constraint_set as runner
+
+    monkeypatch.setenv(name, "http://127.0.0.1:8000/v1")
+    args = runner.parse_args(_ENROLL)
+    assert args.ollama_base == runner.DEFAULT_OLLAMA_BASE == "http://127.0.0.1:11434"
+
+
+def test_enrollment_ollama_base_flag_overrides_the_default(monkeypatch):
+    from scripts.eval import run_orientation_constraint_set as runner
+
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://127.0.0.1:8000/v1")
+    args = runner.parse_args([*_ENROLL, "--ollama-base", "http://gpu:11434"])
+    assert args.ollama_base == "http://gpu:11434"

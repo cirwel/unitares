@@ -79,14 +79,13 @@ DEFAULT_OLLAMA_BASE = "http://127.0.0.1:11434"
 
 
 def _configured_ollama_base() -> str:
-    """The server's model endpoint root when one is configured (new name or
-    alias, through the shared resolver), else this protocol's default."""
-    from src import local_inference_env as lie
-
-    names = (lie.MODEL_BASE_URL_ENV, *(a.old for a in lie.SETTING_ALIASES if a.new == lie.MODEL_BASE_URL_ENV))
-    if any((os.environ.get(n) or "").strip() for n in names):
-        return lie.ollama_base_url()
+    """This protocol's Ollama root. Enrollment reads Ollama's native registry
+    (/api/tags and the model digest), so the default stays Ollama-specific: the
+    server's generic model endpoint (UNITARES_MODEL_BASE_URL) may be another
+    kind of server. Pass --ollama-base to point at a non-default Ollama."""
     return DEFAULT_OLLAMA_BASE
+
+
 DEFAULT_MODEL = "gemma4:latest"
 
 

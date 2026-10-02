@@ -70,8 +70,12 @@ def extra_trusted_networks() -> tuple:
             continue
         nets.append(net)
     # Judge coverage on the collapsed union, so split entries count as one. An
-    # IPv4-mapped IPv6 entry trusts the IPv4 callers it maps (is_trusted_address
-    # matches both forms), so it counts toward the IPv4 union as well.
+    # IPv4-mapped IPv6 entry trusts the callers it maps when they arrive as
+    # ::ffff:a.b.c.d, which is how a dual-stack bind reports an IPv4 peer
+    # (is_trusted_address matches that form against both the entry and its IPv4
+    # equivalent). A native IPv4 peer, as an IPv4-only bind reports it, is
+    # matched by IPv4 entries only, not by a mapped one. The entry counts toward
+    # the IPv4 union as well, so the catch-all warning sees what it can trust.
     mapped_v4 = [
         ipaddress.ip_network((int(n.network_address) & 0xFFFFFFFF, n.prefixlen - 96))
         for n in nets

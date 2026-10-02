@@ -370,19 +370,33 @@ def test_detection_is_one_cached_version_probe(monkeypatch):
 
 
 def test_detection_says_no_for_a_server_without_the_route(monkeypatch):
+    # The .lan hosts classify external, so the probe uses the proxied opener;
+    # a local one would use the direct opener. Patch both and assert the mock
+    # ran, so the case cannot pass on a real (unreachable) request.
+    used = []
+
+    def patch_openers(fn):
+        def wrapped(url, timeout=0):
+            used.append(url)
+            return fn(url, timeout)
+
+        monkeypatch.setattr(env, "direct_urlopen", wrapped)
+        monkeypatch.setattr(env, "_proxied_urlopen", wrapped)
+
     def not_found(url, timeout=0):
         raise env.urllib.error.HTTPError(url, 404, "nf", {}, None)
 
-    monkeypatch.setattr(env, "direct_urlopen", not_found)
+    patch_openers(not_found)
     assert env.is_ollama_endpoint("http://vllm.lan:8000/v1") is False
-    monkeypatch.setattr(env, "direct_urlopen", lambda url, timeout=0: _Resp(b'{"object": "x"}'))
+    patch_openers(lambda url, timeout=0: _Resp(b'{"object": "x"}'))
     assert env.is_ollama_endpoint("http://other.lan:8000/v1") is False
 
     def silent(url, timeout=0):
         raise env.urllib.error.URLError("timed out")
 
-    monkeypatch.setattr(env, "direct_urlopen", silent)
+    patch_openers(silent)
     assert env.is_ollama_endpoint("http://nobody.lan:8000/v1") is False
+    assert len(used) == 3 and all(u.endswith("/api/version") for u in used)
 
 
 def test_a_busy_ollama_that_misses_the_budget_stays_ollama(monkeypatch):
@@ -1089,3 +1103,39 @@ def test_a_scoped_ipv6_literal_is_still_read_as_an_address(no_dns):
     assert env._ip_literal("fe80::1%eth0") is not None
     assert env._ip_literal("fe80::1%") is None  # an empty scope names nothing
     assert env._ip_literal("127.0.0.1") is not None
+
+
+@pytest.mark.parametrize("root, expect_direct", [
+    ("http://127.0.0.1:11434", True),
+    ("http://models.example.com:11434", False),
+])
+def test_version_probe_follows_the_proxy_policy_of_the_endpoint_class(monkeypatch, no_dns, root, expect_direct):
+    used = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"version": "0.1"}'
+
+    monkeypatch.setattr(env, "direct_urlopen", lambda *a, **k: used.append("direct") or Resp())
+    monkeypatch.setattr(env, "_proxied_urlopen", lambda *a, **k: used.append("proxied") or Resp())
+    assert env._probe_ollama_version(root, 0.1) is True
+    assert used == ["direct" if expect_direct else "proxied"]
+
+
+def test_the_bridge_reads_the_repo_wide_endpoint_as_the_server_does(monkeypatch):
+    from pathlib import Path
+
+    # ollama_bridge imports smolagents at module level, so exec only the helper.
+    source = (Path(__file__).parents[1] / "scripts/client/ollama_bridge.py").read_text()
+    namespace: dict = {}
+    exec(source[source.index("def _openai_base"):source.index("DEFAULT_OLLAMA_URL = (")], namespace)  # noqa: S102
+    base = namespace["_openai_base"]
+    for value in ("http://gpu:11434", "gpu:11434", "http://gpu:11434/", "http://gpu:11434/v1"):
+        monkeypatch.setenv("UNITARES_MODEL_BASE_URL", value)
+        assert base(value) == env.model_base_url() == "http://gpu:11434/v1"
