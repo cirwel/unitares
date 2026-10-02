@@ -99,9 +99,15 @@ guard and cannot constrain separate agent CLIs.
     - The default synthetic reviewer is a local model invoked on thesis
       submission (`dialectic/handlers.py:2538`, `:2993`).
     - The compose stack configures no review model.
-    - With no reviewer, D's reviews never complete. With one, it is a second
-      model whose tokens are spent server-side, which breaks the protocol's
-      matched-model and common-ceiling rules (protocol lines 53-63).
+    - With no reviewer, D's reviews never complete. The default synthetic
+      reviewer is a second model whose tokens are spent server-side, which
+      breaks the protocol's matched-model and common-ceiling rules (protocol
+      lines 53-63). This is a limit of that configuration, not of review as
+      such: with synthetic review off, a manual session leaves the reviewer
+      slot open (`dialectic/handlers.py:1637`) and an in-arm peer on the
+      matched model, charged to the common budget, can claim it by submitting
+      the antithesis (`:3308`). Nothing in v0 specifies that peer, which is
+      why D2(c) lists it as an amendment point.
   - **Effect receipts gate nothing.** `record_only` "observes without
     acquiring" (`http_router.ex:157-158`), and editing files in one's own
     worktree is not a governed effect.
