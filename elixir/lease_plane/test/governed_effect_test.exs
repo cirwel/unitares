@@ -10,6 +10,23 @@ defmodule UnitaresLeasePlane.BlockGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.FailingEffectFileOps do
+  @moduledoc false
+  # The commit write fails, and so does the restore: the effect quarantines.
+  def read(_path), do: {:error, :enoent}
+  def write(_path, _bytes), do: {:error, :eio}
+  def rm(_path), do: {:error, :eacces}
+end
+
+defmodule UnitaresLeasePlane.MarkFailsEffectRepo do
+  @moduledoc false
+  # The write lands but its committed mark does not: recovery commits forward.
+  defdelegate record_pre_image(id, sha, bytes, existed?), to: UnitaresLeasePlane.EffectRepo
+  def mark_committed(_id), do: {:error, :mark_unavailable}
+  defdelegate tombstone(id), to: UnitaresLeasePlane.EffectRepo
+  defdelegate quarantine(id), to: UnitaresLeasePlane.EffectRepo
+end
+
 defmodule UnitaresLeasePlane.GovernedEffectTest do
   # async: false — record_only now durably writes to the live audit.events
   # stream (contract §8). Each persisting test registers cleanup by key.
@@ -787,6 +804,68 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert lease_rows(surface) == [{true, "normal"}]
     end
 
+    test "a quarantined write keeps its lease instead of releasing a dirty surface" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "unitares-ge-quarantine-#{System.unique_integer([:positive])}"
+        )
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> LeaseTestHelpers.cleanup_surface(canonical(surface)) end)
+
+      set_file_write_flags(true)
+      put_test_env(:effect_file_ops, UnitaresLeasePlane.FailingEffectFileOps)
+
+      assert {:error, :rollback_failed} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => tracked_key(),
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "never lands\n"},
+                   "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000ae"}
+                 })
+               )
+
+      assert lease_rows(surface) == [{false, nil}]
+    end
+
+    test "a write awaiting its committed mark keeps its lease until recovery" do
+      path =
+        Path.join(
+          System.tmp_dir!(),
+          "unitares-ge-markdefer-#{System.unique_integer([:positive])}"
+        )
+
+      surface = "file://#{path}"
+
+      on_exit(fn ->
+        File.rm(path)
+        LeaseTestHelpers.cleanup_surface(canonical(surface))
+      end)
+
+      set_file_write_flags(true)
+      put_test_env(:effect_repo, UnitaresLeasePlane.MarkFailsEffectRepo)
+
+      assert {:ok, %{result: %{mark_deferred: true}}} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => tracked_key(),
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "landed\n"},
+                   "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000af"}
+                 })
+               )
+
+      assert File.read!(path) == "landed\n"
+      assert lease_rows(surface) == [{false, nil}]
+    end
+
     # Same proposer, surface already held (a concurrent effect or a direct
     # lease): acquire returns that row as :idempotent. Sharing it would let the
     # first effect to finish release custody out from under the other.
@@ -1179,6 +1258,12 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       restore(:agent_orchestrator_bearer_token, prev_bearer)
       restore(:governance_url, prev_gov)
     end)
+  end
+
+  defp put_test_env(key, value) do
+    previous = Application.get_env(:lease_plane, key)
+    Application.put_env(:lease_plane, key, value)
+    on_exit(fn -> restore(key, previous) end)
   end
 
   defp restore(key, nil), do: Application.delete_env(:lease_plane, key)

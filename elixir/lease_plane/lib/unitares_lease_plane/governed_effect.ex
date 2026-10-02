@@ -808,59 +808,12 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
       case acquire_all(canon_leases, env.proposer_agent_uuid) do
         {:ok, acquired} ->
-          try do
-            # §6 veto re-checked HERE, on the commit path, with the lease held.
-            case governance_veto_client().check(env) do
-              :allow ->
-                # Insert the durable effects.payloads row BEFORE the commit so the
-                # executor's record_pre_image UPDATE (and crash recovery) have a row
-                # to act on. record_pre_image is UPDATE-only; without this the file
-                # would commit with no rollback/pre-image record.
-                case ensure_payload_row(effect_id, env, digest) do
-                  :ok ->
-                    result =
-                      FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
-
-                    {status, extra} = result_audit(result)
-
-                    _ =
-                      persist_execute(
-                        env,
-                        execute_audit_payload(effect_id, env, digest, status, extra)
-                      )
-
-                    result_to_reply(result, effect_id, env)
-
-                  {:error, :promotion_already_consumed} ->
-                    # The deterministic predecessor-derived effect id already
-                    # owns a payload row. This caller lost the atomic claim;
-                    # refuse before FileWriteExecutor can observe or mutate.
-                    {:error, :promotion_already_consumed}
-
-                  {:error, reason} ->
-                    _ =
-                      persist_execute(
-                        env,
-                        execute_audit_payload(effect_id, env, digest, "persist_failed", %{
-                          "error" => inspect(reason)
-                        })
-                      )
-
-                    {:error, :persist_failed}
-                end
-
-              blocked ->
-                payload =
-                  execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
-                    "veto_reason" => veto_reason(blocked)
-                  })
-
-                _ = persist_execute(env, payload)
-                {:error, :governance_blocked}
-            end
-          after
-            release_all(acquired)
-          end
+          # No `after`: an exception leaves the leases to the TTL reaper, the
+          # contract's crash path (§4), instead of releasing a surface whose
+          # state is unknown.
+          {reply, custody} = under_custody(env, effect_id, digest, canon_leases)
+          if custody == :release, do: release_all(acquired)
+          reply
 
         {:error, :held_by_other} ->
           {:error, :lease_held}
@@ -871,6 +824,67 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       end
     end
   end
+
+  # Runs with every required lease held. Returns the reply plus what to do with
+  # the leases afterwards.
+  defp under_custody(env, effect_id, digest, canon_leases) do
+    # §6 veto re-checked HERE, on the commit path, with the lease held.
+    case governance_veto_client().check(env) do
+      :allow ->
+        # Insert the durable effects.payloads row BEFORE the commit so the
+        # executor's record_pre_image UPDATE (and crash recovery) have a row
+        # to act on. record_pre_image is UPDATE-only; without this the file
+        # would commit with no rollback/pre-image record.
+        case ensure_payload_row(effect_id, env, digest) do
+          :ok ->
+            result =
+              FileWriteExecutor.apply_effect(effect_id, env.payload, canon_leases)
+
+            {status, extra} = result_audit(result)
+
+            _ =
+              persist_execute(
+                env,
+                execute_audit_payload(effect_id, env, digest, status, extra)
+              )
+
+            {result_to_reply(result, effect_id, env), custody_after(result)}
+
+          {:error, :promotion_already_consumed} ->
+            # The deterministic predecessor-derived effect id already
+            # owns a payload row. This caller lost the atomic claim;
+            # refuse before FileWriteExecutor can observe or mutate.
+            {{:error, :promotion_already_consumed}, :release}
+
+          {:error, reason} ->
+            _ =
+              persist_execute(
+                env,
+                execute_audit_payload(effect_id, env, digest, "persist_failed", %{
+                  "error" => inspect(reason)
+                })
+              )
+
+            {{:error, :persist_failed}, :release}
+        end
+
+      blocked ->
+        payload =
+          execute_audit_payload(effect_id, env, digest, "governance_blocked", %{
+            "veto_reason" => veto_reason(blocked)
+          })
+
+        _ = persist_execute(env, payload)
+        {{:error, :governance_blocked}, :release}
+    end
+  end
+
+  # Keep custody, leaving the leases to the TTL reaper, when the surface is not
+  # known clean: a failed restore quarantined it (§3 note 3), or a durable write
+  # still awaits its committed mark and recovery reconciles it by hash.
+  defp custody_after({:rejected, :rollback_failed}), do: :hold
+  defp custody_after({:committed, %{mark_deferred: true}}), do: :hold
+  defp custody_after(_), do: :release
 
   # Durable row for the commit path only — a dry-run writes nothing and needs no
   # rollback row, so it would otherwise leave an orphan for recovery to reconcile.
