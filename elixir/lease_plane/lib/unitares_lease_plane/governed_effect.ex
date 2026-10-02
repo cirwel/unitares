@@ -936,8 +936,16 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       }
 
       case Repo.acquire(params) do
-        {:ok, lease, _} ->
+        {:ok, lease, :new} ->
           {:cont, {:ok, [lease | acc]}}
+
+        # The proposer already holds this surface, through another in-flight
+        # effect or a lease it took directly. Custody must belong to this effect
+        # alone (a different key on the same exclusive surface is lease_held),
+        # and release_all must never close a lease this call did not open.
+        {:ok, _lease, :idempotent} ->
+          release_all(acc)
+          {:halt, {:error, :held_by_other}}
 
         {:error, :held_by_other, _} ->
           release_all(acc)
@@ -950,9 +958,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end)
   end
 
-  # 'normal' is the holder returning its own in-hand lease (migration 056), which
-  # this is on every path: done, blocked, failed, or rolling back a partial
-  # acquire. Any other string fails surface_leases_release_reason_check, the
+  # Only leases acquire_all opened fresh reach here. 'normal' is the holder
+  # returning its own in-hand lease (migration 056), which this is on every
+  # path: done, blocked, failed, or rolling back a partial acquire. Any other string fails surface_leases_release_reason_check, the
   # lease stays active, and the TTL reaper later mislabels it reaped_remote_ttl.
   defp release_all(leases) do
     Enum.each(leases, fn lease ->

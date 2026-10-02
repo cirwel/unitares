@@ -786,6 +786,44 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute File.exists?(path)
       assert lease_rows(surface) == [{true, "normal"}]
     end
+
+    # Same proposer, surface already held (a concurrent effect or a direct
+    # lease): acquire returns that row as :idempotent. Sharing it would let the
+    # first effect to finish release custody out from under the other.
+    test "a surface the proposer already holds is lease_held and its lease is left alone" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-preheld-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+      proposer = "00000000-0000-0000-0000-0000000000ad"
+
+      on_exit(fn -> LeaseTestHelpers.cleanup_surface(canonical(surface)) end)
+
+      assert {:ok, _, :new} =
+               UnitaresLeasePlane.Repo.acquire(%{
+                 surface_id: canonical(surface),
+                 holder_agent_uuid: proposer,
+                 holder_kind: "remote_heartbeat",
+                 ttl_s: 300
+               })
+
+      set_file_write_flags(true)
+
+      assert {:error, :lease_held} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => tracked_key(),
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "never written\n"},
+                   "proposer" => %{"agent_uuid" => proposer}
+                 })
+               )
+
+      refute File.exists?(path)
+      assert lease_rows(surface) == [{false, nil}]
+    end
   end
 
   describe "execute / agent_spawn (first execute slice)" do
