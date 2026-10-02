@@ -35,7 +35,7 @@ These values bake one operator's environment into code that ships to others. Eac
 | ✅ resolved | `scripts/ops/start_unitares.sh` | 37 | Prints `https://gov.cirwel.org/v1/tools` example | Generic `https://your-host.example/v1/tools` |
 | ✅ resolved | `scripts/ops/start_unitares.sh` | 121 | Prints `Tunnel: https://gov.cirwel.org/mcp/` unconditionally | Conditional print guarded by `CLOUDFLARE_TUNNEL_HOSTNAME` |
 | ✅ resolved | `scripts/ops/start_server.sh` | 60 | Same `gov.cirwel.org` example string | Generic example |
-| ✅ resolved | `src/http_routes/access.py` | `_TRUSTED_NETWORKS` | Tailscale CGNAT range `100.64.0.0/10` built into the local-posture auth bypass (once judged fine as "the whole Tailscale spec"; it trusted one operator's network layout on every install) | Built-in set is loopback + RFC1918; an operator adds overlay ranges with `UNITARES_TRUSTED_NETWORKS` |
+| ✅ resolved | `src/trusted_networks.py` | `BUILTIN_TRUSTED_NETWORKS` | Tailscale CGNAT range `100.64.0.0/10` built into the local-posture auth bypass (once judged fine as "the whole Tailscale spec"; it trusted one operator's network layout on every install) | Built-in set is loopback + RFC1918; an operator adds overlay ranges with `UNITARES_TRUSTED_NETWORKS` |
 | ⏸ deferred | `scripts/ops/health_watchdog.sh` | 28 | Hardcoded Pi Tailscale IP `100.79.215.83` | See *deferred rationale* below |
 | ✅ resolved | `requirements-core.txt` | 22 | Comment example uses `https://gov.cirwel.org/v1/tools` | Generic example |
 | ✅ resolved | `scripts/ops/com.unitares.ipv6-loopback-proxy.plist.template` | 33 | Hardcoded `/Users/<operator>/projects/unitares/scripts/ops/ipv6_loopback_proxy.py` | `__UNITARES_ROOT__` + `__PYTHON3__` placeholders; install header shows `sed` substitution |

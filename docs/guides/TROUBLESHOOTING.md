@@ -272,11 +272,11 @@ The only place to "allow all" for the injected server is the **environment's per
 - `consult` fails with `Standard advisory consultation is unavailable` and the code `MODEL_PROVIDER_UNAVAILABLE`.
 - `request_review` records the thesis, but no reviewer takes it.
 
-**Cause:** No model is reachable. UNITARES bundles none; `consult` and the local reviewer use the Ollama server and model named by `UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL`. On a fresh install neither is set, which is expected: reviews then wait for a peer or the operator.
+**Cause:** No model is reachable. UNITARES bundles none; `consult` and the local reviewer use the model server and model named by `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` (any OpenAI-compatible server; Ollama is the tested one). On a fresh install neither is set, which is expected: reviews then wait for a peer or the operator.
 
 **Solutions:**
 
-1. From a Docker checkout, run `./scripts/unitares model`. It lists the models your Ollama has, writes the choice to `.env`, rebuilds the server, and checks that the server reaches the model.
+1. From a Docker checkout, run `./scripts/unitares model`. It lists the models your model server has, writes the choice to `.env`, rebuilds the server, and checks that the server reaches the model.
 2. If the model is set but still unreachable from Docker on Linux, Ollama is listening only on 127.0.0.1: set `OLLAMA_HOST=0.0.0.0` for the Ollama service and allow port 11434 from the Docker bridge only.
 3. If `consult` reports a missing dependency instead, the image predates the model client: `docker compose up -d --build governance-mcp`.
 

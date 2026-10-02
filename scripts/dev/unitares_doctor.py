@@ -182,6 +182,8 @@ class Status(str, Enum):
     FAIL = "fail"
     WARN = "warn"
     SKIP = "skip"
+    # A note for the operator, never a finding: nothing is wrong yet.
+    INFO = "info"
 
 
 @dataclass
@@ -3649,6 +3651,130 @@ def check_forced_release_transform(db_url: str) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Local model endpoint
+# ---------------------------------------------------------------------------
+
+
+def _local_inference_env(repo_root: Path):
+    """``src.local_inference_env`` (stdlib only), or None if it cannot load.
+
+    The doctor reads the same resolver and alias table as the server, so it
+    cannot describe a different endpoint than the one the server would use.
+    It sees THIS process's environment: run it where the server's settings are
+    exported (a source install's shell), or it reports what it can see.
+    """
+    try:
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from src import local_inference_env
+        return local_inference_env
+    except Exception:
+        return None
+
+
+def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
+    """Does the configured model endpoint answer ``GET {base}/models`` and list
+    the configured model?
+
+    SKIPs when this environment names no endpoint or model (the server then
+    uses Ollama on localhost, which the doctor does not assume is installed)
+    and when the endpoint does not answer: an unreachable endpoint is an
+    install choice the doctor cannot see, not a broken install.
+    """
+    name, mode = "model_endpoint", "local"
+    lie = _local_inference_env(repo_root)
+    if lie is None:
+        return CheckResult(name, mode, Status.SKIP, "src/local_inference_env.py could not be loaded")
+
+    def _named(new: str) -> bool:
+        return any(
+            os.environ.get(n, "").strip()
+            for n in (new, *(a.old for a in lie.aliases_for(new)))
+        )
+
+    base_named = _named(lie.MODEL_BASE_URL_ENV)
+    model_named = _named(lie.MODEL_ENV)
+    if not (base_named or model_named):
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no model endpoint configured here (set {lie.MODEL_BASE_URL_ENV} and "
+            f"{lie.MODEL_ENV}; the server default is {lie.DEFAULT_MODEL_BASE_URL})",
+        )
+
+    base = lie.model_base_url()
+    model = lie.default_local_model()
+    shown = lie.display_url(base)
+    privacy = lie.classify_endpoint(base).privacy
+    try:
+        # Reach the endpoint the way the server does: a local one directly,
+        # ignoring HTTP_PROXY, or a healthy local model can read as down.
+        opener = lie.direct_urlopen if privacy == lie.LOCAL else urllib.request.urlopen
+        with opener(base + "/models", timeout=timeout) as resp:
+            payload = json.load(resp)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # A named endpoint that does not answer is a problem with the
+        # configuration the operator chose (consult and reviews cannot work),
+        # not an optional feature left off, so it warns rather than skips.
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{shown}/models did not answer; the configured model server is "
+            "unreachable, so consult and local reviews cannot use it",
+            detail=str(e),
+        )
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{shown}/models answered, but not with an OpenAI-compatible model list",
+            detail=f"{lie.MODEL_BASE_URL_ENV} must be the base URL including /v1",
+        )
+    ids = sorted({m.get("id") for m in data if isinstance(m, dict) and isinstance(m.get("id"), str)})
+    if not model_named:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{shown} answers, but no model is named; the server falls back to "
+            f"{lie.DEFAULT_LOCAL_MODEL}, a default a later release removes",
+            detail=f"set {lie.MODEL_ENV} to one of: {', '.join(ids[:10]) or '(none listed)'}",
+        )
+    if model not in ids:
+        return CheckResult(
+            name, mode, Status.WARN,
+            f"{shown} does not list {model}",
+            detail=f"listed: {', '.join(ids[:10]) or '(none)'}",
+        )
+    return CheckResult(
+        name, mode, Status.PASS,
+        f"{shown} lists {model} (endpoint classified {privacy})",
+    )
+
+
+def check_model_setting_alias(repo_root: Path, old: str) -> "CheckResult | None":
+    """One INFO line while an older setting name is in use; nothing otherwise."""
+    lie = _local_inference_env(repo_root)
+    if lie is None:
+        return None
+    for alias in lie.SETTING_ALIASES:
+        if alias.old == old and os.environ.get(old, "").strip():
+            return CheckResult(
+                f"setting_alias:{old}", "local", Status.INFO,
+                f"{old} is an alias of {alias.new} until v{alias.removed_in}; "
+                f"rename it to {alias.new}",
+            )
+    return None
+
+
+def _model_alias_checks(repo_root: Path) -> list[Check]:
+    lie = _local_inference_env(repo_root)
+    if lie is None:
+        return []
+    return [
+        Check(f"setting_alias:{a.old}", "local",
+              lambda old=a.old: check_model_setting_alias(repo_root, old))
+        for a in lie.SETTING_ALIASES
+    ]
+
+
 def build_checks(
     repo_root: Path,
     db_url: str,
@@ -3695,6 +3821,8 @@ def build_checks(
               lambda: check_class_anchors_fresh(repo_root)),
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
+        Check("model_endpoint", "local", lambda: check_model_endpoint(repo_root)),
+        *_model_alias_checks(repo_root),
         Check("http_listening", "operator", check_http_listening),
         Check("http_health", "operator", check_http_health),
         Check("mcp_route_gate", "operator", check_mcp_route_gate),
@@ -3736,7 +3864,10 @@ def run_checks(checks: list[Check], mode: str) -> list[CheckResult]:
     results = []
     for c in selected:
         try:
-            results.append(c.fn())
+            result = c.fn()
+            # A check with nothing to say (an unused alias) returns None.
+            if result is not None:
+                results.append(result)
         except Exception as e:  # never crash the whole run
             results.append(CheckResult(c.name, c.mode, Status.FAIL,
                                        "check raised exception", detail=repr(e)))
@@ -3752,6 +3883,7 @@ _GLYPH = {
     Status.FAIL: ("✗", "\033[31m"),
     Status.WARN: ("⚠", "\033[33m"),
     Status.SKIP: ("·", "\033[90m"),
+    Status.INFO: ("i", "\033[36m"),
 }
 _RESET = "\033[0m"
 

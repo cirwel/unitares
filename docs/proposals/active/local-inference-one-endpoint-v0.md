@@ -73,8 +73,10 @@ The local lane becomes one OpenAI-compatible endpoint:
 | Setting | Meaning | Default |
 |---|---|---|
 | `UNITARES_MODEL_BASE_URL` | Base URL including `/v1` | derived from `UNITARES_OLLAMA_BASE` if set, else `http://localhost:11434/v1` |
-| `UNITARES_MODEL` | Model id the endpoint serves | `UNITARES_LLM_MODEL` if set, else none (see 7.2) |
+| `UNITARES_MODEL_ID` | Model id the endpoint serves | `UNITARES_LLM_MODEL` if set, else none (see 7.2) |
 | `UNITARES_MODEL_API_KEY_ENV` | Name of the variable that holds the endpoint's key, if it needs one | `UNITARES_MODEL_API_KEY` |
+
+The model setting is `UNITARES_MODEL_ID`, not `UNITARES_MODEL` as first drafted: `scripts/dev/with_checkin.py` already reads that name for a different purpose (#2571).
 
 The key is named indirectly, as the orchestrated reviewer's `external` backend
 already does (`UNITARES_DIALECTIC_EXTERNAL_API_KEY_ENV`), so a process that must
@@ -265,7 +267,7 @@ The orchestrated reviewer is started through a governed spawn whose
 environment becomes an audited effect record, so
 `orchestrator_dispatch.py` forwards configuration but never credential
 values. The same rule applies here. The dispatcher forwards
-`UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
+`UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` and `UNITARES_MODEL_API_KEY_ENV`
 (the variable's name), and the key's value must be provisioned in the
 orchestrator service's own environment, which the child inherits. With the
 value only in the governance server's environment, server calls succeed and
@@ -295,7 +297,7 @@ release note says what to set first. One rule orders them: no step may let a req
 `privacy='local'` reach an endpoint the server has not classified as local.
 
 1. **Settings, with the privacy check.** In one pull request:
-   - `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL` in `local_inference_env.py`,
+   - `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID` in `local_inference_env.py`,
      with the alias table, its expiry test and the doctor INFO line (2.1.1);
    - the endpoint classification and the `privacy='local'` refusal from 2.3,
      applied to every path that reads the setting, because this is the first
@@ -390,7 +392,7 @@ release note says what to set first. One rule orders them: no step may let a req
    reason instead of calling; the dispatcher does not spawn an orchestrated
    reviewer whose backend is `local` without a model; and the reviewer and
    resident processes check for a model at start and report the same reason. The release notes say that
-   deployments which relied on the implicit model must set `UNITARES_MODEL`
+   deployments which relied on the implicit model must set `UNITARES_MODEL_ID`
    (or the older `UNITARES_LLM_MODEL`) first, and that includes the original
    operator's deployment, which names none today. Agent processes that read
    the same resolver (the orchestrated reviewer's `local` backend, the local
@@ -434,7 +436,7 @@ in CI or a recorded manual run.
 ## 7. Decisions (operator, 2026-09-27)
 
 1. **Names.** The operator left this to the proposal. Decided:
-   `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL` and `UNITARES_MODEL_API_KEY_ENV`
+   `UNITARES_MODEL_BASE_URL`, `UNITARES_MODEL_ID` and `UNITARES_MODEL_API_KEY_ENV`
    become the documented names, and `UNITARES_OLLAMA_BASE`,
    `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` stay as aliases under
    the expiry rule in 2.1.1. A name containing `OLLAMA` tells an installer with

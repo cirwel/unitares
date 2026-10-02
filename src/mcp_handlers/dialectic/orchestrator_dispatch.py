@@ -24,10 +24,23 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from src.local_inference_env import ollama_base_url
+from src.local_inference_env import (
+    MODEL_BASE_URL_ENV,
+    MODEL_ENV,
+    default_local_model,
+    model_base_url,
+)
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
+
+# Classifier inputs the reviewer child must see exactly as this server does
+# (literal names, listed again in reviewer_config for the flag catalog).
+_CLASSIFIER_SETTINGS = (
+    "UNITARES_MODEL_LOCAL_HOSTS",
+    "UNITARES_MODEL_PRIVACY",
+    "UNITARES_TRUSTED_NETWORKS",
+)
 
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -160,9 +173,16 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         # claude/codex; only the CLI path and timeout are configuration.
         "UNITARES_ANTIGRAVITY_CLI",
         "UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S",
-        # The local Ollama host is forwarded below as this server's RESOLVED
-        # URL, not as raw names; only the model name passes through here.
-        "UNITARES_LLM_MODEL",
+        # The local model endpoint and model are forwarded below as this
+        # server's RESOLVED values. The classifier settings pass through as
+        # given, so the child classifies the endpoint (local or external) the
+        # way this server does; UNITARES_TRUSTED_NETWORKS is one of its inputs.
+        # Literal names (not the resolver's constants) so scripts/dev/
+        # flag_catalog.py can read this tuple; the settings-routing test in
+        # tests/test_local_inference_env.py keeps it in step with the list.
+        "UNITARES_MODEL_LOCAL_HOSTS",
+        "UNITARES_MODEL_PRIVACY",
+        "UNITARES_TRUSTED_NETWORKS",
         # The reviewer talks to gov-mcp through GovernanceClient. If that /mcp
         # gate is configured, the child needs the bearer or every call it makes
         # 401s — and the failure would look like a broken reviewer rather than
@@ -175,20 +195,23 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         if value:
             env[name] = value
 
-    # Local Ollama host: forward what THIS server resolved (src/local_inference_env.py),
-    # under both names, rather than the raw values. The child lets
-    # UNITARES_OLLAMA_BASE win over the alias, so forwarding raw names would let a
-    # canonical value the child inherits from the orchestrator daemon outrank an
-    # alias-only server setting and put the reviewer on a different host than the
-    # server. Only when the server has either name set: otherwise the child keeps
-    # whatever the orchestrator provides, as before.
-    if any(
-        os.environ.get(name, "").strip()
-        for name in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL")
-    ):
-        resolved_root = ollama_base_url()
-        env["UNITARES_OLLAMA_BASE"] = resolved_root
-        env["UNITARES_OLLAMA_BASE_URL"] = resolved_root
+    # The classifier inputs are forwarded even when empty. The orchestrator
+    # merges this env OVER its own inherited environment, so an omitted key
+    # would let the child keep a stale value (say UNITARES_MODEL_PRIVACY=local)
+    # and classify the endpoint differently from this server. An empty value
+    # reads as unset in local_inference_env, which is what this server used.
+    for name in _CLASSIFIER_SETTINGS:
+        env[name] = os.environ.get(name, "")
+
+    # Local model endpoint and model: always forward what THIS server
+    # resolved (src/local_inference_env.py), defaults included, under the new
+    # names. The child runs this release, so the new names outrank any older
+    # or stale value it would otherwise inherit from the orchestrator daemon's
+    # environment. Forwarding only explicit settings let a server on defaults
+    # spawn a reviewer that used the orchestrator's own endpoint, which could
+    # classify local and receive a thesis the server never classified.
+    env[MODEL_BASE_URL_ENV] = model_base_url()
+    env[MODEL_ENV] = default_local_model()
 
     # NB: we deliberately do NOT forward UNITARES_DIALECTIC_BEAM_RESOLUTION into
     # the reviewer's env. The reviewer submits its antithesis/synthesis via the

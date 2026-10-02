@@ -1280,7 +1280,7 @@ def test_model_no_docker_needs_no_stack(tmp_path):
     env["OLLAMA_HOST_URL"] = "http://127.0.0.1:9"   # nothing listens: discovery fails cleanly
     result = _cli(env, "model", "--no-docker", "--yes")
     assert "launchd service" not in result.stderr
-    assert "No Ollama answered" in result.stdout
+    assert "No model server answered" in result.stdout
 
 
 def test_psql_shim_runs_inside_the_database_container(tmp_path):

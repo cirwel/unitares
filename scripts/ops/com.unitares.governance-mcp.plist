@@ -186,11 +186,28 @@
              pi_anima_eisv,get_lumen_context. -->
         <key>UNITARES_TRUSTED_SUBSTRATE_MARKERS</key>
         <string></string>
-        <!-- Local model id for call_model (e.g. an Ollama tag on this host).
-             Set to a model you actually have pulled, or omit this key to fall
-             back to the server default. -->
-        <key>UNITARES_LLM_MODEL</key>
+        <!-- The local model endpoint: any OpenAI-compatible server, with /v1
+             in the URL. Empty = Ollama on this machine
+             (http://localhost:11434/v1). -->
+        <key>UNITARES_MODEL_BASE_URL</key>
+        <string></string>
+        <!-- Model id the endpoint serves (e.g. an Ollama tag on this host).
+             Set to a model you actually have, or omit this key to fall back
+             to the server default. UNITARES_LLM_MODEL is its older name, read
+             until v3.3.0. -->
+        <key>UNITARES_MODEL_ID</key>
         <string>YOUR_LOCAL_MODEL</string>
+        <!-- Hostnames of model servers on your own network, comma-separated.
+             A privacy='local' request is sent only to an endpoint the server
+             classifies local: loopback, host.docker.internal, an address in
+             the trusted networks above, or a name listed here. Never decided
+             from DNS. Empty lists none. -->
+        <key>UNITARES_MODEL_LOCAL_HOSTS</key>
+        <string></string>
+        <!-- local or external: overrides the classification (for your own
+             server on a public address). Empty = classify from the URL. -->
+        <key>UNITARES_MODEL_PRIVACY</key>
+        <string></string>
         <!-- Inference lanes beyond the local one. A host built from this
              template comes up with ONLY ollama:local reachable; the two keys
              below are what the other three lanes wait on. list_inference_hosts

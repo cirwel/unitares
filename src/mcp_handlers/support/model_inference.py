@@ -27,8 +27,19 @@ from .inference_registry import (
     host_for_routed_provider,
     inference_extensions,
     list_inference_hosts,
-    ollama_base_url,
     sha256_text as _sha256_text,
+)
+from src.local_inference_env import (
+    DEFAULT_OLLAMA_BASE,
+    display_url,
+    is_ollama_endpoint,
+    ollama_base_url,
+    normalize_ollama_base,
+    no_redirect_http_client,
+    ENDPOINT_NOT_LOCAL,
+    classify_endpoint,
+    local_refusal_message,
+    model_base_url,
 )
 from src.logging_utils import get_logger
 from src.mcp_handlers.context import get_context_resolved_agent_id
@@ -277,6 +288,37 @@ def _provider_timeout_s() -> float:
     return max(1.0, _call_model_timeout() - 5.0)
 
 
+def _configured_endpoint_is_ollama() -> bool:
+    """Whether Ollama-specific recovery advice applies to the configured endpoint:
+    it answered like Ollama, or it is the default Ollama address (a fresh
+    install whose Ollama is simply not running yet)."""
+    return (
+        normalize_ollama_base(ollama_base_url()) == DEFAULT_OLLAMA_BASE
+        or is_ollama_endpoint()
+    )
+
+
+def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
+    """The refusal for a local request whose configured endpoint is external."""
+    return InferenceOutcome.failed(
+        local_refusal_message(endpoint),
+        code=ENDPOINT_NOT_LOCAL,
+        category="validation_error",
+        details={"privacy": privacy, "endpoint_privacy": endpoint.privacy},
+        recovery={
+            "action": (
+                "The configured model endpoint is not on a network the "
+                "server treats as the operator's. Pass privacy='auto' "
+                "or 'cloud' to allow it, or reclassify the endpoint "
+                "with UNITARES_TRUSTED_NETWORKS (an address), "
+                "UNITARES_MODEL_LOCAL_HOSTS (a hostname) or "
+                "UNITARES_MODEL_PRIVACY=local."
+            ),
+            "related_tools": ["list_inference_hosts"],
+        },
+    )
+
+
 async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     """Run one standard advisory inference without an MCP response envelope."""
     if not OPENAI_AVAILABLE:
@@ -303,6 +345,15 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     privacy = request.privacy
     provider = request.provider
     host_id = request.host_id
+
+    if host_id == "ollama:local":
+        # This host id forces privacy='local' below. Classify from the URL
+        # before get_inference_host(), whose availability probe would open a
+        # connection to the endpoint: a local request contacts nothing
+        # external, not even to learn it is up.
+        requested_endpoint = classify_endpoint(model_base_url())
+        if not requested_endpoint.is_local:
+            return _endpoint_not_local_outcome(requested_endpoint, "local")
 
     if host_id:
         host = get_inference_host(str(host_id))
@@ -382,7 +433,13 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
 
     # An HF model id under provider="auto" requests the HF lane as plainly as
     # naming the provider does.
-    wants_hf = provider == "hf" or (provider == "auto" and _is_hf_model_id(model))
+    # An explicit privacy="local" outranks that inference: the id stays a model
+    # name for the local endpoint (vLLM and others serve HF-style ids), and the
+    # prompt never reaches the external lane the id happens to resemble.
+    explicit_local = privacy_stated and privacy == "local"
+    wants_hf = provider == "hf" or (
+        provider == "auto" and _is_hf_model_id(model) and not explicit_local
+    )
 
     if privacy_stated and privacy == "local" and provider == "hf":
         return InferenceOutcome.failed(
@@ -401,12 +458,23 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             },
         )
 
+    # Set on the local route: where the configured endpoint sits (from its URL).
+    local_endpoint = None
+
     # Privacy routing: local unless the caller asked for a lane that is not.
     if provider == "ollama" or (privacy == "local" and not wants_hf):
         # Route to Ollama (local). Model names pass through verbatim so
         # callers get a clean 404 if the model isn't pulled — no silent
         # aliasing to a model that may also be absent.
-        base_url = ollama_base_url() + "/v1"  # Ollama OpenAI-compatible API
+        base_url = model_base_url()  # OpenAI-compatible base, /v1 included
+        # Classified on every use of the local route, not only under
+        # privacy='local': the inference record reports where the prompt went.
+        local_endpoint = classify_endpoint(base_url)
+        if privacy == "local":
+            # privacy='local' (stated or defaulted) is a promise about where the
+            # prompt goes. Checked from the URL alone, before any request.
+            if not local_endpoint.is_local:
+                return _endpoint_not_local_outcome(local_endpoint, privacy)
         if model == "auto":
             model = default_local_model()
         api_key = "ollama"  # Dummy key - Ollama ignores it but OpenAI SDK requires non-None
@@ -454,7 +522,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
 
         if ollama_available:
             # Prefer Ollama (local, free, no token needed)
-            base_url = ollama_base_url() + "/v1"
+            base_url = model_base_url()
+            local_endpoint = classify_endpoint(base_url)
             api_key = "ollama"
             model = default_local_model() if model == "auto" else model
             provider = "ollama"
@@ -471,6 +540,22 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                     model = f"{model}:fastest"
                 provider = "hf"
                 logger.info(f"Auto-selected Hugging Face: {model}")
+            elif not await asyncio.to_thread(_configured_endpoint_is_ollama):
+                configured = display_url(model_base_url())
+                return InferenceOutcome.failed(
+                    f"No provider available. The model server at {configured} is not "
+                    "reachable and HF_TOKEN is not configured.",
+                    code="MISSING_CONFIG",
+                    category="system_error",
+                    recovery={
+                        "action": (
+                            f"Start the model server at {configured} or check "
+                            "UNITARES_MODEL_BASE_URL, or set HF_TOKEN for the "
+                            "Hugging Face fallback"
+                        ),
+                        "related_tools": ["health_check", "list_inference_hosts"],
+                    },
+                )
             else:
                 return InferenceOutcome.failed(
                     "No provider available. Ollama not running and HF_TOKEN not configured.",
@@ -498,7 +583,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     try:
         started = time.monotonic()
 
-        logger.debug(f"Calling model '{model}' via {base_url} for task_type='{task_type}'")
+        logger.debug(f"Calling model '{model}' via {display_url(base_url)} for task_type='{task_type}'")
 
         # Use AsyncOpenAI rather than an executor-wrapped sync client. The
         # latter keeps running after task cancellation, so a cold or wedged
@@ -510,6 +595,13 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             api_key=api_key,
             timeout=request.timeout_s,
             max_retries=0,
+            # Never follow a redirect, and never send a local endpoint's
+            # prompt through an environment proxy (no_redirect_http_client).
+            # The Hugging Face router and an external endpoint keep the
+            # environment's proxy.
+            http_client=no_redirect_http_client(
+                local=local_endpoint is not None and local_endpoint.is_local
+            ),
         )
         try:
             async with asyncio.timeout(request.timeout_s):
@@ -644,6 +736,21 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             ),
             "warnings": [],
         }
+        if (
+            provider == "ollama"
+            and local_endpoint is not None
+            and not local_endpoint.is_local
+        ):
+            # The registry's ollama:local record describes the default, loopback
+            # endpoint. A configured endpoint that classifies external received
+            # this prompt, so the record must say so rather than claim local.
+            inference["privacy_class"] = "external"
+            inference["cost_class"] = "unknown"
+            inference["warnings"].append(
+                "local_route_endpoint_external: the configured model endpoint "
+                f"({local_endpoint.host}) is not on a network the server treats "
+                "as the operator's"
+            )
         
         return InferenceOutcome(
             response=result_text,
@@ -676,18 +783,31 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             and any(marker in error_msg.lower() for marker in ("connection refused", "connection error", "failed to establish", "connect"))
         ):
             error_code = "MODEL_PROVIDER_UNAVAILABLE"
-            recovery_hint = (
-                "Ollama is not reachable. Start Ollama, or explicitly opt into fallback "
-                "routing with privacy='auto' or privacy='cloud' and provider='hf'."
-            )
+            if await asyncio.to_thread(_configured_endpoint_is_ollama):
+                recovery_hint = (
+                    "Ollama is not reachable. Start Ollama, or explicitly opt into fallback "
+                    "routing with privacy='auto' or privacy='cloud' and provider='hf'."
+                )
+            else:
+                recovery_hint = (
+                    f"The model server at {display_url(base_url)} is not reachable. Start it, or check "
+                    "UNITARES_MODEL_BASE_URL; or opt into fallback routing with "
+                    "privacy='auto' or privacy='cloud' and provider='hf'."
+                )
         elif "not found" in error_msg.lower() or "invalid" in error_msg.lower():
             error_code = "MODEL_NOT_AVAILABLE"
-            if provider == "ollama":
+            if provider == "ollama" and await asyncio.to_thread(_configured_endpoint_is_ollama):
                 recovery_hint = (
                     f"Model '{model}' is not pulled on this host. "
                     f"Run `ollama list` to see available models, `ollama pull {model}` to fetch it, "
                     "or call with privacy='auto' to allow configured cloud fallback."
                 )
+            elif provider == "ollama":
+                recovery_hint = (
+                    f"Model '{model}' is not served by {display_url(base_url)}. List what it serves "
+                    "(GET {base}/models, or `unitares model`), then set UNITARES_MODEL_ID; "
+                    "or call with privacy='auto' to allow configured cloud fallback."
+                ).replace("{base}", display_url(base_url))
             else:
                 recovery_hint = (
                     f"Model '{model}' not available on this provider. "

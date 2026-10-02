@@ -119,7 +119,39 @@ INDIRECT_FLAGS = (
         "''",
         "Default variable holding the external reviewer's API key",
     ),
+    # src/local_inference_env.py reads its settings through one helper that
+    # also consults the alias table (ALIAS_TABLES below).
+    IndirectFlag(
+        "src/local_inference_env.py",
+        "MODEL_BASE_URL_ENV",
+        "''",
+        "OpenAI-compatible base URL of the local model endpoint, /v1 included; "
+        "default http://localhost:11434/v1",
+    ),
+    IndirectFlag(
+        "src/local_inference_env.py",
+        "MODEL_ENV",
+        "''",
+        "Model id the local model endpoint serves; default gemma4:latest",
+    ),
+    IndirectFlag(
+        "src/local_inference_env.py",
+        "MODEL_LOCAL_HOSTS_ENV",
+        "''",
+        "Hostnames the model endpoint classifier treats as local, comma-separated",
+    ),
+    IndirectFlag(
+        "src/local_inference_env.py",
+        "MODEL_PRIVACY_ENV",
+        "''",
+        "local or external: overrides the model endpoint's classification",
+    ),
 )
+
+# Tables of older setting names still read in place of a new one until a named
+# release: (module path, table name). Each row is a call with three arguments
+# (old name, new name, removal release), each a string or a module constant.
+ALIAS_TABLES = (("src/local_inference_env.py", "SETTING_ALIASES"),)
 
 BINDING_READER_PATH = "src/http_routes/effects.py"
 BINDING_FLAG_CONSTANT = "_BINDING_FLAG"
@@ -391,6 +423,33 @@ def _merge_flag(target: Flag, source: Flag) -> None:
     target.sites.extend(source.sites)
 
 
+def _alias_rows(path: str, table: str, consts: dict[str, str]) -> list[tuple[str, str, str]]:
+    """Rows of one alias table, each (old, new, removal release)."""
+    tree = ast.parse((REPO / path).read_text(encoding="utf-8"))
+
+    def value(node: ast.expr) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in consts:
+            return consts[node.id]
+        raise RuntimeError(f"alias table {path}:{table} has a non-static entry")
+
+    for node in tree.body:
+        target = (
+            node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1
+            else node.target if isinstance(node, ast.AnnAssign) else None
+        )
+        if isinstance(target, ast.Name) and target.id == table and node.value is not None:
+            rows = []
+            for elt in getattr(node.value, "elts", []):
+                if not (isinstance(elt, ast.Call) and len(elt.args) == 3):
+                    raise RuntimeError(f"alias table {path}:{table} has a malformed row")
+                old, new, removed_in = (value(arg) for arg in elt.args)
+                rows.append((old, new, removed_in))
+            return rows
+    raise RuntimeError(f"alias table {path}:{table} is missing")
+
+
 def _pack_route_files() -> list[Path]:
     """Route-pack handler files the server imports by path from outside SCAN_DIRS.
 
@@ -447,6 +506,12 @@ def collect() -> dict[str, Flag]:
             for name, fl in c.flags.items():
                 tgt = flags.setdefault(name, Flag(name))
                 _merge_flag(tgt, fl)
+
+    for path, table in ALIAS_TABLES:
+        for old, new, removed_in in _alias_rows(path, table, module_constants.get(path, {})):
+            tgt = flags.setdefault(old, Flag(old))
+            tgt.add_read("''", f"{path}:0")
+            tgt.consider_purpose(f"Alias of {new} until v{removed_in}", priority=2)
 
     for indirect in INDIRECT_FLAGS:
         name = module_constants.get(indirect.path, {}).get(indirect.constant_name)

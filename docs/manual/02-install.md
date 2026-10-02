@@ -100,42 +100,91 @@ starts, so on a default install those calls fail and say the extension is not
 configured. `list_inference_hosts` reports it under
 `extensions.agent_orchestrator`. Nothing in this manual needs it.
 
-The quickest way is to run, from the checkout, once Ollama is installed and has
-a model pulled:
+The model is reached through one OpenAI-compatible endpoint, named by two
+settings:
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `UNITARES_MODEL_BASE_URL` | Base URL of the model server, including `/v1` | `http://localhost:11434/v1` (Ollama on the same machine) |
+| `UNITARES_MODEL_ID` | Model id the server serves | `gemma4:latest`, a default a later release removes |
+
+Ollama is the server these steps are tested with. Other servers that speak the
+same routes (vLLM, LM Studio, llama.cpp's server) can be named the same way,
+but they are not yet verified end to end. A URL with no path at all, such as
+`http://gpu-box:11434`, gets `/v1` added. A server that requires an API key is
+not supported yet: the setting for one comes in a later release.
+
+The quickest way is to run, from the checkout, once your model server is
+running and has a model:
 
 ```bash
 ./scripts/unitares model
 ```
 
-It lists the models your Ollama has, writes your choice to `.env`, rebuilds the
-server, and checks that the server can reach the model. `--help` shows the
-non-interactive flags; `--no-docker` prints the two settings for a source
-install instead. To run it as plain `unitares`, link it onto your `PATH` once:
-`ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
+It lists the models the server offers (`GET {base}/models`), writes your choice
+to `.env`, rebuilds the server, and checks that the server can reach the model.
+`--base-url` points it at a server other than Ollama on this machine. When the
+server is Ollama, it also gives Ollama's hints, such as `ollama pull`. `--help`
+shows the non-interactive flags; `--no-docker` prints the two settings for a
+source install instead. To run it as plain `unitares`, link it onto your `PATH`
+once: `ln -s "$PWD/scripts/unitares" ~/.local/bin/unitares`.
 
-To do the same by hand, install Ollama on the Docker host, pull a model, and
-name both in `.env`:
+To do the same by hand with Ollama on the Docker host, pull a model and name
+both in `.env`:
 
 ```bash
 ollama pull <your-model>
 cat >> .env <<'EOF'
-UNITARES_OLLAMA_BASE=http://host.docker.internal:11434
-UNITARES_LLM_MODEL=<your-model>
+UNITARES_MODEL_BASE_URL=http://host.docker.internal:11434/v1
+UNITARES_MODEL_ID=<your-model>
 EOF
 docker compose up -d --build governance-mcp
 ```
 
-`UNITARES_OLLAMA_BASE` is the Ollama root URL, without `/v1`; the older name
-`UNITARES_OLLAMA_BASE_URL` is still read when it is unset. On Docker Desktop the
+Inside the container, `localhost` is the container itself, so a server on the
+Docker host is reached as `host.docker.internal`. On Docker Desktop the
 container reaches the host's Ollama as is. On Linux, Ollama listens only on
 127.0.0.1 by default: set `OLLAMA_HOST=0.0.0.0` for the Ollama service and allow
 port 11434 from the Docker bridge, without exposing it beyond the machine,
 because Ollama has no authentication. `--build` matters on an existing
 install: the model client is installed when the image is built, and `up -d`
 alone keeps an image built before this step. If your `docker-compose.yml` has
-no `UNITARES_OLLAMA_BASE` line, the checkout predates this step. If it has one
-but `consult` reports a missing dependency, the image predates it; rebuild with
-`--build`.
+no `UNITARES_MODEL_BASE_URL` line, the checkout predates this step. If it has
+one but `consult` reports a missing dependency, the image predates it; rebuild
+with `--build`.
+
+Older names still work until v3.3.0: `UNITARES_OLLAMA_BASE` and
+`UNITARES_OLLAMA_BASE_URL` (an Ollama root URL, with or without `/v1`) for the
+endpoint, and `UNITARES_LLM_MODEL` for the model. The new name wins when both
+are set. `scripts/dev/unitares_doctor.py` prints one line for each older name
+it sees, with the name to use instead.
+
+**Where the prompt goes.** `consult` and `call_model` default to
+`privacy='local'`, and the in-process reviewer, check-in coaching and
+knowledge synthesis always count as local. The server sends those only to an
+endpoint it classifies as local, and it decides that from the URL alone,
+never from DNS:
+
+- an IP address is local when it is loopback, in a private RFC 1918 range, or
+  in a network listed in `UNITARES_TRUSTED_NETWORKS` (the same networks the
+  server's own access checks trust; list an IPv6 unique-local range there if
+  your model server uses one);
+- a hostname is local only when it is `localhost`, `host.docker.internal`, or
+  listed in `UNITARES_MODEL_LOCAL_HOSTS` (comma-separated). A Compose service
+  name such as `vllm`, or a machine on your network such as `gpu-box.lan`, is
+  local only once listed there;
+- `UNITARES_MODEL_PRIVACY=local` or `external` overrides both, for your own
+  server on a public address.
+
+Anything else is external, and a local request to it is refused before
+anything is sent, with the error `MODEL_ENDPOINT_NOT_LOCAL` naming the setting
+to change. A model on a Tailscale peer (a 100.64.0.0/10 address) is external
+until you add that range to `UNITARES_TRUSTED_NETWORKS`. On a source install
+that also lets callers from that network reach the REST API without a token;
+under Compose, callers arrive through the Docker bridge, so it changes only
+which model endpoints count as local.
+`consult(privacy='cloud_allowed')` and `call_model(privacy='auto')` may still
+use an external endpoint.
 
 ### Updating
 

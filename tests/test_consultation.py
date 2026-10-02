@@ -245,6 +245,33 @@ async def test_standard_cloud_allowed_is_local_first_auto(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cloud_allowed_accepts_an_external_configured_endpoint(monkeypatch):
+    """The caller permitted external processing and the record says external:
+    the response is returned, not discarded after the prompt was sent."""
+    standard = AsyncMock(return_value=_completed(privacy_class="external"))
+    monkeypatch.setattr(co, "run_model_inference", standard)
+
+    parsed = _payload(await co.handle_consult({
+        "brief": "Answer this",
+        "privacy": "cloud_allowed",
+    }))
+
+    assert parsed["success"] is True, parsed
+    assert parsed["delivery"]["external_processing"] is True
+
+
+@pytest.mark.asyncio
+async def test_local_consult_still_rejects_an_external_route(monkeypatch):
+    standard = AsyncMock(return_value=_completed(privacy_class="external"))
+    monkeypatch.setattr(co, "run_model_inference", standard)
+
+    parsed = _payload(await co.handle_consult({"brief": "Answer this", "privacy": "local"}))
+
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "CONSULT_PRIVACY_POSTCONDITION_FAILED"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("purpose", "standard_task", "thorough_task"),
     [

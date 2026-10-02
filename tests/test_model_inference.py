@@ -667,6 +667,29 @@ class TestHuggingFaceRouting:
         assert parsed["routed_via"] == "huggingface"
 
     @pytest.mark.asyncio
+    async def test_explicit_local_privacy_keeps_an_hf_style_model_id_off_the_hf_lane(self):
+        """An HF-style id under provider='auto' and an explicit privacy='local'
+        is a model name for the local endpoint: the prompt never reaches HF."""
+        mock_client_instance = MagicMock()
+        mock_client_instance.chat.completions.create.return_value = _make_mock_response()
+        env = {"HF_TOKEN": "hf_test_token"}
+        with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
+             patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance) as mock_openai, \
+             patch.dict("os.environ", env, clear=False):
+            from src.mcp_handlers.support.model_inference import handle_call_model
+            await handle_call_model({
+                "prompt": "Hello",
+                "provider": "auto",
+                "model": "Qwen/Qwen3-8B",
+                "privacy": "local",
+            })
+
+        mock_openai.assert_called_once()
+        call_kwargs = mock_openai.call_args[1]
+        assert "huggingface.co" not in call_kwargs["base_url"]
+        assert call_kwargs["api_key"] != "hf_test_token"
+
+    @pytest.mark.asyncio
     async def test_hf_strips_hf_prefix_from_model(self):
         """HF provider strips 'hf:' prefix from model name."""
         mock_client_instance = MagicMock()

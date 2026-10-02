@@ -37,11 +37,17 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import os
 import socket
+import threading
 import time
 from typing import Any
 from urllib.parse import urlparse
 
-from src.local_inference_env import default_local_model, ollama_base_url
+from src.local_inference_env import (
+    classify_endpoint,
+    default_local_model,
+    model_base_url,
+    ollama_base_url,
+)
 
 from . import host_availability
 from .host_adapter import (
@@ -71,9 +77,19 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+_SCHEME_DEFAULT_PORTS = {"https": 443, "http": 80}
+
+
 def _ollama_host_port() -> tuple[str, int]:
+    """Host and port the configured local endpoint's requests go to.
+
+    A URL with no port uses its scheme's default, the port the OpenAI client
+    will actually connect to (443 for https). 11434 is only the fallback for
+    a URL whose scheme names no default.
+    """
     parsed = urlparse(ollama_base_url())
-    return parsed.hostname or "localhost", parsed.port or 11434
+    port = parsed.port or _SCHEME_DEFAULT_PORTS.get((parsed.scheme or "").lower(), 11434)
+    return parsed.hostname or "localhost", port
 
 
 @dataclass(frozen=True)
@@ -110,15 +126,91 @@ _OLLAMA_PROBE_TTL_S = 5.0
 _ollama_probe_cache: dict[str, Any] = {"ts": 0.0, "available": False, "primed": False}
 
 
+_OLLAMA_PROBE_BUDGET_S = 0.5
+
+
+_resolve_lock = threading.Lock()
+# (host, port) -> [thread, result list, finished-at or None]. At most one
+# resolver thread exists per endpoint: a probe that finds one running joins it
+# instead of starting another, so a resolver that never answers costs one
+# thread. A lookup that finished after its caller gave up is kept for
+# _RESOLVE_REUSE_S, so a resolver that is merely slower than the probe budget
+# still lets the next probe connect instead of timing out forever.
+_resolve_inflight: dict[tuple[str, int], list] = {}
+_RESOLVE_REUSE_S = 30.0
+
+
+def _resolve_within(host: str, port: int, budget_s: float) -> list:
+    """``getaddrinfo`` bounded by ``budget_s``; an empty list when it is not
+    answered in time. getaddrinfo has no timeout of its own, and callers run
+    this probe on the event loop during auto routing, so a stalled resolver
+    must not hold them past the probe budget.
+    """
+    key = (host, port)
+    now = time.monotonic()
+    with _resolve_lock:
+        entry = _resolve_inflight.get(key)
+        if entry is not None and not entry[0].is_alive():
+            finished_at = entry[2]
+            if entry[1] and finished_at is not None and now - finished_at < _RESOLVE_REUSE_S:
+                return list(entry[1])
+            entry = None  # an old or empty answer: resolve again
+        if entry is None:
+            entry = [None, [], None]
+
+            def run(slot=entry) -> None:
+                try:
+                    slot[1].extend(socket.getaddrinfo(host, port, type=socket.SOCK_STREAM))
+                except Exception:
+                    pass
+                slot[2] = time.monotonic()
+
+            worker = threading.Thread(target=run, name="model-endpoint-resolve", daemon=True)
+            entry[0] = worker
+            _resolve_inflight[key] = entry
+            worker.start()
+    worker, result = entry[0], entry[1]
+    worker.join(budget_s)
+    if worker.is_alive():
+        return []
+    return list(result)
+
+
 def _probe_ollama_socket() -> bool:
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(0.5)
-        result = sock.connect_ex(_ollama_host_port())
-        sock.close()
-        return result == 0
-    except Exception:
+    """True when a TCP connection to the configured endpoint succeeds.
+
+    Family-neutral: an IPv6 endpoint (``http://[::1]:11434/v1``, an RFC 4193
+    address) is probed over IPv6, and a name that resolves to both families
+    is tried on each address in turn. This is an availability probe only;
+    whether the endpoint is local is decided from its URL, never from DNS.
+    """
+    host, port = _ollama_host_port()
+    # One budget for the whole probe, not per address: a name with several
+    # A/AAAA records must not stretch it to 0.5 s x the record count.
+    deadline = time.monotonic() + _OLLAMA_PROBE_BUDGET_S
+    addresses = _resolve_within(host, port, _OLLAMA_PROBE_BUDGET_S)
+    if not addresses:
         return False
+    for index, (family, socktype, proto, _canon, sockaddr) in enumerate(addresses):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        # Each address gets an equal share of what is left, so a blackholed
+        # first address (an unroutable AAAA, say) cannot starve a working one.
+        remaining /= len(addresses) - index
+        try:
+            sock = socket.socket(family, socktype, proto)
+        except Exception:
+            continue
+        try:
+            sock.settimeout(remaining)
+            if sock.connect_ex(sockaddr) == 0:
+                return True
+        except Exception:
+            pass
+        finally:
+            sock.close()
+    return False
 
 
 def _ollama_available() -> bool:
@@ -151,6 +243,9 @@ def _hf_token_present() -> bool:
 def _base_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
     hf_configured = _hf_token_present()
+    # The record describes the configured endpoint, not the loopback default:
+    # an endpoint that classifies external is neither local nor free.
+    local_route_is_local = classify_endpoint(model_base_url()).is_local
     return [
         InferenceHost(
             host_id="ollama:local",
@@ -159,16 +254,25 @@ def _base_hosts() -> list[InferenceHost]:
             transport="openai_compatible_http",
             configured=True,
             available=_ollama_available(),
-            privacy_class="local",
-            cost_class="local_free",
+            privacy_class="local" if local_route_is_local else "external",
+            cost_class="local_free" if local_route_is_local else "unknown",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "generation", "analysis"],
             models=[ollama_model],
             implementation_status="active",
-            accepts_host_id_from=["call_model"],
+            # host_id="ollama:local" forces privacy='local', so an endpoint
+            # that classifies external cannot be selected by host id; the
+            # record says so instead of advertising a call that is refused.
+            accepts_host_id_from=["call_model"] if local_route_is_local else [],
             notes=(
                 "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
+                if local_route_is_local
+                else "The configured model endpoint classifies external, so "
+                "host_id='ollama:local' (which requests local privacy) is refused. "
+                "Reach it with call_model(provider='ollama', privacy='auto' or "
+                "'cloud') or consult(privacy='cloud_allowed'), or reclassify it "
+                "with UNITARES_MODEL_LOCAL_HOSTS or UNITARES_TRUSTED_NETWORKS."
             ),
         ),
         InferenceHost(
