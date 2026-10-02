@@ -52,9 +52,21 @@ from smolagents import tool, ToolCollection, OpenAIServerModel, CodeAgent
 DEFAULT_MCP_URL = os.getenv("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 # This script's own setting first, then the repo-wide endpoint (the same
 # OpenAI-compatible base, /v1 included), then the local Ollama default.
+def _openai_base(value: str) -> str:
+    """The repo-wide endpoint as an OpenAI-compatible base: a scheme-less value
+    means http, and a URL with no path gets /v1, as the server reads it
+    (src/local_inference_env.model_base_url). This script runs apart from the
+    server, so it does not import that module."""
+    value = value.strip().rstrip("/")
+    if "://" not in value:
+        value = "http://" + value
+    scheme, _, rest = value.partition("://")
+    return value if "/" in rest else f"{scheme}://{rest}/v1"
+
+
 DEFAULT_OLLAMA_URL = (
     os.getenv("UNITARES_OLLAMA_URL")
-    or os.getenv("UNITARES_MODEL_BASE_URL")
+    or (_openai_base(os.environ["UNITARES_MODEL_BASE_URL"]) if os.getenv("UNITARES_MODEL_BASE_URL", "").strip() else "")
     or "http://127.0.0.1:11434/v1"
 )
 DEFAULT_MODEL = (
