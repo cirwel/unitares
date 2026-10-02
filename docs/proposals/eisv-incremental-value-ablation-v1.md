@@ -2,7 +2,7 @@
 
 - Status: draft; no cohort enrolled and no experiment scheduled
 - Study ID: `eisv-incremental-value-v1`
-- Protocol version: `0.3.0`
+- Protocol version: `0.3.1`
 - Dataset namespace: `eisv-incremental-value-v1`
 - Access policy: `eisv-incremental-access.v1`
 - Schema: `docs/evaluations/eisv-incremental-value/eisv-ablation-episode-v2.schema.json`
@@ -253,6 +253,59 @@ primitive producer with no governance-input overlap. `server_observation` alone
 does not establish independence: a server-authored governance verdict is still
 governance-derived. Agent-reported and governance-derived results may be
 retained for secondary analyses but cannot count toward the primary endpoint.
+
+### Admission of `external_signal` outcomes (0.3.1)
+
+On the maintainer deployment the only plausible primary-label source today is
+`audit.outcome_events` rows with `verification_source = 'external_signal'`,
+almost all of them `test_failed`. Three facts constrain their use.
+
+1. **The string is the stop rule's trusted anchor.**
+   `src/grounding/outcome_anchors.py` maps `external_signal` to
+   `TRUSTED_EXTERNAL`, and `scripts/analysis/eisv_ablation_matrix.py
+   --anchor-scope trusted` (its default) reads exactly that set. This study and
+   the [outcome-grounding stop rule](registered/eisv-outcome-grounding-stop-rule-v0.md)
+   would share a label channel.
+2. **The string spans more than one producer.** The anchor module records the
+   separation of operator correction, CI, and verified tool failure inside
+   `external_signal` as unfinished. A read-only count over the 90 days to
+   2026-10-01 found 617 `test_failed` rows with this source, 61 of them with
+   `detail.hard_exogenous = true`.
+3. **A row is not an episode.** Pilot collection is not enabled, so no row has
+   the pre-outcome snapshot, shadow-arm scores, or `substrate_id_hash` that
+   eligibility requires. Historical rows cannot be retrofitted into episodes,
+   and their count is not a capacity estimate.
+
+The following rules apply.
+
+- **Producer, not string.** `label_provenance.producer_class =
+  "external_system"` is assigned per named producer, never inferred from
+  `verification_source`. A producer (for example, CI results posted through the
+  operator-gated harness endpoint) is entered in the independence registry with
+  its emission path before any of its events counts toward the primary
+  endpoint. Until then its events are secondary-only, as for any new label type.
+- **Unresolved at window close.** A test failure counts toward the primary
+  endpoint only if it is still unresolved when the prediction window closes. A
+  passing run of the same test on the same task inside the window resolves it,
+  and the event is recorded as the secondary transient-failure outcome.
+- **Same channel, different process.** If primary labels come from the stop
+  rule's trusted anchor, this study is a different measurement process
+  (prospective frozen snapshots, the behavioral A2 baseline, Brier score, the
+  independence registry) over the same label channel. It is not a new label
+  channel. Its results are never pooled with the 2026-12-01 read or described
+  as a re-run of it. No Phase I primary result is published between 2026-11-15
+  and the posting of that read. Every report of this study states that its
+  labels share the stop rule's channel, whatever that read concludes.
+- **Operators are not independence units.** The maintainer host is expected to
+  resolve to few independence units, because its agents share one substrate
+  and co-develop the system being measured
+  ([deployment caveat](../operations/DEPLOYMENT_DATA_CAVEAT.md)). The count is
+  not yet measured, since no substrate hashes exist. If the power analysis
+  requires more units than one host supplies, they come from distinct
+  substrates through the federated exchange. A second operator on a shared
+  substrate or state domain adds no unit. A second substrate adds units only if
+  it shares no stateful producer and no declared `shared_state_domain` with the
+  first, whoever operates it.
 
 ## Secondary outcomes
 
@@ -666,6 +719,10 @@ invalid.
 
 ### Version history
 
+- `0.3.1` — adds admission rules for `external_signal` outcomes: producer-level
+  primary eligibility, unresolved-at-window-close for test failures, the shared
+  label channel with the outcome-grounding stop rule, and operator versus
+  substrate independence. Changes no estimand, arm, threshold, or result.
 - `0.3.0` — adds the signed, privacy-preserving federated pilot exchange and
   conservative cross-site independence/task linkage contract. Federation
   remains score-free and carries no confirmatory or policy authority.
