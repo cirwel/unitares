@@ -142,10 +142,12 @@ class HeartbeatConfig:
     # Turn inference
     turn_gap_seconds: float = 30.0           # Gap to consider new turn
 
-    # High-impact tools (always track modifications)
+    # High-impact tools (always track modifications). An entry is a tool name
+    # or "router:action" for one action of a router; the legacy names
+    # export_to_file and request_dialectic_review were removed on 2026-09-28.
     high_impact_tools: List[str] = field(default_factory=lambda: [
         'write', 'edit', 'bash',
-        'export_to_file', 'request_dialectic_review'
+        'export:file', 'dialectic:request', 'request_review'
     ])
 
 
@@ -174,7 +176,9 @@ class ActivityTracker:
                 )
         return self.activities[agent_id]
 
-    def track_tool_call(self, agent_id: str, tool_name: str) -> Tuple[bool, Optional[str]]:
+    def track_tool_call(
+        self, agent_id: str, tool_name: str, action: Optional[str] = None
+    ) -> Tuple[bool, Optional[str]]:
         """
         Track a tool call and check if governance should trigger.
 
@@ -198,7 +202,8 @@ class ActivityTracker:
                 activity.conversation_turns += 1
 
         # Track file modifications for high-impact tools
-        if tool_name in self.config.high_impact_tools:
+        high_impact = self.config.high_impact_tools
+        if tool_name in high_impact or (action and f"{tool_name}:{action}" in high_impact):
             activity.files_modified += 1
 
         # Check if should trigger

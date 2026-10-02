@@ -185,7 +185,7 @@ async def _handle_coherence_report_compute(arguments: Dict[str, Any]) -> Sequenc
                 f"Target agent '{target_agent_id}' not found or has no state",
                 recovery={
                     "action": "Ensure target agent exists and has been initialized",
-                    "related_tools": ["list_agents", "state_announce(action='query')"]
+                    "related_tools": ["agent(action='list')", "state_announce(action='query')"]
                 }
             )]
 

@@ -127,7 +127,9 @@ async def _bound_alias_call(name: str, arguments: dict):
 
 def test_the_example_and_note_scans_see_something():
     assert len(_router_examples()) > 10
-    assert any("observe(" in call for call in _migration_note_calls())
+    # The observe_agent alias whose note taught observe(...) went on
+    # 2026-09-28; the workflow aliases' notes still carry calls to scan.
+    assert _migration_note_calls()
 
 
 @pytest.mark.asyncio
@@ -154,7 +156,7 @@ async def test_describe_tool_observe_examples_pass_the_bound_alias_path():
 
     # common_patterns ride on the lite view; lite=false is the advertised
     # default, and the handler no longer assumes lite for in-process callers.
-    described = await handle_describe_tool({"tool_name": "observe_agent", "lite": True})
+    described = await handle_describe_tool({"tool_name": "observe", "action": "agent", "lite": True})
     common_patterns = json.loads(described[0].text)["common_patterns"]
     assert len(common_patterns) == 3
 
@@ -162,7 +164,8 @@ async def test_describe_tool_observe_examples_pass_the_bound_alias_path():
         parsed = _call_kwargs(example)
         assert parsed is not None
         name, kwargs = parsed
-        assert name == "observe_agent"
+        assert name == "observe"
+        assert kwargs["action"] == "agent"
         assert kwargs["target_agent_id"] == "my_agent"
 
         result = await _bound_alias_call(name, kwargs)

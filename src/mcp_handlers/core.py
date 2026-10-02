@@ -404,7 +404,7 @@ def unknown_agent_error(agent_id: str):
             "reason": (
                 "agent_id did not resolve to an onboarded identity. This is "
                 "a read, so no identity or state was created for it. Note "
-                "that list_agents redacts UUIDs for non-operator callers "
+                "that agent(action='list') redacts UUIDs for non-operator callers "
                 "and returns a display handle instead; a display handle is "
                 "not a valid agent_id here."
             ),
@@ -412,7 +412,7 @@ def unknown_agent_error(agent_id: str):
         recovery={
             "action": (
                 "Pass the agent's UUID. If you read the id from "
-                "list_agents and it came back with uuid_redacted=true, "
+                "agent(action='list') and it came back with uuid_redacted=true, "
                 "present an operator token (X-Unitares-Operator header) to "
                 "receive real UUIDs."
             ),

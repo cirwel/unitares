@@ -2,7 +2,6 @@
 
 from typing import Any, Dict, List, Optional
 
-from src.governance_glossary import EISV_INLINE_SUMMARY
 from src.tool_meta import tool_relationships
 from src.mcp_handlers.identity_bootstrap import SET_DISPLAY_NAME_CALL
 
@@ -28,7 +27,7 @@ from src.mcp_handlers.identity_bootstrap import SET_DISPLAY_NAME_CALL
 # alias removed in #1994, one surface over: that fix repaired what the alias
 # *dispatched* to and left what the deprecation block *says* untouched.
 # `direct_resume_if_safe` itself was removed on 2026-09-07, seven months after
-# its deprecation; `request_dialectic_review` is the one entry left.
+# its deprecation; `request_dialectic_review` followed on 2026-09-28.
 #
 # Guarded by SUPERSEDED_BY_TARGET_MISSING / MIGRATION_TARGET_MISSING in
 # scripts/dev/tool_edge_index.py and by
@@ -38,15 +37,9 @@ DEPRECATION_REGISTRY: Dict[str, Dict[str, str]] = {
     # when the operator settled that it is NOT deprecated: it is a first-class
     # low-friction tool in LITE_MODE_TOOLS and in the shared contract. Sharing
     # an implementation with knowledge(action='note') is not supersession.
-    "request_dialectic_review": {
-        "deprecated_since": "2026-01-29",
-        "superseded_by": "dialectic",
-        "migration": (
-            "Use dialectic(action='request', issue_description='...') instead. "
-            "For a solo recovery that needs no peer, self_recovery(action='review', "
-            "reflection='...') is the lighter path."
-        ),
-    },
+    # request_dialectic_review, the last entry, went with its alias on
+    # 2026-09-28: the name no longer dispatches, so there is nothing callable
+    # to describe as deprecated. Use dialectic(action='request').
 }
 
 
@@ -235,44 +228,13 @@ WORKFLOWS: Dict[str, List[str]] = {
 # warned that an argument-less call may mint and persist a new identity, and
 # the `dialectic` entry was a hand-maintained action list that had drifted
 # twice. test_override_table_carries_no_advertised_name pins the scope.
+# Since 2026-09-28 it holds only get_server_info: every other entry described
+# a pre-consolidation name whose alias was removed.
 TOOL_DESCRIPTION_OVERRIDES: Dict[str, str] = {
-    "observe_agent": (
-        "👁️ View agent state and patterns (collaborative awareness). "
-        f"{EISV_INLINE_SUMMARY}"
-    ),
-    "compare_agents": (
-        f"🔍 Compare state patterns across agents. {EISV_INLINE_SUMMARY}"
-    ),
-    "compare_me_to_similar": (
-        f"🔍 Compare your state with similar agents. {EISV_INLINE_SUMMARY}"
-    ),
-    "detect_anomalies": (
-        f"🚨 Scan for unusual patterns across fleet. {EISV_INLINE_SUMMARY}"
-    ),
-    "aggregate_metrics": (
-        f"📈 Fleet-level health overview. {EISV_INLINE_SUMMARY}"
-    ),
-    "list_agents": "👥 List all agents with lifecycle metadata",
-    "get_agent_metadata": "📋 Full metadata for single agent (accepts UUID or label)",
-    "update_agent_metadata": "✏️ Update tags and notes",
-    "archive_agent": "📦 Archive for long-term storage",
-    "delete_agent": "🗑️ Delete agent (protected for pioneers)",
-    "get_system_history": (
-        f"📜 Export time-series history (inline). {EISV_INLINE_SUMMARY}"
-    ),
-    "export_to_file": "💾 Export history to JSON/CSV file",
-    "reset_monitor": "🔄 Reset agent state",
+    # The one dispatch-only alias left after the 2026-09-28 cut (kept for the
+    # Wave 3a BEAM route); without this it would describe itself with its
+    # migration note.
     "get_server_info": "ℹ️ Server version, PID, uptime, health",
-    # Knowledge Graph (Fast, indexed, transparent)
-    "store_knowledge_graph": "💡 Store knowledge discovery in graph (fast, non-blocking)",
-    "get_knowledge_graph": "📚 Get all knowledge for an agent (fast index lookup)",
-    "list_knowledge_graph": "📊 List knowledge graph statistics (full transparency)",
-    "update_discovery_status_graph": "🔄 Update discovery status or content/metadata on an existing discovery",
-    "cleanup_stale_locks": "🧹 Clean up stale lock files from crashed/killed processes",
-    "check_calibration": "📏 Check calibration of confidence estimates",
-    "update_calibration_ground_truth": "📝 Record external truth signal for calibration (optional)",
-    "get_telemetry_metrics": "📊 Get comprehensive telemetry metrics",
-    "get_tool_usage_stats": "📈 Get tool usage statistics to identify which tools are actually used vs unused",
 }
 
 
@@ -317,11 +279,6 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "thorough": "consult(brief=\"Analyze this deeply\", effort=\"thorough\", privacy=\"cloud_allowed\")",
         "full_diagnostics": "consult(brief=\"Explain this route\", response_mode=\"full\")",
     },
-    "store_knowledge_graph": {
-        "insight": "store_knowledge_graph(summary=\"Key insight about X\", tags=[\"insight\"])",
-        "bug_found": "store_knowledge_graph(summary=\"Bug in module Y\", tags=[\"bug\"], severity=\"medium\")",
-        "question": "store_knowledge_graph(summary=\"How does X work?\", discovery_type=\"question\")"
-    },
     "search_knowledge_graph": {
         "by_tag": "knowledge(action=\"search\", tags=[\"bug\"], limit=10)",
         "by_type": "knowledge(action=\"search\", discovery_type=\"insight\", limit=5)",
@@ -354,16 +311,16 @@ COMMON_PATTERNS: Dict[str, Dict[str, str]] = {
         "check_identity": "identity(client_session_id=\"<your client_session_id>\")  # Reports on YOUR binding; with no proof argument the call is gated to a fresh mint",
         "name_yourself": f"{SET_DISPLAY_NAME_CALL}  # Set your display name; without client_session_id the call can resolve a co-located agent"
     },
-    "list_agents": {
-        "all_agents": "list_agents()  # List all agents with metadata",
-        "active_only": "list_agents(status_filter=\"active\")  # Only active agents",
-        "with_metrics": "list_agents(include_metrics=true)  # Include governance metrics",
-        "lite_view": "list_agents(summary_only=true)  # Minimal summary view"
+    "agent": {
+        "all_agents": "agent(action=\"list\")  # List all agents with metadata",
+        "active_only": "agent(action=\"list\", status_filter=\"active\")  # Only active agents",
+        "with_metrics": "agent(action=\"list\", include_metrics=true)  # Include governance metrics",
+        "lite_view": "agent(action=\"list\", summary_only=true)  # Minimal summary view"
     },
-    "observe_agent": {
-        "basic_observation": "observe_agent(target_agent_id=\"my_agent\")  # Analyze agent patterns",
-        "with_history": "observe_agent(target_agent_id=\"my_agent\", include_history=true)  # Include historical patterns",
-        "pattern_analysis": "observe_agent(target_agent_id=\"my_agent\", analyze_patterns=true)  # Deep pattern analysis"
+    "observe": {
+        "basic_observation": "observe(action=\"agent\", target_agent_id=\"my_agent\")  # Analyze agent patterns",
+        "with_history": "observe(action=\"agent\", target_agent_id=\"my_agent\", include_history=true)  # Include historical patterns",
+        "pattern_analysis": "observe(action=\"agent\", target_agent_id=\"my_agent\", analyze_patterns=true)  # Deep pattern analysis"
     }
 }
 

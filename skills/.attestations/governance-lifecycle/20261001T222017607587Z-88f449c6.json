@@ -1,0 +1,38 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-01T22:20:17Z",
+  "verified_date": "2026-10-01",
+  "verifier": "Claude: re-checked governance-lifecycle against #2593 (37 legacy aliases removed; describe_tool reports an alias's pinned operation; hint strings in updates/phases.py and enrichments.py name router calls) and master's #2603; no removed name appears in the skill and its alias claims name only the retained workflow aliases",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "82a2d21673dac84f",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "665769655248cbaa",
+    "unitares/src/mcp_handlers/identity/handlers.py": "6bafb43dd2dc40ef",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "382a9fef840baf06",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "21588db986cf1eef",
+    "unitares/src/mcp_handlers/updates/phases.py": "377db448d52b7692",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "1a2d7782ab306af3"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": [
+      "9dd1699dcc769ae3"
+    ],
+    "unitares/src/mcp_handlers/updates/enrichments.py": [
+      "4e105b1f101ead6e"
+    ],
+    "unitares/src/mcp_handlers/updates/phases.py": [
+      "618dd71d6044b3df"
+    ]
+  }
+}

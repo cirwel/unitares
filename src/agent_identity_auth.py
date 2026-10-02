@@ -176,7 +176,7 @@ def require_explicit_agent_id(arguments: dict, reject_existing: bool = False) ->
             "details": f"'{agent_id}' is an existing agent identity (created {created_str}, {existing_meta.total_updates} updates)",
             "why_this_matters": "Using another agent's ID is identity theft. You would impersonate them and corrupt their governance history.",
             "suggestion": f"Create a unique agent_id for yourself (e.g., 'your_name_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}')",
-            "help": "Use list_agents to see existing agent IDs and avoid collisions"
+            "help": "Use agent(action='list') to see existing agent IDs and avoid collisions"
         }, indent=2)
         return None, TextContent(type="text", text=error_msg)
 

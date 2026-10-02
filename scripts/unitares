@@ -1439,7 +1439,7 @@ Examples:
   unitares update --check
   unitares call process_agent_update '{"response_text": "Fixed a bug", "complexity": 0.4, "confidence": 0.9}'
   unitares metrics
-  unitares call list_agents '{}'
+  unitares call agent '{"action": "list"}'
 EOF
 }
 

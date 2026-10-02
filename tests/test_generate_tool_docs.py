@@ -206,10 +206,10 @@ def test_internal_and_older_names_are_never_tools(markdown):
 
     headings = set(_headings(markdown))
     assert headings.isdisjoint(_TOOL_ALIASES)
-    # register=False delegates that a decorator scan counts as tools.
+    # register=False delegates that a decorator scan counts as tools. Their
+    # older-name aliases were removed on 2026-09-28, so they are listed nowhere.
     for internal in ("request_dialectic_review", "submit_thesis", "list_agents"):
         assert internal not in headings
-        assert f"`{internal}`" in markdown, f"{internal} should appear as an older name"
 
 
 def test_every_alias_is_placed_exactly_somewhere(reference):

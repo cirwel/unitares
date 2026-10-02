@@ -78,8 +78,10 @@ async def _run_middleware(name: str, arguments: dict, resolve_mock, session_key:
 
 def test_roster_includes_the_aliases_that_used_to_diverge():
     """Guard against a vacuous parametrization: the roster is the full table."""
-    assert len(_TOOL_ALIASES) >= 40  # 70 until the 2026-09-28 alias cut
-    assert {"search_shared_memory", "request_review", "list_agents"} <= set(CALL_ROSTER)
+    # The legacy aliases went on 2026-09-28; the roster is the registered
+    # tools plus the eight workflow aliases.
+    assert len(CALL_ROSTER) >= 40
+    assert {"search_shared_memory", "request_review", "agent"} <= set(CALL_ROSTER)
 
 
 @pytest.mark.asyncio

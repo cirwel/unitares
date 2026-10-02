@@ -161,7 +161,7 @@ class HealthCheckParams(AgentIdentityMixin):
 class GetTelemetryMetricsParams(AgentIdentityMixin):
     """Parameters for get_telemetry_metrics"""
     agent_id: Optional[str] = Field(None, description="Optional agent ID to filter metrics. If not provided, returns metrics for all agents.")
-    include_calibration: bool = Field(False, description="Include full calibration metrics (default: false). Calibration data is system-wide and can be large, so it's excluded by default to reduce context bloat. Use check_calibration tool for detailed calibration analysis.")
+    include_calibration: bool = Field(False, description="Include full calibration metrics (default: false). Calibration data is system-wide and can be large, so it's excluded by default to reduce context bloat. Use calibration(action='check') tool for detailed calibration analysis.")
     window_hours: float = Field(24, description="Time window in hours for metrics (default: 24)")
 
 

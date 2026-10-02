@@ -79,7 +79,15 @@ KNOWN_TOOLS = [
     'list_agents', 'get_discovery_details', 'identity', 'onboard',
     'get_agent_metadata', 'observe_agent', 'detect_anomalies',
     'aggregate_metrics', 'export_to_file', 'get_system_history',
+    'start_session', 'sync_state', 'check_working_state', 'search_shared_memory',
+    'store_finding', 'update_finding', 'record_result', 'request_review',
 ]
+
+# Router names are ordinary prose words. Count a call spelling, not incidental
+# mentions of an agent, knowledge, or a configuration export. Keep legacy names
+# above so old continuity records remain interpretable during client migration.
+ROUTER_TOOLS = ('knowledge', 'agent', 'observe', 'dialectic', 'calibration',
+                'admin', 'config', 'export')
 
 
 def analyze_response_text(text: str) -> dict:
@@ -150,7 +158,10 @@ def analyze_response_text(text: str) -> dict:
     
     # Tool mentions
     text_lower = text.lower()
-    tools = [t for t in KNOWN_TOOLS if t.lower() in text_lower]
+    tools = [t for t in KNOWN_TOOLS
+             if re.search(r'\b' + re.escape(t) + r'\b', text_lower)]
+    tools.extend(t for t in ROUTER_TOOLS
+                 if re.search(r'\b' + re.escape(t) + r'\(', text_lower))
     
     return {
         'tokens': tokens,

@@ -86,15 +86,16 @@ def test_action_case_insensitive():
     assert get_call_identity_requirement("knowledge", {"action": "SEARCH"}) == "pre_onboard"
 
 
-def test_legacy_alias_canonicalizes_with_injected_action():
-    """The dashboard's legacy names must resolve like the canonical
-    calls they dispatch to: detect_anomalies → observe(anomalies),
-    check_calibration → calibration(check), list_agents → agent(list).
-    Without alias-awareness these fail closed and refuse under strict
-    even though their canonical forms pass."""
-    assert get_call_identity_requirement("detect_anomalies", {}) == "pre_onboard"
-    assert get_call_identity_requirement("check_calibration", {}) == "pre_onboard"
-    assert get_call_identity_requirement("list_agents", {}) == "pre_onboard"
+def test_the_dashboards_reads_are_pre_onboard_as_router_calls():
+    """The dashboard used to call detect_anomalies, check_calibration and
+    list_agents, which resolved like observe(anomalies), calibration(check)
+    and agent(list). Those aliases went on 2026-09-28 and the dashboard calls
+    the routers; the router calls must pass unbound under strict, and a
+    removed name fails closed (it is also refused before dispatch)."""
+    assert get_call_identity_requirement("observe", {"action": "anomalies"}) == "pre_onboard"
+    assert get_call_identity_requirement("calibration", {"action": "check"}) == "pre_onboard"
+    assert get_call_identity_requirement("agent", {"action": "list"}) == "pre_onboard"
+    assert get_call_identity_requirement("detect_anomalies", {}) == "required"
 
 
 def test_identity_resolver_uses_shared_call_canonicalization(monkeypatch):
@@ -301,9 +302,10 @@ def test_rest_gate_passes_unbound_read_actions(strict_on, unbound_context):
     assert _strict_identity_refusal_or_none(
         "knowledge", {"action": "search", "query": "x"}
     ) is None
-    assert _strict_identity_refusal_or_none("detect_anomalies", {}) is None
+    assert _strict_identity_refusal_or_none("observe", {"action": "anomalies"}) is None
     assert _strict_identity_refusal_or_none("dialectic", {}) is None  # default list
-    assert _strict_identity_refusal_or_none("check_calibration", {}) is None
+    assert _strict_identity_refusal_or_none("calibration", {"action": "check"}) is None
+    assert _strict_identity_refusal_or_none("agent", {"action": "list"}) is None
 
 
 def test_rest_gate_refuses_unbound_write_actions(strict_on, unbound_context):

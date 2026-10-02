@@ -126,10 +126,16 @@ class TestResolveToolAlias:
             "search_shared_memory",
         }
 
-    def test_list_agents_alias(self):
-        name, alias = resolve_tool_alias("list_agents")
-        assert name == "agent"
-        assert alias.inject_action == "list"
+    def test_the_legacy_router_aliases_are_gone(self):
+        """37 of the 38 pre-consolidation names went on 2026-09-28; call the router."""
+        for removed in ("list_agents", "archive_agent", "store_knowledge_graph",
+                        "submit_thesis", "get_connection_status", "check_calibration"):
+            assert resolve_tool_alias(removed) == (removed, None), removed
+
+    def test_get_server_info_is_kept_for_the_wave3a_route(self):
+        """The Wave 3a BEAM route is keyed on this name; see tool_stability."""
+        name, alias = resolve_tool_alias("get_server_info")
+        assert (name, alias.inject_action, alias.operation) == ("admin", "server_info", "read")
 
 
 # ============================================================================

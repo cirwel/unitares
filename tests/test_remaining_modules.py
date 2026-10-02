@@ -1624,13 +1624,15 @@ class TestCheckRateLimit:
     @pytest.mark.asyncio
     async def test_loop_detection(self):
         ctx = DispatchContext()
-        # Fill up history for list_agents
-        history = _tool_call_history["list_agents"]
+        # The expensive read is the canonical agent/list router call.
+        history = _tool_call_history["agent:list"]
         history.clear()
         now = time.time()
         for i in range(25):
             history.append(now - 10 + i * 0.1)
-        result = await check_rate_limit("list_agents", {}, ctx)
-        assert isinstance(result, list)  # short-circuited
-        # Clean up
-        history.clear()
+        try:
+            result = await check_rate_limit("agent", {"action": "list"}, ctx)
+            assert isinstance(result, list)  # short-circuited
+            assert "Tool call loop detected" in json.loads(result[0].text)["error"]
+        finally:
+            history.clear()
