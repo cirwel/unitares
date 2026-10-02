@@ -950,10 +950,25 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     end)
   end
 
+  # 'normal' is the holder returning its own in-hand lease (migration 056), which
+  # this is on every path: done, blocked, failed, or rolling back a partial
+  # acquire. Any other string fails surface_leases_release_reason_check, the
+  # lease stays active, and the TTL reaper later mislabels it reaped_remote_ttl.
   defp release_all(leases) do
     Enum.each(leases, fn lease ->
       lease_id = Map.get(lease, :lease_id) || Map.get(lease, "lease_id")
-      if is_binary(lease_id), do: Repo.release(lease_id, "governed_effect_file_write_complete")
+
+      if is_binary(lease_id) do
+        case Repo.release(lease_id, "normal") do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "governed_effect lease release failed lease_id=#{lease_id}: #{inspect(reason)}"
+            )
+        end
+      end
     end)
   end
 

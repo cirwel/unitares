@@ -4,6 +4,12 @@ defmodule UnitaresLeasePlane.AllowGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.BlockGovernanceVeto do
+  @moduledoc false
+  def check(_env), do: {:blocked, "test_block"}
+  def verify_identity_tier(_env), do: {:ok, "strong"}
+end
+
 defmodule UnitaresLeasePlane.GovernedEffectTest do
   # async: false — record_only now durably writes to the live audit.events
   # stream (contract §8). Each persisting test registers cleanup by key.
@@ -717,6 +723,71 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     end
   end
 
+  describe "file_write lease custody is returned on completion" do
+    # release_all used a release_reason the surface_leases CHECK constraint
+    # rejects, and discarded the error: every governed file_write left its
+    # leases active until the TTL reaper labelled them reaped_remote_ttl.
+    test "a committed file_write releases its lease as 'normal'" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-release-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+
+      on_exit(fn ->
+        File.rm(path)
+        LeaseTestHelpers.cleanup_surface(canonical(surface))
+      end)
+
+      set_file_write_flags(true)
+
+      assert {:ok, _} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => tracked_key(),
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "released\n"},
+                   "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000ab"}
+                 })
+               )
+
+      assert lease_rows(surface) == [{true, "normal"}]
+    end
+
+    test "a governance-blocked file_write still releases its lease as 'normal'" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-blocked-#{System.unique_integer([:positive])}")
+
+      surface = "file://#{path}"
+
+      on_exit(fn -> LeaseTestHelpers.cleanup_surface(canonical(surface)) end)
+
+      set_file_write_flags(true)
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.BlockGovernanceVeto
+      )
+
+      assert {:error, :governance_blocked} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => tracked_key(),
+                   "custody_mode" => "execute",
+                   "surface" => surface,
+                   "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+                   "payload" => %{"path" => path, "content" => "never written\n"},
+                   "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000ac"}
+                 })
+               )
+
+      refute File.exists?(path)
+      assert lease_rows(surface) == [{true, "normal"}]
+    end
+  end
+
   describe "execute / agent_spawn (first execute slice)" do
     test "fail-closed: agent_spawn execute is execute_not_implemented when the flag is off" do
       # default state — flag unset
@@ -1074,6 +1145,25 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
 
   defp restore(key, nil), do: Application.delete_env(:lease_plane, key)
   defp restore(key, val), do: Application.put_env(:lease_plane, key, val)
+
+  # Leases are keyed by the canonical surface (file:// paths resolve symlinks).
+  defp canonical(surface) do
+    {:ok, canon} = UnitaresLeasePlane.Canonicalize.canonicalize(surface)
+    canon
+  end
+
+  # {released?, release_reason} for every lease row ever taken on the surface.
+  defp lease_rows(surface) do
+    %{rows: rows} =
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "SELECT released_at IS NOT NULL, release_reason FROM lease_plane.surface_leases " <>
+          "WHERE surface_id = $1",
+        [canonical(surface)]
+      )
+
+    Enum.map(rows, fn [released, reason] -> {released, reason} end)
+  end
 
   defp execute_rows(key) do
     %{rows: rows} =
