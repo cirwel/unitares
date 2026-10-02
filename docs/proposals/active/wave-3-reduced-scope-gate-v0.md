@@ -1,12 +1,12 @@
 # Wave 3 reduced-scope gate (v0) — the smaller gate owed by the 2026-08-22 signature
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
-same day, before any window started** (§10, Amendment 1). ⛔Ratified is
-not met: the §8 council round was held on 2026-09-27 and the W_pre window (§10 A6) has not started.
+same day, before any window started** (§10, Amendment 1). ⛔Ratified is not met. W_pre (§10 A6)
+started 2026-09-28 05:47:32 UTC (start record: §7 step 2) and is accruing; Amendment 2, which
+classifies host-sleep heartbeat gaps, is a [separate record](wave-3-reduced-scope-gate-amendment-2.md).
 A no-port outcome completes the gate at §7 step 4; a pro-port outcome completes it only after the
-step 5 design pass and a new signature (§10 A10). The signature
-authorises nothing to be built. (Separately, and non-gating for this scope: §6.4's two handoff
-artifacts are still owed.)
+step 5 design pass and a new signature (§10 A10). The signature authorises nothing to be built.
+(Separately, and non-gating for this scope: §6.4's two handoff artifacts are still owed.)
 
 ⚠️**But six of its open questions are now closed.** On 2026-08-29 the operator ruled on §6.1
 (reassignment gets its own serialization design), §6.2 (criterion 6 retained, halt authority
@@ -591,9 +591,9 @@ are now deferred, and the instrument moved to the front.
 
    | | |
    |---|---|
-   | **Deployed commit** | ⛔_not yet deployed_ |
-   | **Wall-clock deploy time (UTC)** | ⛔_not yet deployed_ |
-   | **Denominator / coverage predicate** | ⛔_state expected periodic coverage, lazy-source treatment, and both overlap orderings when the clock starts_ |
+   | **Deployed commit** | `cc397e3b69add1567c1dd15102e3aa6bb46b508c` (on `master`, after Amendment 1 `ec8edd279`) |
+   | **Wall-clock deploy time (UTC)** | 2026-09-28 05:47:32 UTC: the first periodic `dialectic_sweep_cycle` row with `instrument_version = "wave3-instrument-v2"` (`process_boot_id` `4f2a2c3f-4928-45a5-b318-c3fb2d624535`, `cycle_seq` 1). Per §10 A6 this row and its `code_commit` are the start record; it is the first observation of the deployed instrument, not a deploy-completion event. |
+   | **Denominator / coverage predicate** | §10 A8 heartbeat coverage (periodic rows, gaps ≤22 min, no unexplained gap >60 min, uncovered time extends W_pre) and A12 completeness; `active_session_check` rows are lazy and carry no coverage; gap classes per A5 and Amendment 2 B1. Filled 2026-10-01 from `audit.events`, not from memory. |
 
    ⛔**No incident or cycle row predating that timestamp may be counted**, and until the row above
    is filled no window has started and none may be cited. ⛔Whoever runs the deploy fills
