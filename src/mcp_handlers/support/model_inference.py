@@ -433,7 +433,13 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
 
     # An HF model id under provider="auto" requests the HF lane as plainly as
     # naming the provider does.
-    wants_hf = provider == "hf" or (provider == "auto" and _is_hf_model_id(model))
+    # An explicit privacy="local" outranks that inference: the id stays a model
+    # name for the local endpoint (vLLM and others serve HF-style ids), and the
+    # prompt never reaches the external lane the id happens to resemble.
+    explicit_local = privacy_stated and privacy == "local"
+    wants_hf = provider == "hf" or (
+        provider == "auto" and _is_hf_model_id(model) and not explicit_local
+    )
 
     if privacy_stated and privacy == "local" and provider == "hf":
         return InferenceOutcome.failed(
