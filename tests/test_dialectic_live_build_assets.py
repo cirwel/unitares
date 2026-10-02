@@ -1,21 +1,17 @@
 """Contract tests for dialectic_live's boot/deploy asset build.
 
-`elixir/dialectic_live/scripts/build-assets.sh` decides whether a failed
-asset build may fall back to the previous digest (lenient, every boot) or
-must fail (--strict, deploys). These tests run the real script in a scratch
-app directory with `mix` and the CLI-repair helper stubbed. The `mix` stub
-follows the `phx.digest` alias contract in mix.exs: refuse unless the
-script's build lock is held, clear the marker, digest, write the marker only
-on success.
+`elixir/dialectic_live/scripts/build-assets.sh` skips the build when the
+build on disk is the one for this checkout, builds otherwise, and on a failed
+build either falls back to what is on disk (lenient, every boot) or fails
+(--strict, deploys). These tests run the real script inside a scratch git
+checkout with `mix` and the CLI-repair helper stubbed. Like phx.digest, the
+`mix` stub rewrites the manifest with new content on every build.
 """
 
 from __future__ import annotations
 
-import fcntl
 import os
-import signal
 import subprocess
-import time
 from pathlib import Path
 
 
@@ -24,27 +20,44 @@ SCRIPT = REPO_ROOT / "elixir" / "dialectic_live" / "scripts" / "build-assets.sh"
 
 MIX_STUB = """#!/usr/bin/env bash
 set -eu
-app="$PWD"
+echo "$*" >> "$MIX_CALLS"
 case "$1" in
-  assets.compile) sleep "${COMPILE_SLEEP:-0}"; exit "${COMPILE_RC:-0}" ;;
-  phx.digest)
-    [ "${DIALECTIC_LIVE_ASSETS_LOCKED:-}" = 1 ] || { echo "digest without the build lock" >&2; exit 98; }
-    rm -f "$app/_build/assets-digest.ok"
-    sleep "${DIGEST_SLEEP:-0}"
-    echo "{\\"digest\\": \\"new\\"}" > "$app/priv/static/cache_manifest.json"
-    [ "${DIGEST_RC:-0}" -eq 0 ] || exit "$DIGEST_RC"
-    mkdir -p "$app/_build" && touch "$app/_build/assets-digest.ok"
+  assets.deploy)
+    [ "${BUILD_RC:-0}" -eq 0 ] || exit "$BUILD_RC"
+    mkdir -p priv/static
+    echo "{\\"digest\\": \\"$(date +%s)-$$-$RANDOM\\"}" > priv/static/cache_manifest.json
     ;;
   *) echo "unexpected mix $*" >&2; exit 99 ;;
 esac
 """
 
+GITIGNORE = "/_build/\n/priv/static/cache_manifest.json\n"
 
-def _app(tmp_path: Path, *, previous_build: bool) -> Path:
-    app = tmp_path / "dialectic_live"
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@example.invalid",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.invalid",
+        },
+    )
+
+
+def _app(tmp_path: Path, *, git: bool = True) -> Path:
+    repo = tmp_path / "repo"
+    app = repo / "elixir" / "dialectic_live"
     (app / "scripts").mkdir(parents=True)
     (app / "priv" / "static").mkdir(parents=True)
-    (app / "_build").mkdir()
+    (app / "lib").mkdir()
+    (app / "lib" / "page.ex").write_text("v1\n")
+    (app / ".gitignore").write_text(GITIGNORE)
     script = app / "scripts" / "build-assets.sh"
     script.write_text(SCRIPT.read_text())
     script.chmod(0o755)
@@ -56,22 +69,24 @@ def _app(tmp_path: Path, *, previous_build: bool) -> Path:
     mix = bin_dir / "mix"
     mix.write_text(MIX_STUB)
     mix.chmod(0o755)
-    if previous_build:
-        (app / "priv" / "static" / "cache_manifest.json").write_text(
-            '{"digest": "old"}'
-        )
-        (app / "_build" / "assets-digest.ok").touch()
+    if git:
+        _git(repo, "init", "-q")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-qm", "init")
     return app
 
 
 def _run(app: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
+    tmp = app.parent.parent.parent
     full_env = {
         **os.environ,
-        "PATH": f"{app.parent / 'bin'}{os.pathsep}{os.environ['PATH']}",
+        "PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ['PATH']}",
         "MIX_ENV": "prod",
-        "DIALECTIC_LIVE_ASSETS_LOCK_WAIT": "2",
+        "MIX_CALLS": str(tmp / "mix-calls"),
         **env,
     }
+    # Outside a checkout, git must not find an enclosing repository.
+    full_env["GIT_CEILING_DIRECTORIES"] = str(tmp)
     return subprocess.run(
         [str(app / "scripts" / "build-assets.sh"), *args],
         cwd=app,
@@ -82,154 +97,140 @@ def _run(app: Path, *args: str, **env: str) -> subprocess.CompletedProcess:
     )
 
 
-def _manifest(app: Path) -> str:
-    return (app / "priv" / "static" / "cache_manifest.json").read_text()
+def _builds(app: Path) -> int:
+    calls = app.parent.parent.parent / "mix-calls"
+    if not calls.exists():
+        return 0
+    return calls.read_text().splitlines().count("assets.deploy")
 
 
-def _marker(app: Path) -> bool:
-    return (app / "_build" / "assets-digest.ok").exists()
+def _manifest(app: Path) -> Path:
+    return app / "priv" / "static" / "cache_manifest.json"
+
+
+def _stamp(app: Path) -> Path:
+    return app / "_build" / "assets.stamp"
 
 
 def test_script_is_executable() -> None:
     assert SCRIPT.stat().st_mode & 0o111
 
 
-def test_clean_build_digests_and_marks(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=False)
+def test_first_boot_builds_and_stamps(tmp_path: Path) -> None:
+    app = _app(tmp_path)
     proc = _run(app)
     assert proc.returncode == 0, proc.stderr
-    assert "new" in _manifest(app)
-    assert _marker(app)
+    assert _builds(app) == 1
+    assert _manifest(app).exists()
+    assert _stamp(app).exists()
 
 
-def test_lenient_compile_failure_serves_completed_previous_build(
+def test_steady_state_boot_does_no_asset_work(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app, "--strict").returncode == 0  # the deploy build
+    proc = _run(app)
+    assert proc.returncode == 0, proc.stderr
+    assert "build is current" in proc.stdout
+    assert _builds(app) == 1
+
+
+def test_steady_state_boot_never_fails_even_when_a_build_would(
     tmp_path: Path,
 ) -> None:
-    app = _app(tmp_path, previous_build=True)
-    proc = _run(app, COMPILE_RC="1")
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    proc = _run(app, BUILD_RC="1", PREPARE_RC="1")
     assert proc.returncode == 0, proc.stderr
-    assert "serving the previous build" in proc.stderr
-    assert "old" in _manifest(app)
+    assert _builds(app) == 1
 
 
-def test_cli_repair_failure_counts_as_compile_failure(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=True)
+def test_new_commit_triggers_a_rebuild(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    (app / "lib" / "page.ex").write_text("v2\n")
+    _git(app.parent.parent, "commit", "-qam", "v2")
+    assert _run(app).returncode == 0
+    assert _builds(app) == 2
+
+
+def test_uncommitted_changes_always_rebuild(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    (app / "lib" / "page.ex").write_text("edited\n")
+    assert _run(app).returncode == 0
+    assert _run(app).returncode == 0
+    assert _builds(app) == 3
+
+
+def test_a_build_by_another_writer_invalidates_the_stamp(tmp_path: Path) -> None:
+    # e.g. a deploy rollback that rebuilt with an older script, then a
+    # fast-forward back to this tree by another service's deploy.
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    _manifest(app).write_text('{"digest": "someone else"}')
+    assert _run(app).returncode == 0
+    assert _builds(app) == 2
+
+
+def test_missing_manifest_rebuilds_despite_stamp(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    _manifest(app).unlink()
+    assert _run(app).returncode == 0
+    assert _builds(app) == 2
+
+
+def test_outside_a_git_checkout_every_boot_builds(tmp_path: Path) -> None:
+    app = _app(tmp_path, git=False)
+    assert _run(app).returncode == 0
+    assert _run(app).returncode == 0
+    assert _builds(app) == 2
+    assert not _stamp(app).exists()
+
+
+def test_strict_always_builds(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    assert _run(app, "--strict").returncode == 0
+    assert _builds(app) == 2
+
+
+def test_lenient_failure_serves_the_build_on_disk(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    (app / "lib" / "page.ex").write_text("v2\n")
+    _git(app.parent.parent, "commit", "-qam", "v2")
+    before = _manifest(app).read_text()
+    proc = _run(app, BUILD_RC="1")
+    assert proc.returncode == 0, proc.stderr
+    assert "serving the build already on disk" in proc.stderr
+    assert _manifest(app).read_text() == before
+    # The failed build left no stamp, so the next boot tries again.
+    assert not _stamp(app).exists()
+    assert _run(app).returncode == 0
+    assert _builds(app) == 3
+
+
+def test_cli_repair_failure_counts_as_a_build_failure(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    _manifest(app).write_text('{"digest": "old"}')
     proc = _run(app, PREPARE_RC="1")
     assert proc.returncode == 0, proc.stderr
-    assert "serving the previous build" in proc.stderr
+    assert "serving the build already on disk" in proc.stderr
+    assert _builds(app) == 0
 
 
-def test_lenient_compile_failure_without_previous_build_fails(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=False)
-    proc = _run(app, COMPILE_RC="1")
+def test_lenient_failure_with_nothing_on_disk_fails(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    proc = _run(app, BUILD_RC="1")
     assert proc.returncode == 1
-    assert "no completed previous build" in proc.stderr
+    assert "no previous build to serve" in proc.stderr
 
 
-def test_manifest_without_marker_is_not_a_previous_build(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=True)
-    (app / "_build" / "assets-digest.ok").unlink()
-    proc = _run(app, COMPILE_RC="1")
-    assert proc.returncode == 1
-    assert "no completed previous build" in proc.stderr
-
-
-def test_strict_compile_failure_fails_even_with_previous_build(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=True)
-    proc = _run(app, "--strict", COMPILE_RC="1")
+def test_strict_failure_fails_even_with_a_build_on_disk(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    assert _run(app).returncode == 0
+    proc = _run(app, "--strict", BUILD_RC="1")
     assert proc.returncode == 1
     assert "(--strict)" in proc.stderr
-
-
-def test_digest_failure_is_fatal_and_clears_the_marker(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=True)
-    proc = _run(app, DIGEST_RC="1")
-    assert proc.returncode != 0
-    assert not _marker(app)
-    # The interrupted digest is never mistaken for a previous build.
-    proc = _run(app, COMPILE_RC="1")
-    assert proc.returncode == 1
-    assert "no completed previous build" in proc.stderr
-
-
-def test_held_lock_blocks_a_second_build(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=True)
-    with open(app / "_build" / "assets-build.lock", "a") as held:
-        fcntl.flock(held, fcntl.LOCK_EX)
-        proc = _run(app)
-    assert proc.returncode == 1
-    assert "still holds" in proc.stderr
-    assert "old" in _manifest(app)
-
-
-def test_lock_is_released_when_the_build_exits(tmp_path: Path) -> None:
-    app = _app(tmp_path, previous_build=False)
-    assert _run(app).returncode == 0
-    with open(app / "_build" / "assets-build.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
-
-
-def test_lock_is_held_for_the_whole_build(tmp_path: Path) -> None:
-    # perl takes the flock and exits; the lock must stay with the script's fd.
-    app = _app(tmp_path, previous_build=False)
-    env = {
-        **os.environ,
-        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
-        "MIX_ENV": "prod",
-        "COMPILE_SLEEP": "3",
-    }
-    build = subprocess.Popen(
-        [str(app / "scripts" / "build-assets.sh")],
-        cwd=app,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        time.sleep(1.5)
-        with open(app / "_build" / "assets-build.lock", "a") as probe:
-            try:
-                fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                held = True
-            else:
-                held = False
-        assert held, "build lock was not held while the build ran"
-    finally:
-        assert build.wait(timeout=30) == 0
-
-
-def _lock_is_held(app: Path) -> bool:
-    with open(app / "_build" / "assets-build.lock", "a") as probe:
-        try:
-            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        return False
-
-
-def test_digest_outliving_a_killed_wrapper_keeps_the_lock(tmp_path: Path) -> None:
-    # The digest step inherits the lock fd, so killing only the wrapper must
-    # not let a second build in while the digest is still writing.
-    app = _app(tmp_path, previous_build=True)
-    env = {
-        **os.environ,
-        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
-        "MIX_ENV": "prod",
-        "DIGEST_SLEEP": "4",
-    }
-    build = subprocess.Popen(
-        [str(app / "scripts" / "build-assets.sh")],
-        cwd=app,
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    try:
-        time.sleep(1.5)
-        build.send_signal(signal.SIGKILL)  # the wrapper only; the mix stub lives on
-        build.wait(timeout=10)
-        assert _lock_is_held(app), "lock released while the digest was still running"
-    finally:
-        os.killpg(build.pid, signal.SIGKILL)
+    assert not _stamp(app).exists()
