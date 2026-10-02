@@ -9,8 +9,8 @@ exposes them to the model via CodeAgent (which writes Python, not JSON tool call
 
 Configuration (env vars; CLI flags override):
     UNITARES_MCP_URL      governance MCP endpoint   (default http://127.0.0.1:8767/mcp/)
-    UNITARES_OLLAMA_URL   Ollama OpenAI-compat API  (default http://127.0.0.1:11434/v1)
-    UNITARES_LLM_MODEL    Ollama model to drive     (default gemma4:latest)
+    UNITARES_OLLAMA_URL   Ollama OpenAI-compat API  (default: UNITARES_MODEL_BASE_URL, else http://127.0.0.1:11434/v1)
+    UNITARES_MODEL_ID     Ollama model to drive     (default gemma4:latest; UNITARES_LLM_MODEL is read until v3.3.0)
 
 Identity posture (v2 ontology — see docs/ontology/identity.md):
     A fresh bridge run mints a fresh process-instance identity
@@ -50,7 +50,13 @@ from smolagents import tool, ToolCollection, OpenAIServerModel, CodeAgent
 # llm_delegation local path; UNITARES_LLM_MODEL is its older name, read until
 # v3.3.0). Endpoints are config, not identity.
 DEFAULT_MCP_URL = os.getenv("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
-DEFAULT_OLLAMA_URL = os.getenv("UNITARES_OLLAMA_URL", "http://127.0.0.1:11434/v1")
+# This script's own setting first, then the repo-wide endpoint (the same
+# OpenAI-compatible base, /v1 included), then the local Ollama default.
+DEFAULT_OLLAMA_URL = (
+    os.getenv("UNITARES_OLLAMA_URL")
+    or os.getenv("UNITARES_MODEL_BASE_URL")
+    or "http://127.0.0.1:11434/v1"
+)
 DEFAULT_MODEL = (
     os.getenv("UNITARES_MODEL_ID") or os.getenv("UNITARES_LLM_MODEL") or "gemma4:latest"
 )

@@ -410,6 +410,12 @@ def direct_urlopen(request, *, timeout: float):
     return opener.open(request, timeout=timeout)
 
 
+def _proxied_urlopen(request, *, timeout: float):
+    """``urllib.request.urlopen`` with the environment's proxy settings, for an
+    external endpoint's version probe."""
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 class EndpointNotLocalError(RuntimeError):
     """A privacy='local' request met an endpoint the server does not call local."""
 
@@ -470,8 +476,13 @@ _ollama_detect_lock = threading.Lock()
 
 def _probe_ollama_version(root: str, timeout: float) -> bool | None:
     """True/False for an answer that says Ollama or not; None for no answer."""
+    # A local endpoint is reached directly (as inference reaches it); an
+    # external one keeps the environment's proxy settings, because it may be
+    # reachable only through them, and a probe that skipped them would call a
+    # proxied Ollama "not Ollama".
+    opener = direct_urlopen if classify_endpoint(root).is_local else _proxied_urlopen
     try:
-        with direct_urlopen(root + "/api/version", timeout=timeout) as resp:
+        with opener(root + "/api/version", timeout=timeout) as resp:
             payload = json.load(resp)
     except urllib.error.HTTPError:
         return False  # the server answered, without the route

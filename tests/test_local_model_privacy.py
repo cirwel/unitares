@@ -1089,3 +1089,26 @@ def test_a_scoped_ipv6_literal_is_still_read_as_an_address(no_dns):
     assert env._ip_literal("fe80::1%eth0") is not None
     assert env._ip_literal("fe80::1%") is None  # an empty scope names nothing
     assert env._ip_literal("127.0.0.1") is not None
+
+
+@pytest.mark.parametrize("root, expect_direct", [
+    ("http://127.0.0.1:11434", True),
+    ("http://models.example.com:11434", False),
+])
+def test_version_probe_follows_the_proxy_policy_of_the_endpoint_class(monkeypatch, no_dns, root, expect_direct):
+    used = []
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"version": "0.1"}'
+
+    monkeypatch.setattr(env, "direct_urlopen", lambda *a, **k: used.append("direct") or Resp())
+    monkeypatch.setattr(env, "_proxied_urlopen", lambda *a, **k: used.append("proxied") or Resp())
+    assert env._probe_ollama_version(root, 0.1) is True
+    assert used == ["direct" if expect_direct else "proxied"]
