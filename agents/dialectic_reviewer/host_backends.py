@@ -466,8 +466,11 @@ def resolve_antigravity_cli() -> Optional[str]:
 # How much of agy's own explanation a failure carries into the stored warning.
 _AGY_REASON_CHARS = 300
 # A complete glog header at error or fatal level: "E1002 14:11:36.079954 66
-# server.go:1660] ". The whole header, not just "E" plus digits, because a
-# multi-line log entry can carry prompt text, and prompt text is untrusted.
+# server.go:1660] ". The whole header, not just "E" plus digits, so that a
+# continuation line of a multi-line entry is not taken for an error by
+# accident. It does NOT stop forgery: the prompt is untrusted and can carry a
+# complete header on a line of its own. Like stderr, the reason this yields is
+# a diagnostic for the operator to read, never evidence anything acts on.
 _GLOG_ERROR_LINE = re.compile(r"^[EF]\d{4} \d{2}:\d{2}:\d{2}\.\d+\s+\d+ [^\s\]]+:\d+\] ")
 
 
@@ -493,7 +496,8 @@ def _agy_log_error(home: str) -> str:
 
 def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
     """agy's own words for a nonzero exit, best source first: the JSON error,
-    the last stderr line, then the last error line of its log. Live instance:
+    stderr (a Go panic's message, else the last line), then the last error
+    line of its log. Live instance:
     10-01, session c7d1cc8d24773ffd stored only "Antigravity CLI exited 3",
     with stderr discarded and the log deleted with the temporary home, so the
     cause of the fallback could not be recovered. Never raises."""
@@ -501,13 +505,17 @@ def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
         data = _parse_agy_output(stdout.decode(errors="replace"))
         return str(data.get("error") or "") if isinstance(data, dict) else ""
 
-    def last_stderr_line() -> str:
-        return next((line for line in reversed(stderr.decode(errors="replace").splitlines())
-                     if line.strip()), "")
+    def stderr_reason() -> str:
+        lines = [line for line in stderr.decode(errors="replace").splitlines() if line.strip()]
+        # agy is a Go binary: a panic prints its message first and a stack
+        # trace after it, so the last line would be a frame, not the cause.
+        crash = next((line for line in lines
+                      if line.startswith(("panic: ", "fatal error: "))), "")
+        return crash or (lines[-1] if lines else "")
 
     # Each source is best-effort on its own: one that raises (deeply nested
     # JSON raises RecursionError, not ValueError) must not silence the next.
-    for source in (json_error, last_stderr_line, lambda: _agy_log_error(home)):
+    for source in (json_error, stderr_reason, lambda: _agy_log_error(home)):
         try:
             said = source().strip()
         except Exception:  # noqa: BLE001 - a diagnostic must never block the fallback

@@ -78,6 +78,20 @@ def test_a_nonzero_exit_carries_agys_stderr(monkeypatch):
     assert result.error == "Antigravity CLI exited 3: Error: not logged into Antigravity"
 
 
+def test_a_go_panic_reports_its_message_not_the_last_stack_frame(monkeypatch):
+    # Review of b35eb3d8e (antigravity): agy is a Go binary; a panic's last stderr
+    # line is a stack frame.
+    stderr = (b"panic: runtime error: invalid memory address or nil pointer dereference\n"
+              b"[signal SIGSEGV: segmentation violation code=0x2 addr=0x0 pc=0x1]\n\n"
+              b"goroutine 1 [running]:\n"
+              b"main.run(...)\n"
+              b"\t/build/agy/main.go:10 +0x20\n")
+    _spawn(monkeypatch, b"", returncode=2, stderr=stderr)
+    error = asyncio.run(hb.call_antigravity_backend("P")).error
+    assert error == ("Antigravity CLI exited 2: panic: runtime error: invalid memory "
+                     "address or nil pointer dereference")
+
+
 def test_the_json_error_outranks_stderr(monkeypatch):
     out = {"status": "ERROR", "error": "RESOURCE_EXHAUSTED: daily quota"}
     _spawn(monkeypatch, json.dumps(out).encode(), returncode=1, stderr=b"noise")
