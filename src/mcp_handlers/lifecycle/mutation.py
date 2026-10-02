@@ -381,7 +381,7 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             recovery={
                 "action": "Agent is already archived",
                 "related_tools": ["agent"],
-                "workflow": ["1. Check agent status with get_agent_metadata", "2. Archived agents cannot be archived again"]
+                "workflow": ["1. Check agent status with agent(action='get')", "2. Archived agents cannot be archived again"]
             }
         )]
 
@@ -520,9 +520,9 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         return [error_response(
             f"Cannot delete pioneer agent '{agent_id}'",
             recovery={
-                "action": "Pioneer agents are protected from deletion. Use archive_agent instead.",
+                "action": "Pioneer agents are protected from deletion. Use agent(action='archive') instead.",
                 "related_tools": ["agent"],
-                "workflow": ["1. Call archive_agent to archive instead of delete", "2. Pioneer agents preserve system history"]
+                "workflow": ["1. Call agent(action='archive') to archive instead of delete", "2. Pioneer agents preserve system history"]
             }
         )]
 

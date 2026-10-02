@@ -143,31 +143,23 @@ class TestToolAliasActionInjection:
         """Verify aliases have inject_action field"""
         from src.mcp_handlers.tool_stability import _TOOL_ALIASES
 
-        # Agent tools
-        assert _TOOL_ALIASES["list_agents"].inject_action == "list"
-        assert _TOOL_ALIASES["get_agent_metadata"].inject_action == "get"
-        assert _TOOL_ALIASES["archive_agent"].inject_action == "archive"
-
-        # Calibration tools
-        assert _TOOL_ALIASES["check_calibration"].inject_action == "check"
-        assert _TOOL_ALIASES["rebuild_calibration"].inject_action == "rebuild"
-
-        # Knowledge tools
-        assert _TOOL_ALIASES["store_knowledge_graph"].inject_action == "store"
-        assert _TOOL_ALIASES["get_knowledge_graph"].inject_action == "get"
-        assert _TOOL_ALIASES["cleanup_knowledge_graph"].inject_action == "cleanup"
+        # The router-pinning workflow aliases (the legacy ones went 2026-09-28)
+        assert _TOOL_ALIASES["search_shared_memory"].inject_action == "search"
+        assert _TOOL_ALIASES["store_finding"].inject_action == "store"
+        assert _TOOL_ALIASES["update_finding"].inject_action == "update"
+        assert _TOOL_ALIASES["request_review"].inject_action == "request"
 
     def test_resolve_alias_returns_full_info(self):
         """resolve_tool_alias returns full ToolAlias object"""
         from src.mcp_handlers.tool_stability import resolve_tool_alias
 
-        actual_name, alias_info = resolve_tool_alias("list_agents")
+        actual_name, alias_info = resolve_tool_alias("store_finding")
 
-        assert actual_name == "agent"
+        assert actual_name == "knowledge"
         assert alias_info is not None
-        assert alias_info.inject_action == "list"
-        assert alias_info.old_name == "list_agents"
-        assert alias_info.new_name == "agent"
+        assert alias_info.inject_action == "store"
+        assert alias_info.old_name == "store_finding"
+        assert alias_info.new_name == "knowledge"
 
     def test_non_alias_returns_none(self):
         """Non-aliased tool returns (name, None)"""
@@ -384,26 +376,26 @@ class TestLiteResponseMode:
 class TestDispatchAliasInjection:
     """Test that dispatch correctly injects action from aliases"""
 
-    async def test_dispatch_list_agents_injects_action(self):
-        """dispatch_tool('list_agents') injects action='list' for agent tool"""
+    async def test_dispatch_search_shared_memory_injects_action(self):
+        """dispatch_tool('search_shared_memory') injects action='search' for knowledge"""
         from src.mcp_handlers import dispatch_tool
 
-        # list_agents is aliased to agent with inject_action='list'
-        result = await dispatch_tool("list_agents", {})
+        result = await dispatch_tool("search_shared_memory", {"query": "x"})
         assert len(result) > 0
 
         data = json.loads(result[0].text)
         # Test that action was injected (no "action required" error)
         # Note: May fail with PostgreSQL async error which is a pre-existing issue
         error_msg = data.get("error", "")
+        assert data.get("error_code") != "TOOL_NOT_FOUND", data
         assert "action" not in error_msg.lower() or "PostgreSQL" in error_msg, \
-            "Should not get 'action required' error - alias injection should have added action='list'"
+            "Should not get 'action required' error - alias injection should have added action='search'"
 
-    async def test_dispatch_check_calibration_injects_action(self):
-        """dispatch_tool('check_calibration') injects action='check'"""
+    async def test_dispatch_calibration_check_succeeds(self):
+        """dispatch_tool('calibration', action='check') succeeds (check_calibration went 2026-09-28)"""
         from src.mcp_handlers import dispatch_tool
 
-        result = await dispatch_tool("check_calibration", {})
+        result = await dispatch_tool("calibration", {"action": "check"})
         assert len(result) > 0
 
         data = json.loads(result[0].text)

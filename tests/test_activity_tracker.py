@@ -209,3 +209,17 @@ def test_prompted_vs_autonomous_patterns(tmp_path):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+def test_high_impact_router_actions_count_but_their_reads_do_not(tmp_path):
+    """export_to_file / request_dialectic_review became router actions (2026-09-28)."""
+    from src.activity_tracker import ActivityTracker, HeartbeatConfig
+
+    tracker = ActivityTracker(HeartbeatConfig(), data_dir=tmp_path)
+    tracker.track_tool_call("a1", "export", "history")
+    tracker.track_tool_call("a1", "dialectic", "get")
+    assert tracker.get_or_create("a1").files_modified == 0
+    tracker.track_tool_call("a1", "export", "file")
+    tracker.track_tool_call("a1", "dialectic", "request")
+    tracker.track_tool_call("a1", "request_review")
+    assert tracker.get_or_create("a1").files_modified == 3

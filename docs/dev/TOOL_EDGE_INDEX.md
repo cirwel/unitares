@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (55 actions) · 46 aliases.**
+**43 registered tools · 8 consolidated (55 actions) · 9 aliases.**
 
 ## Content-addressed snapshots
 
@@ -247,52 +247,15 @@ the caller had passed it.
 
 | Called as | Resolves to | Injects | Reason |
 |---|---|---|---|
-| `aggregate_metrics` | `observe` | `aggregate` | consolidated |
-| `archive_agent` | `agent` | `archive` | consolidated |
-| `backfill_calibration_from_dialectic` | `calibration` | `backfill` | consolidated |
-| `check_calibration` | `calibration` | `check` | consolidated |
 | `check_working_state` | `get_governance_metrics` | — | intuitive_alias |
-| `cleanup_knowledge_graph` | `knowledge` | `cleanup` | consolidated |
-| `cleanup_stale_locks` | `admin` | `cleanup_locks` | consolidated |
-| `compare_agents` | `observe` | `compare` | consolidated |
-| `compare_me_to_similar` | `observe` | `similar` | consolidated |
-| `debug_request_context` | `admin` | `debug_context` | consolidated |
-| `delete_agent` | `agent` | `delete` | consolidated |
-| `detect_anomalies` | `observe` | `anomalies` | consolidated |
-| `export_to_file` | `export` | `file` | consolidated |
-| `get_agent_metadata` | `agent` | `get` | consolidated |
-| `get_connection_status` | `admin` | `connections` | consolidated |
-| `get_dialectic_session` | `dialectic` | `get` | consolidated |
-| `get_discovery_details` | `knowledge` | `details` | consolidated |
-| `get_knowledge_graph` | `knowledge` | `get` | consolidated |
-| `get_lifecycle_stats` | `knowledge` | `stats` | consolidated |
 | `get_server_info` | `admin` | `server_info` | consolidated |
-| `get_system_history` | `export` | `history` | consolidated |
-| `get_telemetry_metrics` | `admin` | `telemetry` | consolidated |
-| `get_tool_usage_stats` | `admin` | `tool_usage` | consolidated |
-| `list_agents` | `agent` | `list` | consolidated |
-| `list_dialectic_sessions` | `dialectic` | `list` | consolidated |
-| `list_knowledge_graph` | `knowledge` | `list` | consolidated |
-| `observe_agent` | `observe` | `agent` | consolidated |
-| `reassign_reviewer` | `dialectic` | `reassign` | consolidated |
-| `rebuild_calibration` | `calibration` | `rebuild` | consolidated |
 | `record_result` | `outcome_event` | — | intuitive_alias |
-| `request_dialectic_review` | `dialectic` | `request` | consolidated |
 | `request_review` | `dialectic` | `request` | intuitive_alias |
-| `reset_monitor` | `admin` | `reset_monitor` | consolidated |
 | `search_shared_memory` | `knowledge` | `search` | intuitive_alias |
 | `start_session` | `onboard` | — | intuitive_alias |
 | `store_finding` | `knowledge` | `store` | intuitive_alias |
-| `store_knowledge_graph` | `knowledge` | `store` | consolidated |
-| `submit_antithesis` | `dialectic` | `antithesis` | consolidated |
-| `submit_synthesis` | `dialectic` | `synthesis` | consolidated |
-| `submit_thesis` | `dialectic` | `thesis` | consolidated |
 | `sync_state` | `process_agent_update` | — | intuitive_alias |
-| `update_agent_metadata` | `agent` | `update` | consolidated |
-| `update_calibration_ground_truth` | `calibration` | `update` | consolidated |
-| `update_discovery_status_graph` | `knowledge` | `update` | consolidated |
 | `update_finding` | `knowledge` | `update` | intuitive_alias |
-| `validate_file_path` | `admin` | `validate_path` | consolidated |
 
 ## Coverage
 

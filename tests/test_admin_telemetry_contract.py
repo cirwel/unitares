@@ -48,7 +48,7 @@ def telemetry(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("tool_name", ["admin", "get_telemetry_metrics"])
+@pytest.mark.parametrize("tool_name", ["admin"])
 @pytest.mark.parametrize("window_hours", [None, 48])
 @pytest.mark.parametrize("include_calibration", [None, False, True])
 async def test_described_admin_telemetry_matches_bound_call(

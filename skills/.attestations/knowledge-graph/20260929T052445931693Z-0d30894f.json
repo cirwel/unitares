@@ -1,0 +1,30 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-09-29T05:24:45Z",
+  "verified_date": "2026-09-29",
+  "verifier": "claude (#2593): re-checked knowledge-graph after restoring the _SINCE_* constants; it names none of the 37 removed legacy aliases, and its router, workflow-alias and raw-tool claims are unchanged",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "653168b7b3ef3148",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "84298e88c8781d77",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "6a6ed1cd1223c4f9",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "f33e76c5d5364ce9",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "382a9fef840baf06",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "f935fa6857003ff0",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/storage/knowledge_graph_age.py": "59ee851a425185e0",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "2af6ee094f55b6ee"
+  },
+  "skill_digest": "4ff5c890e5d8926b",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "26d05116bea394b0"
+    ]
+  }
+}

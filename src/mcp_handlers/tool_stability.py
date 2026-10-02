@@ -57,8 +57,10 @@ class ToolAlias:
     inject_action: Optional[str] = None  # For consolidated tools: auto-inject this action parameter
     inject_defaults: Optional[Dict[str, Any]] = None  # Friendly-surface defaults applied only when omitted
     # read / write / admin when the alias pins an action narrower than its
-    # router's class (list_agents is a read; the agent router it rewrites to
-    # also archives and deletes). None: same class as the canonical tool.
+    # router's class (an alias that pins agent(action='list') is a read; the
+    # agent router also archives and deletes). None: same class as the
+    # canonical tool. No built-in alias sets it since the 2026-09-28 cut;
+    # plugin aliases (register_extra_aliases) still may.
     operation: Optional[str] = None
     # Friendly aliases may absorb agent vocabulary or materialize advertised
     # workflow defaults before validation; canonical tools stay strict. Runs in
@@ -103,6 +105,7 @@ _SINCE_FEB_2026_CONSOLIDATION = datetime(2026, 2, 4)   # fbe8014e, the action ro
 _SINCE_TOOL_MODE_ENFORCEMENT = datetime(2026, 4, 1)    # e688c2b4, reassign_reviewer
 _SINCE_ADMIN_ROUTER = datetime(2026, 6, 29)            # ebc30169, admin router (#1278)
 
+
 # ONE NAME, ONE HOME (2026-08-29)
 # ------------------------------------------------------------------
 # A name must be EITHER a key in this table OR a register=True dispatch tool,
@@ -121,204 +124,28 @@ _SINCE_ADMIN_ROUTER = datetime(2026, 6, 29)            # ebc30169, admin router 
 # Guarded by ALIAS_SHADOWS_REGISTERED_TOOL in scripts/dev/tool_edge_index.py and
 # by test_no_alias_name_is_also_a_registered_tool.
 _TOOL_ALIASES: Dict[str, ToolAlias] = {
-    # REMOVED 2026-09-28 (operator direction: too many aliases): 24 names
-    # that only redirected a guessed or pre-consolidation name to a tool that
-    # keeps its canonical name (status, start, checkin, log, update, hello,
-    # bind_identity, get_agent_api_key, reply_to_question, ...). No capability
-    # went with them. None was ever advertised in tools/list, so the absence
-    # of calls in audit.tool_usage since 2026-07-31 is telemetry about what
-    # was surfaced, not evidence about value. A caller of a removed name gets
-    # tool_not_found_error, whose difflib suggestion is a name match and
-    # usually not the replacement; docs/CHANGELOG.md lists the replacements.
-    # who_am_i was removed earlier and is not aliased either.
+    # LEGACY ALIASES REMOVED 2026-09-28 (operator direction: too many aliases).
+    # This table used to hold 62 more names beside the eight workflow aliases
+    # below: 24 guessed or pre-consolidation redirects (status, start, checkin,
+    # hello, ...) in #2576, then 37 of the 38 pre-consolidation tool names that each
+    # renamed a router call and injected its action (list_agents ->
+    # agent(action='list'), submit_thesis -> dialectic(action='thesis'),
+    # store_knowledge_graph -> knowledge(action='store'), ...). No capability
+    # went with them: every router and action is unchanged, and the
+    # register=False handlers keep their names as internal router delegates.
+    # A caller of a removed name gets tool_not_found_error before any identity
+    # step runs; docs/changelog.d lists the replacements. Removed tools that
+    # were never aliased (who_am_i, direct_resume_if_safe) stay unaliased.
 
-    # Recovery tools - consolidated recovery hierarchy (Jan 2026)
-    #
-    # direct_resume_if_safe (deprecated 2026-01-29, superseded by self_recovery)
-    # was removed on 2026-09-07 at the operator's direction, and it is
-    # deliberately NOT aliased here. An alias to self_recovery(action="quick")
-    # would answer the old name with narrower behavior: quick resumes only at
-    # risk < 0.40, while the removed handler resumed without reflection up to
-    # risk < 0.60. Retiring that 0.40-0.60 no-reflection band is the substance
-    # of the removal (the deprecation's own migration: quick below 0.40, review
-    # with reflection above), so a caller of the old name gets
-    # tool_not_found_error and the difflib suggestion rather than a silently
-    # different resume. Until 2026-08-29 the name carried a dangling alias to
-    # the register=False delegate quick_resume, which shadowed its own handler
-    # (ALIAS_TARGET_MISSING at error severity); that history is why this note
-    # exists.
-
-    # Dialectic write tools → dialectic(action='...')  (Apr 2026 consolidation)
-    "request_dialectic_review": ToolAlias(
-        old_name="request_dialectic_review", new_name="dialectic", reason="consolidated",
-        deprecated_since=datetime(2026, 1, 29),  # matches DEPRECATION_REGISTRY
-        migration_note="Use dialectic(action='request', issue_description='...')", inject_action="request"),
-    "submit_thesis": ToolAlias(
-        old_name="submit_thesis", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use dialectic(action='thesis', session_id='...', root_cause='...')", inject_action="thesis"),
-    "submit_antithesis": ToolAlias(
-        old_name="submit_antithesis", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use dialectic(action='antithesis', session_id='...')", inject_action="antithesis"),
-    "submit_synthesis": ToolAlias(
-        old_name="submit_synthesis", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_HISTORY_FLOOR,
-        migration_note="Use dialectic(action='synthesis', session_id='...')", inject_action="synthesis"),
-    "reassign_reviewer": ToolAlias(
-        old_name="reassign_reviewer", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_TOOL_MODE_ENFORCEMENT,
-        migration_note="Use dialectic(action='reassign', session_id='...')", inject_action="reassign"),
-
-    # ==========================================================================
-    # Feb 2026 Tool Consolidation - removed tools map to consolidated versions
-    # ==========================================================================
-
-    # Observe tools → observe(action='...')
-    "observe_agent": ToolAlias(old_name="observe_agent", new_name="observe", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note=f"Use observe(action='agent', target_agent_id='...'). {EISV_INLINE_SUMMARY}", inject_action="agent"),
-    "compare_agents": ToolAlias(old_name="compare_agents", new_name="observe", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note=f"Use observe(action='compare', agent_ids=[...]). {EISV_INLINE_SUMMARY}", inject_action="compare"),
-    "compare_me_to_similar": ToolAlias(old_name="compare_me_to_similar", new_name="observe", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note=f"Use observe(action='similar'). {EISV_INLINE_SUMMARY}", inject_action="similar"),
-    "detect_anomalies": ToolAlias(old_name="detect_anomalies", new_name="observe", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note=f"Use observe(action='anomalies'). {EISV_INLINE_SUMMARY}", inject_action="anomalies"),
-    "aggregate_metrics": ToolAlias(old_name="aggregate_metrics", new_name="observe", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use observe(action='aggregate')", inject_action="aggregate"),
-
-    # Admin / diagnostics tools → admin(action='...')
+    # KEPT: get_server_info is the one legacy name still in this table. The
+    # Wave 3a BEAM route (src/wave3a_routing.py, WAVE_3A_GET_SERVER_INFO_ON_BEAM)
+    # is keyed on this name, so REST serves it from BEAM before Python dispatch.
+    # Removing the alias alone would leave REST answering a name that /mcp
+    # refuses. Re-keying that route is a BEAM change, decided separately.
     "get_server_info": ToolAlias(old_name="get_server_info", new_name="admin", reason="consolidated",
         deprecated_since=_SINCE_ADMIN_ROUTER,
         operation="read",
         migration_note="Use admin(action='server_info')", inject_action="server_info"),
-    "get_connection_status": ToolAlias(old_name="get_connection_status", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="read",
-        migration_note="Use admin(action='connections')", inject_action="connections"),
-    # get_workspace_health is deliberately NOT aliased to admin, and it is the
-    # one member of the admin group that keeps register=True.
-    #
-    # The other eight admin-group names resolved through this table to
-    # admin(action=...) while ALSO being registered dispatch tools, which made
-    # their own registration unreachable (resolve_alias rewrites the name before
-    # TOOL_HANDLERS is consulted). Retiring those registrations costs nothing
-    # because every mode that advertises them also advertises `admin`.
-    #
-    # This one is different: operator_readonly and operator_recovery advertise
-    # `get_workspace_health` and do NOT carry `admin`, and no other router
-    # reaches the handler (unlike get_telemetry_metrics, which observe() also
-    # routes). Retiring its registration would delete the capability from those
-    # modes, not just a duplicate name -- so the alias goes instead and the
-    # standalone tool stays. admin(action="workspace_health") is unaffected.
-    "get_tool_usage_stats": ToolAlias(old_name="get_tool_usage_stats", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="read",
-        migration_note="Use admin(action='tool_usage')", inject_action="tool_usage"),
-    "get_telemetry_metrics": ToolAlias(old_name="get_telemetry_metrics", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="read",
-        migration_note="Use admin(action='telemetry') or observe(action='telemetry')", inject_action="telemetry"),
-    "debug_request_context": ToolAlias(old_name="debug_request_context", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="read",
-        migration_note="Use admin(action='debug_context')", inject_action="debug_context"),
-    "validate_file_path": ToolAlias(old_name="validate_file_path", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="read",
-        migration_note="Use admin(action='validate_path', file_path='...')", inject_action="validate_path"),
-    "reset_monitor": ToolAlias(old_name="reset_monitor", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        operation="write",
-        migration_note="Use admin(action='reset_monitor')", inject_action="reset_monitor"),
-    "cleanup_stale_locks": ToolAlias(old_name="cleanup_stale_locks", new_name="admin", reason="consolidated",
-        deprecated_since=_SINCE_ADMIN_ROUTER,
-        migration_note="Use admin(action='cleanup_locks')", inject_action="cleanup_locks"),
-
-    # Dialectic tools → dialectic(action='...')
-    "get_dialectic_session": ToolAlias(old_name="get_dialectic_session", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use dialectic(action='get', session_id='...')", inject_action="get"),
-    "list_dialectic_sessions": ToolAlias(old_name="list_dialectic_sessions", new_name="dialectic", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use dialectic(action='list')", inject_action="list"),
-
-    # Config tools - registered directly (not aliased to avoid action parameter issues)
-    # Use config(action='get') or config(action='set') for consolidated access
-
-    # Export tools → export(action='...')
-    "get_system_history": ToolAlias(old_name="get_system_history", new_name="export", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use export(action='history')", inject_action="history"),
-    "export_to_file": ToolAlias(old_name="export_to_file", new_name="export", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use export(action='file')", inject_action="file"),
-
-    # Agent lifecycle tools → agent(action='...')
-    "list_agents": ToolAlias(old_name="list_agents", new_name="agent", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use agent(action='list')", inject_action="list"),
-    "get_agent_metadata": ToolAlias(old_name="get_agent_metadata", new_name="agent", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use agent(action='get', agent_id='...')", inject_action="get"),
-    "update_agent_metadata": ToolAlias(old_name="update_agent_metadata", new_name="agent", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use agent(action='update', ...)", inject_action="update"),
-    "archive_agent": ToolAlias(old_name="archive_agent", new_name="agent", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use agent(action='archive', agent_id='...')", inject_action="archive"),
-    "delete_agent": ToolAlias(old_name="delete_agent", new_name="agent", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use agent(action='delete', agent_id='...', confirm=true)", inject_action="delete"),
-
-    # Calibration tools → calibration(action='...')
-    "check_calibration": ToolAlias(old_name="check_calibration", new_name="calibration", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use calibration(action='check')", inject_action="check"),
-    "update_calibration_ground_truth": ToolAlias(old_name="update_calibration_ground_truth", new_name="calibration", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use calibration(action='update', actual_correct=...)", inject_action="update"),
-    "backfill_calibration_from_dialectic": ToolAlias(old_name="backfill_calibration_from_dialectic", new_name="calibration", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use calibration(action='backfill')", inject_action="backfill"),
-    "rebuild_calibration": ToolAlias(old_name="rebuild_calibration", new_name="calibration", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use calibration(action='rebuild')", inject_action="rebuild"),
-
-    # Knowledge graph tools → knowledge(action='...')
-    "store_knowledge_graph": ToolAlias(old_name="store_knowledge_graph", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use knowledge(action='store', summary='...')", inject_action="store"),
-    "get_knowledge_graph": ToolAlias(old_name="get_knowledge_graph", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use knowledge(action='get')", inject_action="get"),
-    "list_knowledge_graph": ToolAlias(old_name="list_knowledge_graph", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use knowledge(action='list')", inject_action="list"),
-    "update_discovery_status_graph": ToolAlias(old_name="update_discovery_status_graph", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use knowledge(action='update', discovery_id='...', status='...')", inject_action="update"),
-    "get_discovery_details": ToolAlias(old_name="get_discovery_details", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use knowledge(action='details', discovery_id='...')", inject_action="details"),
-    "cleanup_knowledge_graph": ToolAlias(old_name="cleanup_knowledge_graph", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        migration_note="Use knowledge(action='cleanup')", inject_action="cleanup"),
-    "get_lifecycle_stats": ToolAlias(old_name="get_lifecycle_stats", new_name="knowledge", reason="consolidated",
-        deprecated_since=_SINCE_FEB_2026_CONSOLIDATION,
-        operation="read",
-        migration_note="Use knowledge(action='stats')", inject_action="stats"),
 
     # ==========================================================================
     # Primary agent workflow names (Jun 2026) — task verbs for the core

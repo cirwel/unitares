@@ -51,10 +51,6 @@ EXCEPTIONS: dict[str, str] = {
         f"{GUARDED_REGISTRY}: keyed by category, whose names coincide with router names; "
         "tests/test_tool_registry_bookkeeping.py"
     ),
-    "src/mcp_handlers/introspection/tool_catalog.py::TOOL_DESCRIPTION_OVERRIDES": (
-        f"{GUARDED_REGISTRY}: dispatch-only alias names by design; "
-        "tests/test_describe_tool_drift.py pins the scope"
-    ),
     "src/alias_schema.py::ALIAS_SCHEMA_KEEP": (
         f"{GUARDED_REGISTRY}: keyed by the workflow alias whose schema it narrows; "
         "tests/test_alias_schema_narrowing.py"

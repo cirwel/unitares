@@ -757,12 +757,12 @@ async def handle_onboarding_and_resume(ctx: UpdateContext) -> Optional[Sequence[
                 recovery={
                     "action": "Cannot recover deleted agents",
                     "related_tools": ["agent"],
-                    "workflow": "Deleted agents are permanently removed. Use list_agents to see available agents."
+                    "workflow": "Deleted agents are permanently removed. Use agent(action='list') to see available agents."
                 },
                 context={
                     "agent_id": agent_id,
                     "status": "deleted",
-                    "note": "Deleted agents cannot be recovered. Use archive_agent instead of delete_agent to preserve agent state."
+                    "note": "Deleted agents cannot be recovered. Use agent(action='archive') instead of agent(action='delete') to preserve agent state."
                 }
             )]
 
@@ -2180,6 +2180,23 @@ async def _post_update_save_baseline(ctx: UpdateContext) -> None:
         logger.debug(f"Baseline save skipped: {e}")
 
 
+# Keyword signals for the auto-emitted outcome labels below. Each keyword must
+# start at a word boundary: a bare substring test let "unresolved" match
+# "resolved" and "unblocked" match "blocked", so a status line reporting open
+# problems was recorded as a completed task. Only the leading boundary is
+# required, so inflections ("errors", "crashed") still match as before.
+# Provenance: a resident that reports "N unresolved" with complexity 0.6 wrote
+# task_completed=1.0 on every check-in from 2026-09-12, which shifted its own
+# behavioral I and S for as long as any finding stayed open.
+_COMPLETION_SIGNAL_RE = re.compile(
+    r"\b(?:completed|implemented|deployed|finished|fixed|resolved|shipped"
+    r"|merged|built|created|added|refactored|migrated)"
+)
+_FAILURE_SIGNAL_RE = re.compile(
+    r"\b(?:failed|error|broken|reverted|blocked|stuck|crash|regression)"
+)
+
+
 async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     agent_id = ctx.agent_id
     # Auto-emitted outcomes are weak agent-reported labels inferred from text.
@@ -2190,12 +2207,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
     try:
         if ctx.response_text and ctx.complexity >= 0.3:
             _rt_lower = ctx.response_text.lower()
-            _completion_signals = (
-                'completed', 'implemented', 'deployed', 'finished',
-                'fixed', 'resolved', 'shipped', 'merged', 'built',
-                'created', 'added', 'refactored', 'migrated',
-            )
-            if any(sig in _rt_lower for sig in _completion_signals):
+            if _COMPLETION_SIGNAL_RE.search(_rt_lower):
                 from src.db import get_db
                 _db = get_db()
                 if _db:
@@ -2257,11 +2269,7 @@ async def _post_update_auto_outcome(ctx: UpdateContext) -> None:
                                 logger.debug(f"Calibration from positive outcome skipped: {_ce}")
             # Auto-emit negative outcome event for failure signals
             if not ctx.outcome_event_id:
-                _failure_signals = (
-                    'failed', 'error', 'broken', 'reverted', 'blocked',
-                    'stuck', 'crash', 'regression',
-                )
-                if any(sig in _rt_lower for sig in _failure_signals):
+                if _FAILURE_SIGNAL_RE.search(_rt_lower):
                     from src.db import get_db
                     _db = get_db()
                     if _db:

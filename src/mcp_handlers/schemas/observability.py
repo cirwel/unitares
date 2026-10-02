@@ -118,7 +118,7 @@ class ObserveParams(AgentIdentityMixin):
             "audit_events and outcome_evidence match it exactly against the "
             "stored agent_id and do not resolve labels. That is a UUID for most "
             "agents, but some audit writers record a name instead (the stuck "
-            "sweep records system). Use list_agents to find."
+            "sweep records system). Use agent(action='list') to find."
         ),
         json_schema_extra={
             "brief": (

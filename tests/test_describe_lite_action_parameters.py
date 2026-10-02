@@ -225,7 +225,9 @@ PINNED = _action_pinning_aliases()
 
 def test_the_survey_found_the_legacy_aliases():
     names = {name for name, *_ in PINNED}
-    assert {"update_finding", "get_discovery_details", "store_knowledge_graph"} <= names
+    # Only the workflow aliases pin router actions since the legacy ones went
+    # on 2026-09-28; the survey must still find all four of them.
+    assert {"update_finding", "store_finding", "search_shared_memory", "request_review"} <= names
 
 
 @pytest.mark.parametrize(
