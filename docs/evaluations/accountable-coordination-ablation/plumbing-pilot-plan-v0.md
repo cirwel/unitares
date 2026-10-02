@@ -165,16 +165,17 @@ below use δ = 15 percentage points purely for illustration. n scales with
 - **A probe would not fix the cost basis.** Two or three small synthetic
   families give 8 to 12 heavy-tailed, censored, likely low-cost points. That is
   not a planning basis for the confirmatory study.
-- **The protocol's own penalty.** An underpowered run returns "unsupported",
-  which the protocol requires publishing. That would read as evidence of no
-  value when it is evidence of nothing.
+- **The protocol's own penalty.** An underpowered run is likely to miss a real
+  effect and return "unsupported", which the protocol requires publishing. Its
+  estimate and interval would still be informative, but a wide interval
+  around a small effect is easily read as evidence of no value.
 
 **Correction to the fractional-score figure.** The figure of about 31 families
 assumes a graded score with σd near 0.3. Repository tasks often carry only one
 to three fail-to-pass tests, which makes a fractional score close to binary,
 so that figure is optimistic. The normal-approximation ranges above (about
-31, 105 to 140, and the "31 to 140" in D1) are superseded by the exact table
-below.
+31, 105 to 140, and the "31 to 140" in D1) and the 124 to 560 variant count
+derived from them are superseded by the exact table below.
 
 **Exact power for roughly pass/fail scores.** For binary paired scores the
 primary test reduces to a sign test on the tasks where the arms differ. Power
@@ -192,7 +193,7 @@ when a fraction of tasks differ between arms:
 How many tasks differ between arms is not known. The first row is the most
 favourable case possible at δ = 0.15. Even there, 40 tasks gives 57% power.
 By enumeration, 80% power at δ = 0.15 needs 52 tasks in that most favourable
-case and 148 when 40% of tasks differ. For variance alone: with differences in
+case and 147 when 40% of tasks differ (more if more differ). For variance alone: with differences in
 {−1, 0, 1} and mean δ, the variance is at least δ(1−δ), so the normal
 approximation needs at least 7.84(1−δ)/δ ≈ 45 families at δ = 0.15.
 
