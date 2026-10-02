@@ -76,6 +76,10 @@ def _extract_verdict(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             position = start + 1
             continue
+        except RecursionError:
+            # Too deeply nested to decode. Skipping one brace and rescanning is
+            # quadratic in the depth, so the whole reply counts as no verdict.
+            return None
         if isinstance(value, dict) and "agrees" in value:
             last = text[start : start + consumed]
         position = start + consumed
@@ -602,7 +606,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
     raw = stdout.decode(errors="replace").strip()
     try:
         data = json.loads(raw.splitlines()[-1]) if raw else {}
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, RecursionError):
         data = {}
     if not isinstance(data, dict) or data.get("status") != "SUCCESS":
         return fail("Antigravity CLI reported no successful result", latency_ms=latency_ms)

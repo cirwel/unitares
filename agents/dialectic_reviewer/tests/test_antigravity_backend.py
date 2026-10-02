@@ -143,6 +143,31 @@ def test_a_source_that_raises_does_not_silence_the_next(monkeypatch):
     assert asyncio.run(hb.call_antigravity_backend("P")).error == "Antigravity CLI exited 3"
 
 
+def test_too_deep_json_from_a_successful_agy_falls_back(monkeypatch):
+    # #2619: RecursionError, raised directly (the overflowing depth varies by build).
+    real_loads, real_decode = json.loads, json.JSONDecoder.raw_decode
+
+    def loads(s, *a, **kw):
+        if "DEEP-OUTER" in s:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_loads(s, *a, **kw)
+
+    def raw_decode(self, s, *a, **kw):
+        if s.startswith('{"deep"'):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real_decode(self, s, *a, **kw)
+
+    monkeypatch.setattr(json, "loads", loads)
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", raw_decode)
+    _spawn(monkeypatch, b'{"status": "SUCCESS", "response": "DEEP-OUTER"}')
+    result = asyncio.run(hb.call_antigravity_backend("P"))
+    assert result.text is None and "no successful result" in result.error
+    reply = json.dumps(VERDICT) + ' {"deep": {"deep": {}}}'
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": reply}).encode())
+    result = asyncio.run(hb.call_antigravity_backend("P"))
+    assert result.text is None and "no parseable" in result.error
+
+
 def test_the_exit_reason_is_bounded(monkeypatch):
     _spawn(monkeypatch, b"", returncode=2, stderr=b"x" * 5000)
     error = asyncio.run(hb.call_antigravity_backend("P")).error

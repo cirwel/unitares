@@ -181,3 +181,20 @@ def test_codex_backend_uses_resolved_cli_and_quoted_prompt():
     assert '"$DR_PROMPT"' in captured["args"][2]
     assert captured["kwargs"]["env"]["DR_CLI"] == "/opt/bin/codex"
     assert captured["kwargs"]["env"]["DR_PROMPT"] == "review this"
+
+
+def test_extract_stops_at_too_deep_json_instead_of_rescanning(monkeypatch):
+    # #2619: skipping one brace per RecursionError is quadratic in the depth,
+    # so the whole transcript counts as no verdict, even one before the blob.
+    real, calls = json.JSONDecoder.raw_decode, []
+
+    def raw_decode(self, s, *a, **kw):
+        calls.append(s)
+        if s.startswith('{"deep"'):
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(self, s, *a, **kw)
+
+    monkeypatch.setattr(json.JSONDecoder, "raw_decode", raw_decode)
+    text = '{"agrees": true} {"deep": {"deep": {}}}'
+    assert r.extract_last_json_object(text) is None
+    assert len(calls) == 2
