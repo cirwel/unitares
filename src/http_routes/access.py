@@ -92,8 +92,8 @@ def _build_http_session_signals(request):
 # ---------------------------------------------------------------------------
 # Trusted networks: loopback and the private RFC1918 ranges, plus any the
 # operator adds with UNITARES_TRUSTED_NETWORKS. Defined once in
-# src/trusted_networks.py, which the local model endpoint classifier
-# (src/local_inference_env.py) shares, so "local" means one thing server-wide.
+# src/trusted_networks.py so that other server code can ask the same question
+# without importing this routes module.
 # ---------------------------------------------------------------------------
 _TRUSTED_NETWORKS = list(BUILTIN_TRUSTED_NETWORKS)
 

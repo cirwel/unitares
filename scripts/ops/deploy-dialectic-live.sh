@@ -43,10 +43,11 @@ deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
 deploy_lib_nudge_lease_plane "$TAG" "deploy-dialectic-live.sh" "$DEPLOY"
 
-# scripts/start.sh already runs deps.get + assets.deploy on every boot, so a
-# failure there would surface only as a launchd crash-loop with KeepAlive
-# restarting it forever. Doing both HERE turns that into a deploy-time error
-# with the output in front of you, before anything is restarted.
+# scripts/start.sh runs deps.get on every boot, and builds assets when the
+# build on disk is not this checkout's. A failure there surfaces only in the
+# service log. Doing both HERE turns that into a deploy-time error with the
+# output in front of you, before anything is restarted, and writes the stamp
+# that lets the restart below skip the asset build.
 echo "[deploy] compiling dialectic_live + assets (MIX_ENV=prod; surfaces errors before restart)"
 (
   cd "$DEPLOY/elixir/dialectic_live"
