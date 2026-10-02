@@ -340,6 +340,21 @@ before. CI enforces the rule, reading the policy as merged on the PR's base
 ref, never from the PR head, so a PR cannot remove itself from the list; if
 the changed paths cannot be read, it requires the second family.
 
+**Operator waiver of the second family.** For a small change to a sensitive
+path (a help string, a renamed symbol), the operator can run
+`review.sh waive --reason "<why>" --operator-approved`. It is bounded: one
+family must already have passed this exact diff, so a waiver never replaces the
+first review; it is tied to the diff key, so any push that changes the diff
+voids it; the gate counts the changed lines on the sensitive paths from git and
+refuses past 20 (`waiver.max_changed_lines` in the policy file, read from the
+base ref); a PR carries at most 2 (`waiver.max_per_pr`); and the gate's own
+files (`review_gate.py`, `review_policy.json`, `review.sh`,
+`review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
+behavioural change on a sensitive path can be waived too, so read the hunks
+before you waive. The comment shows the waived hunks and
+the reason. The gate cannot tell who posted it, since every agent uses the
+operator's account, so an agent runs `waive` only when the operator says to.
+
 `review.sh` never starts the second review itself. When a sensitive diff has
 only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)
 and prints the next step: the exact
