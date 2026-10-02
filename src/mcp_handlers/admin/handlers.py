@@ -333,7 +333,7 @@ async def handle_check_continuity_health(arguments: Dict[str, Any]) -> Sequence[
         if metadata_count == 0:
             health_report["recommendations"].append("No agent metadata found - ensure process_agent_update is being called")
         if graph_stats.get("total_discoveries", 0) == 0:
-            health_report["recommendations"].append("No discoveries in knowledge graph - ensure store_knowledge_graph is working")
+            health_report["recommendations"].append("No discoveries in knowledge graph - ensure knowledge(action='store') is working")
         if provenance_count == 0 and deep_check:
             health_report["recommendations"].append("No provenance data found - check that provenance capture is enabled")
 
@@ -711,7 +711,7 @@ async def handle_get_telemetry_metrics(arguments: Dict[str, Any]) -> Sequence[Te
             # Provide summary instead of full calibration data
             response["calibration"] = {
                 "note": "Calibration data excluded to reduce response size. Set include_calibration=true to get full calibration metrics.",
-                "related_tool": "check_calibration"
+                "related_tool": "calibration(action='check')"
             }
         
         return success_response(response)
@@ -926,7 +926,7 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
     
     Policies checked:
     - Test scripts (test_*.py, demo_*.py) must be in tests/ directory
-    - Markdown files in docs/analysis/, docs/fixes/, etc. should use store_knowledge_graph() instead
+    - Markdown files in docs/analysis/, docs/fixes/, etc. should use knowledge(action='store') instead
     - New markdown files should be on approved list or ≥500 words
     
     Returns:
@@ -941,7 +941,7 @@ async def handle_validate_file_path(arguments: Dict[str, Any]) -> Sequence[TextC
             details={"error_type": "missing_parameter", "parameter": "file_path"},
             recovery={
                 "action": "Provide file_path parameter",
-                "workflow": ["1. Call validate_file_path with file_path parameter", "2. Review response before creating file"]
+                "workflow": ["1. Call admin(action='validate_path') with file_path parameter", "2. Review response before creating file"]
             }
         )]
     

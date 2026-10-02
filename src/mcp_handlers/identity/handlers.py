@@ -618,7 +618,7 @@ async def handle_identity_v2(
         identity()              -> Returns your UUID and label (lazy, not persisted)
         identity(name="X")      -> Sets your label to X, returns UUID (persists agent)
 
-    This tool does NOT look up other agents. Use get_agent_metadata for that.
+    This tool does NOT look up other agents. Use agent(action='get') for that.
     """
     # Resolve session to identity (lazy — doesn't persist yet).
     # Name-claim was removed 2026-04-17: `name` is now a cosmetic label,

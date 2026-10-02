@@ -34,15 +34,11 @@ _READ_ONLY_TOOLS = call_set(
 )
 
 # Expensive-read loop detection keys: (canonical name, resolved action).
-# 'agent'/'list' is what the legacy list_agents alias dispatches as.
 _EXPENSIVE_READ_CALLS = {("agent", "list")}
-_LEGACY_EXPENSIVE_READ_TOOLS = {"list_agents"}  # direct-step callers/tests
 
 
 def _loop_detection_key(name: str, arguments: Dict[str, Any]) -> Optional[str]:
     """Return the loop-detection history key for expensive read calls."""
-    if name in _LEGACY_EXPENSIVE_READ_TOOLS:
-        return name
     action = arguments.get("action") or arguments.get("op")
     action = str(action).lower() if action else None
     if (name, action) in _EXPENSIVE_READ_CALLS:

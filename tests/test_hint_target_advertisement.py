@@ -245,23 +245,19 @@ def handle_list_tools(arguments):
         "categories": {"lifecycle": {"tools": ["list_agents", "self_recovery"]}},
         "getting_started": {"next_steps": [{"tools": ["store_knowledge_graph"]}]},
         "relationships": {
-            "health_check": {"depends_on": ["observe_agent"], "related_to": ["get_server_info"]},
+            "health_check": {"depends_on": ["observe_agent"], "related_to": ["get_connection_status"]},
         },
     }
 ''')
         findings = {f.tool: f for f in scanner.find_dead_end_hints("standard")}
         assert set(findings) == {
             "list_agents", "get_system_history", "store_knowledge_graph",
-            "observe_agent", "get_server_info",
+            "observe_agent", "get_connection_status",
         }
-        # Each names a pre-consolidation twin whose router is advertised, so
-        # the hint text is fixable in place.
-        assert {f.kind for f in findings.values()} == {"names_unadvertised_twin"}
-        assert findings["list_agents"].advertised_alias == "agent"
-        assert findings["get_system_history"].advertised_alias == "export"
-        assert findings["store_knowledge_graph"].advertised_alias == "knowledge"
-        assert findings["observe_agent"].advertised_alias == "observe"
-        assert findings["get_server_info"].advertised_alias == "admin"
+        # Each names a pre-consolidation handler whose alias was removed on
+        # 2026-09-28, so no call reaches it by that name: the hint names no
+        # callable tool and must be rewritten to the router call.
+        assert {f.kind for f in findings.values()} == {"names_no_such_tool"}
         # The names list_tools DOES list: an advertised router or workflow
         # alias in a name field is what these fields should carry.
         assert not ({"self_recovery", "get_governance_metrics"} & set(findings))
@@ -294,13 +290,13 @@ def handle_list_tools(arguments):
         handler_tree("catalog.py", "TOOL_RELATIONSHIPS = {}\n")  # an empty handler tree is 'unknown', not 'clean'
         handler_tree("../tool_meta.py", '''
 TOOL_META = (
-    ToolMeta("health_check", category="admin", related_to=("get_server_info", "admin(action='telemetry')")),
+    ToolMeta("health_check", category="admin", related_to=("get_connection_status", "admin(action='telemetry')")),
     ToolMeta("set_thresholds", category="config", depends_on=("get_thresholds",)),
 )
 ''')
-        sites = scanner.collect_hint_sites({"get_server_info", "admin", "get_thresholds", "health_check"})
+        sites = scanner.collect_hint_sites({"get_connection_status", "admin", "get_thresholds", "health_check"})
         # The record's own name is a positional argument, not a hint.
-        assert set(sites) == {"get_server_info", "admin", "get_thresholds"}
+        assert set(sites) == {"get_connection_status", "admin", "get_thresholds"}
         assert all(
             site.startswith("src/tool_meta.py:")
             for triples in sites.values()
@@ -308,8 +304,8 @@ TOOL_META = (
         )
         assert {action for _, action, _ in sites["admin"]} == {"telemetry"}
         findings = {f.tool: f for f in scanner.find_dead_end_hints("standard")}
-        assert set(findings) == {"get_server_info"}
-        assert findings["get_server_info"].advertised_alias == "admin"
+        assert set(findings) == {"get_connection_status"}
+        assert findings["get_connection_status"].kind == "names_no_such_tool"
 
     def test_the_real_relationship_graph_is_in_the_inventory(self):
         """Against the real tree: the inventory carries src/tool_meta.py sites."""
@@ -348,14 +344,14 @@ def summary(tools_list):
     def test_a_structured_walk_still_follows_bindings_and_builders(self, handler_tree):
         handler_tree("bound.py", '''
 def related():
-    return ["get_server_info"]
+    return ["get_connection_status"]
 
 def payload():
     names = ("observe_agent",)
     return {"related_to": names, "depends_on": related(), "tools": [*names, "list_agents"]}
 ''')
-        sites = scanner.collect_hint_sites({"get_server_info", "observe_agent", "list_agents"})
-        assert set(sites) == {"get_server_info", "observe_agent", "list_agents"}
+        sites = scanner.collect_hint_sites({"get_connection_status", "observe_agent", "list_agents"})
+        assert set(sites) == {"get_connection_status", "observe_agent", "list_agents"}
 
 
 class TestNoRegression:

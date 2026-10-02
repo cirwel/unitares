@@ -139,15 +139,14 @@ def test_destructive_and_fleet_ops_are_high():
     for tool in ("archive_orphan_agents", "set_thresholds"):
         assert (tool, None) in _HIGH, tool
         assert get_action_stakes(tool, None) == "high", tool
-    # reset_monitor / cleanup_stale_locks are aliases of admin actions and carry
-    # no entry of their own, so what has to hold is that the name dispatch
-    # lands on is the classified one. A bare lookup on the alias would only be
-    # reporting the fail-closed default.
-    for alias, canonical in (("reset_monitor", ("admin", "reset_monitor")),
-                             ("cleanup_stale_locks", ("admin", "cleanup_locks"))):
-        assert _resolve_canonical_and_action(alias, {}) == canonical, alias
+    # The admin reset and lock-cleanup actions are reached only as
+    # admin(action=...) since their reset_monitor / cleanup_stale_locks aliases
+    # were removed on 2026-09-28; the router call is the classified one.
+    for canonical in (("admin", "reset_monitor"), ("admin", "cleanup_locks")):
+        call = (canonical[0], {"action": canonical[1]})
+        assert _resolve_canonical_and_action(*call) == canonical, canonical
         assert canonical in _HIGH, canonical
-        assert get_call_stakes_requirement(alias, {}) == "high", alias
+        assert get_call_stakes_requirement(*call) == "high", canonical
 
 
 def test_cirs_protocol_is_classified_per_action_not_by_one_blanket_key():

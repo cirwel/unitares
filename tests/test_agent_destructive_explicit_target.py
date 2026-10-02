@@ -135,10 +135,8 @@ async def _dispatch(name: str, arguments: dict) -> tuple[dict, dict]:
     [
         ("agent", {"action": "delete", "confirm": True}),
         ("agent", {"op": "delete", "confirm": True}),
-        ("delete_agent", {"confirm": True}),
         ("agent", {"action": "archive"}),
         ("agent", {"action": "archive", "force": True}),
-        ("archive_agent", {}),
     ],
 )
 def test_a_destructive_call_without_agent_id_does_not_reach_the_caller(name, arguments):
@@ -151,6 +149,35 @@ def test_a_destructive_call_without_agent_id_does_not_reach_the_caller(name, arg
         assert "agent_id" in recovery.get("action", ""), recovery
         assert bound.archived() == [] and bound.deleted() == []
         assert bound.server.agent_metadata[CALLER].status == "active"
+
+
+@pytest.mark.parametrize(
+    "name,arguments",
+    [
+        ("delete_agent", {"confirm": True}),
+        ("archive_agent", {}),
+        ("delete_agent", {"agent_id": TARGET, "confirm": True}),
+        ("archive_agent", {"agent_id": TARGET}),
+        ("delete_agent", {"kwargs": {"confirm": True}}),
+    ],
+)
+def test_a_removed_destructive_alias_is_refused_before_identity_and_touches_nothing(name, arguments):
+    """delete_agent and archive_agent were aliases of agent(action=...) until
+    2026-09-28. A caller that still sends them must get TOOL_NOT_FOUND from
+    the real dispatch pipeline before any identity step runs, and no agent
+    may be archived or deleted, named or not."""
+    from src.mcp_handlers import dispatch_tool
+
+    resolve = AsyncMock(return_value={"agent_uuid": CALLER})
+    with _Bound() as bound, patch(
+        "src.mcp_handlers.identity.handlers.resolve_session_identity", resolve
+    ):
+        result = asyncio.run(dispatch_tool(name, dict(arguments)))
+        payload = json.loads(result[0].text)
+        assert payload.get("error_code") == "TOOL_NOT_FOUND", payload
+        resolve.assert_not_awaited()
+        assert bound.archived() == [] and bound.deleted() == []
+        assert {m.status for m in bound.server.agent_metadata.values()} == {"active"}
 
 
 @pytest.mark.parametrize("action", ["archive", "delete"])
@@ -199,7 +226,7 @@ def test_archive_acts_on_the_agent_whose_uuid_is_named(named):
 def test_archiving_yourself_needs_your_own_uuid():
     with _Bound() as bound:
         _sent, payload = asyncio.run(
-            _dispatch("archive_agent", {"agent_id": CALLER})
+            _dispatch("agent", {"action": "archive", "agent_id": CALLER})
         )
         assert payload.get("success") is True, payload
         assert bound.archived() == [CALLER]
@@ -356,8 +383,6 @@ def _lite(**arguments) -> list[str]:
     [
         {"tool_name": "agent", "action": "archive"},
         {"tool_name": "agent", "action": "delete"},
-        {"tool_name": "archive_agent"},
-        {"tool_name": "delete_agent"},
     ],
 )
 def test_lite_view_of_a_destructive_action_requires_agent_id(arguments):
@@ -373,7 +398,6 @@ def test_lite_view_of_delete_requires_confirm_too():
     [
         {"tool_name": "agent", "action": "get"},
         {"tool_name": "agent", "action": "resume"},
-        {"tool_name": "get_agent_metadata"},
     ],
 )
 def test_lite_view_of_a_targeted_read_shows_agent_id(arguments):
@@ -507,15 +531,12 @@ def _rest_prebind(name: str, arguments: dict, path: str, monkeypatch) -> tuple[s
     [
         ("agent", {"action": "delete", "confirm": True}),
         ("agent", {"op": "delete", "confirm": True}),
-        ("delete_agent", {"confirm": True}),
         ("agent", {"action": "archive"}),
-        ("archive_agent", {}),
         ("agent", {"action": "archive", "agent_id": ""}),
         # Codex on #2579: the kwargs wrapper REST accepts. The stamp lands on
         # the outer dict and dispatch unwraps kwargs over it afterwards.
         ("agent", {"kwargs": {"action": "delete", "confirm": True}}),
         ("agent", {"kwargs": json.dumps({"action": "archive"})}),
-        ("delete_agent", {"kwargs": {"confirm": True}}),
     ],
 )
 def test_rest_prebind_does_not_name_the_caller_as_the_target(name, arguments, path, monkeypatch):

@@ -1123,8 +1123,8 @@ def missing_parameter_error(
         }
     elif tool_name == "store_knowledge_graph":
         examples = {
-            "example": 'store_knowledge_graph(summary="Discovery description", tags=["tag1"])',
-            "quick_fix": "Add summary parameter: store_knowledge_graph(summary='Your discovery')"
+            "example": "knowledge(action='store', summary='Discovery description', tags=['tag1'])",
+            "quick_fix": "Add summary parameter: knowledge(action='store', summary='Your discovery')"
         }
     
     details = {

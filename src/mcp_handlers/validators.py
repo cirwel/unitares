@@ -109,7 +109,7 @@ def validate_file_path_policy(file_path: str) -> Tuple[Optional[str], Optional[T
                 if subdir in MIGRATION_TARGET_DIRS:
                     rel_path = os.path.relpath(file_path, os.getcwd()) if os.path.isabs(file_path) else file_path
                     if rel_path not in APPROVED_FILES:
-                        warning = f"⚠️ POLICY VIOLATION: Markdown file in migration target directory.\nLocation: {file_path}\nPolicy: Files in docs/{subdir}/ should use store_knowledge_graph() instead of creating markdown files.\nAction: Use store_knowledge_graph() for insights/discoveries, or consolidate into existing approved docs.\nApproved files: {', '.join(sorted(APPROVED_FILES))}"
+                        warning = f"⚠️ POLICY VIOLATION: Markdown file in migration target directory.\nLocation: {file_path}\nPolicy: Files in docs/{subdir}/ should use knowledge(action='store') instead of creating markdown files.\nAction: Use knowledge(action='store') for insights/discoveries, or consolidate into existing approved docs.\nApproved files: {', '.join(sorted(APPROVED_FILES))}"
                         return (warning, None)
         rel_path = os.path.relpath(file_path, os.getcwd()) if os.path.isabs(file_path) else file_path
         if rel_path not in APPROVED_FILES:
@@ -118,7 +118,7 @@ def validate_file_path_policy(file_path: str) -> Tuple[Optional[str], Optional[T
                 if docs_index + 1 < len(path_parts):
                     subdir = path_parts[docs_index + 1]
                     if subdir not in {'guides', 'reference', 'archive', 'operations', 'dev', 'engineering', 'meta'}:
-                        warning = f"⚠️ POLICY WARNING: New markdown file not on approved list.\nLocation: {file_path}\nPolicy: New markdown files should be ≥500 words and on approved list, or use store_knowledge_graph() instead.\nAction: Consider using store_knowledge_graph() for insights, or ensure file is ≥500 words and consolidate into existing docs.\nApproved files: {', '.join(sorted(APPROVED_FILES))}"
+                        warning = f"⚠️ POLICY WARNING: New markdown file not on approved list.\nLocation: {file_path}\nPolicy: New markdown files should be ≥500 words and on approved list, or use knowledge(action='store') instead.\nAction: Consider using knowledge(action='store') for insights, or ensure file is ≥500 words and consolidate into existing docs.\nApproved files: {', '.join(sorted(APPROVED_FILES))}"
                         return (warning, None)
     return (None, None)
 

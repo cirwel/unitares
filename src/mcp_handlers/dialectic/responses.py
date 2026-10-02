@@ -130,7 +130,7 @@ def no_sessions_found_recovery() -> Dict[str, Any]:
     return {
         "action": "No dialectic sessions found for that agent.",
         "related_tools": ["get_governance_metrics", "search_knowledge_graph"],
-        "note": "Use get_governance_metrics for live state and request_dialectic_review only when a review is actually needed.",
+        "note": "Use get_governance_metrics for live state and dialectic(action='request') only when a review is actually needed.",
     }
 
 
@@ -201,7 +201,7 @@ def next_step_submit_antithesis(reviewer_agent_id: str | None) -> str:
 
 def next_step_negotiate_synthesis() -> str:
     """Next-step guidance after successful antithesis submission."""
-    return "Both agents should negotiate via submit_synthesis() until convergence"
+    return "Both agents should negotiate via dialectic(action='synthesis') until convergence"
 
 
 def next_step_resumed() -> str:
