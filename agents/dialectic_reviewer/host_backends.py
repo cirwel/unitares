@@ -465,6 +465,10 @@ def resolve_antigravity_cli() -> Optional[str]:
 
 # How much of agy's own explanation a failure carries into the stored warning.
 _AGY_REASON_CHARS = 300
+# A complete glog header at error or fatal level: "E1002 14:11:36.079954 66
+# server.go:1660] ". The whole header, not just "E" plus digits, because a
+# multi-line log entry can carry prompt text, and prompt text is untrusted.
+_GLOG_ERROR_LINE = re.compile(r"^[EF]\d{4} \d{2}:\d{2}:\d{2}\.\d+\s+\d+ [^\s\]]+:\d+\] ")
 
 
 def _agy_log_error(home: str) -> str:
@@ -482,7 +486,7 @@ def _agy_log_error(home: str) -> str:
     except OSError:
         return ""
     for line in reversed(lines):
-        if line[:1] in ("E", "F") and line[1:5].isdigit():
+        if _GLOG_ERROR_LINE.match(line):
             return line.strip()
     return ""
 
@@ -572,7 +576,10 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
             return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
         if proc.returncode != 0:
             # Inside the with: the log fallback reads the temporary home.
-            said = _agy_exit_reason(stdout or b"", stderr or b"", home)
+            try:
+                said = _agy_exit_reason(stdout or b"", stderr or b"", home)
+            except Exception:  # noqa: BLE001 - a diagnostic must never block the fallback
+                said = ""
             return fail(f"Antigravity CLI exited {proc.returncode}"
                         + (f": {said}" if said else ""),
                         latency_ms=int((time.monotonic() - started) * 1000))
