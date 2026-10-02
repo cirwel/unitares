@@ -276,6 +276,13 @@ almost all of them `test_failed`. Three facts constrain their use.
    eligibility requires. Historical rows cannot be retrofitted into episodes,
    and their count is not a capacity estimate.
 
+"Adverse" in this study means that rework was required. It does not mean
+fault, intent, or misconduct, and no outcome here is evidence about an agent's
+honesty or diligence. Failed changes in a busy queue are mostly honest
+mistakes or miscommunication, and the labels are defined so that they are
+counted as rework and attributed only where the cause is the agent's own
+change.
+
 The following rules apply.
 
 - **Producer, not string.** `label_provenance.producer_class =
@@ -288,6 +295,17 @@ The following rules apply.
   endpoint only if it is still unresolved when the prediction window closes. A
   passing run of the same test on the same task inside the window resolves it,
   and the event is recorded as the secondary transient-failure outcome.
+- **Attributable to the episode's own change.** A test failure counts toward
+  the primary endpoint only if it is attributable to the change made in the
+  episode. Failures caused by the merge queue or its surroundings are
+  recorded as secondary environment-caused events: a stale base or merge
+  conflict, a sibling change that broke the shared branch, a test that passes
+  on rerun with no change (flaky), or CI infrastructure. Where the cause is not
+  recorded, the failure is secondary, not primary.
+- **One cause, one event.** Failures across episodes that share one root cause,
+  such as a single breaking commit on the shared branch, resolve to one
+  adverse event in one independence cluster. Concurrent failures in a busy
+  queue are not independent replicates.
 - **Same channel, different process.** If primary labels come from the stop
   rule's trusted anchor, this study is a different measurement process
   (prospective frozen snapshots, the behavioral A2 baseline, Brier score, the
@@ -720,7 +738,8 @@ invalid.
 ### Version history
 
 - `0.3.1` — adds admission rules for `external_signal` outcomes: producer-level
-  primary eligibility, unresolved-at-window-close for test failures, the shared
+  primary eligibility, unresolved-at-window-close and own-change attribution
+  for test failures, one event per root cause, rework-not-fault framing, the shared
   label channel with the outcome-grounding stop rule, and operator versus
   substrate independence. Changes no estimand, arm, threshold, or result.
 - `0.3.0` — adds the signed, privacy-preserving federated pilot exchange and
