@@ -169,3 +169,16 @@ def test_a_same_host_proxy_passes_on_its_callers_address_not_loopback(proxy_peer
              "headers": [(b"x-forwarded-for", b"8.8.8.8")]}
     asyncio.run(middleware(scope, None, None))
     assert seen["trusted"] is False
+
+
+def test_a_mapped_entry_matches_a_mapped_peer_not_a_native_ipv4_one(monkeypatch):
+    """The comment on extra_trusted_networks() says which form a mapped entry
+    matches: the ::ffff: form a dual-stack bind reports, not a native IPv4 peer."""
+    import ipaddress
+
+    from src import trusted_networks
+
+    monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "::ffff:100.64.0.0/106")
+    monkeypatch.setattr(trusted_networks, "_extra_networks_cache", ("", ()))
+    assert trusted_networks.is_trusted_address(ipaddress.ip_address("::ffff:100.100.1.2"))
+    assert not trusted_networks.is_trusted_address(ipaddress.ip_address("100.100.1.2"))
