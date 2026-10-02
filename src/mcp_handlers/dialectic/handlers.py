@@ -1717,13 +1717,13 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             note = (
                 "No standing peer is assigned yet. The reviewer slot is left open: "
                 "submit your thesis now, and an independent reviewer (summoned or "
-                "operator-assigned) can claim it via submit_antithesis. Human "
+                "operator-assigned) can claim it via dialectic(action='antithesis'). Human "
                 "facilitation is requested only if those review paths fail."
             )
     elif session.reviewer_agent_id and session.reviewer_agent_id != agent_uuid:
-        note = f"Reviewer assigned: {session.reviewer_agent_id[:12]}... Use submit_thesis to add your thesis."
+        note = f"Reviewer assigned: {session.reviewer_agent_id[:12]}... Use dialectic(action='thesis') to add your thesis."
     elif session.reviewer_agent_id:
-        note = "Session created with self-review. Use submit_thesis to add your thesis."
+        note = "Session created with self-review. Use dialectic(action='thesis') to add your thesis."
     else:
         note = "Session created. Awaiting reviewer assignment. Operator should assign a reviewer, then paused agent submits thesis."
 

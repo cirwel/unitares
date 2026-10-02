@@ -13,7 +13,7 @@ Usage:
     python scripts/diagnostics/mcp_call.py --session my_session start_session force_new=true
 
     # Show tool schema
-    python scripts/diagnostics/mcp_call.py --describe update_agent_metadata
+    python scripts/diagnostics/mcp_call.py --describe agent
 """
 
 import argparse
@@ -335,7 +335,7 @@ Examples:
   %(prog)s --session my_session start_session force_new=true
   %(prog)s process_agent_update agent_id=test update_type=reflection content="test"
   %(prog)s search_knowledge_graph query=migration limit=5
-  %(prog)s update_agent_metadata agent_id=test tags='["tag1","tag2"]'
+  %(prog)s agent action=update agent_id=test tags='["tag1","tag2"]'
         """,
     )
     parser.add_argument("--url", default=DEFAULT_URL, help="MCP server URL")

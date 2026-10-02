@@ -163,12 +163,12 @@ WHAT IT DOES:
 SEE ALSO:
 - get_governance_metrics - Check current state WITHOUT logging work (read-only)
 - simulate_update - Test governance decision without advancing state (dry-run; still appends an audit event)
-- get_system_history - View historical trends over time
+- export(action='history') - View historical trends over time
 
 ALTERNATIVES:
 - Want to check state without logging? → Use get_governance_metrics() (read-only, no update)
 - Want to test decision? → Use simulate_update() (dry-run, no state advance; still appends an audit event)
-- Want historical data? → Use get_system_history() (time series, not current state)
+- Want historical data? → Use export(action='history') (time series, not current state)
 
 WHEN TO USE:
 - After completing a task or generating output
@@ -219,7 +219,7 @@ PARAMETERS (most are optional):
 RELATED TOOLS:
 - simulate_update: Test decisions without advancing state (still appends an audit event)
 - get_governance_metrics: Get current state without updating
-- get_system_history: View historical governance data
+- export(action='history'): View historical governance data
 - identity: Check/set your identity first
 
 ERROR RECOVERY:
@@ -317,13 +317,13 @@ Read one agent's current governance state: it runs no cycle and mints no identit
 
 SEE ALSO:
 - health_check() - System health (server-level, not agent-specific)
-- get_connection_status() - MCP connection status (transport-level)
+- admin(action='connections') - MCP connection status (transport-level)
 - identity() - Agent identity (who you are, not metrics)
 
 ALTERNATIVES:
 - Want to log work and get a decision? → Use process_agent_update()
 - Want system health? → Use health_check() (server-level)
-- Want connection status? → Use get_connection_status() (MCP transport)
+- Want connection status? → Use admin(action='connections') (MCP transport)
 
 USE CASES:
 - Check current agent state before making decisions
@@ -350,11 +350,11 @@ RETURNS:
 
 RELATED TOOLS:
 - process_agent_update: Update state and get decision
-- observe_agent: Get detailed pattern analysis
-- get_system_history: View historical trends
+- observe(action='agent'): Get detailed pattern analysis
+- export(action='history'): View historical trends
 
 ERROR RECOVERY:
-- "Agent not found": Use list_agents to see available agents
+- "Agent not found": Use agent(action='list') to see available agents
 - "No state available": Agent may need initial process_agent_update call
 
 ~~~text
@@ -406,12 +406,12 @@ USE CASES:
 SEE ALSO:
 - process_agent_update() - Actual update (persists state, logs work)
 - get_governance_metrics - Check current state (read-only)
-- get_system_history() - View historical trends (past data, not simulation)
+- export(action='history') - View historical trends (past data, not simulation)
 
 ALTERNATIVES:
 - Want to actually log work? → Use process_agent_update() (persists, not dry-run)
 - Want current state? → Use get_governance_metrics() (read-only, not simulation)
-- Want historical data? → Use get_system_history() (past trends, not future simulation)
+- Want historical data? → Use export(action='history') (past trends, not future simulation)
 
 ~~~text
 RETURNS:
@@ -542,9 +542,6 @@ EISV FIELD CONTRACT:
 
 Reads or repairs the server-wide model that grades declared confidence against outcomes. check reads; update, backfill and rebuild mutate state every agent shares, and rebuild discards it first. Without recorded exogenous outcomes, accuracy stays null and reported health is a trajectory proxy, not measured correctness. update also needs predicted_correct, which the schema omits, so a schema-only call is rejected; use record_result for your own check-in.
 
-Replaces 4 separate tools: check_calibration, update_calibration_ground_truth,
-backfill_calibration_from_dialectic, rebuild_calibration.
-
 ACTIONS:
 - check: Check current calibration status and metrics (default)
 - update: Update calibration with external ground truth
@@ -555,10 +552,10 @@ EXAMPLE: calibration(action="check")
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `backfill` | required | 20s | `backfill_calibration_from_dialectic` |
-| `check` (default) | pre_onboard | 10s | `check_calibration` |
-| `rebuild` | required | 60s | `rebuild_calibration` |
-| `update` | required | 10s | `update_calibration_ground_truth` |
+| `backfill` | required | 20s | — |
+| `check` (default) | pre_onboard | 10s | — |
+| `rebuild` | required | 60s | — |
+| `update` | required | 10s | — |
 
 ### `cirs_protocol`
 
@@ -675,8 +672,8 @@ RETURNS:
 
 RELATED TOOLS:
 - process_agent_update: Full governance cycle with EISV update
-- get_agent_metadata: Check current status
-- request_dialectic_review: Will skip if agent is waiting_input (not stuck)
+- agent(action='get'): Check current status
+- dialectic(action='request'): Will skip if agent is waiting_input (not stuck)
 
 ~~~text
 EXAMPLE REQUEST:
@@ -742,7 +739,7 @@ EXAMPLE RESPONSE:
   "auto_archival_enabled": false,
   "archived_count": 0,
   "would_archive_count": 3,
-  "action": "auto archival disabled - preview only; use archive_agent for manual archive"
+  "action": "auto archival disabled - preview only; use agent(action='archive') for manual archive"
 }
 ~~~
 
@@ -794,7 +791,7 @@ EXAMPLE RESPONSE:
   "auto_archival_enabled": false,
   "archived_count": 0,
   "would_archive_count": 12,
-  "action": "auto archival disabled - preview only; use archive_agent for manual archive"
+  "action": "auto archival disabled - preview only; use agent(action='archive') for manual archive"
 }
 ~~~
 
@@ -807,9 +804,6 @@ EXAMPLE RESPONSE:
 
 Read and change registered agents' lifecycle. list and get serve unbound callers; list defaults to a 20-agent, 7-day active slice, not the fleet. update writes only your own tags and notes and refuses server-granted tags, but archive, resume and delete carry no ownership check and can target any agent; resume works only on a paused or waiting_input one. archive and delete act only on the agent whose UUID is in agent_id (never a label or public id) and refuse a call without one; archive needs force=true for an agent still showing liveness, and delete needs confirm=true and refuses pioneers. An archived agent stays refused by process_agent_update until self_recovery. release_presence releases only your own presence lease at a clean exit, so a successor can declare you as parent right away. Use observe for behavior rather than metadata.
 
-Replaces 5 separate tools: list_agents, get_agent_metadata, update_agent_metadata,
-archive_agent, delete_agent.
-
 ACTIONS:
 - list: List all agents with metadata and health status
 - get: Get detailed metadata for a specific agent
@@ -821,13 +815,13 @@ EXAMPLE: agent(action="list")
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `archive` | required | 15s | `archive_agent` |
-| `delete` | required | 15s | `delete_agent` |
-| `get` | pre_onboard | 10s | `get_agent_metadata` |
-| `list` | pre_onboard | 15s | `list_agents` |
+| `archive` | required | 15s | — |
+| `delete` | required | 15s | — |
+| `get` | pre_onboard | 10s | — |
+| `list` | pre_onboard | 15s | — |
 | `release_presence` | required | 10s | — |
 | `resume` | required | 15s | — |
-| `update` | required | 10s | `update_agent_metadata` |
+| `update` | required | 10s | — |
 
 ### `operator_resume_agent`
 
@@ -866,7 +860,7 @@ Store and search discoveries, insights, and notes
 
 Search the shared cross-agent knowledge graph; prefer knowledge(action='search') or search_shared_memory, which reach this same handler. Full bodies attach only with include_details=true, or automatically when a request that leaves it unset matches three or fewer rows. Archived and cold rows are excluded unless status is set. search_mode 'semantic' or 'hybrid' errors on a backend lacking it rather than downgrading.
 
-Search knowledge graph - returns summaries only (use get_discovery_details for full content).
+Search knowledge graph - returns summaries only (use knowledge(action='details') for full content).
 
 USE CASES:
 - Find discoveries by tags
@@ -877,16 +871,16 @@ USE CASES:
 - Semantic search (vector embeddings) - find similar meaning, not just keywords
 
 SEE ALSO:
-- get_knowledge_graph - Get ALL knowledge for ONE agent (no search)
-- get_discovery_details - Get full content for a specific discovery (after search)
-- list_knowledge_graph - See statistics (not individual discoveries)
-- store_knowledge_graph - Store new discoveries (write, not read)
+- knowledge(action='get') - Get ALL knowledge for ONE agent (no search)
+- knowledge(action='details') - Get full content for a specific discovery (after search)
+- knowledge(action='list') - See statistics (not individual discoveries)
+- knowledge(action='store') - Store new discoveries (write, not read)
 
 ALTERNATIVES:
-- Want one agent's knowledge? → Use get_knowledge_graph(agent_id="...") (no search needed)
-- Want full content? → Use get_discovery_details(discovery_id="...") (after finding via search)
-- Want statistics? → Use list_knowledge_graph() (counts, not discoveries)
-- Want to store knowledge? → Use store_knowledge_graph() (write, not read)
+- Want one agent's knowledge? → Use knowledge(action='get', agent_id="...") (no search needed)
+- Want full content? → Use knowledge(action='details', discovery_id="...") (after finding via search)
+- Want statistics? → Use knowledge(action='list') (counts, not discoveries)
+- Want to store knowledge? → Use knowledge(action='store') (write, not read)
 
 ~~~text
 SEARCH BEHAVIOR:
@@ -918,14 +912,14 @@ RETURNS:
     }
   ],
   "count": int,
-  "message": "Found N discovery(ies) (use get_discovery_details for full content)"
+  "message": "Found N discovery(ies) (use knowledge(action='details') for full content)"
 }
 ~~~
 
 RELATED TOOLS:
-- get_discovery_details: Get full content for a specific discovery
-- list_knowledge_graph: See statistics
-- get_knowledge_graph: Get agent's knowledge
+- knowledge(action='details'): Get full content for a specific discovery
+- knowledge(action='list'): See statistics
+- knowledge(action='get'): Get agent's knowledge
 
 VALID ENUM VALUES:
 - discovery_type: "bug_found" | "insight" | "pattern" | "improvement" | "question" | "answer" | "note" | "exploration"
@@ -968,7 +962,7 @@ Note: Semantic search finds discoveries similar in meaning, not just matching ke
 DEPENDENCIES:
 - All parameters optional (filters)
 - Returns summaries only by default
-- Use get_discovery_details for full content
+- Use knowledge(action='details') for full content
 
 ### `leave_note`
 
@@ -981,7 +975,7 @@ Append one observation to the shared cross-agent knowledge graph as an open disc
 
 Just agent_id + summary + optional tags. Auto-sets type='note', severity='low'.
 Notes use the normal lifecycle; add ephemeral/temp/scratch tags for short-lived notes.
-For structured lasting knowledge, use store_knowledge_graph instead.
+For structured lasting knowledge, use knowledge(action='store') instead.
 
 USE CASES:
 - Quick observations during exploration
@@ -1001,17 +995,17 @@ RETURNS:
 ~~~
 
 SEE ALSO:
-- store_knowledge_graph() - Full-featured discovery storage (more fields, types, severity)
+- knowledge(action='store') - Full-featured discovery storage (more fields, types, severity)
 - search_knowledge_graph() - Find notes and other discoveries (read, not write)
-- get_knowledge_graph() - Get your notes (read, not write)
+- knowledge(action='get') - Get your notes (read, not write)
 
 ALTERNATIVES:
-- Want full control? → Use store_knowledge_graph() (more fields, can set type/severity)
+- Want full control? → Use knowledge(action='store') (more fields, can set type/severity)
 - Want to find notes? → Use search_knowledge_graph() (read, not write)
-- Want your notes? → Use get_knowledge_graph() (read, not write)
+- Want your notes? → Use knowledge(action='get') (read, not write)
 
 RELATED TOOLS:
-- store_knowledge_graph: Full-featured discovery storage (more fields)
+- knowledge(action='store'): Full-featured discovery storage (more fields)
 - search_knowledge_graph: Find notes and other discoveries
 
 ~~~text
@@ -1066,10 +1060,7 @@ DEPENDENCIES:
 
 Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update revises one and appends resolution_notes rather than replacing details. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
 
-Replaces 12 separate tools: store_knowledge_graph, search_knowledge_graph, get_knowledge_graph,
-list_knowledge_graph, update_discovery_status_graph, get_discovery_details, leave_note,
-cleanup_knowledge_graph, synthesize_knowledge_graph, get_lifecycle_stats,
-supersede_discovery, audit_knowledge_graph. promote is router-only and adds no top-level tool.
+promote is router-only and adds no top-level tool.
 
 ACTIONS:
 - store: Store a discovery/insight in the knowledge graph
@@ -1097,18 +1088,18 @@ EXAMPLE: knowledge(action="search", query="authentication bugs")
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `audit` | required | 60s | — |
-| `cleanup` | required | 60s | `cleanup_knowledge_graph` |
-| `details` | pre_onboard | 10s | `get_discovery_details` |
-| `get` | pre_onboard | 15s | `get_knowledge_graph` |
-| `list` | pre_onboard | 10s | `list_knowledge_graph` |
+| `cleanup` | required | 60s | — |
+| `details` | pre_onboard | 10s | — |
+| `get` | pre_onboard | 15s | — |
+| `list` | pre_onboard | 10s | — |
 | `note` | required | 120s | — |
 | `promote` | required | 20s | — |
 | `search` | pre_onboard | 15s | — |
-| `stats` | pre_onboard | 30s | `get_lifecycle_stats` |
-| `store` | required | 20s | `store_knowledge_graph` |
+| `stats` | pre_onboard | 30s | — |
+| `store` | required | 20s | — |
 | `supersede` | required | 15s | — |
 | `synthesize` | required | 120s | — |
-| `update` | required | 10s | `update_discovery_status_graph` |
+| `update` | required | 10s | — |
 
 ## Observability
 
@@ -1154,7 +1145,7 @@ RETURNS:
 RELATED TOOLS:
 - check_recovery_options: Verify safe recovery eligibility
 - operator_resume_agent: Operator-assisted recovery
-- request_dialectic_review: Escalate when recovery is unsafe
+- dialectic(action='request'): Escalate when recovery is unsafe
 
 ~~~text
 EXAMPLE REQUEST:
@@ -1183,9 +1174,6 @@ PARAMS:
 
 Analyze another agent's or the fleet's governance behavior. agent, compare, similar, anomalies and aggregate serve unbound callers; all but aggregate resolve from an in-memory snapshot that can lag other writers. telemetry, audit_events, outcome_evidence and bridge need a start_session binding and otherwise return a refusal shaped as success. On agent, omitting target_agent_id silently observes you when bound; anomalies writes an audit row per new finding. Use get_governance_metrics for your own state. EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); I=Information Integrity [0,1] (mixed-provenance calibration estimate); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
 
-Replaces 5 separate tools: observe_agent, compare_agents, compare_me_to_similar,
-detect_anomalies, aggregate_metrics.
-
 ACTIONS:
 - agent: Observe a specific agent's patterns and behavior
 - compare: Compare two or more agents' behavior patterns
@@ -1213,14 +1201,14 @@ EISV FIELD CONTRACT:
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `agent` | pre_onboard | 15s | `observe_agent` |
-| `aggregate` | pre_onboard | 15s | `aggregate_metrics` |
-| `anomalies` | pre_onboard | 15s | `detect_anomalies` |
+| `agent` | pre_onboard | 15s | — |
+| `aggregate` | pre_onboard | 15s | — |
+| `anomalies` | pre_onboard | 15s | — |
 | `audit_events` | required | 15s | — |
 | `bridge` | required | 15s | — |
-| `compare` | pre_onboard | 15s | `compare_agents` |
+| `compare` | pre_onboard | 15s | — |
 | `outcome_evidence` | required | 15s | — |
-| `similar` | pre_onboard | 15s | `compare_me_to_similar` |
+| `similar` | pre_onboard | 15s | — |
 | `telemetry` | required | 15s | — |
 
 ### `dashboard`
@@ -1307,8 +1295,8 @@ Exports one agent's check-in trajectory: the monitor's retained rolling history,
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `file` | required | 45s | `export_to_file` |
-| `history` (default) | required | 20s | `get_system_history` |
+| `file` | required | 45s | — |
+| `history` (default) | required | 20s | — |
 
 ## Configuration
 
@@ -1501,19 +1489,19 @@ RETURNS:
 
 SEE ALSO:
 - get_governance_metrics - Agent-specific metrics (EISV, risk, coherence)
-- get_server_info - Detailed server process information (PID, uptime, version)
-- get_connection_status - MCP connection status (transport-level)
+- admin(action='server_info') - Detailed server process information (PID, uptime, version)
+- admin(action='connections') - MCP connection status (transport-level)
 - get_workspace_health - Comprehensive workspace health (file system, dependencies)
 
 ALTERNATIVES:
 - Want agent metrics? → Use get_governance_metrics() (agent-level, not system)
-- Want server details? → Use get_server_info() (process info, PID, uptime)
-- Want connection status? → Use get_connection_status() (MCP transport health)
+- Want server details? → Use admin(action='server_info') (process info, PID, uptime)
+- Want connection status? → Use admin(action='connections') (MCP transport health)
 - Want workspace health? → Use get_workspace_health() (file system, dependencies)
 
 RELATED TOOLS:
-- get_server_info: Get detailed server process information
-- get_telemetry_metrics: Get detailed telemetry data
+- admin(action='server_info'): Get detailed server process information
+- admin(action='telemetry'): Get detailed telemetry data
 
 ~~~text
 EXAMPLE REQUEST:
@@ -1600,18 +1588,18 @@ Returns the server-authored governance skill bundle, read fresh from disk on eve
 - **Timeout:** 20s for the router; some actions stop sooner (table below)
 - **Related:** `health_check`, `observe`, `config`
 
-Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; reset_monitor drops just the in-memory monitor, which rebuilds from persisted state.
+Runs one server-side diagnostic or maintenance operation named by action. Only server_info answers an unbound caller; the rest need a bound identity. connections reports the transport and whether this client bound, and debug_context the identity-injection and registry detail behind a dispatch problem; neither grades subsystems, which is health_check. workspace_health grades the checkout and client config files on the machine the server runs on, never the caller's. telemetry reads the bound caller's skip rate and confidence over window_hours; calibration is excluded unless include_calibration=true and is fleet-wide cumulative state, not a window_hours slice. tool_usage reads per-tool call counts over window_hours, where a zero means no call was recorded, not a capability nobody wanted. For one agent's EISV use check_working_state. cleanup_locks removes agent lock files that no process holds and that are older than max_age_seconds (dry_run previews), and never a held lock; validate_path only warns, never blocks; admin(action='reset_monitor') drops just the in-memory monitor, which rebuilds from persisted state.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `cleanup_locks` | required | 15s | `cleanup_stale_locks` |
-| `connections` | required | 5s | `get_connection_status` |
-| `debug_context` | required | 5s | `debug_request_context` |
-| `reset_monitor` | required | 10s | `reset_monitor` |
+| `cleanup_locks` | required | 15s | — |
+| `connections` | required | 5s | — |
+| `debug_context` | required | 5s | — |
+| `reset_monitor` | required | 10s | — |
 | `server_info` | pre_onboard | 10s | `get_server_info` |
-| `telemetry` | required | 15s | `get_telemetry_metrics` |
-| `tool_usage` | required | 15s | `get_tool_usage_stats` |
-| `validate_path` | required | 5s | `validate_file_path` |
+| `telemetry` | required | 15s | — |
+| `tool_usage` | required | 15s | — |
+| `validate_path` | required | 5s | — |
 | `workspace_health` | required | 20s | — |
 
 ## Workspace
@@ -1669,7 +1657,7 @@ RETURNS:
 
 RELATED TOOLS:
 - health_check: Quick system health overview (governance system)
-- get_server_info: Get detailed server process information
+- admin(action='server_info'): Get detailed server process information
 
 ~~~text
 EXAMPLE REQUEST:
@@ -1729,12 +1717,12 @@ Open and advance governed, on-record peer review sessions. To OPEN a review, use
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
-| `antithesis` | required | 10s | `submit_antithesis` |
+| `antithesis` | required | 10s | — |
 | `consult` | required | 10s | — |
-| `get` | pre_onboard | 10s | `get_dialectic_session` |
-| `list` (default) | pre_onboard | 15s | `list_dialectic_sessions` |
+| `get` | pre_onboard | 10s | — |
+| `list` (default) | pre_onboard | 15s | — |
 | `quick` | required | 10s | — |
-| `reassign` | required | 15s | `reassign_reviewer` |
-| `request` | required | 105s | `request_dialectic_review` |
-| `synthesis` | required | 15s | `submit_synthesis` |
-| `thesis` | required | 90s | `submit_thesis` |
+| `reassign` | required | 15s | — |
+| `request` | required | 105s | — |
+| `synthesis` | required | 15s | — |
+| `thesis` | required | 90s | — |

@@ -195,7 +195,7 @@ class TestMcpToolDecorator:
         ]
         assert deprecation_lines == []
 
-    def test_describe_tool_surfaces_deprecation(self):
+    def test_describe_tool_surfaces_deprecation(self, monkeypatch):
         """describe_tool must inject deprecation block for deprecated tools (#429 council fix).
 
         Pre-fix, the deprecation lived only in tool_relationships (consumed by
@@ -203,29 +203,32 @@ class TestMcpToolDecorator:
         get_tool_definitions only — agents calling describe_tool on a
         deprecated name got no migration hint.
 
-        The sample was leave_note until 2026-08-29, when the operator settled
-        that leave_note is not deprecated. This asserts the MECHANISM, so it
-        just needs some genuinely deprecated entry; request_dialectic_review is
-        one. If DEPRECATION_REGISTRY ever empties, delete this test rather than
-        re-deprecating a tool to keep it alive.
+        This asserts the MECHANISM. DEPRECATION_REGISTRY emptied on 2026-09-28
+        when request_dialectic_review went with its alias, so the entry is
+        synthetic rather than a tool re-deprecated to keep the test alive.
         """
+        from src.mcp_handlers.introspection import tool_catalog
         from src.mcp_handlers.introspection.tool_introspection import (
             _describe_tool_deprecation_block,
         )
         from src.mcp_handlers.decorators import get_tool_registry
         from src.mcp_handlers.tool_stability import list_all_aliases
 
-        block = _describe_tool_deprecation_block("request_dialectic_review")
+        monkeypatch.setitem(tool_catalog.DEPRECATION_REGISTRY, "probe_old_name", {
+            "deprecated_since": "2026-01-29",
+            "superseded_by": "dialectic",
+            "migration": "Use dialectic(action='request') instead.",
+        })
+        block = _describe_tool_deprecation_block("probe_old_name")
         assert block is not None
         assert block["deprecated"] is True
         # Asserted as "names a tool the agent can call", not as a literal: the
-        # literal was `self_recovery_review`, a register=False delegate, so
-        # this test pinned a migration hint that returned tool_not_found_error.
-        # test_every_deprecation_surface_names_a_callable_tool covers the whole
-        # registry; this keeps the sample honest.
+        # literal was once `self_recovery_review`, a register=False delegate, so
+        # the test pinned a migration hint that returned tool_not_found_error.
         callable_names = set(get_tool_registry()) | set(list_all_aliases())
         assert block["superseded_by"] in callable_names
         assert block["superseded_by"] in block["migration"]
+        assert _describe_tool_deprecation_block("dialectic") is None
 
         # A tool that is NOT deprecated returns None -- leave_note included.
         assert _describe_tool_deprecation_block("leave_note") is None

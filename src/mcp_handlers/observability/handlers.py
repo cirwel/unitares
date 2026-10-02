@@ -261,7 +261,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             recovery={
                 "action": "Provide at least 2 agent_ids in the agent_ids array",
                 "related_tools": ["agent"],
-                "workflow": "1. Call list_agents to see available agents 2. Select 2+ agent_ids to compare"
+                "workflow": "1. Call agent(action='list') to see available agents 2. Select 2+ agent_ids to compare"
             }
         )]
     
@@ -350,7 +350,7 @@ async def handle_compare_agents(arguments: Dict[str, Any]) -> Sequence[TextConte
             recovery={
                 "action": "Ensure agents exist and have state. Some agents may need initial process_agent_update call.",
                 "related_tools": ["agent", "get_governance_metrics", "process_agent_update"],
-                "workflow": "1. Call list_agents to verify agents exist 2. Call get_governance_metrics to check if agents have state 3. Call process_agent_update if agents need initialization"
+                "workflow": "1. Call agent(action='list') to verify agents exist 2. Call get_governance_metrics to check if agents have state 3. Call process_agent_update if agents need initialization"
             }
         )]
     
@@ -545,7 +545,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
             },
             "similarity_provenance": similarity_provenance,
             "eisv_labels": get_eisv_glossary(),
-            "suggestion": "Try adjusting similarity_threshold parameter or use compare_agents with specific agent_ids"
+            "suggestion": "Try adjusting similarity_threshold parameter or use observe(action='compare') with specific agent_ids"
         })
     
     # Build comparison response
@@ -684,7 +684,7 @@ async def handle_compare_me_to_similar(arguments: Dict[str, Any]) -> Sequence[Te
         if not bullets:
             bullets = [
                 "No strong metric deltas vs similar agents (all gaps below 0.02).",
-                "Try `compare_agents` with specific agent_ids or reduce similarity_threshold to widen the cohort."
+                "Try `observe(action='compare')` with specific agent_ids or reduce similarity_threshold to widen the cohort."
             ]
 
         comparison_data["insights"].append({

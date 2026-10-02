@@ -502,12 +502,19 @@ async def _call_local_tool(
 ) -> Sequence[TextContent]:
     """Run the local stdio boundary after proxy selection has settled."""
     # Activity tracking for auto-heartbeat
-    agent_id = arguments.get('agent_id') if isinstance(arguments, dict) else None
-    session_id = arguments.get('client_session_id') if isinstance(arguments, dict) else None
+    from src.mcp_handlers.middleware.params_step import unwrapped_view
+    from src.mcp_handlers.decorators import resolve_canonical_action_and_source
+    # The runner and parameter middleware each unwrap one kwargs layer.
+    tracking_args = unwrapped_view(arguments, depth=2) if isinstance(arguments, dict) else {}
+    agent_id = tracking_args.get('agent_id')
+    session_id = tracking_args.get('client_session_id')
     if agent_id and HEARTBEAT_CONFIG.enabled:
-        should_trigger, trigger_reason = activity_tracker.track_tool_call(agent_id, name)
+        canonical, action, _source = resolve_canonical_action_and_source(name, tracking_args)
+        should_trigger, trigger_reason = activity_tracker.track_tool_call(
+            agent_id, canonical, action
+        )
 
-        if should_trigger and not _HEARTBEAT_LIGHTWEIGHT_CALLS.matches(name, arguments):
+        if should_trigger and not _HEARTBEAT_LIGHTWEIGHT_CALLS.matches(name, tracking_args):
             try:
                 activity = activity_tracker.get_or_create(agent_id)
                 activity_summary = {

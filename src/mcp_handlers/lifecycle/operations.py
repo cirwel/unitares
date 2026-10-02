@@ -75,8 +75,8 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
             details={"error_type": "agent_not_resumable", "agent_id": agent_id, "status": meta.status},
             recovery={
                 "action": "Agent must be in paused or waiting_input status to resume",
-                "related_tools": ["get_agent_metadata", "list_agents"],
-                "workflow": ["1. Check agent status with get_agent_metadata", "2. Only paused/waiting_input agents can be resumed"]
+                "related_tools": ["agent(action='get')", "agent(action='list')"],
+                "workflow": ["1. Check agent status with agent(action='get')", "2. Only paused/waiting_input agents can be resumed"]
             }
         )]
 
@@ -650,7 +650,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
     Use include_all=true to review any agent inactive for max_age_days (default: 3 days).
 
     Automatic archival is disabled by default. This tool reports what would be
-    archived; use archive_agent for deliberate manual archival.
+    archived; use agent(action='archive') for deliberate manual archival.
     """
     from src.agent_lifecycle import _agent_age_hours, auto_agent_archival_enabled
 
@@ -721,7 +721,7 @@ async def handle_archive_old_test_agents(arguments: Dict[str, Any]) -> Sequence[
             archived_agents.append(candidate)
 
     if not auto_enabled:
-        action = "auto archival disabled - preview only; use archive_agent for manual archive"
+        action = "auto archival disabled - preview only; use agent(action='archive') for manual archive"
     elif dry_run:
         action = "preview - use dry_run=false to execute"
     else:
@@ -798,7 +798,7 @@ async def handle_archive_orphan_agents(arguments: Dict[str, Any]) -> Sequence[Te
             r["id"] = r["id"][:12] + "..."
 
     if not auto_enabled:
-        action = "auto archival disabled - preview only; use archive_agent for manual archive"
+        action = "auto archival disabled - preview only; use agent(action='archive') for manual archive"
     elif dry_run:
         action = "preview - set dry_run=false to execute"
     else:

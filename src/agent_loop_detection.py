@@ -313,7 +313,7 @@ async def process_update_authenticated_async(
             recovery_tools.append("self_recovery(action='quick') (if state is safe)")
         else:
             recovery_tools.append("self_recovery(action='quick') (if state is safe)")
-            recovery_tools.append("request_dialectic_review (for peer assistance)")
+            recovery_tools.append("dialectic(action='request') (for peer assistance)")
 
         recovery_guidance = (
             f"\n\n🔧 Recovery Options:\n"

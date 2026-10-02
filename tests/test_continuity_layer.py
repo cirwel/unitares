@@ -82,6 +82,34 @@ def _make_refl_entry(**overrides) -> ReflectiveEntry:
 class TestAnalyzeResponseText:
     """Tests for the pure text analysis function."""
 
+    @pytest.mark.parametrize('tool', ['knowledge', 'agent', 'observe', 'dialectic',
+                                      'calibration', 'admin', 'config', 'export'])
+    def test_surviving_router_calls_are_continuity_evidence(self, tool):
+        text = f"Used {tool}(action='list') for this update."
+        op = create_operational_entry('test-agent', text, 'sess-1')
+        assert op.mentioned_tools == [tool]
+        metrics = compute_continuity_metrics(op, _make_refl_entry())
+        assert not metrics.continuity_degenerate
+
+    def test_router_words_in_prose_are_not_tool_calls(self):
+        assert analyze_response_text(
+            'An agent can observe knowledge and export config for admin calibration.'
+        )['tools'] == []
+
+    @pytest.mark.parametrize('text', [
+        'The agent (a background worker) completed the analysis.',
+        'The request_review_policy document was updated.',
+    ])
+    def test_prose_does_not_clear_continuity_degeneracy(self, text):
+        op = create_operational_entry('test-agent', text, 'sess-1')
+        assert op.mentioned_tools == []
+        assert compute_continuity_metrics(op, _make_refl_entry()).continuity_degenerate
+
+    def test_primary_workflow_calls_are_detected(self):
+        assert analyze_response_text(
+            "Used start_session(), sync_state(), and store_finding()."
+        )['tools'] == ['start_session', 'sync_state', 'store_finding']
+
     def test_empty_text_returns_all_zeros(self):
         result = analyze_response_text("")
         assert result["tokens"] == 0

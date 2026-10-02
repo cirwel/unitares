@@ -27,7 +27,7 @@ Examples:
     python3 scripts/mcp_agent.py process_agent_update response_text="Completed analysis" complexity=0.7
     
     # With JSON input (for complex nested structures)
-    python3 scripts/mcp_agent.py store_knowledge_graph --json '{"discovery_type": "insight", "summary": "Found pattern", "tags": ["mcp", "architecture"]}'
+    python3 scripts/mcp_agent.py knowledge --json '{"action": "store", "discovery_type": "insight", "summary": "Found pattern", "tags": ["mcp", "architecture"]}'
 """
 
 import sys

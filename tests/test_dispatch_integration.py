@@ -237,36 +237,36 @@ class TestResolveAlias:
     async def test_inject_action_does_not_override(self):
         """inject_action does not override existing action parameter."""
         ctx = _make_ctx()
-        # observe_agent has inject_action="agent"
+        # search_shared_memory has inject_action="search"
         name, args, ctx_out = await resolve_alias(
-            "observe_agent", {"action": "compare"}, ctx
+            "search_shared_memory", {"action": "details"}, ctx
         )
-        assert name == "observe"
-        assert args["action"] == "compare"
+        assert name == "knowledge"
+        assert args["action"] == "details"
 
     @pytest.mark.asyncio
     async def test_multiple_aliases_for_same_target(self):
         """Multiple aliases can map to the same target tool."""
         ctx1 = _make_ctx()
-        name1, _, _ = await resolve_alias("list_agents", {}, ctx1)
+        name1, _, _ = await resolve_alias("search_shared_memory", {}, ctx1)
 
         ctx2 = _make_ctx()
-        name2, _, _ = await resolve_alias("get_agent_metadata", {}, ctx2)
+        name2, _, _ = await resolve_alias("store_finding", {}, ctx2)
 
         ctx3 = _make_ctx()
-        name3, _, _ = await resolve_alias("archive_agent", {}, ctx3)
+        name3, _, _ = await resolve_alias("update_finding", {}, ctx3)
 
-        assert name1 == "agent"
-        assert name2 == "agent"
-        assert name3 == "agent"
+        assert name1 == "knowledge"
+        assert name2 == "knowledge"
+        assert name3 == "knowledge"
 
     @pytest.mark.asyncio
     async def test_consolidated_alias_with_action(self):
-        """Consolidated aliases inject action parameter."""
+        """Router-pinning aliases inject their action parameter."""
         ctx = _make_ctx()
-        name, args, _ = await resolve_alias("list_agents", {}, ctx)
-        assert name == "agent"
-        assert args["action"] == "list"
+        name, args, _ = await resolve_alias("request_review", {}, ctx)
+        assert name == "dialectic"
+        assert args["action"] == "request"
 
     @pytest.mark.asyncio
     async def test_original_name_is_always_set(self):
@@ -359,17 +359,17 @@ class TestCheckRateLimit:
 
     @pytest.mark.asyncio
     async def test_loop_detection_for_expensive_reads(self):
-        """Loop detection triggers for list_agents after 20+ calls in 60 seconds."""
+        """Loop detection triggers for agent(action='list') after 20+ calls in 60 seconds."""
         ctx = _make_ctx()
 
         # Fill the history with 20 recent timestamps
         now = time.time()
-        history = _tool_call_history["list_agents"]
+        history = _tool_call_history["agent:list"]
         for i in range(20):
             history.append(now - 1)  # All within last 60 seconds
 
         # Next call should trigger loop detection
-        result = await check_rate_limit("list_agents", {}, ctx)
+        result = await check_rate_limit("agent", {"action": "list"}, ctx)
         assert _is_short_circuit(result)
         text = _extract_text(result)
         assert "loop detected" in text.lower() or "rate limit" in text.lower()
@@ -378,7 +378,7 @@ class TestCheckRateLimit:
     async def test_loop_detection_old_calls_expire(self):
         """Old calls outside the 60-second window are cleaned up."""
         ctx = _make_ctx()
-        history = _tool_call_history["list_agents"]
+        history = _tool_call_history["agent:list"]
 
         # Add 25 calls that are all older than 60 seconds
         old_time = time.time() - 120
@@ -386,7 +386,7 @@ class TestCheckRateLimit:
             history.append(old_time)
 
         # Should pass since old calls are cleaned up
-        result = await check_rate_limit("list_agents", {}, ctx)
+        result = await check_rate_limit("agent", {"action": "list"}, ctx)
         assert not _is_short_circuit(result)
 
     @pytest.mark.asyncio
@@ -531,10 +531,14 @@ class TestResolveToolAlias:
         actual, alias_info = resolve_tool_alias("start_session")
         assert actual == "onboard"
 
-    def test_list_agents_maps_to_agent(self):
+    def test_store_finding_maps_to_knowledge_store(self):
+        actual, alias_info = resolve_tool_alias("store_finding")
+        assert actual == "knowledge"
+        assert alias_info.inject_action == "store"
+
+    def test_a_removed_legacy_alias_resolves_to_nothing(self):
         actual, alias_info = resolve_tool_alias("list_agents")
-        assert actual == "agent"
-        assert alias_info.inject_action == "list"
+        assert (actual, alias_info) == ("list_agents", None)
 
 
 # ============================================================================
@@ -658,18 +662,19 @@ class TestDispatchToolIntegration:
         """Alias resolution works end-to-end through dispatch_tool."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        # "list_agents" is an alias for agent(action="list")
-        _require_registered("agent", TOOL_HANDLERS)
+        # "search_shared_memory" is an alias for knowledge(action="search")
+        _require_registered("knowledge", TOOL_HANDLERS)
 
         from mcp.types import TextContent
         expected = [TextContent(type="text", text='{"resolved": "via_alias"}')]
-        original = TOOL_HANDLERS["agent"]
-        TOOL_HANDLERS["agent"] = AsyncMock(return_value=expected)
+        original = TOOL_HANDLERS["knowledge"]
+        TOOL_HANDLERS["knowledge"] = AsyncMock(return_value=expected)
         try:
-            result = await dispatch_tool("list_agents", {})
-            assert result == expected
+            result = await dispatch_tool("search_shared_memory", {"query": "x"})
+            assert result is not None
+            TOOL_HANDLERS["knowledge"].assert_awaited_once()
         finally:
-            TOOL_HANDLERS["agent"] = original
+            TOOL_HANDLERS["knowledge"] = original
 
     @pytest.mark.asyncio
     async def test_kwargs_unwrapping_end_to_end(self, mock_identity_pipeline, mock_track_patterns, clean_rate_limit):
@@ -726,13 +731,13 @@ class TestDispatchToolIntegration:
 
     @pytest.mark.asyncio
     async def test_consolidated_alias_injects_action(self, mock_identity_pipeline, mock_track_patterns, clean_rate_limit):
-        """Consolidated alias (e.g., list_agents -> agent(action='list')) injects action param."""
+        """A router-pinning alias (request_review -> dialectic(action='request')) injects action param."""
         from src.mcp_handlers import dispatch_tool, TOOL_HANDLERS
 
-        _require_registered("agent", TOOL_HANDLERS)
+        _require_registered("dialectic", TOOL_HANDLERS)
 
         from mcp.types import TextContent
-        expected = [TextContent(type="text", text='{"action": "list"}')]
+        expected = [TextContent(type="text", text='{"action": "request"}')]
 
         captured_args = {}
 
@@ -740,13 +745,13 @@ class TestDispatchToolIntegration:
             captured_args.update(arguments)
             return expected
 
-        original = TOOL_HANDLERS["agent"]
-        TOOL_HANDLERS["agent"] = capture_handler
+        original = TOOL_HANDLERS["dialectic"]
+        TOOL_HANDLERS["dialectic"] = capture_handler
         try:
-            result = await dispatch_tool("list_agents", {})
-            assert captured_args.get("action") == "list"
+            await dispatch_tool("request_review", {})
+            assert captured_args.get("action") == "request"
         finally:
-            TOOL_HANDLERS["agent"] = original
+            TOOL_HANDLERS["dialectic"] = original
 
 
 # ============================================================================
@@ -771,12 +776,18 @@ class TestInjectIdentity:
     async def test_browsable_tools_skip_injection(self):
         """Browsable data tools do NOT auto-filter by agent_id."""
         from src.mcp_handlers.middleware import inject_identity
-        browsable = ["search_knowledge_graph", "list_knowledge_graph",
-                      "list_dialectic_sessions", "get_dialectic_session", "dialectic"]
-        for tool_name in browsable:
+        # inject_identity runs after resolve_alias, so it sees router names.
+        browsable = [
+            ("search_knowledge_graph", {}),
+            ("knowledge", {"action": "list"}),
+            ("dialectic", {"action": "list"}),
+            ("dialectic", {"action": "get"}),
+            ("dialectic", {}),
+        ]
+        for tool_name, arguments in browsable:
             ctx = _make_ctx(bound_agent_id="bound-uuid-1234")
             with patch("src.mcp_handlers.context.get_context_agent_id", return_value="bound-uuid-1234"):
-                result = await inject_identity(tool_name, {}, ctx)
+                result = await inject_identity(tool_name, dict(arguments), ctx)
             assert not _is_short_circuit(result)
             _, args, _ = result
             assert "agent_id" not in args, f"{tool_name} should not inject agent_id"

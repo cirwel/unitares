@@ -61,7 +61,7 @@ def test_build_h1_payloads_include_two_model_entries_and_note():
     assert [payload["name"] for payload in payloads] == [
         "process_agent_update",
         "process_agent_update",
-        "store_knowledge_graph",
+        "knowledge",
     ]
     models = [
         payload["arguments"]["model"]
@@ -98,7 +98,8 @@ def test_build_h3_payloads_include_baseline_then_force_new_onboard():
     }
     assert payloads[2]["name"] == "process_agent_update"
     assert payloads[2]["arguments"]["comparison_key"] == "r6-h3-2026-05-06"
-    assert payloads[3]["name"] == "store_knowledge_graph"
+    assert payloads[3]["name"] == "knowledge"
+    assert payloads[3]["arguments"]["action"] == "store"
 
 
 def test_build_h7_payloads_include_distinct_tool_surfaces_and_note():
@@ -112,7 +113,7 @@ def test_build_h7_payloads_include_distinct_tool_surfaces_and_note():
     assert [payload["name"] for payload in payloads] == [
         "process_agent_update",
         "process_agent_update",
-        "store_knowledge_graph",
+        "knowledge",
     ]
     baseline_args = payloads[0]["arguments"]
     variant_args = payloads[1]["arguments"]
@@ -138,7 +139,7 @@ def test_build_h8_payloads_include_interactive_and_noninteractive_transports():
     assert [payload["name"] for payload in payloads] == [
         "process_agent_update",
         "process_agent_update",
-        "store_knowledge_graph",
+        "knowledge",
     ]
     assert payloads[0]["arguments"]["task_outcome"] == "interactive-transport-entry"
     assert payloads[0]["arguments"]["transport"] == "hermes-cli"

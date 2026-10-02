@@ -44,7 +44,7 @@ class TestDialecticDiscovery:
                 "phase": "antithesis",
                 "partner": "agent-paused",
                 "topic": "Recovery threshold",
-                "action_needed": "Submit antithesis via submit_antithesis()",
+                "action_needed": "Submit antithesis via dialectic(action='antithesis')",
                 "created_at": "2026-06-14T12:00:00+00:00",
             }
         ]
