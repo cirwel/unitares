@@ -2,8 +2,8 @@
 
 **Status:** ✅ **RATIFIED as the gate, by operator signature on 2026-09-27** (§9), and **amended the
 same day, before any window started** (§10, Amendment 1). ⛔Ratified is not met. W_pre (§10 A6)
-started 2026-09-28 05:47:32 UTC (start record: §7 step 2) and is accruing; Amendment 2, which
-classifies host-sleep heartbeat gaps, is a [separate record](wave-3-reduced-scope-gate-amendment-2.md).
+started 2026-09-28 05:47:32 UTC (start record: §7 step 2) and is accruing; Amendment 2 (host-sleep
+heartbeat gaps, signed 2026-10-02) is a [separate record](wave-3-reduced-scope-gate-amendment-2.md).
 A no-port outcome completes the gate at §7 step 4; a pro-port outcome completes it only after the
 step 5 design pass and a new signature (§10 A10). The signature authorises nothing to be built.
 (Separately, and non-gating for this scope: §6.4's two handoff artifacts are still owed.)

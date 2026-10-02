@@ -1,13 +1,14 @@
 # Wave 3 reduced-scope gate: Amendment 2 (host-sleep heartbeat gaps)
 
-**Status:** Draft amendment to the signed gate [`wave-3-reduced-scope-gate-v0.md`](wave-3-reduced-scope-gate-v0.md),
-awaiting the operator's signature. Kept as its own record because the gate document is at the
+**Status:** ✅ **SIGNED by the operator, 2026-10-02** (see Signature below). An amendment to the
+signed gate [`wave-3-reduced-scope-gate-v0.md`](wave-3-reduced-scope-gate-v0.md), in force from its
+merge to `master`. Kept as its own record because the gate document is at the
 800-line cap for active proposals. Section references (§7, §9, A5, A6, A8, A10, A12) are to the
 gate document.
 
 ## Amendment 2 (2026-10-01): heartbeat gaps caused by host sleep
 
-**Authority and timing.** Drafted 2026-10-01 for the operator's signature. Unlike Amendment 1, this
+**Authority and timing.** Drafted 2026-10-01 and signed by the operator on 2026-10-02. Unlike Amendment 1, this
 one lands **inside W_pre**, after the two gaps it classifies were observed. §9 allows that: an
 amendment must land before any reading that relies on it, and step 4 has not been read. It changes
 no harm-class standard, no prior in A8 other than how a gap is explained, and no window bound. It
@@ -46,3 +47,17 @@ unexplained. ⛔No later gap may be explained by attestation; B2 applies from th
 **B4 — prevention, recorded as context.** On 2026-10-01 the operator disabled system sleep on the
 host (`pmset -a disablesleep 1`), so further lid-closed gaps are not expected. That setting is a
 host fact, not a gate condition: if it is reverted, B1 and B2 still decide every gap.
+
+## Signature
+
+**Signed by the operator, 2026-10-02.** Recorded by Claude at the operator's instruction ("i sign
+gate doc", given in reply to the request to sign Amendment 2), against this document as it stood
+on draft PR #2609 with B1 to B4 as written, B3 included. The operator asked for Claude's approval
+alongside the signature; Claude approved it as written, on the ground that B1 and B2 explain a gap
+only from evidence preserved before the reading, and B3's weaker class is reported separately with
+its counterfactual.
+
+What the signature does: it adopts B1 to B4 as an amendment to the signed gate, in force from merge,
+and before any §7 step 4 reading. What it does not do: it does not change any harm-class standard,
+window bound, or the instrument; it does not start, restart, or close W_pre; it does not meet the
+gate; and it authorises nothing to be built (§9 and §7 still govern).
