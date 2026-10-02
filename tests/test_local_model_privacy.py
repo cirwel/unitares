@@ -1071,3 +1071,21 @@ def test_a_disagreement_warning_never_logs_endpoint_credentials(monkeypatch, cap
     assert "disagree" in caplog.text
     assert "s3cret" not in caplog.text
     assert "localhost:8000" in caplog.text  # the host stays, so the warning is still useful
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1%25.attacker.example:8000/v1",
+    "http://10.0.0.5%25evil.example:8000/v1",
+    "http://127.0.0.1%25:8000/v1",
+])
+def test_an_ipv4_prefixed_dns_name_is_not_an_ip_literal(no_dns, url):
+    result = env.classify_endpoint(url)
+    assert result.privacy == env.EXTERNAL
+    with pytest.raises(env.EndpointNotLocalError):
+        env.require_local_endpoint(url)
+
+
+def test_a_scoped_ipv6_literal_is_still_read_as_an_address(no_dns):
+    assert env._ip_literal("fe80::1%eth0") is not None
+    assert env._ip_literal("fe80::1%") is None  # an empty scope names nothing
+    assert env._ip_literal("127.0.0.1") is not None

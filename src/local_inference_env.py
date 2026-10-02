@@ -279,13 +279,21 @@ def _privacy_override() -> str | None:
 
 
 def _ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    # A scope id (``fe80::1%eth0``) belongs to an IPv6 literal only. Stripping
+    # whatever follows a ``%`` from any host would turn the DNS name
+    # ``127.0.0.1%25.attacker.example`` into the loopback address while the
+    # client still resolves the whole name.
+    literal, scope_sep, scope = host.partition("%")
     try:
         # Kept as written: is_trusted_address tries an IPv4-mapped address both
         # as itself and as the IPv4 it carries, so a listed ::ffff: range and a
         # listed IPv4 range both match, as they do for the REST checks.
-        return ipaddress.ip_address(host.split("%", 1)[0])
+        addr = ipaddress.ip_address(literal)
     except ValueError:
         return None
+    if scope_sep and (addr.version != 6 or not scope):
+        return None
+    return addr
 
 
 def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
