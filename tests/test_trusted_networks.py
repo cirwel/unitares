@@ -135,9 +135,9 @@ def test_the_setting_is_parsed_and_logged_once_per_value(monkeypatch, caplog):
     # a warning on each one.
     import logging
 
-    from src.http_routes import access
+    from src import trusted_networks
 
-    monkeypatch.setattr(access, "_extra_networks_cache", ("", ()))
+    monkeypatch.setattr(trusted_networks, "_extra_networks_cache", ("", ()))
     monkeypatch.setenv("UNITARES_TRUSTED_NETWORKS", "0.0.0.0/0")
     with caplog.at_level(logging.WARNING):
         for _ in range(3):
