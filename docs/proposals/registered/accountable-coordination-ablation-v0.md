@@ -311,3 +311,32 @@ secondary contrast, task subset, endpoint, or rerun.
 ## Amendment log
 
 - None. v0 registers the initial protocol.
+- **Feasibility stop, 2026-10-01.** Recorded by operator decision before any
+  build, task selection, model run or enrollment. No protocol text above is
+  changed. The study is stopped as infeasible for a single operator; it is not
+  a result and supports no claim about the value of UNITARES.
+  - **Basis.** The
+    [feasibility record](../../evaluations/accountable-coordination-ablation/plumbing-pilot-plan-v0.md)
+    found that this host needs per-episode OS containment, that arms C and D
+    could not be operationalized as specified, and that blinding with one
+    operator was unresolved. The deciding arithmetic is the power of the primary test. With
+    roughly pass/fail task scores, an exact two-sided paired sign test at
+    α = 0.05 and 40 tasks has at most 57% power for a 15-point D−B effect, and
+    24% to 45% when 20% to 40% of tasks differ between arms. Reaching 80% power
+    at 15 points needs about 50 to 150 task families when 15% to 40% of tasks
+    differ (more if more differ), each needing four sealed variants under v0. At 40 tasks, 80% power needs an effect of about
+    25 points with no more than 30% of tasks differing; a 20-point effect
+    reaches it only when nearly every differing task favours D.
+  - **Superseded draft.** A v0.1 amendment drafted the same day (two arms, the
+    same task in both arms, an arm-B-only planning probe and a variance-based
+    gate) was withdrawn before merge. Two independent reviews showed that a
+    B-versus-B probe cannot establish power for D−B.
+  - **Publication language.** Until a new protocol registers, the pre-result
+    statement in [Publication language](#publication-language) is replaced
+    with: "The incremental value of UNITARES coordination over ordinary
+    multi-agent coordination is untested. A registered evaluation was found
+    infeasible for a single operator before any run."
+  - **Reopening** requires a new premise, such as a second operator or
+    independent cohort, or a task source large enough to support a fixed
+    sample size in the power range above. It is done by a new protocol
+    version, not by re-running this feasibility read.
