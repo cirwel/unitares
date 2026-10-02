@@ -110,8 +110,13 @@ def test_a_prompt_line_that_looks_like_a_log_level_is_not_an_error(monkeypatch):
 
 def test_a_failing_reason_extraction_still_falls_back(monkeypatch):
     # Review of 3bea1cfa7 (P2): deeply nested JSON raises RecursionError, not
-    # ValueError; the diagnostic must never cost the local fallback.
-    _spawn(monkeypatch, b"[" * 20_000 + b"]" * 20_000, returncode=3, stderr=b"usable")
+    # ValueError; the diagnostic must never cost the local fallback. Raised
+    # directly: the nesting depth that overflows varies by interpreter build.
+    def deep(_text):
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(hb, "_parse_agy_output", deep)
+    _spawn(monkeypatch, b"{}", returncode=3, stderr=b"usable")
     result = asyncio.run(hb.call_antigravity_backend("P"))
     assert result.text is None and result.error == "Antigravity CLI exited 3"
 
