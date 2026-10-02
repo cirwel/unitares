@@ -3458,6 +3458,168 @@ def test_the_large_mixed_files_are_deliberately_off_the_list():
                  "src/mcp_handlers/decorators.py", "src/mcp_handlers/stakes_table.py"):
         assert rg.sensitive_paths([path], globs) == [], path
 
+
+# --- operator waiver of the second family -----------------------------------
+
+def _full_clean(key, reviewer="codex"):
+    return rg.Record(key, "CLEAN", 0, False, reviewer, head="h", base="b", scope="full")
+
+
+_HELD = ("action_required", "security-sensitive path src/agent_identity_auth.py: needs a second family")
+_POLICY = rg.waiver_policy()
+_PATHS = ["src/agent_identity_auth.py"]
+
+
+def _waiver(key, reason="help string only; no auth decision changes", association="OWNER"):
+    return {"author_association": association,
+            "body": f"<!-- {rg.WAIVER_MARKER} key={key} -->\n### waived\n\nReason: {reason}\n"}
+
+
+def test_a_waiver_lifts_the_hold_for_a_small_change_after_one_family_passed():
+    k = "c" * 64
+    out = rg.apply_waiver(_HELD, [_waiver(k)], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY)
+    assert out[0] == "success" and "waived by the operator" in out[1] and "openai" in out[1]
+
+
+@pytest.mark.parametrize("case", ["no_family", "too_big", "unknown_size", "other_diff",
+                                  "untrusted", "short_reason", "gate_file", "unlisted_gate_file", "over_cap"])
+def test_a_waiver_out_of_bounds_changes_nothing(case):
+    k = "c" * 64
+    comments, families, lines, paths = [_waiver(k)], {"openai"}, 2, _PATHS
+    changed = _PATHS
+    if case == "no_family":
+        families = set()
+    elif case == "too_big":
+        lines = _POLICY["max_changed_lines"] + 1
+    elif case == "unknown_size":
+        lines = None
+    elif case == "other_diff":
+        comments = [_waiver("d" * 64)]
+    elif case == "untrusted":
+        comments = [_waiver(k, association="NONE")]
+    elif case == "short_reason":
+        comments = [_waiver(k, reason="ok")]
+    elif case == "gate_file":
+        changed = ["scripts/dev/review_gate.py", *_PATHS]
+    elif case == "unlisted_gate_file":
+        changed = ["scripts/dev/review.sh", *_PATHS]  # not a sensitive path, still a gate file
+    elif case == "over_cap":
+        comments = [_waiver("a" * 64), _waiver("b" * 64), _waiver(k)]
+    assert rg.apply_waiver(_HELD, comments, k, changed, paths, families, lines, _POLICY) == _HELD
+
+
+def test_a_waiver_never_upgrades_a_check_that_was_not_held():
+    k = "c" * 64
+    pending = ("pending", "1 finding(s) need fixes or dispositions")
+    assert rg.apply_waiver(pending, [_waiver(k)], k, _PATHS, _PATHS, {"openai"}, 1, _POLICY) == pending
+
+
+def test_policy_can_tighten_but_not_unlist_the_gate_files():
+    text = '{"waiver": {"max_changed_lines": 5, "never_waive": ["src/x.py"], "max_per_pr": 1}}'
+    policy = rg.waiver_policy(text)
+    assert policy["max_changed_lines"] == 5 and policy["max_per_pr"] == 1
+    assert "src/x.py" in policy["never_waive"] and "scripts/dev/review_gate.py" in policy["never_waive"]
+    assert rg.waiver_policy("not json")["max_changed_lines"] == rg.WAIVER_DEFAULTS["max_changed_lines"]
+
+
+def test_sensitive_changed_lines_are_counted_by_git_and_binary_is_unknown(tmp_path, monkeypatch):
+    def run(*cmd):
+        return subprocess.run(cmd, cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+    run("git", "init", "-q", "-b", "main")
+    run("git", "config", "user.email", "t@example.com")
+    run("git", "config", "user.name", "T")
+    (tmp_path / "a.py").write_text("one\ntwo\n")
+    run("git", "add", "a.py")
+    run("git", "commit", "-qm", "base")
+    base = run("git", "rev-parse", "HEAD")
+    (tmp_path / "a.py").write_text("one\nTWO\nthree\n")
+    (tmp_path / "b.bin").write_bytes(b"\x00\x01")
+    run("git", "add", "a.py", "b.bin")
+    run("git", "commit", "-qm", "head")
+    head = run("git", "rev-parse", "HEAD")
+    monkeypatch.chdir(tmp_path)
+    assert rg.sensitive_changed_lines(base, head, ["a.py"]) == 3  # 1 removed + 2 added
+    assert rg.sensitive_changed_lines(base, head, ["b.bin"]) is None
+
+
+def _ci_with_waiver(monkeypatch, *, lines, waiver=True):
+    key = "c" * 64
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"state": "open", "head": {"sha": "h"},
+                                                    "base": {"ref": "master"}})
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "")
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_waiver_policy", lambda base: rg.waiver_policy())
+    monkeypatch.setattr(rg, "sensitive_changed_lines", lambda *a: lines)
+    monkeypatch.setattr(rg, "diff_key", lambda *a: key)
+    comments = [_comment(_full_clean(key))]
+    if waiver:
+        comments.append(_waiver(key))
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    posted = []
+    monkeypatch.setattr(rg, "post_check", lambda *a: posted.append(a))
+    assert rg.cmd_ci(SimpleNamespace(repo="o/r", pr=1, post_status=True)) == 0
+    return posted[0]
+
+
+def test_ci_accepts_a_bounded_waiver_and_refuses_a_large_or_missing_one(monkeypatch):
+    ok = _ci_with_waiver(monkeypatch, lines=3)
+    assert ok[3] == "success" and "waived by the operator" in ok[4]
+    assert _ci_with_waiver(monkeypatch, lines=500)[3] == "action_required"
+    assert _ci_with_waiver(monkeypatch, lines=3, waiver=False)[3] == "action_required"
+
+
+def test_local_review_accepts_the_same_waiver_ci_does(monkeypatch, capsys):
+    key = "c" * 64
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "base_waiver_policy", lambda base: rg.waiver_policy())
+    monkeypatch.setattr(rg, "sensitive_changed_lines", lambda *a: 2)
+    comments = [_comment(_full_clean(key)), _waiver(key)]
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: comments)
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    args = SimpleNamespace(base="origin/master", branch="b")
+    assert rg.second_family_pass(args, "o/r", 1, key, "h", 0) == 0
+    assert "waived by the operator" in capsys.readouterr().out
+    comments.pop()  # without the waiver the same diff still needs the second family
+    assert rg.second_family_pass(args, "o/r", 1, key, "h", 0) == rg.NEEDS_SECOND_FAMILY
+
+
+def test_the_workflow_wakes_on_a_waiver_comment():
+    text = (Path(__file__).parents[1] / ".github/workflows/review-gate.yml").read_text()
+    assert "unitares-review-waiver v1" in text
+
+
+def test_a_multiline_reason_is_posted_as_one_line_that_ci_accepts(monkeypatch):
+    posted = []
+    monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "c" * 64, "b"))
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "HEAD" if "rev-parse" in a else "")
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: _PATHS)
+    monkeypatch.setattr(rg, "base_policy_paths", lambda base: _PATHS)
+    monkeypatch.setattr(rg, "base_waiver_policy", lambda base: rg.waiver_policy())
+    monkeypatch.setattr(rg, "sensitive_changed_lines", lambda *a: 2)
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [_comment(_full_clean("c" * 64))])
+    monkeypatch.setattr(rg, "read_native", lambda *a: rg.NativeReview([]))
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **k: posted.append(k["input"]))
+    args = SimpleNamespace(reason="Help text only:\nRename the tool in the help string.",
+                           operator_approved=True, pr=None, base="origin/master")
+    assert rg.cmd_waive(args) == 0
+    assert len(rg.waiver_reason(posted[0])) >= rg.WAIVER_MIN_REASON
+    assert rg.active_waiver([{"author_association": "OWNER", "body": posted[0]}], "c" * 64,
+                            rg.waiver_policy())
+
+
+def test_a_quoted_or_fenced_waiver_marker_is_not_a_waiver():
+    k = "c" * 64
+    marker = f"<!-- {rg.WAIVER_MARKER} key={k} -->"
+    quoted = {"author_association": "OWNER",
+              "body": f"This is a rejected example, not approval:\n```\n{marker}\nReason: help string only, nothing else\n```\n"}
+    assert rg.active_waiver([quoted], k, rg.waiver_policy()) is None
+    assert rg.apply_waiver(_HELD, [quoted], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY) == _HELD
+    assert rg.active_waiver([_waiver(k)], k, rg.waiver_policy())  # the real record still counts
+
+
 # September 30 bounded-review policy: legacy evidence remains explicitly legacy.
 def test_legacy_completed_history_requires_escalation_without_invented_objects():
     legacy = rg.Record('k', 'CLEAN', 0, False, 'codex')

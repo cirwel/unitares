@@ -9,6 +9,7 @@
 #   ./scripts/dev/review.sh --reviewer claude   # retry preferred provider despite cooldown
 #   ./scripts/dev/review.sh record FILE --reviewer-name NAME --independent
 #   ./scripts/dev/review.sh dispose FILE        # dispositions for a FINDINGS record
+#   ./scripts/dev/review.sh waive --reason TEXT --operator-approved  # operator only
 #
 # Semantics, record format and the CI half: scripts/dev/review_gate.py.
 # Exit 0: completed/disposed. Exit 1: findings need author action.
@@ -31,7 +32,7 @@ for a in "$@"; do
 done
 
 case "${ARGS[0]:-}" in
-    record|dispose|key) CMD=("${ARGS[@]}") ;;
+    record|dispose|waive|key) CMD=("${ARGS[@]}") ;;
     *) CMD=(review "${ARGS[@]+"${ARGS[@]}"}") ;;
 esac
 
