@@ -1,0 +1,30 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-03T16:17:05Z",
+  "verified_date": "2026-10-03",
+  "verifier": "claude (subagent, 2026-10-03): re-read PR #2626 diff after rebase onto origin/master; checked skill claims citing envelope_step.py: only the prior-node-in-thread next_action sentence changed (now says pass parent_agent_id only if deliberately continuing an ended process); skill claims (co-location is not lineage, parent_agent_id only for deliberate handoff from exited predecessor, sibling_locus/predecessor_uuid) remain accurate",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "653168b7b3ef3148",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "84298e88c8781d77",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "6a6ed1cd1223c4f9",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "e96e25b95ed8b014",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "65aa2ef37a65c0a5",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "f935fa6857003ff0",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/storage/knowledge_graph_age.py": "59ee851a425185e0",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "6d6b9b63c22af21a"
+  },
+  "skill_digest": "297391b6bc47933a",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "382a9fef840baf06"
+    ]
+  }
+}
