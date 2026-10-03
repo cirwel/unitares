@@ -24,8 +24,12 @@ def test_progressive_hint_uses_use_tool():
     )
 
 
-def test_full_mode_keeps_the_bare_call():
-    assert progressive_aware_hint(BARE, mode="full") == BARE
+def test_rewrite_is_independent_of_mode():
+    # A per-request ?mode=progressive client on a server configured full must
+    # not be told to call the unadvertised bare update_finding.
+    assert progressive_aware_hint(BARE, mode="full") == progressive_aware_hint(
+        BARE, mode="progressive"
+    )
 
 
 def test_unparseable_arguments_are_left_alone():
@@ -43,11 +47,12 @@ def _store_envelope():
     return build_experience_envelope("store_finding", "knowledge", payload, {"summary": "s"})
 
 
-def test_store_finding_next_action_follows_the_mode(monkeypatch):
-    monkeypatch.setattr(tool_modes, "TOOL_MODE", "progressive")
-    assert "use_tool(tool_name='update_finding'" in _store_envelope()["next_action"]
-    monkeypatch.setattr(tool_modes, "TOOL_MODE", "full")
-    assert "update_finding(discovery_id='d-9'" in _store_envelope()["next_action"]
+def test_store_finding_next_action_is_safe_in_every_process_mode(monkeypatch):
+    for mode in ("progressive", "full"):
+        monkeypatch.setattr(tool_modes, "TOOL_MODE", mode)
+        action = _store_envelope()["next_action"]
+        assert "use_tool(tool_name='update_finding'" in action
+        assert "update_finding(discovery_id" not in action
 
 
 def test_search_next_action_points_at_a_revision_route(monkeypatch):
