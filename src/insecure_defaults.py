@@ -77,7 +77,8 @@ def startup_warnings(
             "an address. To require a credential on every REST call, set "
             "UNITARES_MCP_BEARER_TOKENS, set UNITARES_MCP_BEARER_TOKEN (the credential "
             "the lease plane and orchestrated reviewers send) to one of its members, "
-            "and leave UNITARES_REST_STRICT unset or set it to 1."
+            "give every other REST client a member too (strict posture does not accept "
+            "UNITARES_HTTP_API_TOKEN), and leave UNITARES_REST_STRICT unset or set it to 1."
         )
 
     return warnings
