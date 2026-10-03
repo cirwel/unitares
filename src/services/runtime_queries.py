@@ -204,7 +204,7 @@ def _generate_contextual_reflection(metrics: dict, interpreted: dict) -> str | N
                 edges.append(f"{dimension} near the {detail['threshold']} mode threshold")
             else:
                 edges.append(str(dimension))
-        return "Near a mode-label threshold (not a risk limit): " + ", ".join(edges) + "."
+        return "Near a mode-label threshold (not a risk threshold or verdict): " + ", ".join(edges) + "."
 
     S = metrics.get('S')
     if S is not None and S > 0.3:

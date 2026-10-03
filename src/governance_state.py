@@ -602,7 +602,7 @@ class GovernanceState:
                 return (
                     f"{dim}={info['value']:.2f} is near the {info.get('threshold')} "
                     f"mode-label cut (which operating mode is reported). This is "
-                    f"not a basin limit and not a risk signal. Pattern may be shifting."
+                    f"not a basin limit, risk threshold, or verdict. Pattern may be shifting."
                 )
         
         # Priority 4: Basin-specific

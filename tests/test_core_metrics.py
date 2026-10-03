@@ -1670,4 +1670,4 @@ def test_borderline_guidance_names_mode_threshold_not_risk():
         None, "healthy", "healthy", "collaborating", "stable", "mixed",
         {"S": {"value": 0.2, "threshold": 0.3, "status": "low"}},
     )
-    assert "mode-label cut" in msg and "not a risk signal" in msg
+    assert "mode-label cut" in msg and "not a basin limit, risk threshold, or verdict" in msg
