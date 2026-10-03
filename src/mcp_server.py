@@ -134,6 +134,7 @@ from src.mcp_listen_config import (
     oauth_dynamic_registration_enabled,
     oauth_gate_required,
     oauth_public_port,
+    rest_strict_required,
 )
 
 # --- OAuth 2.1 configuration (optional, enabled by env var) ---
@@ -402,6 +403,13 @@ async def main():
             "environment).",
             file=sys.stderr, flush=True,
         )
+
+    from src.insecure_defaults import running_in_container, startup_warnings
+
+    for _warning in startup_warnings(
+        rest_strict=rest_strict_required(), in_container=running_in_container()
+    ):
+        print(f"[FastMCP] WARNING: {_warning}", file=sys.stderr, flush=True)
 
     from src.services.mcp_server_bootstrap import (
         ServerStartupError,
