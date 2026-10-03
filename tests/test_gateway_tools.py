@@ -178,3 +178,74 @@ class TestHandleHelp:
         assert "checkin" in tool_names
         assert "query" in tool_names
         assert len(tool_names) == 6
+
+
+REFUSAL = {
+    "success": True,
+    "status": "identity_required",
+    "refused": True,
+    "rollout_flag": "STRICT_IDENTITY_REQUIRED",
+    "hint": "No identity resolved for this call",
+}
+
+
+class TestStrictIdentityRefusal:
+    """A refusal is shaped like a success; the gateway must not report it as one."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "call",
+        [
+            lambda c: handle_note(c, content="x"),
+            lambda c: handle_checkin(c, summary="x"),
+            lambda c: handle_search(c, query="x"),
+            lambda c: handle_status(c),
+        ],
+        ids=["note", "checkin", "search", "status"],
+    )
+    async def test_refusal_is_an_error_not_a_success(self, mock_client, call):
+        mock_client.call_tool.return_value = dict(REFUSAL)
+        result = json.loads(await call(mock_client))
+        assert result["ok"] is False
+        assert "identity_required" in result["error"]
+        assert "client_session_id" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_unbound_status_is_an_error(self, mock_client):
+        mock_client.call_tool.return_value = {
+            "success": True,
+            "action_summary": {"action": "unbound", "verdict": "unbound"},
+        }
+        result = json.loads(await handle_status(mock_client))
+        assert result["ok"] is False
+        assert "Not bound" in result["summary"]
+
+    @pytest.mark.asyncio
+    async def test_non_refusal_still_succeeds(self, mock_client):
+        mock_client.call_tool.return_value = {"success": True, "id": "n1"}
+        result = json.loads(await handle_note(mock_client, content="x"))
+        assert result["ok"] is True
+        assert result["data"]["id"] == "n1"
+
+
+class TestClientSessionIdPassthrough:
+    @pytest.mark.asyncio
+    async def test_note_forwards_client_session_id(self, mock_client):
+        mock_client.call_tool.return_value = {"success": True}
+        await handle_note(mock_client, content="x", client_session_id="agent-abc")
+        args = mock_client.call_tool.call_args[0][1]
+        assert args["client_session_id"] == "agent-abc"
+
+    @pytest.mark.asyncio
+    async def test_omitted_client_session_id_is_not_sent(self, mock_client):
+        mock_client.call_tool.return_value = {"success": True}
+        await handle_checkin(mock_client, summary="x")
+        args = mock_client.call_tool.call_args[0][1]
+        assert "client_session_id" not in args
+
+    @pytest.mark.asyncio
+    async def test_query_forwards_to_routed_tool(self, mock_client):
+        mock_client.call_tool.return_value = {"success": True, "results": []}
+        await handle_query(mock_client, question="what is EISV?", client_session_id="agent-abc")
+        args = mock_client.call_tool.call_args[0][1]
+        assert args["client_session_id"] == "agent-abc"

@@ -39,6 +39,16 @@ def simplify_status(raw: dict) -> dict:
     verdict = _first_present(raw, "verdict", "action")
     agent_id = _first_present(raw, "agent_id", "resolved_agent_id")
 
+    # The live check_working_state reply carries the verdict and risk under
+    # "action_summary" and the subject under "agent_uuid".
+    action_summary = raw.get("action_summary") if isinstance(raw.get("action_summary"), dict) else {}
+    if not verdict:
+        verdict = _first_present(action_summary, "action", "verdict")
+    if risk is None:
+        risk = _first_present(action_summary, "risk_score")
+    if not agent_id:
+        agent_id = _first_present(raw, "agent_uuid")
+
     # Build compact state
     state = {}
     if eisv:
@@ -105,7 +115,8 @@ def simplify_search(raw: dict) -> dict:
     if not isinstance(raw, dict):
         return ok("Search complete", {"raw": raw})
 
-    results = raw.get("results") or raw.get("entries") or []
+    # The live knowledge(action="search") reply carries its hits under "discoveries".
+    results = raw.get("results") or raw.get("entries") or raw.get("discoveries") or []
     if isinstance(results, list):
         simplified = []
         for r in results:
