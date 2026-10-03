@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.insecure_defaults import (
     PUBLISHED_DEFAULT_SHA256,
-    published_default_secrets,
+    names_at_published_default,
     startup_warnings,
 )
 
@@ -35,14 +35,14 @@ def _published_env() -> dict[str, str]:
 
 
 def test_published_defaults_are_reported():
-    assert published_default_secrets(_published_env()) == list(PUBLISHED_DEFAULT_SHA256)
+    assert names_at_published_default(_published_env()) == list(PUBLISHED_DEFAULT_SHA256)
 
 
 def test_own_values_unset_and_blank_are_not_reported():
     env = {name: "operator-chosen" for name in PUBLISHED_DEFAULT_SHA256}
-    assert published_default_secrets(env) == []
-    assert published_default_secrets({}) == []
-    assert published_default_secrets({name: "  " for name in PUBLISHED_DEFAULT_SHA256}) == []
+    assert names_at_published_default(env) == []
+    assert names_at_published_default({}) == []
+    assert names_at_published_default({name: "  " for name in PUBLISHED_DEFAULT_SHA256}) == []
 
 
 def test_warning_names_each_default_secret():

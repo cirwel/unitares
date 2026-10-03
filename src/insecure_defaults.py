@@ -28,8 +28,8 @@ PUBLISHED_DEFAULT_SHA256 = {
 }
 
 
-def published_default_secrets(environ: Mapping[str, str] | None = None) -> list[str]:
-    """Names of the secrets whose value is still the published compose default."""
+def names_at_published_default(environ: Mapping[str, str] | None = None) -> list[str]:
+    """Variable names (never values) still set to their published compose default."""
     env = os.environ if environ is None else environ
     hits = []
     for name, digest in PUBLISHED_DEFAULT_SHA256.items():
@@ -53,7 +53,7 @@ def startup_warnings(
     env = os.environ if environ is None else environ
     warnings = []
 
-    defaults = published_default_secrets(env)
+    defaults = names_at_published_default(env)
     if defaults:
         warnings.append(
             f"{', '.join(defaults)} still set to the published docker-compose.yml "
