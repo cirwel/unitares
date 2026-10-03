@@ -20,6 +20,7 @@ from src.mcp_handlers.support.antigravity_cli_client import (
     ENV_ALLOWLIST as _AGY_ENV_ALLOWLIST,
     agy_env as _agy_env,
     isolated_home as _isolated_home,
+    parse_output as _parse_agy_output,
 )
 from src.mcp_handlers.support.host_adapter import (
     extract_cli_result,
@@ -75,6 +76,10 @@ def _extract_verdict(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             position = start + 1
             continue
+        except RecursionError:
+            # Too deeply nested to decode. Skipping one brace and rescanning is
+            # quadratic in the depth, so the whole reply counts as no verdict.
+            return None
         if isinstance(value, dict) and "agrees" in value:
             last = text[start : start + consumed]
         position = start + consumed
@@ -462,6 +467,68 @@ def resolve_antigravity_cli() -> Optional[str]:
     return None
 
 
+# How much of agy's own explanation a failure carries into the stored warning.
+_AGY_REASON_CHARS = 300
+# A complete glog header at error or fatal level: "E1002 14:11:36.079954 66
+# server.go:1660] ". The whole header, not just "E" plus digits, so that a
+# continuation line of a multi-line entry is not taken for an error by
+# accident. It does NOT stop forgery: the prompt is untrusted and can carry a
+# complete header on a line of its own. Like stderr, the reason this yields is
+# a diagnostic for the operator to read, never evidence anything acts on.
+_GLOG_ERROR_LINE = re.compile(r"^[EF]\d{4} \d{2}:\d{2}:\d{2}\.\d+\s+\d+ [^\s\]]+:\d+\] ")
+
+
+def _agy_log_error(home: str) -> str:
+    """The last error- or fatal-level line of agy's own log under ``home``.
+
+    agy logs in glog format ("E1002 14:11:36.079954 66 file.go:12] msg") to
+    $HOME/.gemini/antigravity-cli/log/. The home is a per-run temporary
+    directory, so this must be read before it is deleted. Never raises."""
+    try:
+        logs = sorted(Path(home, ".gemini", "antigravity-cli", "log").glob("cli-*.log"),
+                      key=lambda f: f.stat().st_mtime)
+        if not logs:
+            return ""
+        lines = logs[-1].read_text(errors="replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(lines):
+        if _GLOG_ERROR_LINE.match(line):
+            return line.strip()
+    return ""
+
+
+def _agy_exit_reason(stdout: bytes, stderr: bytes, home: str) -> str:
+    """agy's own words for a nonzero exit, best source first: the JSON error,
+    stderr (a Go panic's message, else the last line), then the last error
+    line of its log. Live instance:
+    10-01, session c7d1cc8d24773ffd stored only "Antigravity CLI exited 3",
+    with stderr discarded and the log deleted with the temporary home, so the
+    cause of the fallback could not be recovered. Never raises."""
+    def json_error() -> str:
+        data = _parse_agy_output(stdout.decode(errors="replace"))
+        return str(data.get("error") or "") if isinstance(data, dict) else ""
+
+    def stderr_reason() -> str:
+        lines = [line for line in stderr.decode(errors="replace").splitlines() if line.strip()]
+        # agy is a Go binary: a panic prints its message first and a stack
+        # trace after it, so the last line would be a frame, not the cause.
+        crash = next((line for line in lines
+                      if line.startswith(("panic: ", "fatal error: "))), "")
+        return crash or (lines[-1] if lines else "")
+
+    # Each source is best-effort on its own: one that raises (deeply nested
+    # JSON raises RecursionError, not ValueError) must not silence the next.
+    for source in (json_error, stderr_reason, lambda: _agy_log_error(home)):
+        try:
+            said = source().strip()
+        except Exception:  # noqa: BLE001 - a diagnostic must never block the fallback
+            continue
+        if said:
+            return said[:_AGY_REASON_CHARS]
+    return ""
+
+
 async def _reap_group(proc: Any) -> None:
     """Kill agy's whole process group and wait briefly; never raises."""
     try:
@@ -512,7 +579,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
                 env=agy_env(home),
                 stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
                 # Own process group: a timeout must reach agy's sandbox children,
                 # or one holding stdout keeps communicate() waiting forever.
                 start_new_session=True,
@@ -520,7 +587,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
             return fail(f"Antigravity CLI spawn failed: {type(exc).__name__}")
         try:
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
         except asyncio.TimeoutError:
             await _reap_group(proc)
             return fail(f"Antigravity CLI exceeded {timeout_s:g}s timeout",
@@ -528,14 +595,18 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         except Exception as exc:  # noqa: BLE001 - selected-host failure falls back locally
             await _reap_group(proc)
             return fail(f"Antigravity CLI communication failed: {type(exc).__name__}")
+        if proc.returncode != 0:
+            # Inside the with: the log fallback reads the temporary home.
+            said = _agy_exit_reason(stdout or b"", stderr or b"", home)
+            return fail(f"Antigravity CLI exited {proc.returncode}"
+                        + (f": {said}" if said else ""),
+                        latency_ms=int((time.monotonic() - started) * 1000))
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    if proc.returncode != 0:
-        return fail(f"Antigravity CLI exited {proc.returncode}", latency_ms=latency_ms)
     raw = stdout.decode(errors="replace").strip()
     try:
         data = json.loads(raw.splitlines()[-1]) if raw else {}
-    except (ValueError, IndexError):
+    except (ValueError, IndexError, RecursionError):
         data = {}
     if not isinstance(data, dict) or data.get("status") != "SUCCESS":
         return fail("Antigravity CLI reported no successful result", latency_ms=latency_ms)

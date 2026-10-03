@@ -210,7 +210,7 @@ class Thesis:
             conditions = json.loads(raw_conditions) if raw_conditions else []
             if not isinstance(conditions, list):
                 conditions = [str(conditions)]
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             conditions = [c.strip() for c in raw_conditions.split("\n") if c.strip()]
 
         raw_state = env.get("DIALECTIC_PAUSED_AGENT_STATE", "")
@@ -218,7 +218,7 @@ class Thesis:
             paused_agent_state = json.loads(raw_state) if raw_state else {}
             if not isinstance(paused_agent_state, dict):
                 paused_agent_state = {}
-        except (json.JSONDecodeError, ValueError, TypeError):
+        except (json.JSONDecodeError, ValueError, TypeError, RecursionError):
             paused_agent_state = {}
 
         return cls(
@@ -387,7 +387,7 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
         )
     try:
         obj = json.loads(match.group(0))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return Verdict(
             agrees=False,
             root_cause="",
@@ -494,6 +494,10 @@ def extract_last_json_object(text: str) -> Optional[str]:
         except json.JSONDecodeError:
             pos = start + 1
             continue
+        except RecursionError:
+            # Too deeply nested to decode. Skipping one brace and rescanning is
+            # quadratic in the depth, so the whole transcript counts as no verdict.
+            return None
         if isinstance(obj, dict) and "agrees" in obj:
             last = text[start : start + consumed]
         pos = start + consumed
