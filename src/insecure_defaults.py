@@ -46,7 +46,6 @@ def startup_warnings(
     *,
     rest_strict: bool,
     in_container: bool,
-    public_listener: bool = False,
     environ: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Operator-facing warnings about default or ineffective credentials."""
@@ -62,22 +61,19 @@ def startup_warnings(
             "the server."
         )
 
-    # Local REST posture trusts loopback and private-range callers before it
-    # looks at UNITARES_HTTP_API_TOKEN (src/http_routes/access.py). Inside a
-    # container every caller arrives from a private address, so on the main
-    # listener the token is never what admits them. The OAuth public listener
-    # is never trusted, so the token is checked there.
+    # Local REST posture admits a caller from a trusted network address
+    # (loopback, private ranges) before it looks at UNITARES_HTTP_API_TOKEN
+    # (src/http_routes/access.py). A container on the Docker bridge sees its
+    # callers from the bridge gateway, which is such an address, so there the
+    # token usually admits no one. Callers from untrusted addresses, and the
+    # OAuth public listener, are still checked.
     if in_container and (env.get("UNITARES_HTTP_API_TOKEN") or "").strip() and not rest_strict:
-        where = (
-            "the main listener does not check it (the OAuth public listener does)"
-            if public_listener
-            else "REST does not check it"
-        )
         warnings.append(
-            "UNITARES_HTTP_API_TOKEN is set, but in a container every caller comes "
-            f"from a trusted network address, so {where}. To require a credential "
-            "on every REST call, set UNITARES_MCP_BEARER_TOKENS "
-            "(UNITARES_REST_STRICT then defaults on)."
+            "UNITARES_HTTP_API_TOKEN is set, but REST is in local posture, which admits "
+            "callers from trusted network addresses (loopback and private ranges) "
+            "without checking it. Behind the Docker bridge, callers arrive from such "
+            "an address. To require a credential on every REST call, set "
+            "UNITARES_MCP_BEARER_TOKENS and leave UNITARES_REST_STRICT unset or set it to 1."
         )
 
     return warnings

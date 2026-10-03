@@ -57,13 +57,10 @@ def test_http_token_warning_only_in_a_container_in_local_posture():
 
     [warning] = startup_warnings(rest_strict=False, in_container=True, environ=env)
     assert "UNITARES_HTTP_API_TOKEN" in warning
+    assert "trusted network addresses" in warning
+    # The remediation must also undo an explicit UNITARES_REST_STRICT=0.
     assert "UNITARES_MCP_BEARER_TOKENS" in warning
-
-    [qualified] = startup_warnings(
-        rest_strict=False, in_container=True, public_listener=True, environ=env
-    )
-    assert "main listener does not check it" in qualified
-    assert "public listener does" in qualified
+    assert "UNITARES_REST_STRICT unset or set it to 1" in warning
 
     assert startup_warnings(rest_strict=True, in_container=True, environ=env) == []
     assert startup_warnings(rest_strict=False, in_container=False, environ=env) == []
