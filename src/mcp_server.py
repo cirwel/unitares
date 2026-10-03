@@ -407,7 +407,9 @@ async def main():
     from src.insecure_defaults import running_in_container, startup_warnings
 
     for _warning in startup_warnings(
-        rest_strict=rest_strict_required(), in_container=running_in_container()
+        rest_strict=rest_strict_required(),
+        in_container=running_in_container(),
+        public_listener=bool(_oauth_issuer_url and _oauth_public_port),
     ):
         print(f"[FastMCP] WARNING: {_warning}", file=sys.stderr, flush=True)
 

@@ -46,6 +46,7 @@ def startup_warnings(
     *,
     rest_strict: bool,
     in_container: bool,
+    public_listener: bool = False,
     environ: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Operator-facing warnings about default or ineffective credentials."""
@@ -63,13 +64,19 @@ def startup_warnings(
 
     # Local REST posture trusts loopback and private-range callers before it
     # looks at UNITARES_HTTP_API_TOKEN (src/http_routes/access.py). Inside a
-    # container every caller arrives from a private address, so the token is
-    # never what admits them.
+    # container every caller arrives from a private address, so on the main
+    # listener the token is never what admits them. The OAuth public listener
+    # is never trusted, so the token is checked there.
     if in_container and (env.get("UNITARES_HTTP_API_TOKEN") or "").strip() and not rest_strict:
+        where = (
+            "the main listener does not check it (the OAuth public listener does)"
+            if public_listener
+            else "REST does not check it"
+        )
         warnings.append(
             "UNITARES_HTTP_API_TOKEN is set, but in a container every caller comes "
-            "from a trusted network address, so REST does not check it. To require "
-            "a credential on every REST call, set UNITARES_MCP_BEARER_TOKENS "
+            f"from a trusted network address, so {where}. To require a credential "
+            "on every REST call, set UNITARES_MCP_BEARER_TOKENS "
             "(UNITARES_REST_STRICT then defaults on)."
         )
 
