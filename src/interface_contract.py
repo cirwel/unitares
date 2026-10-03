@@ -235,7 +235,15 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # one. No value is added, removed or renamed,
 # and the default is unchanged; call_model's input digest and the surface
 # digest move.
-INTERFACE_CONTRACT_VERSION = "1.26.0"
+# 1.27.0 (2026-10-03): descriptions only. knowledge's action description says
+# a supplied details replaces the stored details (only resolution_notes
+# appends); search_shared_memory's agent_id, status and query describe search
+# filters instead of citing get/list/update; sync_state's complexity text no
+# longer advertises the {value, scale} object the MCP schema cannot carry;
+# delegate_inference's timeout_s names the client-timeout caveat. Nothing is
+# added, removed, retyped or renamed. The input digests of
+# search_shared_memory and delegate_inference and the surface digest move.
+INTERFACE_CONTRACT_VERSION = "1.27.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

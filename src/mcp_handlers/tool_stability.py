@@ -91,7 +91,9 @@ class ToolLifecycle:
 # Primary agent workflow names also live here: they dispatch through raw
 # implementation tools, but are the public first-run surface for agents.
 
-_CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval("complexity")
+_CHECKIN_COMPLEXITY_NORMALIZER = normalize_unit_interval(
+    "complexity", advertise_scale_object=False
+)
 _SEARCH_SHARED_MEMORY_NORMALIZER = normalize_compact_search_details
 
 # deprecated_since: when a consolidated or deprecated old name stopped being

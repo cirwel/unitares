@@ -252,7 +252,7 @@ async def resolve_alias(name: str, arguments: Dict[str, Any], ctx) -> Any:
                     recovery={
                         "action": (
                             f"Re-call {ctx.original_name} with {exc.parameter} as a 0-1 float, "
-                            f"a named level (e.g. 'medium'), or {{'value': N, 'scale': M}}"
+                            f"a named level (e.g. 'medium'); for other scales, divide to 0-1 first"
                         ),
                         "related_tools": ["describe_tool"],
                     },

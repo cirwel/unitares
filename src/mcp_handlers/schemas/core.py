@@ -31,9 +31,8 @@ ProcessUpdateEpistemicClass = Literal[
 
 
 _COMPLEXITY_ALIAS_HINT = (
-    " For 1-10 or other scales, call sync_state with "
-    "complexity={'value': N, 'scale': M} or a named level "
-    "like 'medium'."
+    " For 1-10 or other scales, call sync_state with a 0-1 number "
+    "(e.g. 5/10 = 0.5) or a named level like 'medium'."
 )
 
 
@@ -393,8 +392,8 @@ class ProcessAgentUpdateParams(AgentIdentityMixin):
         description=(
             "Estimated task complexity, strictly 0-1. The sync_state alias "
             "also accepts named levels "
-            "('trivial'|'low'|'medium'|'high'|'very_high') and explicit "
-            "scale objects like {'value': 5, 'scale': 10}."
+            "('trivial'|'low'|'medium'|'high'|'very_high'); for 1-10 or "
+            "other scales, convert to 0-1 first."
         ),
         json_schema_extra={
             "brief": (
@@ -921,7 +920,12 @@ class DelegateInferenceParams(AgentIdentityMixin):
         240,
         ge=5,
         le=420,
-        description="Maximum seconds to await the delegated CLI result.",
+        description=(
+            "Server-side await window in seconds for the delegated CLI result. "
+            "Many MCP clients enforce their own per-tool timeout (often ~60s); "
+            "a client timeout returns no execution id, so keep this at or "
+            "below the client's limit when it is known."
+        ),
     )
 
 

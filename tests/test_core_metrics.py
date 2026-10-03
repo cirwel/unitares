@@ -1573,7 +1573,7 @@ class TestGenerateContextualReflection:
             {"state": {"borderline": {"S": {"value": 0.28, "threshold": 0.3}}}}
         )
         assert result is not None
-        assert "S near 0.3" in result
+        assert "S near the 0.3 mode threshold" in result
         assert "basin" not in result
 
     def test_high_entropy_returns_reflection(self):
@@ -1662,3 +1662,12 @@ class TestVerbosityTiers:
 # ============================================================================
 # EXTENDED COVERAGE: process_agent_update deeper paths
 # ============================================================================
+
+
+def test_borderline_guidance_names_mode_threshold_not_risk():
+    from src.governance_state import GovernanceState
+    msg = GovernanceState().__class__._generate_guidance(
+        None, "healthy", "healthy", "collaborating", "stable", "mixed",
+        {"S": {"value": 0.2, "threshold": 0.3, "status": "low"}},
+    )
+    assert "mode-label cut" in msg and "not a basin limit, risk threshold, or verdict" in msg

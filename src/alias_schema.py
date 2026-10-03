@@ -171,6 +171,17 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         },
     },
     "search_shared_memory": {
+        # The router's text for these cites get/list/update; this alias only
+        # searches, so describe them as search filters.
+        "agent_id": {
+            "description": "Filter by author agent; agent_id_filter wins if both are set.",
+        },
+        "status": {
+            "description": "Filter by status: open, resolved, archived, superseded.",
+        },
+        "query": {
+            "description": "Search text.",
+        },
         "response_mode": {
             "default": "lean",
             "description": (
