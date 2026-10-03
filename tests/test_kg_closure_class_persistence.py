@@ -387,9 +387,19 @@ def test_search_results_carry_the_class_and_expanded_ones_the_evidence(include_d
         assert "closure_evidence" not in item
 
 
-def test_the_lean_search_digest_is_unchanged():
-    """Left alone on purpose: the lean digest keeps its field budget."""
-    assert "closure_class" not in kg_handlers._LEAN_DISCOVERY_FIELDS
+def test_the_lean_search_digest_carries_closure_class():
+    """Reversed on purpose (council 2026-06-16 item 3): a closed row's digest
+    must show its class, or closure_standard='undeclared' when it has none.
+    The byte budget is held by the 3-result test in test_kg_search.py."""
+    assert "closure_class" in kg_handlers._LEAN_DISCOVERY_FIELDS
+    lean = kg_handlers._lean_search_payload({"discoveries": [
+        {"id": "a", "status": "closed", "summary": "s"},
+        {"id": "b", "status": "closed", "summary": "s", "closure_class": "fix_verified"},
+        {"id": "c", "status": "open", "summary": "s"},
+    ]})["discoveries"]
+    assert lean[0]["closure_standard"] == "undeclared"
+    assert lean[1]["closure_class"] == "fix_verified" and "closure_standard" not in lean[1]
+    assert "closure_standard" not in lean[2]
 
 
 @pytest.fixture
