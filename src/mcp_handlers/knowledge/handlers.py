@@ -405,7 +405,12 @@ def _degenerate_write_response(leaked_marker: str, field: str):
         error_category="validation_error",
         recovery={
             "action": "Resend the call with summary, content/details, and tags "
-            "as distinct arguments; do not embed tags or markup inside content."
+            "as distinct arguments; do not embed tags or markup inside content. "
+            "If the text you authored is clean, your context may have been "
+            "quoting these markers and contaminated the call: describe them "
+            "without the literal strings (e.g. 'an antml parameter tag') or "
+            "send the content from a file via REST. "
+            f"Matched marker: {leaked_marker!r}."
         },
     )
 
