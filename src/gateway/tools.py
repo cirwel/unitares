@@ -25,6 +25,24 @@ def _normalize_tags(tags: Optional[str | list[str]]) -> list[str] | None:
     return [tag for tag in values if tag]
 
 
+_BIND_HINT = "pass client_session_id from start_session on governance (:8767)"
+
+
+def _refusal_envelope(raw: object) -> str | None:
+    """Return an error envelope when governance refused the call, else None.
+
+    A strict-identity refusal arrives shaped like a success (``success: true``
+    plus ``refused: true``), so the simplifiers would otherwise report a write
+    that never happened as saved. ``refused`` is the plain boolean the server
+    sets for generic callers; the gateway keys on it rather than importing the
+    handler package into this thin proxy.
+    """
+    if isinstance(raw, dict) and raw.get("refused") is True:
+        status = raw.get("status") or "identity_required"
+        return json.dumps(simplifiers.err("Not recorded: identity required", f"{status}: {_BIND_HINT}"))
+    return None
+
+
 def _error_envelope(exc: Exception) -> str:
     """Convert an exception to a JSON error envelope string."""
     if isinstance(exc, CircuitOpenError):
@@ -38,15 +56,26 @@ def _error_envelope(exc: Exception) -> str:
     return json.dumps(envelope)
 
 
-async def handle_status(client: GovernanceMCPClient, agent_id: Optional[str] = None) -> str:
+async def handle_status(
+    client: GovernanceMCPClient,
+    agent_id: Optional[str] = None,
+    client_session_id: Optional[str] = None,
+) -> str:
     """Get agent EISV state, coherence, verdict, basin."""
     try:
         args: dict = {}
         if agent_id:
             args["agent_id"] = agent_id
+        if client_session_id:
+            args["client_session_id"] = client_session_id
         # check_working_state: advertised alias of get_governance_metrics
         # (raw twin dropped from the lite MCP wire by #1292).
         raw = await client.call_tool("check_working_state", args)
+        refused = _refusal_envelope(raw)
+        if refused:
+            return refused
+        if isinstance(raw, dict) and (raw.get("action_summary") or {}).get("action") == "unbound":
+            return json.dumps(simplifiers.err("Not bound to an identity", _BIND_HINT))
         return json.dumps(simplifiers.simplify_status(raw))
     except Exception as exc:
         logger.warning("status failed: %s", exc)
@@ -59,6 +88,7 @@ async def handle_checkin(
     complexity: float = 0.5,
     confidence: float = 0.7,
     agent_id: Optional[str] = None,
+    client_session_id: Optional[str] = None,
 ) -> str:
     """Report work and get a governance verdict."""
     try:
@@ -69,9 +99,14 @@ async def handle_checkin(
         }
         if agent_id:
             args["agent_id"] = agent_id
+        if client_session_id:
+            args["client_session_id"] = client_session_id
         # sync_state: advertised alias of process_agent_update
         # (raw twin dropped from the lite MCP wire by #1292).
         raw = await client.call_tool("sync_state", args)
+        refused = _refusal_envelope(raw)
+        if refused:
+            return refused
         return json.dumps(simplifiers.simplify_checkin(raw))
     except Exception as exc:
         logger.warning("checkin failed: %s", exc)
@@ -83,13 +118,19 @@ async def handle_search(
     query: str,
     limit: int = 5,
     agent_id: Optional[str] = None,
+    client_session_id: Optional[str] = None,
 ) -> str:
     """Search the shared knowledge graph."""
     try:
         args: dict = {"action": "search", "query": query, "limit": limit}
         if agent_id:
             args["agent_id"] = agent_id
+        if client_session_id:
+            args["client_session_id"] = client_session_id
         raw = await client.call_tool("knowledge", args)
+        refused = _refusal_envelope(raw)
+        if refused:
+            return refused
         return json.dumps(simplifiers.simplify_search(raw))
     except Exception as exc:
         logger.warning("search failed: %s", exc)
@@ -101,6 +142,7 @@ async def handle_note(
     content: str,
     tags: Optional[str | list[str]] = None,
     agent_id: Optional[str] = None,
+    client_session_id: Optional[str] = None,
 ) -> str:
     """Leave a note or discovery in the knowledge graph."""
     try:
@@ -110,7 +152,12 @@ async def handle_note(
             args["tags"] = normalized_tags
         if agent_id:
             args["agent_id"] = agent_id
+        if client_session_id:
+            args["client_session_id"] = client_session_id
         raw = await client.call_tool("knowledge", args)
+        refused = _refusal_envelope(raw)
+        if refused:
+            return refused
         return json.dumps(simplifiers.simplify_note(raw))
     except Exception as exc:
         logger.warning("note failed: %s", exc)
@@ -121,6 +168,7 @@ async def handle_query(
     client: GovernanceMCPClient,
     question: str,
     agent_id: Optional[str] = None,
+    client_session_id: Optional[str] = None,
 ) -> str:
     """Natural language gateway — route question to the right tool."""
     try:
@@ -130,6 +178,8 @@ async def handle_query(
         # Forward agent_id to whichever tool gets routed
         if agent_id:
             args["agent_id"] = agent_id
+        if client_session_id:
+            args["client_session_id"] = client_session_id
 
         if tool == "status":
             return await handle_status(client, **args)
@@ -142,7 +192,9 @@ async def handle_query(
         elif tool == "help":
             return handle_help()
         else:
-            return await handle_search(client, query=question, agent_id=agent_id)
+            return await handle_search(
+                client, query=question, agent_id=agent_id, client_session_id=client_session_id
+            )
     except Exception as exc:
         logger.warning("query routing failed: %s", exc)
         return _error_envelope(exc)
