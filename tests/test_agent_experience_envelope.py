@@ -320,7 +320,7 @@ def test_onboard_envelope_does_not_turn_sibling_predecessor_into_parent():
     assert env["agent_uuid"] == "u-new"
     assert env["state_summary"]["predecessor_uuid"] == "u-prior"
     assert "co-location does not establish lineage" in env["next_action"]
-    assert "Do not use its uuid as parent_agent_id" in env["next_action"]
+    assert "Pass parent_agent_id only if you are deliberately continuing" in env["next_action"]
     assert env["state_summary"]["episode_fork_kind"] == "sibling_locus"
     # Nothing here shows a plain fresh mint (no is_new, outcome or
     # assurance), so the whole onboard record comes with it, and the reason
