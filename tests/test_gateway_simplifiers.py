@@ -143,3 +143,23 @@ class TestSimplifyQuery:
     def test_non_dict(self):
         result = simplify_query("plain text")
         assert result["ok"] is True
+
+
+class TestLiveReplyShapes:
+    """The shapes the running governance server actually returns."""
+
+    def test_search_reads_discoveries(self):
+        from src.gateway.simplifiers import simplify_search
+        out = simplify_search({"discoveries": [{"summary": "a note", "tags": ["t"]}], "count": 1})
+        assert out["ok"] is True
+        assert out["data"]["results"] == [{"summary": "a note", "tags": ["t"]}]
+
+    def test_status_reads_action_summary(self):
+        from src.gateway.simplifiers import simplify_status
+        out = simplify_status({
+            "agent_uuid": "u-1",
+            "action_summary": {"action": "proceed", "verdict": "safe", "risk_score": 0.242},
+        })
+        assert out["data"]["verdict"] == "proceed"
+        assert out["data"]["risk"] == 0.242
+        assert out["data"]["agent_id"] == "u-1"
