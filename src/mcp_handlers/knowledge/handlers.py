@@ -162,10 +162,10 @@ def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]
     return compact
 
 
-# Statuses whose row says "this is done". A closed row that never declared
-# a closure_class vouches for nothing in particular; the digest says so
-# instead of letting the bare status read as verified.
-_CLOSED_STATUSES = frozenset({"closed", "resolved"})
+# The digest reuses the canonical _CLOSING_STATUSES (the closure_class
+# contract, defined below) so the two cannot drift: a closing row that never
+# declared a closure_class vouches for nothing in particular, and the digest
+# says so instead of letting the bare status read as verified.
 
 _LEAN_DISCOVERY_FIELDS = (
     "id",
@@ -235,7 +235,7 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
         if "summary" in lean:
             lean["summary"] = _one_line(lean["summary"])
-        if lean.get("status") in _CLOSED_STATUSES and "closure_class" not in lean:
+        if lean.get("status") in _CLOSING_STATUSES and "closure_class" not in lean:
             lean["closure_standard"] = "undeclared"
         if isinstance(lean.get("tags"), list):
             lean["tags"] = lean["tags"][:12]

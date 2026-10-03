@@ -3235,6 +3235,25 @@ class TestClosureStandardInDigest:
         _assert_attribution_whole(env, rows)
 
     @pytest.mark.asyncio
+    async def test_wont_fix_and_superseded_classless_rows_undeclared(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        rows = [
+            _live_row(0, status="wont_fix"),
+            _live_row(1, status="superseded"),
+            _live_row(2, status="wont_fix"),
+        ]
+        rows[2].closure_class = "fix_verified"
+        mock_graph.get_superseded_by = AsyncMock(return_value={})
+        env = await _friendly_search(mock_graph, rows)
+        digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
+        for row in rows[:2]:
+            assert digests[row.id]["closure_standard"] == "undeclared"
+            assert "closure_class" not in digests[row.id]
+        assert digests[rows[2].id]["closure_class"] == "fix_verified"
+        assert "closure_standard" not in digests[rows[2].id]
+        # open rows show neither field: test_open_row_carries_no_closure_fields
+
+    @pytest.mark.asyncio
     async def test_open_row_carries_no_closure_fields(self, patch_common):
         mock_mcp_server, mock_graph = patch_common
         rows = [_live_row(0), _live_row(1), _live_row(2)]

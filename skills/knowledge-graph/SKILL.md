@@ -269,7 +269,8 @@ The graph accumulates knowledge well but does not close loops automatically. Thi
   its evidence. Search results name the class in `full` and `compact` mode
   (the `knowledge` router defaults to `full`); `search_shared_memory` defaults
   to the `lean` digest, which carries `closure_class` when set and, on a
-  `closed` or `resolved` row with no class, `closure_standard: "undeclared"`
+  closing row (`resolved`, `closed`, `wont_fix` or `superseded`) with no class,
+  `closure_standard: "undeclared"`
   (a label, not a verdict: the row declared no standard). The class stays with the
   finding when the lifecycle archives it or moves it to cold, and an update
   that reopens it (`open` or `disputed`) clears both. Sent without a status, a
