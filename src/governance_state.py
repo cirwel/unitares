@@ -599,7 +599,11 @@ class GovernanceState:
             borderline_items = list(borderline.items())
             if borderline_items:
                 dim, info = borderline_items[0]
-                return f"{dim}={info['value']:.2f} (borderline). Pattern may be shifting."
+                return (
+                    f"{dim}={info['value']:.2f} is near the {info.get('threshold')} "
+                    f"mode-label cut (which operating mode is reported). This is "
+                    f"not a basin limit and not a risk signal. Pattern may be shifting."
+                )
         
         # Priority 4: Basin-specific
         if basin == "boundary":

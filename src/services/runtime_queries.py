@@ -201,10 +201,10 @@ def _generate_contextual_reflection(metrics: dict, interpreted: dict) -> str | N
         edges = []
         for dimension, detail in borderline.items():
             if isinstance(detail, dict) and detail.get("threshold") is not None:
-                edges.append(f"{dimension} near {detail['threshold']}")
+                edges.append(f"{dimension} near the {detail['threshold']} mode threshold")
             else:
                 edges.append(str(dimension))
-        return "Near an interpretation threshold: " + ", ".join(edges) + "."
+        return "Near a mode-label threshold (not a risk limit): " + ", ".join(edges) + "."
 
     S = metrics.get('S')
     if S is not None and S > 0.3:

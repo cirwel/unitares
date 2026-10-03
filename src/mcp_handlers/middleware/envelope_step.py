@@ -2577,9 +2577,9 @@ def build_experience_envelope(
             else:
                 next_action += (
                     " A prior node in this thread was detected, but thread "
-                    "co-location does not establish lineage. Do not use its uuid "
-                    "as parent_agent_id unless a future process is a deliberate "
-                    "continuation after this process exits."
+                    "co-location does not establish lineage. Pass parent_agent_id "
+                    "only if you are deliberately continuing a process that "
+                    "has ended."
                 )
 
     elif canonical_name == "process_agent_update":
