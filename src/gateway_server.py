@@ -68,29 +68,29 @@ def _get_client() -> GovernanceMCPClient:
 
 # -- Tool registrations --
 
-@mcp.tool(description="Get agent EISV state, coherence, verdict, basin. Pass agent_id to identify yourself or query a specific agent.")
-async def status(agent_id: Optional[str] = None) -> str:
-    return await tools.handle_status(_get_client(), agent_id=agent_id)
+@mcp.tool(description="Get agent EISV state, coherence, verdict, basin. Pass agent_id to identify yourself or query a specific agent. client_session_id=the id start_session returned; pass it so the call is recorded.")
+async def status(agent_id: Optional[str] = None, client_session_id: Optional[str] = None) -> str:
+    return await tools.handle_status(_get_client(), agent_id=agent_id, client_session_id=client_session_id)
 
 
-@mcp.tool(description="Report work and get a governance verdict. agent_id=your identity, summary=what you did, complexity=0-1 (default 0.5), confidence=0-1 (default 0.7).")
-async def checkin(summary: str, agent_id: Optional[str] = None, complexity: float = 0.5, confidence: float = 0.7) -> str:
-    return await tools.handle_checkin(_get_client(), summary=summary, complexity=complexity, confidence=confidence, agent_id=agent_id)
+@mcp.tool(description="Report work and get a governance verdict. agent_id=your identity, summary=what you did, complexity=0-1 (default 0.5), confidence=0-1 (default 0.7). client_session_id=the id start_session returned; pass it so the call is recorded.")
+async def checkin(summary: str, agent_id: Optional[str] = None, complexity: float = 0.5, confidence: float = 0.7, client_session_id: Optional[str] = None) -> str:
+    return await tools.handle_checkin(_get_client(), summary=summary, complexity=complexity, confidence=confidence, agent_id=agent_id, client_session_id=client_session_id)
 
 
-@mcp.tool(description="Search the shared knowledge graph. Returns matching discoveries, notes, and findings.")
-async def search(query: str, limit: int = 5, agent_id: Optional[str] = None) -> str:
-    return await tools.handle_search(_get_client(), query=query, limit=limit, agent_id=agent_id)
+@mcp.tool(description="Search the shared knowledge graph. Returns matching discoveries, notes, and findings. client_session_id=the id start_session returned; pass it so the call is recorded.")
+async def search(query: str, limit: int = 5, agent_id: Optional[str] = None, client_session_id: Optional[str] = None) -> str:
+    return await tools.handle_search(_get_client(), query=query, limit=limit, agent_id=agent_id, client_session_id=client_session_id)
 
 
-@mcp.tool(description="Leave a note or discovery in the knowledge graph. tags=comma-separated (optional).")
-async def note(content: str, tags: Optional[str] = None, agent_id: Optional[str] = None) -> str:
-    return await tools.handle_note(_get_client(), content=content, tags=tags, agent_id=agent_id)
+@mcp.tool(description="Leave a note or discovery in the knowledge graph. tags=comma-separated (optional). client_session_id=the id start_session returned; pass it so the call is recorded.")
+async def note(content: str, tags: Optional[str] = None, agent_id: Optional[str] = None, client_session_id: Optional[str] = None) -> str:
+    return await tools.handle_note(_get_client(), content=content, tags=tags, agent_id=agent_id, client_session_id=client_session_id)
 
 
-@mcp.tool(description="Natural language gateway — ask any question and it gets routed to the right tool automatically.")
-async def query(question: str, agent_id: Optional[str] = None) -> str:
-    return await tools.handle_query(_get_client(), question=question, agent_id=agent_id)
+@mcp.tool(description="Natural language gateway — ask any question and it gets routed to the right tool automatically. client_session_id=the id start_session returned; pass it so the call is recorded.")
+async def query(question: str, agent_id: Optional[str] = None, client_session_id: Optional[str] = None) -> str:
+    return await tools.handle_query(_get_client(), question=question, agent_id=agent_id, client_session_id=client_session_id)
 
 
 @mcp.tool(description="List all gateway tools with descriptions and examples.")
