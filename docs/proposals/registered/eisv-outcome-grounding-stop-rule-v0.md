@@ -189,6 +189,49 @@ was also run, which the falsification audit permits. This changes no cutoff,
 cohort, threshold or condition; it is recorded so the December report can
 list every known interim access.
 
+## Label-generator change inside the window — disclosed 2026-10-03
+
+PR #2611 changed the server's auto-outcome emitter
+(`_post_update_auto_outcome` in `src/mcp_handlers/updates/phases.py`). The
+governance server picked it up at the 2026-10-02 08:55:34 UTC restart on build
+`2893a4fc4`. Before it, the emitter matched completion and failure keywords as
+bare substrings, so a check-in reporting "N unresolved" was labelled
+`task_completed` and one reporting "unblocked" was labelled `task_failed`. Since
+then each keyword must start at a word boundary. One resident's status line had
+written a `task_completed` row on every check-in with open findings since
+2026-09-12; it has written none since the restart.
+
+These rows carry `verification_source = 'agent_reported_tool_result'`, so they
+are outside the trusted anchor tier this read scores, and no trusted row changed.
+They are, however, inputs to the behavioral sensor: `get_recent_outcomes` feeds
+them into E's outcome-success term and I's outcome-consistency term without a
+provenance filter, and the E and I stored on trusted rows are computed from that
+sensor. Counts as of 2026-10-03 06:44 UTC, taken for this disclosure:
+
+- 5,704 such rows (`task_completed` or `task_failed`) in the trailing 30 days,
+  3,484 of them from the one resident above;
+- 14.94 rows an hour over the 7 days before the restart, against 62 rows in the
+  21.8 hours after it (about 2.8 an hour);
+- 2,540 of 3,053 `external_signal` rows in the trailing 30 days had at least one
+  such row from the same agent in the 24 hours before them.
+
+So the label stream that shapes prior-state E and I is not uniform across the
+registered window: it has a seam at the restart. This changes no cutoff, cohort,
+threshold or condition. Whether the December report splits its cohort at the
+seam or reports it only as a disclosed generator change is the operator's
+judgment and is not decided here.
+
+The counts above, and the descriptive counts gathered while deciding what to do
+next, came from read-only queries of `audit.outcome_events` and
+`core.agent_state`. They counted rows and their provenance. None of them
+computed a discrimination statistic or read an EISV value against an outcome
+label.
+
+The remaining proposal in #2418, to stop emitting these labels for check-ins
+not authored by the agent, is deferred until after the read so that the window
+carries no second seam. Any producer change to this label stream before
+2026-12-01 gets its own dated disclosure here.
+
 ## Power-characterisation correction — disclosed 2026-08-23
 
 The first database-free power audit reused `(agent, prior-state snapshot)`
