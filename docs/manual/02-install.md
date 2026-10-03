@@ -198,8 +198,9 @@ an upgrade keep its data.
   This deletes the stack's data.
 - To keep the old install and add a second one, set `COMPOSE_PROJECT_NAME` to a
   different value in the new checkout's `.env`. The compose file also sets
-  fixed `container_name` values, so stop the first stack before starting the
-  second one.
+  fixed `container_name` values, so run `docker compose down` (without `-v`, which
+  keeps the old volumes) in the first checkout before starting the second one.
+  `docker compose stop` is not enough: stopped containers keep their names.
 
 ### Updating
 

@@ -365,7 +365,7 @@ def main() -> int:
     banner("done")
     print("  • Every number above came from check-in responses — no DB queries.")
     print(f"  • Open {_dashboard_url()} to see the same state visually.")
-    print("  • Integrate this in your own agent loop: 5 lines, see README §Install (connect MCP clients) and docs/manual/02-install.md.")
+    print("  • Integrate this in your own agent loop: see docs/integration/MCP_CLIENTS.md (MCP clients) or agents/sdk/README.md (Python SDK).")
     return 0
 
 
