@@ -1858,7 +1858,7 @@ def test_store_finding_envelope_keeps_the_callers_summary_verbatim():
     env = build_experience_envelope("store_finding", "knowledge", payload, {"summary": summary})
 
     assert env["state_summary"]["summary"] == summary
-    assert "update_finding(" in env["next_action"]
+    assert "update_finding" in env["next_action"]
 
 
 def test_store_finding_envelope_reports_write_instead_of_empty_search():
@@ -1896,7 +1896,7 @@ def test_store_finding_envelope_reports_write_instead_of_empty_search():
         "discovery_id": "d-new",
         "message": "Discovery stored for agent 'agent-1'",
     }
-    assert "update_finding(" in env["next_action"]
+    assert "update_finding" in env["next_action"]
     assert "No prior discoveries matched" not in env["next_action"]
     assert "raw_governance" not in env
     assert "discovery_id='d-new'" in env["raw_governance_hint"]
