@@ -72,6 +72,12 @@ Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
 This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
 coordination plane.
 
+Data lives in Docker named volumes keyed to the Compose project name, which is
+the checkout directory name (`unitares`). Re-running the one-liner therefore
+reuses an earlier install's database. For a clean start, run
+`docker compose down -v` in the old checkout first. See
+[Reinstalling](docs/manual/02-install.md#reinstalling-and-side-by-side-installs).
+
 From the checkout, `./scripts/unitares model` points the server at a model you
 run with Ollama, which turns on advisory `consult` answers and a first reviewer
 for dialectic reviews; without one, a review waits for a peer or the operator.
