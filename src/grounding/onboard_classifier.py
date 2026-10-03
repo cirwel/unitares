@@ -275,11 +275,12 @@ _REGISTRATION_DETAIL = {
         "auto-archive and exempt from loop-detection pattern 4."
     ),
     "not_on_roster": (
-        "{name!r} is NOT in this deployment's UNITARES_RESIDENTS roster, so it "
-        "was minted as an ordinary agent and did NOT receive {required}. Those "
-        "tags are granted only at mint and only to roster names -- they cannot "
-        "be self-assigned afterwards (PRIVILEGED_TAGS). This identity is not "
-        "protected from auto-archive. To register it: add {name!r} to "
+        "You are an ordinary agent; no action needed. {name!r} is not a "
+        "registered resident name, so this identity did not receive {required} "
+        "and is not protected from auto-archive. Only if it is meant to be a "
+        "long-lived resident: those tags are granted only at mint, only to "
+        "names in this deployment's UNITARES_RESIDENTS roster, and cannot be "
+        "self-assigned afterwards (PRIVILEGED_TAGS). To register it: add {name!r} to "
         "UNITARES_RESIDENTS where the governance server reads it, restart the "
         "server so it re-reads the config, then bootstrap a fresh identity. "
         "An existing identity cannot be upgraded in place."

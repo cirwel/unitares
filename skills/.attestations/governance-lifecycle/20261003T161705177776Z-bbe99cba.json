@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-03T16:17:05Z",
+  "verified_date": "2026-10-03",
+  "verifier": "claude (subagent, 2026-10-03): re-read PR #2626 diff after rebase onto origin/master; checked skill claims citing envelope_step.py: only the prior-node-in-thread next_action sentence changed (now says pass parent_agent_id only if deliberately continuing an ended process); skill claims (co-location is not lineage, parent_agent_id only for deliberate handoff from exited predecessor, sibling_locus/predecessor_uuid) remain accurate",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "82a2d21673dac84f",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "86cf1303adea1b1b",
+    "unitares/src/mcp_handlers/identity/handlers.py": "6bafb43dd2dc40ef",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "65aa2ef37a65c0a5",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "551f17d6b4fae569",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "21588db986cf1eef",
+    "unitares/src/mcp_handlers/updates/phases.py": "4080d56cabc16cbd",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "1a2d7782ab306af3"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "382a9fef840baf06"
+    ]
+  }
+}
