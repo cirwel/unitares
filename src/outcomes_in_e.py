@@ -111,16 +111,24 @@ def build_outcomes_in_e(derivation: Any) -> dict[str, Any] | None:
     counted = len(outcomes)
     adverse_rows = [o for o in outcomes if isinstance(o, Mapping) and o.get("is_bad")]
     adverse_by_type = Counter(str(o.get("outcome_type") or "unrecorded") for o in adverse_rows)
-    by_source = Counter(
-        str(o.get("verification_source") or "unrecorded")
-        for o in outcomes
-        if isinstance(o, Mapping)
-    )
-    return {
+    # The default outcome query does not select verification_source (it stays
+    # byte-identical to the legacy query; see get_recent_outcomes), so on the
+    # default path every row arrives without it. Reporting that as N
+    # "unrecorded" would misstate rows whose source is in fact recorded, so
+    # the breakdown is given only when the query actually fetched provenance.
+    sources = [o.get("verification_source") for o in outcomes if isinstance(o, Mapping)]
+    account: dict[str, Any] = {
         "counted": counted,
         "adverse": len(adverse_rows),
         "adverse_by_type": dict(sorted(adverse_by_type.items())),
-        "by_verification_source": dict(sorted(by_source.items())),
+    }
+    if any(source is not None for source in sources):
+        account["by_verification_source"] = dict(
+            sorted(Counter(str(source or "unrecorded") for source in sources).items())
+        )
+    else:
+        account["by_verification_source"] = "not_fetched"
+    account.update({
         "window": WINDOW_TEXT,
         "share_of_observation": round(share, 4),
         "term_contribution": round(float(component.get("weighted_contribution", 0.0)) * retained, 4),
@@ -131,7 +139,8 @@ def build_outcomes_in_e(derivation: Any) -> dict[str, Any] | None:
         "next_adverse_outcome": _next_adverse(share, counted, len(adverse_rows)),
         "caused_by_your_change": "not_recorded",
         "note": NOTE,
-    }
+    })
+    return account
 
 
 def evidence_key(evidence: Mapping[str, Any]) -> tuple:

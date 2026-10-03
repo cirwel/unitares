@@ -83,6 +83,18 @@ def test_account_matches_the_deployed_formula():
     )
 
 
+def test_default_query_shape_does_not_claim_unrecorded_provenance():
+    # With the provenance filter off (the default), get_recent_outcomes selects
+    # outcome_type, is_bad, outcome_score, ts and no verification_source.
+    rows = [
+        {k: v for k, v in row.items() if k != "verification_source"}
+        for row in _outcomes(6, 2)
+    ]
+    evidence = _evidence(rows)
+    assert evidence["by_verification_source"] == "not_fetched"
+    assert evidence["adverse"] == 2
+
+
 def test_next_adverse_is_zero_when_all_are_adverse():
     evidence = _evidence(_outcomes(5, 5))
     assert evidence["next_adverse_outcome"]["lowers_by"] == 0.0
