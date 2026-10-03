@@ -179,6 +179,11 @@ class TestHandleHelp:
         assert "query" in tool_names
         assert len(tool_names) == 6
 
+    def test_glossary_defines_eisv_letters(self):
+        glossary = json.loads(handle_help())["data"]["glossary"]
+        for word in ("energy", "information_integrity", "entropy", "void"):
+            assert word in glossary["EISV"]
+
 
 REFUSAL = {
     "success": True,

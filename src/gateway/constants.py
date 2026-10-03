@@ -16,6 +16,11 @@ CIRCUIT_BACKOFF_MAX = 120.0
 REQUEST_TIMEOUT = 30.0
 
 HELP_TEXT = {
+    "glossary": {
+        "EISV": "The four state variables in a status reply: E (energy), I (information_integrity), S (entropy), V (void)",
+        "verdict": "Governance policy action: proceed, guide, or pause. proceed and guide are advisory",
+        "coherence / basin / risk": "Other fields in a status reply; call status to read your own values",
+    },
     "tools": [
         {
             "name": "status",

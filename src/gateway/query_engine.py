@@ -21,6 +21,7 @@ INTENTS = {
     "search": "search",
     "note": "note",
     "help": "help",
+    "explain": "explain",
 }
 
 # Keyword patterns for fallback classification
@@ -32,10 +33,16 @@ KEYWORD_PATTERNS = [
     (r"\b(help|tools|commands|how|what can)\b", "help"),
 ]
 
+# Definitional questions ("what does EISV stand for") are about the system, not
+# the caller. Without this the status keywords below grab any mention of eisv.
+_EXPLAIN = re.compile(r"\b(stands? for|mean|means|meaning|define|definition|explain)\b")
+_PERSONAL = re.compile(r"\b(my|me|mine|i|current|currently|right now)\b")
+
 ROUTING_PROMPT = """You are an intent classifier for a governance system. Given a user question, classify it into exactly one intent.
 
 Available intents:
-- status: Questions about agent state, EISV, coherence, basin, verdict, health
+- status: Questions about the caller's OWN current state, EISV, coherence, basin, verdict, health
+- explain: Asking what a term means or stands for (for example "what does EISV stand for")
 - checkin: Reporting work done, checking in, getting a verdict on progress
 - search: Looking up knowledge, findings, discoveries in the knowledge graph
 - note: Saving a note, discovery, or observation
@@ -85,6 +92,9 @@ async def classify_intent(
 def _keyword_classify(question: str) -> str:
     """Fallback: classify by keyword matching."""
     q = question.lower()
+    if _EXPLAIN.search(q) and not _PERSONAL.search(q):
+        logger.debug("Keyword classified '%s' → explain", question[:50])
+        return "explain"
     for pattern, intent in KEYWORD_PATTERNS:
         if re.search(pattern, q):
             logger.debug("Keyword classified '%s' → %s", question[:50], intent)
@@ -111,7 +121,8 @@ async def route_query(
         return {"tool": "search", "args": {"query": question}}
     elif intent == "note":
         return {"tool": "note", "args": {"content": question}}
-    elif intent == "help":
+    elif intent in ("help", "explain"):
+        # help carries the glossary, so a definitional question gets a fixed answer.
         return {"tool": "help", "args": {}}
     else:
         return {"tool": "search", "args": {"query": question}}

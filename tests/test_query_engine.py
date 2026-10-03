@@ -52,6 +52,9 @@ class TestKeywordClassify:
             ("find the knowledge graph entry", "search"),
             ("please save this as a note", "note"),
             ("what tools are available, help", "help"),
+            ("What does EISV stand for?", "explain"),
+            ("explain coherence", "explain"),
+            ("what does my verdict mean right now", "status"),
         ],
     )
     def test_keyword_routes(self, question, expected):
@@ -161,3 +164,16 @@ class TestClassifierSessionBinding:
         route = await route_query("keep this observation", client, client_session_id="agent-abc")
         assert route["tool"] == "note"
         assert client.calls[0][1]["client_session_id"] == "agent-abc"
+
+
+class TestExplainRoute:
+    @pytest.mark.asyncio
+    async def test_explain_intent_routes_to_help(self):
+        client = _FakeClient(result={"response": "explain"})
+        assert await route_query("what does EISV stand for", client) == {"tool": "help", "args": {}}
+
+    @pytest.mark.asyncio
+    async def test_definitional_question_survives_llm_failure(self):
+        # LLM down: the keyword fallback must not send this to status.
+        client = _FakeClient(raises=True)
+        assert await route_query("What does EISV stand for?", client) == {"tool": "help", "args": {}}
