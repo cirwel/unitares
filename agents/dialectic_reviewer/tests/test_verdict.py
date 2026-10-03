@@ -183,13 +183,53 @@ def test_thesis_from_env_discards_malformed_or_non_object_pause_evidence(raw_sta
 
 
 # --------------------------- SDK interface conformance --------------------------- #
+def _raw_client_methods_called() -> set[str]:
+    """Every method the reviewer calls on a real GovernanceClient, read from its
+    source: calls on ``client`` inside ``_GovernanceLink._serve``, and calls on
+    the parameter of each lambda handed to a link's ``.run(...)``."""
+    import ast
+    import inspect
+
+    import agents.dialectic_reviewer.reviewer as r
+
+    def calls_on(node, name):
+        return {
+            n.func.attr
+            for n in ast.walk(node)
+            if isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and isinstance(n.func.value, ast.Name)
+            and n.func.value.id == name
+        }
+
+    tree = ast.parse(inspect.getsource(r))
+    methods: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_serve":
+            methods |= calls_on(node, "client")
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "run"
+            and node.args
+            and isinstance(node.args[0], ast.Lambda)
+        ):
+            fn = node.args[0]
+            methods |= calls_on(fn.body, fn.args.args[0].arg)
+    return methods
+
+
 def test_runner_only_calls_real_governance_client_methods():
-    """Guard against the mock lying: every GovernanceClient method run() invokes
-    must actually exist on the real SDK class. (This catches close-vs-disconnect /
-    sync_state-vs-checkin drift that mocked wiring tests cannot.)"""
+    """Guard against the mock lying: every GovernanceClient method the reviewer
+    invokes must actually exist on the real SDK class. (This catches
+    close-vs-disconnect / sync_state-vs-checkin drift that mocked wiring tests
+    cannot.)"""
     client_mod = pytest.importorskip("unitares_sdk.client")
     gc = client_mod.GovernanceClient
-    for method in ("connect", "onboard", "identity", "call_tool", "checkin", "disconnect"):
+    methods = _raw_client_methods_called()
+    # The extraction itself must keep seeing the known calls, or it checks nothing.
+    assert {"connect", "identity", "disconnect", "call_tool", "onboard", "checkin"} <= methods
+    for method in sorted(methods):
         assert hasattr(gc, method), f"GovernanceClient is missing {method!r} — runner would crash live"
 
 
