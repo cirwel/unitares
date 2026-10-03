@@ -113,6 +113,19 @@ def _copy_passthrough_fields(response_data: dict, result: dict, fields: tuple) -
             result[field] = value
 
 
+def _surfaced_outcomes_in_e(response_data: dict) -> Optional[dict]:
+    """The outcome account (#2610) when filtered modes should show it.
+
+    Only when an adverse outcome is counted and the counts changed since the
+    last account shown: an all-good window costs nothing, and an unchanged one
+    is not repeated every check-in. Full mode carries the raw key regardless.
+    """
+    evidence = response_data.get("outcomes_in_e")
+    if isinstance(evidence, dict) and evidence.get("adverse") and evidence.get("changed"):
+        return evidence
+    return None
+
+
 def _bounded_text(value: Any) -> Any:
     """Collapse free text to one bounded line for filtered response modes."""
     if not isinstance(value, str):
@@ -680,6 +693,9 @@ def _format_standard(response_data: dict, task_type: str, saved_trust_tier: Any 
             "knowledge_surfacing_degraded",
         ),
     )
+    outcomes_in_e = _surfaced_outcomes_in_e(response_data)
+    if outcomes_in_e is not None:
+        result["outcomes_in_e"] = outcomes_in_e
 
     policy_summary = None
     if _compact_policy_is_actionable(policy_source):
@@ -891,6 +907,14 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
         # Back-compat: older enrichments may still set _mirror_question.
         reflection = response_data.get("_mirror_question", None)
 
+    # 7. Outcomes in E (#2610): which recorded outcomes are pulling the
+    # outcome term down, said once per change. Descriptive, with the two facts
+    # the formula does not record (no attribution; adverse is not fault).
+    outcomes_in_e = _surfaced_outcomes_in_e(response_data)
+    if outcomes_in_e is not None:
+        from src.outcomes_in_e import mirror_line
+        mirror_signals.append(mirror_line(outcomes_in_e))
+
     # In-flow review nudge (#1685): render as a mirror line so the suggestion
     # is visible in the mode that actionable states resolve to.
     if response_data.get("review_suggested"):
@@ -928,6 +952,8 @@ def _format_mirror(response_data: dict, saved_trust_tier: Any, meta: Any = None)
 
     if relevant_prior:
         result["relevant_prior_work"] = relevant_prior
+    if outcomes_in_e is not None:
+        result["outcomes_in_e"] = outcomes_in_e
 
     if reflection:
         result["reflection"] = reflection
@@ -1155,6 +1181,9 @@ def _format_compact(response_data: dict, using_default_mode: bool, saved_trust_t
             "knowledge_surfacing_degraded",
         ),
     )
+    outcomes_in_e = _surfaced_outcomes_in_e(response_data)
+    if outcomes_in_e is not None:
+        result["outcomes_in_e"] = outcomes_in_e
 
     policy_source = response_data.get("policy_evaluation")
     enforcement_source = response_data.get("enforcement")
