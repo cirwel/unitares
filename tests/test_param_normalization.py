@@ -261,7 +261,18 @@ class TestResolveAliasIntegration:
         assert payload["error_code"] == "PARAMETER_ERROR"
         assert payload["error_type"] == "ambiguous_parameter_value"
         assert payload["parameter"] == "complexity"
-        assert "scale" in payload["error"]
+        # sync_state's schema rejects objects: never advertise the object form.
+        assert "'scale'" not in payload["error"]
+        assert "'value'" not in payload["error"]
+        assert "{" not in payload["error"]
+        assert "0-1" in payload["error"]
+        assert "divide" in payload["error"]
+        assert "0-1" in payload["recovery"]["action"]
+
+    def test_default_normalizer_still_advertises_scale_object(self):
+        with pytest.raises(ParamNormalizationError) as exc:
+            normalize_unit_interval("complexity")({"complexity": 5})
+        assert "'scale': 10" in str(exc.value)
 
     @pytest.mark.asyncio
     async def test_in_range_value_passes_with_no_record(self):

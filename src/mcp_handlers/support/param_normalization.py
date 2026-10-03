@@ -54,7 +54,13 @@ class ParamNormalizationError(ValueError):
         self.provided = provided
 
 
-def _accepted_forms(param: str) -> str:
+def _accepted_forms(param: str, *, scale_object: bool = True) -> str:
+    if not scale_object:
+        return (
+            f"a 0-1 float ({param}=0.7) or a named level ({_LEVELS_DISPLAY}); "
+            f"for any other scale, divide by the scale you meant first "
+            f"(e.g. 5 out of 10 -> {param}=0.5)"
+        )
     return (
         f"a 0-1 float ({param}=0.7), a named level ({_LEVELS_DISPLAY}), or an "
         f"explicit scale object ({param}={{'value': 5, 'scale': 10}})"
@@ -65,12 +71,18 @@ def _real_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def normalize_unit_interval(param: str) -> ParamNormalizer:
+def normalize_unit_interval(
+    param: str, *, advertise_scale_object: bool = True
+) -> ParamNormalizer:
     """Build an alias-layer normalizer for a 0-1 parameter.
 
     The returned callable mutates the arguments dict in place and returns
     disclosure records for the response envelope (empty dict when the value
     passed through untouched).
+
+    ``advertise_scale_object=False`` keeps error text from recommending the
+    ``{'value', 'scale'}`` form for tools whose advertised schema rejects
+    objects; the object is still normalized if it reaches the normalizer.
     """
 
     def _reject(provided: Any, message: str) -> None:
@@ -81,7 +93,7 @@ def normalize_unit_interval(param: str) -> ParamNormalizer:
             provided,
             f"{param}={provided!r} is ambiguous: bare numeric values must "
             f"already be on the 0-1 scale (a bare 5 could mean 5/10 or "
-            f"5/100). Use {_accepted_forms(param)}.",
+            f"5/100). Use {_accepted_forms(param, scale_object=advertise_scale_object)}.",
         )
 
     def _normalize_scale_object(value: Dict[str, Any]) -> float:
@@ -136,7 +148,7 @@ def normalize_unit_interval(param: str) -> ParamNormalizer:
                 _reject(
                     value,
                     f"{param}={value!r} is not a named level. Use "
-                    f"{_accepted_forms(param)}.",
+                    f"{_accepted_forms(param, scale_object=advertise_scale_object)}.",
                 )
             if 0.0 <= numeric <= 1.0:
                 # In-range numeric strings are valid canonical input; the
@@ -158,7 +170,7 @@ def normalize_unit_interval(param: str) -> ParamNormalizer:
         _reject(
             value,
             f"{param} got unsupported type {type(value).__name__}. Use "
-            f"{_accepted_forms(param)}.",
+            f"{_accepted_forms(param, scale_object=advertise_scale_object)}.",
         )
 
     return _normalize
