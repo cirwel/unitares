@@ -172,7 +172,7 @@ async def handle_query(
 ) -> str:
     """Natural language gateway — route question to the right tool."""
     try:
-        route = await route_query(question, client)
+        route = await route_query(question, client, client_session_id=client_session_id)
         tool = route["tool"]
         args = route["args"]
         # Forward agent_id to whichever tool gets routed

@@ -48,17 +48,24 @@ User question: {question}
 Intent:"""
 
 
-async def classify_intent(question: str, client: GovernanceMCPClient) -> str:
+async def classify_intent(
+    question: str, client: GovernanceMCPClient, client_session_id: str | None = None
+) -> str:
     """Classify a natural language question into a gateway intent.
 
     Tries LLM classification via call_model first, falls back to keyword matching.
     """
     # Try LLM classification
     try:
-        result = await client.call_tool("call_model", {
+        args = {
             "prompt": ROUTING_PROMPT.format(question=question),
             "max_tokens": 10,
-        })
+        }
+        # call_model needs a bound caller; without the id it is refused and the
+        # keyword fallback below silently takes over.
+        if client_session_id:
+            args["client_session_id"] = client_session_id
+        result = await client.call_tool("call_model", args)
         if isinstance(result, dict):
             intent = (result.get("response") or result.get("text") or "").strip().lower()
         else:
@@ -86,12 +93,14 @@ def _keyword_classify(question: str) -> str:
     return "search"
 
 
-async def route_query(question: str, client: GovernanceMCPClient) -> dict:
+async def route_query(
+    question: str, client: GovernanceMCPClient, client_session_id: str | None = None
+) -> dict:
     """Route a natural language question to the appropriate tool call.
 
     Returns (tool_name, arguments) tuple for the gateway to execute.
     """
-    intent = await classify_intent(question, client)
+    intent = await classify_intent(question, client, client_session_id=client_session_id)
 
     if intent == "status":
         return {"tool": "status", "args": {}}

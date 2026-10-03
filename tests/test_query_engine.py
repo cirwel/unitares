@@ -136,3 +136,28 @@ class TestRouteQuery:
         client = _FakeClient(raises=True)
         out = await route_query("zxqw plover", client)
         assert out == {"tool": "search", "args": {"query": "zxqw plover"}}
+
+
+class TestClassifierSessionBinding:
+    """call_model needs a bound caller, so the session id must reach it."""
+
+    @pytest.mark.asyncio
+    async def test_classify_forwards_client_session_id(self):
+        client = _FakeClient(result={"response": "note"})
+        assert await classify_intent("keep this observation", client, client_session_id="agent-abc") == "note"
+        name, args = client.calls[0]
+        assert name == "call_model"
+        assert args["client_session_id"] == "agent-abc"
+
+    @pytest.mark.asyncio
+    async def test_classify_omits_client_session_id_when_absent(self):
+        client = _FakeClient(result={"response": "note"})
+        await classify_intent("keep this observation", client)
+        assert "client_session_id" not in client.calls[0][1]
+
+    @pytest.mark.asyncio
+    async def test_route_query_forwards_client_session_id(self):
+        client = _FakeClient(result={"response": "note"})
+        route = await route_query("keep this observation", client, client_session_id="agent-abc")
+        assert route["tool"] == "note"
+        assert client.calls[0][1]["client_session_id"] == "agent-abc"
