@@ -51,7 +51,7 @@ Every agent has four dimensions, updated through check-ins:
 
 ### How the Live Path Reads Them
 
-- **E (Energy)** currently blends decision success, complexity calibration, sometimes external task evidence, and a legacy coherence-level term sourced from `legacy_tanh_v` ODE control feedback. That last input is compatibility debt, not behavioral health evidence.
+- **E (Energy)** currently blends decision success, complexity calibration, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` ODE control feedback. That last input is compatibility debt, not behavioral health evidence. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
 - **I (Integrity)** currently blends calibration/outcome consistency with the trend of that same legacy controller scalar. Read it as a deployed heuristic, not a pure claims-match-results measurement.
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
 - **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).

@@ -28,6 +28,7 @@ from collections import Counter
 from typing import Any, Mapping
 
 from src.behavioral_sensor import OUTCOME_E_FLOOR, OUTCOME_E_SPAN
+from src.eisv_telemetry import OUTCOME_WINDOW
 
 OUTCOME_COMPONENT = "outcome_success"
 WINDOW_TEXT = "last 24h, at most 20 outcomes"
@@ -65,6 +66,25 @@ def _retained_after_adjustments(e_record: Mapping[str, Any]) -> float:
         if isinstance(adjustment, Mapping):
             retained *= float(adjustment.get("retained_weight", 1.0))
     return retained
+
+
+def _next_adverse(share: float, counted: int, adverse: int) -> dict[str, Any]:
+    """How much recording one more adverse outcome lowers the observation.
+
+    A new outcome grows the window, so the success rate goes from good/n to
+    good/(n+1), not to (good-1)/n: the drop is share * SPAN * good / (n(n+1)),
+    and zero when every counted outcome is already adverse. At the window cap
+    the oldest record leaves as the new one arrives, so the drop is
+    share * SPAN / n if that record was good and zero if it was adverse; the
+    value is then the upper bound. Either way it assumes nothing else ages
+    out of the 24h window in between.
+    """
+    good = counted - adverse
+    if counted >= OUTCOME_WINDOW:
+        drop = share * OUTCOME_E_SPAN / counted if good else 0.0
+        return {"lowers_by_at_most": round(drop, 4), "window_full": True}
+    drop = share * OUTCOME_E_SPAN * good / (counted * (counted + 1))
+    return {"lowers_by": round(drop, 4), "window_full": False}
 
 
 def build_outcomes_in_e(derivation: Any) -> dict[str, Any] | None:
@@ -108,7 +128,7 @@ def build_outcomes_in_e(derivation: Any) -> dict[str, Any] | None:
             round(share * OUTCOME_E_FLOOR, 4),
             round(share * (OUTCOME_E_FLOOR + OUTCOME_E_SPAN), 4),
         ],
-        "per_adverse_outcome": round(share * OUTCOME_E_SPAN / counted, 4),
+        "next_adverse_outcome": _next_adverse(share, counted, len(adverse_rows)),
         "caused_by_your_change": "not_recorded",
         "note": NOTE,
     }

@@ -73,11 +73,34 @@ def test_account_matches_the_deployed_formula():
     assert evidence["share_of_observation"] == pytest.approx(0.20 * 0.80 * 0.85, abs=1e-4)
     assert evidence["term_range"] == pytest.approx([0.136 * 0.3, 0.136 * 0.9], abs=1e-4)
 
-    # One more adverse outcome moves the published observation by exactly
-    # per_adverse_outcome.
+    # Recording one more adverse outcome (a seventh row, not a reclassified
+    # sixth) lowers the published observation by exactly next_adverse_outcome.
     before = compute_behavioral_sensor_eisv(**_inputs(outcomes))["E"]
-    after = compute_behavioral_sensor_eisv(**_inputs(_outcomes(6, 3)))["E"]
-    assert before - after == pytest.approx(evidence["per_adverse_outcome"], abs=1e-4)
+    after = compute_behavioral_sensor_eisv(**_inputs(_outcomes(7, 3)))["E"]
+    assert evidence["next_adverse_outcome"]["window_full"] is False
+    assert before - after == pytest.approx(
+        evidence["next_adverse_outcome"]["lowers_by"], abs=1e-4
+    )
+
+
+def test_next_adverse_is_zero_when_all_are_adverse():
+    evidence = _evidence(_outcomes(5, 5))
+    assert evidence["next_adverse_outcome"]["lowers_by"] == 0.0
+    before = compute_behavioral_sensor_eisv(**_inputs(_outcomes(5, 5)))["E"]
+    after = compute_behavioral_sensor_eisv(**_inputs(_outcomes(6, 6)))["E"]
+    assert before == pytest.approx(after, abs=1e-9)
+
+
+def test_next_adverse_at_the_window_cap_is_an_upper_bound():
+    # 20 rows, oldest first, the oldest good: the arriving adverse row evicts it.
+    outcomes = list(reversed(_outcomes(20, 4)))
+    evidence = _evidence(outcomes)
+    nxt = evidence["next_adverse_outcome"]
+    assert nxt["window_full"] is True
+    bad = dict(outcomes[0], is_bad=True, outcome_type="test_failed")
+    before = compute_behavioral_sensor_eisv(**_inputs(outcomes))["E"]
+    after = compute_behavioral_sensor_eisv(**_inputs(outcomes[1:] + [bad]))["E"]
+    assert before - after == pytest.approx(nxt["lowers_by_at_most"], abs=1e-4)
 
 
 def test_no_account_without_the_outcome_term():
