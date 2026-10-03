@@ -128,7 +128,8 @@ later change.
 
 The caller *names* an inbox and the identity gate *proves* they are that agent.
 The claim and the read are one statement, so concurrent pollers get disjoint
-sets. Expired mail is never delivered. The outer `SELECT ... ORDER BY
+sets ("disjoint" means no message is returned twice, not that one recipient's
+mail arrives whole; see the partition note below). Expired mail is never delivered. The outer `SELECT ... ORDER BY
 created_at` is load-bearing: `UPDATE ... RETURNING` has no defined row order, so
 the ordering inside the claim CTE decides only *which* rows are taken.
 
@@ -137,6 +138,17 @@ to gloss.** The row is marked `delivered` when the statement commits — before
 the HTTP response reaches the recipient. A connection drop or a client crash
 between those two moments loses that message permanently: there is no ack, no
 visibility timeout, and no redelivery.
+
+⛔**Disjoint also means partitioned for a single recipient.** If one caller
+retries after a lost response, or two callers poll the same inbox concurrently,
+`SKIP LOCKED` splits that recipient's mail across the calls: the batch from the
+lost response stays `delivered` and hidden until its TTL, while the retry
+receives only later messages. This is the same at-most-once gap seen from the
+retry side, and no ack or lease scheme on top of this statement removes it. A
+pure read cursored on `created_at` + `message_id` does not close it either (late
+commits can still land behind the cursor), so the cursor design stays unbuilt
+until the RFC that owns it. Practical impact is unmeasured and likely low while
+no agent-side caller exists (KG note 2026-08-29T20:11:28).
 
 At-least-once needs a claim that can expire unacknowledged, which is the
 `claimed` / `ack` state machine §6 defers — the same machinery piece B needs.
