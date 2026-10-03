@@ -186,6 +186,21 @@ which model endpoints count as local.
 `consult(privacy='cloud_allowed')` and `call_model(privacy='auto')` may still
 use an external endpoint.
 
+### Reinstalling and side-by-side installs
+
+Compose names the project after the checkout directory (`unitares`), and the
+database, Redis and other state live in named volumes under that project name.
+Running the clone-and-start command again, even from a fresh clone, reuses
+those volumes, so the old database and its data come back. That is what makes
+an upgrade keep its data.
+
+- For a clean install, run `docker compose down -v` in the old checkout first.
+  This deletes the stack's data.
+- To keep the old install and add a second one, set `COMPOSE_PROJECT_NAME` to a
+  different value in the new checkout's `.env`. The compose file also sets
+  fixed `container_name` values, so stop the first stack before starting the
+  second one.
+
 ### Updating
 
 From the checkout, see whether a newer release is published, then move to it:
