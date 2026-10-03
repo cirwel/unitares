@@ -603,3 +603,34 @@ async def test_continuation_does_not_file_a_non_judgment_over_a_standing_rejecti
     assert verdict.agrees is False
     assert verdict.root_cause == "shallow"
     assert verdict.proposed_conditions == ["supply evidence"]
+
+
+# --------------------------- deeply nested JSON (#2619) --------------------------- #
+# Too-deep JSON raises RecursionError, not a decode error. Raised directly: the
+# nesting depth that overflows varies by interpreter build.
+def _too_deep_when(monkeypatch, marker):
+    real = json.loads
+
+    def loads(s, *a, **kw):
+        if marker in s:
+            raise RecursionError("maximum recursion depth exceeded")
+        return real(s, *a, **kw)
+
+    monkeypatch.setattr(json, "loads", loads)
+
+
+def test_too_deep_model_json_degrades_to_disagree(monkeypatch):
+    _too_deep_when(monkeypatch, "DEEP")
+    v = parse_reviewer_verdict('{"agrees": true, "reasoning": "DEEP"}')
+    assert v.agrees is False and v.degraded is True and v.judgment_formed is False
+
+
+def test_too_deep_thesis_env_is_not_fatal(monkeypatch):
+    _too_deep_when(monkeypatch, "DEEP")
+    env = {
+        "DIALECTIC_SESSION_ID": "s",
+        "DIALECTIC_THESIS_CONDITIONS": '["DEEP"]',
+        "DIALECTIC_PAUSED_AGENT_STATE": '{"k": "DEEP"}',
+    }
+    t = Thesis.from_env(env)
+    assert t.proposed_conditions == ['["DEEP"]'] and t.paused_agent_state == {}
