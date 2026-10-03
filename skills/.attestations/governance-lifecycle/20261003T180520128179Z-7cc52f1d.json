@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-03T18:05:20Z",
+  "verified_date": "2026-10-03",
+  "verifier": "claude/lean-digest-closure-class: re-read governance-lifecycle claims on lean digest/memory_suggestions against diff (adds closure_class + closure_standard='undeclared' to lean/memory_suggestions rows; knowledge-graph SKILL line on lean digest corrected)",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "82a2d21673dac84f",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "86cf1303adea1b1b",
+    "unitares/src/mcp_handlers/identity/handlers.py": "6bafb43dd2dc40ef",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "5bc107e1c3e63009",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "aeaf3cfe1f80a921",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/tool_stability.py": "f8531e20696b533f",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "21588db986cf1eef",
+    "unitares/src/mcp_handlers/updates/phases.py": "4080d56cabc16cbd",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "1a2d7782ab306af3"
+  },
+  "skill_digest": "724d8ac3660ecc1f",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "382a9fef840baf06"
+    ]
+  }
+}

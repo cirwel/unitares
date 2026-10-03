@@ -3205,3 +3205,58 @@ class TestSearchLimitValidation:
         assert data["success"] is False
         assert "must be an integer" in data["error"]
         mock_graph.full_text_search.assert_not_awaited()
+
+
+class TestClosureStandardInDigest:
+    """closure_class reaches the lean digest; closed rows with no class say
+    closure_standard='undeclared'. No reopen, no tag, no invented class."""
+
+    @pytest.mark.asyncio
+    async def test_closed_rows_show_class_or_undeclared_within_budget(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        rows = [
+            _live_row(0, status="closed"),
+            _live_row(1, status="resolved"),
+            _live_row(2, status="closed"),
+        ]
+        rows[2].closure_class = "fix_verified"
+
+        env = await _friendly_search(mock_graph, rows)
+
+        digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
+        assert len(digests) == 3
+        for row in rows[:2]:
+            assert digests[row.id]["closure_standard"] == "undeclared"
+            assert "closure_class" not in digests[row.id]
+        assert digests[rows[2].id]["closure_class"] == "fix_verified"
+        assert "closure_standard" not in digests[rows[2].id]
+        assert all("recurred" not in json.dumps(d) for d in digests.values())
+        assert _wire_bytes(env) <= 3_000
+        _assert_attribution_whole(env, rows)
+
+    @pytest.mark.asyncio
+    async def test_wont_fix_and_superseded_classless_rows_undeclared(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        rows = [
+            _live_row(0, status="wont_fix"),
+            _live_row(1, status="superseded"),
+            _live_row(2, status="wont_fix"),
+        ]
+        rows[2].closure_class = "fix_verified"
+        mock_graph.get_superseded_by = AsyncMock(return_value={})
+        env = await _friendly_search(mock_graph, rows)
+        digests = {d["discovery_id"]: d for d in env["memory_suggestions"]}
+        for row in rows[:2]:
+            assert digests[row.id]["closure_standard"] == "undeclared"
+            assert "closure_class" not in digests[row.id]
+        assert digests[rows[2].id]["closure_class"] == "fix_verified"
+        assert "closure_standard" not in digests[rows[2].id]
+        # open rows show neither field: test_open_row_carries_no_closure_fields
+
+    @pytest.mark.asyncio
+    async def test_open_row_carries_no_closure_fields(self, patch_common):
+        mock_mcp_server, mock_graph = patch_common
+        rows = [_live_row(0), _live_row(1), _live_row(2)]
+        env = await _friendly_search(mock_graph, rows)
+        for d in env["memory_suggestions"]:
+            assert "closure_standard" not in d and "closure_class" not in d

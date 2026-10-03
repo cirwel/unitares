@@ -162,6 +162,11 @@ def _compact_caller_identity_envelope(payload: Dict[str, Any]) -> Dict[str, Any]
     return compact
 
 
+# The digest reuses the canonical _CLOSING_STATUSES (the closure_class
+# contract, defined below) so the two cannot drift: a closing row that never
+# declared a closure_class vouches for nothing in particular, and the digest
+# says so instead of letting the bare status read as verified.
+
 _LEAN_DISCOVERY_FIELDS = (
     "id",
     "discovery_id",
@@ -175,6 +180,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "staleness_warning",
     "last_activity_days",
     "authority",
+    "closure_class",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
     # told a reader what a finding says but not who wrote it (#2386); the
@@ -229,6 +235,8 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
         if "summary" in lean:
             lean["summary"] = _one_line(lean["summary"])
+        if lean.get("status") in _CLOSING_STATUSES and "closure_class" not in lean:
+            lean["closure_standard"] = "undeclared"
         if isinstance(lean.get("tags"), list):
             lean["tags"] = lean["tags"][:12]
         discovery_id = discovery.get("id") or discovery.get("discovery_id")
