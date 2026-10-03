@@ -290,6 +290,10 @@ class TestStoreKnowledgeGraph:
         assert data["success"] is False
         assert data["error_code"] == "degenerate_write_rejected"
         mock_graph.add_discovery.assert_not_awaited()
+        # Recovery names the matched marker and the contamination workaround.
+        recovery = json.dumps(data.get("recovery", {}))
+        assert "contaminated" in recovery
+        assert "parameter name" in recovery
 
     @pytest.mark.asyncio
     async def test_store_rejects_toolcall_markup_in_summary(self, patch_common, registered_agent):
