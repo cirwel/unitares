@@ -11,6 +11,7 @@ different surface.
 
 from typing import Set
 import os
+import re
 
 from src.tool_meta import (  # noqa: F401 -- compatibility re-exports
     TOOL_CATEGORIES,
@@ -58,6 +59,38 @@ STANDARD_MODE_TOOLS = set(TOOL_META_BY_NAME)
 LITE_MODE_TOOLS = set(TOOL_META_BY_NAME)
 OPERATOR_READONLY_MODE_TOOLS = set(TOOL_META_BY_NAME)
 OPERATOR_RECOVERY_MODE_TOOLS = set(TOOL_META_BY_NAME)
+
+
+_REVISION_CALL = re.compile(r"\bupdate_finding\(([^()]*)\)")
+_REVISION_KWARG = re.compile(r"""(\w+)\s*=\s*('[^']*'|"[^"]*"|true|false|\d+)""")
+
+
+def progressive_aware_hint(text: str, mode: str = None) -> str:
+    """Rewrite bare update_finding(...) hints to the use_tool route.
+
+    update_finding is deliberately not in PROGRESSIVE_MODE_TOOLS (advertising
+    it costs ~3.4 KB of tools/list against a down-only byte ratchet), so a
+    progressive caller reaches it through use_tool. The advertised mode is
+    per request (/v1/tools?mode=...), but an envelope is built without it, and
+    TOOL_MODE is only the process default. use_tool(tool_name='update_finding')
+    is valid on both surfaces, so the rewrite is unconditional; ``mode`` is
+    accepted for compatibility and ignored.
+    """
+    if "update_finding(" not in text:
+        return text
+
+    def _rewrite(match):
+        body = match.group(1)
+        pairs = _REVISION_KWARG.findall(body)
+        if not pairs or _REVISION_KWARG.sub("", body).strip(" ,"):
+            return match.group(0)
+        args = ", ".join(
+            '"%s": "%s"' % (k, v[1:-1]) if v[0] in "'\"" else '"%s": %s' % (k, v)
+            for k, v in pairs
+        )
+        return "use_tool(tool_name='update_finding', arguments={%s})" % args
+
+    return _REVISION_CALL.sub(_rewrite, text)
 
 
 def advertised_tool_names_full() -> Set[str]:

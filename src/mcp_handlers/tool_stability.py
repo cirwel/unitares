@@ -224,7 +224,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "is not annotated read-only. It serves unbound callers, so it works "
             "before start_session, "
             "unlike the writes: use store_finding to add a finding and "
-            "update_finding to revise one."
+            "use_tool(tool_name='update_finding', ...) to revise one."
         ),
         inject_action="search",
         param_normalizer=_SEARCH_SHARED_MEMORY_NORMALIZER,
@@ -248,7 +248,7 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
             "critical is refused unless the session is bound to a registered "
             "agent, while low and medium fall back to an anonymous writer id. "
             "Every call mints a NEW discovery — search_shared_memory first, and "
-            "use update_finding to revise one that already exists. Use it for a "
+            "revise one with use_tool(tool_name='update_finding', ...). Use it for a "
             "discovery, root cause or correction, and record_result for task, "
             "tool or test outcomes; budget 20 findings an hour."
         ),

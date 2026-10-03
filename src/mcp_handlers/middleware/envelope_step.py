@@ -59,6 +59,7 @@ from mcp.types import TextContent
 
 from config.governance_config import GovernanceConfig
 from src.logging_utils import get_logger
+from src.tool_modes import progressive_aware_hint
 from src.mcp_handlers.response_formatter import (
     canonical_response_mode,
     normalize_discovery_list,
@@ -1373,7 +1374,8 @@ def _friendly_hint_text(value: str) -> str:
         direct.items(), key=lambda item: len(item[0]), reverse=True
     ):
         result = re.sub(rf"\b{re.escape(canonical)}\b", friendly_name, result)
-    return result
+    # update_finding is not advertised in progressive mode; point at use_tool.
+    return progressive_aware_hint(result)
 
 
 # Keys whose values are the caller's own words (a finding's summary, a review's
@@ -2846,7 +2848,9 @@ def build_experience_envelope(
             next_action = (
                 f"{total} prior discoveries matched - read before redoing work. "
                 "Full context: knowledge(action='details', discovery_id=...). "
-                "Record new findings: knowledge(action='store', summary='...')."
+                "Record new findings: knowledge(action='store', summary='...'). "
+                "Revise one: knowledge(action='update', discovery_id='...', "
+                "summary='...')."
             )
         else:
             next_action = (
