@@ -2,9 +2,10 @@
 
 ``docker-compose.yml`` gives three secrets a default so the quickstart runs
 with no setup. Those defaults are published in this repository, so a server
-still using one has a credential everyone already knows. The host ports in the
-compose file are loopback-only, which is what makes that tolerable; the server
-says so at startup so the operator learns it before rebinding a port, not after.
+still using one has a credential everyone already knows. That is tolerable only
+for a single-user local evaluation (docs/DEPLOYMENT_SECURITY.md); the server
+says so at startup so the operator learns it before sharing the host or
+exposing a port, not after.
 
 The defaults are held as SHA-256 digests rather than literals, so a rotation of
 the compose defaults does not have one more copy to find.
@@ -56,9 +57,10 @@ def startup_warnings(
     if defaults:
         warnings.append(
             f"{', '.join(defaults)} still set to the published docker-compose.yml "
-            "default, which anyone can read. That is safe only while every host "
-            "port stays bound to 127.0.0.1. Set your own values before exposing "
-            "the server."
+            "default, which anyone can read. That suits only a single-user local "
+            "evaluation: any process on this host can reach the loopback ports, and "
+            "on native Linux the Compose bridge too (docs/DEPLOYMENT_SECURITY.md). "
+            "Set your own values before sharing the host or exposing the server."
         )
 
     # Local REST posture admits a caller from a trusted network address

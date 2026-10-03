@@ -49,7 +49,7 @@ def test_warning_names_each_default_secret():
     [warning] = startup_warnings(rest_strict=False, in_container=False, environ=_published_env())
     for name in PUBLISHED_DEFAULT_SHA256:
         assert name in warning
-    assert "127.0.0.1" in warning
+    assert "single-user local evaluation" in warning
 
 
 def test_http_token_warning_only_in_a_container_in_local_posture():
