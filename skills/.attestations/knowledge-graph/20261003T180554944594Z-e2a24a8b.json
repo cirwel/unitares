@@ -1,0 +1,33 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-03T18:05:54Z",
+  "verified_date": "2026-10-03",
+  "verifier": "claude/progressive-revision-hints: re-read knowledge-graph claims on update_finding/use_tool/progressive/next_action against the diff (hint text now rewrites update_finding(...) to use_tool(tool_name='update_finding', ...) in progressive mode; tool names, advertisement set and envelope fields unchanged); no claim contradicted",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "e02fda0b601e0f14",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "84298e88c8781d77",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "be25e08101ce351e",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "e96e25b95ed8b014",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "0d0ef632f5fc572f",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "76060be105b596d0",
+    "unitares/src/storage/knowledge_graph_age.py": "59ee851a425185e0",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "18cd5116195f6953"
+  },
+  "skill_digest": "297391b6bc47933a",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": [
+      "382a9fef840baf06"
+    ],
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "f8531e20696b533f"
+    ]
+  }
+}
