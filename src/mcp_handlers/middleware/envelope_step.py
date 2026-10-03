@@ -1194,6 +1194,8 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 "type",
                 "status",
                 "last_activity_days",
+                "closure_class",
+                "closure_standard",
             )
             # A superseded row names what replaced it, so "prefer the newer
             # entry" can be followed without a full-mode re-call. First id
@@ -2327,7 +2329,13 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
             discovery_id = item.get("discovery_id")
             if discovery_id is not None:
                 compact["discovery_id"] = str(discovery_id)[:128]
-            for key in ("status", "superseded_by", "last_activity_days"):
+            for key in (
+                "status",
+                "superseded_by",
+                "last_activity_days",
+                "closure_class",
+                "closure_standard",
+            ):
                 value = item.get(key)
                 if value is not None:
                     compact[key] = value[:128] if isinstance(value, str) else value
