@@ -75,7 +75,9 @@ def startup_warnings(
             "callers from trusted network addresses (loopback and private ranges) "
             "without checking it. Behind the Docker bridge, callers arrive from such "
             "an address. To require a credential on every REST call, set "
-            "UNITARES_MCP_BEARER_TOKENS and leave UNITARES_REST_STRICT unset or set it to 1."
+            "UNITARES_MCP_BEARER_TOKENS, set UNITARES_MCP_BEARER_TOKEN (the credential "
+            "the lease plane and orchestrated reviewers send) to one of its members, "
+            "and leave UNITARES_REST_STRICT unset or set it to 1."
         )
 
     return warnings

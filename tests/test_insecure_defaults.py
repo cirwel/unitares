@@ -61,6 +61,8 @@ def test_http_token_warning_only_in_a_container_in_local_posture():
     # The remediation must also undo an explicit UNITARES_REST_STRICT=0.
     assert "UNITARES_MCP_BEARER_TOKENS" in warning
     assert "UNITARES_REST_STRICT unset or set it to 1" in warning
+    # Strict auth also gates the in-stack clients, which send the singular bearer.
+    assert "UNITARES_MCP_BEARER_TOKEN (" in warning
 
     assert startup_warnings(rest_strict=True, in_container=True, environ=env) == []
     assert startup_warnings(rest_strict=False, in_container=False, environ=env) == []
