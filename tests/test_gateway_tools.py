@@ -249,3 +249,14 @@ class TestClientSessionIdPassthrough:
         await handle_query(mock_client, question="what is EISV?", client_session_id="agent-abc")
         args = mock_client.call_tool.call_args[0][1]
         assert args["client_session_id"] == "agent-abc"
+
+
+class TestQueryBindsClassifier:
+    @pytest.mark.asyncio
+    async def test_handle_query_binds_the_classification_call(self, mock_client):
+        """The session id must reach the call_model classification, not only the routed tool."""
+        mock_client.call_tool.return_value = {"success": True, "response": "note"}
+        await handle_query(mock_client, question="keep this observation", client_session_id="agent-abc")
+        first_name, first_args = mock_client.call_tool.call_args_list[0][0]
+        assert first_name == "call_model"
+        assert first_args["client_session_id"] == "agent-abc"
