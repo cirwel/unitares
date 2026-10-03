@@ -18,8 +18,9 @@
 #   1. Tidy the slot. An armed PR carrying the approval label that has become
 #      CONFLICTING, whose checks failed on its current head, or that has a check
 #      parked for approval, is disarmed so it stops holding the slot; its label
-#      stays, so it returns to the queue. One the script armed that now carries
-#      the hold label (PR_QUEUE_HOLD_LABEL) is disarmed too: the hold is a veto.
+#      stays, so it returns to the queue. A PR the script armed that now
+#      carries the hold label (PR_QUEUE_HOLD_LABEL) is disarmed too: the hold
+#      is a veto.
 #   2. Pin the head each newly labelled PR is at (see below), every tick,
 #      whether or not the slot is free.
 #   3. If a PR is still armed (including one the maintainer armed by hand, which
