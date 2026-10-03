@@ -194,7 +194,12 @@ services:
       # surfaces. Empty default = unchanged behavior (default-deny stays on).
       #   UNITARES_OPERATOR_TOKENS — csv allowlist for X-Unitares-Operator
       #     (required by /v1/harness/outcome, the external outcome-producer path)
-      #   UNITARES_HTTP_API_TOKEN  — local dashboard/telemetry read auth
+      #   UNITARES_HTTP_API_TOKEN  — REST bearer for callers outside the
+      #     trusted networks. Callers through the Docker bridge arrive from
+      #     the gateway, a trusted address, so it does not gate them; for
+      #     REST auth on every call set UNITARES_MCP_BEARER_TOKENS (strict)
+      #     and UNITARES_MCP_BEARER_TOKEN to one of its members; every other
+      #     REST client then needs a member too (this token is not accepted)
       #   UNITARES_MCP_BEARER_TOKENS — hosted /mcp + strict REST bearer allowlist
       #   UNITARES_MCP_ALLOWED_HOSTS — external Host values accepted by /mcp
       #   UNITARES_MCP_ALLOWED_ORIGINS — origins accepted by MCP transport
