@@ -66,15 +66,17 @@ _REVISION_KWARG = re.compile(r"""(\w+)\s*=\s*('[^']*'|"[^"]*"|true|false|\d+)"""
 
 
 def progressive_aware_hint(text: str, mode: str = None) -> str:
-    """Point revision hints at the route a progressive caller can take.
+    """Rewrite bare update_finding(...) hints to the use_tool route.
 
     update_finding is deliberately not in PROGRESSIVE_MODE_TOOLS (advertising
     it costs ~3.4 KB of tools/list against a down-only byte ratchet), so a
-    progressive caller reaches it through use_tool. In full mode the bare
-    call is a real tool and the text is returned unchanged.
+    progressive caller reaches it through use_tool. The advertised mode is
+    per request (/v1/tools?mode=...), but an envelope is built without it, and
+    TOOL_MODE is only the process default. use_tool(tool_name='update_finding')
+    is valid on both surfaces, so the rewrite is unconditional; ``mode`` is
+    accepted for compatibility and ignored.
     """
-    resolved = str(mode or TOOL_MODE).strip().lower()
-    if resolved != "progressive" or "update_finding(" not in text:
+    if "update_finding(" not in text:
         return text
 
     def _rewrite(match):
