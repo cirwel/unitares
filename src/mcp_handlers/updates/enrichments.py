@@ -1188,6 +1188,32 @@ def enrich_eisv_validation(ctx: UpdateContext) -> None:
         logger.warning(f"EISV validation warning: {validation_error}")
         ctx.response_data["_eisv_validation_warning"] = str(validation_error)
 
+# ─── Outcomes in E (#2610) ──────────────────────────────────────────
+
+@enrichment(order=205, lite_safe=True)
+def enrich_outcomes_in_e(ctx: UpdateContext) -> None:
+    """Say which recorded outcomes are moving this agent's behavioral E.
+
+    Restates the outcome term of the derivation this check-in already built;
+    computes no new signal and reads nothing the policy path uses. ``changed``
+    is True when the counts differ from the last account this process showed
+    the agent, so filtered modes surface it once per change, not every turn.
+    """
+    try:
+        from src.outcomes_in_e import build_outcomes_in_e, evidence_key
+
+        evidence = build_outcomes_in_e(ctx.agent_state.get("_eisv_derivation"))
+        if evidence is None:
+            return
+        key = evidence_key(evidence)
+        monitor = ctx.monitor
+        evidence["changed"] = key != getattr(monitor, "_outcomes_in_e_key", None)
+        if monitor is not None:
+            monitor._outcomes_in_e_key = key
+        ctx.response_data["outcomes_in_e"] = evidence
+    except Exception as e:
+        logger.debug(f"Could not build outcomes_in_e: {e}")
+
 # ─── Learning Context ──────────────────────────────────────────────────
 
 def _behavioral_coherence_pattern(metrics: dict) -> str | None:

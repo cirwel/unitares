@@ -28,6 +28,12 @@ BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA = "behavioral_sensor.components.v1"
 # not what happens if you move everyone's level.
 DECISION_NEUTRAL_SCORE = 0.84
 
+# outcome_success maps the non-adverse share of recent outcomes onto
+# [FLOOR, FLOOR + SPAN] = [0.3, 0.9]. Named so the agent-facing account in
+# src/outcomes_in_e.py states the same map instead of a copy of it.
+OUTCOME_E_FLOOR = 0.3
+OUTCOME_E_SPAN = 0.6
+
 
 def compute_behavioral_sensor_eisv(
     decision_history: list,
@@ -586,7 +592,7 @@ def _compute_E_components(
     if outcome_history and len(outcome_history) >= 3:
         good_count = sum(1 for o in outcome_history if not o.get('is_bad', False))
         success_rate = good_count / len(outcome_history)
-        outcome_e = 0.3 + success_rate * 0.6  # Map [0,1] -> [0.3, 0.9]
+        outcome_e = OUTCOME_E_FLOOR + success_rate * OUTCOME_E_SPAN  # [0,1] -> [0.3, 0.9]
         # Weights: 35% decision, 25% coherence, 20% calibration, 20% outcomes
         components = [
             _component(

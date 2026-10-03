@@ -2637,6 +2637,13 @@ def build_experience_envelope(
                 state_summary["coherence"] = coherence
         if risk is not None:
             state_summary["risk_score"] = risk
+        # The outcome account (#2610) rides beside the state it explains. The
+        # formatter already decided whether this turn shows it (adverse and
+        # changed, or full mode). Bounded shapes drop the raw payload, so lift
+        # it there; when raw_governance goes out it already carries the key.
+        outcomes_in_e = payload.get("outcomes_in_e")
+        if isinstance(outcomes_in_e, dict) and not include_raw:
+            envelope["outcomes_in_e"] = outcomes_in_e
         if state_summary.get("action") == "pause":
             # The generic continuation text below was emitted on pause verdicts
             # too, telling a paused agent to "keep working". Match recovery_hint.
