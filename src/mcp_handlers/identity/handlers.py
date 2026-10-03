@@ -756,6 +756,52 @@ def _identity_success_for_request(
     return success_response(payload, agent_id=agent_uuid, arguments=response_arguments)
 
 
+def _observe_path0_token_accept(
+    arguments: Dict[str, Any],
+    agent_uuid: str,
+    *,
+    resume_source: str,
+) -> Optional[Dict[str, Any]]:
+    """Record and surface the age of the token that proved a PATH 0 resume.
+
+    Observation only: acceptance is unchanged, and an expired-but-signed token
+    still proves ownership here (PR #42). Returns the caller-facing
+    ``continuity_token_freshness`` block, or None when no token proved
+    ownership (substrate attestation, or no token at all).
+    """
+    token = arguments.get("continuity_token")
+    if not token:
+        return None
+    try:
+        from .session import continuity_token_freshness
+        fresh = continuity_token_freshness(str(token))
+    except Exception:
+        return None
+    if fresh is None:
+        return None
+    try:
+        from src.audit_log import audit_logger
+        audit_logger.log_path0_token_accept_observed(
+            agent_uuid=agent_uuid,
+            resume_source=resume_source,
+            **fresh,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug(f"[PATH0_TOKEN] observation write failed (non-fatal): {exc}")
+    block: Dict[str, Any] = {
+        "expired": fresh["expired"],
+        "token_age_seconds": fresh["token_age_seconds"],
+    }
+    if fresh["expired"]:
+        block["seconds_past_exp"] = fresh["seconds_past_exp"]
+        block["note"] = (
+            "This continuity_token is past its expiry. It was still accepted "
+            "as ownership proof for this same-process rebind; use the fresh "
+            "continuity_token returned in this response from now on."
+        )
+    return block
+
+
 async def _try_resume_by_agent_uuid_direct(
     arguments: Dict[str, Any],
     *,
@@ -910,6 +956,12 @@ async def _try_resume_by_agent_uuid_direct(
                 "source": "monitor_cache",
                 "message": f"Resumed identity {_direct_uuid[:12]}... via in-process monitor cache",
             })
+            if _partc_token_aid == _direct_uuid:
+                _freshness = _observe_path0_token_accept(
+                    arguments, _direct_uuid, resume_source="monitor_cache"
+                )
+                if _freshness is not None:
+                    payload["continuity_token_freshness"] = _freshness
             return _identity_success_for_request(arguments, payload, agent_uuid=_direct_uuid)
     except Exception:
         # Any fast-path failure falls through to the DB-backed slow path.
@@ -972,6 +1024,12 @@ async def _try_resume_by_agent_uuid_direct(
         "resumed_by_uuid": True,
         "message": f"Welcome back! Resumed identity '{label or agent_id}' via UUID",
     })
+    if _partc_token_aid == _direct_uuid:
+        _freshness = _observe_path0_token_accept(
+            arguments, _direct_uuid, resume_source="db"
+        )
+        if _freshness is not None:
+            payload["continuity_token_freshness"] = _freshness
     return _identity_success_for_request(arguments, payload, agent_uuid=_direct_uuid)
 
 

@@ -276,6 +276,45 @@ def extract_token_exp(token: str) -> Optional[int]:
         return None
 
 
+def continuity_token_freshness(
+    token: str, *, now: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """Report a signature-verified token's age and expiry, without enforcing it.
+
+    Observation only. PATH 0 accepts an expired token as ownership proof
+    (``extract_token_agent_uuid``, PR #42), which predates S1's 1h rolling
+    TTL and S1-c's retirement of cross-process resume. Before anyone decides
+    whether PATH 0 should refuse expired tokens, the fleet needs a count of
+    who presents them; this helper feeds that count and tells the caller.
+    It is deliberately separate from ``extract_token_agent_uuid`` (whose
+    contract says not to tighten it) and never changes acceptance.
+
+    Returns None when the token does not verify. ``expired`` applies the same
+    clock-skew tolerance ``resolve_continuity_token`` uses.
+    """
+    payload = _decode_token_payload(token)
+    if payload is None:
+        return None
+    current = int(time.time()) if now is None else int(now)
+
+    def _as_int(value: Any) -> Optional[int]:
+        try:
+            return int(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    iat = _as_int(payload.get("iat"))
+    exp = _as_int(payload.get("exp"))
+    expired = exp is not None and exp + _CLOCK_SKEW_TOLERANCE < current
+    return {
+        "token_iat": iat,
+        "token_exp": exp,
+        "token_age_seconds": max(0, current - iat) if iat is not None else None,
+        "expired": expired,
+        "seconds_past_exp": (current - exp) if expired else None,
+    }
+
+
 def extract_token_agent_uuid(token: str) -> Optional[str]:
     """Extract agent UUID from a continuity token after signature verification.
 

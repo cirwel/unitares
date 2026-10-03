@@ -608,6 +608,39 @@ class AuditLogger:
         )
         self._write_entry(entry)
 
+    def log_path0_token_accept_observed(
+        self,
+        *,
+        agent_uuid: str,
+        resume_source: str,
+        token_iat: Optional[int],
+        token_exp: Optional[int],
+        token_age_seconds: Optional[int],
+        expired: bool,
+        seconds_past_exp: Optional[int],
+    ) -> None:
+        """Observation: a PATH 0 resume accepted a continuity_token as proof.
+
+        PATH 0 does not enforce token expiry (PR #42). This event counts how
+        often an expired-but-signed token is what proved ownership, so a later
+        decision on enforcing expiry rests on data. It changes no acceptance.
+        """
+        entry = AuditEntry(
+            timestamp=datetime.now().isoformat(),
+            agent_id=agent_uuid,
+            event_type="path0_token_accept_observed",
+            confidence=1.0,
+            details={
+                "resume_source": resume_source,
+                "token_iat": token_iat,
+                "token_exp": token_exp,
+                "token_age_seconds": token_age_seconds,
+                "expired": bool(expired),
+                "seconds_past_exp": seconds_past_exp,
+            },
+        )
+        self._write_entry(entry)
+
     def log_mirror_signal_emit(
         self,
         *,
