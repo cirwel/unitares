@@ -1550,14 +1550,35 @@ def repo_slug() -> str:
     return gh_json("api", "repos/{owner}/{repo}")["full_name"]
 
 
+def head_ref() -> tuple[str, str] | None:
+    """(owner, branch) of the pushed head the current branch tracks, as
+    `gh pr view` resolves it: a fork's PR has a head owned by the fork, not
+    by the base repository `{owner}` names. Without an upstream, the branch
+    is assumed pushed under its own name to the base repository."""
+    branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    if not branch or branch == "HEAD":
+        return None
+    owner, name = "{owner}", branch
+    merge = git("config", f"branch.{branch}.merge", check=False).strip()
+    remote = git("config", f"branch.{branch}.remote", check=False).strip()
+    if merge.startswith("refs/heads/"):
+        name = merge.removeprefix("refs/heads/")
+    if remote and remote != ".":
+        url = git("remote", "get-url", remote, check=False).strip()
+        found = re.search(r"[:/]([^/:]+)/[^/:]+?(?:\.git)?/?$", url)
+        if found:
+            owner = found.group(1)
+    return owner, name
+
+
 def current_pr() -> dict | None:
     """The PR whose head is the checked-out branch: an open one if any, else
     the newest, so a merged branch still reports merged rather than absent.
     A failed lookup raises with gh's error; it is not reported as no PR."""
-    branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
-    if not branch or branch == "HEAD":
+    ref = head_ref()
+    if ref is None:
         return None
-    head = urllib.parse.quote(f"{{owner}}:{branch}", safe="{}:/")
+    head = urllib.parse.quote(":".join(ref), safe="{}:/")
     prs = [pr_fields(p) for p in gh_json("api", f"{PULLS}?head={head}&state=all&per_page=100")]
     return next((p for p in prs if p["state"] == "OPEN"), prs[0] if prs else None)
 

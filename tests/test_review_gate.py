@@ -1041,7 +1041,7 @@ def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
         return json.dumps(_rest_pr(3) if "/pulls/" in cmd[-1] else {"full_name": "o/r"})
 
     monkeypatch.setattr(rg, "_run", run)
-    monkeypatch.setattr(rg, "git", lambda *a, **k: "claude/x y")
+    monkeypatch.setattr(rg, "head_ref", lambda: ("{owner}", "claude/x y"))
     launched = []
     monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: launched.append((cmd, kw["input"])))
     assert rg.pr_view(3)["state"] == "OPEN"
@@ -1056,9 +1056,45 @@ def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
     assert all(cmd[1] == "api" for cmd in calls + [c for c, _ in launched])
 
 
+def _fake_git(config):
+    def git(*args, check=True):
+        return config.get(args, "")
+    return git
+
+
+@pytest.mark.parametrize("config,expected", [
+    # No upstream: the branch is assumed pushed under its name to the base repo.
+    ({}, ("{owner}", "topic")),
+    # A fork: the head is owned by the fork's account, as `gh pr view` finds it.
+    ({("config", "branch.topic.remote"): "fork",
+      ("config", "branch.topic.merge"): "refs/heads/their-topic",
+      ("remote", "get-url", "fork"): "git@github.com:contributor/unitares.git"},
+     ("contributor", "their-topic")),
+    ({("config", "branch.topic.remote"): "origin",
+      ("config", "branch.topic.merge"): "refs/heads/topic",
+      ("remote", "get-url", "origin"): "https://github.com/cirwel/unitares"},
+     ("cirwel", "topic")),
+    # A local tracking branch, or a remote URL with no owner/repo shape.
+    ({("config", "branch.topic.remote"): ".",
+      ("config", "branch.topic.merge"): "refs/heads/master"}, ("{owner}", "master")),
+])
+def test_head_ref_finds_the_owner_of_the_pushed_head(monkeypatch, config, expected):
+    monkeypatch.setattr(rg, "git", _fake_git({("rev-parse", "--abbrev-ref", "HEAD"): "topic\n", **config}))
+    assert rg.head_ref() == expected
+
+
+def test_current_pr_queries_a_fork_head_by_its_owner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "head_ref", lambda: ("contributor", "their-topic"))
+    monkeypatch.setattr(rg, "gh_json", lambda *a: calls.append(a) or [_rest_pr(9)])
+    assert rg.current_pr()["number"] == 9
+    assert calls == [("api", "repos/{owner}/{repo}/pulls?head=contributor:their-topic"
+                             "&state=all&per_page=100")]
+
+
 @pytest.mark.parametrize("listing,expected", [([], None), ([_rest_pr(1, "closed", merged_at="t")], "MERGED")])
 def test_current_pr_reports_a_merged_branch_as_merged_not_absent(monkeypatch, listing, expected):
-    monkeypatch.setattr(rg, "git", lambda *a, **k: "b")
+    monkeypatch.setattr(rg, "head_ref", lambda: ("{owner}", "b"))
     monkeypatch.setattr(rg, "gh_json", lambda *a: listing)
     info = rg.current_pr()
     assert (info and info["state"]) == expected
