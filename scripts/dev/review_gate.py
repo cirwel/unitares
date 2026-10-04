@@ -1583,7 +1583,7 @@ def head_ref() -> tuple[str, str] | None:
             if merge.startswith("refs/heads/"):
                 name = merge.removeprefix("refs/heads/")
     if remote and remote != ".":
-        url = git("remote", "get-url", remote, check=False).strip()
+        url = git("remote", "get-url", "--push", remote, check=False).strip()
         found = re.search(r"[:/]([^/:]+)/[^/:]+?(?:\.git)?/?$", url)
         if found:
             owner = found.group(1)

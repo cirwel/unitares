@@ -1096,6 +1096,9 @@ def test_head_ref_finds_the_owner_of_the_pushed_head(monkeypatch, config, expect
     # here, so the explicit push-remote read must give the same head.
     (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
       "branch.topic.pushRemote=fork", "push.default=current"], ("contributor", "topic")),
+    # One remote, upstream fetch URL, fork push URL: the owner is the push side's.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic",
+      "remote.origin.pushurl=git@github.com:contributor/unitares.git"], ("contributor", "topic")),
 ])
 def test_head_ref_follows_git_push_destination(tmp_path, monkeypatch, setup, expected):
     _git(tmp_path, "init", "-q", "-b", "master")
