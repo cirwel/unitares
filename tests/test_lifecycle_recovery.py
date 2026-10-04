@@ -61,6 +61,35 @@ class TestSelfRecoveryReview:
             assert meta.status == "active"
 
     @pytest.mark.asyncio
+    async def test_recovery_reflection_is_written_ephemeral(self, server):
+        """A reflection is a reading of one pause, so it ages out with the
+        other snapshots instead of joining Vigil's 90-day archive queue."""
+        from src.knowledge_graph_lifecycle import KnowledgeGraphLifecycle
+
+        meta = make_agent_meta(status="paused")
+        server.agent_metadata = {"agent-1": meta}
+        server.get_or_create_monitor.return_value = make_monitor(coherence=0.8, I=0.3, S=0.5)
+
+        with patch_lifecycle_server(server, require_registered=("agent-1", None)), \
+             patch_agent_storage() as mock_storage, \
+             patch("src.mcp_handlers.utils.verify_agent_ownership", return_value=True), \
+             patch("src.mcp_handlers.knowledge.handlers.store_discovery_internal",
+                   new_callable=AsyncMock) as mock_store:
+            mock_storage.update_agent = AsyncMock()
+            mock_storage.persist_runtime_state = AsyncMock()
+            from src.mcp_handlers.lifecycle.handlers import handle_self_recovery_review
+            await handle_self_recovery_review({
+                "agent_id": "agent-1",
+                "reflection": "I got stuck in a loop and should have stepped back",
+            })
+
+        kwargs = mock_store.await_args.kwargs
+        assert kwargs["discovery_type"] == "recovery_reflection"
+        assert "ephemeral" in kwargs["tags"]
+        node = SimpleNamespace(type=kwargs["discovery_type"], tags=kwargs["tags"])
+        assert KnowledgeGraphLifecycle().get_lifecycle_policy(node) == "ephemeral"
+
+    @pytest.mark.asyncio
     async def test_reviewed_recovery_untraps_exact_non_authored_phi_cold_start(
         self, server
     ):
