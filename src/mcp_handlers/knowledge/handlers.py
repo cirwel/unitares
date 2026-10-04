@@ -1476,23 +1476,52 @@ def _truncate_store_content(state: _KnowledgeStoreState) -> None:
     state.details = raw_details
 
 
-def _parse_store_response_to(arguments: Dict[str, Any]) -> Optional[ResponseTo]:
-    """Parse the optional typed link to a parent discovery."""
-    response_data = arguments.get("response_to")
+class _InvalidResponseTo(Exception):
+    """A response_to the caller supplied but that cannot become a typed link."""
+
+
+def _parse_response_to(response_data: Any) -> Optional[ResponseTo]:
+    """Parse the optional typed parent link shared by store, batch store and note.
+
+    An absent or empty value means no link. Anything else either becomes a
+    ResponseTo or raises _InvalidResponseTo with a caller-facing message: a
+    write the caller asked to thread must not land unthreaded and report
+    success. The batch path used to drop an unknown response_type silently,
+    and all three dropped a malformed shape, so the reply edge (which lineage
+    scoring in src/identity/memory_integration.py reads) went missing
+    without a trace.
+    """
     if not response_data:
         return None
-    if not (isinstance(response_data, dict) and "discovery_id" in response_data and "response_type" in response_data):
-        return None
+    required_fields = {"discovery_id", "response_type"}
+    if not isinstance(response_data, dict) or not required_fields.issubset(
+        response_data
+    ):
+        raise _InvalidResponseTo(
+            "Invalid response_to: expected "
+            "{'discovery_id': <parent id>, 'response_type': <type>}"
+        )
 
-    parent_id = str(response_data["discovery_id"]).strip()
+    raw_parent_id = response_data["discovery_id"]
+    parent_id = "" if raw_parent_id is None else str(raw_parent_id).strip()
     if not parent_id:
-        raise _StoreResponseError(error_response("Invalid response_to.discovery_id (empty)"))
+        raise _InvalidResponseTo("Invalid response_to.discovery_id (empty)")
+
     response_type = normalize_response_type(response_data["response_type"])
     if response_type not in VALID_RESPONSE_TYPES:
-        raise _StoreResponseError(
-            error_response(f"Invalid response_type '{response_data['response_type']}'. Valid: {sorted(VALID_RESPONSE_TYPES)}")
+        raise _InvalidResponseTo(
+            f"Invalid response_type '{response_data['response_type']}'. "
+            f"Valid: {sorted(VALID_RESPONSE_TYPES)}"
         )
     return ResponseTo(discovery_id=parent_id, response_type=response_type)
+
+
+def _parse_store_response_to(arguments: Dict[str, Any]) -> Optional[ResponseTo]:
+    """Parse the optional typed link to a parent discovery."""
+    try:
+        return _parse_response_to(arguments.get("response_to"))
+    except _InvalidResponseTo as exc:
+        raise _StoreResponseError(error_response(str(exc))) from None
 
 
 def _parse_store_severity(arguments: Dict[str, Any]) -> Optional[str]:
@@ -4837,28 +4866,11 @@ def _truncate_batch_details(details: Any) -> tuple[Any, Optional[str]]:
 def _parse_batch_response_to(
     disc_data: dict[str, Any],
 ) -> Optional[ResponseTo]:
-    """Parse a response edge, preserving the legacy ignore-invalid behavior."""
-    if "response_to" not in disc_data or not disc_data["response_to"]:
-        return None
-
-    response_data = disc_data["response_to"]
-    required_fields = {"discovery_id", "response_type"}
-    if not isinstance(response_data, dict) or not required_fields.issubset(
-        response_data
-    ):
-        return None
-
-    parent_id = str(response_data["discovery_id"]).strip()
-    if not parent_id:
-        raise _BatchItemError("Invalid response_to.discovery_id (empty)")
-
-    response_type = normalize_response_type(response_data["response_type"])
-    if response_type not in VALID_RESPONSE_TYPES:
-        return None
-    return ResponseTo(
-        discovery_id=parent_id,
-        response_type=response_type,
-    )
+    """Parse one batch item's response edge; an invalid one fails that item."""
+    try:
+        return _parse_response_to(disc_data.get("response_to"))
+    except _InvalidResponseTo as exc:
+        raise _BatchItemError(str(exc)) from None
 
 
 def _parse_batch_severity(
@@ -5141,33 +5153,10 @@ def _parse_note_response_to(
     arguments: Dict[str, Any],
 ) -> Optional[ResponseTo]:
     """Parse an optional typed parent link for a note."""
-    response_data = arguments.get("response_to")
-    if not response_data:
-        return None
-    required_fields = {"discovery_id", "response_type"}
-    if not isinstance(response_data, dict) or not required_fields.issubset(
-        response_data
-    ):
-        return None
-
-    parent_id = str(response_data["discovery_id"]).strip()
-    if not parent_id:
-        raise _NoteResponseError(
-            error_response("Invalid response_to.discovery_id (empty)")
-        )
-
-    response_type = normalize_response_type(response_data["response_type"])
-    if response_type not in VALID_RESPONSE_TYPES:
-        raise _NoteResponseError(
-            error_response(
-                f"Invalid response_type '{response_data['response_type']}'. "
-                f"Valid: {sorted(VALID_RESPONSE_TYPES)}"
-            )
-        )
-    return ResponseTo(
-        discovery_id=parent_id,
-        response_type=response_type,
-    )
+    try:
+        return _parse_response_to(arguments.get("response_to"))
+    except _InvalidResponseTo as exc:
+        raise _NoteResponseError(error_response(str(exc))) from None
 
 
 def _split_note_text(text: Any) -> tuple[Any, Any]:
