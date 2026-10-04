@@ -15,8 +15,14 @@ mcp>=1.26.0,<3.0.0
 # mcp 2.x depends on `httpx2` instead, so declare it explicitly.
 httpx>=0.27.0,<1.0.0
 
-# Governance system core math
-numpy>=1.24.0,<3.0.0
+# Governance system core math. Floor 2.3.2: the first numpy release with
+# CPython 3.14 wheels.
+numpy>=2.3.2,<3.0.0
+
+# Parameter validation for every tool (src/mcp_handlers/schemas/). Imported
+# directly, so declared rather than left to arrive through mcp; floor 2.12.0
+# matches what mcp 2.x itself requires.
+pydantic>=2.12.0,<3.0.0
 
 # Skill and taxonomy metadata parsing
 PyYAML>=6.0.0,<7.0.0
