@@ -793,17 +793,15 @@ class VigilAgent(GovernanceAgent):
         vigil-aggression posture (auto-archive was once hiding initializing-
         agent bugs). Safeguards:
 
-          - Gated on ``with_hygiene`` (default False; matches the
-            propose-only sweep — operator opts in explicitly).
+          - Gated on ``with_hygiene``. The constructor defaults it to False,
+            but ``main()`` passes True, so the deployed resident runs it.
           - Only acts on bucket=``candidate_for_archive``. ``_score_discovery``
             excludes permanent types/tags via its policy check.
           - Defense in depth: requires entry.activity_score == 0 (no
-            ``responses_from`` AND no ``related_to``). NOTE: the bucket
-            classifier in ``_score_discovery`` only checks ``responses_from``
-            for the healthy guard (not ``related_to``), so an entry that is
-            cross-linked but unanswered can land in candidate_for_archive
-            despite being referenced. We re-check activity_score here so
-            cross-linked load-bearing notes are not auto-archived.
+            ``responses_from`` AND no ``related_to``). The classifier's
+            healthy guard already counts both link kinds, so this re-check
+            is redundant today; it stays so a classifier change cannot
+            auto-archive cross-linked load-bearing notes.
           - Requires last_activity_days > VIGIL_AUTO_ARCHIVE_AGE_DAYS
             (default 90, i.e., 3x the bucket-entry threshold) — extra margin
             so a freshly-classified entry gets weeks of grace before action.
@@ -815,7 +813,9 @@ class VigilAgent(GovernanceAgent):
             servers that may not emit error_code.
           - Per-entry try/except: one failure doesn't poison the rest.
           - Reversible: status mutation only, never deletion. Archived rows
-            remain searchable with ``include_cold=true``.
+            leave default search and remain searchable only with
+            ``include_archived=true`` — for an agent that does not know the
+            entry exists, archive is effectively removal.
         """
         summary: Dict[str, Any] = {
             "auto_archive_run": False,
