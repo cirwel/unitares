@@ -629,7 +629,7 @@ class AuditLogger:
             timestamp=datetime.now().isoformat(),
             agent_id=agent_uuid,
             event_type="path0_token_accept_observed",
-            confidence=1.0,
+            confidence=0.0,  # observation, not a prediction: keep it out of calibration
             details={
                 "resume_source": resume_source,
                 "token_iat": token_iat,

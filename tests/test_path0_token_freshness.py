@@ -153,3 +153,42 @@ async def test_audit_write_is_scheduled_off_the_request_thread():
     _schedule_path0_audit_write(_write)
     await asyncio.wait_for(done.wait(), timeout=5)
     assert ran_on and ran_on[0] != threading.get_ident()
+
+
+@pytest.mark.asyncio
+async def test_executor_refusal_does_not_change_acceptance(monkeypatch):
+    """A refused executor submission drops the observation, never the resume."""
+    import asyncio
+    from src.mcp_handlers.identity.handlers import handle_identity_adapter
+
+    monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "strict")
+    loop = asyncio.get_running_loop()
+
+    def _refuse(*_a, **_k):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    fake_server = MagicMock(monitors={_UUID: object()}, agent_metadata={})
+    with patch.object(loop, "run_in_executor", side_effect=_refuse), \
+         patch("src.mcp_handlers.shared.get_mcp_server", return_value=fake_server):
+        result = await handle_identity_adapter(
+            {"agent_uuid": _UUID, "resume": True, "continuity_token": _mint()}
+        )
+    data = json.loads(result[0].text)
+    assert data.get("success") is True
+    assert data.get("source") == "monitor_cache"
+    assert data["continuity_token_freshness"]["expired"] is False
+
+
+def test_observation_row_carries_no_confidence(tmp_path):
+    """confidence=0.0 keeps this row out of get_latest_confidence_before."""
+    from src import audit_log as audit_mod
+
+    captured = []
+    logger_obj = audit_mod.audit_logger
+    with patch.object(logger_obj, "_write_entry", side_effect=captured.append):
+        logger_obj.log_path0_token_accept_observed(
+            agent_uuid=_UUID, resume_source="db", token_iat=1, token_exp=2,
+            token_age_seconds=3, expired=True, seconds_past_exp=4,
+        )
+    assert captured and captured[0].confidence == 0.0
+    assert captured[0].event_type == "path0_token_accept_observed"

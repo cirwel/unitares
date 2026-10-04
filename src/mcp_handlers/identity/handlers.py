@@ -769,7 +769,12 @@ def _schedule_path0_audit_write(write: Any) -> None:
     except RuntimeError:
         write()
         return
-    loop.run_in_executor(None, write)
+    try:
+        loop.run_in_executor(None, write)
+    except Exception as exc:
+        # Executor shutting down or out of threads: drop the observation.
+        # Telemetry must never change whether a resume is accepted.
+        logger.debug(f"[PATH0_TOKEN] observation dropped, executor refused: {exc}")
 
 
 def _observe_path0_token_accept(
