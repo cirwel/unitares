@@ -325,7 +325,10 @@ jobs:
     # open PR whose last run reported the old name then needs a fresh run.
     name: test (3.12)
     if: ${{ always() }}
-    needs: test_shard
+    # macos-platform rides on this context so its identity-proof tests block
+    # a merge without a second protected check; it finishes well inside the
+    # slowest shard, so the gate waits no longer.
+    needs: [test_shard, macos-platform]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -341,6 +344,12 @@ jobs:
       if: ${{ needs.test_shard.result != 'success' }}
       run: |
         echo "one or more test shards failed or were cancelled" >&2
+        exit 1
+
+    - name: Require the macOS platform tests to pass
+      if: ${{ needs.macos-platform.result != 'success' }}
+      run: |
+        echo "the macOS platform tests failed, skipped a test, or were cancelled" >&2
         exit 1
 
     - name: Require every shard leg of this run to pass
