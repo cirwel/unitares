@@ -756,6 +756,7 @@ class TestStoreKnowledgeGraph:
     @pytest.mark.asyncio
     async def test_store_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
         """Paused agents cannot store knowledge (circuit breaker)."""
+        _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
         from datetime import datetime as _dt
@@ -770,7 +771,49 @@ class TestStoreKnowledgeGraph:
 
         data = parse_result(result)
         assert data["success"] is False
-        assert "paused" in data["error"].lower()
+        assert data["error_code"] == "AGENT_PAUSED"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_batch_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+        """The batch path is behind the same circuit breaker as a single store."""
+        _, mock_graph = patch_common
+        mock_mcp_server.agent_metadata[registered_agent].status = "paused"
+        from datetime import datetime as _dt
+        mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
+
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discoveries": [
+                {"discovery_type": "note", "summary": "Should be blocked 1"},
+                {"discovery_type": "insight", "summary": "Should be blocked 2"},
+            ],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AGENT_PAUSED"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_archived_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+        """Archived agents cannot store knowledge either."""
+        _, mock_graph = patch_common
+        mock_mcp_server.agent_metadata[registered_agent].status = "archived"
+
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Should be blocked",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AGENT_ARCHIVED"
+        mock_graph.add_discovery.assert_not_awaited()
 
 
 # ============================================================================
