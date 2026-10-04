@@ -1068,11 +1068,11 @@ def _fake_git(config):
     # A fork: the head is owned by the fork's account, as `gh pr view` finds it.
     ({("config", "branch.topic.remote"): "fork",
       ("config", "branch.topic.merge"): "refs/heads/their-topic",
-      ("remote", "get-url", "fork"): "git@github.com:contributor/unitares.git"},
+      ("remote", "get-url", "--push", "fork"): "git@github.com:contributor/unitares.git"},
      ("contributor", "their-topic")),
     ({("config", "branch.topic.remote"): "origin",
       ("config", "branch.topic.merge"): "refs/heads/topic",
-      ("remote", "get-url", "origin"): "https://github.com/cirwel/unitares"},
+      ("remote", "get-url", "--push", "origin"): "https://github.com/cirwel/unitares"},
      ("cirwel", "topic")),
     # A local tracking branch, or a remote URL with no owner/repo shape.
     ({("config", "branch.topic.remote"): ".",
