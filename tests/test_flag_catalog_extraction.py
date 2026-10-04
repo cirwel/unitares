@@ -253,3 +253,11 @@ def test_route_pack_files_outside_scan_dirs_are_catalogued():
     assert "scripts/ops/automation_census_route.py" in files
     assert not any(f.startswith(tuple(f"{d}/" for d in fc.SCAN_DIRS)) for f in files)
     assert "UNITARES_AUTOMATION_CENSUS_PATH" in fc.collect()
+
+
+def test_explicit_purpose_outranks_the_first_readers_docstring():
+    # The host list is first read by a timeout helper, whose docstring would
+    # otherwise describe the setting as a time budget.
+    flags = fc.collect()
+    for name, purpose in fc.PURPOSES.items():
+        assert flags[name].purpose == purpose
