@@ -58,6 +58,9 @@ class TestKeywordClassify:
             ("What does I stand for in EISV?", "explain"),
             ("Can you explain to me what EISV means?", "explain"),
             ("define eventual consistency", "search"),
+            ("define risk in project planning", "search"),
+            ("explain the verdict I got", "status"),
+            ("explain how I am doing in coherence", "status"),
         ],
     )
     def test_keyword_routes(self, question, expected):

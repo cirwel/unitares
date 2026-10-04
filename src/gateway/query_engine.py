@@ -38,10 +38,16 @@ KEYWORD_PATTERNS = [
 # Only words that ask for the caller's own state count as personal: a bare "I"
 # or "me" is also an EISV dimension and ordinary conversation.
 _EXPLAIN = re.compile(r"\b(stands? for|mean|means|meaning|define|definition|explain)\b")
-_PERSONAL = re.compile(r"\b(my|mine|current|currently|right now)\b")
+_PERSONAL = re.compile(
+    r"\b(my|mine|current|currently|right now)\b"
+    r"|\bi (am|was|got|just|received|have)\b"
+    r"|\b(verdict|status|coherence) i\b"
+)
 # Terms the fixed glossary in help can actually answer. Anything else keeps the
 # old search path rather than getting a glossary that does not mention it.
-_GLOSSARY_TERM = re.compile(r"\b(eisv|verdict|coherence|basin|risk|energy|entropy|valence|void|integrity)\b")
+# Only governance-specific words: generic ones (risk, energy, entropy) would pull
+# unrelated definitional questions away from search.
+_GLOSSARY_TERM = re.compile(r"\b(eisv|verdict|coherence|basin|valence)\b")
 
 ROUTING_PROMPT = """You are an intent classifier for a governance system. Given a user question, classify it into exactly one intent.
 
