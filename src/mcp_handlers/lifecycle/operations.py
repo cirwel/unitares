@@ -418,6 +418,10 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
     all_safe = all(safety_checks.values())
 
     # 8. Log reflection to knowledge graph (always, even if not resuming)
+    # Tagged ephemeral: a reflection is a reading of one pause, not a claim
+    # meant to stay true, so it archives after 7 days like other snapshots.
+    # Untagged, these sat open until Vigil's 90-day candidate archive —
+    # 25 of 110 archive candidates on 2026-10-04.
     reflection_logged = False
     try:
         from ..knowledge.handlers import store_discovery_internal
@@ -437,6 +441,7 @@ async def handle_self_recovery_review(arguments: Dict[str, Any]) -> Sequence[Tex
             tags=[
                 "recovery",
                 "self-reflection",
+                "ephemeral",
                 margin_info.get('margin', 'unknown'),
                 recovery_basis,
             ],
