@@ -681,8 +681,8 @@ jobs:
     # and checks its launchd label, and the Linux backend raises
     # NotImplementedError (docs/proposals/s19-attestation-mechanism.md). Before
     # this job they ran only when someone ran the suite on a Mac. No services:
-    # these files need neither Postgres nor Redis. Every test here must run, so
-    # a skip fails the job rather than passing quietly.
+    # the selected tests need neither Postgres nor Redis. Every test here must
+    # run, so a skip fails the job rather than passing quietly.
     name: macos platform tests
     runs-on: macos-latest
     timeout-minutes: 15
@@ -703,11 +703,16 @@ jobs:
         uv pip install --system -r requirements-full.txt -c constraints.txt
 
     - name: Run the macOS-only tests and refuse skips
+      # `shell: bash` is what adds -o pipefail; the default shell is `bash -e`
+      # alone, under which a failing pytest piped into tee reports success.
+      # Only the launchd-guard test is taken from the CLI file: the rest of it
+      # needs the Postgres the Linux shards provide.
+      shell: bash
       run: |
         python -m pytest \
           tests/test_substrate_peer_attestation.py \
           tests/test_uds_listener.py \
-          tests/test_unitares_cli_script.py \
+          tests/test_unitares_cli_script.py::test_install_commands_refuse_a_launchd_install \
           tests/test_lease_plane_canonicalize.py \
           -q -rs -p no:cacheprovider | tee macos-tests.log
         if grep -q '^SKIPPED' macos-tests.log; then
