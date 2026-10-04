@@ -38,8 +38,9 @@ also carries it under `raw_governance`.
 
 ## Codex Reality
 
-- Codex uses slash commands and explicit tool calls, not Claude hooks
-- nothing auto-checks in for you; keep the turn-level baseline yourself
+- Codex uses slash commands and explicit tool calls; its lifecycle hooks are synchronous and do not imply a continuously running agent
+- the plugin's Stop hook may record a `substrate_interpretation` row after a turn; that is the substrate's reading, not an agent check-in, so do not echo it
+- agent-authored check-ins are yours to make, and only when there is meaningful state to report
 - Watcher findings are manual unless you invoke the watcher CLI yourself
 - `.unitares/session.json` is local workspace state; use its `uuid` as a lineage candidate, not a resume credential
 

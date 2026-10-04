@@ -36,7 +36,7 @@ Inputs:
 Guidelines:
 
 - Do not check in after every trivial edit or tool call.
-- Prefer one baseline check-in per assistant turn.
+- Check in only when there is meaningful agent state to report, typically at most once per assistant turn; a turn with nothing to report needs no check-in.
 - Add a check-in for meaningful milestones, completed steps, or decision points.
 - If you had to rebind with `identity()`, only use that restored binding when the response shows strong/proof-owned continuity.
 - If recent local edit context exists, use it to improve the summary, but do not report raw file churn as if it were real progress.
