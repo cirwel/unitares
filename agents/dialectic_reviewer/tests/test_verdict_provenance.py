@@ -142,7 +142,7 @@ def _run_reviewer_capturing_calls(provenance, verdict_text, *, prompts=None, res
 
     thesis = r.Thesis(session_id="s1", root_cause="rc", reasoning="why")
 
-    async def fake_obtain(prompt):
+    async def fake_obtain(prompt, pinned=None):
         r._record_reviewer_provenance(provenance)
         if prompts is not None:
             prompts.append(prompt)

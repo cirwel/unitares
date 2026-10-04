@@ -305,3 +305,47 @@ async def test_crashed_fast_false_on_error_or_no_bearer(monkeypatch):
     assert await od.reviewer_crashed_fast("ag-4", await_seconds=0.01) is False
     monkeypatch.delenv("AGENT_ORCHESTRATOR_BEARER_TOKEN", raising=False)
     assert await od.reviewer_crashed_fast("ag-5", await_seconds=0.01) is False
+
+
+# ------------------- reviewer host list (dialectic-reviewer-hosts-v0) ------------------- #
+def test_build_spec_forwards_the_ordered_host_list(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,antigravity")
+    spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
+    assert spec["env"]["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == "codex,antigravity"
+
+
+def test_runtime_cap_grows_by_the_hosts_after_the_first(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "120")
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
+    base = od._reviewer_max_runtime_ms()
+    assert base == 1_020_000
+
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,agy,external")
+    assert od._reviewer_max_runtime_ms() == base + (420 + 180) * 1000
+
+    monkeypatch.setenv("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", "60")
+    assert od._reviewer_max_runtime_ms() == base + (60 + 180) * 1000
+
+    # The reviewer refuses more than three hosts or an unknown one; neither
+    # buys extra lifetime.
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,mystery,claude,external,agy")
+    assert od._reviewer_max_runtime_ms() == base + 420 * 1000
+
+
+def test_host_timeouts_match_the_reviewers_host_table():
+    from agents.dialectic_reviewer import host_list
+
+    assert {
+        key: (host.timeout_env, host.default_timeout_s) for key, host in host_list.HOSTS.items()
+    } == od._HOST_TIMEOUTS
+    assert host_list._ALIASES == od._HOST_TIMEOUT_ALIASES
+
+
+def test_the_server_persists_every_provenance_key_the_reviewer_writes():
+    # The server files the reviewer's stamp through its own allowlist; a key
+    # missing there is silently dropped from the ledger.
+    from agents.dialectic_reviewer import reviewer
+    from src.mcp_handlers.dialectic import handlers
+
+    missing = set(reviewer._PERSISTED_PROVENANCE_KEYS) - set(handlers._REVIEWER_PROVENANCE_KEYS)
+    assert not missing, missing
