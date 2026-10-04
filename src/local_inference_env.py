@@ -352,25 +352,57 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
-def endpoint_address_is_local(url: str) -> bool:
-    """Whether ``url`` names a local endpoint by its address alone.
+def endpoint_reaches_local_address(url: str) -> bool:
+    """Whether ``url`` can reach the operator's own machine or network.
 
-    ``classify_endpoint``'s rules without the ``UNITARES_MODEL_PRIVACY``
-    override, plus the unspecified address (``0.0.0.0``, ``::``), which a client
-    connects to as this machine. For callers that must know whether a URL
-    reaches the operator's own model servers whatever the privacy setting says:
-    the dialectic reviewer refuses to list such an endpoint as a host that may
-    approve, because ``localhost``, ``127.0.0.1`` and a trusted-network address
-    can all name the local floor (docs/proposals/active/
-    dialectic-reviewer-hosts-v0.md 2.2).
+    The opposite question from ``classify_endpoint``, and so the opposite
+    default. That classifier must never call an endpoint local that is not, so
+    it decides from the URL alone and treats anything unrecognized as
+    external. This one must never miss an endpoint that IS local, so it widens
+    every way a URL can name a local address:
+
+    - ``classify_endpoint``'s address rules, without the
+      ``UNITARES_MODEL_PRIVACY`` override: trusted networks and names listed as
+      local;
+    - the unspecified address (``0.0.0.0``, ``::``), which a client connects
+      to as this machine;
+    - numeric IPv4 shorthand the resolver accepts (``127.1``, ``2130706433``,
+      ``0x7f000001``), parsed as the C library parses it;
+    - any address the name resolves to now. A failed lookup adds nothing.
+
+    The dialectic reviewer refuses to list an ``external`` host for which this
+    is true, because any of these can be the local floor under another name
+    (docs/proposals/active/dialectic-reviewer-hosts-v0.md 2.2).
     """
+    import socket
+
     host = (urlsplit(url).hostname or "").lower().rstrip(".")
     if not host:
         return False
+    if host in _local_hostnames():
+        return True
+
+    def local(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+        return addr.is_unspecified or addr.is_loopback or is_trusted_address(addr)
+
     addr = _ip_literal(host)
     if addr is not None:
-        return addr.is_unspecified or is_trusted_address(addr)
-    return host in _local_hostnames()
+        return local(addr)
+    try:
+        return local(ipaddress.IPv4Address(socket.inet_aton(host)))
+    except (OSError, ValueError):
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError):
+        return False
+    for info in infos:
+        try:
+            if local(ipaddress.ip_address(info[4][0].split("%", 1)[0])):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 _ssl_context_cache: tuple[tuple, object] | None = None

@@ -1327,6 +1327,12 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
     reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
+    # The session's pin: the listed host that answered first. It is fixed here
+    # and never taken from a later reply. If that host's reply needs a repair
+    # and the repair falls to the floor, the floor's reply may be the one
+    # filed, and a pin read from it would be none, letting a reconsideration
+    # restart the list (codex review of #2652).
+    pinned_host = _listed_host_of(reviewer_text)
     verdict = parse_reviewer_verdict(reviewer_text)
     # The reply whose verdict is filed; its own provenance decides approval.
     verdict_text = reviewer_text
@@ -1546,7 +1552,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 verdict,
                 paused_agent_id=parent_agent_id,
                 reviewer_agent_id=client.agent_uuid,
-                pinned_host=_listed_host_of(verdict_text),
+                pinned_host=pinned_host,
             )
         return verdict
     finally:

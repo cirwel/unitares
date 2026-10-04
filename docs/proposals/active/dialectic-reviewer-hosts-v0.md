@@ -124,9 +124,10 @@ the local endpoint, by endpoint identity rather than by name: `ollama:local`,
 or any host whose base URL resolves to `UNITARES_MODEL_BASE_URL` or its
 fallback. Otherwise listing it would launder the 07-02 rule. *As built:* an
 `external` host is refused when its address is local by the server's own
-rules (`endpoint_address_is_local`: loopback in any spelling, the unspecified
-address, a trusted network, a name listed as local), ignoring the privacy
-override. A string comparison let `127.0.0.1` stand in for `localhost` (codex
+rules, widened (`endpoint_reaches_local_address`: loopback in any spelling,
+numeric IPv4 shorthand such as `127.1`, the unspecified address, a trusted
+network, a name listed as local or resolving to a local address now), ignoring
+the privacy override. A string comparison let `127.0.0.1` stand in for `localhost` (codex
 review of #2652). A strong model on the operator's own network is a declared
 host with an explicit `may_approve` (step 4).
 

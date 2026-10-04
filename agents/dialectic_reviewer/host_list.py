@@ -20,7 +20,7 @@ import os
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
-from src.local_inference_env import endpoint_address_is_local
+from src.local_inference_env import endpoint_reaches_local_address
 
 MAX_REVIEWER_HOSTS = 3
 
@@ -118,8 +118,9 @@ def _digest(env: Mapping[str, str], keys: list[str]) -> str:
 def reviewer_host_plan(env: Optional[Mapping[str, str]] = None) -> HostPlan:
     """The operator's ordered reviewer host list, read as a plan. Pure given ``env``.
 
-    An external host whose address is local (loopback in any spelling, a
-    trusted network, a name listed as local) is refused: it can be the local
+    An external host that can reach a local address (loopback in any
+    spelling, numeric shorthand, a trusted network, a name listed as local or
+    resolving to a local address) is refused: it can be the local
     floor under another name, and listing it would launder the local model
     into an approver. A strong model on the operator's own network is a
     declared host with an explicit ``may_approve`` (design step 4), not this.
@@ -166,7 +167,7 @@ def reviewer_host_plan(env: Optional[Mapping[str, str]] = None) -> HostPlan:
         hosts.append(host)
     if any(host.key == "external" for host in hosts):
         external = env.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", "").strip()
-        if external and endpoint_address_is_local(external):
+        if external and endpoint_reaches_local_address(external):
             return invalid(
                 f"the external host {external} is a local endpoint, which may "
                 "object but not approve"

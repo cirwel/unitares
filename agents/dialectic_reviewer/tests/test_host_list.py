@@ -73,7 +73,48 @@ def test_an_external_host_at_a_local_address_cannot_be_listed():
         assert plan.hosts == () and "local endpoint" in (plan.error or ""), url
 
 
-def test_an_external_host_at_a_public_address_can_be_listed():
+def test_numeric_and_resolved_spellings_of_a_local_address_are_refused(monkeypatch):
+    # Codex review of #2652, round 2: shorthand the resolver accepts reached
+    # 127.0.0.1 while the URL parser saw a hostname.
+    import socket
+
+    real = socket.getaddrinfo
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        if host == "looks-public.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 0))]
+        if host == "really-public.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 0))]
+        return real(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    for url in (
+        "http://127.1:11434/v1",
+        "http://2130706433:11434/v1",
+        "http://0x7f000001:11434/v1",
+        "http://0177.0.0.1:11434/v1",
+        "http://looks-public.example:11434/v1",
+    ):
+        plan = _plan(
+            UNITARES_DIALECTIC_REVIEWER_HOSTS="external",
+            UNITARES_DIALECTIC_EXTERNAL_BASE_URL=url,
+        )
+        assert plan.hosts == () and "local endpoint" in (plan.error or ""), url
+    plan = _plan(
+        UNITARES_DIALECTIC_REVIEWER_HOSTS="external",
+        UNITARES_DIALECTIC_EXTERNAL_BASE_URL="https://really-public.example/v1",
+    )
+    assert plan.keys == ["external"]
+
+
+def test_an_external_host_at_a_public_address_can_be_listed(monkeypatch):
+    import socket
+
+    def unresolvable(*args, **kwargs):
+        raise socket.gaierror("offline")
+
+    # A failed lookup adds nothing: the host is judged by its URL alone.
+    monkeypatch.setattr(socket, "getaddrinfo", unresolvable)
     plan = _plan(
         UNITARES_DIALECTIC_REVIEWER_HOSTS="codex,external",
         UNITARES_DIALECTIC_EXTERNAL_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/",

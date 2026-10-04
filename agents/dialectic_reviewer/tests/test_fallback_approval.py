@@ -546,3 +546,34 @@ async def test_a_codex_reply_without_a_verdict_object_is_its_answer(monkeypatch)
     assert log == ["codex"]
     assert str(text) == "I would not approve this."
     assert text.host_key == "codex"
+
+
+@pytest.mark.asyncio
+async def test_the_pin_is_the_first_answering_host_even_when_the_floor_is_filed(monkeypatch):
+    # Codex review of #2652, round 2: codex objected in prose, failed on the
+    # repair, the floor's objection was filed, and the continuation restarted
+    # the list, where antigravity could approve.
+    log = _hosts(monkeypatch, "codex,antigravity", {"antigravity": APPROVE}, local_reply=OBJECT)
+    replies = iter([r.UnparsedReply("I object, in prose."), None])
+
+    async def codex(prompt):
+        log.append("codex")
+        return next(replies)
+
+    monkeypatch.setattr(r, "call_codex_reviewer", codex)
+    _install_fake_client(monkeypatch, [])
+    seen = {}
+
+    async def continuation(client, thesis, verdict, **kw):
+        seen.update(kw)
+        return verdict
+
+    monkeypatch.setattr(r, "continue_after_disagreement", continuation)
+    verdict = await r.run(
+        Thesis(session_id="s-pin-floor", root_cause="rc", proposed_conditions=["c"]),
+        governance_url="http://localhost:8767",
+        parent_agent_id="paused-uuid",
+    )
+    assert log == ["codex", "codex", "local"]
+    assert verdict.agrees is False and verdict.judgment_formed is True
+    assert seen["pinned_host"] == "codex"
