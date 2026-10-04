@@ -91,6 +91,38 @@ def test_validate_executable_accepts_real_binary(tmp_path: Path) -> None:
 # -----------------------------------------------------------------------------
 
 
+def _fake_framework(tmp_path: Path) -> tuple[Path, Path]:
+    version = tmp_path / "Python.framework" / "Versions" / "3.14"
+    launcher = version / "bin" / "python3.14"
+    app = version / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    for binary in (launcher, app):
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\n")
+        binary.chmod(0o755)
+    (version / "bin" / "python3").symlink_to("python3.14")
+    return version / "bin" / "python3", app
+
+
+def test_validate_executable_maps_framework_launcher_to_app_binary(tmp_path: Path) -> None:
+    """proc_pidpath reports Python.app for a framework launcher; enroll that."""
+    launcher, app = _fake_framework(tmp_path)
+    assert enroll_resident._validate_executable(str(launcher)) == str(app.resolve())
+
+
+def test_validate_executable_leaves_non_framework_python_alone(tmp_path: Path) -> None:
+    binary = tmp_path / "opt" / "bin" / "python3"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    assert enroll_resident._validate_executable(str(binary)) == str(binary.resolve())
+
+
+def test_validate_executable_keeps_launcher_when_app_binary_missing(tmp_path: Path) -> None:
+    launcher, app = _fake_framework(tmp_path)
+    app.unlink()
+    assert enroll_resident._validate_executable(str(launcher)) == str(launcher.resolve())
+
+
 def test_emit_warning_fires_on_user_writable_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
