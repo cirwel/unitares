@@ -12,6 +12,7 @@ Modules:
 
 from typing import Optional, Dict, Any, Sequence
 from datetime import datetime, timedelta
+import asyncio
 import os
 import re
 
@@ -756,6 +757,21 @@ def _identity_success_for_request(
     return success_response(payload, agent_id=agent_uuid, arguments=response_arguments)
 
 
+def _schedule_path0_audit_write(write: Any) -> None:
+    """Run a PATH 0 observation write off the request thread.
+
+    The audit JSONL append takes a blocking ``flock`` and ``fsync``; the
+    monitor-cache fast path must never wait on it. Hand it to the default
+    executor without awaiting; with no running loop, write inline.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        write()
+        return
+    loop.run_in_executor(None, write)
+
+
 def _observe_path0_token_accept(
     arguments: Dict[str, Any],
     agent_uuid: str,
@@ -779,15 +795,18 @@ def _observe_path0_token_accept(
         return None
     if fresh is None:
         return None
-    try:
-        from src.audit_log import audit_logger
-        audit_logger.log_path0_token_accept_observed(
-            agent_uuid=agent_uuid,
-            resume_source=resume_source,
-            **fresh,
-        )
-    except Exception as exc:  # pragma: no cover - defensive
-        logger.debug(f"[PATH0_TOKEN] observation write failed (non-fatal): {exc}")
+    def _write() -> None:
+        try:
+            from src.audit_log import audit_logger
+            audit_logger.log_path0_token_accept_observed(
+                agent_uuid=agent_uuid,
+                resume_source=resume_source,
+                **fresh,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"[PATH0_TOKEN] observation write failed (non-fatal): {exc}")
+
+    _schedule_path0_audit_write(_write)
     block: Dict[str, Any] = {
         "expired": fresh["expired"],
         "token_age_seconds": fresh["token_age_seconds"],

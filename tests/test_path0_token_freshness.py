@@ -80,6 +80,10 @@ async def _resume_fastpath(token: str | None):
     if token:
         args["continuity_token"] = token
     with patch("src.mcp_handlers.shared.get_mcp_server", return_value=fake_server), \
+         patch(
+             "src.mcp_handlers.identity.handlers._schedule_path0_audit_write",
+             side_effect=lambda write: write(),
+         ), \
          patch("src.audit_log.audit_logger.log_path0_token_accept_observed") as audit:
         result = await handle_identity_adapter(args)
     return json.loads(result[0].text), audit
@@ -129,3 +133,23 @@ async def test_path0_without_token_has_no_freshness_block(monkeypatch):
     assert data.get("success") is True
     assert "continuity_token_freshness" not in data
     audit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_audit_write_is_scheduled_off_the_request_thread():
+    """The flock/fsync append must not run inline on the event loop."""
+    import asyncio
+    import threading
+    from src.mcp_handlers.identity.handlers import _schedule_path0_audit_write
+
+    ran_on = []
+    done = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    def _write():
+        ran_on.append(threading.get_ident())
+        loop.call_soon_threadsafe(done.set)
+
+    _schedule_path0_audit_write(_write)
+    await asyncio.wait_for(done.wait(), timeout=5)
+    assert ran_on and ran_on[0] != threading.get_ident()
