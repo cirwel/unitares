@@ -297,6 +297,83 @@ async def _shadow_mirror_session_binding(
         logger.debug(f"session-binding shadow mirror skipped: {e}")
 
 
+def schedule_attested_bind_fingerprint_refresh(session_key: str, agent_uuid: str) -> None:
+    """Re-record the bind fingerprint after a substrate-attested PATH 0 resume.
+
+    The PATH 1 hijack check compares a session's binding-time fingerprint with
+    the caller's. A resident that moves from HTTP to the UDS socket keeps its
+    ``agent-{uuid12}`` session, whose binding still carries the HTTP
+    fingerprint (``127.0.0.1:…``), while every UDS call reports ``unknown:…``.
+    Without this, each later call in the run raises a false
+    ``identity_hijack_suspected``, and nothing refreshes the binding, since the
+    monitor-cache fast path never rebinds.
+
+    Kernel peer attestation is stronger proof than the original bind, so the
+    binding takes the attested caller's fingerprint. Only the fingerprint
+    changes, and only on bindings that already map to ``agent_uuid``. The
+    in-memory map (read by the sync check) is updated inline; the Redis slot
+    and the PG mirror are updated off the request path. Never raises.
+    """
+    try:
+        from ..context import get_session_signals
+        _sig = get_session_signals()
+        fp = getattr(_sig, "ip_ua_fingerprint", None) if _sig else None
+        if not fp:
+            return
+        from .shared import _bind_fingerprints, _session_identities
+        bound = _session_identities.get(session_key) or {}
+        bound_uuid = bound.get("bound_agent_id") or bound.get("agent_uuid")
+        if bound_uuid in (None, agent_uuid):
+            _bind_fingerprints[session_key] = fp
+        from src.background_tasks import create_tracked_task
+        create_tracked_task(
+            _refresh_bind_fingerprint_stores(session_key, agent_uuid, fp),
+            name="attested_bind_fingerprint_refresh",
+        )
+    except Exception as e:
+        logger.debug(f"[IDENTITY] attested bind-fingerprint refresh skipped: {e}")
+
+
+async def _refresh_bind_fingerprint_stores(session_key: str, agent_uuid: str, fp: str) -> None:
+    """Redis slot and PG mirror half of schedule_attested_bind_fingerprint_refresh."""
+    try:
+        await asyncio.wait_for(
+            _refresh_redis_bind_fingerprint(session_key, agent_uuid, fp),
+            timeout=_REDIS_WRITE_TIMEOUT,
+        )
+    except Exception as e:
+        logger.debug(f"[IDENTITY] redis bind-fingerprint refresh skipped: {e}")
+    try:
+        await get_db().refresh_session_binding_fingerprint(session_key, agent_uuid, fp)
+    except Exception as e:
+        logger.debug(f"[IDENTITY] PG bind-fingerprint refresh skipped: {e}")
+
+
+async def _refresh_redis_bind_fingerprint(session_key: str, agent_uuid: str, fp: str) -> None:
+    from src.cache.redis_client import get_redis
+    redis = await get_redis()
+    if not redis:
+        return
+    slot = f"session:{session_key}"
+    raw = await redis.get(slot)
+    if not raw:
+        return
+    data = json.loads(raw)
+    if not isinstance(data, dict) or data.get("agent_id") != agent_uuid:
+        return
+    if data.get("bind_ip_ua") == fp:
+        return
+    data["bind_ip_ua"] = fp
+    await redis.set(slot, json.dumps(data), keepttl=True)
+    try:
+        from src.cache import session_cache as _session_cache_mod
+        cached = _session_cache_mod._fallback_cache.get(session_key)
+        if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
+            cached["bind_ip_ua"] = fp
+    except Exception:
+        pass
+
+
 async def _cache_session_redis_write(
     session_cache,
     session_key: str,
