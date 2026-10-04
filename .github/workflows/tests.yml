@@ -673,3 +673,44 @@ jobs:
         tests/test_consultation.py::TestConsultSchema::test_schema_is_bounded_and_forbids_route_controls
         tests/test_mcp_text_compact.py
         -q
+
+  macos-platform:
+    # The test shards run on Linux, where these files skip themselves: the
+    # substrate identity proof reads a Unix-socket peer's PID, executable path
+    # and start time through macOS-only interfaces (LOCAL_PEERPID, proc_pidpath)
+    # and checks its launchd label, and the Linux backend raises
+    # NotImplementedError (docs/proposals/s19-attestation-mechanism.md). Before
+    # this job they ran only when someone ran the suite on a Mac. No services:
+    # these files need neither Postgres nor Redis. Every test here must run, so
+    # a skip fails the job rather than passing quietly.
+    name: macos platform tests
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Python 3.14
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.14'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -r requirements-full.txt -c constraints.txt
+
+    - name: Run the macOS-only tests and refuse skips
+      run: |
+        python -m pytest \
+          tests/test_substrate_peer_attestation.py \
+          tests/test_uds_listener.py \
+          tests/test_unitares_cli_script.py \
+          tests/test_lease_plane_canonicalize.py \
+          -q -rs -p no:cacheprovider | tee macos-tests.log
+        if grep -q '^SKIPPED' macos-tests.log; then
+          echo "::error::a macOS-only test skipped on macOS; see the summary above"
+          exit 1
+        fi
