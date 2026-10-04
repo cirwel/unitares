@@ -884,6 +884,14 @@ async def _try_resume_by_agent_uuid_direct(
                             "[SUBSTRATE_VERIFIED] %s... via UDS peer attestation "
                             "(pid=%d)", _direct_uuid[:8], _peer_pid,
                         )
+                        # The stable session may still carry the fingerprint
+                        # it was first bound with (HTTP, before this resident
+                        # moved to UDS); take the attested caller's instead.
+                        from .shared import make_client_session_id
+                        from .persistence import schedule_attested_bind_fingerprint_refresh
+                        schedule_attested_bind_fingerprint_refresh(
+                            make_client_session_id(_direct_uuid), _direct_uuid,
+                        )
                     else:
                         # Verification fired and rejected — return an
                         # explicit error naming the failure mode rather
