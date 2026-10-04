@@ -253,9 +253,15 @@ that changes no setting.
    and the withhold.
 4. **Declared hosts** (2.4), with the schema as fixed above.
 
-`agents/dialectic_reviewer/host_backends.py` and the approval path are
-security-sensitive under `scripts/dev/review_policy.json`; steps 1 and 3 need
-reviews from two model families.
+Today `scripts/dev/review_policy.json` lists `agents/dialectic_reviewer/host_backends.py`
+as security-sensitive, but not `agents/dialectic_reviewer/reviewer.py`, where
+approval is withheld, nor the dispatcher or `consultation.py`, where steps 1
+and 3 put the family and forwarding logic. The gate matches changed files
+against that list (`scripts/dev/review_gate.py:1054-1056`), so a step that
+touched only those files would need one family. Step 1 therefore adds
+`reviewer.py` and `src/mcp_handlers/dialectic/orchestrator_dispatch.py` to the
+policy, and step 3 adds `consultation.py`'s family code, so that every step
+touching the approval path needs reviews from two model families.
 
 ## 5. Evidence required before each step ships
 
