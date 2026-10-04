@@ -32,8 +32,10 @@ implementation, or a search snippet). Snippet-only entries are not
 byte-verified and must be re-opened before they are cited anywhere else.
 **Addendum 2026-10-04:** Hindsight was added to the substitute map and to
 the substitute column of claims 4 and 8 after an operator asked whether it
-encroaches. Only its README was opened. The classes of both claims are
-unchanged; claim 8 is the one it presses hardest (see open question 4).
+encroaches. Its README was opened first, then its working tree was read
+for the component comparison under the substitute map. The classes of both
+claims are unchanged; claim 8 is the one it presses hardest (see open
+question 4).
 
 ---
 
@@ -116,6 +118,36 @@ result only, not byte-verified; **blocked** = the primary domain refused.
 | **MI9** (Wang et al., Barclays, arXiv:2508.03858) | Runtime safety framework: agency-risk index, agent-semantic telemetry, goal-aware authorization monitoring, finite-state conformance, goal-conditioned drift detection, graded containment; evaluated on 1,000 synthetic scenarios; open-sourced prompts and scripts | Identity ontology, class-conditional calibration, shared memory, adjudication record (June verdict stands) | opened (abstract via Hugging Face papers) |
 | **Auton** (Snap, arXiv:2602.23720) | Declarative Cognitive Blueprint separated from a Runtime Engine; formal auditability of the agent artifact; POMDP execution model; constraint manifold for safety | Behavioral state at runtime (June verdict stands: different layer) | opened (abstract via Hugging Face papers) |
 | **Multiagent debate** (Du et al., MIT and Google Brain, 2023) | Multiple model instances propose, critique and revise over rounds to converge on an answer | Any durable record of the debate, adjudication with conditions, binding to later outcomes | opened (abstract via Hugging Face papers) |
+
+### Component comparison: Hindsight (2026-10-04)
+
+Hindsight's working tree and UNITARES's were each read once, by one agent
+per codebase, at the commits current on 2026-10-04. Neither reading was
+independently verified. "Ahead" means ahead in mechanism as read, not in
+measured benefit.
+
+| Component | Hindsight | UNITARES | Ahead |
+|---|---|---|---|
+| Duplicate detection on write | Exact-text guard, plus embedding cosine ≥ 0.97 confirmed by an LLM judge | None; tag-overlap linking only, inert on the Postgres backend (#2655) | Hindsight |
+| Revision history | Pre-update snapshot per observation (capped at 50); dedup folds and deletes leave none | `update` overwrites in place; explicit supersede keeps the old row, and the successor link needs AGE | Mixed: automatic versions versus attributed corrections |
+| Retrieval | Semantic, BM25, graph and temporal fused (RRF k=60) and cross-encoder reranked by default; reports LongMemEval results | Full-text by default; semantic, hybrid RRF and reranker exist behind backend and env flags; no benchmark | Hindsight |
+| Synthesis | Mental models with cited ids, refreshed and versioned | Topic rollups with cited ids; unscheduled and unversioned | Hindsight |
+| Successor handoff | Session-start injection from a bank built from git history and past transcripts | Declared lineage; no knowledge content handed over (reconstruction is a client workflow) | Hindsight in practice |
+| Writer attribution | No writer column; identity only as client-chosen tags, dropped when observations merge across harnesses | Agent id, `client_session_id`, provenance chain, authority tiers, identity-gated high-severity writes | UNITARES |
+| Review, outcomes, policy | None found | Dialectic records, outcome binding to prior predictions, proceed/guide/pause | UNITARES only |
+| Without an LLM | Extraction, observations and mental models need one; no-LLM mode is chunk storage | Core path runs without a model | UNITARES |
+
+**Provenance check.** None of 15 UNITARES-specific identifiers appears in
+Hindsight's tree. Its "supersede" and "lineage" mean source-fact
+replacement and observation ancestry, not the UNITARES concepts. The
+projects developed in parallel (Hindsight's first commit 2025-10-30;
+UNITARES's knowledge layer 2025-11-25, observations in Hindsight
+2025-11-26). Their shared parts (RRF, cross-encoders, small embedding
+models) are field-standard and say nothing about copying.
+
+**Reading.** Claim 4 stays differentiated on attribution alone. On
+retrieval, deduplication and handoff, the strongest open memory substitute
+is ahead.
 
 ---
 
