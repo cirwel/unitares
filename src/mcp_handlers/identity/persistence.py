@@ -325,6 +325,14 @@ def schedule_attested_bind_fingerprint_refresh(session_key: str, agent_uuid: str
         bound_uuid = bound.get("bound_agent_id") or bound.get("agent_uuid")
         if bound_uuid in (None, agent_uuid):
             _bind_fingerprints[session_key] = fp
+        # The degraded local-only cache, refreshed whether or not Redis is up.
+        try:
+            from src.cache import session_cache as _session_cache_mod
+            cached = _session_cache_mod._fallback_cache.get(session_key)
+            if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
+                cached["bind_ip_ua"] = fp
+        except Exception:
+            pass
         from src.background_tasks import create_tracked_task
         create_tracked_task(
             _refresh_bind_fingerprint_stores(session_key, agent_uuid, fp),
@@ -350,28 +358,35 @@ async def _refresh_bind_fingerprint_stores(session_key: str, agent_uuid: str, fp
 
 
 async def _refresh_redis_bind_fingerprint(session_key: str, agent_uuid: str, fp: str) -> None:
+    """Compare-and-set the slot's bind_ip_ua under WATCH.
+
+    This runs off the request path, so a bind can land between the read and
+    the write; WATCH turns that into a no-op instead of writing the stale
+    snapshot back over it.
+    """
+    from redis.exceptions import WatchError
     from src.cache.redis_client import get_redis
     redis = await get_redis()
     if not redis:
         return
     slot = f"session:{session_key}"
-    raw = await redis.get(slot)
-    if not raw:
-        return
-    data = json.loads(raw)
-    if not isinstance(data, dict) or data.get("agent_id") != agent_uuid:
-        return
-    if data.get("bind_ip_ua") == fp:
-        return
-    data["bind_ip_ua"] = fp
-    await redis.set(slot, json.dumps(data), keepttl=True)
-    try:
-        from src.cache import session_cache as _session_cache_mod
-        cached = _session_cache_mod._fallback_cache.get(session_key)
-        if isinstance(cached, dict) and cached.get("agent_id") == agent_uuid:
-            cached["bind_ip_ua"] = fp
-    except Exception:
-        pass
+    async with redis.pipeline(transaction=True) as pipe:
+        await pipe.watch(slot)
+        raw = await pipe.get(slot)
+        if not raw:
+            return
+        data = json.loads(raw)
+        if not isinstance(data, dict) or data.get("agent_id") != agent_uuid:
+            return
+        if data.get("bind_ip_ua") == fp:
+            return
+        data["bind_ip_ua"] = fp
+        pipe.multi()
+        pipe.set(slot, json.dumps(data), keepttl=True)
+        try:
+            await pipe.execute()
+        except WatchError:
+            logger.debug("[IDENTITY] bind slot changed during fingerprint refresh; left as written")
 
 
 async def _cache_session_redis_write(

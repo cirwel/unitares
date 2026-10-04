@@ -87,17 +87,10 @@ def test_refresh_without_a_current_fingerprint_does_nothing(_clean_maps):
     sched.assert_not_called()
 
 
-class _FakeRedis:
-    def __init__(self, slots):
-        self.slots = slots
-        self.sets = []
+fakeredis = pytest.importorskip("fakeredis")
+import fakeredis.aioredis  # noqa: E402
 
-    async def get(self, key):
-        value = self.slots.get(key)
-        return value.encode() if value is not None else None
-
-    async def set(self, key, value, keepttl=False):
-        self.sets.append((key, json.loads(value), keepttl))
+_SLOT = f"session:{_KEY}"
 
 
 def _slot(agent_id, fp):
@@ -107,34 +100,78 @@ def _slot(agent_id, fp):
     })
 
 
+def _fake(server=None):
+    return fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+
+
 @pytest.mark.asyncio
 async def test_redis_slot_takes_new_fingerprint_and_keeps_the_rest():
     from src.mcp_handlers.identity.persistence import _refresh_redis_bind_fingerprint
 
-    redis = _FakeRedis({f"session:{_KEY}": _slot(_UUID, _HTTP_FP)})
+    redis = _fake()
+    await redis.set(_SLOT, _slot(_UUID, _HTTP_FP), ex=86400)
     with patch("src.cache.redis_client.get_redis", new=AsyncMock(return_value=redis)):
         await _refresh_redis_bind_fingerprint(_KEY, _UUID, _UDS_FP)
-    assert len(redis.sets) == 1
-    key, data, keepttl = redis.sets[0]
-    assert key == f"session:{_KEY}" and keepttl is True
+    data = json.loads(await redis.get(_SLOT))
     assert data["bind_ip_ua"] == _UDS_FP
     assert data["spawn_reason"] == "explicit"
     assert data["bound_at"] == "2026-09-26T21:16:38+00:00"
+    assert 0 < await redis.ttl(_SLOT) <= 86400
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("slots", [
-    {f"session:{_KEY}": _slot(_OTHER, _HTTP_FP)},
-    {f"session:{_KEY}": _slot(_UUID, _UDS_FP)},
-    {},
-])
-async def test_redis_slot_untouched_when_foreign_current_or_absent(slots):
+@pytest.mark.parametrize("stored", [_slot(_OTHER, _HTTP_FP), _slot(_UUID, _UDS_FP), None])
+async def test_redis_slot_untouched_when_foreign_current_or_absent(stored):
     from src.mcp_handlers.identity.persistence import _refresh_redis_bind_fingerprint
 
-    redis = _FakeRedis(slots)
+    redis = _fake()
+    if stored is not None:
+        await redis.set(_SLOT, stored)
     with patch("src.cache.redis_client.get_redis", new=AsyncMock(return_value=redis)):
         await _refresh_redis_bind_fingerprint(_KEY, _UUID, _UDS_FP)
-    assert redis.sets == []
+    assert await redis.get(_SLOT) == stored
+
+
+@pytest.mark.asyncio
+async def test_redis_bind_landing_mid_refresh_is_not_reverted():
+    """A rebind between the read and the write wins; the stale snapshot is dropped."""
+    from src.mcp_handlers.identity.persistence import _refresh_redis_bind_fingerprint
+
+    server = fakeredis.FakeServer()
+    redis, other = _fake(server), _fake(server)
+    await redis.set(_SLOT, _slot(_UUID, _HTTP_FP))
+    concurrent = _slot(_OTHER, "10.0.0.9:aaaaaa")
+
+    class _Racing:
+        def pipeline(self, transaction=True):
+            pipe = redis.pipeline(transaction=transaction)
+            real_get = pipe.get
+
+            async def get(key):
+                value = await real_get(key)
+                await other.set(key, concurrent)
+                return value
+
+            pipe.get = get
+            return pipe
+
+    with patch("src.cache.redis_client.get_redis", new=AsyncMock(return_value=_Racing())):
+        await _refresh_redis_bind_fingerprint(_KEY, _UUID, _UDS_FP)
+    assert await redis.get(_SLOT) == concurrent
+
+
+def test_fallback_cache_refreshed_without_redis(_uds_signals, _clean_maps):
+    from src.cache import session_cache as session_cache_mod
+    from src.mcp_handlers.identity.persistence import schedule_attested_bind_fingerprint_refresh
+
+    with patch.dict(session_cache_mod._fallback_cache, {
+        _KEY: {"agent_id": _UUID, "bind_ip_ua": _HTTP_FP},
+        "agent-eeeeeeee-111": {"agent_id": _OTHER, "bind_ip_ua": _HTTP_FP},
+    }), patch("src.background_tasks.create_tracked_task", side_effect=_drop_task):
+        schedule_attested_bind_fingerprint_refresh(_KEY, _UUID)
+        assert session_cache_mod._fallback_cache[_KEY]["bind_ip_ua"] == _UDS_FP
+        schedule_attested_bind_fingerprint_refresh("agent-eeeeeeee-111", _UUID)
+        assert session_cache_mod._fallback_cache["agent-eeeeeeee-111"]["bind_ip_ua"] == _HTTP_FP
 
 
 @pytest.mark.asyncio
