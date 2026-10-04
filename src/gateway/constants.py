@@ -2,6 +2,11 @@
 
 import os
 
+try:  # the gateway process puts src/ itself on sys.path; tests use the repo root
+    from governance_glossary import EISV_INLINE_SUMMARY
+except ImportError:
+    from src.governance_glossary import EISV_INLINE_SUMMARY
+
 # Deployment-overridable via env; defaults suit a local single-host install.
 GOVERNANCE_URL = os.getenv("GOVERNANCE_URL", "http://localhost:8767/mcp/")
 GATEWAY_PORT = int(os.getenv("GATEWAY_PORT", "8768"))
@@ -16,6 +21,11 @@ CIRCUIT_BACKOFF_MAX = 120.0
 REQUEST_TIMEOUT = 30.0
 
 HELP_TEXT = {
+    "glossary": {
+        "EISV": EISV_INLINE_SUMMARY,
+        "verdict": "Governance policy action: proceed, guide, or pause. proceed and guide are advisory",
+        "coherence / basin / risk": "Other fields in a status reply; call status to read your own values",
+    },
     "tools": [
         {
             "name": "status",
