@@ -1901,7 +1901,9 @@ def test_missing_gh_is_unreviewed_not_findings(monkeypatch, tmp_path, capsys, ar
     # Exit 1 means "findings need author action". A machine without `gh`
     # reviewed nothing, so it must report UNREVIEWED (2), not a traceback
     # whose exit status reads as findings. A PATH holding only git gives the
-    # real error (the current-branch lookup reads the branch name from git).
+    # real error. The head ref is pinned: a detached checkout (CI's) has no
+    # branch, and the lookup would stop at "no PR" before it ever ran `gh`.
+    monkeypatch.setattr(rg, "head_ref", lambda: ("o", "b"))
     (tmp_path / "git").symlink_to(shutil.which("git"))
     monkeypatch.setenv("PATH", str(tmp_path))
     assert rg.main(argv) == rg.UNREVIEWED
