@@ -105,9 +105,16 @@ veto by removing the label.
   queue's, entered by the owning agent's `approved-to-merge` label (section
   4); arming by hand is the operator's. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
-  actually passed — CI green, a completed review with findings addressed (see
-  "Review workflow" below), and no collision with an in-flight branch. A
-  neutral UNREVIEWED warning is not review completion.
+  actually passed — CI green, a review attempted where one can run (see
+  "Review workflow" below) with any findings addressed, and no collision with
+  an in-flight branch. The `review` check is advisory, not a required check:
+  a neutral UNREVIEWED warning is not review completion, but where no
+  reviewer can run (a cloud session has no reviewer CLI) or the round cap is
+  spent, readiness needs the PR to say so: name the reviewer that was
+  unavailable, answer any open findings in a PR comment, and note that a
+  local session or the operator may add the second family later. Operator
+  decision, 2026-10-04: cloud sessions cannot run `review.sh`, and the gate
+  had become the main thing stopping finished PRs.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
