@@ -12,7 +12,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- plugin-bundle-recut: v0.4.20 -->
 <!-- changelog-coverage-exempt: #2515 no-user-effect -->
 <!-- changelog-coverage-exempt: #2562 no-user-effect -->
-<!-- changelog-coverage-exempt: #2585 no-user-effect -->
 <!-- changelog-coverage-exempt: #2596 no-user-effect -->
 <!-- changelog-coverage-exempt: #2598 no-user-effect -->
 <!-- changelog-coverage-exempt: #2599 no-user-effect -->
@@ -24,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- changelog-coverage-exempt: #2609 no-user-effect -->
 <!-- changelog-coverage-exempt: #2612 no-user-effect -->
 <!-- changelog-coverage-exempt: #2614 no-user-effect -->
-<!-- changelog-coverage-exempt: #2617 no-user-effect -->
 <!-- changelog-coverage-exempt: #2621 no-user-effect -->
 <!-- changelog-coverage-exempt: #2623 no-user-effect -->
 <!-- changelog-coverage-exempt: #2625 no-user-effect -->
@@ -35,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- changelog-coverage-exempt: #2644 no-user-effect -->
 <!-- changelog-coverage-exempt: #2646 no-user-effect -->
 <!-- changelog-coverage-exempt: #2648 no-user-effect -->
-<!-- changelog-coverage-exempt: #2650 no-user-effect -->
 
 ### Added
 - **check-in responses: `outcomes_in_e`:** when an agent's behavioral E includes the outcome term (at least three outcomes recorded in the last 24h), a check-in response now says which outcomes count and what they do. The fields are: how many outcomes were counted and how many were adverse, by type, and by `verification_source` when the outcome query fetched it (the default query does not, and the field then says `not_fetched` rather than calling recorded sources unrecorded); the term's real share of each E observation after the later blends (about 0.14, not the nominal 0.20, when both are active); its current contribution and range; and how much recording one more adverse outcome lowers the observation (an upper bound once the 20-outcome window is full, since the record that leaves may itself be adverse). It also states the two things the formula does not record: outcomes count without attribution to whether the agent's change caused them, and adverse means rework was needed, not fault. Mirror, compact and standard modes show it only when an adverse outcome is counted and the counts changed since the last account this process showed, and mirror adds one line. `response_mode='full'` always carries it, and `sync_state` lifts it beside `state_summary`. It restates the derivation the check-in already built: E, I, the verdict path and every persisted value are unchanged. Changing how outcomes count is deferred to after the 2026-12-01 registered read (#2610). (#2636)
@@ -49,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **external calibration mirror:** `get_agent_external_calibration` scores only confidence the agent itself reported, and skips outcomes marked `calibration_excluded`. Previously it took the latest confidence of any audit event, usually a server-derived value, which is circular when scored against outcomes. `auto_attest` audit details now record `confidence_source` and `epistemic_class`, and a weak-identity clamp marks the value `confidence_dampened`. No verdict, risk, trust-tier or response change. (#2603)
 - **knowledge synthesis:** a model-written topic summary must cite its source discoveries by reference. One with missing or invalid references is discarded and the deterministic summary is used instead. (#2597)
 - **self-recovery reflections** are tagged `ephemeral` when written, so they archive after seven days (still retrievable with `include_archived=true`) instead of staying open until the 90-day archive pass. New reflections only. (#2643)
-- **in-tree SDK:** `GovernanceClient` lists the server's advertised tools on connect and sends a call to a tool missing from a progressive listing through `use_tool`, which keeps MCP result validation and stops a per-call warning; servers that do not advertise `use_tool` keep direct dispatch. The in-tree SDK version moves to 0.4.1; it reaches PyPI when `sdk-v0.4.1` is tagged. (#2534)
+- **in-tree SDK:** `GovernanceClient` lists the server's advertised tools on connect and sends a call to a tool missing from a progressive listing through `use_tool`, which keeps MCP result validation and stops a per-call warning; servers that do not advertise `use_tool` keep direct dispatch. `checkin` (async and sync) now returns the E/I/S/V metrics resolved from a full check-in envelope in `CheckinResult.metrics`; before, they were dropped even when the server sent them. The in-tree SDK version moves to 0.4.1; it reaches PyPI when `sdk-v0.4.1` is tagged. (#2534)
 - **dependencies:** `pydantic>=2.12.0,<3.0.0` is now declared (every tool schema imports it; it used to arrive only through `mcp`); `numpy` moves from `>=1.24.0` to `>=2.3.2` (the first release with CPython 3.14 wheels; the old floor could never install); `starlette` moves from `>=0.37.0` to `>=1.0.0`; `fakeredis` joins the `dev` extra (#2641). The `openai` ceiling moves from `<3.0.0` to `<4.0.0` (#2563).
 - **documentation:** check-in guidance in `docs/guides/CODEX_START.md` and `commands/checkin.md` no longer says to check in once per turn as a baseline; it matches `AGENTS.md`: check in when there is real state to report (#2642). The install guide notes that a reinstall reuses existing Docker volumes and says to `docker compose down` first (#2628). The user manual drops a maintainer-specific "no paid model API" rule and a deployment-specific model name (#2566).
 
@@ -60,6 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **dialectic reviewer:** deeply nested JSON is treated as unparseable rather than crashing the reviewer before any fallback or abstention is recorded, and the verdict scanners no longer take quadratic time on it (#2619, #2622). When the Antigravity reviewer host exits nonzero, the stored error now includes its own reason (from its JSON error, stderr or log), capped at 300 characters (#2616).
 - **dialectic_live:** on macOS, boot re-signs asset CLIs the OS kills on exec (#2600), and a failed boot-time asset build serves the build already on disk instead of crash-looping under launchd; assets are rebuilt only when the on-disk build is stale (#2601, #2613, #2602).
 - **knowledge graph writes:** a `response_to` that cannot become a typed link is now refused instead of being dropped, on all three write paths (`store`, the `discoveries` batch, and `note`). This covers an unknown `response_type`, a value that is not a `{discovery_id, response_type}` object, a missing field, and an empty or `null` `discovery_id`. Before this, the batch path stored the item unthreaded for an unknown type, all three paths did so for a malformed shape, and a `null` id was stored as a reply to a discovery literally named `"None"`; each reported success. A refused single write returns an error naming the expected shape, `{'discovery_id': <parent id>, 'response_type': <type>}`, or the valid types; a refused batch item is reported as `Discovery N: ...` and fails alone, and the other items in the batch are still stored. The three parsers are now one (`_parse_response_to`). A well-formed link is unchanged, including case-normalised types. Lineage scoring in `src/identity/memory_integration.py` reads these reply edges, so a dropped link used to lower it without a trace (#2651).
+- **operator tooling (`scripts/ops/`):** `enroll_resident.py` now enrolls the binary the kernel actually reports for a macOS framework-Python resident (`Python.app/Contents/MacOS/Python`, not the `bin/python3.x` launcher), so UDS resume no longer fails every time with an executable mismatch; it also refuses a launcher path that does not exist or is not executable (#2650). `deploy-mcp.sh` applies a deployment env overlay (`scripts/ops/governance-mcp.env`) to the live LaunchAgent plist before restarting, so settings such as `UNITARES_TRUSTED_NETWORKS` reach the running server without hand-editing; a failure warns and deploys with the old environment (#2585). `deploy-orchestrator.sh` warns when the redeployed orchestrator comes up without its idempotency store, instead of reporting OK while keyed spawns fail closed (#2617).
 
 ### Removed
 - **37 of the last 38 legacy tool aliases** (compatibility: callable names removed).
@@ -1582,7 +1580,7 @@ _Backfill of notable changes merged between 2.13.0 (2026-05-04) and this release
 
 ---
 
-## [3.2.0] - 2026-10-04
+## [Unreleased]
 
 ---
 
