@@ -251,6 +251,52 @@ async def test_promote_memory_rejects_memory_only_corroboration():
     assert "cannot independently corroborate" in result["error"]
 
 
+@pytest.mark.asyncio
+async def test_promote_memory_claim_refused_while_paused():
+    """The real circuit breaker runs here (not patched), so a paused promoter
+    is refused before ownership, graph reads, or the write."""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.knowledge.handlers import handle_promote_memory_claim
+
+    graph = AsyncMock()
+    server = SimpleNamespace(agent_metadata={
+        "agent-a": SimpleNamespace(status="paused", paused_at=datetime.now().isoformat()),
+    })
+    verify_ownership = patch(
+        "src.mcp_handlers.support.agent_auth.verify_agent_ownership",
+        return_value=True,
+    )
+
+    with (
+        patch(
+            "src.mcp_handlers.knowledge.handlers.require_registered_agent",
+            return_value=("agent-a", None),
+        ),
+        patch("src.mcp_handlers.shared.get_mcp_server", return_value=server),
+        verify_ownership as ownership,
+        patch(
+            "src.mcp_handlers.knowledge.handlers.get_knowledge_graph",
+            AsyncMock(return_value=graph),
+        ),
+    ):
+        result = parse_result(await handle_promote_memory_claim({
+            "discovery_id": "memory-1",
+            "evidence_ids": ["evidence-1"],
+            "summary": "claim",
+            "verification_basis": "an integration test",
+            "decision_standard": "one non-memory artifact",
+            "client_session_id": "session-1",
+        }))
+
+    assert result["success"] is False
+    assert result["error_code"] == "AGENT_PAUSED"
+    ownership.assert_not_called()
+    graph.get_discovery.assert_not_awaited()
+    graph.add_discovery.assert_not_awaited()
+
+
 # Channel messages (operator decision 2026-09-27): agent-to-agent notes on a
 # `channel-<topic>` lane get the imported-memory multiplier. Measured that day
 # on the relational table: 78 rows match, 61 of them open.
