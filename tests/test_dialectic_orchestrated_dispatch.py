@@ -314,6 +314,24 @@ def test_build_spec_forwards_the_ordered_host_list(monkeypatch):
     assert spec["env"]["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == "codex,antigravity"
 
 
+def test_build_spec_clears_an_inherited_host_selection(monkeypatch):
+    """The orchestrator merges this env over its own, so selection settings
+    this server leaves unset are sent empty: the daemon's HOSTS=claude must
+    not override a legacy HOST=codex chosen here."""
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
+    monkeypatch.delenv("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", raising=False)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", "codex")
+    env = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)["env"]
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == ""
+    assert env["UNITARES_DIALECTIC_EXTERNAL_BASE_URL"] == ""
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOST"] == "codex"
+
+    from agents.dialectic_reviewer.host_list import reviewer_host_plan
+
+    inherited = {"UNITARES_DIALECTIC_REVIEWER_HOSTS": "claude"}
+    assert reviewer_host_plan({**inherited, **env}, local_base_url="http://127.0.0.1:11434").keys == ["codex"]
+
+
 def test_runtime_cap_grows_by_the_hosts_after_the_first(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "120")
     monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)

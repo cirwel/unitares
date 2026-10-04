@@ -42,6 +42,15 @@ _CLASSIFIER_SETTINGS = (
     "UNITARES_TRUSTED_NETWORKS",
 )
 
+# Settings that decide which reviewer hosts the child may call and where the
+# external one points: forwarded even when empty, so the daemon's own values
+# never stand in for this server's (literal names, also in reviewer_config).
+_HOST_SELECTION_SETTINGS = (
+    "UNITARES_DIALECTIC_REVIEWER_HOSTS",
+    "UNITARES_DIALECTIC_REVIEWER_HOST",
+    "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
+)
+
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -242,6 +251,14 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         value = os.environ.get(name)
         if value:
             env[name] = value
+
+    # Host selection is forwarded even when empty, like the classifier
+    # settings below: the orchestrator merges this env over its own, so an
+    # omitted list would let the child keep the daemon's (say HOSTS=claude)
+    # and approve through a host this server never selected. Empty reads as
+    # unset in host_list.
+    for name in _HOST_SELECTION_SETTINGS:
+        env[name] = os.environ.get(name, "")
 
     # The classifier inputs are forwarded even when empty. The orchestrator
     # merges this env OVER its own inherited environment, so an omitted key

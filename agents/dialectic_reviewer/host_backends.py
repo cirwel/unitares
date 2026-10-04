@@ -14,6 +14,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import httpx
+
 from src.mcp_handlers.support.antigravity_cli_client import (
     AGY_FLAGS as _AGY_FLAGS,
     guard_prompt as _guard_prompt,
@@ -348,11 +350,18 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
     except (TypeError, ValueError):
         max_tokens = DEFAULT_EXTERNAL_MAX_TOKENS
 
+    # Redirects are refused, not followed. The host list vetted base_url as
+    # not the local floor; a 3xx to a loopback or trusted address would let the
+    # floor answer with this host's approval authority. The OpenAI SDK's own
+    # client follows redirects, so it gets one that does not.
+    http_client = httpx.AsyncClient(follow_redirects=False, timeout=timeout_s)
     started = time.monotonic()
     try:
         from openai import AsyncOpenAI  # local import: only the runner needs it
 
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout_s)
+        client = AsyncOpenAI(
+            base_url=base_url, api_key=api_key, timeout=timeout_s, http_client=http_client
+        )
         resp = await asyncio.wait_for(
             client.chat.completions.create(
                 model=model,
@@ -381,6 +390,8 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
             backend="external",
             error=f"External reviewer call failed: {type(exc).__name__}",
         )
+    finally:
+        await http_client.aclose()
 
     latency_ms = int((time.monotonic() - started) * 1000)
     model_used = getattr(resp, "model", None) or model

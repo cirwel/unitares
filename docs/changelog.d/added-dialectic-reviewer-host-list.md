@@ -9,7 +9,10 @@
   approve answered, or no list is set and the local model is the reviewer), so
   a verdict whose provenance does not say so is withheld. The local endpoint
   cannot be listed, by name or by URL, and neither can an `external` host at a
-  local address; an invalid list calls no host. The
+  local address; an invalid list calls no host. The external host no longer
+  follows HTTP redirects, so a redirect cannot reach the local model under
+  its authority, and the dispatching server sends its host selection even
+  when empty, so the orchestrator's own setting never stands in. The
   repair and every reconsideration go to the host that answered first. Each
   verdict records the list, a configuration digest, every attempt and the
   answering host's family. `UNITARES_DIALECTIC_REVIEWER_HOST` still works as
