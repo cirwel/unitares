@@ -35,8 +35,13 @@ KEYWORD_PATTERNS = [
 
 # Definitional questions ("what does EISV stand for") are about the system, not
 # the caller. Without this the status keywords below grab any mention of eisv.
+# Only words that ask for the caller's own state count as personal: a bare "I"
+# or "me" is also an EISV dimension and ordinary conversation.
 _EXPLAIN = re.compile(r"\b(stands? for|mean|means|meaning|define|definition|explain)\b")
-_PERSONAL = re.compile(r"\b(my|me|mine|i|current|currently|right now)\b")
+_PERSONAL = re.compile(r"\b(my|mine|current|currently|right now)\b")
+# Terms the fixed glossary in help can actually answer. Anything else keeps the
+# old search path rather than getting a glossary that does not mention it.
+_GLOSSARY_TERM = re.compile(r"\b(eisv|verdict|coherence|basin|risk|energy|entropy|valence|void|integrity)\b")
 
 ROUTING_PROMPT = """You are an intent classifier for a governance system. Given a user question, classify it into exactly one intent.
 
@@ -92,7 +97,7 @@ async def classify_intent(
 def _keyword_classify(question: str) -> str:
     """Fallback: classify by keyword matching."""
     q = question.lower()
-    if _EXPLAIN.search(q) and not _PERSONAL.search(q):
+    if _EXPLAIN.search(q) and _GLOSSARY_TERM.search(q) and not _PERSONAL.search(q):
         logger.debug("Keyword classified '%s' → explain", question[:50])
         return "explain"
     for pattern, intent in KEYWORD_PATTERNS:
@@ -121,8 +126,12 @@ async def route_query(
         return {"tool": "search", "args": {"query": question}}
     elif intent == "note":
         return {"tool": "note", "args": {"content": question}}
-    elif intent in ("help", "explain"):
-        # help carries the glossary, so a definitional question gets a fixed answer.
+    elif intent == "help":
         return {"tool": "help", "args": {}}
+    elif intent == "explain":
+        # help carries the glossary; a term it does not cover is still a lookup.
+        if _GLOSSARY_TERM.search(question.lower()):
+            return {"tool": "help", "args": {}}
+        return {"tool": "search", "args": {"query": question}}
     else:
         return {"tool": "search", "args": {"query": question}}

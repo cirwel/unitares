@@ -55,6 +55,9 @@ class TestKeywordClassify:
             ("What does EISV stand for?", "explain"),
             ("explain coherence", "explain"),
             ("what does my verdict mean right now", "status"),
+            ("What does I stand for in EISV?", "explain"),
+            ("Can you explain to me what EISV means?", "explain"),
+            ("define eventual consistency", "search"),
         ],
     )
     def test_keyword_routes(self, question, expected):
@@ -171,6 +174,12 @@ class TestExplainRoute:
     async def test_explain_intent_routes_to_help(self):
         client = _FakeClient(result={"response": "explain"})
         assert await route_query("what does EISV stand for", client) == {"tool": "help", "args": {}}
+
+    @pytest.mark.asyncio
+    async def test_explain_outside_glossary_keeps_search(self):
+        client = _FakeClient(result={"response": "explain"})
+        out = await route_query("define eventual consistency", client)
+        assert out == {"tool": "search", "args": {"query": "define eventual consistency"}}
 
     @pytest.mark.asyncio
     async def test_definitional_question_survives_llm_failure(self):

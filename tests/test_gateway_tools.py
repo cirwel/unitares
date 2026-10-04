@@ -181,8 +181,9 @@ class TestHandleHelp:
 
     def test_glossary_defines_eisv_letters(self):
         glossary = json.loads(handle_help())["data"]["glossary"]
-        for word in ("energy", "information_integrity", "entropy", "void"):
+        for word in ("Energy", "Information Integrity", "Entropy", "Valence"):
             assert word in glossary["EISV"]
+        assert "void" not in glossary["EISV"].lower()
 
 
 REFUSAL = {
