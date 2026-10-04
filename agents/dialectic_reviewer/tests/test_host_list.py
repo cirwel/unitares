@@ -145,3 +145,43 @@ def test_the_digest_moves_with_the_list_and_the_external_model():
                                 UNITARES_DIALECTIC_EXTERNAL_MODEL="m1").digest
     assert base.digest != _plan(UNITARES_DIALECTIC_REVIEWER_HOSTS="codex,external",
                                 UNITARES_DIALECTIC_EXTERNAL_MODEL="m2").digest
+
+
+def test_the_configured_local_model_cannot_be_listed_even_on_a_public_address(monkeypatch):
+    # Codex review of #2652, round 3: an operator's model server on a public
+    # address (UNITARES_MODEL_PRIVACY=local) passed the local-address check.
+    import socket
+
+    def resolve(host, *args, **kwargs):
+        if host in ("models.example.org", "alias.example.org"):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.7", 0))]
+        raise socket.gaierror("offline")
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    floor = "https://models.example.org/v1"
+    for external in (floor, "https://alias.example.org/v1", "https://203.0.113.7:443/v1"):
+        plan = reviewer_host_plan(
+            {
+                "UNITARES_DIALECTIC_REVIEWER_HOSTS": "external",
+                "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": external,
+            },
+            local_base_url=floor,
+        )
+        assert plan.hosts == () and "local model endpoint" in (plan.error or ""), external
+    # Another port on the same address is another server.
+    plan = reviewer_host_plan(
+        {
+            "UNITARES_DIALECTIC_REVIEWER_HOSTS": "external",
+            "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": "https://203.0.113.7:8443/v1",
+        },
+        local_base_url=floor,
+    )
+    assert plan.keys == ["external"]
+
+
+def test_a_malformed_external_url_is_an_invalid_list_not_a_crash():
+    plan = _plan(
+        UNITARES_DIALECTIC_REVIEWER_HOSTS="codex,external",
+        UNITARES_DIALECTIC_EXTERNAL_BASE_URL="http://[::1/v1",
+    )
+    assert plan.hosts == () and "does not parse" in (plan.error or "")

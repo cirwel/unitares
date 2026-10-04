@@ -20,7 +20,13 @@ import os
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
-from src.local_inference_env import endpoint_reaches_local_address
+from urllib.parse import urlsplit
+
+from src.local_inference_env import (
+    endpoint_reaches_local_address,
+    model_base_url,
+    same_endpoint,
+)
 
 MAX_REVIEWER_HOSTS = 3
 
@@ -115,15 +121,19 @@ def _digest(env: Mapping[str, str], keys: list[str]) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
-def reviewer_host_plan(env: Optional[Mapping[str, str]] = None) -> HostPlan:
+def reviewer_host_plan(
+    env: Optional[Mapping[str, str]] = None, *, local_base_url: Optional[str] = None
+) -> HostPlan:
     """The operator's ordered reviewer host list, read as a plan. Pure given ``env``.
 
     An external host that can reach a local address (loopback in any
     spelling, numeric shorthand, a trusted network, a name listed as local or
     resolving to a local address) is refused: it can be the local
     floor under another name, and listing it would launder the local model
-    into an approver. A strong model on the operator's own network is a
-    declared host with an explicit ``may_approve`` (design step 4), not this.
+    into an approver. So is the configured local endpoint itself
+    (``local_base_url``, default ``model_base_url()``), wherever it sits. A
+    strong model on the operator's own network is a declared host with an
+    explicit ``may_approve`` (design step 4), not this.
     """
     if env is None:
         # Literal reads, so scripts/dev/flag_catalog.py indexes each setting.
@@ -167,10 +177,22 @@ def reviewer_host_plan(env: Optional[Mapping[str, str]] = None) -> HostPlan:
         hosts.append(host)
     if any(host.key == "external" for host in hosts):
         external = env.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", "").strip()
-        if external and endpoint_reaches_local_address(external):
-            return invalid(
-                f"the external host {external} is a local endpoint, which may "
-                "object but not approve"
-            )
+        if external:
+            try:
+                urlsplit(external).port
+            except ValueError:
+                return invalid(f"the external host URL {external!r} does not parse")
+            if endpoint_reaches_local_address(external):
+                return invalid(
+                    f"the external host {external} is a local endpoint, which may "
+                    "object but not approve"
+                )
+            # The configured local model can sit on a public address (with
+            # UNITARES_MODEL_PRIVACY=local); it is still the floor.
+            if same_endpoint(external, local_base_url or model_base_url()):
+                return invalid(
+                    f"the external host {external} is the local model endpoint, "
+                    "which may object but not approve"
+                )
     keys = [host.key for host in hosts]
     return HostPlan(hosts=tuple(hosts), listed=True, raw=raw, digest=_digest(env, keys))
