@@ -43,7 +43,14 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   replacements are in the [changelog entry](CHANGELOG.md)); each now returns
   `tool_not_found_error`, and the same router call with that action replaces it
   (#2593). The eight advertised workflow aliases and `get_server_info` remain,
-  and the advertised surface digest is unchanged. The local model endpoint is
+  and the advertised surface digest is unchanged. These names were not
+  undocumented: v3.1.0's tool reference listed them in an "Older names"
+  column, and they dispatched on REST `/v1/tools/call` and in stdio, though
+  not on `/mcp`, and no listing advertised them. The release is a minor by
+  operator decision (2026-10-04): the "Older names" column records legacy
+  redirects, not part of the client contract, which is the router call and
+  action each one named, and that contract is unchanged. A client still
+  sending an older name over REST or stdio must switch to the router call. The local model endpoint is
   now set with `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID`;
   `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL`
   keep working as aliases until v3.3.0. A `privacy='local'` model request
