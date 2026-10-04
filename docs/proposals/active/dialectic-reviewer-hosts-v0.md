@@ -2,8 +2,8 @@
 
 Status: Proposed, design-only. Merging this document does not by itself
 authorize the build. The operator delegated the design ("proceed best for
-federation future", 2026-10-04); three questions that remain the operator's
-are in section 7.
+federation future", 2026-10-04); the operator's questions are in section 7;
+the second is decided.
 
 Date: 2026-10-04
 
@@ -306,10 +306,11 @@ touching the approval path needs reviews from two model families.
    be listed for dialectic review before its retention is known? Until
    answered, step 4 declares the entry with an `egress_class` that does not
    admit agent work content, so it cannot be listed.
-2. **Approval from a later host (2.2).** Proposed: any listed host with
-   `may_approve` may approve. The alternative keeps today's rule (only the
-   first may) and accepts a failed dialectic whenever it is out. Recommended:
-   any listed host.
+2. **Approval from a later host (2.2). Decided 2026-10-04.** Any listed host
+   with `may_approve` may approve. Offered "a chain … and a capable fallback
+   could be allowed to approve", the operator answered "sounds good". The
+   alternative, today's rule (only the first host may approve), accepts a
+   failed dialectic whenever that host is out.
 3. **Unverified independence (2.3).** When the paused agent's family or the
    answering model's family is unknown, should its approval count? Counting
    it, recorded as `unverified`, keeps such agents clearable; withholding it
