@@ -24,12 +24,14 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
-# One release publishes two images from the same tag, with the same hardening:
-# the server (`ghcr.io/<repo>`) and the Compose lease plane
-# (`ghcr.io/<repo>-lease-plane`). docker-compose.yml pins the lease plane to the
-# verified release and falls back to building it from source when the tag cannot
-# be pulled. Neither image gets `latest` here; Promote Release moves only the
-# server's `latest` and pins the lease plane by version.
+# One release publishes three images from the same tag, with the same
+# hardening: the server (`ghcr.io/<repo>`), the Compose lease plane
+# (`ghcr.io/<repo>-lease-plane`) and the Compose database
+# (`ghcr.io/<repo>-postgres`: Postgres with Apache AGE and pgvector).
+# docker-compose.yml pins all three to the verified release and falls back to
+# building each from source when its tag cannot be pulled. No image gets
+# `latest` here; Promote Release moves only the server's `latest` and pins the
+# others by version.
 jobs:
   publish:
     name: publish (${{ matrix.artifact }})
@@ -38,17 +40,23 @@ jobs:
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.ref, 'v'))
     runs-on: ubuntu-latest
     strategy:
-      # The server image must not be cancelled by a lease-plane failure, or the
-      # reverse; Promote Release refuses a release unless both verify.
+      # One image's failure must not cancel another's build; Promote Release
+      # refuses a release unless every image its Compose file pulls verifies.
       fail-fast: false
       matrix:
         include:
           - artifact: server
             image_suffix: ""
+            context: .
             dockerfile: Dockerfile
           - artifact: lease-plane
             image_suffix: -lease-plane
+            context: .
             dockerfile: elixir/lease_plane/Dockerfile
+          - artifact: postgres
+            image_suffix: -postgres
+            context: db/postgres
+            dockerfile: db/postgres/Dockerfile.age-vector
     steps:
       - name: Resolve release tag
         id: release
@@ -84,14 +92,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # docker-compose.yml pulls the lease plane by its release tag, not by
-      # digest, and Promote Release verified the digest that tag named. A
-      # re-dispatch for a release that already has the image must not replace
+      # docker-compose.yml pulls every image by its release tag, not by
+      # digest, and Promote Release verified the digest each tag named. A
+      # re-dispatch for a release that already has an image must not replace
       # it with a rebuild (a moved base image or package gives a new digest).
-      # The server image is unaffected: installs never pull it by tag.
-      - name: Keep a published lease-plane tag immutable
+      - name: Keep a published release tag immutable
         id: existing
-        if: matrix.artifact == 'lease-plane'
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}:${{ steps.release.outputs.tag }}
         run: |
@@ -116,7 +122,7 @@ jobs:
         if: steps.existing.outputs.skip != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
@@ -126,7 +132,7 @@ jobs:
           # its /health reports a build_sha instead of "unknown". The server
           # Dockerfile declares no such argument, so it gets none.
           build-args: ${{ matrix.artifact == 'lease-plane' && format('UNITARES_BUILD_SHA={0}', steps.source.outputs.sha) || '' }}
-          # Separate cache scopes so the two builds do not evict each other.
+          # Separate cache scopes so the builds do not evict each other.
           cache-from: type=gha,scope=${{ matrix.artifact }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
           sbom: true

@@ -29,22 +29,31 @@ def test_publication_only_tags_the_versioned_artifact():
     assert push["with"]["provenance"] == "mode=max"
 
 
-def test_one_release_publishes_the_server_and_the_lease_plane():
-    """docker-compose.yml pins ghcr.io/<repo>-lease-plane to the release tag."""
+def test_one_release_publishes_every_image_compose_pulls():
+    """docker-compose.yml pins the server, lease-plane and database images to the release tag."""
     strategy = PUBLISH["strategy"]
-    # A lease-plane failure must not cancel the server image, or the reverse.
+    # One image's failure must not cancel another's build.
     assert strategy["fail-fast"] is False
     artifacts = {entry["artifact"]: entry for entry in strategy["matrix"]["include"]}
-    assert set(artifacts) == {"server", "lease-plane"}
+    assert set(artifacts) == {"server", "lease-plane", "postgres"}
     assert artifacts["server"]["image_suffix"] == ""
+    assert artifacts["server"]["context"] == "."
     assert artifacts["server"]["dockerfile"] == "Dockerfile"
     assert artifacts["lease-plane"]["image_suffix"] == "-lease-plane"
+    assert artifacts["lease-plane"]["context"] == "."
     assert artifacts["lease-plane"]["dockerfile"] == "elixir/lease_plane/Dockerfile"
+    # The database image builds from db/postgres, matching docker-compose.yml.
+    assert artifacts["postgres"]["image_suffix"] == "-postgres"
+    assert artifacts["postgres"]["context"] == "db/postgres"
+    assert artifacts["postgres"]["dockerfile"] == "db/postgres/Dockerfile.age-vector"
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())["services"]
+    assert compose["postgres-age"]["build"]["context"] == "db/postgres"
+    assert compose["postgres-age"]["build"]["dockerfile"] == "Dockerfile.age-vector"
 
     image = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}"
     assert _step("meta")["with"]["images"] == image
     push = _step("push")
-    assert push["with"]["context"] == "."
+    assert push["with"]["context"] == "${{ matrix.context }}"
     assert push["with"]["file"] == "${{ matrix.dockerfile }}"
     # Each image keeps its own build cache instead of evicting the other's.
     assert "scope=${{ matrix.artifact }}" in push["with"]["cache-from"]
@@ -61,11 +70,12 @@ def test_one_release_publishes_the_server_and_the_lease_plane():
     assert attest["with"]["push-to-registry"] is True
 
 
-def test_a_published_lease_plane_tag_is_never_replaced():
-    """Compose pulls the lease plane by tag; a re-dispatch must not rebuild
+def test_a_published_release_tag_is_never_replaced():
+    """Compose pulls every image by tag; a re-dispatch must not rebuild
     over the digest Promote Release verified."""
     guard = _step("existing")
-    assert guard["if"] == "matrix.artifact == 'lease-plane'"
+    # Every artifact, not only the lease plane: Compose now pulls all three.
+    assert "if" not in guard
     assert "docker buildx imagetools inspect" in guard["run"]
     assert 'skip=true' in guard["run"]
     steps = PUBLISH["steps"]
@@ -74,6 +84,26 @@ def test_a_published_lease_plane_tag_is_never_replaced():
     assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
     attest = next(st for st in steps if "attest-build-provenance" in st.get("uses", ""))
     assert attest["if"] == "steps.existing.outputs.skip != 'true'"
+
+
+def test_database_image_check_rebuilds_on_every_build_input():
+    check = yaml.safe_load((ROOT / ".github/workflows/postgres-image.yml").read_text())
+    events = check.get("on", check.get(True))
+    for event in ("push", "pull_request"):
+        paths = set(events[event]["paths"])
+        assert {
+            "db/postgres/Dockerfile.age-vector",
+            "db/postgres/init-extensions.sql",
+            ".github/workflows/publish-container.yml",
+        } <= paths
+    build = next(
+        step for step in check["jobs"]["build"]["steps"]
+        if "build-push-action" in step.get("uses", "")
+    )
+    assert build["with"]["context"] == "db/postgres"
+    assert build["with"]["file"] == "db/postgres/Dockerfile.age-vector"
+    assert build["with"]["platforms"] == "linux/amd64,linux/arm64"
+    assert build["with"]["push"] is False
 
 
 def test_lease_plane_image_check_rebuilds_on_every_build_input():

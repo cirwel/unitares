@@ -56,9 +56,10 @@ branch does not deploy the master-only public Pages workflow.
    [`CITATION.cff`](../../CITATION.cff), and review every generated version
    change. `VERSION` remains the source-version authority. Leave
    `PUBLISHED_VERSION` unchanged during release preparation. The version bump
-   also moves the lease-plane `image:` tag in `docker-compose.yml` to the new
-   version, so the tagged tree pulls the lease-plane image published from its
-   own tag; until that image exists, Compose builds the lease plane from source.
+   also moves the server, lease-plane and database `image:` tags in
+   `docker-compose.yml` to the new version, so the tagged tree pulls the images
+   published from its own tag; until an image exists, Compose builds that
+   service from source.
    In the same commit as the changelog fold, prune the skill attestations
    with the wrapper, which resolves cited sources in other repositories
    against `UNITARES_PROJECTS_ROOT` (default: the directory above this
@@ -103,14 +104,15 @@ branch does not deploy the master-only public Pages workflow.
    migrations, evidence changes, known limits, and rollback notes.
 7. The `Publish Container` workflow publishes `linux/amd64` and `linux/arm64`
    images to GHCR with an SBOM and build-provenance attestation: the server
-   (`ghcr.io/cirwel/unitares`) and the Compose lease plane
-   (`ghcr.io/cirwel/unitares-lease-plane`), from the same tag. The
-   `Lease Plane Image` workflow builds that image for both platforms, without
-   pushing, on every change to the lease plane, the SDK it copies, or this
-   publishing workflow, so an emulated arm64 build that breaks fails on its
-   pull request rather than at release. A lease-plane tag is never replaced
-   once published: a re-dispatch for a release that already has the image
-   skips that build, because Compose pulls the image by that tag. A manual
+   (`ghcr.io/cirwel/unitares`), the Compose lease plane
+   (`ghcr.io/cirwel/unitares-lease-plane`) and the Compose database
+   (`ghcr.io/cirwel/unitares-postgres`), from the same tag. The
+   `Lease Plane Image` and `Postgres Image` workflows build those two images
+   for both platforms, without pushing, on every change to their build inputs
+   or this publishing workflow, so an emulated arm64 build that breaks fails on
+   its pull request rather than at release. No release tag is replaced once
+   published: a re-dispatch for a release that already has an image skips that
+   build, because Compose pulls each image by that tag. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A
@@ -119,9 +121,10 @@ branch does not deploy the master-only public Pages workflow.
    `latest`, rather than weakening promotion verification. Both publication
    paths publish only the version tag; neither changes `latest`. The former
    `publish_latest` input is removed. A new GHCR package starts private: after
-   the first release that publishes the lease plane, set that package's
-   visibility to public once, or promotion fails at `verify` because it reads
-   both images without credentials. A release cut from a maintenance branch
+   the first release that publishes the lease plane, and again after the first
+   that publishes the database image, set that package's visibility to public
+   once, or promotion fails at `verify` because it reads the images without
+   credentials. A release cut from a maintenance branch
    whose `publish-container.yml` predates the lease-plane image publishes no
    lease plane and cannot be promoted by the workflow; backport the workflow to
    that branch before tagging.
@@ -132,14 +135,18 @@ branch does not deploy the master-only public Pages workflow.
    carries `linux/amd64` and `linux/arm64` with an SPDX SBOM for each, and that
    build provenance verifies against `publish-container.yml` at that tag and
    the tag's peeled source commit. It applies the same digest, platform, SBOM
-   and provenance checks to the lease-plane image at the same tag, requires the
-   tagged `docker-compose.yml` to name that image, and records the evidence for
-   both in the run summary.
+   and provenance checks to the lease-plane image at the same tag, and to the
+   database image wherever the tagged `docker-compose.yml` pulls one. It
+   requires that file to name the lease-plane image at that tag, and to name the
+   server and database images at that tag wherever it names them at all, and
+   records the evidence in the run summary. A release cut before Compose pulled
+   the server and database (v3.2.0 and earlier) builds both locally, so it has
+   no database image to verify and still promotes.
    Approving the `release-promotion` environment runs `promote`, which re-reads
-   every mutable release pointer, including the lease-plane tag, before moving
+   every mutable release pointer, including the lease-plane and database tags, before moving
    the server's `latest` to the verified digest as described below. `pin`
    performs the same freshness check and re-verifies the published release page
-   plus source-bound provenance for both images before pushing `publish/vX.Y.Z`
+   plus source-bound provenance for every verified image before pushing `publish/vX.Y.Z`
    with `PUBLISHED_VERSION` and `version_manager.py --update` applied and the
    `COMPATIBILITY.md` published-server row regenerated by
    `scripts/ci/compat_published_row.py` (it names the verified tag, this run and

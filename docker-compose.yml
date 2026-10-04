@@ -6,8 +6,10 @@
 #
 # Then point an MCP client at http://localhost:8767/mcp/ and call start_session().
 #
-# On a master checkout, or after changing source, add --build so every service
-# is built from the tree you have (see the lease-plane service below).
+# A release checkout pulls the prebuilt images published from its own tag, so
+# it builds nothing. On a master checkout, or after changing source, add
+# --build so every service is built from the tree you have (see the lease-plane
+# service below).
 #
 # This brings up:
 #   - postgres-age      Postgres 18 + Apache AGE + pgvector  (internal only)
@@ -39,6 +41,10 @@
 
 services:
   postgres-age:
+    # Pulled from this release's tag like the lease plane below, with the same
+    # build fallback. `make version-bump` moves the tag; do not edit it by hand.
+    image: ghcr.io/cirwel/unitares-postgres:v3.1.0
+    pull_policy: missing
     build:
       context: db/postgres
       dockerfile: Dockerfile.age-vector
@@ -166,6 +172,10 @@ services:
     restart: unless-stopped
 
   governance-mcp:
+    # Pulled from this release's tag like the lease plane above, with the same
+    # build fallback. `make version-bump` moves the tag; do not edit it by hand.
+    image: ghcr.io/cirwel/unitares:v3.1.0
+    pull_policy: missing
     build:
       context: .
       dockerfile: Dockerfile
