@@ -23,7 +23,7 @@ infer lineage from the cache alone.
 
 If no local continuity state exists and the current identity is unclear, use `/governance-start` first.
 
-Call `process_agent_update` for the current agent once per assistant turn to establish a behavioral baseline. Also call it after meaningful milestones, before/after high-risk work, or when uncertainty/drift shows up.
+Call `process_agent_update` for the current agent when there is meaningful agent state to report: typically at most once per assistant turn, and after meaningful milestones, before/after high-risk work, or when uncertainty/drift shows up. Do not manufacture a check-in for a turn with nothing to report; a hook-written `substrate_interpretation` row is not an agent check-in and does not need echoing.
 
 Inputs:
 
@@ -36,7 +36,7 @@ Inputs:
 Guidelines:
 
 - Do not check in after every trivial edit or tool call.
-- Prefer one baseline check-in per assistant turn.
+- Check in only when there is meaningful agent state to report, typically at most once per assistant turn; a turn with nothing to report needs no check-in.
 - Add a check-in for meaningful milestones, completed steps, or decision points.
 - If you had to rebind with `identity()`, only use that restored binding when the response shows strong/proof-owned continuity.
 - If recent local edit context exists, use it to improve the summary, but do not report raw file churn as if it were real progress.

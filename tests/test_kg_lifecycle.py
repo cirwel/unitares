@@ -636,6 +636,7 @@ class TestLeaveNote:
     @pytest.mark.asyncio
     async def test_leave_note_paused_agent(self, patch_common, registered_agent, mock_mcp_server):
         """Paused agents cannot leave notes (circuit breaker)."""
+        _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
         from datetime import datetime as _dt
@@ -650,7 +651,8 @@ class TestLeaveNote:
 
         data = parse_result(result)
         assert data["success"] is False
-        assert "paused" in data["error"].lower()
+        assert data["error_code"] == "AGENT_PAUSED"
+        mock_graph.add_discovery.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_leave_note_with_response_to(self, patch_common, registered_agent):

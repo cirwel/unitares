@@ -38,8 +38,9 @@ SKILLS_DIR = PROJECT_ROOT / "skills"
 def _read_skill(name: str) -> str:
     """Read a skill file's content."""
     path = SKILLS_DIR / name / "SKILL.md"
-    if not path.exists():
-        pytest.skip(f"Skill file not found: {path}")
+    # A missing file fails rather than skips: a moved skill must not silently
+    # retire the claims checked against it.
+    assert path.exists(), f"Skill file not found: {path}"
     return path.read_text()
 
 
@@ -63,8 +64,7 @@ class TestGovernanceFundamentalsClaims:
 
     def test_skills_do_not_reference_config_as_agent_lookup(self):
         """Skills should not tell agents to look at governance_config.py — it's an internal detail."""
-        if not SKILLS_DIR.exists():
-            pytest.skip("Skills directory not found")
+        assert SKILLS_DIR.is_dir(), f"Skills directory not found: {SKILLS_DIR}"
 
         violations = []
         for skill_dir in sorted(SKILLS_DIR.iterdir()):
@@ -146,8 +146,7 @@ class TestCoreHandlerClaims:
     def test_coherence_range_in_lite_metrics(self):
         """core.py lite_metrics should report coherence range as [0, 1], not [0.45, 0.55]."""
         core_path = PROJECT_ROOT / "src" / "mcp_handlers" / "core.py"
-        if not core_path.exists():
-            pytest.skip("core.py not found")
+        assert core_path.exists(), f"core.py not found: {core_path}"
         content = core_path.read_text()
         # The old misleading range should not be the reported range
         assert "'range': '[0.45, 0.55]'" not in content, (
@@ -169,8 +168,7 @@ class TestNoHardcodedConfigValues:
 
     def test_no_hardcoded_thresholds_in_skills(self):
         """Skills should not hardcode config values that can change."""
-        if not SKILLS_DIR.exists():
-            pytest.skip("Skills directory not found")
+        assert SKILLS_DIR.is_dir(), f"Skills directory not found: {SKILLS_DIR}"
 
         violations = []
         for skill_dir in sorted(SKILLS_DIR.iterdir()):
@@ -204,8 +202,7 @@ class TestSkillFreshnessMetadata:
 
     def test_all_skills_have_freshness_fields(self):
         """Every SKILL.md should have last_verified and freshness_days."""
-        if not SKILLS_DIR.exists():
-            pytest.skip("Skills directory not found")
+        assert SKILLS_DIR.is_dir(), f"Skills directory not found: {SKILLS_DIR}"
 
         missing = []
         for skill_dir in sorted(SKILLS_DIR.iterdir()):

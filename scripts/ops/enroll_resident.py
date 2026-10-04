@@ -35,6 +35,7 @@ import re
 import sys
 import uuid
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -68,6 +69,25 @@ def _validate_label(value: str) -> str:
     return value
 
 
+def _framework_app_binary(resolved: Path) -> Optional[Path]:
+    """The binary the kernel reports for a macOS framework Python launcher.
+
+    ``.../Python.framework/Versions/X.Y/bin/python3`` is a small launcher that
+    re-execs ``.../Versions/X.Y/Resources/Python.app/Contents/MacOS/Python``.
+    ``proc_pidpath`` on the running resident returns the latter, and
+    verification compares paths exactly, so enrolling the launcher path (the
+    plist's ``ProgramArguments[0]``) rejects every UDS resume with an
+    executable mismatch. Returns None for any other path.
+    """
+    parts = resolved.parts
+    if len(parts) < 5 or parts[-2] != "bin" or not parts[-1].startswith("python"):
+        return None
+    if parts[-5] != "Python.framework" or parts[-4] != "Versions":
+        return None
+    app = resolved.parent.parent / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
+    return app if app.exists() else None
+
+
 def _validate_executable(value: str) -> str:
     p = Path(value).expanduser()
     if not p.is_absolute():
@@ -75,15 +95,31 @@ def _validate_executable(value: str) -> str:
             f"executable path must be absolute, got {value!r}"
         )
     resolved = p.resolve()
-    if not resolved.exists():
-        raise argparse.ArgumentTypeError(
-            f"executable path does not exist: {resolved}"
+    # Check the path the operator gave before any remap, so a typo'd launcher
+    # cannot be silently replaced by a real app binary and enrolled.
+    _require_executable(resolved)
+    app = _framework_app_binary(resolved)
+    if app is not None:
+        app = app.resolve()
+        _require_executable(app)
+        print(
+            f"note: {resolved} is a framework Python launcher; enrolling the "
+            f"binary the kernel reports for it instead: {app}",
+            file=sys.stderr,
         )
-    if not os.access(str(resolved), os.X_OK):
-        raise argparse.ArgumentTypeError(
-            f"executable path is not executable: {resolved}"
-        )
+        resolved = app
     return str(resolved)
+
+
+def _require_executable(path: Path) -> None:
+    if not path.exists():
+        raise argparse.ArgumentTypeError(
+            f"executable path does not exist: {path}"
+        )
+    if not os.access(str(path), os.X_OK):
+        raise argparse.ArgumentTypeError(
+            f"executable path is not executable: {path}"
+        )
 
 
 def _emit_user_writable_warning(executable: str) -> bool:

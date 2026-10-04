@@ -756,6 +756,7 @@ class TestStoreKnowledgeGraph:
     @pytest.mark.asyncio
     async def test_store_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
         """Paused agents cannot store knowledge (circuit breaker)."""
+        _, mock_graph = patch_common
         mock_mcp_server.agent_metadata[registered_agent].status = "paused"
         # Fresh paused_at — pause TTL auto-expires stale ones (>72h default)
         from datetime import datetime as _dt
@@ -770,7 +771,49 @@ class TestStoreKnowledgeGraph:
 
         data = parse_result(result)
         assert data["success"] is False
-        assert "paused" in data["error"].lower()
+        assert data["error_code"] == "AGENT_PAUSED"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_batch_paused_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+        """The batch path is behind the same circuit breaker as a single store."""
+        _, mock_graph = patch_common
+        mock_mcp_server.agent_metadata[registered_agent].status = "paused"
+        from datetime import datetime as _dt
+        mock_mcp_server.agent_metadata[registered_agent].paused_at = _dt.now().isoformat()
+
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discoveries": [
+                {"discovery_type": "note", "summary": "Should be blocked 1"},
+                {"discovery_type": "insight", "summary": "Should be blocked 2"},
+            ],
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AGENT_PAUSED"
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_store_archived_agent_blocked(self, patch_common, registered_agent, mock_mcp_server):
+        """Archived agents cannot store knowledge either."""
+        _, mock_graph = patch_common
+        mock_mcp_server.agent_metadata[registered_agent].status = "archived"
+
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Should be blocked",
+        })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AGENT_ARCHIVED"
+        mock_graph.add_discovery.assert_not_awaited()
 
 
 # ============================================================================
@@ -2111,3 +2154,101 @@ class TestSupersedes:
         data = parse_result(result)
         assert data.get("success") is False
         mock_graph.add_discovery.assert_not_awaited()
+
+
+# ============================================================================
+# response_to: one contract for store, batch store and note
+# ============================================================================
+
+_PARENT_ID = "2026-01-01T00:00:00.000000"
+
+# Each value is a response_to the caller supplied but that cannot become a
+# typed link. Before the shared parser, the batch path stored the item
+# unthreaded for the unknown type, and every path did so for the rest.
+_UNTHREADABLE_RESPONSE_TO = {
+    "unknown_type": {"discovery_id": _PARENT_ID, "response_type": "not_a_type"},
+    "missing_type": {"discovery_id": _PARENT_ID},
+    "missing_id": {"response_type": "extend"},
+    "none_id": {"discovery_id": None, "response_type": "extend"},
+    "blank_id": {"discovery_id": "   ", "response_type": "extend"},
+    "bare_string": _PARENT_ID,
+}
+
+
+class TestResponseToContract:
+
+    async def _write(self, path, agent, response_to):
+        from src.mcp_handlers.knowledge.handlers import (
+            handle_leave_note,
+            handle_store_knowledge_graph,
+        )
+
+        if path == "store":
+            return await handle_store_knowledge_graph({
+                "agent_id": agent, "summary": "reply", "discovery_type": "note",
+                "response_to": response_to,
+            })
+        if path == "note":
+            return await handle_leave_note({
+                "agent_id": agent, "summary": "reply", "response_to": response_to,
+            })
+        return await handle_store_knowledge_graph({
+            "agent_id": agent,
+            "discoveries": [
+                {"discovery_type": "note", "summary": "reply", "response_to": response_to},
+            ],
+        })
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["store", "batch", "note"])
+    async def test_valid_link_threads_on_every_path(self, path, patch_common, registered_agent):
+        _, mock_graph = patch_common
+
+        result = await self._write(
+            path, registered_agent,
+            {"discovery_id": f"  {_PARENT_ID} ", "response_type": "EXTEND"},
+        )
+
+        assert parse_result(result)["success"] is True
+        stored = mock_graph.add_discovery.await_args.args[0]
+        assert stored.response_to.discovery_id == _PARENT_ID
+        assert stored.response_to.response_type == "extend"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["store", "note"])
+    @pytest.mark.parametrize("case", sorted(_UNTHREADABLE_RESPONSE_TO))
+    async def test_single_write_refuses_an_unthreadable_link(
+        self, path, case, patch_common, registered_agent
+    ):
+        _, mock_graph = patch_common
+
+        result = await self._write(path, registered_agent, _UNTHREADABLE_RESPONSE_TO[case])
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert "response_to" in data["error"] or "response_type" in data["error"]
+        mock_graph.add_discovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("case", sorted(_UNTHREADABLE_RESPONSE_TO))
+    async def test_batch_fails_only_the_unthreadable_item(
+        self, case, patch_common, registered_agent
+    ):
+        _, mock_graph = patch_common
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "discoveries": [
+                {"discovery_type": "note", "summary": "bad link",
+                 "response_to": _UNTHREADABLE_RESPONSE_TO[case]},
+                {"discovery_type": "note", "summary": "plain sibling"},
+            ],
+        })
+
+        data = parse_result(result)
+        assert data["success_count"] == 1
+        assert data["error_count"] == 1
+        assert data["errors"][0].startswith("Discovery 0:")
+        mock_graph.add_discovery.assert_awaited_once()
+        assert mock_graph.add_discovery.await_args.args[0].summary == "plain sibling"
