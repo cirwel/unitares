@@ -46,6 +46,12 @@ class HostReviewResult:
     # Which backend produced this. Defaults to the original (and only) producer
     # so existing Claude call sites keep byte-identical provenance.
     backend: str = "claude"
+    # The model's own reply when it held no verdict object: the model answered,
+    # possibly with an objection in prose. A host list treats it as that host's
+    # answer and repairs it with the same host, never asking the next one
+    # (docs/proposals/active/dialectic-reviewer-hosts-v0.md 2.1). Bounded, and
+    # not part of the persisted provenance.
+    unparsed_reply: Optional[str] = None
 
     def provenance(self) -> dict[str, Any]:
         return {
@@ -60,6 +66,16 @@ class HostReviewResult:
             "finish_reason": self.finish_reason,
             "warnings": list(self.warnings),
         }
+
+
+_UNPARSED_REPLY_CHARS = 8000
+
+
+def _bounded_reply(text: Optional[str]) -> Optional[str]:
+    """A model reply worth keeping as an answer: non-empty after stripping,
+    cut to the tail, where a verdict or its prose conclusion sits."""
+    stripped = (text or "").strip()
+    return stripped[-_UNPARSED_REPLY_CHARS:] if stripped else None
 
 
 def _extract_verdict(text: str) -> Optional[str]:
@@ -208,6 +224,7 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
             finish_reason=metadata.get("finish_reason"),
             warnings=list(metadata.get("warnings") or []),
             error="Claude CLI returned no parseable dialectic verdict",
+            unparsed_reply=_bounded_reply(text),
         )
 
     return HostReviewResult(
@@ -398,6 +415,7 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
             finish_reason=finish_reason,
             backend="external",
             error=reason,
+            unparsed_reply=_bounded_reply(content),
         )
 
     return HostReviewResult(
@@ -630,6 +648,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         if not response.strip() and denied:
             error = ("Antigravity CLI returned an empty reply after denied tool use: "
                      + ", ".join(denied))
-        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
+        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings,
+                    unparsed_reply=_bounded_reply(response))
     return HostReviewResult(text=verdict_text, host_id=host_id, backend="antigravity",
                             tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)

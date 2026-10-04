@@ -502,3 +502,47 @@ async def test_a_verdict_keeps_its_own_provenance_when_a_later_call_raises(monke
     )
     anti = next(a for n, a in calls if n == "dialectic")
     assert anti["observed_metrics"]["reviewer_backend"]["backend"] == "codex"
+
+
+@pytest.mark.asyncio
+async def test_a_prose_objection_ends_the_list_and_is_repaired_by_its_author(monkeypatch):
+    # Codex review of #2652: the adapters report a reply without JSON as no
+    # verdict, so a prose objection failed over and the next host approved.
+    log = _hosts(monkeypatch, "claude,codex", {"codex": APPROVE})
+
+    async def claude(prompt):
+        log.append("claude")
+        return HostReviewResult(
+            text=None, host_id="claude:host-adapter", backend="claude",
+            error="Claude CLI returned no parseable dialectic verdict",
+            unparsed_reply="I disagree: the authorization defect remains.",
+        )
+
+    monkeypatch.setattr(r, "call_claude_reviewer", claude)
+    calls: list[tuple[str, dict]] = []
+    _install_fake_client(monkeypatch, calls)
+
+    verdict = await r.run(
+        Thesis(session_id="s-prose", root_cause="rc", proposed_conditions=["c"]),
+        governance_url="http://localhost:8767",
+        parent_agent_id="paused-uuid",
+    )
+
+    # Claude answered; the repair went back to claude; codex was never asked.
+    assert log == ["claude", "claude"]
+    assert verdict.agrees is False
+
+
+@pytest.mark.asyncio
+async def test_a_codex_reply_without_a_verdict_object_is_its_answer(monkeypatch):
+    log = _hosts(monkeypatch, "codex,antigravity", {"antigravity": APPROVE})
+
+    async def codex(prompt):
+        log.append("codex")
+        return r.UnparsedReply("I would not approve this.")
+
+    monkeypatch.setattr(r, "call_codex_reviewer", codex)
+    text = await r.obtain_reviewer_text("p")
+    assert log == ["codex"]
+    assert str(text) == "I would not approve this."
+    assert text.host_key == "codex"

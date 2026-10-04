@@ -147,6 +147,13 @@ class ReviewerText(str):
 
 
 FLOOR = "__floor__"
+_UNPARSED_REPLY_CHARS = 8000
+
+
+class UnparsedReply(str):
+    """A host's reply that held no verdict object. The host answered, so its
+    reply is its answer: the caller's repair goes back to it, and a host list
+    does not move on to the next host."""
 
 
 def _provenance_of(text: Any) -> dict[str, Any]:
@@ -658,9 +665,9 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     it — the judgment gap is model class, not prompt or parse).
 
     Opt-in via ``UNITARES_DIALECTIC_REVIEWER_HOST=codex``; returns the final
-    JSON verdict string, or None on ANY failure (CLI absent, non-zero exit,
-    timeout, no parseable verdict) — the caller then falls back to the free
-    local model, so the no-budget default path is never removed (execution-cost
+    JSON verdict string, an ``UnparsedReply`` when codex answered without one,
+    or None on a failure (CLI absent, non-zero exit, timeout, no output) — the
+    caller then falls back to the free local model, so the no-budget default path is never removed (execution-cost
     policy: subscription CLI is an opt-in backend, never a requirement).
 
     Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec
@@ -705,7 +712,15 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
         return None
     if proc.returncode != 0:
         return None
-    return extract_last_json_object(stdout.decode(errors="replace"))
+    transcript = stdout.decode(errors="replace")
+    verdict = extract_last_json_object(transcript)
+    if verdict is None:
+        # Codex ran and answered without a verdict object, possibly objecting
+        # in prose. That is its answer, not a failure: a host list repairs it
+        # with codex and never asks the next host (design 2.1).
+        tail = transcript.strip()[-_UNPARSED_REPLY_CHARS:]
+        return UnparsedReply(tail) if tail else None
+    return verdict
 
 
 async def call_claude_reviewer(prompt: str) -> HostReviewResult:
@@ -729,7 +744,12 @@ async def call_external_reviewer(prompt: str) -> HostReviewResult:
 async def _call_listed_host(
     host: ListedHost, prompt: str
 ) -> tuple[Optional[str], dict[str, Any], Optional[str]]:
-    """One listed host's reply, its provenance, and why it gave none."""
+    """One listed host's reply, its provenance, and why it gave none.
+
+    The reply is the host's answer whether or not it holds a verdict object:
+    a reply without one comes back as itself, for the caller's repair. ``None``
+    means the host did not answer at all (an error, a timeout, a nonzero exit,
+    an empty reply), which is the only case in which the list moves on."""
     if host.key == "codex":
         text = await call_codex_reviewer(prompt)
         provenance = {
@@ -738,8 +758,11 @@ async def _call_listed_host(
             "models_used": [],
             "warnings": ["Codex CLI did not report an exact model identifier"],
         }
+        if isinstance(text, UnparsedReply):
+            provenance["warnings"].append("Codex replied without a verdict object")
+            return str(text), provenance, None
         return text, provenance, None if text is not None else (
-            "Codex backend unavailable or returned no verdict"
+            "Codex backend unavailable or returned no reply"
         )
     if host.key == "claude":
         result = await call_claude_reviewer(prompt)
@@ -750,25 +773,28 @@ async def _call_listed_host(
         # misconfiguration surfaces as an attempt's reason, never as a silent
         # vendor default.
         result = await call_external_reviewer(prompt)
-    return result.text, result.provenance(), result.error
+    provenance = result.provenance()
+    if result.text is None and result.unparsed_reply:
+        provenance["warnings"] = [*provenance["warnings"], str(result.error or "no verdict object")]
+        return result.unparsed_reply, provenance, None
+    return result.text, provenance, result.error
 
 
 async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> ReviewerText:
     """Ask the operator's listed hosts in order, then the free local model.
 
-    A host that returns no reply (an error, a timeout, a nonzero exit, or a
-    reply holding no verdict object, which each backend already reports as no
-    text) is skipped for the next one. A host that returns a reply answers:
-    its reply goes to the caller's parse and repair, and is never traded for
-    another host's, because a reply that does not parse may still be an
-    objection in prose. The order is the operator's and is only ever
+    A host that does not answer (an error, a timeout, a nonzero exit, an empty
+    reply) is skipped for the next one. A host that answers ends the list,
+    whether or not its reply holds a verdict object: the reply goes to the
+    caller's parse and repair, and is never traded for another host's, because
+    a reply that does not parse may still be an objection in prose. The order is the operator's and is only ever
     shortened (design: docs/proposals/active/dialectic-reviewer-hosts-v0.md).
 
     ``pinned``: a listed host's key, to ask only that host before the floor,
     or ``FLOOR`` for the local model alone. With no list set, the local model
     is the reviewer and the reply is byte-identical to the pre-list path.
     """
-    plan = reviewer_host_plan(local_base_url=OLLAMA_BASE_URL)
+    plan = reviewer_host_plan()
     if pinned == FLOOR:
         hosts: tuple[ListedHost, ...] = ()
     elif pinned is not None:
@@ -1155,7 +1181,7 @@ async def continue_after_disagreement(
     # answers. It is re-filed as formed, never re-judged: a second model call
     # can reach a different verdict, and a dropped connection must not be able
     # to change a governance outcome.
-    unfiled: Optional[tuple[dict[str, Any], Verdict]] = None
+    unfiled: Optional[tuple[dict[str, Any], Verdict, dict[str, Any]]] = None
 
     while True:
         remaining = deadline - time.monotonic()
@@ -1215,7 +1241,7 @@ async def continue_after_disagreement(
         if remaining <= 0:
             return current_verdict
         if unfiled is not None:
-            next_verdict = unfiled[1]
+            next_verdict, next_provenance = unfiled[1], unfiled[2]
         else:
             prompt = build_continuation_prompt(
                 thesis, current_verdict, paused_response, synthesis_round
@@ -1229,11 +1255,12 @@ async def continue_after_disagreement(
             except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
                 logger.warning("Dialectic continuation model failed: %r", exc)
                 return current_verdict
+            next_provenance = _provenance_of(model_text)
             next_verdict = withhold_fallback_approval(
                 _verdict_with_ratified_conditions(
                     parse_reviewer_verdict(model_text), paused_response, current_verdict
                 ),
-                _provenance_of(model_text),
+                next_provenance,
             )
             if pinned_host is None:
                 pinned_host = _listed_host_of(model_text)
@@ -1262,6 +1289,13 @@ async def continue_after_disagreement(
                     # There is no second antithesis call, so the reconsideration's
                     # rationale belongs on this follow-up synthesis.
                     "reasoning": next_verdict.reasoning,
+                    # So is its attribution: the host that answered this round
+                    # can differ from the antithesis's (the floor objected, a
+                    # listed host later approved), and the row that decides the
+                    # session must name it (codex review of #2652).
+                    "reviewer_provenance": _provenance_for_message(
+                        next_provenance, degraded=next_verdict.degraded
+                    ),
                 },
             )
         except Exception as exc:  # noqa: BLE001 — classified below
@@ -1276,7 +1310,7 @@ async def continue_after_disagreement(
             # pending, and this same verdict is filed again. Neither case
             # files twice or judges twice.
             logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
-            unfiled = (paused_response, next_verdict)
+            unfiled = (paused_response, next_verdict, next_provenance)
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue
         unfiled = None

@@ -3,11 +3,8 @@ step 1). Pure parsing: what a setting means, and which settings are refused."""
 
 from agents.dialectic_reviewer.host_list import MAX_REVIEWER_HOSTS, reviewer_host_plan
 
-LOCAL = "http://localhost:11434/v1"
-
-
 def _plan(**env):
-    return reviewer_host_plan(env, local_base_url=LOCAL)
+    return reviewer_host_plan(env)
 
 
 def test_no_setting_means_no_list_and_the_local_model_reviews():
@@ -56,12 +53,41 @@ def test_an_unknown_legacy_host_is_invalid_not_ignored():
     assert plan.listed is True and "unknown host" in plan.error
 
 
-def test_an_external_host_that_is_the_local_endpoint_cannot_be_listed():
+def test_an_external_host_at_a_local_address_cannot_be_listed():
+    # Every spelling of this machine, and a trusted-network address, can be the
+    # local floor under another name (codex review of #2652: 127.0.0.1 passed a
+    # string comparison against localhost).
+    for url in (
+        "HTTP://localhost:11434/v1/",
+        "http://127.0.0.1:11434/v1",
+        "http://127.8.9.10:8000/v1",
+        "http://[::1]:11434/v1",
+        "http://0.0.0.0:11434/v1",
+        "http://192.168.1.20:8000/v1",
+        "http://host.docker.internal:11434/v1",
+    ):
+        plan = _plan(
+            UNITARES_DIALECTIC_REVIEWER_HOSTS="codex,external",
+            UNITARES_DIALECTIC_EXTERNAL_BASE_URL=url,
+        )
+        assert plan.hosts == () and "local endpoint" in (plan.error or ""), url
+
+
+def test_an_external_host_at_a_public_address_can_be_listed():
     plan = _plan(
         UNITARES_DIALECTIC_REVIEWER_HOSTS="codex,external",
-        UNITARES_DIALECTIC_EXTERNAL_BASE_URL="HTTP://localhost:11434/v1/",
+        UNITARES_DIALECTIC_EXTERNAL_BASE_URL="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
-    assert plan.hosts == () and "local endpoint" in plan.error
+    assert plan.keys == ["codex", "external"]
+
+
+def test_the_privacy_override_cannot_unlock_a_local_external_host(monkeypatch):
+    monkeypatch.setenv("UNITARES_MODEL_PRIVACY", "external")
+    plan = _plan(
+        UNITARES_DIALECTIC_REVIEWER_HOSTS="external",
+        UNITARES_DIALECTIC_EXTERNAL_BASE_URL="http://127.0.0.1:11434/v1",
+    )
+    assert plan.hosts == ()
 
 
 def test_only_the_cli_hosts_and_the_configured_external_host_may_approve():

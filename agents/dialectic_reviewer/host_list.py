@@ -20,6 +20,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping, Optional
 
+from src.local_inference_env import endpoint_address_is_local
+
 MAX_REVIEWER_HOSTS = 3
 
 # Names that mean the local endpoint. In the legacy single-host setting they
@@ -100,10 +102,6 @@ class HostPlan:
         return [host.key for host in self.hosts]
 
 
-def _normalized_url(value: str) -> str:
-    return value.strip().rstrip("/").lower()
-
-
 def _digest(env: Mapping[str, str], keys: list[str]) -> str:
     """A short fingerprint of the configuration a verdict was produced under,
     so two verdicts can be told apart when the list or a host's model moved."""
@@ -117,16 +115,14 @@ def _digest(env: Mapping[str, str], keys: list[str]) -> str:
     return hashlib.sha256("\n".join(parts).encode()).hexdigest()[:16]
 
 
-def reviewer_host_plan(
-    env: Optional[Mapping[str, str]] = None,
-    *,
-    local_base_url: str = "",
-) -> HostPlan:
+def reviewer_host_plan(env: Optional[Mapping[str, str]] = None) -> HostPlan:
     """The operator's ordered reviewer host list, read as a plan. Pure given ``env``.
 
-    ``local_base_url`` is the local endpoint's OpenAI-compatible base; an
-    external host pointing at it is the floor under another name and is
-    refused, so a list cannot launder the local model into an approver.
+    An external host whose address is local (loopback in any spelling, a
+    trusted network, a name listed as local) is refused: it can be the local
+    floor under another name, and listing it would launder the local model
+    into an approver. A strong model on the operator's own network is a
+    declared host with an explicit ``may_approve`` (design step 4), not this.
     """
     if env is None:
         # Literal reads, so scripts/dev/flag_catalog.py indexes each setting.
@@ -168,9 +164,12 @@ def reviewer_host_plan(
         if host in hosts:
             return invalid(f"'{name}' is listed twice")
         hosts.append(host)
-    if any(host.key == "external" for host in hosts) and local_base_url:
-        external = _normalized_url(env.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", ""))
-        if external and external == _normalized_url(local_base_url):
-            return invalid("the external host is the local endpoint")
+    if any(host.key == "external" for host in hosts):
+        external = env.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", "").strip()
+        if external and endpoint_address_is_local(external):
+            return invalid(
+                f"the external host {external} is a local endpoint, which may "
+                "object but not approve"
+            )
     keys = [host.key for host in hosts]
     return HostPlan(hosts=tuple(hosts), listed=True, raw=raw, digest=_digest(env, keys))

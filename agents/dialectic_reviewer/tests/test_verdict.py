@@ -474,6 +474,11 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
     syntheses = [call for call in dialectic_calls if call["action"] == "synthesis"]
     assert [call["agrees"] for call in syntheses] == [False, True]
     assert syntheses[1]["reasoning"] == "addressed"
+    # The reconsideration's own attribution rides the synthesis that decides
+    # the session (codex review of #2652).
+    stamp = syntheses[1]["reviewer_provenance"]
+    assert stamp["host_id"] == "codex:host-adapter" and stamp["vouched"] is True
+    assert stamp["reviewer_kind"] == "orchestrated"
     assert session.phase == DialecticPhase.RESOLVED
     assert session.synthesis_round == 3
     assert [message.agent_id for message in session.transcript[-3:]] == [

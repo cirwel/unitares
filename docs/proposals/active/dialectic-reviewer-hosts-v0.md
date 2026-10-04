@@ -72,11 +72,12 @@ agent's family (2.3). It never adds a host, reorders the list, or chooses by
 cost, latency, quality or past verdicts. That is the line between this and a
 router, and a test asserts the order is never permuted.
 
-A host that returns no reply moves the list to the next host: an error, a
-timeout, a nonzero exit, or a reply holding no verdict object, which every
-backend already reports as no reply (codex's `extract_last_json_object` keeps
-only an object carrying `agrees`). A host that returns a reply answers, and the
-list ends there. Its reply goes through the existing parse and the one repair
+A host that does not answer moves the list to the next host: an error, a
+timeout, a nonzero exit, or an empty reply. A host that answers ends the list,
+whether or not its reply holds a verdict object. The adapters used to report a
+reply without a verdict object as no reply at all; they now return it as the
+host's answer (`HostReviewResult.unparsed_reply`, bounded to 8,000 characters
+and never persisted; codex's as `UnparsedReply`). Its reply goes through the existing parse and the one repair
 attempt, and the repair goes to the same host (2.2). A reply that does not
 parse is never traded for the next host's, because it may be an objection
 written in prose; a reply that parses as an objection is an objection even when
@@ -85,7 +86,9 @@ After the list, the local endpoint runs as the floor.
 
 *As built (step 1):* this replaces the first draft's rule, failing over on any
 reply without a formed judgment, which would have dropped a host's prose
-objection in favour of the next host's verdict.
+objection in favour of the next host's verdict. The first build still lost it
+through the adapters (codex review of #2652), which is why they now return the
+reply.
 
 `UNITARES_DIALECTIC_REVIEWER_HOST` stays as a one-item list, under the
 expiring-alias rule of `local-inference-one-endpoint-v0.md` section 2.1.1. The
@@ -119,7 +122,13 @@ set it; this one fails closed.
 **The floor cannot be listed.** Configuration load rejects a list that names
 the local endpoint, by endpoint identity rather than by name: `ollama:local`,
 or any host whose base URL resolves to `UNITARES_MODEL_BASE_URL` or its
-fallback. Otherwise listing it would launder the 07-02 rule.
+fallback. Otherwise listing it would launder the 07-02 rule. *As built:* an
+`external` host is refused when its address is local by the server's own
+rules (`endpoint_address_is_local`: loopback in any spelling, the unspecified
+address, a trusted network, a name listed as local), ignoring the privacy
+override. A string comparison let `127.0.0.1` stand in for `localhost` (codex
+review of #2652). A strong model on the operator's own network is a declared
+host with an explicit `may_approve` (step 4).
 
 **With no list set, behavior is unchanged.** An install with no reviewer host
 runs the local model as its reviewer today, with no `fallback_from`, and that
@@ -222,7 +231,9 @@ Each verdict's provenance carries:
 - `independence`, `vouched` and `authorized_by`.
 
 These are recorded from step 1, before the rules that use them, because a
-verdict written without them can never be re-attributed. *As built:* step 1
+verdict written without them can never be re-attributed. Each reconsideration
+sends its own provenance with its synthesis, because the host that answered a
+later round can differ from the antithesis's. *As built:* step 1
 records the list, digest, attempts, `vouched`, `vouched_by`, `authorized_by`
 (`deployment_config`) and the answering host's declared family. The paused
 agent's family needs the dispatcher lookup of 2.3, so it is recorded from

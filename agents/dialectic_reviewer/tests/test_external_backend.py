@@ -205,6 +205,7 @@ def test_unparseable_reply_reports_no_verdict_and_keeps_provenance():
     assert result.text is None
     assert "no parseable dialectic verdict" in (result.error or "")
     assert result.models_used == ["some-model-id-002"]
+    assert result.unparsed_reply == "I would rather not answer in JSON."
 
 
 def test_thinking_block_is_stripped_before_verdict_extraction():

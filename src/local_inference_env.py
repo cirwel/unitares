@@ -352,6 +352,27 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
+def endpoint_address_is_local(url: str) -> bool:
+    """Whether ``url`` names a local endpoint by its address alone.
+
+    ``classify_endpoint``'s rules without the ``UNITARES_MODEL_PRIVACY``
+    override, plus the unspecified address (``0.0.0.0``, ``::``), which a client
+    connects to as this machine. For callers that must know whether a URL
+    reaches the operator's own model servers whatever the privacy setting says:
+    the dialectic reviewer refuses to list such an endpoint as a host that may
+    approve, because ``localhost``, ``127.0.0.1`` and a trusted-network address
+    can all name the local floor (docs/proposals/active/
+    dialectic-reviewer-hosts-v0.md 2.2).
+    """
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    addr = _ip_literal(host)
+    if addr is not None:
+        return addr.is_unspecified or is_trusted_address(addr)
+    return host in _local_hostnames()
+
+
 _ssl_context_cache: tuple[tuple, object] | None = None
 
 
