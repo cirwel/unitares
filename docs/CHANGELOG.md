@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **check-in responses: `outcomes_in_e`:** when an agent's behavioral E includes the outcome term (at least three outcomes recorded in the last 24h), a check-in response now says which outcomes count and what they do. The fields are: how many outcomes were counted and how many were adverse, by type, and by `verification_source` when the outcome query fetched it (the default query does not, and the field then says `not_fetched` rather than calling recorded sources unrecorded); the term's real share of each E observation after the later blends (about 0.14, not the nominal 0.20, when both are active); its current contribution and range; and how much recording one more adverse outcome lowers the observation (an upper bound once the 20-outcome window is full, since the record that leaves may itself be adverse). It also states the two things the formula does not record: outcomes count without attribution to whether the agent's change caused them, and adverse means rework was needed, not fault. Mirror, compact and standard modes show it only when an adverse outcome is counted and the counts changed since the last account this process showed, and mirror adds one line. `response_mode='full'` always carries it, and `sync_state` lifts it beside `state_summary`. It restates the derivation the check-in already built: E, I, the verdict path and every persisted value are unchanged. Changing how outcomes count is deferred to after the 2026-12-01 registered read (#2610).
+
+### Changed
+- **local model endpoint:** the model behind `consult`, `call_model`, the in-process dialectic reviewer, check-in coaching and knowledge synthesis is now named by `UNITARES_MODEL_BASE_URL` (an OpenAI-compatible base URL, `/v1` included; default `http://localhost:11434/v1`) and `UNITARES_MODEL_ID` (default still `gemma4:latest`). The older names `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` keep working as aliases until v3.3.0; setting only an old name logs nothing, and `scripts/dev/unitares_doctor.py` prints one line per old name in use. The server now classifies the endpoint as local or external from its URL alone, never from DNS: loopback and RFC 1918 addresses and networks in `UNITARES_TRUSTED_NETWORKS` (the set the REST access checks trust) are local, and so are `localhost`, `host.docker.internal` and hostnames listed in the new `UNITARES_MODEL_LOCAL_HOSTS`. `UNITARES_MODEL_PRIVACY=local|external` overrides it. A `privacy='local'` request (the default) against an external endpoint is refused with `MODEL_ENDPOINT_NOT_LOCAL` before anything is sent, on every path that reads the setting, including the orchestrated reviewer's local backend and the local resident runner. The in-process reviewer tries Ollama's native `/api/chat` only after a cached `/api/version` probe says the endpoint is Ollama. `unitares model` lists models from `{base}/models` and writes the new names; the doctor checks that the endpoint lists the configured model. `call_model`'s `provider` and `model` descriptions change (interface contract 1.26.0). A call that reaches an external endpoint (with `privacy='auto'` or `'cloud'`) is recorded as external, not local, and `list_inference_hosts` reports the endpoint the same way. Local-route clients never follow redirects and ignore `HTTP_PROXY`/`HTTPS_PROXY`, so a local prompt cannot be carried to a host nothing classified. The model setting is `UNITARES_MODEL_ID`, not `UNITARES_MODEL`, which already names the model behind an agent's work in check-ins. A default install on local Ollama behaves as before. Other servers than Ollama are not yet verified end to end.
+
+### Removed
+- **37 of the last 38 legacy tool aliases** (compatibility: callable names removed).
+  These were pre-consolidation tool names that each renamed one router call
+  and injected its action. They now return `tool_not_found_error`, refused
+  before any identity step runs. Use the router call instead: `agent`
+  (`list_agents`, `get_agent_metadata`, `update_agent_metadata`,
+  `archive_agent`, `delete_agent`), `observe` (`observe_agent`,
+  `compare_agents`, `compare_me_to_similar`, `detect_anomalies`,
+  `aggregate_metrics`), `dialectic` (`request_dialectic_review`,
+  `submit_thesis`, `submit_antithesis`, `submit_synthesis`,
+  `reassign_reviewer`, `get_dialectic_session`, `list_dialectic_sessions`),
+  `knowledge` (`store_knowledge_graph`, `get_knowledge_graph`,
+  `list_knowledge_graph`, `update_discovery_status_graph`,
+  `get_discovery_details`, `cleanup_knowledge_graph`, `get_lifecycle_stats`),
+  `calibration` (`check_calibration`, `update_calibration_ground_truth`,
+  `backfill_calibration_from_dialectic`, `rebuild_calibration`), `export`
+  (`get_system_history`, `export_to_file`) and `admin` (`get_connection_status`, `get_tool_usage_stats`, `get_telemetry_metrics`,
+  `debug_request_context`, `validate_file_path`, `reset_monitor`,
+  `cleanup_stale_locks`), each with the action its old name implied. No
+  router, action, identity requirement or read/write class changes, and the
+  advertised surface digest does not move. Server hints and tool
+  descriptions that named the old tools now show the router call, and the
+  router descriptions no longer list the tools they replaced. Only the
+  eight workflow aliases remain, plus `get_server_info`, which stays because
+  the Wave 3a BEAM route is keyed on that name. The read/write classes some of these
+  aliases carried now live in `tool_meta.ACTION_OPERATIONS`, so timeout
+  recovery for router reads is unchanged.
+
 ## [3.1.0] - 2026-09-28
 
 <!-- plugin-bundle-recut: v0.4.19 -->
