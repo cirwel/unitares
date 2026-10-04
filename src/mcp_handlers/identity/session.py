@@ -290,7 +290,8 @@ def continuity_token_freshness(
     contract says not to tighten it) and never changes acceptance.
 
     Returns None when the token does not verify. ``expired`` applies the same
-    clock-skew tolerance ``resolve_continuity_token`` uses.
+    clock-skew tolerance ``resolve_continuity_token`` uses, and, like it,
+    treats a missing or non-integer ``exp`` as expired.
     """
     payload = _decode_token_payload(token)
     if payload is None:
@@ -305,13 +306,13 @@ def continuity_token_freshness(
 
     iat = _as_int(payload.get("iat"))
     exp = _as_int(payload.get("exp"))
-    expired = exp is not None and exp + _CLOCK_SKEW_TOLERANCE < current
+    expired = exp is None or exp + _CLOCK_SKEW_TOLERANCE < current
     return {
         "token_iat": iat,
         "token_exp": exp,
         "token_age_seconds": max(0, current - iat) if iat is not None else None,
         "expired": expired,
-        "seconds_past_exp": (current - exp) if expired else None,
+        "seconds_past_exp": (current - exp) if expired and exp is not None else None,
     }
 
 

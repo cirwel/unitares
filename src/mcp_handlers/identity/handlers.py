@@ -819,7 +819,7 @@ def _observe_path0_token_accept(
     if fresh["expired"]:
         block["seconds_past_exp"] = fresh["seconds_past_exp"]
         block["note"] = (
-            "This continuity_token is past its expiry. It was still accepted "
+            "This continuity_token is expired (or carries no valid expiry). It was still accepted "
             "as ownership proof for this same-process rebind; use the fresh "
             "continuity_token returned in this response from now on."
         )

@@ -55,6 +55,36 @@ def test_freshness_reports_expired_token_with_skew_tolerance():
     assert past["seconds_past_exp"] == 7200
 
 
+def _sign(payload: dict) -> str:
+    import hashlib
+    import hmac
+
+    from src.mcp_handlers.identity import session
+
+    payload_b64 = session._b64url_encode(json.dumps(payload).encode())
+    sig = hmac.new(session._get_continuity_secret(), payload_b64.encode(), hashlib.sha256).digest()
+    return f"v1.{payload_b64}.{session._b64url_encode(sig)}"
+
+
+@pytest.mark.parametrize("exp", [None, "soon"])
+def test_freshness_treats_missing_or_malformed_exp_as_expired(exp):
+    """resolve_continuity_token refuses these, so the observation must agree."""
+    from src.mcp_handlers.identity.session import (
+        continuity_token_freshness,
+        resolve_continuity_token,
+    )
+
+    now = int(time.time())
+    payload = {"sid": "agent-eeeeeeee-111", "aid": _UUID, "iat": now}
+    if exp is not None:
+        payload["exp"] = exp
+    token = _sign(payload)
+    assert resolve_continuity_token(token) is None
+    fresh = continuity_token_freshness(token, now=now)
+    assert fresh["expired"] is True
+    assert fresh["seconds_past_exp"] is None
+
+
 def test_freshness_rejects_unverified_token():
     from src.mcp_handlers.identity.session import continuity_token_freshness
 
