@@ -134,6 +134,11 @@ def reviewer_host_plan(
     (``local_base_url``, default ``model_base_url()``), wherever it sits. A
     strong model on the operator's own network is a declared host with an
     explicit ``may_approve`` (design step 4), not this.
+
+    The check reads DNS once, here; the call resolves again when it connects.
+    That guards against misconfiguration, not a hostile resolver: whoever
+    controls the external host's DNS can answer an approval from a server of
+    their own, which is more than rebinding to the local model would give.
     """
     if env is None:
         # Literal reads, so scripts/dev/flag_catalog.py indexes each setting.
@@ -178,20 +183,25 @@ def reviewer_host_plan(
     if any(host.key == "external" for host in hosts):
         external = env.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", "").strip()
         if external:
+            # The error lands in persisted provenance, so it names the endpoint
+            # by scheme, host and port only: never userinfo, path or query,
+            # any of which can carry a credential.
             try:
-                urlsplit(external).port
+                parts = urlsplit(external)
+                port = parts.port
             except ValueError:
-                return invalid(f"the external host URL {external!r} does not parse")
+                return invalid("the external host URL does not parse")
+            label = f"{parts.scheme}://{parts.hostname or ''}" + (f":{port}" if port else "")
             if endpoint_reaches_local_address(external):
                 return invalid(
-                    f"the external host {external} is a local endpoint, which may "
+                    f"the external host {label} is a local endpoint, which may "
                     "object but not approve"
                 )
             # The configured local model can sit on a public address (with
             # UNITARES_MODEL_PRIVACY=local); it is still the floor.
             if same_endpoint(external, local_base_url or model_base_url()):
                 return invalid(
-                    f"the external host {external} is the local model endpoint, "
+                    f"the external host {label} is the local model endpoint, "
                     "which may object but not approve"
                 )
     keys = [host.key for host in hosts]

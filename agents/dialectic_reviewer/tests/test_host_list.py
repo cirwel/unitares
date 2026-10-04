@@ -185,3 +185,29 @@ def test_a_malformed_external_url_is_an_invalid_list_not_a_crash():
         UNITARES_DIALECTIC_EXTERNAL_BASE_URL="http://[::1/v1",
     )
     assert plan.hosts == () and "does not parse" in (plan.error or "")
+
+
+def test_a_refused_url_is_named_without_its_credentials(monkeypatch):
+    # Codex review of #2652, round 6: the error is persisted as provenance, so
+    # it must not quote userinfo, path or query.
+    import socket
+
+    def resolve(host, *args, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.7", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve)
+    secret = "SECRET-must-not-surface"
+    for external, local in (
+        (f"http://user:{secret}@127.0.0.1:11434/v1?api_key={secret}", None),
+        (f"https://models.example.org/{secret}/v1?key={secret}", "https://models.example.org/v1"),
+        (f"http://[::1/v1?api_key={secret}", None),
+    ):
+        plan = reviewer_host_plan(
+            {
+                "UNITARES_DIALECTIC_REVIEWER_HOSTS": "external",
+                "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": external,
+            },
+            local_base_url=local or "http://localhost:11434/v1",
+        )
+        assert plan.hosts == () and plan.error, external
+        assert secret not in plan.error and "user" not in plan.error, plan.error
