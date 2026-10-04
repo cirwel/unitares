@@ -95,23 +95,31 @@ def _validate_executable(value: str) -> str:
             f"executable path must be absolute, got {value!r}"
         )
     resolved = p.resolve()
+    # Check the path the operator gave before any remap, so a typo'd launcher
+    # cannot be silently replaced by a real app binary and enrolled.
+    _require_executable(resolved)
     app = _framework_app_binary(resolved)
     if app is not None:
+        app = app.resolve()
+        _require_executable(app)
         print(
             f"note: {resolved} is a framework Python launcher; enrolling the "
             f"binary the kernel reports for it instead: {app}",
             file=sys.stderr,
         )
         resolved = app
-    if not resolved.exists():
-        raise argparse.ArgumentTypeError(
-            f"executable path does not exist: {resolved}"
-        )
-    if not os.access(str(resolved), os.X_OK):
-        raise argparse.ArgumentTypeError(
-            f"executable path is not executable: {resolved}"
-        )
     return str(resolved)
+
+
+def _require_executable(path: Path) -> None:
+    if not path.exists():
+        raise argparse.ArgumentTypeError(
+            f"executable path does not exist: {path}"
+        )
+    if not os.access(str(path), os.X_OK):
+        raise argparse.ArgumentTypeError(
+            f"executable path is not executable: {path}"
+        )
 
 
 def _emit_user_writable_warning(executable: str) -> bool:

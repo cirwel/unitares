@@ -123,6 +123,14 @@ def test_validate_executable_keeps_launcher_when_app_binary_missing(tmp_path: Pa
     assert enroll_resident._validate_executable(str(launcher)) == str(launcher.resolve())
 
 
+def test_validate_executable_rejects_missing_launcher_inside_framework(tmp_path: Path) -> None:
+    """A typo'd launcher must not be remapped to a real app binary and enrolled."""
+    launcher, _app = _fake_framework(tmp_path)
+    typo = launcher.parent / "python-typo"
+    with pytest.raises(argparse.ArgumentTypeError, match="does not exist"):
+        enroll_resident._validate_executable(str(typo))
+
+
 def test_emit_warning_fires_on_user_writable_path(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
