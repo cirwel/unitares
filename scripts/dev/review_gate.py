@@ -1553,16 +1553,35 @@ def repo_slug() -> str:
 def head_ref() -> tuple[str, str] | None:
     """(owner, branch) of the pushed head the current branch tracks, as
     `gh pr view` resolves it: a fork's PR has a head owned by the fork, not
-    by the base repository `{owner}` names. Without an upstream, the branch
-    is assumed pushed under its own name to the base repository."""
+    by the base repository `{owner}` names. Git's push destination (`@{push}`,
+    which honours pushRemote and remote.pushDefault in a triangular setup)
+    wins over the upstream; with neither, the branch is assumed pushed under
+    its own name to the base repository."""
     branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
     if not branch or branch == "HEAD":
         return None
-    owner, name = "{owner}", branch
-    merge = git("config", f"branch.{branch}.merge", check=False).strip()
-    remote = git("config", f"branch.{branch}.remote", check=False).strip()
-    if merge.startswith("refs/heads/"):
-        name = merge.removeprefix("refs/heads/")
+    owner, name, remote = "{owner}", branch, ""
+    push = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{push}", check=False).strip()
+    remotes = git("remote", check=False).split()
+    # A remote name may contain "/", so match the longest remote prefix.
+    for candidate in sorted(remotes, key=len, reverse=True):
+        if push.startswith(candidate + "/"):
+            remote, name = candidate, push[len(candidate) + 1:]
+            break
+    else:
+        # @{push} refuses a triangular branch under push.default=simple when
+        # the upstream's name differs; read the push remote as gh does then.
+        merge = git("config", f"branch.{branch}.merge", check=False).strip()
+        pushed_to = (git("config", f"branch.{branch}.pushRemote", check=False).strip()
+                     or git("config", "remote.pushDefault", check=False).strip())
+        if pushed_to:
+            remote = pushed_to
+            if git("config", "push.default", check=False).strip() in ("upstream", "tracking"):
+                name = merge.removeprefix("refs/heads/") if merge.startswith("refs/heads/") else branch
+        else:
+            remote = git("config", f"branch.{branch}.remote", check=False).strip()
+            if merge.startswith("refs/heads/"):
+                name = merge.removeprefix("refs/heads/")
     if remote and remote != ".":
         url = git("remote", "get-url", remote, check=False).strip()
         found = re.search(r"[:/]([^/:]+)/[^/:]+?(?:\.git)?/?$", url)

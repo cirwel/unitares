@@ -1083,6 +1083,35 @@ def test_head_ref_finds_the_owner_of_the_pushed_head(monkeypatch, config, expect
     assert rg.head_ref() == expected
 
 
+@pytest.mark.parametrize("setup,expected", [
+    ([], ("{owner}", "topic")),
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic"], ("cirwel", "topic")),
+    # Triangular: tracks upstream/master, pushes to the fork. Under the
+    # default push.default=simple, @{push} refuses this; the fork still wins.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "branch.topic.pushRemote=fork"], ("contributor", "topic")),
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "remote.pushDefault=fork"], ("contributor", "topic")),
+    # push.default=current: @{push} needs a fork tracking ref that is absent
+    # here, so the explicit push-remote read must give the same head.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "branch.topic.pushRemote=fork", "push.default=current"], ("contributor", "topic")),
+])
+def test_head_ref_follows_git_push_destination(tmp_path, monkeypatch, setup, expected):
+    _git(tmp_path, "init", "-q", "-b", "master")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+         "--allow-empty", "-m", "x")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/cirwel/unitares.git")
+    _git(tmp_path, "remote", "add", "fork", "git@github.com:contributor/unitares.git")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _git(tmp_path, "checkout", "-q", "-b", "topic")
+    for item in setup:
+        key, value = item.split("=", 1)
+        _git(tmp_path, "config", key, value)
+    monkeypatch.chdir(tmp_path)
+    assert rg.head_ref() == expected
+
+
 def test_current_pr_queries_a_fork_head_by_its_owner(monkeypatch):
     calls = []
     monkeypatch.setattr(rg, "head_ref", lambda: ("contributor", "their-topic"))
