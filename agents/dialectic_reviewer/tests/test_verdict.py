@@ -182,6 +182,19 @@ def test_thesis_from_env_discards_malformed_or_non_object_pause_evidence(raw_sta
     assert Thesis.from_env(env).paused_agent_state == {}
 
 
+# A reply from a listed host that may approve (design 2.2): the provenance an
+# approval needs. The run() wiring tests below are about the protocol, not the
+# host list, so their model doubles answer as such a host.
+_LISTED_CODEX = {
+    "backend": "codex",
+    "host_id": "codex:host-adapter",
+    "models_used": [],
+    "warnings": [],
+    "vouched": True,
+    "vouched_by": "listed_host",
+}
+
+
 # --------------------------- SDK interface conformance --------------------------- #
 def _raw_client_methods_called() -> set[str]:
     """Every method the reviewer calls on a real GovernanceClient, read from its
@@ -350,9 +363,9 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
         ]
     )
 
-    async def fake_obtain(prompt):
+    async def fake_obtain(prompt, pinned=None):
         prompts.append(prompt)
-        return next(outputs)
+        return r.ReviewerText(next(outputs), _LISTED_CODEX, "codex")
 
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")
@@ -545,8 +558,8 @@ async def test_continuation_does_not_file_a_non_judgment_over_a_standing_rejecti
         ]
     )
 
-    async def fake_obtain(prompt):
-        return next(outputs)
+    async def fake_obtain(prompt, pinned=None):
+        return r.ReviewerText(next(outputs), _LISTED_CODEX, "codex")
 
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")
