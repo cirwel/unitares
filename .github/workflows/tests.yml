@@ -325,7 +325,10 @@ jobs:
     # open PR whose last run reported the old name then needs a fresh run.
     name: test (3.12)
     if: ${{ always() }}
-    needs: test_shard
+    # macos-platform rides on this context so its identity-proof tests block
+    # a merge without a second protected check; it finishes well inside the
+    # slowest shard, so the gate waits no longer.
+    needs: [test_shard, macos-platform]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -341,6 +344,12 @@ jobs:
       if: ${{ needs.test_shard.result != 'success' }}
       run: |
         echo "one or more test shards failed or were cancelled" >&2
+        exit 1
+
+    - name: Require the macOS platform tests to pass
+      if: ${{ needs.macos-platform.result != 'success' }}
+      run: |
+        echo "the macOS platform tests failed, skipped a test, or were cancelled" >&2
         exit 1
 
     - name: Require every shard leg of this run to pass
@@ -673,3 +682,49 @@ jobs:
         tests/test_consultation.py::TestConsultSchema::test_schema_is_bounded_and_forbids_route_controls
         tests/test_mcp_text_compact.py
         -q
+
+  macos-platform:
+    # The test shards run on Linux, where these files skip themselves: the
+    # substrate identity proof reads a Unix-socket peer's PID, executable path
+    # and start time through macOS-only interfaces (LOCAL_PEERPID, proc_pidpath)
+    # and checks its launchd label, and the Linux backend raises
+    # NotImplementedError (docs/proposals/s19-attestation-mechanism.md). Before
+    # this job they ran only when someone ran the suite on a Mac. No services:
+    # the selected tests need neither Postgres nor Redis. Every test here must
+    # run, so a skip fails the job rather than passing quietly.
+    name: macos platform tests
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      with:
+        persist-credentials: false
+
+    - name: Set up Python 3.14
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.14'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install uv
+        uv pip install --system -r requirements-full.txt -c constraints.txt
+
+    - name: Run the macOS-only tests and refuse skips
+      # `shell: bash` is what adds -o pipefail; the default shell is `bash -e`
+      # alone, under which a failing pytest piped into tee reports success.
+      # Only the launchd-guard test is taken from the CLI file: the rest of it
+      # needs the Postgres the Linux shards provide.
+      shell: bash
+      run: |
+        python -m pytest \
+          tests/test_substrate_peer_attestation.py \
+          tests/test_uds_listener.py \
+          tests/test_unitares_cli_script.py::test_install_commands_refuse_a_launchd_install \
+          tests/test_lease_plane_canonicalize.py \
+          -q -rs -p no:cacheprovider | tee macos-tests.log
+        if grep -q '^SKIPPED' macos-tests.log; then
+          echo "::error::a macOS-only test skipped on macOS; see the summary above"
+          exit 1
+        fi

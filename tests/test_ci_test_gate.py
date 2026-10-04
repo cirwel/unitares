@@ -76,8 +76,9 @@ def test_github_full_test_jobs_cover_every_test_file() -> None:
     assert not unassigned, f"pytest files missing from CI shards: {unassigned}"
 
     assert "name: test (3.12)" in workflow
-    assert "needs: test_shard" in workflow
+    assert "needs: [test_shard, macos-platform]" in workflow
     assert "needs.test_shard.result != 'success'" in workflow
+    assert "needs.macos-platform.result != 'success'" in workflow
     assert "python -m coverage combine coverage-data" in workflow
     assert "cancel-in-progress: true" in workflow
     assert _coverage_floor(workflow) >= MIN_COVERAGE_FLOOR
