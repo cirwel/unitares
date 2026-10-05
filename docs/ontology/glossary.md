@@ -210,13 +210,14 @@ persisted column holding V is `core.agent_state.volatility` (see *Persistence
 false friends* below). The violation taxonomy's "Void Compliance" class is an
 unrelated word (null-and-void).
 
-### coherence — one field, three producers (code level)
+### coherence — one field, three producers, plus an unrelated identity use (code level)
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `coherence (ODE control feedback)` | What is the ODE's V-driven feedback term `C(V, Θ)`? The **deployed** value in `metrics['coherence']` and `core.agent_state.coherence`. | `governance_core/coherence.py`; `src/coherence_provenance.py` source `legacy_tanh_v`, role `ode_control_feedback` |
 | `coherence (manifold)` | How structurally consistent is the (E, I, S) state? Canonical **only** under `UNITARES_GROUNDING_APPLY`, which is off; shadow-computed otherwise. | `src/grounding/coherence.py::compute_coherence`; source `manifold`, role `eis_structural_measurement` |
 | `coherence (behavioral)` | How consistent is this agent's sequence of behavioral updates? | `src/coherence_provenance.py` source `behavioral_assessment`, role `behavioral_update_consistency` |
+| `coherence (trajectory identity)` | Is the current trajectory signature similar to the recent one, so this is the same subject as a moment ago? Tier 1 of two-tier identity verification (lineage is Tier 2). **Not** `metrics['coherence']`; it gates the weak-to-medium assurance upgrade. | `src/trajectory_identity.py::verify_trajectory_identity` · `eisv-proprioception-contract.md` (names the collision itself) |
 
 The dangerous reading is the everyday one: "coherence" sounds like a health
 measure, and the deployed producer is a controller output. Earlier docstrings
@@ -319,6 +320,67 @@ The first causes the second, but they answer different questions: the verdict is
 | `archive (file rotation)` | Where did an old log or data file get moved? (`archive_dir` under a log or data directory) | `src/background_tasks.py` |
 
 The first two are both reversible in practice but reached through separate paths, and only the first carries identity consequences: an archived agent that was merely quiet is the failure `proof of life` describes. "Archived" on its own, in an audit or census row, names none of the three.
+
+---
+
+### orphan — agent vs. knowledge-graph entry vs. lineage claim
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `orphan (agent)` | Is this stale, unlabeled or ephemeral-named agent eligible for archival? (a pure predicate over update count and age; an agent with zero updates is a *ghost*, deliberately excluded) | `src/agent_lifecycle.py::classify_for_archival` · `src/agent_lifecycle.py::auto_archive_orphan_agents` (the mutation is separately gated by `UNITARES_ENABLE_AUTO_AGENT_ARCHIVAL`) |
+| `orphan (knowledge-graph discovery)` | Does this discovery have no inbound edges, i.e. nothing references it? (structural; the query may add an age cutoff) | `src/storage/knowledge_graph_age.py::get_orphan_discoveries` |
+| `orphan (lineage claim)` | Is this provisional lineage claim unsupported, and so demotable? (`orphan_candidate` / `orphan_demoted` / `orphan_demote_failed` in the R1 sweep) | `src/identity/r1_maintenance.py::sweep_provisional_lineage` · `r1-verify-lineage-claim.md` |
+
+Three structurally different questions: liveness over time, graph connectivity, and evidential support for a claimed ancestor. An audit row or sweep name containing "orphan" does not say which. Informal uses (a lease or OS process left behind by a crashed owner) appear in BEAM comments but have no code predicate; they are plain English, not this term.
+
+---
+
+### heartbeat — four different signals
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `heartbeat (lease)` | Is this holder's time-bounded claim or presence still renewed? (renewal moves `expires_at`; liveness is `expires_at > now()`; deliberately does *not* go through the check-in path) | `beam-coordination-kernel.md` (`POST /v1/lease/heartbeat`) · `src/mcp_handlers/identity/agent_presence_lease.py::schedule_agent_presence_heartbeat` |
+| `heartbeat (agent check-in)` | Did an idle agent loop send a real, low-content governance check-in? (it *does* write a state update, with `epistemic_class` `substrate_observation`) | `agents/sdk/src/unitares_sdk/agent.py::_send_heartbeat`; the monitor-side reading is `src/resident_progress/heartbeat.py::HeartbeatEvaluator` (cadence derived from last check-in time, not a separate ping) |
+| `heartbeat (host observation)` | Was the hook-parent host process seen alive by a hook? (a `runtime_observation.heartbeat` audit row; never written to `core.agent_state`; proves nothing about agent activity) | `src/runtime_observations.py::VALID_KINDS` · `src/http_routes/substrate.py::http_runtime_activity` |
+| `heartbeat (OS process file)` | Is this server process still writing its liveness file so cleanup does not reap it? | `src/process_cleanup.py::write_heartbeat` |
+
+The `proof of life` entry's self-attested row says "heartbeat/check-in" as though they were one thing. They are not: the lease heartbeat is explicitly *not* a check-in, the agent check-in heartbeat is one, and the host-observation heartbeat is evidence of neither. Bind the sense before reasoning about what a heartbeat proves.
+
+---
+
+### resident — roster label vs. calibration class
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `resident (roster label)` | Is this identity's onboarding name declared in the deployment's `UNITARES_RESIDENTS` roster, so it is stamped `persistent` + `autonomous` at mint? (a missing roster entry leaves it untagged, and the orphan sweep can then archive it) | `docs/operations/resident-roster.md` · `src/grounding/onboard_classifier.py::RESIDENT_DEFAULT_TAGS` · `src/grounding/class_indicator.py::load_resident_labels` |
+| `resident (calibration class)` | Which per-behavior-class scale constants apply to an agent carrying `persistent` + `autonomous` tags, independent of any roster name? (`resident_persistent`) | `src/grounding/class_indicator.py::CLASS_RESIDENT_PERSISTENT` · `src/grounding/class_indicator.py::classify_by_label_and_tags` |
+
+Precedence matters: `classify_by_label_and_tags` resolves a roster label *first* and returns the label itself as the class, so a roster resident is **not** in class `resident_persistent`; that class is the tag-derived fallback for agents whose name is not on the roster. The informal use, "a launchd or cron fleet agent", is a deployment label and, per `identity.md`, "not an ontological category".
+
+---
+
+### verdict — behavioral tier vs. policy decision
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `verdict (behavioral tier)` | How risky does this agent's current EISV state read, on the three-step `safe` / `caution` / `high-risk` scale? | `src/behavioral_assessment.py::assess_behavioral_state` |
+| `verdict (policy decision)` | What did the governance gate decide: `proceed`, `guide`, `pause`, `reject`? | `src/monitor_decision.py::make_decision` · `src/governance_glossary.py::explain_verdict` |
+
+The two are decoupled in code: per the `explain_verdict` docstring a `high-risk` tier can land with `proceed` and a `safe` tier can land with `pause`. The `VERDICTS` table in the runtime glossary lists words from both vocabularies, and the variable named `unitares_verdict` in the monitor holds the *tier* despite its name. Bind the sense before quoting either.
+
+---
+
+### tier — five scales that share the word
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `tier (trajectory trust)` | How much trajectory history backs this UUID? (0 unknown, 1 emerging, 2 established, 3 verified) | `src/trajectory_identity.py::compute_trust_tier` |
+| `tier (identity assurance)` | How strongly is this identity claim bound right now? (weak / medium / strong) | `src/mcp_handlers/updates/phases.py::_compute_identity_assurance` |
+| `tier (outcome anchor)` | Is this outcome's provenance exogenous, soft self-attested, or excluded? | `src/grounding/outcome_anchors.py::AnchorTier` |
+| `tier (tool catalog)` | How prominent is this tool in the progressive tool listing? (essential / common / advanced) | `src/tool_meta.py::TIERS` |
+| `tier (grounding estimator)` | Which estimator rung computes E? (the module docstring's Tier 1 FEP, stubbed, Tier 2 resource, Tier 3 heuristic) | `src/grounding/free_energy.py` |
+
+The pair most likely to be mis-bound is trajectory trust and identity assurance: both read as "identity strength", and `identity.md` uses "trust tier" for the first and a bare "tier: strong" for the second. They are computed from different evidence and neither implies the other.
 
 ---
 
