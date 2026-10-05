@@ -245,6 +245,27 @@ class SessionMixin:
             )
             return dict(row) if row else None
 
+    async def refresh_session_binding_fingerprint(
+        self, session_key: str, agent_uuid: str, bind_ip_ua: str,
+    ) -> bool:
+        """Replace bind_ip_ua on a binding that already maps to ``agent_uuid``.
+
+        Only ever touches the fingerprint, and only on a row for the same UUID,
+        so it cannot rebind a session to a different agent. True if a row was
+        updated.
+        """
+        async with self.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE core.session_bindings
+                SET bind_ip_ua = $3
+                WHERE session_key = $1 AND agent_uuid = $2
+                  AND bind_ip_ua IS DISTINCT FROM $3
+                """,
+                session_key, agent_uuid, bind_ip_ua,
+            )
+            return result == "UPDATE 1"
+
     async def delete_session_binding(self, session_key: str) -> bool:
         """Remove a session binding (e.g. on force_new). True if a row was removed."""
         async with self.acquire() as conn:
