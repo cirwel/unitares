@@ -1117,11 +1117,34 @@ class TestExportToFile:
         monkeypatch.setattr(export_mod, "_contained_export_path", check_then_swap)
         with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
              patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
-            result = await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
+            await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
 
-            data = _parse(result)
-            assert data.get("success") is not True
+        # The rename replaces the planted entry; nothing is written through it.
         assert not outside.exists()
+        assert not (history / "raced.json").is_symlink()
+
+    @pytest.mark.asyncio
+    async def test_planted_hard_link_is_replaced_not_truncated(
+        self, mock_server, mock_monitor, tmp_path,
+    ):
+        """O_TRUNC through a hard link would rewrite a file outside the directory."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("precious")
+        os.link(outside, history / "linked.json")
+        mock_server.project_root = str(root)
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            await handle_export_to_file({"format": "json", "filename": "linked"})
+
+        assert outside.read_text() == "precious"
+        assert not (history / "linked.json").samefile(outside)
+        assert [p.name for p in history.iterdir() if p.name.endswith(".tmp")] == []
 
     @pytest.mark.asyncio
     async def test_symlinked_target_outside_dir_refused(self, mock_server, mock_monitor, tmp_path):

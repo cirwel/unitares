@@ -6,6 +6,7 @@ from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import os
 import re
+import secrets
 import json
 from datetime import datetime
 from ..utils import success_response, error_response, require_registered_agent
@@ -233,27 +234,39 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             # Create directory if needed (inside executor to avoid blocking)
             os.makedirs(export_dir, exist_ok=True)
 
-            # Open relative to the directory we validated, refusing symlinks
-            # at both steps: a path check followed by open(path) leaves a
-            # window in which the target can be swapped for a symlink.
-            dir_fd = os.open(
-                os.path.dirname(file_path),
-                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            )
+            # Never open the target name itself: a path check followed by
+            # open(path) leaves a window in which another writer can swap in
+            # a symlink, and O_TRUNC through a planted hard link would still
+            # truncate a file outside this directory. Write a freshly created
+            # (O_EXCL) temporary file inside the validated directory instead,
+            # then rename it over the target: rename replaces the directory
+            # entry and never writes through whatever it pointed to.
+            directory = os.path.dirname(file_path)
+            tmp_name = f".{os.path.basename(file_path)}.{secrets.token_hex(8)}.tmp"
+            dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             try:
                 fd = os.open(
-                    os.path.basename(file_path),
-                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                    tmp_name,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                     0o644,
                     dir_fd=dir_fd,
                 )
+                try:
+                    with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                        f.write(export_data)
+                        f.flush()  # Ensure buffered data written
+                        os.fsync(f.fileno())  # Ensure written to disk
+                        size = os.fstat(f.fileno()).st_size
+                    os.replace(os.path.join(directory, tmp_name), file_path)
+                except BaseException:
+                    try:
+                        os.unlink(tmp_name, dir_fd=dir_fd)
+                    except OSError:
+                        pass
+                    raise
             finally:
                 os.close(dir_fd)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                f.write(export_data)
-                f.flush()  # Ensure buffered data written
-                os.fsync(f.fileno())  # Ensure written to disk
-                return os.fstat(f.fileno()).st_size
+            return size
         
         # Run file I/O in executor to avoid blocking event loop
         file_size = await loop.run_in_executor(None, _write_file_sync)
