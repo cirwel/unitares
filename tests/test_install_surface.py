@@ -12,6 +12,7 @@ bad values as examples of what to remove).
 """
 from __future__ import annotations
 
+import plistlib
 import re
 from pathlib import Path
 
@@ -67,6 +68,17 @@ def test_no_operator_specific_defaults(relpath: str, pattern: str, rationale: st
         f"  matches:  {matches}\n"
         f"  see:      docs/install/cross-machine-surface.md"
     )
+
+
+def test_governance_mcp_install_surfaces_default_to_loopback() -> None:
+    launcher = _read("scripts/ops/start_unitares.sh")
+    assert 'UNITARES_BIND_ALL_INTERFACES="${UNITARES_BIND_ALL_INTERFACES:-0}"' in launcher
+    assert "--host 0.0.0.0" not in launcher
+
+    plist_path = REPO / "scripts/ops/com.unitares.governance-mcp.plist"
+    with plist_path.open("rb") as handle:
+        plist = plistlib.load(handle)
+    assert plist["EnvironmentVariables"]["UNITARES_BIND_ALL_INTERFACES"] == "0"
 
 
 # Plist templates must use placeholder substitution, not live paths.

@@ -15,7 +15,7 @@ cd "$PROJECT_ROOT"
 # this script:
 #   UNITARES_MCP_ALLOWED_HOSTS="<lan-ip>:*,<hostname>.local,<tunnel-host>"
 #   UNITARES_MCP_ALLOWED_ORIGINS="http://<lan-ip>:*,https://<tunnel-host>"
-export UNITARES_BIND_ALL_INTERFACES="${UNITARES_BIND_ALL_INTERFACES:-1}"
+export UNITARES_BIND_ALL_INTERFACES="${UNITARES_BIND_ALL_INTERFACES:-0}"
 export UNITARES_MCP_ALLOWED_HOSTS="${UNITARES_MCP_ALLOWED_HOSTS:-}"
 export UNITARES_MCP_ALLOWED_ORIGINS="${UNITARES_MCP_ALLOWED_ORIGINS:-}"
 
@@ -96,7 +96,7 @@ cleanup_stale_markers
 
 # Start MCP server
 echo "📡 Starting MCP server on port 8767..."
-nohup python3 src/mcp_server.py --port 8767 --host 0.0.0.0 --force > /tmp/unitares.log 2>&1 &
+nohup python3 src/mcp_server.py --port 8767 --force > /tmp/unitares.log 2>&1 &
 SERVER_PID=$!
 
 # Wait for server to start
