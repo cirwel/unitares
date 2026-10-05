@@ -82,8 +82,13 @@ def call_tool(tool_name, arguments=None):
 
 
 def onboard_cmd(name=None):
-    """Call onboard() tool."""
-    args = {}
+    """Call onboard() tool for a fresh identity.
+
+    force_new is explicit: under strict identity (the server default) an
+    onboard with neither force_new nor parent_agent_id is refused as
+    lineage_declaration_required.
+    """
+    args = {"force_new": True}
     if name:
         args["name"] = name
     

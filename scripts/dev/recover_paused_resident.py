@@ -36,6 +36,18 @@ def main(arg: str) -> int:
         anchor = json.loads(anchor_path.read_text())
         uuid = anchor["agent_uuid"]
         token = anchor.get("continuity_token")
+        if not token:
+            # Persistent residents on UNITARES_UDS_SOCKET deliberately keep
+            # UUID-only anchors: their ownership proof is the kernel-attested
+            # socket, not a token. Over REST that would be a bare UUID resume,
+            # which strict identity (the server default) refuses.
+            print(
+                f"anchor {anchor_path} has no continuity_token (a UDS-attested "
+                "resident). Recover it over its UDS socket instead: restart the "
+                "resident so it resumes through UNITARES_UDS_SOCKET.",
+                file=sys.stderr,
+            )
+            return 2
 
     client = SyncGovernanceClient(rest_url=GOV_REST_URL, transport="rest", timeout=30)
     if token:
