@@ -143,6 +143,26 @@ def _origin_matches(origin: str, pattern: str) -> bool:
     return origin == pattern
 
 
+def _header_value(request, name: str) -> str:
+    """First value of header ``name``, matched case-insensitively.
+
+    Read from the raw ASGI scope, not ``request.headers``: Starlette's
+    ``Headers.get`` lowercases the key but expects the stored names to be
+    lowercase already, and the websockets-sansio protocol uvicorn runs for
+    ``/ws/eisv`` keeps the client's casing (``Origin``, ``Sec-Fetch-Site``),
+    so a lookup there misses them and a security check silently passes.
+    """
+    raw = (getattr(request, "scope", None) or {}).get("headers")
+    if raw:
+        want = name.lower().encode("latin-1")
+        for key, value in raw:
+            if key.lower() == want:
+                return value.decode("latin-1")
+        return ""
+    headers = getattr(request, "headers", None) or {}
+    return headers.get(name) or headers.get(name.title()) or ""
+
+
 def _rebindable_host(host: str) -> bool:
     """True when ``host`` is a DNS name a rebinding page could have used.
 
@@ -194,10 +214,8 @@ def _foreign_browser_request(request) -> bool:
     dashboard's passkey origin. The opaque ``null`` origin is never accepted
     here: sandboxed iframes on any site send it.
     """
-    headers = request.headers
-
     def header(name: str) -> str:
-        return headers.get(name) or headers.get(name.title()) or ""
+        return _header_value(request, name)
 
     if _rebindable_host(header("host")):
         return True

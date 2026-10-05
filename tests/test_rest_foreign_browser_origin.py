@@ -188,3 +188,62 @@ def test_ws_localhost_origin_keeps_bypass():
         "sec-fetch-site": "same-origin",
     })
     assert _check_ws_auth(ws, http_api_token=None) is True
+
+
+# ---- Real transport objects (header casing) ----
+
+def _real_ws(headers):
+    from starlette.websockets import WebSocket
+    scope = {
+        "type": "websocket",
+        "path": "/ws/eisv",
+        "client": ("127.0.0.1", 50000),
+        "query_string": b"",
+        "headers": [(k.encode(), v.encode()) for k, v in headers],
+    }
+    return WebSocket(scope, receive=None, send=None)
+
+
+def _real_http(headers):
+    from starlette.requests import Request
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/tools/call",
+        "client": ("127.0.0.1", 50000),
+        "query_string": b"",
+        "headers": [(k.encode(), v.encode()) for k, v in headers],
+    }
+    return Request(scope)
+
+
+def test_ws_title_cased_cross_site_headers_lose_bypass():
+    # websockets-sansio keeps the client's header casing in the ASGI scope,
+    # and Starlette's Headers.get misses title-cased names.
+    ws = _real_ws([
+        ("Host", "127.0.0.1:8767"),
+        ("Origin", "https://evil.example"),
+        ("Sec-Fetch-Site", "cross-site"),
+    ])
+    assert _foreign_browser_request(ws) is True
+    assert _check_ws_auth(ws, http_api_token="tok") is False
+
+
+def test_ws_title_cased_rebound_host_loses_bypass():
+    ws = _real_ws([("Host", "rebind.evil.example:8767")])
+    assert _check_ws_auth(ws, http_api_token=None) is False
+
+
+def test_ws_title_cased_localhost_keeps_bypass():
+    ws = _real_ws([("Host", "127.0.0.1:8767"), ("Origin", "http://127.0.0.1:8767")])
+    assert _check_ws_auth(ws, http_api_token=None) is True
+
+
+def test_real_http_request_cross_site_origin_loses_bypass():
+    req = _real_http([("host", "127.0.0.1:8767"), ("origin", "https://evil.example")])
+    assert _auth(req) is False
+
+
+def test_real_http_request_non_browser_keeps_bypass():
+    req = _real_http([("host", "127.0.0.1:8767"), ("content-type", "application/json")])
+    assert _auth(req) is True
