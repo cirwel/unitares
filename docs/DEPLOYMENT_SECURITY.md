@@ -69,6 +69,18 @@ the credential layer for any of the four. That's the same shape of gap
 or local-shell access to the host"), stated here so it doesn't read as
 solved by this PR's title.
 
+**A web page is not a local caller.** The trusted-network bypass on REST and
+`/ws/eisv` trusts the source address, and a browser on the operator's machine
+connects from loopback (or, under Compose, from the bridge gateway) whichever
+page asked. The bypass therefore does not apply when the request names a
+browser `Origin` outside localhost, `UNITARES_MCP_ALLOWED_ORIGINS` and the
+dashboard passkey origin, or a `Host` that is a dotted DNS name not listed in
+`UNITARES_MCP_ALLOWED_HOSTS` (the DNS-rebinding shape). IP literals, `localhost`
+and dotless names such as the `governance-mcp` service need no listing.
+Non-browser clients are unaffected; a browser opening the dashboard on a LAN
+address or a hostname needs that origin and host in the two lists, which `/mcp`
+already required, or a bearer or passkey session.
+
 ## What this pass did not change (known gaps)
 
 - **`governance-mcp` and `lease-plane` still run as root** — neither

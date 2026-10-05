@@ -24,9 +24,12 @@ from src.trusted_networks import (  # noqa: F401  (extra_trusted_networks is re-
     is_trusted_address,
 )
 from src.mcp_listen_config import (
+    LOCALHOST_ALLOWED_HOSTS,
+    LOCALHOST_ALLOWED_ORIGINS,
     check_mcp_bearer,
     mcp_bearer_required,
     rest_strict_required,
+    split_csv_env,
 )
 from src.dashboard_auth import (
     DASHBOARD_EXPECTED_ORIGIN,
@@ -128,6 +131,86 @@ def _is_trusted_network(request) -> bool:
         return is_trusted_address(_ipaddress.ip_address(client_ip))
     except ValueError:
         return False
+
+
+def _origin_matches(origin: str, pattern: str) -> bool:
+    """Match an Origin against an allowlist entry; ``:*`` means any port."""
+    if pattern.endswith(":*"):
+        prefix = pattern[:-2]
+        if origin == prefix:
+            return True
+        return origin.startswith(prefix + ":") and origin[len(prefix) + 1:].isdigit()
+    return origin == pattern
+
+
+def _rebindable_host(host: str) -> bool:
+    """True when ``host`` is a DNS name a rebinding page could have used.
+
+    DNS rebinding needs a public, dotted name the attacker resolves first to
+    their own server and then to this one. An IP literal resolves to nothing,
+    and a dotless name (``localhost``, a Compose service such as
+    ``governance-mcp``) is resolved by the local host, not by public DNS. Any
+    other name must be listed in ``UNITARES_MCP_ALLOWED_HOSTS``.
+    """
+    if not host:
+        return False
+    if any(_origin_matches(host, p) for p in LOCALHOST_ALLOWED_HOSTS):
+        return False
+    if any(_origin_matches(host, p) for p in split_csv_env("UNITARES_MCP_ALLOWED_HOSTS")):
+        return False
+    if host.startswith("["):
+        name = host[1:host.find("]")] if "]" in host else host
+    else:
+        name = host.rsplit(":", 1)[0] if host.count(":") == 1 else host
+    try:
+        _ipaddress.ip_address(name)
+        return False
+    except ValueError:
+        pass
+    return "." in name or not name
+
+
+def _foreign_browser_request(request) -> bool:
+    """True when a browser may have sent this on behalf of a foreign page.
+
+    The trusted-network bypass is ambient authority: it trusts the source
+    address, and a browser on the operator's machine sends from loopback (or,
+    under Docker, from the bridge gateway) no matter which page asked.
+    Without this check any web page could drive ``POST /v1/tools/call`` with a
+    CORS-simple ``text/plain`` body (the handler parses JSON regardless of
+    content type) and read ``/ws/eisv`` outright, since WebSockets get no CORS
+    protection. Browsers always send Origin on POST and on WebSocket
+    handshakes, so a disallowed Origin removes the bypass.
+
+    A DNS rebinding page's same-origin GETs carry no Origin and, over plain
+    http, no ``Sec-Fetch-*`` either; only its Host gives it away. So the Host
+    must not be a rebindable name (see :func:`_rebindable_host`); otherwise a
+    rebound page could read the dashboard, which embeds the API token.
+
+    Non-browser clients send no Origin and address the server by IP,
+    ``localhost`` or a Compose service name, so they are unaffected. The
+    allowlists are the ones ``/mcp`` already uses (localhost plus
+    ``UNITARES_MCP_ALLOWED_ORIGINS`` / ``UNITARES_MCP_ALLOWED_HOSTS``) plus the
+    dashboard's passkey origin. The opaque ``null`` origin is never accepted
+    here: sandboxed iframes on any site send it.
+    """
+    headers = request.headers
+
+    def header(name: str) -> str:
+        return headers.get(name) or headers.get(name.title()) or ""
+
+    if _rebindable_host(header("host")):
+        return True
+    origin = header("origin")
+    if origin:
+        allowed = list(LOCALHOST_ALLOWED_ORIGINS)
+        allowed += split_csv_env("UNITARES_MCP_ALLOWED_ORIGINS")
+        if DASHBOARD_EXPECTED_ORIGIN:
+            allowed.append(DASHBOARD_EXPECTED_ORIGIN)
+        return not any(_origin_matches(origin, p) for p in allowed if p != "null")
+    # No Origin: a navigation or a non-browser client. A browser still labels
+    # cross-site fetches to trustworthy origins, so refuse those.
+    return header("sec-fetch-site").lower() == "cross-site"
 
 
 def _http_unauthorized():
@@ -265,8 +348,8 @@ def _check_ws_auth(websocket, *, http_api_token: str | None) -> bool:
         return bool(origin) and secrets.compare_digest(origin, DASHBOARD_EXPECTED_ORIGIN)
 
     # Trusted networks (loopback, RFC1918, UNITARES_TRUSTED_NETWORKS) stay
-    # unauthenticated in local posture.
-    if _is_trusted_network(websocket):
+    # unauthenticated in local posture, except for a foreign browser page.
+    if _is_trusted_network(websocket) and not _foreign_browser_request(websocket):
         return True
     # An unset local token is deny, not "gate disabled". Passkey sessions and
     # trusted-network access above remain usable after deliberate token removal.
@@ -312,7 +395,9 @@ def _check_http_auth(request, *, http_api_token: str | None) -> bool:
         return dashboard_session_authenticated(request)
 
     # Legacy / local posture: trusted network -> bearer -> validated session.
-    if _is_trusted_network(request):
+    # A foreign browser page loses the network bypass but can still present
+    # a bearer or session below.
+    if _is_trusted_network(request) and not _foreign_browser_request(request):
         return True
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     token = _bearer_from_header(auth)
