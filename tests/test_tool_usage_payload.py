@@ -458,6 +458,7 @@ async def _dispatch_that_injects_the_alias_action(_name, arguments):
     return {"success": True}
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_rest_surface_writes_the_payload(monkeypatch):
     from src.services.http_tool_service import execute_http_tool
