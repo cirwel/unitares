@@ -81,6 +81,7 @@ import sys
 import tempfile
 import unicodedata
 import time
+import urllib.parse
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -188,12 +189,54 @@ def gh_json(*args: str):
     return json.loads(_run(["gh", *args]))
 
 
+# Every PR read and write here goes through REST (`gh api`), never `gh pr`
+# or `gh repo view`: those use GraphQL, which Claude Code cloud sessions
+# refuse with HTTP 403, so a review there failed as "no PR for this branch".
+# `{owner}/{repo}` is gh's placeholder for the current checkout's repository,
+# the same one `gh pr view` resolved.
+PULLS = "repos/{owner}/{repo}/pulls"
+
+
+def pr_fields(pr: dict) -> dict:
+    """A REST pull request in the GraphQL field names callers compare.
+
+    REST state is lowercase open/closed with merging as a separate flag
+    (`merged` on a single PR, `merged_at` in a listing); GraphQL reported one
+    of OPEN/CLOSED/MERGED, and require_open and its messages still use that.
+    """
+    merged = pr.get("merged") or pr.get("merged_at")
+    return {
+        "number": pr["number"],
+        "headRefOid": pr["head"]["sha"],
+        "headRefName": pr["head"]["ref"],
+        "baseRefName": pr["base"]["ref"],
+        "state": "MERGED" if merged else str(pr["state"]).upper(),
+        "isDraft": bool(pr.get("draft")),
+        "author": {"login": (pr.get("user") or {}).get("login", "")},
+        "updatedAt": pr.get("updated_at", ""),
+        "labels": [{"name": label["name"]} for label in pr.get("labels") or []],
+    }
+
+
+def pr_view(pr: int) -> dict:
+    return pr_fields(gh_json("api", f"{PULLS}/{pr}"))
+
+
+def open_prs(repo: str) -> list[dict]:
+    return [pr_fields(p) for p in api_pages(f"repos/{repo}/pulls?state=open&per_page=100")]
+
+
+def post_comment(pr: int, body: str) -> None:
+    _launch(["gh", "api", "--method", "POST", f"repos/{{owner}}/{{repo}}/issues/{pr}/comments",
+             "-F", "body=@-"], input=body, text=True, check=True, capture_output=True)
+
+
 class ClosedPullRequest(Exception):
     """Stop local review work once its PR has been closed or merged."""
 
 
 def require_open(pr: int, info: dict | None = None) -> None:
-    info = info if info is not None else gh_json("pr", "view", str(pr), "--json", "state")
+    info = info if info is not None else pr_view(pr)
     if info["state"] != "OPEN":
         raise ClosedPullRequest(f"PR #{pr} is {info['state'].lower()}; review work has stopped")
 
@@ -1424,7 +1467,7 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
     requested = False
     print("[review] joining native Codex review (bounded wait; local fallback available)", flush=True)
     while time.monotonic() < deadline:
-        info = gh_json("pr", "view", str(pr), "--json", "headRefOid,state")
+        info = pr_view(pr)
         require_open(pr, info)
         if info["headRefOid"] != head:
             return Record(key, "FAILED", 0, False, "PR head changed; rerun review.sh")
@@ -1447,8 +1490,7 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
         if not snapshot.running and not snapshot.completed and not requested and time.monotonic() - started >= 30:
             body = (f"@codex review\n\nReview the current draft diff at `{head}`. "
                     "The author owns fixes and readiness.\n\n" + request_marker + "\n")
-            _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-                    input=body, text=True, capture_output=True, check=True)
+            post_comment(pr, body)
             requested = True
             print("[review] requested native review for this head and diff", flush=True)
         time.sleep(min(10, max(0, deadline - time.monotonic())))
@@ -1505,14 +1547,59 @@ def parse_verdict(text: str) -> tuple[str, int] | None:
 
 
 def repo_slug() -> str:
-    return gh_json("repo", "view", "--json", "nameWithOwner")["nameWithOwner"]
+    return gh_json("api", "repos/{owner}/{repo}")["full_name"]
+
+
+def head_ref() -> tuple[str, str] | None:
+    """(owner, branch) of the pushed head the current branch tracks, as
+    `gh pr view` resolves it: a fork's PR has a head owned by the fork, not
+    by the base repository `{owner}` names. Git's push destination (`@{push}`,
+    which honours pushRemote and remote.pushDefault in a triangular setup)
+    wins over the upstream; with neither, the branch is assumed pushed under
+    its own name to the base repository."""
+    branch = git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    if not branch or branch == "HEAD":
+        return None
+    owner, name, remote = "{owner}", branch, ""
+    push = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{push}", check=False).strip()
+    remotes = git("remote", check=False).split()
+    # A remote name may contain "/", so match the longest remote prefix.
+    for candidate in sorted(remotes, key=len, reverse=True):
+        if push.startswith(candidate + "/"):
+            remote, name = candidate, push[len(candidate) + 1:]
+            break
+    else:
+        # @{push} refuses a triangular branch under push.default=simple when
+        # the upstream's name differs; read the push remote as gh does then.
+        merge = git("config", f"branch.{branch}.merge", check=False).strip()
+        pushed_to = (git("config", f"branch.{branch}.pushRemote", check=False).strip()
+                     or git("config", "remote.pushDefault", check=False).strip())
+        if pushed_to:
+            remote = pushed_to
+            if git("config", "push.default", check=False).strip() in ("upstream", "tracking"):
+                name = merge.removeprefix("refs/heads/") if merge.startswith("refs/heads/") else branch
+        else:
+            remote = git("config", f"branch.{branch}.remote", check=False).strip()
+            if merge.startswith("refs/heads/"):
+                name = merge.removeprefix("refs/heads/")
+    if remote and remote != ".":
+        url = git("remote", "get-url", "--push", remote, check=False).strip()
+        found = re.search(r"[:/]([^/:]+)/[^/:]+?(?:\.git)?/?$", url)
+        if found:
+            owner = found.group(1)
+    return owner, name
 
 
 def current_pr() -> dict | None:
-    proc = _launch(["gh", "pr", "view", "--json",
-                    "number,headRefOid,headRefName,baseRefName,state"],
-                   text=True, capture_output=True)
-    return json.loads(proc.stdout) if proc.returncode == 0 else None
+    """The PR whose head is the checked-out branch: an open one if any, else
+    the newest, so a merged branch still reports merged rather than absent.
+    A failed lookup raises with gh's error; it is not reported as no PR."""
+    ref = head_ref()
+    if ref is None:
+        return None
+    head = urllib.parse.quote(":".join(ref), safe="{}:/")
+    prs = [pr_fields(p) for p in gh_json("api", f"{PULLS}?head={head}&state=all&per_page=100")]
+    return next((p for p in prs if p["state"] == "OPEN"), prs[0] if prs else None)
 
 
 def optional_cli_installed(provider: str) -> bool:
@@ -1911,8 +1998,7 @@ def render_body(rec: Record, heading: str, text: str) -> str:
 
 def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     require_open(pr)  # a local reviewer may have finished after the merge
-    _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"],
-            input=render_body(rec, heading, text), text=True, check=True, capture_output=True)
+    post_comment(pr, render_body(rec, heading, text))
 
 
 def _resolve_offline(args) -> str:
@@ -1951,8 +2037,7 @@ def _resolve_offline(args) -> str:
 
 def _resolve(args) -> tuple[int, str, str, str]:
     """PR number, repo, key, reviewer label for HEAD. Refuses a stale push."""
-    info = current_pr() if args.pr is None else gh_json(
-        "pr", "view", str(args.pr), "--json", "number,headRefOid,headRefName,baseRefName,state")
+    info = current_pr() if args.pr is None else pr_view(args.pr)
     if info is None:
         raise SystemExit("review_gate: no PR for this branch — ship it first (ship.sh opens one)")
     require_open(info["number"], info)
@@ -1971,7 +2056,7 @@ def _resolve(args) -> tuple[int, str, str, str]:
         if pushed == head:
             break
         time.sleep(5)
-        pushed = gh_json("pr", "view", str(info["number"]), "--json", "headRefOid")["headRefOid"]
+        pushed = pr_view(info["number"])["headRefOid"]
     if pushed != head:
         known = subprocess.run(["git", "cat-file", "-e", f"{pushed}^{{commit}}"],
                                capture_output=True).returncode == 0
@@ -2029,7 +2114,7 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
     snapshot = f"refs/review-gate/handoff/{pr}/{uuid.uuid4().hex}"
     base_ref, head_ref = f"{snapshot}/base", f"{snapshot}/head"
     try:
-        info = gh_json("pr", "view", str(pr), "--json", "baseRefName,state")
+        info = pr_view(pr)
         require_open(pr, info)
         base_refspec = f"+refs/heads/{info['baseRefName']}:{base_ref}"
         git("fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin",
@@ -2743,8 +2828,7 @@ def cmd_waive(args) -> int:
             f"{', '.join(sensitive)} · families that passed: {', '.join(sorted(families))}\n\n"
             f"Reason: {reason}\n\nThis applies to this diff only; any push that changes the diff "
             f"voids it. Waived hunks:\n\n```diff\n{hunks.strip()}\n```\n")
-    _launch(["gh", "pr", "comment", str(pr), "--body-file", "-"], input=body, text=True,
-            check=True, capture_output=True)
+    post_comment(pr, body)
     print(f"[review] waiver posted for diff {key[:12]} on PR #{pr}; the review check re-evaluates")
     return 0
 
@@ -2853,8 +2937,7 @@ def cmd_sweep(args) -> int:
     its cwd in `--worktree`, detached at the PR head — the PR's own copy of
     this script is never executed."""
     repo = repo_slug()
-    prs = gh_json("pr", "list", "--state", "open", "--limit", "100", "--json",
-                  "number,isDraft,author,headRefOid,headRefName,baseRefName,updatedAt,labels")
+    prs = open_prs(repo)
     candidates = 0
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
