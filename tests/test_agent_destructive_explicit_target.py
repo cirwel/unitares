@@ -39,6 +39,7 @@ from src.mcp_handlers.introspection.tool_introspection import handle_describe_to
 from src.mcp_handlers.middleware import DispatchContext, inject_identity, resolve_alias
 from src.mcp_handlers.middleware.params_step import _EXPLICIT_TARGET_CALLS
 from src.mcp_handlers.schemas.lifecycle import AgentParams
+from tests.lifecycle_auth import operator_caller
 from tests.helpers import (
     make_agent_meta,
     make_mock_server,
@@ -64,7 +65,13 @@ def _server():
 
 
 class _Bound:
-    """A session bound as CALLER, with every write the handlers make mocked."""
+    """A session bound as CALLER, with every write the handlers make mocked.
+
+    The caller also holds the operator token: these tests are about WHICH
+    agent a destructive call selects, and since GHSA-r9q5-7j8h-82rr a call on
+    another agent needs operator standing to reach that point at all
+    (tests/test_lifecycle_owner_or_operator.py pins the refusal).
+    """
 
     def __init__(self):
         self.server = _server()
@@ -72,6 +79,7 @@ class _Bound:
 
     def __enter__(self):
         s = self._stack
+        s.enter_context(operator_caller())
         s.enter_context(patch_lifecycle_server(self.server))
         self.storage = s.enter_context(patch_agent_storage())
         self.storage.delete_agent = AsyncMock()
