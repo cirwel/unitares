@@ -43,7 +43,7 @@ services:
   postgres-age:
     # Pulled from this release's tag like the lease plane below, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares-postgres:v3.1.0
+    image: ghcr.io/cirwel/unitares-postgres:v3.2.0
     pull_policy: missing
     build:
       context: db/postgres
@@ -174,7 +174,7 @@ services:
   governance-mcp:
     # Pulled from this release's tag like the lease plane above, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares:v3.1.0
+    image: ghcr.io/cirwel/unitares:v3.2.0
     pull_policy: missing
     build:
       context: .
