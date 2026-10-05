@@ -146,6 +146,27 @@ PUBLIC_LISTENER_SCOPE_KEY = "unitares_public_listener"
 FORWARDED_ALLOW_IPS = "127.0.0.0/8,::1/128,::ffff:127.0.0.0/104"
 
 
+class LowercaseWebSocketHeaders:
+    """Lowercase WebSocket header names before anything reads them.
+
+    ASGI requires lowercased header names, and Starlette's ``Headers``
+    relies on it. uvicorn's websockets-sansio protocol, which serves
+    ``/ws/eisv``, passes the client's casing through (``Origin``,
+    ``Authorization``, ``Cookie``), so every lookup on a WebSocket scope
+    missed a title-cased header: a bearer token, the passkey Origin pin and
+    the session cookie were all invisible, and legitimate clients were
+    refused. HTTP scopes already arrive lowercased and pass through as is.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "websocket" and scope.get("headers"):
+            scope = {**scope, "headers": [(k.lower(), v) for k, v in scope["headers"]]}
+        await self.app(scope, receive, send)
+
+
 def mark_public_listener(app: Any) -> AsgiCallable:
     """Wrap ``app`` so every request through it is stamped as public.
 
@@ -592,6 +613,9 @@ def build_transport_runtime(
         server_build_sha=server_build_sha,
     )
 
+    # Added last, so outermost: every middleware and route below sees the
+    # spec-conformant lowercase names.
+    app.add_middleware(LowercaseWebSocketHeaders)
     config = uvicorn.Config(
         app,
         host=host,
