@@ -207,8 +207,10 @@ def _foreign_browser_request(request) -> bool:
     must not be a rebindable name (see :func:`_rebindable_host`); otherwise a
     rebound page could read the dashboard, which embeds the API token.
 
-    Non-browser clients send no Origin and address the server by IP,
-    ``localhost`` or a Compose service name, so they are unaffected. The
+    The Host rule cannot tell a rebound page from a script, so it applies to
+    every caller: a client addressing the server by a dotted hostname needs
+    that host in ``UNITARES_MCP_ALLOWED_HOSTS`` (or a bearer). Clients using
+    an IP, ``localhost`` or a Compose service name are unaffected. The
     allowlists are the ones ``/mcp`` already uses (localhost plus
     ``UNITARES_MCP_ALLOWED_ORIGINS`` / ``UNITARES_MCP_ALLOWED_HOSTS``) plus the
     dashboard's passkey origin. The opaque ``null`` origin is never accepted

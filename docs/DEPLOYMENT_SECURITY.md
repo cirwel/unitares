@@ -77,9 +77,13 @@ browser `Origin` outside localhost, `UNITARES_MCP_ALLOWED_ORIGINS` and the
 dashboard passkey origin, or a `Host` that is a dotted DNS name not listed in
 `UNITARES_MCP_ALLOWED_HOSTS` (the DNS-rebinding shape). IP literals, `localhost`
 and dotless names such as the `governance-mcp` service need no listing.
-Non-browser clients are unaffected; a browser opening the dashboard on a LAN
-address or a hostname needs that origin and host in the two lists, which `/mcp`
-already required, or a bearer or passkey session.
+The Host rule applies to every caller, not only browsers: the server cannot
+tell a rebound page from a script by its Host alone. So any client, `curl` and
+the SDKs included, that addresses the server by a dotted hostname (for example
+`server.home.arpa` or a Tailscale MagicDNS name) needs that host in
+`UNITARES_MCP_ALLOWED_HOSTS`, or a bearer or passkey session. A browser opening
+the dashboard on a LAN address or a hostname also needs its origin in
+`UNITARES_MCP_ALLOWED_ORIGINS`, which `/mcp` already required.
 
 ## What this pass did not change (known gaps)
 
