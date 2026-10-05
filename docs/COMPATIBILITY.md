@@ -59,7 +59,12 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
   `UNITARES_MODEL_PRIVACY` if a local endpoint is misclassified (#2571). The
   interface contract moves 1.25.0 → 1.27.0 with compatible description changes.
   Dependency floors rise to `numpy>=2.3.2` and `starlette>=1.0.0`, and
-  `pydantic>=2.12.0` is declared (#2641). No database migration is introduced.
+  `pydantic>=2.12.0` is declared (#2641). On the default local posture, a
+  client that reaches the server by a dotted hostname (`curl`, the SDKs, a
+  Tailscale MagicDNS name) now needs that host in `UNITARES_MCP_ALLOWED_HOSTS`
+  or a bearer or passkey session, and a browser page from another origin no
+  longer gets the trusted-network bypass (#2658). No database migration is
+  introduced.
 - v3.1.0 removes no registered callable's canonical name, but retires 24
   unadvertised aliases that only redirected a guessed or pre-consolidation
   name to one that keeps its own (`status`, `start`, `checkin`, `hello`,

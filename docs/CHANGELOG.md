@@ -89,6 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   aliases carried now live in `tool_meta.ACTION_OPERATIONS`, so timeout
   recovery for router reads is unchanged. (#2593)
 
+### Security
+- **`export_to_file` writes only inside its export directory.** `format` is allowlisted, and `filename` must be a bare name with no path separators and no leading dot. The target is opened relative to the validated directory without following symlinks, and a multiply linked target is refused. Before this, an absolute path or `..` in `filename` wrote anywhere the server user could write (#2658).
+- **A web page is no longer treated as a local caller.** On the default local posture (no `UNITARES_MCP_BEARER_TOKENS`), the trusted-network bypass on REST and `/ws/eisv` no longer applies to a request whose browser `Origin` falls outside localhost, `UNITARES_MCP_ALLOWED_ORIGINS` and the dashboard passkey origin. It also no longer applies to a cross-site `Sec-Fetch-Site` request without an allowed Origin, or to a `Host` that is a dotted DNS name not listed in `UNITARES_MCP_ALLOWED_HOSTS`, which is the DNS-rebinding shape. Before this, any page open in the operator's browser could call `/v1/tools/call`, read `/ws/eisv`, or, after rebinding, read the dashboard. The Host rule applies to every caller: a client that reaches the server by a dotted hostname, such as `server.home.arpa` or a Tailscale MagicDNS name, now needs that host in `UNITARES_MCP_ALLOWED_HOSTS`, or a bearer or passkey session. IP literals, `localhost` and dotless names need no listing (#2658).
+
 ## [3.1.0] - 2026-09-28
 
 <!-- plugin-bundle-recut: v0.4.19 -->
