@@ -299,6 +299,43 @@ than re-defining it).
 
 ---
 
+### anchor — **four** distinct questions
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `anchor (substrate identity)` | What persistent on-disk pin lets a substrate-anchored resident *earn* continuity across restarts? (the `anchors/` directory; keyed by uuid) | `src/identity/substrate.py::_default_anchors_dir` · `identity.md` "Substrate-Earned Identity" |
+| `anchor (exogenous outcome)` | Does this outcome signal come from *outside* the governance loop, so the loop's references stay externally falsifiable? (a `verification_source` mapped to a trust tier; `--anchor-scope trusted` vs `all` selects the cohort) | `src/grounding/outcome_anchors.py::AnchorTier` · EISV maths roadmap Invariant 4 |
+| `anchor (sensor coupling)` | How strongly is the modelled E/I pulled toward sensor-derived values? (`k_anchor`, a spring coupling in the dynamics; 0 disables it) | `governance_core/parameters.py` · `governance_core/dynamics.py` |
+| `anchor (calibration class)` | Which per-behavior-class scale constants apply to this agent? (generic classes `embodied`, `resident_persistent`, `engaged_ephemeral`, `ephemeral`, `default`; a deployment overlay supplies per-resident values) | `config/governance_config.py::_apply_class_calibration_overlay` |
+
+Two of these are about *trust* (what may be believed), one is a *physical coupling constant*, and one is a *scale-selection key*. They share a word and nothing else: a "trusted anchor" filter does not touch `k_anchor`, and regenerating a class anchor does not change which outcomes count as exogenous. Always qualify which sense a sentence means, especially around `anchor-scope` and calibration regen.
+
+---
+
+### pause — policy verdict vs. persisted state vs. scheduled-job state
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `pause (policy verdict)` | Did the governance gate decide to stop this agent's governed writes? (`coherence_pause`, `risk_pause`, `void_pause`; an output of the decision, advisory `proceed`/`guide` being its siblings) | `src/coherence_gate_shadow.py` · `governance-fundamentals` skill |
+| `pause (agent lifecycle state)` | What status is this agent record *currently in*? (`lifecycle_status == "paused"`, `paused_at`; persists until `self_recovery`, dialectic, an operator, or the TTL) | `src/mcp_handlers/support/pause_ttl.py::maybe_auto_expire_pause_async` |
+| `pause (automation)` | Is this scheduled job (launchd, Hermes cron) switched off by an operator? (the census `paused` row; nothing to do with any agent's governance state) | the operator's automation registry runbook (`unitares-automations census`) |
+
+The first causes the second, but they answer different questions: the verdict is a *decision at a moment*, the lifecycle state is *what is persisted afterward*, and the TTL can clear the state without the gate re-deciding. The third is unrelated to both. A census "paused" row is not a governance pause, and a cleared lifecycle pause is not evidence the original verdict was wrong.
+
+---
+
+### archive — agent status vs. knowledge-graph entry vs. file rotation
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `archive (agent)` | Has this agent identity been retired from the live roster? (`status = archived`, `disabled_at` set; the sense behind the false-archival incidents) | `src/agent_storage.py::archive_agent` |
+| `archive (knowledge-graph entry)` | Has this discovery aged out of default search? (ephemeral entries after the lifecycle threshold; still retrievable with `include_archived=true`, never deleted) | `src/knowledge_graph_lifecycle.py::_archive_ephemeral` |
+| `archive (file rotation)` | Where did an old log or data file get moved? (`archive_dir` under a log or data directory) | `src/background_tasks.py` |
+
+The first two are both reversible in practice but reached through separate paths, and only the first carries identity consequences: an archived agent that was merely quiet is the failure `proof of life` describes. "Archived" on its own, in an audit or census row, names none of the three.
+
+---
+
 ## Single-sense load-bearing terms
 
 These currently answer one question each. Listed so a future split is visible
@@ -318,6 +355,7 @@ against a baseline.
 | `affordance_state` | What reach/permissions/capability does the agent actually have at event time? | `harness-substrate-plurality.md` |
 | `assurance` (`identity_assurance`) | How strongly is this identity claim grounded? (tier + source) | `harness-substrate-plurality.md`, `identity.md` |
 | `governance_mode` | Under what authority context was this write made? (explicit / ambient / gated / lifecycle / posthoc) | `harness-substrate-plurality.md` |
+| `epistemic_class` | Who *composed* this report? (`agent_report` the agent itself; `substrate_interpretation` a hook or process reading turn shape; `substrate_observation` a direct runtime reading; `prediction`; and `synthetic` for bootstrap rows the server writes itself, which the check-in API does not accept) — never a statement of *choice* | `src/mcp_handlers/updates/phases.py::_ALLOWED_EPISTEMIC_CLASSES` · `eisv-proprioception-contract.md`; an omitted value is still coerced to `agent_report` server-side, so the label over-states authorship for automation |
 | `typed absence` | *What kind* of absence is this? (`not_found` / `pending` / `expired` / `stale` / …) — never a bare null | `beam-coordination-kernel.md` |
 | `provenance envelope` | What situated facts surrounded this single governance write? | `harness-substrate-plurality.md` (s22 write_context) |
 
