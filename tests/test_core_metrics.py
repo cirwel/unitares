@@ -1124,7 +1124,7 @@ class TestExportToFile:
         assert not outside.exists()
 
     @pytest.mark.asyncio
-    async def test_planted_hard_link_is_replaced_not_truncated(
+    async def test_planted_hard_link_is_refused_not_truncated(
         self, mock_server, mock_monitor, tmp_path,
     ):
         """O_TRUNC through a hard link would rewrite a file outside the directory."""
