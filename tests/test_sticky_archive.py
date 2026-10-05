@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.lifecycle_auth import operator_caller
 
 from tests.helpers import parse_result
 from tests.test_core_update import (
@@ -160,6 +161,13 @@ class TestArchivedRefusal:
 
 class TestManualArchiveMarker:
     """handle_archive_agent must stamp meta.notes with 'user requested' marker."""
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
 
     @pytest.mark.asyncio
     async def test_manual_archive_stamps_user_requested_marker(self):

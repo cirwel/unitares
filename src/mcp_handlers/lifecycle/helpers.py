@@ -20,6 +20,45 @@ from ..utils import error_response
 logger = get_logger(__name__)
 
 
+def require_owner_or_operator(
+    target_uuid: str,
+    arguments: dict,
+    *,
+    action: str,
+    display_id: Optional[str] = None,
+) -> Optional[Sequence[TextContent]]:
+    """Authorize a lifecycle mutation of ``target_uuid`` (GHSA-r9q5-7j8h-82rr).
+
+    Two principals may archive, delete or resume an agent: the agent itself
+    (the session binding resolves to the target) and an operator presenting a
+    valid ``X-Unitares-Operator`` token. Nothing else counts: not a bearer
+    API key (every holder would be equally privileged), not a self-claimed
+    ``operator`` label or tag, and not an unbound caller. Returns ``None``
+    when the call may proceed, else the error payload to return as-is.
+    """
+    from ..context import get_context_agent_id
+    from ..error_helpers import ownership_error
+    from ..identity.operator import is_operator_caller
+    from ..utils import verify_agent_ownership
+
+    if verify_agent_ownership(target_uuid, arguments):
+        return None
+    if is_operator_caller():
+        return None
+    caller = get_context_agent_id() or "unbound"
+    logger.warning(
+        "[LIFECYCLE_AUTH] %s refused: caller=%s target=%s (not owner, no operator token)",
+        action, caller[:8], target_uuid[:8],
+    )
+    return ownership_error(
+        resource_type=f"agent lifecycle ({action})",
+        resource_id=display_id or target_uuid,
+        owner_agent_id=target_uuid,
+        caller_agent_id=caller,
+        error_code="LIFECYCLE_NOT_OWNER_OR_OPERATOR",
+    )
+
+
 def clear_loop_detector_state(meta) -> None:
     """Clear loop-detector fields after successful recovery/resume."""
     meta.loop_cooldown_until = None

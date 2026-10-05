@@ -9,6 +9,7 @@ Covers: handle_list_agents, handle_get_agent_metadata, handle_update_agent_metad
 """
 
 import pytest
+from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 import json
 import sys
 from pathlib import Path
@@ -1036,6 +1037,13 @@ class TestUpdateAgentMetadata:
 
 class TestArchiveAgent:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
+
     @pytest.fixture
     def server(self):
         return make_mock_server()
@@ -1080,8 +1088,8 @@ class TestArchiveAgent:
             assert "not found" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_archive_no_ownership_check(self, server):
-        """Archive intentionally skips ownership check -- operators/dashboard need to archive others."""
+    async def test_archive_operator_token_may_target_another_agent(self, server):
+        """An operator token (the dashboard, the Lumen doctor) may archive another agent."""
         meta = make_agent_meta(status="active")
         server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
@@ -1162,6 +1170,13 @@ class TestArchiveAgent:
 
 class TestDeleteAgent:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
+
     @pytest.fixture
     def server(self):
         return make_mock_server()
@@ -1222,8 +1237,8 @@ class TestDeleteAgent:
             assert "not found" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_delete_no_ownership_check(self, server):
-        """Delete intentionally skips ownership check -- operators/dashboard need to manage agents."""
+    async def test_delete_operator_token_may_target_another_agent(self, server):
+        """An operator token may delete another agent."""
         meta = make_agent_meta(status="active", tags=[])
         server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
@@ -1706,6 +1721,13 @@ class TestMarkResponseComplete:
 # ============================================================================
 
 class TestResumeAgent:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
 
     @pytest.fixture
     def server(self):
@@ -2438,6 +2460,13 @@ class TestUpdateAgentMetadataEdgeCases:
 
 class TestArchiveAgentEdgeCases:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
+
     @pytest.fixture
     def server(self):
         return make_mock_server()
@@ -2466,6 +2495,13 @@ class TestArchiveAgentEdgeCases:
 # ============================================================================
 
 class TestDeleteAgentEdgeCases:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
 
     @pytest.fixture
     def server(self):
