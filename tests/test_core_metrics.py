@@ -1117,11 +1117,11 @@ class TestExportToFile:
         monkeypatch.setattr(export_mod, "_contained_export_path", check_then_swap)
         with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
              patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
-            await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
+            result = await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
 
-        # The rename replaces the planted entry; nothing is written through it.
+            data = _parse(result)
+            assert data.get("success") is not True
         assert not outside.exists()
-        assert not (history / "raced.json").is_symlink()
 
     @pytest.mark.asyncio
     async def test_planted_hard_link_is_replaced_not_truncated(
@@ -1140,11 +1140,33 @@ class TestExportToFile:
         with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
              patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
             from src.mcp_handlers.introspection.export import handle_export_to_file
-            await handle_export_to_file({"format": "json", "filename": "linked"})
+            result = await handle_export_to_file({"format": "json", "filename": "linked"})
 
+            data = _parse(result)
+            assert data.get("success") is not True
         assert outside.read_text() == "precious"
-        assert not (history / "linked.json").samefile(outside)
-        assert [p.name for p in history.iterdir() if p.name.endswith(".tmp")] == []
+
+    @pytest.mark.asyncio
+    async def test_overwrite_keeps_existing_file_mode(self, mock_server, mock_monitor, tmp_path):
+        """Re-exporting to an existing private file keeps it private."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        target = history / "mine.json"
+        target.write_text("old contents that are longer than the new export" * 100)
+        target.chmod(0o600)
+        mock_server.project_root = str(root)
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({"format": "json", "filename": "mine"})
+
+            data = _parse(result)
+            assert "file_path" in data
+        assert target.stat().st_mode & 0o777 == 0o600
+        assert "old contents" not in target.read_text()
 
     @pytest.mark.asyncio
     async def test_symlinked_target_outside_dir_refused(self, mock_server, mock_monitor, tmp_path):
