@@ -45,8 +45,12 @@ def test_websocket_header_names_are_lowercased():
 
 
 def test_http_scope_passes_through_unchanged():
-    scope = _scope("http", [("host", "127.0.0.1:8767")])
-    assert _seen(scope) == scope
+    # A title-cased name proves the middleware left the scope alone; a
+    # lowercase one would compare equal even if it had been rewritten.
+    scope = _scope("http", [("Host", "127.0.0.1:8767")])
+    seen = _seen(scope)
+    assert seen == scope
+    assert seen["headers"] == [(b"Host", b"127.0.0.1:8767")]
 
 
 def test_title_cased_bearer_authenticates_untrusted_websocket(monkeypatch):
