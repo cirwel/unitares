@@ -1978,7 +1978,11 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
             is_strict_identity_required,
             strict_identity_refusal_payload,
         )
-        if is_strict_identity_required():
+        # A declared parent_agent_id is not ownership proof, but it is the
+        # lineage declaration this refusal asks for (its hint names it), and
+        # a declared-lineage onboard is a fresh mint by definition. So it
+        # passes here and is promoted to force_new like the permissive path.
+        if is_strict_identity_required() and not arguments.get("parent_agent_id"):
             logger.info(
                 "[FRESH_INSTANCE] STRICT_IDENTITY_REQUIRED=true and "
                 "arg-less onboard() has no caller-proof signal — refusing "
