@@ -183,7 +183,7 @@ async def mcp_call(
     if strict:
         monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
     else:
-        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
     registration._tool_wrappers_cache.clear()
 
     if route == "direct":
@@ -271,7 +271,7 @@ async def rest_call(
     if strict:
         monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
     else:
-        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
     resolve = _resolver(hit() if resolve_result is None else resolve_result)
     metrics = AsyncMock(return_value={"agent_id": AGENT_UUID, "state": "real"})
     db = MagicMock()

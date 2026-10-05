@@ -53,6 +53,7 @@ async def test_get_governance_metrics():
     print("✅ get_governance_metrics handler tests passed")
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_process_agent_update():
     """Test process_agent_update handler

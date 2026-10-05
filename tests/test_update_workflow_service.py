@@ -403,6 +403,7 @@ async def test_process_update_records_s22_provenance_context():
     assert state_kwargs["provenance_context"] == context
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_run_process_update_workflow_real_spine_retries_record_state_after_create():
     """Post-update state persistence should recover by creating the agent and retrying."""

@@ -143,28 +143,40 @@ def mcp_test_server(tmp_path_factory):
 # that test used, so cli_env's teardown can archive each one. The session file
 # alone misses some: `reset` deletes it, and a second onboard overwrites the
 # first one's uuid.
-_ONBOARDED: dict[str, list[str]] = {}
+# session file -> {uuid: client_session_id} for every identity a test onboarded.
+_ONBOARDED: dict[str, dict[str, str | None]] = {}
 
 
 def _session_uuid(session_file: str) -> str | None:
+    return _session_field(session_file, "uuid")
+
+
+def _session_field(session_file: str, field: str) -> str | None:
     try:
-        return json.loads(Path(session_file).read_text()).get("uuid") or None
+        return json.loads(Path(session_file).read_text()).get(field) or None
     except (OSError, ValueError, AttributeError):
         return None
 
 
-def _archive_test_agent(server_url: str, agent_uuid: str) -> dict:
-    """Archive one test identity by UUID and return the tool result.
+def _archive_test_agent(
+    server_url: str, agent_uuid: str, client_session_id: str | None,
+) -> dict:
+    """Archive one test identity by UUID, as that identity, and return the result.
 
     Only a UUID names an archive target (TARGET_AGENT_UUID_REQUIRED refuses a
     label). force=true: the test is over, so the liveness guard, which exists
-    so a sweep cannot strand a running workflow, has nothing to protect.
+    so a sweep cannot strand a running workflow, has nothing to protect. The
+    call carries the identity's own client_session_id because strict identity
+    is the server default, and it refuses an unbound write.
     """
+    arguments = {"action": "archive", "agent_id": agent_uuid, "force": True}
+    if client_session_id:
+        arguments["client_session_id"] = client_session_id
     req = urllib.request.Request(
         f"{server_url}/v1/tools/call",
         data=json.dumps({
             "name": "agent",
-            "arguments": {"action": "archive", "agent_id": agent_uuid, "force": True},
+            "arguments": arguments,
         }).encode(),
         headers={"Content-Type": "application/json"},
     )
@@ -195,13 +207,13 @@ def cli_env(tmp_path, mcp_test_server):
     env["UNITARES_SESSION_FILE"] = session_file
     env["UNITARES_TIMEOUT"] = "30"
     yield env
-    minted = _ONBOARDED.pop(session_file, [])
+    minted = _ONBOARDED.pop(session_file, {})
     current = _session_uuid(session_file)
     if current and current not in minted:
-        minted.append(current)
+        minted[current] = _session_field(session_file, "client_session_id")
     refused = {}
-    for agent_uuid in minted:
-        result = _archive_test_agent(mcp_test_server, agent_uuid)
+    for agent_uuid, client_session_id in minted.items():
+        result = _archive_test_agent(mcp_test_server, agent_uuid, client_session_id)
         if result.get("success") is not True:
             refused[agent_uuid] = result
     assert not refused, (
@@ -222,7 +234,9 @@ def _run(env, *args, check=True):
     if args and args[0] in ("onboard", "o") and result.returncode == 0 and session_file:
         minted = _session_uuid(session_file)
         if minted:
-            _ONBOARDED.setdefault(session_file, []).append(minted)
+            _ONBOARDED.setdefault(session_file, {})[minted] = _session_field(
+                session_file, "client_session_id"
+            )
     if check and result.returncode != 0:
         raise AssertionError(
             f"CLI exited {result.returncode}\n"
