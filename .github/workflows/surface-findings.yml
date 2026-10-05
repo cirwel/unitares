@@ -59,9 +59,12 @@ jobs:
 
       - name: Run surfacing collectors
         id: surface
+        env:
+          COLLECTORS: ${{ github.event.inputs.collectors || 'ruff' }}
+          CHANGED_PATHS: ${{ steps.changed.outputs.files }}
         run: |
-          collectors="${{ github.event.inputs.collectors || 'ruff' }}"
-          paths="${{ steps.changed.outputs.files }}"
+          collectors="$COLLECTORS"
+          paths="$CHANGED_PATHS"
           python3 scripts/ci/surface_findings.py \
             --collectors $collectors \
             ${paths:+--paths $paths} \
