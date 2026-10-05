@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.27.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.28.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -309,7 +309,15 @@ The two identifiers serve different jobs:
   no longer advertises a `{value, scale}` object the MCP schema cannot carry;
   `delegate_inference`'s `timeout_s` notes client timeouts. The input digests
   of `search_shared_memory` and `delegate_inference` and the surface digest
-  move).
+  move;
+  1.28.0, 2026-10-05: authorization only. `agent`'s `archive`, `resume` and
+  `delete` act on the caller's own agent, or on any agent when the request
+  carries a valid `X-Unitares-Operator` token; a bound session or bearer API
+  key alone now gets `LIFECYCLE_NOT_OWNER_OR_OPERATOR` where it used to
+  succeed. `operator_resume_agent` keys on the same token; a self-claimed
+  `operator` label or tag no longer counts, and `operator` is a server-granted
+  tag. Nothing is added, removed, retyped or renamed, and no digest moves: the
+  version alone records the behavior change).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
