@@ -285,20 +285,6 @@ The first sense is a *descriptive* stance (it reports standing already accrued),
 
 ---
 
-## Persistence false friends
-
-Not homonyms: each is a single-sense storage name whose word suggests the wrong
-EISV axis. Map a column to an axis by its writer, not by its name. Canonical
-mapping: `src/db/mixins/state.py` (see rule 3 — this note points there rather
-than re-defining it).
-
-- `core.agent_state.entropy` holds **S** (`src/agent_storage.py`,
-  `record_agent_state(entropy=S, …)`), not E.
-- `core.agent_state.volatility` holds **V** ("void maps to volatility column").
-- **E** has no column; it lives in `state_json.E`.
-
----
-
 ### anchor — **four** distinct questions
 
 | Sense | Question it answers | Canonical source |
@@ -333,6 +319,20 @@ The first causes the second, but they answer different questions: the verdict is
 | `archive (file rotation)` | Where did an old log or data file get moved? (`archive_dir` under a log or data directory) | `src/background_tasks.py` |
 
 The first two are both reversible in practice but reached through separate paths, and only the first carries identity consequences: an archived agent that was merely quiet is the failure `proof of life` describes. "Archived" on its own, in an audit or census row, names none of the three.
+
+---
+
+## Persistence false friends
+
+Not homonyms: each is a single-sense storage name whose word suggests the wrong
+EISV axis. Map a column to an axis by its writer, not by its name. Canonical
+mapping: `src/db/mixins/state.py` (see rule 3 — this note points there rather
+than re-defining it).
+
+- `core.agent_state.entropy` holds **S** (`src/agent_storage.py`,
+  `record_agent_state(entropy=S, …)`), not E.
+- `core.agent_state.volatility` holds **V** ("void maps to volatility column").
+- **E** has no column; it lives in `state_json.E`.
 
 ---
 
