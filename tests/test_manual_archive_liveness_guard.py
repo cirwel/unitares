@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 
 
 def _payload(result):
@@ -138,6 +139,13 @@ class TestLivenessSignalsHelper:
 
 
 class TestManualArchiveGuard:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
     async def _run_archive(self, meta, arguments):
         agent_uuid = "aaaaaaaa-0000-4000-8000-000000000001"
         mock_server, mock_storage = _archive_patches(meta, agent_uuid)

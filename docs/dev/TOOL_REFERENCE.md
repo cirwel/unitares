@@ -802,7 +802,7 @@ EXAMPLE RESPONSE:
 - **Timeout:** 20s for the router; some actions stop sooner (table below)
 - **Related:** `onboard`, `identity`, `observe`
 
-Read and change registered agents' lifecycle. list and get serve unbound callers; list defaults to a 20-agent, 7-day active slice, not the fleet. update writes only your own tags and notes and refuses server-granted tags, but archive, resume and delete carry no ownership check and can target any agent; resume works only on a paused or waiting_input one. archive and delete act only on the agent whose UUID is in agent_id (never a label or public id) and refuse a call without one; archive needs force=true for an agent still showing liveness, and delete needs confirm=true and refuses pioneers. An archived agent stays refused by process_agent_update until self_recovery. release_presence releases only your own presence lease at a clean exit, so a successor can declare you as parent right away. Use observe for behavior rather than metadata.
+Read and change registered agents' lifecycle. list and get serve unbound callers; list defaults to a 20-agent, 7-day active slice, not the fleet. update writes only your own tags and notes and refuses server-granted tags; archive, resume and delete act on your own agent, or on any agent when the request carries a valid X-Unitares-Operator token (a bearer API key alone is refused); resume works only on a paused or waiting_input one. archive and delete act only on the agent whose UUID is in agent_id (never a label or public id) and refuse a call without one; archive needs force=true for an agent still showing liveness, and delete needs confirm=true and refuses pioneers. An archived agent stays refused by process_agent_update until self_recovery. release_presence releases only your own presence lease at a clean exit, so a successor can declare you as parent right away. Use observe for behavior rather than metadata.
 
 ACTIONS:
 - list: List all agents with metadata and health status
@@ -830,7 +830,7 @@ EXAMPLE: agent(action="list")
 - **Timeout:** 15s
 - **Related:** `agent`, `self_recovery`
 
-Resume ANOTHER agent's paused session on operator authority, clearing its pause and loop-detector cooldown; the caller must hold the label or tag 'operator'. Refuses outright on an active void or risk above 0.80, and on elevated or unreadable risk until you pass force=true, an override the input schema does not advertise. A resume logs an operator_intervention entry to the knowledge graph under the caller. self_recovery resumes your own session; detect_stuck_agents lists targets.
+Resume ANOTHER agent's paused session on operator authority, clearing its pause and loop-detector cooldown; the request must carry a valid X-Unitares-Operator token; a self-claimed 'operator' label or tag grants nothing. Refuses outright on an active void or risk above 0.80, and on elevated or unreadable risk until you pass force=true, an override the input schema does not advertise. A resume logs an operator_intervention entry to the knowledge graph under the caller. self_recovery resumes your own session; detect_stuck_agents lists targets.
 
 USE CASES:
 - Emergency recovery when normal paths fail

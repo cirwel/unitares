@@ -621,7 +621,8 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
     
     This tool allows the Central Operator agent to resume other agents that are stuck.
     It requires:
-    1. The caller to be an operator (label="Operator" or tags contain "operator")
+    1. The caller to present a valid X-Unitares-Operator token (a self-claimed
+       "operator" label or tag never counts; GHSA-r9q5-7j8h-82rr)
     2. The target agent to be in a resumable state
     3. A reason for the intervention
     
@@ -652,18 +653,17 @@ async def handle_operator_resume_agent(arguments: Dict[str, Any]) -> Sequence[Te
             error_category="validation_error",
         )]
     
-    # Verify caller is operator
+    # Verify caller is operator. Labels and tags are caller-claimed at onboard
+    # and never server-verified, so they are not an authorization primitive;
+    # only the X-Unitares-Operator token (UNITARES_OPERATOR_TOKENS allowlist)
+    # grants operator standing here.
     meta = mcp_server.agent_metadata.get(caller_uuid)
     if not meta:
         return [error_response("Caller not found")]
-    
-    label = getattr(meta, 'label', '') or ''
-    tags = getattr(meta, 'tags', []) or []
-    is_operator = (
-        label.lower() == 'operator' or
-        'operator' in [t.lower() for t in tags]
-    )
-    
+
+    from ..identity.operator import is_operator_caller
+    is_operator = is_operator_caller()
+
     if not is_operator:
         return [error_response(
             "Only operator agents can use this tool. "
