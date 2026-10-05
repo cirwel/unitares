@@ -6,6 +6,7 @@ with mocked mcp_server and agent_storage.
 """
 
 import pytest
+from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 import json
 import sys
 from pathlib import Path
@@ -231,6 +232,13 @@ class TestListAgentsLite:
 
 class TestArchiveAgent:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
+
     @pytest.fixture
     def mock_mcp_server(self):
         return make_mock_server()
@@ -279,8 +287,8 @@ class TestArchiveAgent:
             assert "not found" in text.lower() or "error" in text.lower()
 
     @pytest.mark.asyncio
-    async def test_archive_no_ownership_check(self, mock_mcp_server):
-        """Archive intentionally skips ownership check -- operators/dashboard need to archive others."""
+    async def test_archive_operator_token_may_target_another_agent(self, mock_mcp_server):
+        """An operator token (the dashboard, the Lumen doctor) may archive another agent."""
         meta = make_agent_meta(status="active")
         mock_mcp_server.agent_metadata = {"aaaaaaaa-0000-4000-8000-000000000001": meta}
 
@@ -298,6 +306,13 @@ class TestArchiveAgent:
 # ============================================================================
 
 class TestDeleteAgent:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
 
     @pytest.fixture
     def mock_mcp_server(self):

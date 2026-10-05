@@ -243,7 +243,16 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # delegate_inference's timeout_s names the client-timeout caveat. Nothing is
 # added, removed, retyped or renamed. The input digests of
 # search_shared_memory and delegate_inference and the surface digest move.
-INTERFACE_CONTRACT_VERSION = "1.27.0"
+# 1.28.0 (2026-10-05): authorization. agent's archive, resume and delete act
+# on the caller's own agent, or on any agent when the request carries a valid
+# X-Unitares-Operator token; a bound session or bearer API key alone now gets
+# LIFECYCLE_NOT_OWNER_OR_OPERATOR where it used to succeed. operator_resume_agent
+# keys on the same token; a self-claimed operator label or tag no longer
+# counts, and operator is a server-granted tag. Nothing is added, removed,
+# retyped or renamed, and the tool descriptions that say the new rule are not
+# part of any input schema, so no input digest and not the surface digest
+# moves: the version alone records the behavior change.
+INTERFACE_CONTRACT_VERSION = "1.28.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
