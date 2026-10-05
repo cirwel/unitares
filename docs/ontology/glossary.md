@@ -272,6 +272,19 @@ The first is a *claim the subject makes*; the second is a *fact something watchi
 
 ---
 
+### attestation — **four** distinct questions
+
+| Sense | Question it answers | Canonical source |
+|---|---|---|
+| `attestation (descriptive, server-to-world)` | What can an outside party verify the deployment *asserts*, offline, with only a public key? (`aic.v2` identity credential, `drr.v1` dialectic resolution receipt; Ed25519, JWKS-published; confers no authority and carries no session proof) | `src/identity/agent_identity_credential.py::AICError` · `dialectic_receipt.py::mint_resolution_receipt` |
+| `attestation (performative, request-bound)` | Who authorized *this one* lease mutation? (`lat.v1`: governance verifies a live continuity proof, then delegates a single short-lived HTTP call bound to method, path, and body SHA-256; the lease plane consumes `(issuer, jti)` once) | `lease_attestation.py::mint_lease_attestation` · `elixir/lease_plane` `IdentityBinding` |
+| `attestation (kernel peer)` | Which process is really on the other end of this Unix socket? (kernel-attested PID, owning launchd label, executable path, process start time to catch PID reuse; the S19 substrate-claim path. The orchestrator-vouched extension in `substrate/vouch.py` is inert, not wired into resolution) | `src/substrate/peer_attestation.py::read_peer_pid` · `identity.md` S19 |
+| `attestation (self-reported)` | What does the agent *claim* about its own state? (caller-attested EISV and confidence in a `sync_state` check-in; verification may raise risk but never lowers a worse self-attested signal; unscored until `record_result` attaches an outcome) | `governance_core/verification.py` |
+
+The first sense is a *descriptive* stance (it reports standing already accrued), the second a *performative* one (it grants a bounded act), the third an observation by the kernel, and the fourth a claim by the subject. Binding the wrong one is the bug: an `aic.v2` token is not a resume credential (copying it grants nothing, unlike `continuity_token`), a `drr.v1` receipt proves what the deployment *persisted* and not that either party intended it, and a self-reported check-in is not evidence of anything until an outcome grades it. This is the same self-reported vs. externally-observed split as `proof of life` above, applied to identity and state claims; the *self-reported* sense there and here is the weakest of its pair.
+
+---
+
 ## Persistence false friends
 
 Not homonyms: each is a single-sense storage name whose word suggests the wrong
