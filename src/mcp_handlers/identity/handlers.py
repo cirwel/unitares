@@ -884,6 +884,14 @@ async def _try_resume_by_agent_uuid_direct(
                             "[SUBSTRATE_VERIFIED] %s... via UDS peer attestation "
                             "(pid=%d)", _direct_uuid[:8], _peer_pid,
                         )
+                        # The stable session may still carry the fingerprint
+                        # it was first bound with (HTTP, before this resident
+                        # moved to UDS); take the attested caller's instead.
+                        from .shared import make_client_session_id
+                        from .persistence import schedule_attested_bind_fingerprint_refresh
+                        schedule_attested_bind_fingerprint_refresh(
+                            make_client_session_id(_direct_uuid), _direct_uuid,
+                        )
                     else:
                         # Verification fired and rejected — return an
                         # explicit error naming the failure mode rather
@@ -1970,7 +1978,11 @@ def _s13_freshness_gate(arguments: Dict[str, Any]):
             is_strict_identity_required,
             strict_identity_refusal_payload,
         )
-        if is_strict_identity_required():
+        # A declared parent_agent_id is not ownership proof, but it is the
+        # lineage declaration this refusal asks for (its hint names it), and
+        # a declared-lineage onboard is a fresh mint by definition. So it
+        # passes here and is promoted to force_new like the permissive path.
+        if is_strict_identity_required() and not arguments.get("parent_agent_id"):
             logger.info(
                 "[FRESH_INSTANCE] STRICT_IDENTITY_REQUIRED=true and "
                 "arg-less onboard() has no caller-proof signal — refusing "

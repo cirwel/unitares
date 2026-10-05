@@ -17,6 +17,7 @@ agent_storage.persist_runtime_state() so values survive force-reload.
 """
 
 import pytest
+from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 import sys
 from pathlib import Path
 from datetime import datetime, timezone
@@ -46,6 +47,13 @@ def _server_with_agent(meta):
 
 
 class TestResumeAgentPersistsRuntimeState:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
     @pytest.mark.asyncio
     async def test_resume_persists_paused_at_and_lifecycle_event(self):
         meta = make_agent_meta(status="paused", paused_at="2026-04-16T10:00:00+00:00")
@@ -156,6 +164,13 @@ class TestQuickResumePersistsRecoveryAttempt:
 
 
 class TestOperatorResumePersistsRuntimeState:
+
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
     @pytest.mark.asyncio
     async def test_operator_resume_persists_paused_at_and_lifecycle_event(self):
         caller_id = "operator-under-test"

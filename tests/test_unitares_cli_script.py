@@ -70,6 +70,9 @@ def _wait_for_ready(url: str, timeout_s: float = 60.0) -> None:
     raise TimeoutError(f"mcp_server at {url} not ready after {timeout_s}s: {last_err}")
 
 
+_TEST_OPERATOR_TOKEN = "pytest-operator-token"
+
+
 @pytest.fixture(scope="session")
 def mcp_test_server(tmp_path_factory):
     """Start a sacrificial mcp_server.py against governance_test on a random
@@ -100,6 +103,11 @@ def mcp_test_server(tmp_path_factory):
     # secret is configured. Provide a deterministic test secret so the
     # CLI tests can assert on the token field.
     env.setdefault("UNITARES_CONTINUITY_TOKEN_SECRET", "pytest-fixture-secret")
+    # Teardown archives the identities each test minted. That is a write on
+    # another agent, which needs operator standing (GHSA-r9q5-7j8h-82rr), so
+    # the sacrificial server allowlists this token and _archive_test_agent
+    # presents it.
+    env["UNITARES_OPERATOR_TOKENS"] = _TEST_OPERATOR_TOKEN
     # Redirect the tool-usage tracker to a fresh tmp file so the subprocess
     # server doesn't read the developer-machine data/tool_usage.jsonl
     # (~1M lines / 177MB) on every process_update — that file is parsed
@@ -166,7 +174,10 @@ def _archive_test_agent(server_url: str, agent_uuid: str) -> dict:
             "name": "agent",
             "arguments": {"action": "archive", "agent_id": agent_uuid, "force": True},
         }).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Unitares-Operator": _TEST_OPERATOR_TOKEN,
+        },
     )
     with urllib.request.urlopen(req, timeout=10) as resp:
         body = json.loads(resp.read())

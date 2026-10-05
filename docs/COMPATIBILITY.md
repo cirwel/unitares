@@ -8,7 +8,7 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.1.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
+| UNITARES server | `v3.2.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.1.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 36533584670](https://github.com/cirwel/unitares/actions/runs/36533584670). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.1.0). |
 | `unitares-governance` plugin | `v0.4.19` | Carries the skills bundle for server `v3.1.0`: its `skills/` mirrors master at `ef127104`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.19). |
 | `unitares-sdk` | `0.4.0` | Published Python client for resident and custom integrations, released with server v3.0.0. A behavioral minor release: `checkin` reads the verdict from the response envelope, so `GovernanceAgent`'s pause and reject handling (`VerdictError`) can now fire where every verdict used to parse as proceed; `get_metrics().action` is the policy action; `audit_knowledge` no longer requests a model by default; and the async `GovernanceClient` raises `GovernanceToolRefused`, a subclass of `GovernanceConnectionError`, when a tool answers `success: false`. It adds an optional NeMo Relay integration (`unitares-sdk[nemo-relay]`). Install it with `pip install unitares-sdk==0.4.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
@@ -35,6 +35,36 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.2.0 removes no registered callable's canonical name. It retires 37 of
+  the last 38 pre-consolidation aliases, each of which renamed one router call
+  and injected its action (`list_agents`, `observe_agent`,
+  `request_dialectic_review`, `store_knowledge_graph`, `check_calibration`,
+  `get_system_history`, `get_connection_status`, and 30 more; the full list and
+  replacements are in the [changelog entry](CHANGELOG.md)); each now returns
+  `tool_not_found_error`, and the same router call with that action replaces it
+  (#2593). The eight advertised workflow aliases and `get_server_info` remain,
+  and the advertised surface digest is unchanged. These names were not
+  undocumented: v3.1.0's tool reference listed them in an "Older names"
+  column, and they dispatched on REST `/v1/tools/call` and in stdio, though
+  not on `/mcp`, and no listing advertised them. The release is a minor by
+  operator decision (2026-10-04): the "Older names" column records legacy
+  redirects, not part of the client contract, which is the router call and
+  action each one named, and that contract is unchanged. A client still
+  sending an older name over REST or stdio must switch to the router call. The local model endpoint is
+  now set with `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID`;
+  `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL`
+  keep working as aliases until v3.3.0. A `privacy='local'` model request
+  (the default) to an endpoint classified as external is now refused with
+  `MODEL_ENDPOINT_NOT_LOCAL`; set `UNITARES_MODEL_LOCAL_HOSTS` or
+  `UNITARES_MODEL_PRIVACY` if a local endpoint is misclassified (#2571). The
+  interface contract moves 1.25.0 → 1.27.0 with compatible description changes.
+  Dependency floors rise to `numpy>=2.3.2` and `starlette>=1.0.0`, and
+  `pydantic>=2.12.0` is declared (#2641). On the default local posture, a
+  client that reaches the server by a dotted hostname (`curl`, the SDKs, a
+  Tailscale MagicDNS name) now needs that host in `UNITARES_MCP_ALLOWED_HOSTS`
+  or a bearer or passkey session, and a browser page from another origin no
+  longer gets the trusted-network bypass (#2658). No database migration is
+  introduced.
 - v3.1.0 removes no registered callable's canonical name, but retires 24
   unadvertised aliases that only redirected a guessed or pre-consolidation
   name to one that keeps its own (`status`, `start`, `checkin`, `hello`,
