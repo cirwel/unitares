@@ -96,16 +96,36 @@ jobs:
       # digest, and Promote Release verified the digest each tag named. A
       # re-dispatch for a release that already has an image must not replace
       # it with a rebuild (a moved base image or package gives a new digest).
+      # It must still be able to finish an interrupted publication: when the
+      # push landed but the attestation did not, the existing digest is
+      # attested here instead of being left unverifiable by Promote Release.
       - name: Keep a published release tag immutable
         id: existing
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}:${{ steps.release.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          REPOSITORY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
-            echo "::notice::$IMAGE is already published; not rebuilding or replacing it."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          image="$REPOSITORY:$RELEASE_TAG"
+          if ! digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest) \
+            || [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::$image is already published; not rebuilding or replacing it."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          # The same binding Promote Release verifies: this workflow, this tag,
+          # this tag's source commit. Anything short of that is re-attested.
+          if gh attestation verify "oci://$REPOSITORY@$digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$(git rev-parse HEAD)" >/dev/null 2>&1; then
+            echo "attested=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$image has no verifiable provenance; attesting the published digest."
+            echo "attested=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Generate image metadata
@@ -139,9 +159,11 @@ jobs:
           provenance: mode=max
 
       - name: Attest published image
-        if: steps.existing.outputs.skip != 'true'
+        if: steps.existing.outputs.skip != 'true' || steps.existing.outputs.attested != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
-          subject-digest: ${{ steps.push.outputs.digest }}
+          # A fresh build attests what it pushed; a re-dispatch attests the
+          # digest already published under the tag.
+          subject-digest: ${{ steps.push.outputs.digest || steps.existing.outputs.digest }}
           push-to-registry: true

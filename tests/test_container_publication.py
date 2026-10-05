@@ -66,7 +66,9 @@ def test_one_release_publishes_every_image_compose_pulls():
         if "attest-build-provenance" in step.get("uses", "")
     )
     assert attest["with"]["subject-name"] == image
-    assert attest["with"]["subject-digest"] == "${{ steps.push.outputs.digest }}"
+    assert attest["with"]["subject-digest"] == (
+        "${{ steps.push.outputs.digest || steps.existing.outputs.digest }}"
+    )
     assert attest["with"]["push-to-registry"] is True
 
 
@@ -82,8 +84,32 @@ def test_a_published_release_tag_is_never_replaced():
     login = next(i for i, st in enumerate(steps) if "login-action" in st.get("uses", ""))
     assert login < steps.index(guard) < steps.index(_step("push"))
     assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
+
+
+def test_a_rerun_attests_a_published_image_that_lacks_provenance():
+    """A push that landed without its attestation must stay recoverable.
+
+    Skipping the attestation along with the rebuild would leave the tag
+    permanently unverifiable by Promote Release.
+    """
+    guard = _step("existing")
+    # The guard checks the binding Promote Release verifies before skipping.
+    for flag in ("--signer-workflow", "publish-container.yml",
+                 '--source-ref "refs/tags/$RELEASE_TAG"', "--source-digest"):
+        assert flag in guard["run"]
+    assert "gh attestation verify" in guard["run"]
+    assert 'digest=$digest' in guard["run"]
+    assert "attested=true" in guard["run"] and "attested=false" in guard["run"]
+    steps = PUBLISH["steps"]
     attest = next(st for st in steps if "attest-build-provenance" in st.get("uses", ""))
-    assert attest["if"] == "steps.existing.outputs.skip != 'true'"
+    assert attest["if"] == (
+        "steps.existing.outputs.skip != 'true' || steps.existing.outputs.attested != 'true'"
+    )
+    assert attest["with"]["subject-digest"] == (
+        "${{ steps.push.outputs.digest || steps.existing.outputs.digest }}"
+    )
+    # Never a rebuild: the push stays gated on skip alone.
+    assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
 
 
 def test_database_image_check_rebuilds_on_every_build_input():
