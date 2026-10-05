@@ -607,6 +607,7 @@ class TestRequireAgentId:
         a, e = require_agent_id(args)
         assert a == "ctx" and args["agent_id"] == "ctx"
 
+    @pytest.mark.legacy_identity_defaults
     @patch("src.mcp_handlers.validators.validate_agent_id_reserved_names", return_value=(None, None))
     @patch("src.mcp_handlers.validators.validate_agent_id_format")
     @patch("src.mcp_handlers.context.get_context_agent_id", return_value=None)

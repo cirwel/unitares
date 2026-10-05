@@ -30,7 +30,7 @@ from src.mcp_handlers.middleware import resolve_identity, DispatchContext
 @pytest.fixture(autouse=True)
 def _reset_env(monkeypatch):
     monkeypatch.delenv("UNITARES_SESSION_FINGERPRINT_CHECK", raising=False)
-    monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
     yield
 
 
@@ -255,7 +255,7 @@ class TestMiddlewareHijackGuardRefusal:
     @pytest.mark.asyncio
     async def test_non_strict_keeps_auto_mint_retry(self, monkeypatch):
         """Strict off: behavior parity with session_resolve_miss — legible retry."""
-        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
 
         minted = {
             "agent_uuid": "99999999-8888-4777-8666-555555555555",
@@ -454,7 +454,7 @@ class TestMiddlewareResolverExceptionFailsClosed:
 
     @pytest.mark.asyncio
     async def test_non_strict_still_continues_unbound(self, monkeypatch):
-        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
         resolve_mock = AsyncMock(side_effect=RuntimeError("identity store unavailable"))
 
         result, ctx = await self._dispatch(

@@ -121,6 +121,7 @@ async def test_invalid_parameter_values():
     print("✅ Handles negative values")
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_authentication_failures():
     """Test session binding authentication (identity_v2)
@@ -246,6 +247,7 @@ async def test_nonexistent_resources():
     print("✅ Non-existent agent read refused without minting identity")
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_validation_errors():
     """Test handlers handle validation errors gracefully"""
@@ -288,6 +290,7 @@ async def test_validation_errors():
     print("✅ Handles out-of-range threshold value")
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_error_response_format():
     """Test that error responses have consistent format
