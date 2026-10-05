@@ -13,6 +13,7 @@ from src.mcp_handlers.context import (
     get_session_signals,
 )
 from src.services.mcp_transport_service import (
+    LowercaseWebSocketHeaders,
     McpAuthConfig,
     bind_public_socket,
     build_transport_runtime,
@@ -35,8 +36,18 @@ def _scope(*headers: tuple[bytes, bytes], peer_pid: int | None = None):
     return scope
 
 
+class _StubApp:
+    """Base-application stand-in that records the middleware added to it."""
+
+    def __init__(self):
+        self.middleware = []
+
+    def add_middleware(self, cls, *args, **kwargs):
+        self.middleware.append(cls)
+
+
 def test_transport_runtime_uses_supported_sansio_websocket_backend(monkeypatch):
-    app = object()
+    app = _StubApp()
     session_manager = object()
 
     monkeypatch.setattr(
@@ -79,6 +90,8 @@ def test_transport_runtime_uses_supported_sansio_websocket_backend(monkeypatch):
 
     assert runtime.session_manager is session_manager
     assert runtime.server.config.ws == "websockets-sansio"
+    # Outermost, so every middleware and route sees lowercase header names.
+    assert app.middleware[-1] is LowercaseWebSocketHeaders
     assert runtime.public_server is None
 
 
@@ -100,7 +113,7 @@ def test_transport_runtime_adds_a_loopback_public_listener(monkeypatch):
         )
     monkeypatch.setattr(
         "src.services.mcp_transport_service._create_base_application",
-        lambda _mcp: object(),
+        lambda _mcp: _StubApp(),
     )
 
     runtime = build_transport_runtime(
@@ -155,7 +168,7 @@ def test_an_unbound_public_listener_falls_back_to_gating_every_request(monkeypat
     )
     monkeypatch.setattr(
         "src.services.mcp_transport_service._create_base_application",
-        lambda _mcp: object(),
+        lambda _mcp: _StubApp(),
     )
 
     runtime = build_transport_runtime(

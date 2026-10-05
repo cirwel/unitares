@@ -422,7 +422,7 @@ TOOL_ANNOTATIONS: Dict[str, Dict[str, Any]] = {
         "openWorldHint": True,
     },
     "agent": {
-        # archive, resume and delete carry no ownership check.
+        # archive, resume and delete need the agent itself or an operator token.
         "title": "Agent Lifecycle Management",
         "readOnlyHint": False,
         "destructiveHint": True,

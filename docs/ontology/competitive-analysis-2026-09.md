@@ -30,6 +30,12 @@ Where a source could not be opened, the row says so and the entry is graded
 on what was opened instead (a GitHub-hosted README, a conformant
 implementation, or a search snippet). Snippet-only entries are not
 byte-verified and must be re-opened before they are cited anywhere else.
+**Addendum 2026-10-04:** Hindsight was added to the substitute map and to
+the substitute column of claims 4 and 8 after an operator asked whether it
+encroaches. Its README was opened first, then its working tree was read
+for the component comparison under the substitute map. The classes of both
+claims are unchanged; claim 8 is the one it presses hardest (see open
+question 4).
 
 ---
 
@@ -103,6 +109,7 @@ result only, not byte-verified; **blocked** = the primary domain refused.
 | **OpenTelemetry GenAI semantic conventions** | Spans and signals for inference, agents, tool execution, evaluation and MCP; `gen_ai.*` and `mcp.*` attribute registries | Identity across processes, claims versus outcomes, review, policy verdicts, audit semantics beyond traces | opened (repository index only) |
 | **Langfuse** (MIT, representative of LangSmith, Phoenix, Weave, Braintrust) | Tracing of LLM calls and agent actions, LLM-as-judge and manual evaluation, prompt management, self-hosting | Cross-process identity, claims versus outcomes, adjudication, pausing | opened (README) |
 | **AgentLens** (MIT, 23 stars) | SHA-256 hash-chained append-only audit of LLM calls, tool invocations, approvals and errors; OTel GenAI ingestion without an SDK; MCP server; self-hosted on SQLite or Postgres; EU AI Act Article 12 framing; guardrails with dry-run; multi-tenancy | Identity continuity across restarts, outcome feedback loops, review workflows, policy enforcement or pausing, claim-to-evidence linking | opened (README) |
+| **Hindsight** (vectorize-io, MIT; added 2026-10-04) | Agent memory over Postgres and pgvector: `retain` (LLM extraction of facts, entities, relationships, time), `recall` (semantic, BM25, graph and temporal in parallel), `reflect` (synthesis); *observations*, deduplicated beliefs that keep supporting quotes and a proof count and are refined rather than overwritten; *mental models* and *knowledge pages*, standing answers rewritten in the background; isolated *banks* per user, agent or project; a built-in MCP endpoint per bank; a coding-agents package (Claude Code, Codex, Cursor and others) that builds a per-repo bank from git history and past sessions and injects knowledge pages on in-flight work at session start; opt-in secret and PII scanning; LLM required for retain and reflect, local backends (Ollama, llama.cpp) supported | Process-attributed writes and lineage (a bank is a storage partition, not a writer identity), epistemic labels on claims, review or adjudication records, binding of predictions or check-ins to later outcomes, policy verdicts or pausing | opened (README) |
 | **IETF `draft-sharif-agent-audit-trail`** (-03, 2026-09) | JSON audit records with agent identity, action classification, outcome and trust level; SHA-256 hash chain over JCS; optional ECDSA; EU AI Act, SOC 2, ISO 42001 mappings | Linking a prior claim or prediction to a later outcome, adjudication records, parent-child lineage (per a conformant implementation's own "lossy mapping" note) | impl (omega-evidence README); datatracker blocked |
 | **IETF `draft-kuehlewind-audit-architecture`** | An architecture for auditing agent delegation and interactions | Not opened; listed for follow-up | snippet; datatracker blocked |
 | **Temporal** (durable execution) | Workflows that survive process failure with automatic retry; event history | Agents, behavioral monitoring, claims versus outcomes, adjudication (not its problem) | opened (README) |
@@ -111,6 +118,36 @@ result only, not byte-verified; **blocked** = the primary domain refused.
 | **MI9** (Wang et al., Barclays, arXiv:2508.03858) | Runtime safety framework: agency-risk index, agent-semantic telemetry, goal-aware authorization monitoring, finite-state conformance, goal-conditioned drift detection, graded containment; evaluated on 1,000 synthetic scenarios; open-sourced prompts and scripts | Identity ontology, class-conditional calibration, shared memory, adjudication record (June verdict stands) | opened (abstract via Hugging Face papers) |
 | **Auton** (Snap, arXiv:2602.23720) | Declarative Cognitive Blueprint separated from a Runtime Engine; formal auditability of the agent artifact; POMDP execution model; constraint manifold for safety | Behavioral state at runtime (June verdict stands: different layer) | opened (abstract via Hugging Face papers) |
 | **Multiagent debate** (Du et al., MIT and Google Brain, 2023) | Multiple model instances propose, critique and revise over rounds to converge on an answer | Any durable record of the debate, adjudication with conditions, binding to later outcomes | opened (abstract via Hugging Face papers) |
+
+### Component comparison: Hindsight (2026-10-04)
+
+Hindsight's working tree and UNITARES's were each read once, by one agent
+per codebase, at the commits current on 2026-10-04. Neither reading was
+independently verified. "Ahead" means ahead in mechanism as read, not in
+measured benefit.
+
+| Component | Hindsight | UNITARES | Ahead |
+|---|---|---|---|
+| Duplicate detection on write | Exact-text guard, plus embedding cosine ≥ 0.97 confirmed by an LLM judge | None; tag-overlap linking only, inert on the Postgres backend (#2655) | Hindsight |
+| Revision history | Pre-update snapshot per observation (capped at 50); dedup folds and deletes leave none | `update` overwrites in place; explicit supersede keeps the old row, and the successor link needs AGE | Mixed: automatic versions versus attributed corrections |
+| Retrieval | Semantic, BM25, graph and temporal fused (RRF k=60) and cross-encoder reranked by default; reports LongMemEval results | Full-text by default; semantic, hybrid RRF and reranker exist behind backend and env flags; no benchmark | Hindsight |
+| Synthesis | Mental models with cited ids, refreshed and versioned | Topic rollups with cited ids; unscheduled and unversioned | Hindsight |
+| Successor handoff | Session-start injection from a bank built from git history and past transcripts | Declared lineage; no knowledge content handed over (reconstruction is a client workflow) | Hindsight in practice |
+| Writer attribution | No writer column; identity only as client-chosen tags, dropped when observations merge across harnesses | Agent id, `client_session_id`, provenance chain, authority tiers, identity-gated high-severity writes | UNITARES |
+| Review, outcomes, policy | None found | Dialectic records, outcome binding to prior predictions, proceed/guide/pause | UNITARES only |
+| Without an LLM | Extraction, observations and mental models need one; no-LLM mode is chunk storage | Core path runs without a model | UNITARES |
+
+**Provenance check.** None of 15 UNITARES-specific identifiers appears in
+Hindsight's tree. Its "supersede" and "lineage" mean source-fact
+replacement and observation ancestry, not the UNITARES concepts. The
+projects developed in parallel (Hindsight's first commit 2025-10-30;
+UNITARES's knowledge layer 2025-11-25, observations in Hindsight
+2025-11-26). Their shared parts (RRF, cross-encoders, small embedding
+models) are field-standard and say nothing about copying.
+
+**Reading.** Claim 4 stays differentiated on attribution alone. On
+retrieval, deduplication and handoff, the strongest open memory substitute
+is ahead.
 
 ---
 
@@ -121,11 +158,11 @@ result only, not byte-verified; **blocked** = the primary domain refused.
 | 1 | "Accountability infrastructure for long-running AI agents" (README tagline, public site) | capability | AgentLens; AgentCore Observability; DriftGate | Commodity | Operational observation | Keep; no positioning weight |
 | 2 | "Its federation kernel connects independent runtimes to one operator-controlled server" (README, public site) | capability with implied uniqueness | A2A 1.0.0 owns cross-runtime interoperability | **Unsupported as read** | — | Rewrite: the runtimes interoperate over A2A or their own transports; UNITARES is the shared record behind them. Define "federation" once, in the narrow sense, with the A2A disambiguation |
 | 3 | "Identity and lineage — know which process acted and where inherited work came from" (README) | capability | Entra Agent ID, Google attested identity, AgentCore Identity (credential identity); Relay scopes (execution lineage) | Differentiated | Exercised path | Keep; add "for attribution, not authentication", which `SCOPE_AND_THREAT_MODEL.md` already states |
-| 4 | "Claims and evidence — retain important findings, corrections, and their provenance outside any one context window" (README) | capability | Memory services (AgentCore Memory), evaluation datasets (Langfuse), audit logs (AgentLens, IETF AAT record actions, not claims) | Differentiated | Exercised path | Keep |
+| 4 | "Claims and evidence — retain important findings, corrections, and their provenance outside any one context window" (README) | capability | Memory services (Hindsight observations, AgentCore Memory), evaluation datasets (Langfuse), audit logs (AgentLens, IETF AAT record actions, not claims) | Differentiated | Exercised path | Keep |
 | 5 | "Governed review — preserve disagreement, conditions, and resolution as part of the work record" (README) | capability | Multiagent debate (a method, no record); approval and input-required states (AgentLens approvals, A2A `INPUT_REQUIRED`); IETF human-in-the-loop drafts (not opened) | **Differentiated, strongest** | Exercised path (81 non-canary verdicts; reviewer-label study) | Keep; this and row 6 are the sentence to lead with |
 | 6 | "Outcome grounding — connect predictions and check-ins to what later happened" (README) | capability | IETF AAT `outcome` (action outcome, no prediction binding); evaluation platforms score outputs without binding to prior self-reports | Differentiated | Exercised path; predictive lift: non-detection, inconclusive | Keep the capability wording; never let "grounding" read as validated prediction |
 | 7 | "Runtime policy — return an action, reason, and next step at meaningful checkpoints" (README) | capability | Relay middleware, AgentCore Policy (Cedar), Google Agent Gateway and Model Armor, DriftGate | Commodity as enforcement; differentiated only in the contestability fields (reason, next step, review path) | Pause actuation: event reconciled, protection untested | Keep; state that enforcement is delegated to runtimes (the 2026-09-16 Relay gate is the pattern) |
-| 8 | "Reconstruction — give a successor the records needed to understand and continue earlier work" (README) | capability | Temporal event history (execution state); Relay ATIF trajectories; AgentCore Memory | Commodity for execution state; differentiated for records of claims, review and outcomes | Untested versus git plus handoff (already stated) | Keep with the existing caveat |
+| 8 | "Reconstruction — give a successor the records needed to understand and continue earlier work" (README) | capability | Temporal event history (execution state); Relay ATIF trajectories; AgentCore Memory; Hindsight coding-agent knowledge pages | Commodity for execution state; differentiated for records of claims, review and outcomes | Untested versus git plus handoff (already stated) | Keep with the existing caveat |
 | 9 | "an operator-owned accountability layer across coding agents, research agents, residents, and custom runtimes" (README) | positioning | AgentLens (self-hosted, MIT) plus OTel GenAI plus an AAT export | Differentiated | — | Sharpen to "self-hosted and vendor-neutral"; name the open substitute honestly |
 | 10 | "self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction" (`PRODUCT_DEFINITION.md`) | combination | None opened covers all five | Differentiated combination | Benefit untested | Keep the five nouns; fix "federation" per row 2 |
 | 11 | "The deployed policy path uses auditable behavioral state estimation" (public site) | capability | MI9 (conformance, risk index, drift); DriftGate drift | Differentiated technically (continuous estimator versus discrete conformance) | Predictive validity: research claim, not guarantee (trust contract §4) | Keep with the caveat that already follows it |
@@ -209,3 +246,9 @@ each should land with the canonical wording registered in
 3. Does A2A's `INPUT_REQUIRED` task state give a standard seam for governed
    review, so that a UNITARES pause could surface as an A2A task state rather
    than a bespoke verdict?
+4. Is Hindsight's coding-agent memory (a per-repo bank built from git history
+   and past sessions, with knowledge pages on in-flight work injected at
+   session start) a stronger reconstruction baseline than the transcript? If
+   so, it belongs in the control arm of any reconstruction test, beside the
+   transcript, and a "differentiated" class on claim 8 has to survive that
+   comparison rather than a comparison with execution history.

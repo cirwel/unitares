@@ -310,10 +310,17 @@ def io_path2_miss_recent() -> bool:
 
 
 def io_resume(token: str) -> dict:
+    # The doctor is not Lumen, so agent(action=resume) on Lumen's UUID is a
+    # cross-agent lifecycle write; since GHSA-r9q5-7j8h-82rr those require the
+    # operator token, not just the bearer API key.
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    operator_token = _load_secret("UNITARES_OPERATOR_TOKEN")
+    if operator_token:
+        headers["X-Unitares-Operator"] = operator_token
     out = _http_json(
         f"{GOV_URL}/v1/tools/call",
         {"name": "agent", "arguments": {"action": "resume", "agent_id": LUMEN_UUID}},
-        headers={"Authorization": f"Bearer {token}"} if token else {},
+        headers=headers,
     )
     return out.get("result", {})
 
