@@ -7,7 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased]
+## [3.2.0] - 2026-10-04
+
+<!-- plugin-bundle-recut: v0.4.20 -->
+<!-- changelog-coverage-exempt: #2515 no-user-effect -->
+<!-- changelog-coverage-exempt: #2562 no-user-effect -->
+<!-- changelog-coverage-exempt: #2596 no-user-effect -->
+<!-- changelog-coverage-exempt: #2598 no-user-effect -->
+<!-- changelog-coverage-exempt: #2599 no-user-effect -->
+<!-- changelog-coverage-exempt: #2604 no-user-effect -->
+<!-- changelog-coverage-exempt: #2605 no-user-effect -->
+<!-- changelog-coverage-exempt: #2606 no-user-effect -->
+<!-- changelog-coverage-exempt: #2607 no-user-effect -->
+<!-- changelog-coverage-exempt: #2608 no-user-effect -->
+<!-- changelog-coverage-exempt: #2609 no-user-effect -->
+<!-- changelog-coverage-exempt: #2612 no-user-effect -->
+<!-- changelog-coverage-exempt: #2614 no-user-effect -->
+<!-- changelog-coverage-exempt: #2621 no-user-effect -->
+<!-- changelog-coverage-exempt: #2623 no-user-effect -->
+<!-- changelog-coverage-exempt: #2625 no-user-effect -->
+<!-- changelog-coverage-exempt: #2630 no-user-effect -->
+<!-- changelog-coverage-exempt: #2633 no-user-effect -->
+<!-- changelog-coverage-exempt: #2634 no-user-effect -->
+<!-- changelog-coverage-exempt: #2635 no-user-effect -->
+<!-- changelog-coverage-exempt: #2644 no-user-effect -->
+<!-- changelog-coverage-exempt: #2646 no-user-effect -->
+<!-- changelog-coverage-exempt: #2648 no-user-effect -->
+<!-- changelog-coverage-exempt: #2649 no-user-effect -->
+
+### Added
+- **check-in responses: `outcomes_in_e`:** when an agent's behavioral E includes the outcome term (at least three outcomes recorded in the last 24h), a check-in response now says which outcomes count and what they do. The fields are: how many outcomes were counted and how many were adverse, by type, and by `verification_source` when the outcome query fetched it (the default query does not, and the field then says `not_fetched` rather than calling recorded sources unrecorded); the term's real share of each E observation after the later blends (about 0.14, not the nominal 0.20, when both are active); its current contribution and range; and how much recording one more adverse outcome lowers the observation (an upper bound once the 20-outcome window is full, since the record that leaves may itself be adverse). It also states the two things the formula does not record: outcomes count without attribution to whether the agent's change caused them, and adverse means rework was needed, not fault. Mirror, compact and standard modes show it only when an adverse outcome is counted and the counts changed since the last account this process showed, and mirror adds one line. `response_mode='full'` always carries it, and `sync_state` lifts it beside `state_summary`. It restates the derivation the check-in already built: E, I, the verdict path and every persisted value are unchanged. Changing how outcomes count is deferred to after the 2026-12-01 registered read (#2610). (#2636)
+- **startup warning for published compose secrets:** the server now logs a startup warning naming each of `LEASE_PLANE_BEARER_TOKEN`, `UNITARES_CONTINUITY_TOKEN_SECRET` and `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` that still holds the default value from `docker-compose.yml`. Those defaults are in this repository, so they are safe only while the host ports stay on loopback. Inside a container with REST in local posture it also warns that `UNITARES_HTTP_API_TOKEN` is not what admits callers, since every peer there is in a private range; use `UNITARES_MCP_BEARER_TOKENS`. Warnings only; no behavior changes. (#2624)
+- **knowledge graph:** the lean discovery digest (and `memory_suggestions`) now carries `closure_class`, and a closed, resolved, `wont_fix` or `superseded` row with no class is labelled `closure_standard: "undeclared"`. No reopen, tag or backfill is applied. (#2631)
+- **audit:** a resume that a continuity token proves (PATH 0) now writes a `path0_token_accept_observed` audit event recording the token's age and whether it had expired. It is an observation only, kept out of calibration and written off the request thread: PATH 0 still accepts an expired token, as before, and this records how often that happens before any decision to enforce expiry. (#2638)
+
+### Changed
+- **local model endpoint:** the model behind `consult`, `call_model`, the in-process dialectic reviewer, check-in coaching and knowledge synthesis is now named by `UNITARES_MODEL_BASE_URL` (an OpenAI-compatible base URL, `/v1` included; default `http://localhost:11434/v1`) and `UNITARES_MODEL_ID` (default still `gemma4:latest`). The older names `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` keep working as aliases until v3.3.0; setting only an old name logs nothing, and `scripts/dev/unitares_doctor.py` prints one line per old name in use. The server now classifies the endpoint as local or external from its URL alone, never from DNS: loopback and RFC 1918 addresses and networks in `UNITARES_TRUSTED_NETWORKS` (the set the REST access checks trust) are local, and so are `localhost`, `host.docker.internal` and hostnames listed in the new `UNITARES_MODEL_LOCAL_HOSTS`. `UNITARES_MODEL_PRIVACY=local|external` overrides it. A `privacy='local'` request (the default) against an external endpoint is refused with `MODEL_ENDPOINT_NOT_LOCAL` before anything is sent, on every path that reads the setting, including the orchestrated reviewer's local backend and the local resident runner. The in-process reviewer tries Ollama's native `/api/chat` only after a cached `/api/version` probe says the endpoint is Ollama. `unitares model` lists models from `{base}/models` and writes the new names; the doctor checks that the endpoint lists the configured model. `call_model`'s `provider` and `model` descriptions change (interface contract 1.26.0). A call that reaches an external endpoint (with `privacy='auto'` or `'cloud'`) is recorded as external, not local, and `list_inference_hosts` reports the endpoint the same way. Local-route clients never follow redirects and ignore `HTTP_PROXY`/`HTTPS_PROXY`, so a local prompt cannot be carried to a host nothing classified. The model setting is `UNITARES_MODEL_ID`, not `UNITARES_MODEL`, which already names the model behind an agent's work in check-ins. A default install on local Ollama behaves as before. Other servers than Ollama are not yet verified end to end. (#2571, #2615)
+- **tool descriptions and hints:** `knowledge(action="update")` says that a supplied `details` replaces the stored one; `search_shared_memory` describes `agent_id`, `status` and `query` as search filters; `sync_state`'s `complexity` no longer advertises a scale object the schema rejects, and its ambiguity error now asks for a 0-1 float or a named level; `delegate_inference`'s `timeout_s` notes client timeouts; the `degenerate_write_rejected` recovery names the marker and the workaround (interface contract 1.27.0, #2627). `dialectic`'s description calls it the on-record, state-altering lane and points opening a review at `request_review` and outside opinions at `consult` (#2592). Revision hints in envelopes and in the store/search descriptions now say `use_tool(tool_name="update_finding", ...)`, which works whether or not `update_finding` is advertised (#2632). Lineage, `not_on_roster` and borderline-S guidance text is plainer; no threshold or logic changes (#2626).
+- **external calibration mirror:** `get_agent_external_calibration` scores only confidence the agent itself reported, and skips outcomes marked `calibration_excluded`. Previously it took the latest confidence of any audit event, usually a server-derived value, which is circular when scored against outcomes. `auto_attest` audit details now record `confidence_source` and `epistemic_class`, and a weak-identity clamp marks the value `confidence_dampened`. No verdict, risk, trust-tier or response change. (#2603)
+- **knowledge synthesis:** a model-written topic summary must cite its source discoveries by reference. One with missing or invalid references is discarded and the deterministic summary is used instead. (#2597)
+- **self-recovery reflections** are tagged `ephemeral` when written, so they archive after seven days (still retrievable with `include_archived=true`) instead of staying open until the 90-day archive pass. New reflections only. (#2643)
+- **in-tree SDK:** `GovernanceClient` lists the server's advertised tools on connect and sends a call to a tool missing from a progressive listing through `use_tool`, which keeps MCP result validation and stops a per-call warning; servers that do not advertise `use_tool` keep direct dispatch. `checkin` (async and sync) now returns the E/I/S/V metrics resolved from a full check-in envelope in `CheckinResult.metrics`; before, they were dropped even when the server sent them. The in-tree SDK version moves to 0.4.1; it reaches PyPI when `sdk-v0.4.1` is tagged. (#2534)
+- **dependencies:** `pydantic>=2.12.0,<3.0.0` is now declared (every tool schema imports it; it used to arrive only through `mcp`); `numpy` moves from `>=1.24.0` to `>=2.3.2` (the first release with CPython 3.14 wheels; the old floor could never install); `starlette` moves from `>=0.37.0` to `>=1.0.0`; `fakeredis` joins the `dev` extra (#2641). The `openai` ceiling moves from `<3.0.0` to `<4.0.0` (#2563).
+- **documentation:** check-in guidance in `docs/guides/CODEX_START.md` and `commands/checkin.md` no longer says to check in once per turn as a baseline; it matches `AGENTS.md`: check in when there is real state to report (#2642). The install guide notes that a reinstall reuses existing Docker volumes and says to `docker compose down` first (#2628). The user manual drops a maintainer-specific "no paid model API" rule and a deployment-specific model name (#2566).
+
+### Fixed
+- **auto-emitted outcomes:** signal words now match only at a word boundary, so "unresolved" no longer counts as "resolved" and "unblocked" no longer counts as "blocked". A check-in reporting open problems had been recorded as `task_completed` (and vice versa), which fed the behavioral outcome terms. Existing rows are not rewritten. (#2611)
+- **gateway (:8768):** a strict-identity refusal (`refused: true`) is now reported as an error, not as "Note saved" or "proceed"; `status`, `checkin`, `search`, `note` and `query` accept an optional `client_session_id` and forward it, so a bound agent can write through the gateway; `search` reads the result key the server actually returns (it always reported 0 results) and `status` reads the live reply shape (#2629). A definitional question such as "What does EISV stand for?" gets a glossary answer instead of the caller's own status (#2637).
+- **lease plane:** a governed `file_write` now releases its lease with reason `normal`. The previous reason was rejected by the database constraint and the error was discarded, so every such lease stayed active until the TTL reaper closed it. An effect on a surface its proposer already holds is now refused rather than piggybacking on that lease. (#2618)
+- **dialectic reviewer:** deeply nested JSON is treated as unparseable rather than crashing the reviewer before any fallback or abstention is recorded, and the verdict scanners no longer take quadratic time on it (#2619, #2622). When the Antigravity reviewer host exits nonzero, the stored error now includes its own reason (from its JSON error, stderr or log), capped at 300 characters (#2616).
+- **dialectic_live:** on macOS, boot re-signs asset CLIs the OS kills on exec (#2600), and a failed boot-time asset build serves the build already on disk instead of crash-looping under launchd; assets are rebuilt only when the on-disk build is stale (#2601, #2613, #2602).
+- **knowledge graph writes:** a `response_to` that cannot become a typed link is now refused instead of being dropped, on all three write paths (`store`, the `discoveries` batch, and `note`). This covers an unknown `response_type`, a value that is not a `{discovery_id, response_type}` object, a missing field, and an empty or `null` `discovery_id`. Before this, the batch path stored the item unthreaded for an unknown type, all three paths did so for a malformed shape, and a `null` id was stored as a reply to a discovery literally named `"None"`; each reported success. A refused single write returns an error naming the expected shape, `{'discovery_id': <parent id>, 'response_type': <type>}`, or the valid types; a refused batch item is reported as `Discovery N: ...` and fails alone, and the other items in the batch are still stored. The three parsers are now one (`_parse_response_to`). A well-formed link is unchanged, including case-normalised types. Lineage scoring in `src/identity/memory_integration.py` reads these reply edges, so a dropped link used to lower it without a trace (#2651).
+- **identity:** after a substrate-attested resume (a resident moving from HTTP to the UDS socket), the session's bind fingerprint now takes the attested caller's value, so later calls no longer raise a false `identity_hijack_suspected` on every request. The in-memory binding is refreshed inline and the local fallback cache with it; the Redis slot (compare-and-set under WATCH, TTL kept) and the Postgres mirror are refreshed off the request path. Only the fingerprint changes, only on bindings already mapped to the same UUID, and acceptance is unchanged. (#2653)
+- **operator tooling (`scripts/ops/`):** `enroll_resident.py` now enrolls the binary the kernel actually reports for a macOS framework-Python resident (`Python.app/Contents/MacOS/Python`, not the `bin/python3.x` launcher), so UDS resume no longer fails every time with an executable mismatch; it also refuses a launcher path that does not exist or is not executable (#2650). `deploy-mcp.sh` applies a deployment env overlay (`scripts/ops/governance-mcp.env`) to the live LaunchAgent plist before restarting, so settings such as `UNITARES_TRUSTED_NETWORKS` reach the running server without hand-editing; a failure warns and deploys with the old environment (#2585). `deploy-orchestrator.sh` warns when the redeployed orchestrator comes up without its idempotency store, instead of reporting OK while keyed spawns fail closed (#2617).
+
+### Removed
+- **37 of the last 38 legacy tool aliases** (compatibility: callable names removed).
+  These were pre-consolidation tool names that each renamed one router call
+  and injected its action. They now return `tool_not_found_error`, refused
+  before any identity step runs. Use the router call instead: `agent`
+  (`list_agents`, `get_agent_metadata`, `update_agent_metadata`,
+  `archive_agent`, `delete_agent`), `observe` (`observe_agent`,
+  `compare_agents`, `compare_me_to_similar`, `detect_anomalies`,
+  `aggregate_metrics`), `dialectic` (`request_dialectic_review`,
+  `submit_thesis`, `submit_antithesis`, `submit_synthesis`,
+  `reassign_reviewer`, `get_dialectic_session`, `list_dialectic_sessions`),
+  `knowledge` (`store_knowledge_graph`, `get_knowledge_graph`,
+  `list_knowledge_graph`, `update_discovery_status_graph`,
+  `get_discovery_details`, `cleanup_knowledge_graph`, `get_lifecycle_stats`),
+  `calibration` (`check_calibration`, `update_calibration_ground_truth`,
+  `backfill_calibration_from_dialectic`, `rebuild_calibration`), `export`
+  (`get_system_history`, `export_to_file`) and `admin` (`get_connection_status`, `get_tool_usage_stats`, `get_telemetry_metrics`,
+  `debug_request_context`, `validate_file_path`, `reset_monitor`,
+  `cleanup_stale_locks`), each with the action its old name implied. No
+  router, action, identity requirement or read/write class changes, and the
+  advertised surface digest does not move. Server hints and tool
+  descriptions that named the old tools now show the router call, and the
+  router descriptions no longer list the tools they replaced. Only the
+  eight workflow aliases remain, plus `get_server_info`, which stays because
+  the Wave 3a BEAM route is keyed on that name. The read/write classes some of these
+  aliases carried now live in `tool_meta.ACTION_OPERATIONS`, so timeout
+  recovery for router reads is unchanged. (#2593)
+
+### Security
+- **`export_to_file` writes only inside its export directory.** `format` is allowlisted, and `filename` must be a bare name with no path separators and no leading dot. The target is opened relative to the validated directory without following symlinks, and a multiply linked target is refused. Before this, an absolute path or `..` in `filename` wrote anywhere the server user could write (#2658).
+- **A web page is no longer treated as a local caller.** On the default local posture (no `UNITARES_MCP_BEARER_TOKENS`), the trusted-network bypass on REST and `/ws/eisv` no longer applies to a request whose browser `Origin` falls outside localhost, `UNITARES_MCP_ALLOWED_ORIGINS` and the dashboard passkey origin. It also no longer applies to a cross-site `Sec-Fetch-Site` request without an allowed Origin, or to a `Host` that is a dotted DNS name not listed in `UNITARES_MCP_ALLOWED_HOSTS`, which is the DNS-rebinding shape. Before this, any page open in the operator's browser could call `/v1/tools/call`, read `/ws/eisv`, or, after rebinding, read the dashboard. The Host rule applies to every caller: a client that reaches the server by a dotted hostname, such as `server.home.arpa` or a Tailscale MagicDNS name, now needs that host in `UNITARES_MCP_ALLOWED_HOSTS`, or a bearer or passkey session. IP literals, `localhost` and dotless names need no listing (#2658).
 
 ## [3.1.0] - 2026-09-28
 

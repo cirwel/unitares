@@ -29,6 +29,7 @@ from .helpers import (
     _archive_one_agent,
     _is_test_agent,
     _resume_with_persistence,
+    require_owner_or_operator,
 )
 from .recovery_policy import (
     compute_recovery_margin,
@@ -46,8 +47,9 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
     """Resume a paused/stuck agent from the dashboard.
 
     Lightweight resume handler for human operators (dashboard).
-    No ownership check -- mirrors archive_agent pattern.
-    Only resumes agents in paused or waiting_input status.
+    Authorization: the agent itself, or a caller presenting a valid
+    ``X-Unitares-Operator`` token (``require_owner_or_operator``); mirrors
+    archive_agent. Only resumes agents in paused or waiting_input status.
     """
     agent_id, error = require_registered_agent(arguments)
     if error:
@@ -63,6 +65,10 @@ async def handle_resume_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
         return agent_not_found_error(agent_id)
 
     meta = mcp_server.agent_metadata[agent_uuid]
+
+    denied = require_owner_or_operator(agent_uuid, arguments, action="resume", display_id=agent_id)
+    if denied:
+        return denied
 
     # Allow resuming paused/waiting_input agents AND "unsticking" active agents
     # Stuck agents are typically still "active" but caught in a timeout/loop
