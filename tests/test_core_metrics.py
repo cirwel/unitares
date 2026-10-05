@@ -1095,6 +1095,35 @@ class TestExportToFile:
         assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
 
     @pytest.mark.asyncio
+    async def test_symlink_swapped_in_after_check_is_not_followed(
+        self, mock_server, mock_monitor, tmp_path, monkeypatch,
+    ):
+        """A symlink planted between the containment check and the open is refused."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        outside = tmp_path / "outside.json"
+        mock_server.project_root = str(root)
+
+        from src.mcp_handlers.introspection import export as export_mod
+        real_contained = export_mod._contained_export_path
+
+        def check_then_swap(export_dir, filename):
+            path = real_contained(export_dir, filename)
+            (history / filename).symlink_to(outside)  # the race, made deterministic
+            return path
+
+        monkeypatch.setattr(export_mod, "_contained_export_path", check_then_swap)
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            result = await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
+
+            data = _parse(result)
+            assert data.get("success") is not True
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
     async def test_symlinked_target_outside_dir_refused(self, mock_server, mock_monitor, tmp_path):
         """A pre-planted symlink in the export dir cannot redirect the write."""
         mock_server.get_or_create_monitor.return_value = mock_monitor

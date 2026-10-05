@@ -232,14 +232,28 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
             """Synchronous file write function - runs in executor to avoid blocking event loop"""
             # Create directory if needed (inside executor to avoid blocking)
             os.makedirs(export_dir, exist_ok=True)
-            
-            # Write file
-            with open(file_path, 'w', encoding='utf-8') as f:
+
+            # Open relative to the directory we validated, refusing symlinks
+            # at both steps: a path check followed by open(path) leaves a
+            # window in which the target can be swapped for a symlink.
+            dir_fd = os.open(
+                os.path.dirname(file_path),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            try:
+                fd = os.open(
+                    os.path.basename(file_path),
+                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                    0o644,
+                    dir_fd=dir_fd,
+                )
+            finally:
+                os.close(dir_fd)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 f.write(export_data)
                 f.flush()  # Ensure buffered data written
                 os.fsync(f.fileno())  # Ensure written to disk
-            # Get file size after write
-            return os.path.getsize(file_path)
+                return os.fstat(f.fileno()).st_size
         
         # Run file I/O in executor to avoid blocking event loop
         file_size = await loop.run_in_executor(None, _write_file_sync)
