@@ -1035,6 +1035,160 @@ class TestExportToFile:
             assert "agent-1" in data["filename"]
             assert "history" in data["filename"]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("complete_package", [False, True])
+    @pytest.mark.parametrize("bad_filename", [
+        "ABSOLUTE",  # replaced with an absolute path under tmp_path below
+        "../escaped",
+        "../../escaped",
+        "sub/escaped",
+        "..",
+        ".hidden",
+        "",
+        123,
+    ])
+    async def test_filename_cannot_escape_export_dir(
+        self, mock_server, mock_monitor, tmp_path, bad_filename, complete_package,
+    ):
+        """filename is a bare stem: absolute paths, separators and '..' are refused."""
+        mock_server.agent_metadata = {"agent-1": _make_metadata()}
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        mock_server.project_root = str(root)
+        outside = tmp_path / "outside"
+        if bad_filename == "ABSOLUTE":
+            bad_filename = str(outside / "escaped")
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({
+                "format": "json",
+                "filename": bad_filename,
+                "complete_package": complete_package,
+            })
+
+            data = _parse(result)
+            assert data.get("success") is not True
+            assert "file_path" not in data
+        written = [p for p in tmp_path.rglob("*") if p.is_file()]
+        assert written == []
+
+    @pytest.mark.asyncio
+    async def test_format_must_be_known(self, mock_server, mock_monitor, tmp_path):
+        """format is interpolated into the filename, so it is allowlisted."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        mock_server.project_root = str(tmp_path / "root")
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({
+                "format": "json/../../../escaped",
+                "filename": "ok",
+            })
+
+            data = _parse(result)
+            assert data.get("success") is not True
+        assert [p for p in tmp_path.rglob("*") if p.is_file()] == []
+
+    @pytest.mark.asyncio
+    async def test_symlink_swapped_in_after_check_is_not_followed(
+        self, mock_server, mock_monitor, tmp_path, monkeypatch,
+    ):
+        """A symlink planted between the containment check and the open is refused."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        outside = tmp_path / "outside.json"
+        mock_server.project_root = str(root)
+
+        from src.mcp_handlers.introspection import export as export_mod
+        real_contained = export_mod._contained_export_path
+
+        def check_then_swap(export_dir, filename):
+            path = real_contained(export_dir, filename)
+            (history / filename).symlink_to(outside)  # the race, made deterministic
+            return path
+
+        monkeypatch.setattr(export_mod, "_contained_export_path", check_then_swap)
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            result = await export_mod.handle_export_to_file({"format": "json", "filename": "raced"})
+
+            data = _parse(result)
+            assert data.get("success") is not True
+        assert not outside.exists()
+
+    @pytest.mark.asyncio
+    async def test_planted_hard_link_is_refused_not_truncated(
+        self, mock_server, mock_monitor, tmp_path,
+    ):
+        """O_TRUNC through a hard link would rewrite a file outside the directory."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        outside = tmp_path / "outside.txt"
+        outside.write_text("precious")
+        os.link(outside, history / "linked.json")
+        mock_server.project_root = str(root)
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({"format": "json", "filename": "linked"})
+
+            data = _parse(result)
+            assert data.get("success") is not True
+        assert outside.read_text() == "precious"
+
+    @pytest.mark.asyncio
+    async def test_overwrite_keeps_existing_file_mode(self, mock_server, mock_monitor, tmp_path):
+        """Re-exporting to an existing private file keeps it private."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        target = history / "mine.json"
+        target.write_text("old contents that are longer than the new export" * 100)
+        target.chmod(0o600)
+        mock_server.project_root = str(root)
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({"format": "json", "filename": "mine"})
+
+            data = _parse(result)
+            assert "file_path" in data
+        assert target.stat().st_mode & 0o777 == 0o600
+        assert "old contents" not in target.read_text()
+
+    @pytest.mark.asyncio
+    async def test_symlinked_target_outside_dir_refused(self, mock_server, mock_monitor, tmp_path):
+        """A pre-planted symlink in the export dir cannot redirect the write."""
+        mock_server.get_or_create_monitor.return_value = mock_monitor
+        root = tmp_path / "root"
+        history = root / "data" / "history"
+        history.mkdir(parents=True)
+        outside = tmp_path / "outside.json"
+        (history / "planted.json").symlink_to(outside)
+        mock_server.project_root = str(root)
+
+        with patch("src.mcp_handlers.introspection.export.mcp_server", mock_server), \
+             patch("src.mcp_handlers.introspection.export.require_registered_agent", return_value=("agent-1", None)):
+
+            from src.mcp_handlers.introspection.export import handle_export_to_file
+            result = await handle_export_to_file({"format": "json", "filename": "planted"})
+
+            data = _parse(result)
+            assert data.get("success") is not True
+        assert not outside.exists()
+
 
 # ============================================================================
 # handle_mark_response_complete (lifecycle.py)

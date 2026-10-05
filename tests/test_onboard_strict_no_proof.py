@@ -59,3 +59,34 @@ async def test_strict_transport_injected_csid_onboard_refuses(monkeypatch):
     assert data["status"] == "lineage_declaration_required"
     assert data["rollout_flag"] == "STRICT_IDENTITY_REQUIRED"
     resolver.assert_not_awaited()
+
+
+def test_strict_declared_lineage_passes_the_freshness_gate(monkeypatch):
+    """parent_agent_id is the declaration the refusal hint asks for.
+
+    Without this, following the hint (pass parent_agent_id to continue prior
+    work) was refused again by the same gate. The declared-lineage call is a
+    fresh mint, so the gate promotes it to force_new.
+    """
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+
+    from src.mcp_handlers.identity.handlers import _s13_freshness_gate
+
+    arguments = {
+        "parent_agent_id": "11111111-1111-4111-8111-111111111111",
+        "spawn_reason": "explicit",
+    }
+    assert _s13_freshness_gate(arguments) is None
+    assert arguments["force_new"] is True
+
+
+def test_strict_bare_gate_still_refuses_without_lineage(monkeypatch):
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
+
+    from src.mcp_handlers.identity.handlers import _s13_freshness_gate
+
+    arguments = {"spawn_reason": "explicit"}
+    refusal = _s13_freshness_gate(arguments)
+    assert refusal is not None
+    assert json.loads(refusal[0].text)["status"] == "lineage_declaration_required"
+    assert "force_new" not in arguments
