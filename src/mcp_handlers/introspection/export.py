@@ -5,6 +5,7 @@ Export tool handlers.
 from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 import os
+import re
 import json
 from datetime import datetime
 from ..utils import success_response, error_response, require_registered_agent
@@ -14,6 +15,29 @@ from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 
 logger = get_logger(__name__)
+
+_EXPORT_FORMATS = ("json", "csv")
+# A bare file stem: no separators, no leading dot, so it cannot name a path
+# outside the export directory (an absolute value makes os.path.join drop the
+# base, and ".." walks out of it).
+_EXPORT_STEM = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
+
+
+def _invalid_export_stem(custom_filename: Any) -> bool:
+    return (
+        not isinstance(custom_filename, str)
+        or _EXPORT_STEM.fullmatch(custom_filename) is None
+        or ".." in custom_filename
+    )
+
+
+def _contained_export_path(export_dir: str, filename: str) -> str | None:
+    """Resolve filename under export_dir, or None if it would land outside."""
+    base = os.path.realpath(export_dir)
+    file_path = os.path.realpath(os.path.join(base, filename))
+    if os.path.dirname(file_path) != base:
+        return None
+    return file_path
 
 @mcp_tool("get_system_history", timeout=20.0, register=False)
 async def handle_get_system_history(arguments: Dict[str, Any]) -> Sequence[TextContent]:
@@ -85,6 +109,19 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
     format_type = arguments.get("format", "json")
     custom_filename = arguments.get("filename")
     complete_package = arguments.get("complete_package", False)  # New: export all layers
+
+    if format_type not in _EXPORT_FORMATS:
+        return [error_response(
+            f"Unsupported export format. Use one of: {', '.join(_EXPORT_FORMATS)}.",
+            {"format": format_type},
+        )]
+    if custom_filename is not None and _invalid_export_stem(custom_filename):
+        return [error_response(
+            "filename must be a bare name (letters, digits, '_', '-', '.'; no "
+            "path separators or '..'). Files are always written to the "
+            "server's export directory.",
+            {"filename": custom_filename},
+        )]
     
     # Load monitor state from disk if not in memory (consistent with get_governance_metrics)
     monitor = mcp_server.get_or_create_monitor(agent_id)
@@ -181,7 +218,12 @@ async def handle_export_to_file(arguments: Dict[str, Any]) -> Sequence[TextConte
         export_dir = os.path.join(mcp_server.project_root, "data", "history")
     
     # Write file (non-blocking - run in executor)
-    file_path = os.path.join(export_dir, filename)
+    file_path = _contained_export_path(export_dir, filename)
+    if file_path is None:
+        return [error_response(
+            "Export path resolves outside the export directory.",
+            {"filename": filename},
+        )]
     try:
         import asyncio
         loop = asyncio.get_running_loop()
