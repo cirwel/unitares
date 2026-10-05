@@ -12,7 +12,11 @@ cd "$PROJECT_ROOT"
 # Host header allowlists for LAN/Cloudflare access (see src/mcp_listen_config.py).
 # Defaults are empty — loopback-only. To expose on LAN or via tunnel, set these
 # in the caller's environment (e.g. via your LaunchAgent plist) BEFORE invoking
-# this script:
+# this script. The server also binds to loopback (127.0.0.1) by default, so
+# clients on another machine (LAN, or a proxy running elsewhere) additionally
+# need UNITARES_BIND_ALL_INTERFACES=1; a proxy or tunnel on this same host
+# reaches loopback and needs only the allowlists:
+#   UNITARES_BIND_ALL_INTERFACES=1   # only for clients on other machines
 #   UNITARES_MCP_ALLOWED_HOSTS="<lan-ip>:*,<hostname>.local,<tunnel-host>"
 #   UNITARES_MCP_ALLOWED_ORIGINS="http://<lan-ip>:*,https://<tunnel-host>"
 export UNITARES_BIND_ALL_INTERFACES="${UNITARES_BIND_ALL_INTERFACES:-0}"
