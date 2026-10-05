@@ -12,6 +12,7 @@ Covers:
 
 import json
 import pytest
+from tests.lifecycle_auth import operator_caller, no_operator, bound_caller
 from unittest.mock import patch, MagicMock, AsyncMock
 
 from src.mcp_handlers.lifecycle.self_recovery import (
@@ -811,6 +812,13 @@ class TestQuickResume:
 
 class TestOperatorResumeAgent:
 
+    @pytest.fixture(autouse=True)
+    def _as_operator(self):
+        """These calls target another agent, so the caller holds the operator token."""
+        with operator_caller():
+            yield
+
+
     def _make_mock_server(self, caller_label="Operator", caller_tags=None,
                           target_coherence=0.6, target_risk=0.3,
                           target_void_active=False, target_void_value=0.0,
@@ -923,7 +931,7 @@ class TestOperatorResumeAgent:
         from src.mcp_handlers.lifecycle.self_recovery import handle_operator_resume_agent
         mock_server = self._make_mock_server(caller_label="Regular Agent")
 
-        with patch(
+        with no_operator(), patch(
             "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
             return_value=("caller-agent", None),
         ), patch(
@@ -939,15 +947,15 @@ class TestOperatorResumeAgent:
             assert "error" in text or "NOT_OPERATOR" in str(text)
 
     @pytest.mark.asyncio
-    async def test_operator_tag_accepted(self):
-        """Operator identified by tag instead of label."""
+    async def test_operator_label_or_tag_without_token_is_rejected(self):
+        """A self-claimed operator label/tag never grants standing (GHSA-r9q5-7j8h-82rr)."""
         from src.mcp_handlers.lifecycle.self_recovery import handle_operator_resume_agent
         mock_server = self._make_mock_server(
-            caller_label="Central",
+            caller_label="Operator",
             caller_tags=["operator", "admin"],
         )
 
-        with patch(
+        with no_operator(), patch(
             "src.mcp_handlers.lifecycle.self_recovery.require_registered_agent",
             return_value=("caller-agent", None),
         ), patch(
@@ -970,8 +978,8 @@ class TestOperatorResumeAgent:
                 "reason": "Recovering stuck agent",
             })
             text = json.loads(result[0].text)
-            data = text.get("data", text)
-            assert data.get("success") is True
+            assert text.get("success") is False
+            assert text.get("error_code") == "NOT_OPERATOR"
 
     @pytest.mark.asyncio
     async def test_hard_limit_void_active(self):

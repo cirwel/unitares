@@ -25,7 +25,7 @@ from ..decorators import mcp_tool
 from ..support.coerce import resolve_agent_uuid
 from src.logging_utils import get_logger
 
-from .helpers import _invalidate_agent_cache
+from .helpers import _invalidate_agent_cache, require_owner_or_operator
 
 logger = get_logger(__name__)
 
@@ -45,6 +45,7 @@ logger = get_logger(__name__)
 # confer auto-archival immunity (agent_lifecycle.py).
 PRIVILEGED_TAGS = frozenset({
     "admin",
+    "operator",
     "embodied",
     "persistent",
     "autonomous",
@@ -342,8 +343,9 @@ async def handle_update_agent_metadata(arguments: Dict[str, Any]) -> Sequence[Te
 async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Archive an agent for long-term storage.
 
-    No ownership check -- dashboard and operator agents need to archive
-    other agents. HTTP Bearer token auth is sufficient for admin actions.
+    Authorization: the agent itself, or a caller presenting a valid
+    ``X-Unitares-Operator`` token (``require_owner_or_operator``). A bearer
+    API key alone is not enough: every holder would be equally privileged.
     Mirrors handle_resume_agent pattern. The target is always named: see
     _require_named_target.
     """
@@ -371,6 +373,10 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 
     if agent_uuid != named:
         return [_target_not_found_error(named, "archive")]
+
+    denied = require_owner_or_operator(agent_uuid, arguments, action="archive", display_id=agent_id)
+    if denied:
+        return denied
 
     if meta.status == "archived":
         return [error_response(
@@ -482,8 +488,8 @@ async def handle_archive_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
 async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Delete agent and archive data (protected: cannot delete pioneer agents).
 
-    No ownership check -- dashboard and operator agents need to manage
-    other agents. HTTP Bearer token auth is sufficient for admin actions.
+    Authorization: the agent itself, or a caller presenting a valid
+    ``X-Unitares-Operator`` token (``require_owner_or_operator``).
     Still requires confirm=true and pioneer protection. The target is always
     named: see _require_named_target.
     """
@@ -514,6 +520,10 @@ async def handle_delete_agent(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     if agent_uuid != named:
         return [_target_not_found_error(named, "delete")]
+
+    denied = require_owner_or_operator(agent_uuid, arguments, action="delete", display_id=agent_id)
+    if denied:
+        return denied
 
     # Check if agent is a pioneer (protected)
     if "pioneer" in meta.tags:
