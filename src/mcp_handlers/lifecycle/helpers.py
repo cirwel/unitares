@@ -46,9 +46,11 @@ def require_owner_or_operator(
     if is_operator_caller():
         return None
     caller = get_context_agent_id() or "unbound"
+    # The refusal payload below names both parties; the log line does not,
+    # so an identity never lands in the error log in clear text.
     logger.warning(
-        "[LIFECYCLE_AUTH] %s refused: caller=%s target=%s (not owner, no operator token)",
-        action, caller[:8], target_uuid[:8],
+        "[LIFECYCLE_AUTH] %s refused: caller is neither the target nor an operator",
+        action,
     )
     return ownership_error(
         resource_type=f"agent lifecycle ({action})",
