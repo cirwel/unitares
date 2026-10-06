@@ -310,11 +310,13 @@ async def test_a_fresh_mint_does_not_bind_a_keyed_id_it_was_given(keyed):
     cache = AsyncMock()
     with patch.object(resolution, "get_db", return_value=db), \
          patch.object(resolution, "_cache_session", cache):
-        try:
-            await resolution.resolve_session_identity(old_csid, persist=True, force_new=True)
-        except Exception:
-            pass  # the mint's other writes are not under test
+        result = await resolution.resolve_session_identity(old_csid, persist=True, force_new=True)
 
+    # The mint itself succeeded, for a different agent...
+    assert result.get("created") is True
+    new_uuid = result["agent_uuid"]
+    assert new_uuid != VICTIM and db.upsert_identity.await_count == 1
+    # ...and the keyed id it was given, which names VICTIM, was never bound to it.
     db.create_session.assert_not_awaited()
     cache.assert_not_awaited()
 
