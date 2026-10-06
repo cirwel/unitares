@@ -14,11 +14,12 @@ recomputes "this agent's own key" keeps working, and it keeps the ``agent-``
 prefix and ``key[6:18]`` as the display prefix.
 
 A keyed id authenticates itself. The resolver accepts one when exactly one
-active, non-disabled identity has that uuid prefix and the tag verifies for it
+identity that is not deleted has that uuid prefix and the tag verifies for it
 (``resolve_keyed``), with no stored binding needed and nothing written, so a
 resident that resumed by token or UDS attestation and received its id keeps
-working however its bindings expire. A forged tag or an ambiguous prefix is a
-terminal refusal, never a fall-through to other lookups.
+working however its bindings expire; an archived identity resolves as archived,
+so onboard's reactivation still works. A forged tag, an ambiguous prefix or a
+deleted identity is a terminal refusal, never a fall-through to other lookups.
 
 Legacy ids (exactly ``agent-{uuid[:12]}``) follow ``UNITARES_LEGACY_SESSION_IDS``:
 ``refuse`` (the default), ``log`` (accept and log ``[LEGACY_SESSION_ID]``, for an
@@ -150,7 +151,7 @@ def refusal(reason: str) -> Dict[str, Any]:
             "rebind with your continuity_token or start a new session."
         ),
         "no_such_agent": "No active agent owns this client_session_id.",
-        "agent_disabled": "The agent this client_session_id names is disabled.",
+        "agent_deleted": "The agent this client_session_id names was deleted.",
     }
     return {
         "resume_failed": True,
@@ -166,7 +167,7 @@ async def _candidates(prefix: str) -> list[Dict[str, Any]]:
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT agent_id, disabled_at FROM core.identities WHERE agent_id LIKE $1 LIMIT 2",
+            "SELECT agent_id, status, disabled_at FROM core.identities WHERE agent_id LIKE $1 LIMIT 2",
             prefix + "%",
         )
     return [dict(r) for r in rows]
@@ -189,14 +190,30 @@ async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[
     agent_uuid = str(rows[0]["agent_id"])
     if not verifies_for(session_key, agent_uuid):
         return None, refusal("tag_mismatch")
-    if rows[0].get("disabled_at") is not None:
-        return None, refusal("agent_disabled")
+    # Archiving sets disabled_at too and is reversible (onboard with resume
+    # reactivates the same identity), so only a deleted identity is refused
+    # here; an archived one resolves and the resolver reports it archived.
+    if rows[0].get("status") == "deleted":
+        return None, refusal("agent_deleted")
     _verified[session_key] = (agent_uuid, time.monotonic() + _VERIFIED_TTL_S)
     if len(_verified) > 10_000:
         now = time.monotonic()
         for k in [k for k, (_, exp) in _verified.items() if exp <= now]:
             _verified.pop(k, None)
     return agent_uuid, None
+
+
+def audit_reference(session_id: Optional[str]) -> Optional[str]:
+    """What audit.events stores for a session id.
+
+    A keyed id is a bearer credential that audit rows would otherwise hand to
+    every caller who can read them (observe audit_events), so it is stored as
+    a stable digest that still correlates events of one session. Other values
+    are stored as given: a legacy id is derivable from the UUID anyway.
+    """
+    if session_id and classify(session_id) == "keyed":
+        return "csid:" + hashlib.sha256(session_id.encode()).hexdigest()[:24]
+    return session_id
 
 
 def forget_verified() -> None:

@@ -87,7 +87,7 @@ async def test_a_keyed_id_resolves_with_no_stored_binding_and_writes_nothing(key
 
     csid = make_client_session_id(VICTIM)
     cache = AsyncMock()
-    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
          patch.object(resolution, "_get_redis", side_effect=AssertionError("no PATH 1")), \
          patch.object(resolution, "_get_agent_status", AsyncMock(return_value="active")), \
          patch.object(resolution, "_get_agent_label", AsyncMock(return_value="victim")), \
@@ -103,14 +103,15 @@ async def test_a_keyed_id_resolves_with_no_stored_binding_and_writes_nothing(key
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rows, csid_for, reason", [
-    ([{"agent_id": VICTIM, "disabled_at": None}], OTHER, "tag_mismatch"),
+    ([{"agent_id": VICTIM, "status": "active", "disabled_at": None}], OTHER, "tag_mismatch"),
     ([], VICTIM, "no_such_agent"),
-    ([{"agent_id": VICTIM, "disabled_at": None}, {"agent_id": VICTIM[:12] + "x", "disabled_at": None}],
+    ([{"agent_id": VICTIM, "status": "active", "disabled_at": None},
+      {"agent_id": VICTIM[:12] + "x", "status": "active", "disabled_at": None}],
      VICTIM, "ambiguous_prefix"),
-    ([{"agent_id": VICTIM, "disabled_at": "2026-10-06"}], VICTIM, "agent_disabled"),
+    ([{"agent_id": VICTIM, "status": "deleted", "disabled_at": "2026-10-06"}], VICTIM, "agent_deleted"),
 ])
 async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reason):
-    """Forged, unknown, ambiguous or disabled: refused before PATH 1/2, never a
+    """Forged, unknown, ambiguous or deleted: refused before PATH 1/2, never a
     fall through to another lookup."""
     from src.mcp_handlers.identity import resolution
 
@@ -208,16 +209,86 @@ async def test_runtime_observations_accept_a_keyed_id_without_a_session_row(keye
     db = MagicMock()
     db.get_session = AsyncMock(return_value=None)
     csid = make_client_session_id(VICTIM)
-    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
          patch("src.db.get_db", return_value=db), \
          patch.object(ro, "_normalize", return_value=(VICTIM, csid, "e1", None, {"observation_kind": "test"})), \
          patch("src.audit_db.append_audit_event_async", AsyncMock(side_effect=RuntimeError("past the gate"))):
         with pytest.raises(RuntimeError, match="past the gate"):
             await ro.record_runtime_observation({"any": "payload"})
 
-    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
          patch("src.db.get_db", return_value=db), \
          patch.object(ro, "_normalize", return_value=(OTHER, csid, "e1", None, {})):
         with pytest.raises(ro.RuntimeObservationError) as exc:
             await ro.record_runtime_observation({"any": "payload"})
     assert exc.value.code == "session_unbound"
+
+
+@pytest.mark.asyncio
+async def test_an_archived_agents_keyed_id_resolves_as_archived(keyed):
+    """Archiving sets disabled_at but is reversible: onboard(resume=true)
+    reactivates the same identity, so the keyed id must still reach it."""
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "status": "archived", "disabled_at": "2026-10-01"}), \
+         patch.object(resolution, "_get_redis", side_effect=AssertionError("no PATH 1")), \
+         patch.object(resolution, "_get_agent_status", AsyncMock(return_value="archived")), \
+         patch.object(resolution, "_get_agent_label", AsyncMock(return_value="victim")), \
+         patch.object(resolution, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)), \
+         patch.object(resolution, "_substrate_http_reject", AsyncMock(return_value=None)):
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM and result.get("archived") is True
+
+
+def test_audit_rows_store_a_keyed_id_as_a_digest(keyed):
+    csid = make_client_session_id(VICTIM)
+    ref = ss.audit_reference(csid)
+
+    assert ref.startswith("csid:") and csid not in ref and ref == ss.audit_reference(csid)
+    assert ss.audit_reference(f"agent-{VICTIM[:12]}") == f"agent-{VICTIM[:12]}"
+    assert ss.audit_reference("16f5506c-dialectic") == "16f5506c-dialectic"
+    assert ss.audit_reference(None) is None
+
+
+@pytest.mark.asyncio
+async def test_the_audit_writer_stores_the_digest(keyed):
+    from datetime import datetime, timezone
+
+    from src.db.base import AuditEvent
+    from src.db.mixins.audit import AuditMixin
+
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    db = MagicMock(spec=AuditMixin)
+    db.acquire = MagicMock(return_value=acquire)
+    csid = make_client_session_id(VICTIM)
+
+    await AuditMixin.append_audit_event(db, AuditEvent(
+        ts=datetime.now(timezone.utc), event_id="", event_type="t", agent_id=VICTIM,
+        session_id=csid, confidence=0.0, payload={}, raw_hash=None,
+    ))
+
+    args = conn.execute.await_args.args
+    assert csid not in args and ss.audit_reference(csid) in args
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_observation_passes_despite_an_expired_row(keyed):
+    from src import runtime_observations as ro
+
+    expired = MagicMock(agent_id=VICTIM)
+    db = MagicMock()
+    db.get_session = AsyncMock(return_value=expired)
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
+         patch("src.db.get_db", return_value=db), \
+         patch.object(ro, "_session_is_live", return_value=False), \
+         patch.object(ro, "_normalize", return_value=(VICTIM, csid, "e1", None, {"observation_kind": "t"})), \
+         patch("src.audit_db.append_audit_event_async", AsyncMock(side_effect=RuntimeError("past the gate"))):
+        with pytest.raises(RuntimeError, match="past the gate"):
+            await ro.record_runtime_observation({"any": "payload"})
