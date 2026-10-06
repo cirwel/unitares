@@ -51,15 +51,30 @@ def _path_lock(uds_path: str):
         os.close(fd)  # closing the fd releases the flock
 
 
-# Inode of the socket node this process bound at each path, set when a start
-# succeeds. Shutdown unlinks a path only while it still holds that inode.
-_bound_inodes: dict[str, int] = {}
+NodeId = tuple[int, int, int]
 
 
-def unlink_own_socket(uds_path: str, ino: Optional[int] = None) -> bool:
+def _node_id(path: str) -> NodeId:
+    """Identify the filesystem node at ``path``: (device, inode, ctime_ns).
+
+    The inode number alone is not enough: once our node is unlinked, the
+    filesystem may give the same number to the next node created, such as a
+    replacement server's socket (ext4 does this readily). That node's change
+    time cannot match ours, so the triple tells them apart.
+    """
+    st = os.stat(path)
+    return (st.st_dev, st.st_ino, st.st_ctime_ns)
+
+
+# Identity of the socket node this process bound at each path, set when a
+# start succeeds. Shutdown unlinks a path only while it still holds that node.
+_bound_nodes: dict[str, NodeId] = {}
+
+
+def unlink_own_socket(uds_path: str, node: Optional[NodeId] = None) -> bool:
     """Unlink ``uds_path`` only if it is still the node this process bound.
 
-    ``ino`` defaults to the inode recorded by a successful start. Once our
+    ``node`` defaults to the identity recorded by a successful start. Once our
     listener stops accepting, a replacement server can probe the path as stale
     and bind its own socket there (#2662); a blind unlink at our shutdown would
     then delete its live socket. The check runs under the path lock, so no
@@ -67,13 +82,13 @@ def unlink_own_socket(uds_path: str, ino: Optional[int] = None) -> bool:
     a lock file that cannot be opened (EMFILE, a permission change) leaves the
     node in place rather than failing a cleanup path.
     """
-    if ino is None:
-        ino = _bound_inodes.pop(uds_path, None)
-    if ino is None:
+    if node is None:
+        node = _bound_nodes.pop(uds_path, None)
+    if node is None:
         return False
     try:
         with _path_lock(uds_path):
-            if os.stat(uds_path).st_ino != ino:
+            if _node_id(uds_path) != node:
                 return False
             os.unlink(uds_path)
     except OSError:
@@ -216,15 +231,17 @@ async def start_uds_listener(
         # the explicit chmod re-asserts it (defense in depth) before listen(), so
         # the socket accepts no connection until it is owner-only.
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        bound_ino: Optional[int] = None
+        bound_node: Optional[NodeId] = None
         try:
             prev_umask = os.umask(0o177)
             try:
                 sock.bind(uds_path)
             finally:
                 os.umask(prev_umask)
-            bound_ino = os.stat(uds_path).st_ino
+            bound_node = _node_id(uds_path)
             os.chmod(uds_path, 0o600)
+            # chmod moves ctime: re-read so the identity is the node as served.
+            bound_node = _node_id(uds_path)
             # listen() before handing the socket to uvicorn so the kernel queues
             # connections immediately — otherwise a client connecting in the window
             # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
@@ -234,12 +251,12 @@ async def start_uds_listener(
         except OSError:
             sock.close()
             # Clean up a partially-created socket file so a retry can rebind,
-            # but only the node we bound: compare its inode, as every other
+            # but only the node we bound: compare its identity, as every other
             # cleanup here does. The path lock is already held, so this checks
             # inline rather than through unlink_own_socket, which takes it.
-            if bound_ino is not None:
+            if bound_node is not None:
                 try:
-                    if os.stat(uds_path).st_ino == bound_ino:
+                    if _node_id(uds_path) == bound_node:
                         os.unlink(uds_path)
                 except OSError:
                     pass
@@ -281,12 +298,12 @@ async def start_uds_listener(
         # The caller claims no path on failure (#2662), so nothing else will
         # unlink this one: remove the node we bound before closing the socket.
         # Unlinking first means a concurrent start still probes a live listener
-        # rather than a stale path, and the inode check leaves alone any node
-        # that is no longer ours.
+        # rather than a stale path, and the identity check leaves alone any
+        # node that is no longer ours.
         try:
-            unlink_own_socket(uds_path, bound_ino)
+            unlink_own_socket(uds_path, bound_node)
         finally:
             sock.close()
         raise
-    _bound_inodes[uds_path] = bound_ino
+    _bound_nodes[uds_path] = bound_node
     return task

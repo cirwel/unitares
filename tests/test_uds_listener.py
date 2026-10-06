@@ -569,6 +569,36 @@ async def test_stop_leaves_a_replacement_servers_socket_alone(monkeypatch):
         _shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.mark.asyncio
+async def test_stop_survives_inode_reuse_by_a_replacement(monkeypatch):
+    """A replacement socket may reuse our freed inode number (ext4 does); its
+    change time still differs, so shutdown must leave it alone (#2662)."""
+    from src import uds_listener
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    replacement = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        dev, _ino, ctime_ns = uds_listener._bound_nodes[path]
+        os.unlink(path)
+        replacement.bind(path)
+        replacement.listen(8)
+        # Pretend the filesystem handed the replacement our inode number.
+        st = os.stat(path)
+        assert st.st_ctime_ns != ctime_ns
+        uds_listener._bound_nodes[path] = (dev, st.st_ino, ctime_ns)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+    finally:
+        replacement.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
 def test_path_lock_excludes_a_second_holder():
     import errno as _errno
     import fcntl
