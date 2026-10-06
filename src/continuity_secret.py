@@ -69,7 +69,9 @@ def _read(path: Path) -> tuple[str | None, str | None]:
     ownership proof for any agent. Anything else is a problem, never a key.
     """
     try:
-        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        # Nonblocking, so a FIFO at this path is refused below instead of
+        # blocking startup until something writes to it.
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return None, None
     except OSError as exc:

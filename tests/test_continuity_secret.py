@@ -148,3 +148,32 @@ def test_a_symlinked_key_file_is_refused(secret_path, tmp_path):
     assert session_mod._get_continuity_secret() is None
     with pytest.raises(OSError):
         cs.ensure_generated_secret()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_at_the_key_path_is_refused_without_blocking(secret_path):
+    secret_path.parent.mkdir(parents=True)
+    os.mkfifo(secret_path, 0o600)
+
+    assert session_mod._get_continuity_secret() is None
+    with pytest.raises(OSError, match="not a regular file"):
+        cs.ensure_generated_secret()
+
+
+def test_stdio_startup_creates_the_key(secret_path, monkeypatch):
+    import asyncio
+
+    import src.mcp_server_std as std
+
+    monkeypatch.setattr(std, "STDIO_PROXY_URL", None, raising=False)
+    monkeypatch.setattr(std, "STDIO_PROXY_HTTP_URL", None, raising=False)
+    monkeypatch.setattr(std, "init_server_process", lambda: None)
+
+    async def stop_after_the_probe():
+        raise SystemExit("probe reached")
+
+    monkeypatch.setattr(std, "probe_identity_continuity_status", stop_after_the_probe)
+    with pytest.raises(SystemExit, match="probe reached"):
+        asyncio.run(std.main())
+
+    assert session_mod._get_continuity_secret()
