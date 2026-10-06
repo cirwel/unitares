@@ -321,3 +321,307 @@ async def test_uds_socket_created_mode_0600() -> None:
                 await listener_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+# --- #2662: a failed start must not claim (or unlink) another server's socket ---
+import socket as _socket
+import shutil as _shutil
+import tempfile as _tempfile
+
+
+@pytest.mark.asyncio
+async def test_failed_start_does_not_claim_or_unlink_live_socket(monkeypatch):
+    from src.services.mcp_transport_service import (
+        _start_uds_listener,
+        _stop_uds_listener,
+    )
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    live = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    live.bind(path)
+    live.listen(8)
+    try:
+        monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+        sock_path, task = await _start_uds_listener(object())
+        assert (sock_path, task) == (None, None)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.connect(path)  # still the live owner's socket
+        c.close()
+    finally:
+        live.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_unprovable_stale_socket_is_not_displaced(monkeypatch):
+    """An EACCES probe (e.g. another UID's 0600 socket) must not be read as stale."""
+    import errno as _errno
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    live = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    live.bind(path)
+    live.listen(8)
+    real_socket = _socket.socket
+
+    class _DenyingProbe:
+        def __init__(self, *a, **k):
+            self._s = real_socket(*a, **k)
+
+        def settimeout(self, t):
+            self._s.settimeout(t)
+
+        def connect(self, addr):
+            raise PermissionError(_errno.EACCES, "denied")
+
+        def close(self):
+            self._s.close()
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _DenyingProbe)
+    try:
+        with pytest.raises(OSError) as exc:
+            await uds_listener.start_uds_listener(object(), path)
+        assert exc.value.errno == _errno.EADDRINUSE
+        assert os.path.exists(path)
+    finally:
+        live.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_failure_after_bind_removes_own_socket(monkeypatch):
+    """A failure between bind and serve leaves no stale node behind: the caller
+    claims no path on failure, so shutdown would never unlink it."""
+    from src import uds_listener
+    from src.services.mcp_transport_service import _start_uds_listener
+
+    def _boom():
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _boom)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert not os.path.exists(path)
+
+        monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+        assert await _start_uds_listener(object()) == (None, None)
+        assert not os.path.exists(path)
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_failure_after_bind_leaves_a_replaced_node_alone(monkeypatch):
+    """The cleanup unlinks only the node it bound, never one that replaced it."""
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    other = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+
+    def _replace_then_fail():
+        os.unlink(path)
+        other.bind(path)
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _replace_then_fail)
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert os.path.exists(path)
+    finally:
+        other.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replaced", [False, True])
+async def test_oserror_after_bind_unlinks_only_its_own_node(monkeypatch, replaced):
+    """An OSError between bind and listen removes the node we bound, and
+    leaves alone a node that replaced it."""
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    other = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+
+    def _chmod_fails(p, mode):
+        if replaced:
+            os.unlink(p)
+            other.bind(p)
+        raise PermissionError(13, "chmod refused")
+
+    monkeypatch.setattr(uds_listener.os, "chmod", _chmod_fails)
+    try:
+        with pytest.raises(PermissionError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert os.path.exists(path) is replaced
+    finally:
+        monkeypatch.undo()
+        other.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_failed_cleanup_lock_still_closes_socket_and_keeps_original_error(monkeypatch):
+    """If the path lock cannot be opened during the failure cleanup (EMFILE,
+    say), the socket is still closed and the original error still surfaces."""
+    import errno as _errno
+    from contextlib import contextmanager
+    from src import uds_listener
+
+    made = []
+    real_socket = uds_listener.socket.socket
+
+    def _tracking_socket(*a, **k):
+        s = real_socket(*a, **k)
+        made.append(s)
+        return s
+
+    @contextmanager
+    def _lock_unavailable(path):
+        raise OSError(_errno.EMFILE, "too many open files")
+        yield  # pragma: no cover
+
+    def _boom():
+        monkeypatch.setattr(uds_listener, "_path_lock", _lock_unavailable)
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _tracking_socket)
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _boom)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert made and made[-1].fileno() == -1  # the listening socket was closed
+    finally:
+        monkeypatch.undo()
+        for s in made:
+            s.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    if scope["type"] == "http":
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+
+@pytest.mark.asyncio
+async def test_stop_unlinks_the_socket_this_process_bound(monkeypatch):
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        assert sock_path == path and task is not None
+        await _stop_uds_listener(sock_path, task)
+        assert not os.path.exists(path)
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_leaves_a_replacement_servers_socket_alone(monkeypatch):
+    """After our listener stops accepting, a replacement server may bind a
+    fresh socket at the same path; our shutdown must not delete it (#2662)."""
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    replacement = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        assert sock_path == path
+        os.unlink(path)  # the replacement found our node stale and removed it
+        replacement.bind(path)
+        replacement.listen(8)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.connect(path)  # still the replacement's live socket
+        c.close()
+    finally:
+        replacement.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_survives_inode_reuse_by_a_replacement(monkeypatch):
+    """A replacement socket may reuse our freed inode number (ext4 does); its
+    change time still differs, so shutdown must leave it alone (#2662)."""
+    from src import uds_listener
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    replacement = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        dev, _ino, ctime_ns = uds_listener._bound_nodes[path]
+        os.unlink(path)
+        replacement.bind(path)
+        replacement.listen(8)
+        # Pretend the filesystem handed the replacement our inode number.
+        st = os.stat(path)
+        assert st.st_ctime_ns != ctime_ns
+        uds_listener._bound_nodes[path] = (dev, st.st_ino, ctime_ns)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+    finally:
+        replacement.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+def test_path_lock_excludes_a_second_holder():
+    import errno as _errno
+    import fcntl
+    from src.uds_listener import _path_lock
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with _path_lock(path):
+            fd = os.open(path + ".lock", os.O_RDWR)
+            try:
+                with pytest.raises(OSError) as exc:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                assert exc.value.errno in (_errno.EAGAIN, _errno.EWOULDBLOCK)
+            finally:
+                os.close(fd)
+        fd = os.open(path + ".lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released on exit
+        finally:
+            os.close(fd)
+    finally:
+        for f in (path + ".lock",):
+            if os.path.exists(f):
+                os.unlink(f)
+        _shutil.rmtree(d, ignore_errors=True)

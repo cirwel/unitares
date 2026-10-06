@@ -25,6 +25,9 @@ via ``getsockopt(SOL_LOCAL, LOCAL_PEERPID)`` from the underlying socket, and
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import errno
+import fcntl
 import logging
 import os
 import socket
@@ -32,6 +35,65 @@ import stat
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _path_lock(uds_path: str):
+    """Hold an exclusive flock on ``<uds_path>.lock`` for the with-body.
+
+    The lock file is left in place (removing it would reopen the race).
+    """
+    fd = os.open(uds_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing the fd releases the flock
+
+
+NodeId = tuple[int, int, int]
+
+
+def _node_id(path: str) -> NodeId:
+    """Identify the filesystem node at ``path``: (device, inode, ctime_ns).
+
+    The inode number alone is not enough: once our node is unlinked, the
+    filesystem may give the same number to the next node created, such as a
+    replacement server's socket (ext4 does this readily). That node's change
+    time cannot match ours, so the triple tells them apart.
+    """
+    st = os.stat(path)
+    return (st.st_dev, st.st_ino, st.st_ctime_ns)
+
+
+# Identity of the socket node this process bound at each path, set when a
+# start succeeds. Shutdown unlinks a path only while it still holds that node.
+_bound_nodes: dict[str, NodeId] = {}
+
+
+def unlink_own_socket(uds_path: str, node: Optional[NodeId] = None) -> bool:
+    """Unlink ``uds_path`` only if it is still the node this process bound.
+
+    ``node`` defaults to the identity recorded by a successful start. Once our
+    listener stops accepting, a replacement server can probe the path as stale
+    and bind its own socket there (#2662); a blind unlink at our shutdown would
+    then delete its live socket. The check runs under the path lock, so no
+    start can replace the node between the stat and the unlink. Never raises:
+    a lock file that cannot be opened (EMFILE, a permission change) leaves the
+    node in place rather than failing a cleanup path.
+    """
+    if node is None:
+        node = _bound_nodes.pop(uds_path, None)
+    if node is None:
+        return False
+    try:
+        with _path_lock(uds_path):
+            if _node_id(uds_path) != node:
+                return False
+            os.unlink(uds_path)
+    except OSError:
+        return False
+    return True
 
 
 def _read_peer_pid_from_transport(transport: asyncio.BaseTransport) -> Optional[int]:
@@ -134,69 +196,114 @@ async def start_uds_listener(
     sock_dir = os.path.dirname(uds_path)
     if sock_dir:
         os.makedirs(sock_dir, mode=0o700, exist_ok=True)
-    if os.path.exists(uds_path):
-        try:
-            os.unlink(uds_path)
-        except OSError as exc:
-            logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
-
-    # Bind the AF_UNIX socket ourselves so we own its mode with no
-    # world-writable window. umask 0o177 → the socket node is created 0600;
-    # the explicit chmod re-asserts it (defense in depth) before listen(), so
-    # the socket accepts no connection until it is owner-only.
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        prev_umask = os.umask(0o177)
-        try:
-            sock.bind(uds_path)
-        finally:
-            os.umask(prev_umask)
-        os.chmod(uds_path, 0o600)
-        # listen() before handing the socket to uvicorn so the kernel queues
-        # connections immediately — otherwise a client connecting in the window
-        # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
-        # asyncio's create_server(sock=...) calling listen() again is harmless.
-        sock.listen(_UDS_BACKLOG)
-        sock.setblocking(False)
-    except OSError:
-        sock.close()
-        # Clean up a partially-created socket file so a retry can rebind.
+    # Serialize probe/unlink/bind across processes: two starts that both see
+    # the same stale path must not unlink each other's fresh bind (#2662).
+    with _path_lock(uds_path):
         if os.path.exists(uds_path):
+            # Refuse to displace a live listener (#2662): only a stale socket
+            # file (nobody accepting) is safe to remove.
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(1.0)
+                probe.connect(uds_path)
+            except OSError as exc:
+                # Only these mean nobody is accepting. Anything else (EACCES from
+                # another UID's 0600 socket, EAGAIN/ETIMEDOUT from a saturated
+                # listener) may be a live owner, so refuse rather than displace it.
+                if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK):
+                    raise OSError(
+                        errno.EADDRINUSE,
+                        f"cannot prove {uds_path} is stale ({exc}); refusing to displace it",
+                    ) from exc
+            else:
+                raise OSError(
+                    errno.EADDRINUSE, f"live listener already bound at {uds_path}"
+                )
+            finally:
+                probe.close()
             try:
                 os.unlink(uds_path)
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
+
+        # Bind the AF_UNIX socket ourselves so we own its mode with no
+        # world-writable window. umask 0o177 → the socket node is created 0600;
+        # the explicit chmod re-asserts it (defense in depth) before listen(), so
+        # the socket accepts no connection until it is owner-only.
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bound_node: Optional[NodeId] = None
+        try:
+            prev_umask = os.umask(0o177)
+            try:
+                sock.bind(uds_path)
+            finally:
+                os.umask(prev_umask)
+            bound_node = _node_id(uds_path)
+            os.chmod(uds_path, 0o600)
+            # chmod moves ctime: re-read so the identity is the node as served.
+            bound_node = _node_id(uds_path)
+            # listen() before handing the socket to uvicorn so the kernel queues
+            # connections immediately — otherwise a client connecting in the window
+            # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
+            # asyncio's create_server(sock=...) calling listen() again is harmless.
+            sock.listen(_UDS_BACKLOG)
+            sock.setblocking(False)
+        except OSError:
+            sock.close()
+            # Clean up a partially-created socket file so a retry can rebind,
+            # but only the node we bound: compare its identity, as every other
+            # cleanup here does. The path lock is already held, so this checks
+            # inline rather than through unlink_own_socket, which takes it.
+            if bound_node is not None:
+                try:
+                    if _node_id(uds_path) == bound_node:
+                        os.unlink(uds_path)
+                except OSError:
+                    pass
+            raise
+
+    try:
+        # Verify the on-disk mode is actually 0600 before we serve — surfaces any
+        # future regression loudly instead of silently shipping a 0666 socket.
+        actual_mode = stat.S_IMODE(os.stat(uds_path).st_mode)
+        if actual_mode != 0o600:
+            logger.warning(
+                "[UDS] socket %s mode is %o after bind+chmod, expected 0600",
+                uds_path, actual_mode,
+            )
+        else:
+            logger.info(
+                "[UDS] listening at %s (mode 0600, peer-cred enabled)", uds_path
+            )
+
+        protocol_class = make_peer_cred_protocol_class()
+        config = uvicorn.Config(
+            app=app,
+            # NOTE: no uds= here — we pass the pre-bound socket to serve() so
+            # uvicorn does not re-bind (and does not apply its own 0666 chmod).
+            http=protocol_class,
+            log_level=log_level,
+            # Disable uvicorn's lifespan and CORS — those are handled by the
+            # primary HTTP listener; UDS is just a transport into the same app.
+            lifespan="off",
+            ws="none",
+            access_log=False,
+            backlog=_UDS_BACKLOG,
+        )
+        server = uvicorn.Server(config)
+        task = asyncio.create_task(
+            server.serve(sockets=[sock]), name="unitares-uds-listener"
+        )
+    except BaseException:
+        # The caller claims no path on failure (#2662), so nothing else will
+        # unlink this one: remove the node we bound before closing the socket.
+        # Unlinking first means a concurrent start still probes a live listener
+        # rather than a stale path, and the identity check leaves alone any
+        # node that is no longer ours.
+        try:
+            unlink_own_socket(uds_path, bound_node)
+        finally:
+            sock.close()
         raise
-
-    # Verify the on-disk mode is actually 0600 before we serve — surfaces any
-    # future regression loudly instead of silently shipping a 0666 socket.
-    actual_mode = stat.S_IMODE(os.stat(uds_path).st_mode)
-    if actual_mode != 0o600:
-        logger.warning(
-            "[UDS] socket %s mode is %o after bind+chmod, expected 0600",
-            uds_path, actual_mode,
-        )
-    else:
-        logger.info(
-            "[UDS] listening at %s (mode 0600, peer-cred enabled)", uds_path
-        )
-
-    protocol_class = make_peer_cred_protocol_class()
-    config = uvicorn.Config(
-        app=app,
-        # NOTE: no uds= here — we pass the pre-bound socket to serve() so
-        # uvicorn does not re-bind (and does not apply its own 0666 chmod).
-        http=protocol_class,
-        log_level=log_level,
-        # Disable uvicorn's lifespan and CORS — those are handled by the
-        # primary HTTP listener; UDS is just a transport into the same app.
-        lifespan="off",
-        ws="none",
-        access_log=False,
-        backlog=_UDS_BACKLOG,
-    )
-    server = uvicorn.Server(config)
-    task = asyncio.create_task(
-        server.serve(sockets=[sock]), name="unitares-uds-listener"
-    )
+    _bound_nodes[uds_path] = bound_node
     return task
