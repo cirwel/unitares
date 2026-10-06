@@ -22,6 +22,12 @@ resolves the caller only by inference, and inference must not be exchanged for
 a credential: on a Docker bridge or behind a tunnel every client shares one
 address, and a user agent is whatever the client sends.
 
+What this does not close: a ``client_session_id`` of the legacy shape
+``agent-{uuid[:12]}`` is computable from the agent's public UUID, and a
+caller who sends one counts as ``caller_asserted``. The rule cannot tell the
+owner from someone who computed it; that needs an id that cannot be derived
+from the UUID, which is a separate change.
+
 The rule applies under strict identity, the default. A deployment that opted
 out (``STRICT_IDENTITY_REQUIRED=false``) keeps its permissive behavior.
 

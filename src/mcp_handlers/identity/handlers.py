@@ -2688,6 +2688,33 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             logger.error(f"onboard() failed to create identity: {e}")
             return error_response(f"Failed to create identity: {e}")
 
+    # STEP 2c: A resume hands this agent's credentials to the caller, so it
+    # must rest on proof the caller sent (its own client_session_id, a token
+    # bound to this agent, a transport session it holds) or on an operator
+    # token. A resume reached by inference (onboard pin, fingerprint, a name or
+    # unverified agent_id) is refused here, before the label, rebadge, tag,
+    # binding or any other write below touches the agent.
+    if not is_new:
+        from .credential_issuance import credentials_issuable, log_withheld
+
+        _issuable, _issuance_basis = credentials_issuable(agent_uuid)
+        if not _issuable:
+            log_withheld("onboard", agent_uuid, _issuance_basis)
+            from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+
+            return success_response(strict_identity_refusal_payload(
+                "onboard",
+                status="resume_proof_required",
+                hint=(
+                    "This onboard would resume an existing agent that the call was "
+                    "matched to only by inference (an onboard pin, a transport "
+                    "fingerprint, or a name or agent_id it did not prove). Pass the "
+                    "client_session_id your process received when it started, or "
+                    "call start_session(force_new=true) to begin a new identity, "
+                    "with parent_agent_id=<prior uuid> if it continues that work."
+                ),
+            ))
+
     # CRITICAL: Update request context so signature in response matches new identity
     try:
         from ..context import update_context_agent_id
@@ -2819,32 +2846,6 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception as e:
             logger.debug(f"[TRAJECTORY] Could not store genesis at onboard: {e}")
             # Non-blocking - trajectory is optional
-
-    # STEP 2c: A resume hands this agent's credentials to the caller, so it
-    # must rest on proof the caller sent (its own client_session_id, a token
-    # bound to this agent, a transport session it holds) or on an operator
-    # token. A resume reached by inference (onboard pin, fingerprint, a name or
-    # unverified agent_id) is refused before anything is bound or issued.
-    if not is_new:
-        from .credential_issuance import credentials_issuable, log_withheld
-
-        _issuable, _issuance_basis = credentials_issuable(agent_uuid)
-        if not _issuable:
-            log_withheld("onboard", agent_uuid, _issuance_basis)
-            from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
-
-            return success_response(strict_identity_refusal_payload(
-                "onboard",
-                status="resume_proof_required",
-                hint=(
-                    "This onboard would resume an existing agent that the call was "
-                    "matched to only by inference (an onboard pin, a transport "
-                    "fingerprint, or a name or agent_id it did not prove). Pass the "
-                    "client_session_id your process received when it started, or "
-                    "call start_session(force_new=true) to begin a new identity, "
-                    "with parent_agent_id=<prior uuid> if it continues that work."
-                ),
-            ))
 
     # STEP 3: Generate stable session ID
     # Import helper to ensure consistent format

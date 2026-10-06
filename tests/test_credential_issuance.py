@@ -130,11 +130,17 @@ async def test_onboard_refuses_a_resume_reached_by_inference():
         _inferred()
         return dict(existing)
 
+    label = AsyncMock(return_value="attacker-chosen")
+    rebadge = AsyncMock()
     with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
          patch.object(handlers, "derive_session_key", AsyncMock(return_value="pin:shared-ua")), \
          patch.object(handlers, "_cache_session", cache), \
-         patch.object(handlers, "_perform_session_bind", bind):
-        result = await handlers.handle_onboard_v2({"name": "victim", "resume": True})
+         patch.object(handlers, "_perform_session_bind", bind), \
+         patch.object(handlers, "set_agent_label_resolved", label), \
+         patch.object(handlers, "_persist_rebadged_agent_id", rebadge), \
+         patch.object(handlers, "_should_rebadge_agent_id", return_value=True):
+        # A different name: the label write is the mutation a refusal must precede.
+        result = await handlers.handle_onboard_v2({"name": "attacker-chosen", "resume": True})
 
     body = json.loads(result[0].text)
     assert body["status"] == "resume_proof_required", body
@@ -143,6 +149,8 @@ async def test_onboard_refuses_a_resume_reached_by_inference():
         "Pass the client_session_id", "")
     cache.assert_not_awaited()
     bind.assert_not_awaited()
+    label.assert_not_awaited()
+    rebadge.assert_not_awaited()
 
 
 @pytest.mark.asyncio
