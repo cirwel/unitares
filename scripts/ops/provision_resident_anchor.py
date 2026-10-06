@@ -16,9 +16,9 @@ sessions.
 
 This is the operator-side repair. It mints a continuity token whose ``aid``
 claim is the resident's UUID, signed with the same secret the governance server
-uses (``UNITARES_CONTINUITY_TOKEN_SECRET``, else ``UNITARES_HTTP_API_TOKEN``,
-else ``UNITARES_API_TOKEN`` -- the same resolution order as
-``src/mcp_handlers/identity/session.py``), proves the server ACCEPTED that token
+uses (``UNITARES_CONTINUITY_TOKEN_SECRET``, else the key the server generated
+in ``data/secrets/`` -- resolved by ``src/continuity_secret.py``, as the server
+does), proves the server ACCEPTED that token
 as ownership proof, and only then writes the anchor. It never mints an identity,
 never touches tags, and never repoints an anchor at a different UUID without
 ``--replace-identity``.
@@ -348,12 +348,12 @@ def main(argv: list[str] | None = None) -> int:
                   f"  Replacing an anchor silently is how a resident forks.", file=sys.stderr)
             return 1
 
-    if not (os.environ.get("UNITARES_CONTINUITY_TOKEN_SECRET")
-            or os.environ.get("UNITARES_HTTP_API_TOKEN")
-            or os.environ.get("UNITARES_API_TOKEN")):
-        print("no signing secret in the environment; set UNITARES_CONTINUITY_TOKEN_SECRET\n"
-              "  (or UNITARES_HTTP_API_TOKEN / UNITARES_API_TOKEN) to the value the\n"
-              "  governance server runs with, or the token will not verify.", file=sys.stderr)
+    from src.continuity_secret import resolve as _resolve_continuity_secret
+
+    if _resolve_continuity_secret() is None:
+        print("no signing secret: set UNITARES_CONTINUITY_TOKEN_SECRET to the value the\n"
+              "  governance server runs with, or run this from the server's checkout so\n"
+              "  it reads the key the server generated in data/secrets/.", file=sys.stderr)
         return 1
 
     status = tags = label = None

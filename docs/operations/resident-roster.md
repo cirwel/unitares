@@ -91,9 +91,10 @@ process boundary after `UNITARES_IDENTITY_STRICT=strict` /
 the identity. Any baseline keyed on the original UUID is lost either way.
 
 `scripts/ops/provision_resident_anchor.py` is the operator-side repair. Run it
-where the governance server's environment is available, so the signing secret
-(`UNITARES_CONTINUITY_TOKEN_SECRET`, else `UNITARES_HTTP_API_TOKEN`, else
-`UNITARES_API_TOKEN`) matches the server's:
+from the server's checkout with the server's environment, so the signing secret
+matches the server's: `UNITARES_CONTINUITY_TOKEN_SECRET` when it is set, else
+the key the server generated in `data/secrets/continuity_token_secret`
+(`src/continuity_secret.py`):
 
 ```bash
 python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http          # dry run
