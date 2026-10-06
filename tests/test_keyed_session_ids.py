@@ -108,7 +108,6 @@ async def test_a_keyed_id_resolves_with_no_stored_binding_and_writes_nothing(key
     ([{"agent_id": VICTIM, "status": "active", "disabled_at": None},
       {"agent_id": VICTIM[:12] + "x", "status": "active", "disabled_at": None}],
      VICTIM, "ambiguous_prefix"),
-    ([{"agent_id": VICTIM, "status": "deleted", "disabled_at": "2026-10-06"}], VICTIM, "agent_deleted"),
 ])
 @pytest.mark.parametrize("resume", [True, False])
 async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reason, resume):
@@ -612,3 +611,20 @@ async def test_a_cache_hit_survives_a_failed_status_recheck(keyed):
         assert await ss.resolve_keyed(csid) == (VICTIM, None)
     with patch.object(ss, "_status", AsyncMock(side_effect=ConnectionError("pg down"))):
         assert await ss.resolve_keyed(csid) == (VICTIM, None)
+
+
+@pytest.mark.asyncio
+async def test_the_redis_binding_reader_parses_a_session_cache_entry(keyed):
+    """_get_redis() is the SessionCache, whose get() returns the decoded dict
+    PATH 1 also reads; the keyed reader takes its agent and fingerprint."""
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.identity import resolution
+
+    cache = SimpleNamespace(get=AsyncMock(return_value={"agent_id": VICTIM, "bind_ip_ua": "fp-a"}))
+    csid = make_client_session_id(VICTIM)
+    with patch.object(resolution, "_get_redis", return_value=cache):
+        assert await resolution._keyed_redis_binding(csid) == (VICTIM, "fp-a")
+    cache.get.assert_awaited_once_with(csid)
+    with patch.object(resolution, "_get_redis", return_value=None):
+        assert await resolution._keyed_redis_binding(csid) == (None, None)

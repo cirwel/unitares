@@ -221,11 +221,10 @@ async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[
     agent_uuid = str(rows[0]["agent_id"])
     if not verifies_for(session_key, agent_uuid):
         return None, refusal("tag_mismatch")
-    # Archiving sets disabled_at too and is reversible (onboard with resume
-    # reactivates the same identity), so only a deleted identity is refused
-    # here; an archived one resolves and the resolver reports it archived.
-    if rows[0].get("status") == "deleted":
-        return None, refusal("agent_deleted")
+    # _candidates leaves deleted identities out (so one cannot make a live
+    # agent's prefix ambiguous): a deleted agent's id was refused above as
+    # no_such_agent. Archiving is reversible (onboard with resume reactivates
+    # the same identity), so an archived one resolves and is reported archived.
     if len(_verified) >= _VERIFIED_MAX:
         now = time.monotonic()
         for k in [k for k, (_, exp) in _verified.items() if exp <= now]:
