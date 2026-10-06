@@ -639,11 +639,16 @@ async def handle_identity_v2(
     # set via set_agent_label after the session resolves normally.
     name = arguments.get("name")
 
-    # Pass model_type to generate proper agent_id (model+date format)
+    # Pass model_type to generate proper agent_id (model+date format).
+    # force_new rides through (#2692): the adapter skipped the session-key
+    # resume for it, so the resolver must skip its lookups too, or a key that
+    # already maps to an agent (or a session id the resolver refuses) would
+    # answer a request for a fresh identity.
     identity = await resolve_session_identity(
         session_key,
         persist=False,
-        model_type=model_type or arguments.get("model_type")
+        model_type=model_type or arguments.get("model_type"),
+        force_new=bool(arguments.get("force_new", False)),
     )
     agent_id = identity.get("agent_id", identity["agent_uuid"])
     agent_uuid = identity["agent_uuid"]
