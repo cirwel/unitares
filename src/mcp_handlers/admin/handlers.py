@@ -859,15 +859,23 @@ async def handle_debug_request_context(arguments: Dict[str, Any]) -> Sequence[Te
     uuid_prefix_keys = []
     uuid_prefix_mappings = {}
     try:
+        from ..identity.session import session_id_reference
         from ..identity.shared import _session_identities, _uuid_prefix_index
+        # Session keys are bearer credentials and any bound caller can reach
+        # this action, so keys are shown as references. A 12-character uuid
+        # prefix is the legacy session id itself, so prefixes are cut to 8.
         for k, v in list(_session_identities.items())[:10]:  # Show first 10
             agent_id = v.get("bound_agent_id")
+            ref = session_id_reference(k)
             if agent_id:
-                legacy_bindings[k] = agent_id[:8] + "..."
+                legacy_bindings[ref] = agent_id[:8] + "..."
             else:
-                legacy_bindings[k] = "None"
-        uuid_prefix_keys = list(_uuid_prefix_index.keys())[:10]  # Show first 10
-        uuid_prefix_mappings = {k: _uuid_prefix_index[k][:8] + "..." for k in uuid_prefix_keys}
+                legacy_bindings[ref] = "None"
+        uuid_prefix_keys = [k[:8] + "..." for k in list(_uuid_prefix_index.keys())[:10]]  # Show first 10
+        uuid_prefix_mappings = {
+            k[:8] + "...": _uuid_prefix_index[k][:8] + "..."
+            for k in list(_uuid_prefix_index.keys())[:10]
+        }
         legacy_bindings_count = len(_session_identities)
     except Exception as e:
         import traceback
