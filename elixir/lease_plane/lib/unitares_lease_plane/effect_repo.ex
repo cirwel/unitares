@@ -153,6 +153,20 @@ defmodule UnitaresLeasePlane.EffectRepo do
     end
   end
 
+  @doc """
+  Whether any durable payload row exists for this idempotency key. A row means
+  an earlier attempt reached the commit path, so recovery owns its reconciliation.
+  """
+  @spec payload_exists_for_key?(String.t()) :: {:ok, boolean()} | {:error, term()}
+  def payload_exists_for_key?(idempotency_key) do
+    sql = "SELECT 1 FROM effects.payloads WHERE idempotency_key = $1 LIMIT 1"
+
+    case Postgrex.query(DB, sql, [idempotency_key]) do
+      {:ok, %{rows: rows}} -> {:ok, rows != []}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   @doc "Full row fetch for a single effect, or nil when absent."
   @spec get_payload(String.t()) :: {:ok, map() | nil} | {:error, term()}
   def get_payload(effect_id) do

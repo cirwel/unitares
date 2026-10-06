@@ -806,7 +806,9 @@ defmodule UnitaresLeasePlane.GovernedEffect do
       # executor's canonical(path) match (the path-canonicalization seam).
       canon_leases = canonicalize_leases(env.required_leases)
 
-      case acquire_all(canon_leases, env.proposer_agent_uuid) do
+      stamp = custody_stamp(env.idempotency_key, digest)
+
+      case acquire_all(canon_leases, env.proposer_agent_uuid, stamp, env.idempotency_key) do
         {:ok, acquired} ->
           # No `after`: an exception leaves the leases to the TTL reaper, the
           # contract's crash path (§4), instead of releasing a surface whose
@@ -940,13 +942,14 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   # Acquire every required lease; on the first conflict, release what we hold and
   # bail (atomic-ish: no partial custody escapes).
-  defp acquire_all(leases, proposer) do
+  defp acquire_all(leases, proposer, stamp, idempotency_key) do
     Enum.reduce_while(leases, {:ok, []}, fn l, {:ok, acc} ->
       params = %{
         surface_id: Map.get(l, "surface"),
         holder_agent_uuid: proposer,
         holder_kind: "remote_heartbeat",
-        ttl_s: lease_ttl(l)
+        ttl_s: lease_ttl(l),
+        intent: stamp
       }
 
       case Repo.acquire(params) do
@@ -957,9 +960,19 @@ defmodule UnitaresLeasePlane.GovernedEffect do
         # effect or a lease it took directly. Custody must belong to this effect
         # alone (a different key on the same exclusive surface is lease_held),
         # and release_all must never close a lease this call did not open.
-        {:ok, _lease, :idempotent} ->
-          release_all(acc)
-          {:halt, {:error, :held_by_other}}
+        #
+        # Exception (#2620): a lease stamped with THIS effect's key+digest is the
+        # leftover of a request that died after acquiring, so the same-key retry
+        # adopts it (and releases it like a fresh one) rather than waiting out the
+        # TTL. Never when a payload row survives for the key: that attempt got
+        # as far as the commit path and EffectRecovery owns reconciling it.
+        {:ok, lease, :idempotent} ->
+          if adoptable?(lease, stamp, idempotency_key) do
+            {:cont, {:ok, [lease | acc]}}
+          else
+            release_all(acc)
+            {:halt, {:error, :held_by_other}}
+          end
 
         {:error, :held_by_other, _} ->
           release_all(acc)
@@ -970,6 +983,21 @@ defmodule UnitaresLeasePlane.GovernedEffect do
           {:halt, {:error, reason}}
       end
     end)
+  end
+
+  # Stamp written to a custody lease's `intent`: ties the lease to one effect
+  # (idempotency key + digest). The digest alone omits the key, so two keys
+  # carrying identical content must still not share a lease.
+  defp custody_stamp(idempotency_key, digest) do
+    hash =
+      :crypto.hash(:sha256, idempotency_key <> " " <> digest) |> Base.encode16(case: :lower)
+
+    "governed_effect:" <> hash
+  end
+
+  defp adoptable?(lease, stamp, idempotency_key) do
+    Map.get(lease, :intent) == stamp and
+      EffectRepo.payload_exists_for_key?(idempotency_key) == {:ok, false}
   end
 
   # Only leases acquire_all opened fresh reach here. 'normal' is the holder

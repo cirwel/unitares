@@ -10,6 +10,13 @@ defmodule UnitaresLeasePlane.BlockGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.CrashGovernanceVeto do
+  @moduledoc false
+  # The request process dies after the lease commits, before any audit row.
+  def check(_env), do: raise("request process died")
+  def verify_identity_tier(_env), do: {:ok, "strong"}
+end
+
 defmodule UnitaresLeasePlane.FailingEffectFileOps do
   @moduledoc false
   # The commit write fails, and so does the restore: the effect quarantines.
@@ -900,6 +907,127 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
                  })
                )
 
+      refute File.exists?(path)
+      assert lease_rows(surface) == [{false, nil}]
+    end
+  end
+
+  describe "execute / file_write same-key retry after a request crash (#2620)" do
+    defp crash_first_attempt(path, key, proposer) do
+      surface = "file://#{path}"
+      on_exit(fn -> LeaseTestHelpers.cleanup_surface(canonical(surface)) end)
+      set_file_write_flags(true)
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.CrashGovernanceVeto
+      )
+
+      req = fn extra ->
+        base(
+          Map.merge(
+            %{
+              "idempotency_key" => key,
+              "custody_mode" => "execute",
+              "surface" => surface,
+              "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+              "payload" => %{"path" => path, "content" => "landed\n"},
+              "proposer" => %{"agent_uuid" => proposer}
+            },
+            extra
+          )
+        )
+      end
+
+      assert_raise RuntimeError, fn -> GovernedEffect.handle(req.(%{})) end
+      # The dead attempt's lease is still held.
+      assert lease_rows(surface) == [{false, nil}]
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.AllowGovernanceVeto
+      )
+
+      {surface, req}
+    end
+
+    test "the same key resumes under the dead attempt's lease instead of lease_held" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-crash-#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> File.rm(path) end)
+      key = tracked_key()
+
+      {surface, req} =
+        crash_first_attempt(path, key, "00000000-0000-0000-0000-0000000000b1")
+
+      assert {:ok, %{ok: true, custody_mode: "execute"}} = GovernedEffect.handle(req.(%{}))
+      assert File.read!(path) == "landed\n"
+      assert lease_rows(surface) == [{true, "normal"}]
+    end
+
+    test "a different key is still lease_held against the dead attempt's lease" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-crash2-#{System.unique_integer([:positive])}")
+
+      key = tracked_key()
+
+      {surface, req} =
+        crash_first_attempt(path, key, "00000000-0000-0000-0000-0000000000b2")
+
+      assert {:error, :lease_held} =
+               GovernedEffect.handle(req.(%{"idempotency_key" => tracked_key()}))
+
+      refute File.exists?(path)
+      assert lease_rows(surface) == [{false, nil}]
+    end
+
+    test "the same key with a different payload is not adopted" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-crash3-#{System.unique_integer([:positive])}")
+
+      key = tracked_key()
+
+      {surface, req} =
+        crash_first_attempt(path, key, "00000000-0000-0000-0000-0000000000b3")
+
+      assert {:error, reason} =
+               GovernedEffect.handle(
+                 req.(%{"payload" => %{"path" => path, "content" => "other\n"}})
+               )
+
+      assert reason in [:lease_held, :idempotency_conflict]
+      refute File.exists?(path)
+      assert lease_rows(surface) == [{false, nil}]
+    end
+
+    test "a surviving payload row means recovery owns the attempt: lease_held" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-crash4-#{System.unique_integer([:positive])}")
+
+      key = tracked_key()
+
+      {surface, req} =
+        crash_first_attempt(path, key, "00000000-0000-0000-0000-0000000000b4")
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "INSERT INTO effects.payloads (effect_id, effect_type, payload_bytes, payload_sha256, " <>
+          "required_leases, proposer_agent_uuid, idempotency_key, idempotency_digest) " <>
+          "VALUES ($1, 'file_write', $2, $3, '[]'::jsonb, $4, $5, $6)",
+        [
+          "dead0000-0000-4000-8000-000000000001",
+          "landed\n",
+          String.duplicate("a", 64),
+          "00000000-0000-0000-0000-0000000000b4",
+          key,
+          String.duplicate("b", 64)
+        ]
+      )
+
+      assert {:error, :lease_held} = GovernedEffect.handle(req.(%{}))
       refute File.exists?(path)
       assert lease_rows(surface) == [{false, nil}]
     end
