@@ -188,3 +188,15 @@ async def test_a_reload_only_adds_so_it_cannot_erase_a_concurrent_lookup():
     with patch("src.db.get_db", return_value=failing), pytest.raises(ConnectionError):
         await verification.load_known_substrate_claims()
     assert verification.known_substrate_claimed(RESIDENT)
+
+
+@pytest.mark.asyncio
+async def test_unreadable_signals_count_as_not_uds():
+    """Only a caller shown to be UDS skips the gate; if the signals cannot be
+    read, a known resident is still refused."""
+    from src.mcp_handlers.identity import resolution
+
+    verification._known_claimed.add(RESIDENT)
+    with patch("src.mcp_handlers.context.get_session_signals", side_effect=RuntimeError("ctx")):
+        out = await resolution._substrate_http_reject(RESIDENT, "unit")
+    assert out["error"] == "substrate_check_unavailable"

@@ -543,7 +543,9 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
     (`substrate_check_unavailable`); otherwise the error fails OPEN (returns
     None) so it does not break resolution for ordinary agents.
     """
-    _http = False
+    # Only a proven UDS caller (a peer PID) returns before the lookup, so a
+    # failure below, including reading the signals, comes from a request not
+    # shown to be UDS.
     try:
         from src.mcp_handlers.context import get_session_signals
         _signals = get_session_signals()
@@ -552,7 +554,6 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
             # UDS path — the kernel can attest the peer; let normal
             # substrate verification (handler_gate) judge it.
             return None
-        _http = True
         from src.substrate.verification import fetch_substrate_claim
         _claim = await fetch_substrate_claim(agent_uuid)
         if _claim is None:
@@ -577,7 +578,7 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
     except Exception as exc:
         from src.substrate.verification import known_substrate_claimed
 
-        if _http and known_substrate_claimed(agent_uuid):
+        if known_substrate_claimed(agent_uuid):
             return _substrate_check_unavailable(agent_uuid, "agent_uuid", source)
         logger.warning(
             "[SUBSTRATE_HTTP_REJECT] %s gate raised for %s...: %s; falling "
@@ -1184,13 +1185,12 @@ async def resolve_session_identity(
     # must not resume over non-UDS transport even when the token's embedded
     # session id still has a live Redis/PG binding. Check before PATH 1/2.
     if token_agent_uuid and not force_new:
-        _http = False
+        # Only a proven UDS caller returns before the lookup (see _substrate_http_reject).
         try:
             from src.mcp_handlers.context import get_session_signals
             _signals = get_session_signals()
             _peer_pid = _signals.peer_pid if _signals else None
             if _peer_pid is None:
-                _http = True
                 from src.substrate.verification import fetch_substrate_claim
                 _claim = await fetch_substrate_claim(token_agent_uuid)
                 if _claim is not None:
@@ -1216,7 +1216,7 @@ async def resolve_session_identity(
         except Exception as exc:
             from src.substrate.verification import known_substrate_claimed
 
-            if _http and known_substrate_claimed(token_agent_uuid):
+            if known_substrate_claimed(token_agent_uuid):
                 return _substrate_check_unavailable(
                     token_agent_uuid, "token_agent_uuid", "pre_session_token",
                 )
@@ -1657,13 +1657,12 @@ async def resolve_session_identity(
         # to UDS. Closes the Hermes-incident leak path in production.
         # The gate is self-scoping by the substrate_claims table —
         # non-substrate UUIDs are unaffected (no row, no rejection).
-        _http = False
+        # Only a proven UDS caller returns before the lookup (see _substrate_http_reject).
         try:
             from src.mcp_handlers.context import get_session_signals
             _signals = get_session_signals()
             _peer_pid = _signals.peer_pid if _signals else None
             if _peer_pid is None:
-                _http = True
                 from src.substrate.verification import fetch_substrate_claim
                 _claim = await fetch_substrate_claim(token_agent_uuid)
                 if _claim is not None:
@@ -1692,7 +1691,7 @@ async def resolve_session_identity(
             # the existing PATH 2.8 behavior rather than breaking the flow.
             from src.substrate.verification import known_substrate_claimed
 
-            if _http and known_substrate_claimed(token_agent_uuid):
+            if known_substrate_claimed(token_agent_uuid):
                 return _substrate_check_unavailable(
                     token_agent_uuid, "token_agent_uuid", "path2_8_token",
                 )
