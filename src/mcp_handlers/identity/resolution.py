@@ -547,8 +547,12 @@ async def _keyed_bind_fingerprint(session_key: str, agent_uuid: str) -> Optional
     evidence (it never penalizes a missing fingerprint).
     """
     try:
+        import asyncio
+
         redis = _get_redis()
-        cached = await redis.get(session_key) if redis else None
+        # Redis is not ExecutorPool-wrapped: bound the await (AGENTS.md) so a
+        # stalled read falls back to the PG mirror below.
+        cached = await asyncio.wait_for(redis.get(session_key), timeout=2.0) if redis else None
         if cached and cached.get("agent_id"):
             cached_uuid, _ = await _decode_stored_identity(
                 cached["agent_id"], cached.get("display_agent_id")

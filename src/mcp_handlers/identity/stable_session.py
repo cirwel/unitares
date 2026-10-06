@@ -48,8 +48,9 @@ _TAG_DOMAIN = b"unitares.csid.v2|"
 _KEY_DOMAIN = b"unitares.csid.v1"
 LEGACY_MODE_ENV = "UNITARES_LEGACY_SESSION_IDS"
 
-# Resolution result cache: key -> (agent_uuid, expires_at). Bounded TTL so an
-# archive or a disabled identity takes effect within a minute.
+# Resolution result cache: key -> (agent_uuid, expires_at). It saves the
+# prefix search only; a hit still re-checks the tag and the identity's status
+# (resolve_keyed). The TTL bounds how long a newly ambiguous prefix goes unseen.
 _VERIFIED_TTL_S = 60.0
 _VERIFIED_MAX = 10_000
 _verified: Dict[str, tuple[str, float]] = {}
@@ -175,16 +176,33 @@ async def _candidates(prefix: str) -> list[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def _status(agent_uuid: str) -> Optional[str]:
+    """The identity's status by primary key, or None when it has no row."""
+    from src.db import get_db
+
+    db = get_db()
+    async with db.acquire() as conn:
+        return await conn.fetchval(
+            "SELECT status FROM core.identities WHERE agent_id = $1", agent_uuid,
+        )
+
+
 async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """(agent_uuid, None) for a valid keyed id, else (None, refusal)."""
     match = _KEYED.match(session_key or "")
     if not match:
         return None, refusal("tag_mismatch")
     cached = _verified.get(session_key)
-    # The cache saves the identity lookup, not the tag check: re-verify on a
-    # hit, so a rotated continuity key revokes the id at once.
+    # The cache saves the prefix search, not the checks: on a hit the tag is
+    # re-verified, so a rotated continuity key revokes the id at once, and the
+    # identity's status is re-read by primary key, so a deletion (in this or
+    # any other server process) refuses the id at once.
     if cached and cached[1] > time.monotonic() and verifies_for(session_key, cached[0]):
-        return cached[0], None
+        status = await _status(cached[0])
+        if status is not None and status != "deleted":
+            return cached[0], None
+        _verified.pop(session_key, None)
+        return None, refusal("agent_deleted" if status == "deleted" else "no_such_agent")
     rows = await _candidates(match.group(1))
     if not rows:
         return None, refusal("no_such_agent")
