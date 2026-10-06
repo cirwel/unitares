@@ -471,3 +471,22 @@ async def test_a_keyed_resume_without_a_recorded_fingerprint_proceeds(keyed):
         result = await resolution.resolve_session_identity(csid, resume=True)
 
     assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status, reason", [("deleted", "agent_deleted"), (None, "no_such_agent")])
+async def test_a_cached_keyed_id_is_refused_once_its_agent_is_deleted(keyed, status, reason):
+    """The 60 s verification cache must not outlive a deletion, which another
+    server process may have made: a hit re-reads the status by primary key."""
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
+         patch.object(ss, "_status", AsyncMock(return_value="active")):
+        assert await ss.resolve_keyed(csid) == (VICTIM, None)
+    assert csid in ss._verified
+
+    with patch.object(ss, "_candidates", AsyncMock(side_effect=AssertionError("cache hit"))), \
+         patch.object(ss, "_status", AsyncMock(return_value=status)):
+        uuid, refused = await ss.resolve_keyed(csid)
+
+    assert uuid is None and refused["reason"] == reason
+    assert csid not in ss._verified
