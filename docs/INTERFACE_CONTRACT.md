@@ -319,10 +319,10 @@ The two identifiers serve different jobs:
   tag. Nothing is added, removed, retyped or renamed, and no digest moves: the
   version alone records the behavior change;
   1.29.0, 2026-10-06: output only. `list_process_bindings` rows carry
-  `client_session_ref`, a reference that cannot be presented as a session,
-  in place of the `client_session_id` each process onboarded with, and
+  `client_session_ref`, an opaque reference keyed per server process, in
+  place of the `client_session_id` each process onboarded with, and
   `admin(action='debug_context')` shows session-cache keys as references
-  and uuid prefixes cut to 8 characters. A `client_session_id` is a bearer
+  and the uuid prefix index only as a count. A `client_session_id` is a bearer
   credential, and both surfaces could name other agents' sessions. No input
   schema changes, so no digest moves).
 

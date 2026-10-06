@@ -13,6 +13,7 @@ import os
 import hashlib
 import base64
 import hmac
+import secrets
 import json
 import re
 import time
@@ -82,19 +83,25 @@ def normalize_client_session_id(value: Any) -> Optional[str]:
     return sanitized
 
 
+# Keys session_id_reference(). Random per process, so a reference is opaque
+# to anyone outside the server: it cannot be computed from a guessed id.
+_SESSION_REFERENCE_KEY = secrets.token_bytes(32)
+
+
 def session_id_reference(value: Any) -> Optional[str]:
     """A display form of a session id that cannot be used as one.
 
     A client_session_id is a bearer credential: whoever presents it acts as
     the session it names. Diagnostics that show other sessions show this
-    instead, a short prefix and a digest, enough to tell rows apart and to
-    match a session you already hold, never enough to present.
+    instead. It reveals no character of the id, and it is keyed with a secret
+    held only by this process, so it is no oracle for guessing ids offline.
+    References are stable for the life of the process, which is enough to tell
+    rows apart and to follow one session across calls.
     """
     if not value:
         return None
-    text = str(value)
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
-    return f"{text[:8]}…{digest}"
+    digest = hmac.new(_SESSION_REFERENCE_KEY, str(value).encode("utf-8"), hashlib.sha256)
+    return "ref-" + digest.hexdigest()[:16]
 
 
 def normalize_client_session_id_argument(arguments: Dict[str, Any]) -> Optional[str]:

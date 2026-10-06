@@ -5,7 +5,9 @@ session it names. ``list_process_bindings`` takes any ``agent_uuid`` and
 returned the session id each live process onboarded with, and
 ``admin(action='debug_context')``, open to any bound caller, listed raw keys
 from the in-memory session cache and the 12-character uuid prefixes that are
-the legacy session id itself. Both now show references.
+the legacy session id itself. Both now show opaque references, keyed per
+process so they are no oracle for guessing ids, and the prefix index only by
+its size.
 """
 
 import json
@@ -24,9 +26,30 @@ def test_a_reference_cannot_be_presented_as_the_id():
     ref = session_id_reference(OTHER_CSID)
 
     assert ref != OTHER_CSID and OTHER_CSID not in ref
-    assert ref == session_id_reference(OTHER_CSID)  # stable, so rows can be matched
+    assert ref == session_id_reference(OTHER_CSID)  # stable within the process
     assert ref != session_id_reference(OTHER_CSID + "x")
     assert session_id_reference(None) is None and session_id_reference("") is None
+
+
+@pytest.mark.parametrize("csid", ["secret42", "s3", VICTIM_CSID, OTHER_CSID])
+def test_a_reference_reveals_no_part_of_the_id(csid):
+    ref = session_id_reference(csid)
+
+    assert ref.startswith("ref-") and len(ref) == 20
+    for n in range(2, len(csid) + 1):
+        assert csid[:n] not in ref[4:]
+
+
+def test_a_reference_is_keyed_so_it_is_no_offline_oracle(monkeypatch):
+    # Without the process key, hashing a guessed id does not reproduce it.
+    import hashlib
+
+    from src.mcp_handlers.identity import session
+
+    ref = session_id_reference(VICTIM_CSID)
+    assert ref[4:] != hashlib.sha256(VICTIM_CSID.encode()).hexdigest()[:16]
+    monkeypatch.setattr(session, "_SESSION_REFERENCE_KEY", b"another process")
+    assert session_id_reference(VICTIM_CSID) != ref
 
 
 @pytest.mark.asyncio
@@ -78,8 +101,9 @@ async def test_debug_context_shows_references_and_short_prefixes():
 
     text = result[0].text
     assert VICTIM_CSID not in text and OTHER_CSID not in text
-    assert VICTIM_UUID[:12] not in text  # the legacy session id's suffix
+    assert VICTIM_CSID[6:] not in text  # the legacy session id's uuid part
     diagnostics = json.loads(text)["diagnostics"]
+    assert diagnostics["legacy_uuid_prefix_index"] == {"count": 1}
     assert set(diagnostics["legacy_bindings_in_memory"]) == {
         session_id_reference(VICTIM_CSID), session_id_reference(OTHER_CSID),
     }
