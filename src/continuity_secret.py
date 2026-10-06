@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -43,9 +44,13 @@ def is_retired_compose_default(value: str) -> bool:
 
 
 def configured_secret(environ: Mapping[str, str] | None = None) -> str | None:
-    """The operator's secret, or None when unset, blank or the published default."""
-    value = ((os.environ if environ is None else environ).get(ENV) or "").strip()
-    if not value or is_retired_compose_default(value):
+    """The operator's secret, or None when unset, blank or the published default.
+
+    Returned byte for byte, surrounding whitespace included, so a deployment's
+    key does not change across this upgrade.
+    """
+    value = (os.environ if environ is None else environ).get(ENV) or ""
+    if not value.strip() or is_retired_compose_default(value):
         return None
     return value
 
@@ -56,12 +61,32 @@ def secret_file(environ: Mapping[str, str] | None = None) -> Path:
     return Path(override) if override else DEFAULT_FILE
 
 
-def _read(path: Path) -> str | None:
+def _read(path: Path) -> tuple[str | None, str | None]:
+    """(key, problem) from the generated file.
+
+    The file must be a regular file, not a symlink, owned by this process's
+    user and closed to group and others: anyone who can read it can forge an
+    ownership proof for any agent. Anything else is a problem, never a key.
+    """
     try:
-        value = path.read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return value or None
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"cannot open {path}: {exc.strerror or exc}"
+    with os.fdopen(fd, encoding="utf-8") as fh:
+        st = os.fstat(fh.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            return None, f"{path} is not a regular file"
+        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            return None, f"{path} is not owned by the server's user"
+        if st.st_mode & 0o077:
+            return None, f"{path} is readable by other users (mode {stat.S_IMODE(st.st_mode):o}); chmod 600 it"
+        try:
+            value = fh.read().strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            return None, f"cannot read {path}: {exc}"
+    return (value, None) if value else (None, f"{path} is empty")
 
 
 def resolve(environ: Mapping[str, str] | None = None) -> tuple[bytes, str] | None:
@@ -69,7 +94,7 @@ def resolve(environ: Mapping[str, str] | None = None) -> tuple[bytes, str] | Non
     configured = configured_secret(environ)
     if configured:
         return configured.encode(), ENV
-    generated = _read(secret_file(environ))
+    generated, _problem = _read(secret_file(environ))
     if generated:
         return generated.encode(), "generated"
     return None
@@ -79,22 +104,26 @@ def ensure_generated_secret(environ: Mapping[str, str] | None = None) -> Path | 
     """Create the generated key if no configured secret is in use.
 
     Returns the file now holding the key, or None when the operator configured
-    one. Raises OSError when the file cannot be created or read back, so a
-    server that would otherwise run without ownership proofs says so.
+    one. Raises OSError when the file cannot be created or read back, or is
+    open to other users, so a server that would otherwise run without
+    ownership proofs says so.
     """
     if configured_secret(environ):
         return None
     path = secret_file(environ)
-    if _read(path):
+    value, problem = _read(path)
+    if value:
         return path
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
-        pass  # another process created it first; read theirs below
-    else:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(secrets.token_hex(32) + "\n")
-    if not _read(path):
-        raise OSError(f"continuity token secret file {path} is empty or unreadable")
+    if problem is None:  # no file yet
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        except FileExistsError:
+            pass  # another process created it first; read theirs below
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(secrets.token_hex(32) + "\n")
+        value, problem = _read(path)
+    if not value:
+        raise OSError(problem or f"continuity token secret file {path} is unusable")
     return path

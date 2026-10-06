@@ -64,7 +64,7 @@ additions merge cleanly. -->
 | `UNITARES_COHORT_PRIOR_MODE` | `None (no reader fallback)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
-| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default. | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET_FILE` | `None (no reader fallback)` | Where the generated secret lives | src/continuity_secret.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DASHBOARD_EXT_DIR` | `''` | Serve operator dashboard extensions from UNITARES_DASHBOARD_EXT_DIR. | src/http_routes/dashboard.py |

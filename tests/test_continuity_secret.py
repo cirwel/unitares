@@ -120,3 +120,31 @@ def test_startup_warns_about_the_retired_default():
     )
     assert cs.ENV in warning and "ignores" in warning
     assert startup_warnings(rest_strict=False, in_container=False, environ={cs.ENV: "mine"}) == []
+
+
+def test_a_configured_secret_is_used_byte_for_byte(secret_path, monkeypatch):
+    # Upgrading must not change an existing deployment's key.
+    monkeypatch.setenv(cs.ENV, "  operator-key  ")
+    assert session_mod._get_continuity_secret() == b"  operator-key  "
+
+
+@pytest.mark.parametrize("mode", [0o640, 0o604, 0o644])
+def test_a_key_file_open_to_other_users_is_refused(secret_path, mode):
+    cs.ensure_generated_secret()
+    os.chmod(secret_path, mode)
+
+    assert session_mod._get_continuity_secret() is None
+    with pytest.raises(OSError, match="readable by other users"):
+        cs.ensure_generated_secret()
+
+
+def test_a_symlinked_key_file_is_refused(secret_path, tmp_path):
+    target = tmp_path / "elsewhere"
+    target.write_text("a" * 64)
+    os.chmod(target, 0o600)
+    secret_path.parent.mkdir(parents=True)
+    secret_path.symlink_to(target)
+
+    assert session_mod._get_continuity_secret() is None
+    with pytest.raises(OSError):
+        cs.ensure_generated_secret()
