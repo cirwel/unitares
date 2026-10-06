@@ -181,7 +181,9 @@ async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[
     if not match:
         return None, refusal("tag_mismatch")
     cached = _verified.get(session_key)
-    if cached and cached[1] > time.monotonic():
+    # The cache saves the identity lookup, not the tag check: re-verify on a
+    # hit, so a rotated continuity key revokes the id at once.
+    if cached and cached[1] > time.monotonic() and verifies_for(session_key, cached[0]):
         return cached[0], None
     rows = await _candidates(match.group(1))
     if not rows:

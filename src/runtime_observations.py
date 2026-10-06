@@ -782,8 +782,16 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
     # attestation, or one whose row expired): accept it when it verifies for
     # this agent, whatever the row says (src/mcp_handlers/identity/
     # stable_session.py). Other ids still need a live row bound to the agent.
-    from src.mcp_handlers.identity.stable_session import classify, resolve_keyed
+    from src.mcp_handlers.identity.stable_session import classify, legacy_refused, resolve_keyed
 
+    if legacy_refused(session_id):
+        # A legacy agent-{uuid12} id is computable from the public UUID; the
+        # legacy policy applies here as at resolution.
+        raise RuntimeObservationError(
+            "legacy client session id is not accepted",
+            status_code=409,
+            code="legacy_session_id",
+        )
     keyed_ok = False
     if classify(session_id) == "keyed":
         keyed_uuid, _refused = await resolve_keyed(session_id)
