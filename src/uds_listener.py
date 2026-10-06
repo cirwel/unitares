@@ -63,19 +63,21 @@ def unlink_own_socket(uds_path: str, ino: Optional[int] = None) -> bool:
     listener stops accepting, a replacement server can probe the path as stale
     and bind its own socket there (#2662); a blind unlink at our shutdown would
     then delete its live socket. The check runs under the path lock, so no
-    start can replace the node between the stat and the unlink.
+    start can replace the node between the stat and the unlink. Never raises:
+    a lock file that cannot be opened (EMFILE, a permission change) leaves the
+    node in place rather than failing a cleanup path.
     """
     if ino is None:
         ino = _bound_inodes.pop(uds_path, None)
     if ino is None:
         return False
-    with _path_lock(uds_path):
-        try:
+    try:
+        with _path_lock(uds_path):
             if os.stat(uds_path).st_ino != ino:
                 return False
             os.unlink(uds_path)
-        except OSError:
-            return False
+    except OSError:
+        return False
     return True
 
 
@@ -281,8 +283,10 @@ async def start_uds_listener(
         # Unlinking first means a concurrent start still probes a live listener
         # rather than a stale path, and the inode check leaves alone any node
         # that is no longer ours.
-        unlink_own_socket(uds_path, bound_ino)
-        sock.close()
+        try:
+            unlink_own_socket(uds_path, bound_ino)
+        finally:
+            sock.close()
         raise
     _bound_inodes[uds_path] = bound_ino
     return task

@@ -477,6 +477,48 @@ async def test_oserror_after_bind_unlinks_only_its_own_node(monkeypatch, replace
         _shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.mark.asyncio
+async def test_failed_cleanup_lock_still_closes_socket_and_keeps_original_error(monkeypatch):
+    """If the path lock cannot be opened during the failure cleanup (EMFILE,
+    say), the socket is still closed and the original error still surfaces."""
+    import errno as _errno
+    from contextlib import contextmanager
+    from src import uds_listener
+
+    made = []
+    real_socket = uds_listener.socket.socket
+
+    def _tracking_socket(*a, **k):
+        s = real_socket(*a, **k)
+        made.append(s)
+        return s
+
+    @contextmanager
+    def _lock_unavailable(path):
+        raise OSError(_errno.EMFILE, "too many open files")
+        yield  # pragma: no cover
+
+    def _boom():
+        monkeypatch.setattr(uds_listener, "_path_lock", _lock_unavailable)
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _tracking_socket)
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _boom)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert made and made[-1].fileno() == -1  # the listening socket was closed
+    finally:
+        monkeypatch.undo()
+        for s in made:
+            s.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
 async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
     if scope["type"] == "http":
         await send({"type": "http.response.start", "status": 200, "headers": []})
