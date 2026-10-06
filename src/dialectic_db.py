@@ -29,6 +29,9 @@ from src.db.acquire_compat import compatible_acquire
 
 logger = get_logger(__name__)
 
+# Distinguishes "no compare-and-set predicate" from an observed None.
+_UNSET: Any = object()
+
 
 # =============================================================================
 # PostgreSQL Backend (Primary and Only)
@@ -453,6 +456,8 @@ class DialecticDB:
         self,
         session_id: str,
         *,
+        expected_phase: Any = _UNSET,
+        expected_updated_at: Any = _UNSET,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -483,18 +488,34 @@ class DialecticDB:
         `update_session_awaiting_facilitation`, which does bump — it is a
         caller-driven transition on a live session, not a sweep observation.
 
+        Compare-and-set (#2367): when ``expected_phase`` and/or
+        ``expected_updated_at`` are passed (the values the sweeper read), the
+        write lands only if the row still matches them, so a participant
+        message or phase move between the sweeper's read and this write
+        refuses it instead of flagging a session that is no longer stalled.
+        The CAS only READS `updated_at`; the SET clause still never writes it.
+        Omitted arguments add no predicate.
+
         Pass ``winner={}`` to learn who refused the write (see
         `_record_winner`); the return value is unchanged.
         """
         await self._ensure_pool()
+        cas = ""
+        args: List[Any] = [session_id]
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_updated_at is not _UNSET:
+            args.append(expected_updated_at)
+            cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET awaiting_facilitation = true
                 WHERE session_id = $1
-                  AND status NOT IN ('resolved', 'failed')
+                  AND status NOT IN ('resolved', 'failed'){cas}
                 RETURNING {self._EFFECT_TS}
-            """, session_id)
+            """, *args)
             self._record_effect(detail, row)
             if row is not None:
                 return True
@@ -502,6 +523,12 @@ class DialecticDB:
             self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"mark_awaiting_facilitation: {session_id[:16]}... not found")
+            elif existing["status"] not in ("resolved", "failed"):
+                logger.info(
+                    f"mark_awaiting_facilitation: {session_id[:16]}... moved since "
+                    "the sweeper read it (phase/updated_at changed); facilitation "
+                    "write refused, next sweep re-reads"
+                )
             else:
                 logger.warning(
                     f"mark_awaiting_facilitation: {session_id[:16]}... is terminal as "
@@ -1282,6 +1309,8 @@ async def update_session_status_async(
 async def mark_awaiting_facilitation_async(
     session_id: str,
     *,
+    expected_phase: Any = _UNSET,
+    expected_updated_at: Any = _UNSET,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
@@ -1289,7 +1318,8 @@ async def mark_awaiting_facilitation_async(
     ) as rec:
         db = await get_dialectic_db()
         return await _recorded_write(rec, lambda d: db.mark_awaiting_facilitation(
-            session_id, winner=winner, detail=d), winner=winner)
+            session_id, expected_phase=expected_phase,
+            expected_updated_at=expected_updated_at, winner=winner, detail=d), winner=winner)
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:

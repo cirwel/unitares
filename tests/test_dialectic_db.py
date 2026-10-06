@@ -855,7 +855,42 @@ class TestMarkAwaitingFacilitation:
 
         await instance.mark_awaiting_facilitation("sess-001")
 
-        assert "updated_at" not in conn.fetchrow.call_args_list[0][0][0]
+        sql = " ".join(conn.fetchrow.call_args_list[0][0][0].split())
+        assert "SET awaiting_facilitation = true WHERE" in sql
+        assert "updated_at" not in sql  # no CAS args passed: no predicate either
+
+    @pytest.mark.asyncio
+    async def test_compare_and_set_on_observed_phase_and_updated_at(self, db):
+        """#2367: the write lands only if phase/updated_at still match the sweep's read.
+
+        The CAS READS `updated_at` in the WHERE clause; the SET clause must
+        still never write it.
+        """
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        ts = object()
+
+        assert await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="synthesis", expected_updated_at=ts) is True
+
+        call = conn.fetchrow.call_args_list[0][0]
+        sql = " ".join(call[0].split())
+        assert "SET awaiting_facilitation = true WHERE" in sql
+        assert "AND phase IS NOT DISTINCT FROM $2" in sql
+        assert "AND updated_at IS NOT DISTINCT FROM $3" in sql
+        assert call[1:] == ("sess-001", "synthesis", ts)
+
+    @pytest.mark.asyncio
+    async def test_compare_and_set_refused_when_row_moved(self, db):
+        """A live row that no longer matches is refused (False), not an error."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"status": "active"}])
+        winner = {}
+
+        assert await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="antithesis", expected_updated_at=None,
+            winner=winner) is False
+        assert winner["winner_status"] == "active"
 
     @pytest.mark.asyncio
     async def test_refused_on_a_terminal_row(self, db):
