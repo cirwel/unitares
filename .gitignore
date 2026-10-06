@@ -178,6 +178,17 @@ tests/additional_security_report.json
 # Environment variables
 .env
 .env.local
+.env.*
+!.env.example
+!.env.*.example
+
+# Private keys and certificates
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 secrets/
 
 # LaunchAgent plists (contain secrets — installed copy lives in ~/Library/LaunchAgents/)
