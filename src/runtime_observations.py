@@ -777,18 +777,19 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
     from src.db import get_db
 
     db = get_db()
-    session = await db.get_session(session_id)
-    keyed_ok = False
-    if session is None:
-        # A keyed stable session id authenticates itself and may have no
-        # stored session row (a resident that resumed by token or UDS
-        # attestation): accept it when it verifies for this agent and the
-        # identity is active (src/mcp_handlers/identity/stable_session.py).
-        from src.mcp_handlers.identity.stable_session import classify, resolve_keyed
+    # A keyed stable session id authenticates itself and need not have a live
+    # stored session row (a resident that resumed by token or UDS
+    # attestation, or one whose row expired): accept it when it verifies for
+    # this agent, whatever the row says (src/mcp_handlers/identity/
+    # stable_session.py). Other ids still need a live row bound to the agent.
+    from src.mcp_handlers.identity.stable_session import classify, resolve_keyed
 
-        if classify(session_id) == "keyed":
-            keyed_uuid, _refused = await resolve_keyed(session_id)
-            keyed_ok = keyed_uuid is not None and keyed_uuid == agent_uuid
+    keyed_ok = False
+    if classify(session_id) == "keyed":
+        keyed_uuid, _refused = await resolve_keyed(session_id)
+        keyed_ok = keyed_uuid is not None and keyed_uuid == agent_uuid
+    session = None if keyed_ok else await db.get_session(session_id)
+    if session is None:
         if not keyed_ok:
             raise RuntimeObservationError(
                 "client session is not bound",

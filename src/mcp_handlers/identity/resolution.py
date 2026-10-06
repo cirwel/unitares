@@ -1135,7 +1135,8 @@ async def resolve_session_identity(
 
     # Stable session ids (identity/stable_session.py). A keyed id
     # agent-{uuid12}-{tag} authenticates itself: it resolves when exactly one
-    # active identity has that uuid prefix and the tag verifies for it, with no
+    # identity that is not deleted has that uuid prefix and the tag verifies
+    # for it (an archived one resolves as archived), with no
     # stored binding and nothing written (F3 holds: verification is not a
     # bind). A forged tag or an ambiguous prefix is terminal, never a fall
     # through to PATH 1/2. A legacy agent-{uuid12} id, computable from the
