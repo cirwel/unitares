@@ -370,3 +370,33 @@ async def test_an_unproven_uuid_resume_does_not_bind_the_callers_session(monkeyp
     body = json.loads(result[0].text)
     assert body.get("uuid") == VICTIM and body.get("client_session_id") is None, body
     cache.assert_not_awaited()
+
+
+def test_a_session_id_that_only_ends_like_a_fingerprint_still_proves():
+    """Only the real fingerprint shapes are inferred; a high-entropy caller
+    session that happens to end in ':' plus six hex characters is not."""
+    set_session_resolution_source("x_session_id")
+    set_session_proof_origin("caller_asserted")
+    note_session_proof(VICTIM, "session-1b4e28ba-2fa1-11d2-883f-0016d3cca427:abcdef")
+    assert credentials_issuable(VICTIM) == (True, "proven_uuid")
+
+
+@pytest.mark.asyncio
+async def test_each_dispatch_starts_without_an_earlier_calls_proof():
+    """Proof is for one request: the identity middleware clears it (and the
+    proof origin) at entry, so a reused task cannot carry it forward."""
+    from src.mcp_handlers.middleware import identity_step
+
+    set_credential_proof_uuid(VICTIM)
+    set_session_proof_origin("caller_asserted")
+
+    class _Stop(Exception):
+        pass
+
+    with patch("src.mcp_handlers.context.get_session_signals", side_effect=_Stop):
+        with pytest.raises(_Stop):
+            await identity_step.resolve_identity("identity", {}, MagicMock())
+
+    from src.mcp_handlers.context import get_credential_proof_uuid, get_session_proof_origin
+    assert get_credential_proof_uuid() is None
+    assert get_session_proof_origin() is None

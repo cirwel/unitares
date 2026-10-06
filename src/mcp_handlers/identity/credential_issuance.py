@@ -118,12 +118,19 @@ def log_withheld(tool: str, agent_uuid: Optional[str], basis: str) -> None:
 
 
 # Session keys the server derives by inference: the IP:UA fingerprint
-# ``{host}:{md5(user-agent)[:6]}`` (optionally scoped with ``|client|model``),
+# ``{host}:{md5(user-agent)[:6]}``, where host is the peer address (an IPv4 or
+# IPv6 literal, or ``unknown`` / ``testclient`` / ``localhost``), optionally
+# scoped with ``|client|model``,
 # the bare ``ua:{hash}`` and the stdio process key. A binding stored under one
 # was made for a caller the server only inferred, and the key is low-entropy:
 # anyone who knows or shares the address and User-Agent can construct it and
 # send it back as an explicit session header.
-_INFERRED_KEY = re.compile(r"^(?:ua:[0-9a-f]{6}|stdio:\d+|.+:[0-9a-f]{6})$")
+_INFERRED_KEY = re.compile(
+    r"^(?:ua:[0-9a-f]{6}"
+    r"|stdio:\d+"
+    r"|(?:\d{1,3}(?:\.\d{1,3}){3}|\[?[0-9a-fA-F:.]*:[0-9a-fA-F:.]*\]?|unknown|testclient|localhost)"
+    r":[0-9a-f]{6})$"
+)
 
 
 def is_inferred_session_key(session_key: Optional[str]) -> bool:
