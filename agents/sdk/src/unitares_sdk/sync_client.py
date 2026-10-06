@@ -57,7 +57,7 @@ class SyncGovernanceClient:
     Usage::
 
         client = SyncGovernanceClient(transport="rest")
-        result = client.onboard("MyAgent")
+        result = client.onboard("MyAgent", force_new=True)
         result = client.checkin("did some work")
     """
 

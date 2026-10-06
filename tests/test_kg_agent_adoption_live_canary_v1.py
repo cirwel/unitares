@@ -267,3 +267,31 @@ def test_full_v1_receipt_records_isolation_without_promoting(monkeypatch) -> Non
     assert content["claims"]["production_plumbing_fully_proven"] is False
     assert content["attempted_operations"]["audit_append_attempts_this_run"] == 1
     close_db.assert_awaited_once()
+
+
+def test_attribution_matches_a_keyed_session_by_its_stored_digest() -> None:
+    """audit.tool_usage stores a keyed client_session_id as its csid: digest."""
+    from src.mcp_handlers.identity.stable_session import audit_reference
+
+    identity = {
+        "agent_uuid": "5e728ecb-1234-4abc-8def-0123456789ab",
+        "client_session_id": "agent-5e728ecb-123-xjc4uauir6jvdvqxylny",
+        "label": "canary_agent_adoption",
+    }
+    stored = canary._stored_session_identity(identity)
+    assert stored["client_session_id"] == audit_reference(identity["client_session_id"])
+    rows = [
+        {
+            "agent_id": identity["agent_uuid"],
+            "session_id": audit_reference(identity["client_session_id"]),
+            "tool_name": "knowledge",
+            "payload": {"action": action},
+            "label": identity["label"],
+        }
+        for action in ["details", "details", *(["search"] * 6)]
+    ]
+    result = v0.validate_tool_usage_attribution(
+        identity=stored, rows=rows, expected_searches=6, expected_details=2,
+    )
+    assert result["all_rows_attributed"] is True
+    assert identity["client_session_id"] not in json.dumps(result)

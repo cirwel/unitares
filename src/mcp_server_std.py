@@ -653,6 +653,17 @@ async def main():
     if STDIO_PROXY_URL or STDIO_PROXY_HTTP_URL:
         logger.info("Identity continuity mode: proxied (delegated to upstream HTTP server)")
     else:
+        # Local handlers sign continuity tokens here, as the HTTP server does.
+        from src.continuity_secret import ensure_generated_secret
+
+        try:
+            ensure_generated_secret()
+        except OSError as exc:
+            logger.warning(
+                "Could not create the continuity token secret (%s). Continuity tokens "
+                "and effect grants are disabled until UNITARES_CONTINUITY_TOKEN_SECRET "
+                "is set or the file can be written.", exc,
+            )
         continuity_status = await probe_identity_continuity_status()
         continuity_message = format_identity_continuity_startup_message(continuity_status)
         if continuity_status.get("mode") == "redis":

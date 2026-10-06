@@ -268,7 +268,8 @@ async def test_antithesis_awaits_facilitation_when_no_candidates():
     assert result["facilitation_count"] == 1
     assert result["resolved_count"] == 0  # NOT failed yet
     mock_update_status.assert_not_called()  # Should not mark as failed
-    mock_mark.assert_awaited_once_with("s1", winner=ANY)
+    mock_mark.assert_awaited_once_with(
+        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
     # Every other writer of this flag announces it; a request nobody is told
     # about is one the operator has to go looking for.
     assert mock_emit.await_args.kwargs["session_id"] == "s1"
@@ -333,7 +334,7 @@ async def test_refused_facilitation_write_is_not_narrated():
 
     mock_add_msg = AsyncMock()
 
-    async def _refused_by_liveness(session_id, winner=None):
+    async def _refused_by_liveness(session_id, winner=None, **_cas):
         # What the DB helper reports on a refusal: the row's status and the
         # reason its writer recorded (BEAM liveness here).
         winner.update(winner_status="failed", winner_reason="liveness_timeout",
@@ -496,7 +497,8 @@ async def test_synthesis_stall_awaits_facilitation_without_reassigning():
     assert result["resolved_count"] == 0, "the operator window has not opened yet"
     assert result["reassigned_count"] == 0
     mock_update_status.assert_not_called()
-    mock_mark.assert_awaited_once_with("s1", winner=ANY)
+    mock_mark.assert_awaited_once_with(
+        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
     # Authority stays with the reviewer that formed the objection.
     mock_select.assert_not_awaited()
     mock_update_reviewer.assert_not_called()
@@ -594,7 +596,8 @@ async def test_synthesis_stall_awaiting_first_reviewer_verdict_raises_the_flag()
         paused="a1", reviewer="r1",
         transcript=_transcript(("a1", "thesis"), ("r1", "antithesis")))
     assert result["facilitation_count"] == 1
-    m["mark"].assert_awaited_once_with("s1", winner=ANY)
+    m["mark"].assert_awaited_once_with(
+        "s1", expected_phase=ANY, expected_updated_at=ANY, winner=ANY)
     m["update_status"].assert_not_called()
 
 
@@ -1111,3 +1114,72 @@ class TestSweeperFirstOverlapProbe:
             outcome = await ar._probe_write_overlap("s1", "reap_failed", "a1")
 
         assert outcome == "probe_failed"
+
+
+# --- compare-and-set against the sweeper's read (#2367) ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase,moved", [
+    ("antithesis", {"updated_at": "later"}),
+    ("synthesis", {"updated_at": "later"}),
+    ("synthesis", {"phase": "antithesis"}),
+])
+async def test_facilitation_cas_refuses_when_row_moved_after_read(phase, moved):
+    """A participant message between the sweep's read and the flag write refuses it.
+
+    The fake stands in for the guarded UPDATE: it holds the "live" row, a
+    concurrent writer mutates it after the sweeper read its snapshot, and the
+    write lands only if the expected phase/updated_at the sweeper passed still
+    match -- the same predicate as `DialecticDB.mark_awaiting_facilitation`.
+    """
+    observed_ts = _old_time(2.5)
+    sessions = [
+        {"session_id": "s1", "updated_at": observed_ts, "paused_agent_id": "a1",
+         "phase": phase, "reviewer_agent_id": "gone-reviewer"}
+    ]
+    live_row = {"phase": phase, "updated_at": observed_ts}
+    live_row.update(moved)  # the concurrent change, already landed at write time
+
+    async def _cas_mark(session_id, *, expected_phase, expected_updated_at, winner=None):
+        if (live_row["phase"] != expected_phase
+                or live_row["updated_at"] != expected_updated_at):
+            winner.update(winner_status="active", winner_reason=None, row_missing=False)
+            return False
+        return True
+
+    mock_mark = AsyncMock(side_effect=_cas_mark)
+    mock_emit = AsyncMock()
+    mock_emit_refused = AsyncMock()
+    mock_add_msg = AsyncMock()
+    mock_update_status = AsyncMock()
+    server = _make_mock_server({"a1": _make_agent_meta(status="paused")})
+
+    with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+               new_callable=AsyncMock, return_value=sessions), \
+         patch(f"{AUTO_RESOLVE}.mcp_server", server), \
+         patch(f"{AUTO_RESOLVE}.update_session_status_async", mock_update_status), \
+         patch(f"{AUTO_RESOLVE}.mark_awaiting_facilitation_async", mock_mark), \
+         patch(f"{AUTO_RESOLVE}.emit_facilitation_needed", mock_emit), \
+         patch(f"{AUTO_RESOLVE}.emit_write_refused", mock_emit_refused), \
+         patch(f"{AUTO_RESOLVE}.add_message_async", mock_add_msg), \
+         patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
+               return_value=_transcript(("a1", "thesis"), ("silent", "antithesis"),
+                                        ("silent", "synthesis", False),
+                                        ("a1", "synthesis", True))), \
+         patch("src.mcp_handlers.dialectic.reviewer.select_reviewer",
+               new_callable=AsyncMock, return_value=None):
+        from src.mcp_handlers.dialectic.auto_resolve import auto_resolve_stuck_sessions
+        result = await auto_resolve_stuck_sessions()
+
+    # The sweeper passed exactly what it read.
+    kwargs = mock_mark.await_args.kwargs
+    assert kwargs["expected_phase"] == phase
+    assert kwargs["expected_updated_at"] == observed_ts
+    assert any(d.get("action") == "write_refused" for d in result["details"])
+    mock_emit_refused.assert_awaited_once()
+    assert result["facilitation_count"] == 0
+    assert result["skipped_count"] == 1
+    mock_emit.assert_not_awaited()
+    mock_add_msg.assert_not_awaited()
+    mock_update_status.assert_not_called()

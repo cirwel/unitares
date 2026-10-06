@@ -106,9 +106,11 @@ class OnboardParams(AgentIdentityMixin):
         description=(
             "Resume existing identity when a proof signal is present "
             "(continuity_token, agent_uuid, agent_id, client_session_id, "
-            "or name). Per identity.md v2 ontology (S13), an arg-less "
-            "onboard() with no proof signal mints fresh — the server "
-            "gates `force_new=True` automatically when nothing is presented."
+            "or name). An arg-less onboard() with no proof signal is "
+            "refused under strict identity (the default) with "
+            "lineage_declaration_required: pass force_new=true for a fresh "
+            "identity. A server with STRICT_IDENTITY_REQUIRED=false sets "
+            "force_new=true for that call instead (identity.md v2, S13)."
         )
     )
     force_new: Union[bool, str, None] = Field(

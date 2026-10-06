@@ -168,6 +168,7 @@ def _isolate_db_backend(monkeypatch):
     # Session operations
     mock_backend.create_session.return_value = True
     mock_backend.get_session.return_value = None
+    mock_backend.get_session_binding.return_value = None
     mock_backend.update_session_activity.return_value = True
     mock_backend.end_session.return_value = True
     mock_backend.get_active_sessions_for_identity.return_value = []
@@ -639,6 +640,54 @@ def _isolate_knowledge_graph_singleton():
     if module is not None:
         module._graph_instance = None
         module._graph_lock = None
+
+
+@pytest.fixture(autouse=True)
+def _identity_posture(request, monkeypatch):
+    """Apply the permissive identity posture to tests marked for it.
+
+    Strict identity is the server default: STRICT_IDENTITY_REQUIRED unset means
+    on, and UNITARES_IDENTITY_STRICT unset means strict. Tests whose subject is
+    the opt-out posture (auto-mint on a session miss, bare UUID resume that
+    only logs) carry ``@pytest.mark.legacy_identity_defaults`` and get those
+    values set explicitly; every other test runs under the shipped default.
+    """
+    if request.node.get_closest_marker("legacy_identity_defaults") is not None:
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
+        monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "log")
+
+
+@pytest.fixture(autouse=True)
+def _stable_session_policy(monkeypatch):
+    """Accept legacy agent-{uuid12} session ids across the suite.
+
+    The product default refuses them when the server has a continuity key
+    (identity/stable_session.py). Many fixtures bind legacy-shaped keys while
+    also setting a continuity secret; tests of the policy itself set
+    UNITARES_LEGACY_SESSION_IDS explicitly. Verified keyed ids are cached per
+    process, so the cache is cleared between tests.
+    """
+    monkeypatch.setenv("UNITARES_LEGACY_SESSION_IDS", "accept")
+    from src.mcp_handlers.identity.stable_session import forget_verified
+
+    forget_verified()
+    yield
+    forget_verified()
+
+
+@pytest.fixture(autouse=True)
+def _continuity_secret_file(tmp_path, monkeypatch):
+    """Point the generated continuity secret at a file that does not exist.
+
+    Without a configured UNITARES_CONTINUITY_TOKEN_SECRET the server signs with
+    a key it generated in data/secrets/ (src/continuity_secret.py). A test must
+    not read or create that key in the checkout, and a test that sets no secret
+    expects continuity tokens to be off.
+    """
+    monkeypatch.setenv(
+        "UNITARES_CONTINUITY_TOKEN_SECRET_FILE",
+        str(tmp_path / "continuity-secret-unset" / "continuity_token_secret"),
+    )
 
 
 @pytest.fixture(autouse=True)

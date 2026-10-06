@@ -404,7 +404,18 @@ async def main():
             file=sys.stderr, flush=True,
         )
 
+    from src.continuity_secret import ensure_generated_secret
     from src.insecure_defaults import running_in_container, startup_warnings
+
+    try:
+        ensure_generated_secret()
+    except OSError as exc:
+        print(
+            f"[FastMCP] WARNING: could not create the continuity token secret ({exc}). "
+            "Continuity tokens and effect grants are disabled until "
+            "UNITARES_CONTINUITY_TOKEN_SECRET is set or the file can be written.",
+            file=sys.stderr, flush=True,
+        )
 
     for _warning in startup_warnings(
         rest_strict=rest_strict_required(),

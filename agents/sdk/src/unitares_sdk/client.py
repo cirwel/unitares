@@ -100,7 +100,7 @@ class GovernanceClient:
     Use as a context manager for convenience::
 
         async with GovernanceClient() as client:
-            result = await client.onboard("MyAgent")
+            result = await client.onboard("MyAgent", force_new=True)
             await client.checkin("did some work")
     """
 

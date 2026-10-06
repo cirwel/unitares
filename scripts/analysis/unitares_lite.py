@@ -65,13 +65,7 @@ def call_tool(tool_name, arguments=None):
     
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            
-            # Save session ID if returned
-            if "client_session_id" in result:
-                save_session(result["client_session_id"])
-            
-            return result
+            envelope = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if hasattr(e, 'read') else ""
         return {"success": False, "error": f"HTTP {e.code}: {e.reason}", "body": error_body}
@@ -80,10 +74,42 @@ def call_tool(tool_name, arguments=None):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+    # /v1/tools/call wraps the tool's own payload as {"name", "result",
+    # "success"}; the session id and any identity refusal are inside it.
+    result = envelope.get("result") if isinstance(envelope.get("result"), dict) else envelope
+
+    # Save session ID if returned
+    if result.get("client_session_id"):
+        save_session(result["client_session_id"])
+
+    # An identity refusal is success-shaped by design, so report it as the
+    # failure it is rather than as a call that worked.
+    refusal = _identity_refusal_status(result)
+    if refusal:
+        detail = result.get("hint") or result.get("next_step") or ""
+        return {"success": False, "refused": refusal,
+                "error": f"identity refused ({refusal}). {detail}".strip()}
+
+    return result
+
+
+def _identity_refusal_status(payload) -> str | None:
+    """Mirror of identity_bootstrap.identity_refusal_status for this
+    standalone client: a typed strict-identity refusal carries
+    rollout_flag=STRICT_IDENTITY_REQUIRED and its status."""
+    if not isinstance(payload, dict) or payload.get("rollout_flag") != "STRICT_IDENTITY_REQUIRED":
+        return None
+    return str(payload.get("status") or "identity_required")
+
 
 def onboard_cmd(name=None):
-    """Call onboard() tool."""
-    args = {}
+    """Call onboard() tool for a fresh identity.
+
+    force_new is explicit: under strict identity (the server default) an
+    onboard with neither force_new nor parent_agent_id is refused as
+    lineage_declaration_required.
+    """
+    args = {"force_new": True}
     if name:
         args["name"] = name
     
@@ -101,7 +127,7 @@ def onboard_cmd(name=None):
         return result
     else:
         print(f"❌ Error: {result.get('error', 'Unknown error')}")
-        return result
+        return {**result, "success": False}
 
 
 def update_cmd(response_text, complexity=None, confidence=None):
@@ -142,7 +168,7 @@ def update_cmd(response_text, complexity=None, confidence=None):
         return result
     else:
         print(f"❌ Error: {result.get('error', 'Unknown error')}")
-        return result
+        return {**result, "success": False}
 
 
 def metrics_cmd():
@@ -172,7 +198,7 @@ def metrics_cmd():
         return result
     else:
         print(f"❌ Error: {result.get('error', 'Unknown error')}")
-        return result
+        return {**result, "success": False}
 
 
 def status_cmd():
@@ -181,12 +207,18 @@ def status_cmd():
     
     # Get identity
     identity_result = call_tool("identity", {})
-    if identity_result.get("success") or "agent_id" in identity_result:
+    identity_ok = bool(identity_result.get("success") or "agent_id" in identity_result)
+    if identity_ok:
         agent_id = identity_result.get("agent_id") or identity_result.get("result", {}).get("agent_id", "Unknown")
         print(f"👤 Agent ID: {agent_id}\n")
-    
+    else:
+        print(f"❌ Error: {identity_result.get('error', 'Unknown error')}\n")
+
     # Get metrics
-    metrics_cmd()
+    result = metrics_cmd()
+    if not identity_ok:
+        return {**result, "success": False}
+    return result
 
 
 def parse_args():
@@ -218,13 +250,18 @@ def parse_args():
     return command, args
 
 
+def _failed(result) -> bool:
+    """A command failed when it reports success explicitly False."""
+    return isinstance(result, dict) and result.get("success") is False
+
+
 def main():
-    """Main entry point."""
+    """Main entry point. Exits nonzero when the command's call failed."""
     command, args = parse_args()
     
     if command == "onboard":
         name = args.get("name")
-        onboard_cmd(name)
+        result = onboard_cmd(name)
     
     elif command == "update":
         response_text = args.get("response_text")
@@ -232,21 +269,24 @@ def main():
             print("❌ Error: 'update' requires a response_text")
             print("Usage: unitares_lite.py update 'What you did' [complexity=0.5] [confidence=0.7]")
             sys.exit(1)
-        update_cmd(
+        result = update_cmd(
             response_text,
             complexity=args.get("complexity"),
             confidence=args.get("confidence")
         )
     
     elif command == "metrics":
-        metrics_cmd()
+        result = metrics_cmd()
     
     elif command == "status":
-        status_cmd()
+        result = status_cmd()
     
     else:
         print(f"❌ Unknown command: {command}")
         print(__doc__)
+        sys.exit(1)
+
+    if _failed(result):
         sys.exit(1)
 
 

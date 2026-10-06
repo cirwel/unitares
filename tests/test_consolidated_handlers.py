@@ -638,6 +638,24 @@ class TestObserveHandler:
         assert "skip_rate_metrics" not in data
 
     @pytest.mark.asyncio
+    async def test_operator_refusal_read_only_option_names_no_writing_action(self):
+        # observe(action='anomalies') writes an anomaly_detected audit row per
+        # newly detected anomaly, so the refusal must not list it under
+        # stay_read_only (dogfood finding 69d1bbc66c031365).
+        from src.mcp_handlers.consolidated import handle_observe
+
+        with patch("src.mcp_handlers.context.get_context_agent_id", return_value=None):
+            result = await handle_observe({"action": "audit_events"})
+
+        data = _parse_response(result)
+        assert data["status"] == "identity_required"
+        options = {o["action"]: o for o in data["safe_options"]}
+        assert "anomalies" not in options["stay_read_only"]["call"]
+        assert "observe(action='aggregate')" in options["stay_read_only"]["call"]
+        assert options["scan_anomalies"]["call"] == "observe(action='anomalies')"
+        assert "Not read-only" in options["scan_anomalies"]["when"]
+
+    @pytest.mark.asyncio
     async def test_bridge_action_refuses_unbound_caller(self):
         from src.mcp_handlers.consolidated import handle_observe
 

@@ -53,7 +53,17 @@ async def handle_list_process_bindings(
             "list_process_bindings requires agent_uuid or a bound session."
         )
 
-    bindings = await get_live_bindings(agent_uuid)
+    # The stored client_session_id is a bearer credential, and any caller can
+    # name any agent here, so rows carry a reference to it instead.
+    from .session import session_id_reference
+
+    bindings = [
+        {
+            **{k: v for k, v in b.items() if k != "client_session_id"},
+            "client_session_ref": session_id_reference(b.get("client_session_id")),
+        }
+        for b in await get_live_bindings(agent_uuid)
+    ]
 
     distinct_contexts = {
         (b["host_id"], b["pid"], b["pid_start_time"], b["transport"])

@@ -448,6 +448,7 @@ class TestS21APath2FailClosed:
 
 class TestS21AFollowupSpawnReason:
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_session_resolve_miss_persists_spawn_reason(self):
         """T5: when onboard hits session_resolve_miss with no caller-provided
@@ -712,8 +713,9 @@ class TestS21BSpawnReasonPlumbing:
 
 class TestStrictIdentityRequiredFlag:
     """When STRICT_IDENTITY_REQUIRED=true, the dispatch retry replaces the
-    auto-mint else branch with a typed-refusal response. Default is off so
-    rollout is staged: local → Lumen → dispatch → flip default. The refusal
+    auto-mint else branch with a typed-refusal response. The staged rollout
+    (local → Lumen → dispatch → flip default) has reached its last step:
+    strict is the default, and an explicit off value opts out. The refusal
     is a structured success-shape (not an MCP error) so callers can't catch
     it and retry into the auto-mint path."""
 
@@ -761,32 +763,33 @@ class TestStrictIdentityRequiredFlag:
             "removing this would break existing callers before rollout."
         )
 
-    def test_helper_default_is_false(self):
-        # Verify the shared helper itself defaults to False when env unset —
-        # belt-and-suspenders against a future commit that flips the default
-        # before residents are migrated.
+    def test_helper_default_is_true(self):
+        # Strict identity is the server default: with the variable unset the
+        # auto-mint paths refuse rather than mint.
         import os
         from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
 
         prior = os.environ.pop("STRICT_IDENTITY_REQUIRED", None)
         try:
-            assert is_strict_identity_required() is False
+            assert is_strict_identity_required() is True
         finally:
             if prior is not None:
                 os.environ["STRICT_IDENTITY_REQUIRED"] = prior
 
-    def test_helper_truthy_values(self):
+    def test_helper_values(self):
+        # Only an explicit off value disables strict identity; anything else,
+        # a typo included, keeps it on.
         import os
         from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
 
         prior = os.environ.get("STRICT_IDENTITY_REQUIRED")
         try:
-            for val in ("1", "true", "TRUE", "yes", "Yes", "on"):
+            for val in ("1", "true", "TRUE", "yes", "Yes", "on", "", "garbage", "ture"):
                 os.environ["STRICT_IDENTITY_REQUIRED"] = val
-                assert is_strict_identity_required() is True, f"value {val!r} should be truthy"
-            for val in ("0", "false", "no", "off", "", "garbage"):
+                assert is_strict_identity_required() is True, f"value {val!r} should keep strict on"
+            for val in ("0", "false", "False", "no", "off", " OFF "):
                 os.environ["STRICT_IDENTITY_REQUIRED"] = val
-                assert is_strict_identity_required() is False, f"value {val!r} should be falsy"
+                assert is_strict_identity_required() is False, f"value {val!r} should turn strict off"
         finally:
             if prior is None:
                 os.environ.pop("STRICT_IDENTITY_REQUIRED", None)
