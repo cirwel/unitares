@@ -142,8 +142,20 @@ def _observe_operator_refusal(
                 },
                 {
                     "action": "stay_read_only",
-                    "call": "observe(action='aggregate') or observe(action='anomalies')",
+                    "call": "observe(action='aggregate')",
                     "when": "You need pre-onboard fleet-level read data only.",
+                },
+                # Not offered as read-only: an anomaly scan records each newly
+                # detected anomaly as an `anomaly_detected` audit row (deduped
+                # per change, handle_detect_anomalies). It still serves unbound,
+                # so it stays on the list, labeled for what it does.
+                {
+                    "action": "scan_anomalies",
+                    "call": "observe(action='anomalies')",
+                    "when": (
+                        "You need pre-onboard fleet anomaly data. Not read-only: "
+                        "newly detected anomalies are recorded to the audit trail."
+                    ),
                 },
             ],
             surface_context={
