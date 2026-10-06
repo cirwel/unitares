@@ -35,6 +35,7 @@ import time
 from typing import Optional
 
 from src.logging_utils import get_logger
+from src.mcp_handlers.identity.stable_session import audit_reference
 
 logger = get_logger(__name__)
 
@@ -273,6 +274,10 @@ async def heartbeat_agent_presence(
     """Keep the ``agent:/<uuid>`` presence lease fresh. Fire-and-forget; never raises."""
     if not agent_uuid:
         return
+    # Sessions are tracked, and sent as the lease's audit_session, by their
+    # audit reference: lease status shows audit_session to any caller, and a
+    # keyed client_session_id is a bearer credential.
+    client_session_id = audit_reference(client_session_id)
     _sweep(time.monotonic())
     if _released_since(agent_uuid, scheduled_at, client_session_id):
         return
@@ -528,7 +533,7 @@ async def release_agent_presence(
     if not agent_uuid:
         return {"released": False, "reason": "no_identity"}
     _sweep(time.monotonic())
-    session_ids = tuple(s for s in client_session_ids if s)
+    session_ids = tuple(audit_reference(s) for s in client_session_ids if s)
     if not session_ids:
         # Without the releasing session's id, a late final check-in from that
         # session could not be told apart from a resumed session and would

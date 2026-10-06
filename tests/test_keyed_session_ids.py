@@ -357,3 +357,52 @@ async def test_rotating_the_key_revokes_a_cached_verification(keyed, monkeypatch
         monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "rotated")
         uuid, refusal = await ss.resolve_keyed(csid)
     assert uuid is None and refusal["reason"] == "tag_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_the_presence_lease_names_its_session_by_reference(keyed, monkeypatch):
+    """Lease status shows audit_session to any caller, so the keyed id is not sent."""
+    from tests.test_agent_presence_lease import _FakeClient, _patch_models
+    from src.mcp_handlers.identity import agent_presence_lease as apl
+
+    csid = make_client_session_id(VICTIM)
+    client = _FakeClient()
+    _patch_models(monkeypatch, client)
+    try:
+        await apl.heartbeat_agent_presence(VICTIM, csid)
+        assert client.acquired[0].audit_session == ss.audit_reference(csid)
+
+        # After a restart the holder comes back from the lease row, in reference
+        # form, and must still count as the releasing session's own.
+        apl._lease_ids.clear()
+        apl._lease_sessions.clear()
+        monkeypatch.setattr(
+            apl, "_lookup_live_lease",
+            AsyncMock(return_value=("lease-123", ss.audit_reference(csid))),
+        )
+        result = await apl.release_agent_presence(VICTIM, (csid,))
+        assert result == {"released": True, "reason": "released"}
+    finally:
+        for cache in (apl._lease_ids, apl._released_at, apl._released_sessions,
+                      apl._locks, apl._lease_sessions, apl._touched):
+            cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_rows_store_the_digest(keyed):
+    """Usage and outcome rows are read back by other callers' queries."""
+    from src.db.mixins.tool_usage import ToolUsageMixin
+
+    conn = MagicMock()
+    conn.execute = AsyncMock()
+    acquire = MagicMock()
+    acquire.__aenter__ = AsyncMock(return_value=conn)
+    acquire.__aexit__ = AsyncMock(return_value=False)
+    db = MagicMock(spec=ToolUsageMixin)
+    db.acquire = MagicMock(return_value=acquire)
+    csid = make_client_session_id(VICTIM)
+
+    await ToolUsageMixin.append_tool_usage(db, VICTIM, csid, "t", 1, True)
+
+    args = conn.execute.await_args.args
+    assert csid not in args and ss.audit_reference(csid) in args
