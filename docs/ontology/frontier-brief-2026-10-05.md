@@ -64,15 +64,21 @@ Brief's manifest fields vs that record:
 
 | Field | In S22 today |
 |---|---|
-| model, harness, tools, memory | Yes (self-declared; see Limits) |
+| model, harness, tools, memory | Yes, with per-field source labels (see Limits) |
 | task information regime (curated vs full role-visible state) | No. This is the variable the 9-24 brief §3 already flagged for the ablation |
 | permissions | Partly: `affordance_state`, not a permission set |
 | budget / retries / verifier present | No |
-| compaction policy | No (only the fork kind) |
+| compaction policy | No. `spawn_reason` can say `compaction`, but nothing records the policy or what state survived |
 
-Limits that apply to any manifest built from S22: the fields are
-agent-declared, so a manifest is a claim about configuration, not evidence of it
-unless a harness-side source corroborates it.
+Limits that apply to any manifest built from S22: trust is per field, not
+blanket. `runtime_provenance` (`src/model_harness_provenance.py`) labels model
+and harness values as `provider_reported`, `harness_reported`,
+`transport_user_agent`, `transport_inferred` or `caller_declared`, and
+`build_s22_write_context` replaces any client-supplied fork classification with
+the server's. A manifest should carry those labels through and must not
+collapse them into one "declared" tier, or it would discard evidence already
+in the record and could call for corroboration fields that exist. Values
+labelled `caller_declared` remain claims, not evidence.
 
 The 54% rerun-variance finding is an independent reason to distrust single-run
 contrasts. It does not transfer a number to UNITARES tasks. Whether it widens
@@ -85,10 +91,13 @@ or digest. An empty field would read as absent, not as "no configuration".
 
 ### 3. AutoCompact: compaction as a governed state transition
 
-`classify_episode_fork` (`src/thread_identity.py`) already infers a
-`compaction` fork kind, separate from declared lineage. It is a heuristic
-(a Claude Code client with existing thread nodes), not a declaration, so it
-says a compaction probably happened, not what state survived it. The brief's rule that a summary
+`infer_spawn_reason` and `classify_episode_fork` (`src/thread_identity.py`)
+already treat compaction as a lineage reason: `spawn_reason="compaction"` makes
+the fork `identity_lineage`, and `episode_fork_kind` has no `compaction` value
+of its own. The reason is only inferred (a Claude Code client hint with
+existing thread nodes) when the caller already declared a `parent_agent_id`, so
+it is part of declared lineage, not separate from it. It records that a
+compaction was claimed, not what state survived it. The brief's rule that a summary
 must never expand permissions or erase contrary evidence is a design
 constraint on any future handoff format and is consistent with the current
 "declared lineage only" posture. The replay experiment (full history vs summary
