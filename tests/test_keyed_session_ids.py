@@ -1,0 +1,223 @@
+"""Keyed stable session ids (identity/stable_session.py).
+
+The stable client_session_id was ``agent-{uuid[:12]}``: anyone who knew an
+agent's UUID could compute it and act as the agent. It is now
+``agent-{uuid[:12]}-{tag}``, keyed with the server's continuity key, so knowing
+the UUID is not enough. These tests pin the format, that a UUID alone cannot
+produce an accepted id, how the resolver treats keyed, forged and legacy ids,
+and the migration paths (old tokens, runtime observations).
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from src.mcp_handlers.identity import stable_session as ss
+from src.mcp_handlers.identity.shared import make_client_session_id
+
+VICTIM = "5e728ecb-1234-4abc-8def-0123456789ab"
+OTHER = "11111111-2222-4333-8444-555555555555"
+
+
+@pytest.fixture
+def keyed(tmp_path, monkeypatch):
+    """A server with a continuity key, so it issues keyed ids."""
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "keyed-session-test-secret")
+    ss.forget_verified()
+    yield
+    ss.forget_verified()
+
+
+def _candidates(*rows):
+    return patch.object(ss, "_candidates", AsyncMock(return_value=list(rows)))
+
+
+# --- format -----------------------------------------------------------------
+
+def test_without_a_key_the_legacy_form_is_issued(monkeypatch):
+    monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET", raising=False)
+    assert make_client_session_id(VICTIM) == f"agent-{VICTIM[:12]}"
+
+
+def test_the_keyed_form(keyed):
+    csid = make_client_session_id(VICTIM)
+
+    assert ss.classify(csid) == "keyed" and len(csid) == 39
+    assert csid.startswith(f"agent-{VICTIM[:12]}-") and csid[6:18] == VICTIM[:12]
+    assert csid == make_client_session_id(VICTIM)          # deterministic per agent
+    assert csid != make_client_session_id(OTHER)
+    assert set(csid[19:]) <= set("abcdefghijklmnopqrstuvwxyz234567")
+
+
+def test_rotating_the_key_changes_every_id(keyed, monkeypatch):
+    before = make_client_session_id(VICTIM)
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "rotated")
+    assert make_client_session_id(VICTIM) != before
+
+
+# --- the advisory: a UUID alone yields no accepted id ------------------------
+
+def test_knowing_the_uuid_does_not_produce_an_accepted_id(keyed):
+    real = make_client_session_id(VICTIM)
+    guesses = [
+        f"agent-{VICTIM[:12]}",                                             # legacy
+        f"agent-{VICTIM[:12]}-" + base64.b32encode(                         # unkeyed HMAC
+            hashlib.sha256(b"unitares.csid.v2|" + VICTIM.encode()).digest()).decode().lower()[:20],
+        f"agent-{VICTIM[:12]}-" + base64.b32encode(                         # wrong key
+            hmac.new(b"guess", b"unitares.csid.v2|" + VICTIM.encode(), hashlib.sha256).digest()
+        ).decode().lower()[:20],
+        real[:-1] + ("a" if real[-1] != "a" else "b"),                      # one char off
+    ]
+    for guess in guesses:
+        assert not ss.verifies_for(guess, VICTIM), guess
+    assert ss.verifies_for(real, VICTIM)
+    assert not ss.verifies_for(real, OTHER)
+
+
+# --- resolution ---------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_a_keyed_id_resolves_with_no_stored_binding_and_writes_nothing(keyed):
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    cache = AsyncMock()
+    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+         patch.object(resolution, "_get_redis", side_effect=AssertionError("no PATH 1")), \
+         patch.object(resolution, "_get_agent_status", AsyncMock(return_value="active")), \
+         patch.object(resolution, "_get_agent_label", AsyncMock(return_value="victim")), \
+         patch.object(resolution, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)), \
+         patch.object(resolution, "_substrate_http_reject", AsyncMock(return_value=None)), \
+         patch.object(resolution, "_cache_session", cache):
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM and result["source"] == "keyed_session"
+    assert not result.get("created")
+    cache.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rows, csid_for, reason", [
+    ([{"agent_id": VICTIM, "disabled_at": None}], OTHER, "tag_mismatch"),
+    ([], VICTIM, "no_such_agent"),
+    ([{"agent_id": VICTIM, "disabled_at": None}, {"agent_id": VICTIM[:12] + "x", "disabled_at": None}],
+     VICTIM, "ambiguous_prefix"),
+    ([{"agent_id": VICTIM, "disabled_at": "2026-10-06"}], VICTIM, "agent_disabled"),
+])
+async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reason):
+    """Forged, unknown, ambiguous or disabled: refused before PATH 1/2, never a
+    fall through to another lookup."""
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(csid_for)
+    if csid_for == OTHER:  # same prefix as VICTIM, tag made for another agent
+        csid = f"agent-{VICTIM[:12]}-{csid.rsplit('-', 1)[1]}"
+    with _candidates(*rows), \
+         patch.object(resolution, "_get_redis", side_effect=AssertionError("no PATH 1")):
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["resume_failed"] is True
+    assert result["error"] == "stable_session_id_rejected" and result["reason"] == reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, refused", [("refuse", True), ("log", False), ("accept", False)])
+async def test_the_legacy_policy(keyed, monkeypatch, caplog, mode, refused):
+    from src.mcp_handlers.identity import resolution
+
+    monkeypatch.setenv("UNITARES_LEGACY_SESSION_IDS", mode)
+    with patch.object(resolution, "_get_redis", return_value=None), \
+         patch.object(resolution, "get_db", side_effect=RuntimeError("stop after the policy")):
+        try:
+            result = await resolution.resolve_session_identity(f"agent-{VICTIM[:12]}", resume=True)
+        except RuntimeError:
+            result = None
+
+    if refused:
+        assert result["error"] == "stable_session_id_rejected" and result["reason"] == "legacy_session_id"
+    else:
+        assert not (result or {}).get("error") == "stable_session_id_rejected"
+    assert ("[LEGACY_SESSION_ID]" in caplog.text) is (mode != "accept")
+
+
+def test_without_a_key_legacy_ids_are_never_refused(monkeypatch):
+    monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN_SECRET", raising=False)
+    monkeypatch.setenv("UNITARES_LEGACY_SESSION_IDS", "refuse")
+    assert ss.legacy_refused(f"agent-{VICTIM[:12]}") is False
+
+
+def test_the_product_default_refuses(monkeypatch):
+    monkeypatch.delenv("UNITARES_LEGACY_SESSION_IDS", raising=False)
+    assert ss.legacy_mode() == "refuse"
+
+
+# --- migration ----------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_an_old_token_converts_to_the_keyed_id(keyed):
+    """A token issued before keyed ids embeds agent-{uuid12}. It is verified
+    and names its agent, so derivation presents that agent's keyed id."""
+    from src.mcp_handlers.identity.session import create_continuity_token, derive_session_key
+
+    token = create_continuity_token(VICTIM, f"agent-{VICTIM[:12]}")
+    key = await derive_session_key(None, {"continuity_token": token})
+
+    assert key == make_client_session_id(VICTIM) and ss.classify(key) == "keyed"
+
+
+def test_the_sync_cache_rejects_a_keyed_id_bound_to_another_agent(keyed):
+    from src.mcp_handlers.identity.shared import _get_identity_record_sync, _session_identities
+
+    csid = make_client_session_id(VICTIM)
+    _session_identities[csid] = {"bound_agent_id": OTHER, "bind_count": 1}
+    try:
+        with patch("src.mcp_handlers.context.get_context_session_key", return_value=None):
+            assert _get_identity_record_sync(session_id=csid)["bound_agent_id"] is None
+        _session_identities[csid] = {"bound_agent_id": VICTIM, "bind_count": 1}
+        with patch("src.mcp_handlers.context.get_context_session_key", return_value=None):
+            assert _get_identity_record_sync(session_id=csid)["bound_agent_id"] == VICTIM
+    finally:
+        _session_identities.pop(csid, None)
+
+
+def test_a_keyed_id_counts_as_a_session_the_caller_holds(keyed):
+    from src.mcp_handlers.context import set_credential_proof_uuid, set_session_proof_origin, set_session_resolution_source
+    from src.mcp_handlers.identity.credential_issuance import credentials_issuable, note_session_proof
+
+    set_credential_proof_uuid(None)
+    set_session_resolution_source("explicit_client_session_id")
+    set_session_proof_origin("caller_asserted")
+    note_session_proof(VICTIM, make_client_session_id(VICTIM))
+    try:
+        assert credentials_issuable(VICTIM)[0] is True
+    finally:
+        set_credential_proof_uuid(None)
+        set_session_proof_origin(None)
+        set_session_resolution_source(None)
+
+
+@pytest.mark.asyncio
+async def test_runtime_observations_accept_a_keyed_id_without_a_session_row(keyed):
+    from src import runtime_observations as ro
+
+    db = MagicMock()
+    db.get_session = AsyncMock(return_value=None)
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+         patch("src.db.get_db", return_value=db), \
+         patch.object(ro, "_normalize", return_value=(VICTIM, csid, "e1", None, {"observation_kind": "test"})), \
+         patch("src.audit_db.append_audit_event_async", AsyncMock(side_effect=RuntimeError("past the gate"))):
+        with pytest.raises(RuntimeError, match="past the gate"):
+            await ro.record_runtime_observation({"any": "payload"})
+
+    with _candidates({"agent_id": VICTIM, "disabled_at": None}), \
+         patch("src.db.get_db", return_value=db), \
+         patch.object(ro, "_normalize", return_value=(OTHER, csid, "e1", None, {})):
+        with pytest.raises(ro.RuntimeObservationError) as exc:
+            await ro.record_runtime_observation({"any": "payload"})
+    assert exc.value.code == "session_unbound"
