@@ -40,6 +40,11 @@
 #   http-ok           URL answers 200
 #   manual            `last_verified` is within `max_age_days`
 #   covered           an existing check owns this surface (`covered_by`)
+#
+# `content_checked_by` names checks that live outside this repo (a sibling
+# repo or the operator's machine), so they cannot be `covered_by` paths. The
+# weekly job prints them, so a site whose probe is only http-ok still shows
+# what reads its words, or that nothing does.
 
 schema = 1
 
@@ -162,7 +167,7 @@ title = "Descriptions of the public sibling repos"
 where = "https://github.com/cirwel"
 source = "set in the GitHub UI per repo"
 refresh = "gh repo edit <repo> --description ..."
-probe = { type = "repo-description", repos = ["cirwel/unitares-governance-plugin", "cirwel/unitares-host-adapter", "cirwel/unitares-discord-bridge", "cirwel/unitares-resident", "cirwel/anima-mcp", "cirwel/CIRWEL"] }
+probe = { type = "repo-description", repos = ["cirwel/unitares-governance-plugin", "cirwel/unitares-host-adapter", "cirwel/unitares-discord-bridge", "cirwel/unitares-resident", "cirwel/anima-mcp", "cirwel/eisv-lumen", "cirwel/CIRWEL"] }
 
 [[surface]]
 id = "zenodo-citation"
@@ -193,6 +198,7 @@ title = "cirwel.org"
 where = "https://cirwel.org"
 source = "cirwel/cirwel-site (src/data/claims.json, components)"
 refresh = "Edit and deploy cirwel-site."
+content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json", "served-surfaces check: hero, share card, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
 probe = { type = "http-ok", url = "https://cirwel.org" }
 
 [[surface]]
@@ -202,6 +208,7 @@ title = "cirwelsystems.com"
 where = "https://cirwelsystems.com"
 source = "cirwel/cirwelsystems-site"
 refresh = "Edit and deploy cirwelsystems-site."
+content_checked_by = []  # deliberately unchecked: the lower-priority half of the cirwel.org/.com A/B
 probe = { type = "http-ok", url = "https://cirwelsystems.com" }
 
 [[surface]]
@@ -211,6 +218,7 @@ title = "cirwel.github.io index + CIRWEL profile README"
 where = "https://cirwel.github.io/"
 source = "cirwel/cirwel.github.io (index.html), cirwel/CIRWEL (README.md)"
 refresh = "Edit those repos."
+content_checked_by = ["cirwel.github.io scripts/check-index.py against Zenodo deposits", "served-surfaces check: hero, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
 probe = { type = "http-ok", url = "https://cirwel.github.io/" }
 
 [[surface]]
@@ -218,8 +226,9 @@ id = "hf-eisv-trajectories"
 kind = "site"
 title = "Hugging Face dataset hikewa/unitares-eisv-trajectories"
 where = "https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories"
-source = "cirwel/eisv-lumen"
-refresh = "Edit the dataset card on the Hub."
+source = "cirwel/eisv-lumen (HF_DATASET_CARD.md)"
+refresh = "Edit HF_DATASET_CARD.md in eisv-lumen, then upload it to the Hub."
+content_checked_by = ["served-surfaces check: Hub card mirrors eisv-lumen HF_DATASET_CARD.md", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
 probe = { type = "http-ok", url = "https://huggingface.co/api/datasets/hikewa/unitares-eisv-trajectories" }
 
 [[surface]]

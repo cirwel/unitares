@@ -238,3 +238,17 @@ def test_unreachable_is_skip_and_gone_is_drift() -> None:
     probe = {"type": "http-ok", "url": "https://x"}
     assert _statuses(ds.probe_http_ok("h", probe, FakeNet(http={}), PROJECT_ROOT)) == ["SKIP"]
     assert _statuses(ds.probe_http_ok("h", probe, FakeNet(http={"https://x": 404}), PROJECT_ROOT)) == ["DRIFT"]
+
+
+def test_content_readers_are_reported_including_none() -> None:
+    registry = {
+        "surface": [
+            {"id": "read", "probe": {"type": "covered"}, "covered_by": ["x"], "content_checked_by": ["claims check"]},
+            {"id": "unread", "probe": {"type": "covered"}, "covered_by": ["x"], "content_checked_by": []},
+        ]
+    }
+    info = [r.message for r in ds.run_probes(registry, FakeNet()) if r.status == "INFO"]
+    assert info == [
+        "content checked by: claims check",
+        "content checked by: nothing reads this surface's words",
+    ]

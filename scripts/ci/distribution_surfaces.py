@@ -498,6 +498,8 @@ def offline_errors(registry: dict, root: Path = REPO_ROOT) -> list[str]:
             for field in PROBE_FIELDS[ptype]:
                 if field not in probe:
                     errors.append(f"{sid}: probe {ptype} needs {field}")
+        if not isinstance(surface.get("content_checked_by", []), list):
+            errors.append(f"{sid}: content_checked_by must be a list")
         if ptype == "covered" and not surface.get("covered_by"):
             errors.append(f"{sid}: probe 'covered' needs a covered_by list")
         if ptype == "manual" and "last_verified" in probe:
@@ -547,6 +549,10 @@ def run_probes(
             results.extend(probe_covered(sid, surface, net, root))
         else:
             results.extend(PROBES[probe["type"]](sid, probe, net, root))
+        if "content_checked_by" in surface:
+            readers = surface["content_checked_by"]
+            text = "; ".join(readers) if readers else "nothing reads this surface's words"
+            results.append(Result("INFO", sid, f"content checked by: {text}"))
     return results
 
 
