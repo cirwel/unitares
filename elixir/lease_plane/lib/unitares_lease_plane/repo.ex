@@ -880,7 +880,7 @@ defmodule UnitaresLeasePlane.Repo do
     args = [
       event.ts,
       event.holder_agent_uuid,
-      Map.get(payload, "audit_session"),
+      UnitaresLeasePlane.SessionRef.reference(Map.get(payload, "audit_session")),
       "lease.#{event.event_type}",
       success,
       error_type,
@@ -936,7 +936,7 @@ defmodule UnitaresLeasePlane.Repo do
     args = [
       event_type,
       Map.get(rec, :agent_id),
-      Map.get(rec, :session_id),
+      UnitaresLeasePlane.SessionRef.reference(Map.get(rec, :session_id)),
       Jason.encode!(payload)
     ]
 
@@ -1107,7 +1107,16 @@ defmodule UnitaresLeasePlane.Repo do
   end
 
   defp tool_usage_payload(event) do
-    event_payload = decode_payload(event.payload)
+    # A lease recorded before acquire ingest hashed keyed ids may still hold
+    # one raw; audit.tool_usage is readable by other callers (SessionRef).
+    event_payload =
+      case decode_payload(event.payload) do
+        %{"audit_session" => session} = decoded ->
+          Map.put(decoded, "audit_session", UnitaresLeasePlane.SessionRef.reference(session))
+
+        decoded ->
+          decoded
+      end
 
     %{
       "lease_event_id" => event.event_id,

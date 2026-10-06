@@ -264,7 +264,9 @@ class DiscoveryNode:
 
         # Include provenance if present (agent state at creation)
         if self.provenance:
-            result["provenance"] = self.provenance
+            from src.mcp_handlers.identity.stable_session import redact_provenance
+
+            result["provenance"] = redact_provenance(self.provenance)
 
         # Include provenance chain if present (lineage context)
         if self.provenance_chain:

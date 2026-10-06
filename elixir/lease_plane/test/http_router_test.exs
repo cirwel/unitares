@@ -304,6 +304,17 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert is_binary(lease["expires_at"])
     end
 
+    test "a keyed client session id is stored as its audit digest", ctx do
+      body =
+        acquire_body(ctx.surface)
+        |> Map.put(:audit_session, "agent-5e728ecb-123-xjc4uauir6jvdvqxylny")
+
+      resp = post_json("/v1/lease/acquire", body)
+
+      assert resp.status == 200
+      assert parsed(resp)["lease"]["audit_session"] == "csid:96ac49cb17c64d38ad2468be"
+    end
+
     test "agent:/ surface routes to the remote_heartbeat self-healing path (migration 042)",
          _ctx do
       agent_surface = "agent:/ag-" <> binary_part(random_uuid(), 0, 8)

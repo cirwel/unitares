@@ -110,6 +110,16 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 > not a field to persist or attach to every ordinary tool call, and it does not
 > resume identity across process boundaries.
 
+> **Who receives credentials.** A `client_session_id` and a `continuity_token`
+> each let the holder act as the agent, so under strict identity (the default)
+> `identity()` and `onboard()` return them only to a call that proved ownership:
+> a mint, a session or token the caller sent, a UDS substrate attestation, or an
+> operator token. A call matched only by inference (an onboard pin keyed on the
+> User-Agent, a transport fingerprint, a name or unverified `agent_id`) gets
+> `client_session_id: null` and `credentials_withheld` from `identity()`, and
+> `onboard()` refuses that resume with `resume_proof_required`
+> (`src/mcp_handlers/identity/credential_issuance.py`).
+
 ### Canonical resolution order
 
 When the server needs to answer "who is this caller?" the **canonical order
@@ -441,9 +451,12 @@ properties, not surprises:
 - **`tier: strong` on an echoed `agent-{uuid}` is itself a
   performative claim across a process boundary — a known, bounded
   over-claim, named here so it is a property and not a surprise.** The
-  `agent-{uuid12}` session string is copyable and UUID-derivable, so
-  the server cannot distinguish "the process that minted this string
-  echoing its own" from "a co-resident process presenting it." The
+  stable session string is copyable, so the server cannot distinguish
+  "the process that minted this string echoing its own" from "a
+  co-resident process presenting it." (It is no longer derivable from
+  the UUID: the keyed form `agent-{uuid12}-{tag}` needs the server's
+  key, `src/mcp_handlers/identity/stable_session.py`. The legacy
+  `agent-{uuid12}` form was derivable, and is refused by default.) The
   `strong` / `caller_proven: true` stamp the echo earns is therefore
   the *same* "same string = same subject" leap as the pin above, taken
   at a higher tier: honest *within* a live process, unverifiable

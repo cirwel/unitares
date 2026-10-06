@@ -17,6 +17,7 @@ import os
 import re
 
 from mcp.types import TextContent
+from . import credential_issuance as _credential_issuance  # noqa: F401  (load operator.py at import time)
 
 from src.logging_utils import get_logger
 from src.db import get_db
@@ -607,6 +608,18 @@ async def _collect_identity_aliases(
 # TOOL HANDLER (replaces identity() tool)
 # =============================================================================
 
+def _label_write_allowed(agent_uuid: Optional[str]) -> bool:
+    """May this request rename ``agent_uuid``? Renaming writes to the agent,
+    so it needs the proof that receiving its credentials needs
+    (identity/credential_issuance.py); a caller matched by inference may not."""
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    allowed, basis = credentials_issuable(agent_uuid)
+    if not allowed:
+        log_withheld("identity(name)", agent_uuid, basis)
+    return allowed
+
+
 async def handle_identity_v2(
     arguments: Dict[str, Any],
     session_key: str,
@@ -626,17 +639,26 @@ async def handle_identity_v2(
     # set via set_agent_label after the session resolves normally.
     name = arguments.get("name")
 
-    # Pass model_type to generate proper agent_id (model+date format)
+    # Pass model_type to generate proper agent_id (model+date format).
+    # force_new rides through (#2692): the adapter skipped the session-key
+    # resume for it, so the resolver must skip its lookups too, or a key that
+    # already maps to an agent (or a session id the resolver refuses) would
+    # answer a request for a fresh identity.
     identity = await resolve_session_identity(
         session_key,
         persist=False,
-        model_type=model_type or arguments.get("model_type")
+        model_type=model_type or arguments.get("model_type"),
+        force_new=coerce_bool(arguments.get("force_new"), default=False),
     )
     agent_id = identity.get("agent_id", identity["agent_uuid"])
     agent_uuid = identity["agent_uuid"]
     persisted = identity.get("persisted", False)
 
-    # Set label if requested (this will persist the agent)
+    # Set label if requested (this will persist the agent). Renaming is a
+    # write on the agent, so a caller matched only by inference may not do it
+    # (identity/credential_issuance.py); its response also withholds credentials.
+    if name and not identity.get("created") and not _label_write_allowed(agent_uuid):
+        name = None
     if name:
         success = await set_agent_label(agent_uuid, name, session_key=session_key)
         if success:
@@ -709,6 +731,8 @@ def _build_identity_diag_payload_for_request(
     """
     from .shared import make_client_session_id
 
+    from .credential_issuance import WITHHELD_HINT, credentials_issuable, log_withheld
+
     stable_session_id = make_client_session_id(agent_uuid)
     try:
         from ..context import get_session_resolution_source, get_session_proof_origin
@@ -718,17 +742,20 @@ def _build_identity_diag_payload_for_request(
         continuity_source = None
         proof_origin = None
     continuity_support = continuity_token_support_status()
+    issuable, basis = credentials_issuable(agent_uuid)
     continuity_token = create_continuity_token(
         agent_uuid,
         stable_session_id,
         model_type=model_type,
         client_hint=arguments.get("client_hint"),
-    )
-    return build_identity_diag_payload(
+    ) if issuable else None
+    if not issuable:
+        log_withheld("identity", agent_uuid, basis)
+    payload = build_identity_diag_payload(
         agent_uuid=agent_uuid,
         agent_id=agent_id,
         display_name=label,
-        client_session_id=stable_session_id,
+        client_session_id=stable_session_id if issuable else None,
         continuity_source=continuity_source,
         continuity_support=continuity_support,
         continuity_token=continuity_token,
@@ -740,6 +767,9 @@ def _build_identity_diag_payload_for_request(
         model_type=model_type,
         proof_origin=proof_origin,
     )
+    if not issuable:
+        payload["credentials_withheld"] = {"basis": basis, "hint": WITHHELD_HINT}
+    return payload
 
 
 def _identity_success_for_request(
@@ -921,6 +951,20 @@ async def _try_resume_by_agent_uuid_direct(
                 _direct_uuid[:8], _exc, exc_info=True,
             )
 
+    # A token bound to this UUID or a verified substrate attestation lets this
+    # request receive the agent's credentials (credential_issuance.py). Without
+    # either, the agent comes from a bare UUID claim (allowed only outside
+    # strict mode), and a caller-asserted session derived earlier in the
+    # request must not vouch for it.
+    try:
+        from ..context import set_credential_proof_uuid, set_session_proof_origin
+        if _partc_owned:
+            set_credential_proof_uuid(_direct_uuid)
+        else:
+            set_session_proof_origin("server_inferred")
+    except Exception:
+        pass
+
     if not _partc_owned:
         from config.governance_config import identity_strict_mode
         _partc_mode = identity_strict_mode()
@@ -1015,10 +1059,16 @@ async def _try_resume_by_agent_uuid_direct(
     label = await _get_agent_label(_direct_uuid)
     # Update label if requested
     requested_name = arguments.get("name")
-    if requested_name and requested_name != label:
+    if requested_name and requested_name != label and _label_write_allowed(_direct_uuid):
         if await set_agent_label(_direct_uuid, requested_name, session_key=base_session_key):
             label = requested_name
-    await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
+    # Bind the caller's session to this agent only when the request proved it
+    # owns the agent: a bare UUID claim (allowed outside strict mode) must not
+    # leave the caller's key resolving to the agent on later calls.
+    from .credential_issuance import credentials_issuable as _issuable
+
+    if _issuable(_direct_uuid)[0]:
+        await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
     try:
         from ..context import update_context_agent_id, set_session_resolution_source
         update_context_agent_id(_direct_uuid)
@@ -1164,8 +1214,12 @@ async def _try_resume_by_session_key(
 
     logger.info(f"[IDENTITY] Resuming existing agent {agent_uuid[:8]}... (explicit resume=true)")
 
-    # Update label if requested
-    if arguments.get("name") and arguments.get("name") != label:
+    # Update label if requested, and only by a caller that proved ownership.
+    if (
+        arguments.get("name")
+        and arguments.get("name") != label
+        and _label_write_allowed(agent_uuid)
+    ):
         success = await set_agent_label(agent_uuid, arguments.get("name"), session_key=base_session_key)
         if success:
             label = arguments.get("name")
@@ -1250,14 +1304,17 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         or arguments.get("agent_id")
         or arguments.get("name")
     )
-    if not _has_proof_signal and not arguments.get("force_new"):
-        arguments["force_new"] = True
+    # Coerced once, before the S13 default and like handle_identity_v2's
+    # resolver call, so a string "false" is treated exactly as False here,
+    # in the default below and there.
+    force_new = coerce_bool(arguments.get("force_new"), default=False)
+    if not _has_proof_signal and not force_new:
+        force_new = True
         logger.info(
             "[FRESH_INSTANCE] arg-less identity() with no proof signal — "
             "defaulting to force_new=true per v2 ontology (S13)"
         )
-
-    force_new = arguments.get("force_new", False)
+    arguments["force_new"] = force_new
     resume = arguments.get("resume", True)
     model_type = arguments.get("model_type")
 
@@ -1403,15 +1460,21 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     final_agent_id = public_agent_id or structured_id or agent_uuid
     user_name = result.get("label")
 
-    # Derive client_session_id for session continuity
+    # Derive client_session_id for session continuity. Both it and the token
+    # are credentials, returned only to a caller that proved ownership or
+    # minted this identity (credential_issuance.py).
     from .shared import make_client_session_id
+    from .credential_issuance import WITHHELD_HINT, credentials_issuable, log_withheld
     client_session_id = make_client_session_id(agent_uuid)
+    issuable, issuance_basis = credentials_issuable(agent_uuid, minted=bool(result.get("created")))
     continuity_token = create_continuity_token(
         agent_uuid,
         client_session_id,
         model_type=model_type,
         client_hint=arguments.get("client_hint"),
-    )
+    ) if issuable else None
+    if not issuable:
+        log_withheld("identity", agent_uuid, issuance_basis)
     try:
         from ..context import get_session_resolution_source, get_session_proof_origin
         continuity_source = get_session_resolution_source()
@@ -1434,7 +1497,9 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
     elif not identity_resolution_outcome:
         identity_resolution_outcome = "minted_fresh" if result.get("created") else "resumed"
     auto_bind = coerce_bool(arguments.get("auto_bind", True))
-    if auto_bind and not (existing_identity and existing_identity.get("archived")):
+    # A caller matched only by inference does not get the stable session
+    # bound for it either: it never receives that key.
+    if auto_bind and issuable and not (existing_identity and existing_identity.get("archived")):
         try:
             await _perform_session_bind(
                 agent_uuid=agent_uuid,
@@ -1466,7 +1531,7 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         agent_uuid=agent_uuid,
         agent_id=final_agent_id,
         display_name=user_name,
-        client_session_id=client_session_id,
+        client_session_id=client_session_id if issuable else None,
         continuity_source=continuity_source,
         continuity_support=continuity_support,
         continuity_token=continuity_token,
@@ -1474,13 +1539,16 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         identity_resolution_outcome=identity_resolution_outcome,
         model_type=model_type,
         resumed=False if result.get("created") else (True if result.get("source") else None),
-        session_continuity=result.get("session_continuity"),
+        session_continuity=result.get("session_continuity") if issuable else None,
         verbose=verbose,
         provisional_lineage=_r2_prov_main,
         lineage_state=_r2_state_main,
         client_hint=_resolve_response_client_hint(arguments),
         proof_origin=proof_origin,
     )
+
+    if not issuable:
+        response_data["credentials_withheld"] = {"basis": issuance_basis, "hint": WITHHELD_HINT}
 
     # REMOVED (#2142): a second, transport-key auto-bind used to run here. It
     # re-derived a key with NO arguments, so the ladder fell through to the
@@ -1694,6 +1762,22 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     # Resolve the agent from the provided client_session_id
     # resume=True is correct here — bind_session is explicitly resuming an existing identity
+    # The target is the caller's own client_session_id: record that provenance
+    # before resolving it, so a stored binding for it proves the agent
+    # (credential_issuance.note_session_proof). The destination derivation
+    # above does not stamp, and REST runs bind_session without the identity
+    # middleware. A transport-injected id keeps whatever its source says.
+    try:
+        from ..context import (
+            get_csid_transport_injected,
+            set_session_proof_origin,
+            set_session_resolution_source,
+        )
+        if not get_csid_transport_injected():
+            set_session_resolution_source("explicit_client_session_id")
+            set_session_proof_origin("caller_asserted")
+    except Exception:
+        pass
     target_identity = await resolve_session_identity(client_session_id, persist=False, resume=True)
     # S21-a: resume=True with no PG row now returns resume_failed instead
     # of silently minting a ghost. Treat that the same as "no existing agent".
@@ -1743,7 +1827,17 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     # key differs from `client_session_id` by construction, so the guard passes
     # exactly when the destination is most dangerous.
     rebind_refused: Optional[str] = None
-    if mcp_session_key and mcp_session_key == client_session_id:
+    # Binding the target agent to this caller's session gives the caller that
+    # agent: the same proof receiving its credentials needs
+    # (identity/credential_issuance.py). Resolving client_session_id is not
+    # enough when it is a key the server inferred, such as a fingerprint.
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    _bind_allowed, _bind_basis = credentials_issuable(target_uuid)
+    if not _bind_allowed:
+        log_withheld("bind_session", target_uuid, _bind_basis)
+        rebind_refused = "ownership_unproven"
+    elif mcp_session_key and mcp_session_key == client_session_id:
         # Nothing to rebind — the caller already holds this key. Checked first
         # so the benign self-pin case is never reported as a refusal.
         pass
@@ -1797,6 +1891,11 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         ),
         "message": (
             f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: this call did not prove it owns that agent "
+            f"(the client_session_id was matched by inference, such as a transport "
+            f"fingerprint). Your identity is unchanged."
+            if rebind_refused == "ownership_unproven"
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
             f"bind this transport: the destination key's provenance was not "
             f"declared, so it cannot be shown to be yours. Your identity is unchanged."
             if rebind_refused == UNDECLARED_DESTINATION_PROVENANCE
@@ -1816,7 +1915,10 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         bind_response["rebind_refused"] = rebind_refused
         bind_response["recovery"] = {
             "action": (
-                "Retry from a client that carries its own session identifier "
+                "Pass the client_session_id your process received from "
+                "start_session, or a continuity_token bound to the agent."
+                if rebind_refused == "ownership_unproven"
+                else "Retry from a client that carries its own session identifier "
                 "(Mcp-Session-Id or X-Session-ID), or rebind out of band."
             ),
             "related_tools": ["identity", "start_session"],
@@ -2239,6 +2341,35 @@ def _log_identity_resolution_observation(arguments, agent_uuid: str) -> None:
         logger.debug(f"[IRES] identity_resolution_observed write failed (non-fatal): {_ires_err}")
 
 
+def _onboard_unproven_resume_refusal(agent_uuid: Optional[str]) -> Optional[Sequence[TextContent]]:
+    """The refusal for an onboard resume this request did not prove, else None.
+
+    Resuming hands the agent's credentials to the caller and lets onboard write
+    to it (label, rebadge, unarchive, tags, bindings), so it needs the proof
+    identity/credential_issuance.py defines. Called before any of those writes.
+    """
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    issuable, basis = credentials_issuable(agent_uuid)
+    if issuable:
+        return None
+    log_withheld("onboard", agent_uuid, basis)
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+
+    return success_response(strict_identity_refusal_payload(
+        "onboard",
+        status="resume_proof_required",
+        hint=(
+            "This onboard would resume an existing agent that the call was "
+            "matched to only by inference (an onboard pin, a transport "
+            "fingerprint, or a name or agent_id it did not prove). Pass the "
+            "client_session_id your process received when it started, or "
+            "call start_session(force_new=true) to begin a new identity, "
+            "with parent_agent_id=<prior uuid> if it continues that work."
+        ),
+    ))
+
+
 @mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
 async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -2477,6 +2608,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             if existing_identity.get("archived"):
                 # ARCHIVED AGENT — auto-unarchive with same UUID (only when resume=True)
                 if resume:
+                    # Unarchiving is a write on the agent: it needs the same
+                    # proof as any resume (STEP 2c), checked before it happens.
+                    _refusal = _onboard_unproven_resume_refusal(existing_identity.get("agent_uuid"))
+                    if _refusal is not None:
+                        return _refusal
                     agent_uuid = existing_identity.get("agent_uuid")
                     agent_id = existing_identity.get("agent_id", agent_uuid)
                     label = existing_identity.get("label")
@@ -2659,6 +2795,17 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
         except Exception as e:
             logger.error(f"onboard() failed to create identity: {e}")
             return error_response(f"Failed to create identity: {e}")
+
+    # STEP 2c: A resume hands this agent's credentials to the caller, so it
+    # must rest on proof the caller sent (its own client_session_id, a token
+    # bound to this agent, a transport session it holds) or on an operator
+    # token. A resume reached by inference (onboard pin, fingerprint, a name or
+    # unverified agent_id) is refused here, before the label, rebadge, tag,
+    # binding or any other write below touches the agent.
+    if not is_new:
+        _refusal = _onboard_unproven_resume_refusal(agent_uuid)
+        if _refusal is not None:
+            return _refusal
 
     # CRITICAL: Update request context so signature in response matches new identity
     try:

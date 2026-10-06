@@ -258,7 +258,21 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # shows session-cache keys as references and the uuid prefix index as a count.
 # A client_session_id is a bearer credential and both surfaces could name other
 # agents' sessions. No input schema changes, so no digest moves.
-INTERFACE_CONTRACT_VERSION = "1.29.0"
+# 1.30.0 (2026-10-06): authorization of outputs. Under strict identity,
+# identity() returns client_session_id null and no continuity_token, with
+# credentials_withheld {basis, hint}, when the call was matched to the agent
+# only by inference (onboard pin, transport fingerprint), and onboard() refuses
+# such a resume with status resume_proof_required. A mint, a session the caller
+# sent, a continuity token or UDS attestation for the agent, or an operator
+# token still receives them. No input schema changes, so no digest moves.
+# 1.31.0 (2026-10-06): the stable client_session_id returned by onboard and
+# identity is agent-{uuid12}-{tag}, keyed with the server's continuity key, in
+# place of agent-{uuid12}. Callers that store and echo it are unaffected; a
+# legacy agent-{uuid12} id is refused by default (UNITARES_LEGACY_SESSION_IDS
+# = refuse | log | accept) with stable_session_id_rejected, and a verified
+# continuity token naming the agent converts to the keyed id. No input schema
+# changes, so no digest moves.
+INTERFACE_CONTRACT_VERSION = "1.31.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

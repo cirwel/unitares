@@ -726,6 +726,11 @@ class AuditLogger:
         keeping audit logging off latency-sensitive handler paths.
         """
         entry_dict = asdict(entry)
+        # A keyed client_session_id authenticates as its agent; neither the
+        # JSONL file nor the Postgres row may hold it (stable_session.py).
+        from src.mcp_handlers.identity.stable_session import audit_reference
+
+        entry_dict["session_id"] = audit_reference(entry_dict.get("session_id"))
         try:
             # Raw truth: JSONL append
             if self._jsonl_enabled:

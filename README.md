@@ -13,7 +13,7 @@ connected. Recover work across restarts, context loss, and handoffs.
 [![Tests](https://github.com/cirwel/unitares/actions/workflows/tests.yml/badge.svg)](https://github.com/cirwel/unitares/actions/workflows/tests.yml)
 [![Python](https://img.shields.io/badge/python-3.14+-5C544A?style=flat-square&labelColor=1A1612)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache_2.0-5C544A?style=flat-square&labelColor=1A1612)](LICENSE)
-[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19647159-7A1F1F?style=flat-square&labelColor=1A1612)](https://doi.org/10.5281/zenodo.19647159)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.19647159-7A1F1F?style=flat-square&labelColor=1A1612)](https://doi.org/10.5281/zenodo.19647159) [![Glama score](https://glama.ai/mcp/servers/cirwel/unitares/badges/score.svg)](https://glama.ai/mcp/servers/cirwel/unitares)
 
 </div>
 
@@ -67,7 +67,12 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 ```
 
 Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
-`http://localhost:8767/dashboard`.
+`http://localhost:8767/dashboard`. If port 8767 or 8788 is taken, set
+`GOVERNANCE_HOST_PORT` and `LEASE_PLANE_HOST_PORT`; see [Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
+
+An agent starts with `start_session(force_new=true)` and passes the returned
+`client_session_id` on every later call, which ties its writes to its own
+process; see [Integrating agents](docs/manual/04-integrating-agents.md).
 
 This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
 coordination plane.

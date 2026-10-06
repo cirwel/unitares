@@ -85,7 +85,9 @@ class AuditMixin:
                     event.ts or datetime.now(timezone.utc),
                     event_id_uuid,
                     event.agent_id,
-                    event.session_id,
+                    # A keyed session id is a credential; store its digest
+                    # (identity/stable_session.audit_reference).
+                    _audit_session_ref(event.session_id),
                     event.event_type,
                     event.confidence,
                     json.dumps(event.payload),
@@ -314,3 +316,9 @@ class AuditMixin:
             payload=json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"],
             raw_hash=row["raw_hash"],
         )
+
+
+def _audit_session_ref(session_id):
+    from src.mcp_handlers.identity.stable_session import audit_reference
+
+    return audit_reference(session_id)
