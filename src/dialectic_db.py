@@ -751,47 +751,50 @@ class DialecticDB:
     ) -> int:
         """Add a message to a session.
 
-        Two statements: the message INSERT, and the session's ``updated_at``
-        bump (the sweeper's staleness clock). ``detail``, when given, receives
+        Two statements in ONE transaction: the message INSERT, and the
+        session's ``updated_at`` bump (the sweeper's staleness clock). Atomic so
+        the sweeper's compare-and-set on ``updated_at`` (#2367) can never see a
+        committed message whose bump has not landed yet. ``detail``, when given, receives
         ``message_ts`` (the message row's own timestamp) and ``effect_ts`` (the
         database clock at the ``updated_at`` bump -- the write that changes the
         session's sweep eligibility).
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                INSERT INTO core.dialectic_messages (
-                    session_id, agent_id, message_type,
-                    root_cause, proposed_conditions, reasoning,
-                    observed_metrics, concerns, agrees, signature
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING message_id, timestamp
-            """,
-                session_id,
-                agent_id,
-                message_type,
-                root_cause,
-                json.dumps(proposed_conditions) if proposed_conditions else None,
-                reasoning,
-                json.dumps(observed_metrics) if observed_metrics else None,
-                json.dumps(concerns) if concerns else None,
-                agrees,
-                signature,
-            )
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    INSERT INTO core.dialectic_messages (
+                        session_id, agent_id, message_type,
+                        root_cause, proposed_conditions, reasoning,
+                        observed_metrics, concerns, agrees, signature
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING message_id, timestamp
+                """,
+                    session_id,
+                    agent_id,
+                    message_type,
+                    root_cause,
+                    json.dumps(proposed_conditions) if proposed_conditions else None,
+                    reasoning,
+                    json.dumps(observed_metrics) if observed_metrics else None,
+                    json.dumps(concerns) if concerns else None,
+                    agrees,
+                    signature,
+                )
 
-            bump = await conn.fetchrow(f"""
-                UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-                RETURNING {self._EFFECT_TS}
-            """, session_id)
-            if detail is not None:
-                try:
-                    detail["message_ts"] = row["timestamp"] if row else None
-                    detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
-                    detail["written"] = row is not None
-                except Exception:  # pragma: no cover
-                    pass
+                bump = await conn.fetchrow(f"""
+                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+                    RETURNING {self._EFFECT_TS}
+                """, session_id)
+                if detail is not None:
+                    try:
+                        detail["message_ts"] = row["timestamp"] if row else None
+                        detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
+                        detail["written"] = row is not None
+                    except Exception:  # pragma: no cover
+                        pass
 
-            return row["message_id"] if row else 0
+                return row["message_id"] if row else 0
 
     async def add_bounded_message(
         self,

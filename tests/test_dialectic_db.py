@@ -6,6 +6,7 @@ async wrappers. All asyncpg pool/connection interactions are mocked.
 """
 
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import asyncio
@@ -59,6 +60,14 @@ def _make_mock_pool():
     acm.__aenter__ = AsyncMock(return_value=conn)
     acm.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = acm
+
+    # Default no-op transaction so writers that open one (add_message, #2367)
+    # work against the mock; tests may still replace conn.transaction.
+    @asynccontextmanager
+    async def _transaction():
+        yield
+
+    conn.transaction = _transaction
 
     return pool, conn
 
@@ -965,6 +974,29 @@ class TestResolveSession:
 # ============================================================================
 
 class TestAddMessage:
+    @pytest.mark.asyncio
+    async def test_add_message_insert_and_bump_share_one_transaction(self, db):
+        """The sweeper CAS (#2367) must never see a committed message whose
+        updated_at bump has not landed: both statements run inside one
+        transaction."""
+        instance, pool, conn = db
+        events = []
+
+        @asynccontextmanager
+        async def transaction():
+            events.append("begin")
+            yield
+            events.append("commit")
+
+        async def fetchrow(sql, *a):
+            events.append("insert" if "INSERT" in sql else "bump")
+            return {"message_id": 1, "timestamp": None, "effect_ts": None}
+
+        conn.transaction = transaction
+        conn.fetchrow = fetchrow
+        await instance.add_message("sess-001", "agent-A", "thesis")
+        assert events == ["begin", "insert", "bump", "commit"]
+
     @pytest.mark.asyncio
     async def test_add_message_full_args(self, db):
         """add_message inserts with all parameters and returns message_id."""
