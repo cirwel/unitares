@@ -66,27 +66,84 @@ def _sign(payload: dict) -> str:
     return f"v1.{payload_b64}.{session._b64url_encode(sig)}"
 
 
-@pytest.mark.parametrize("exp", [None, "soon", 1e309, float("nan")])
-def test_freshness_treats_missing_or_malformed_exp_as_expired(exp):
+_NOW = int(time.time())
+
+
+@pytest.mark.parametrize(
+    "exp",
+    [
+        None,
+        "soon",
+        1e309,
+        float("nan"),
+        # Finite but absurd: int(1e308) is a giant int that never expires.
+        1e308,
+        10**400,
+        # Not an integer: int() would truncate these into a readable exp.
+        float(_NOW + 600),
+        _NOW + 600.5,
+        True,
+        # An integer, but further ahead than any token the server mints.
+        _NOW + 3600 + 30 + 1,
+        _NOW + 30 * 86400,
+    ],
+    ids=lambda v: repr(v)[:24],
+)
+def test_freshness_treats_missing_or_unreadable_exp_as_expired(exp):
     """resolve_continuity_token refuses these, so the observation must agree."""
+    from src.mcp_handlers.identity import session
     from src.mcp_handlers.identity.session import (
         continuity_token_freshness,
         resolve_continuity_token,
     )
 
-    now = int(time.time())
-    payload = {"sid": "agent-eeeeeeee-111", "aid": _UUID, "iat": now}
+    payload = {"sid": "agent-eeeeeeee-111", "aid": _UUID, "iat": _NOW}
     if exp is not None:
         payload["exp"] = exp
     token = _sign(payload)
-    assert resolve_continuity_token(token) is None
-    fresh = continuity_token_freshness(token, now=now)
+    with patch.object(session.time, "time", return_value=float(_NOW)):
+        assert resolve_continuity_token(token) is None
+    fresh = continuity_token_freshness(token, now=_NOW)
     assert fresh["expired"] is True
+    assert fresh["token_exp"] is None
     assert fresh["seconds_past_exp"] is None
 
 
+def test_exp_bound_admits_every_token_the_server_mints():
+    """The upper bound is TTL + skew past now: the edge is readable, one past is not."""
+    from src.mcp_handlers.identity import session
+    from src.mcp_handlers.identity.session import (
+        _CLOCK_SKEW_TOLERANCE,
+        _CONTINUITY_TTL,
+        continuity_token_freshness,
+        resolve_continuity_token,
+    )
+
+    edge = _NOW + _CONTINUITY_TTL + _CLOCK_SKEW_TOLERANCE
+    for exp, readable in ((edge, True), (edge + 1, False)):
+        token = _sign({"sid": "agent-eeeeeeee-111", "aid": _UUID, "iat": _NOW, "exp": exp})
+        with patch.object(session.time, "time", return_value=float(_NOW)):
+            resolved = resolve_continuity_token(token)
+        assert (resolved == "agent-eeeeeeee-111") is readable
+        fresh = continuity_token_freshness(token, now=_NOW)
+        assert fresh["expired"] is (not readable)
+        assert fresh["token_exp"] == (exp if readable else None)
+
+
+def test_mint_clamps_ttl_to_the_bound():
+    """A longer ttl_seconds cannot mint a token the resolver would then refuse."""
+    from src.mcp_handlers.identity import session
+
+    with patch.object(session.time, "time", return_value=float(_NOW)):
+        token = session.create_continuity_token(
+            _UUID, "agent-eeeeeeee-111", ttl_seconds=30 * 86400
+        )
+        assert session.resolve_continuity_token(token) == "agent-eeeeeeee-111"
+    assert session.extract_token_exp(token) == _NOW + session._CONTINUITY_TTL
+
+
 @pytest.mark.parametrize("claim", ["iat", "exp"])
-@pytest.mark.parametrize("value", [1e309, -1e309, float("nan"), "soon"])
+@pytest.mark.parametrize("value", [1e309, -1e309, float("nan"), "soon", 1.5, True])
 def test_claim_accessors_return_none_for_non_finite_or_malformed(claim, value):
     """extract_token_iat / extract_token_exp feed observation callers, which
     must get None for an unreadable claim rather than an OverflowError."""
@@ -160,12 +217,17 @@ async def test_path0_expired_token_still_resumes_and_is_surfaced(monkeypatch):
 async def test_path0_fresh_token_surfaces_not_expired(monkeypatch):
     monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "strict")
 
-    data, audit = await _resume_fastpath(_mint())
+    issued_at = int(time.time()) - 120
+    data, audit = await _resume_fastpath(_mint(issued_at=issued_at))
+    elapsed = int(time.time()) - issued_at
 
     assert data.get("success") is True
     block = data["continuity_token_freshness"]
-    assert block == {"expired": False, "token_age_seconds": block["token_age_seconds"]}
+    assert set(block) == {"expired", "token_age_seconds"}
+    assert block["expired"] is False
+    assert 120 <= block["token_age_seconds"] <= elapsed
     assert audit.call_args.kwargs["expired"] is False
+    assert audit.call_args.kwargs["token_age_seconds"] == block["token_age_seconds"]
 
 
 @pytest.mark.asyncio

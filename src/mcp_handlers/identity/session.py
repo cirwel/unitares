@@ -193,7 +193,12 @@ def create_continuity_token(
     client_hint: Optional[str] = None,
     ttl_seconds: int = _CONTINUITY_TTL,
 ) -> Optional[str]:
-    """Create a signed continuity token for robust session resumption."""
+    """Create a signed continuity token for robust session resumption.
+
+    ``ttl_seconds`` can shorten a token's life, never lengthen it past
+    ``_CONTINUITY_TTL``: ``_token_exp_claim`` treats any ``exp`` further ahead
+    than that as one this server did not issue.
+    """
     secret = _get_continuity_secret()
     if not secret or not client_session_id or not agent_uuid:
         return None
@@ -207,7 +212,7 @@ def create_continuity_token(
         "mf": _normalize_pin_model_type(model_type),
         "ch": _normalize_pin_client_hint(client_hint),
         "iat": now,
-        "exp": now + max(60, int(ttl_seconds)),
+        "exp": now + min(_CONTINUITY_TTL, max(60, int(ttl_seconds))),
     }
     payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     payload_b64 = _b64url_encode(payload_json)
@@ -245,23 +250,45 @@ def _decode_token_payload(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _as_int(value: Any) -> Optional[int]:
+    """A timestamp claim as decoded from JSON, or None unless it is an integer.
+
+    ``create_continuity_token`` writes ``iat``/``exp`` as integers, so a float
+    (whole or not, finite or not), a string, or a bool is not a claim this
+    server wrote. Rejecting them, rather than coercing with ``int()``, keeps
+    1.5 from reading as 1 and ``true`` from reading as 1.
+    """
+    return value if type(value) is int else None
+
+
+def _token_exp_claim(payload: Dict[str, Any], now: int) -> Optional[int]:
+    """The payload's ``exp`` claim, or None when it is unreadable.
+
+    Unreadable means missing, not an integer (see ``_as_int``), or further
+    ahead of ``now`` than any token this server mints: ``create_continuity_token``
+    never sets ``exp`` more than ``_CONTINUITY_TTL`` past ``iat``, and the clock
+    skew tolerance covers a minting clock that ran ahead. ``resolve_continuity_token``
+    refuses a token with an unreadable ``exp`` and ``continuity_token_freshness``
+    reports it as expired, so both read the claim through this one function.
+    """
+    exp = _as_int(payload.get("exp"))
+    if exp is None or exp - now > _CONTINUITY_TTL + _CLOCK_SKEW_TOLERANCE:
+        return None
+    return exp
+
+
 def extract_token_iat(token: str) -> Optional[int]:
     """Extract the `iat` (issued-at) claim from a continuity token.
 
     Signature-verified like `extract_token_agent_uuid`; does NOT check expiry.
     Returned for grace-period telemetry under S1-a — callers need `iat`
-    to compute token lifetime at accept-time.
+    to compute token lifetime at accept-time. None when the claim is
+    missing or not an integer.
     """
     payload = _decode_token_payload(token)
     if payload is None:
         return None
-    iat = payload.get("iat")
-    if iat is None:
-        return None
-    try:
-        return int(iat)
-    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
-        return None
+    return _as_int(payload.get("iat"))
 
 
 def extract_token_exp(token: str) -> Optional[int]:
@@ -271,18 +298,14 @@ def extract_token_exp(token: str) -> Optional[int]:
     whether the token has actually expired. Callers wanting that should use
     `resolve_continuity_token`. This accessor exists so observation-only
     instrumentation can record token lifetime / observed-staleness even on
-    tokens that resolution rejected.
+    tokens that resolution rejected. None when the claim is missing or not an
+    integer; unlike ``_token_exp_claim`` it applies no upper bound, so it
+    reports what the token claims.
     """
     payload = _decode_token_payload(token)
     if payload is None:
         return None
-    exp = payload.get("exp")
-    if exp is None:
-        return None
-    try:
-        return int(exp)
-    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
-        return None
+    return _as_int(payload.get("exp"))
 
 
 def continuity_token_freshness(
@@ -300,21 +323,19 @@ def continuity_token_freshness(
 
     Returns None when the token does not verify. ``expired`` applies the same
     clock-skew tolerance ``resolve_continuity_token`` uses, and, like it,
-    treats a missing or non-integer ``exp`` as expired.
+    treats a missing or unreadable ``exp`` as expired: one that is not an
+    integer, or that lies further ahead than any token this server mints
+    (``_token_exp_claim``). An unreadable ``exp`` is reported as
+    ``token_exp`` None, and an ``iat`` that is not an integer as
+    ``token_iat`` None.
     """
     payload = _decode_token_payload(token)
     if payload is None:
         return None
     current = int(time.time()) if now is None else int(now)
 
-    def _as_int(value: Any) -> Optional[int]:
-        try:
-            return int(value) if value is not None else None
-        except (TypeError, ValueError, OverflowError):  # OverflowError: inf
-            return None
-
     iat = _as_int(payload.get("iat"))
-    exp = _as_int(payload.get("exp"))
+    exp = _token_exp_claim(payload, current)
     expired = exp is None or exp + _CLOCK_SKEW_TOLERANCE < current
     return {
         "token_iat": iat,
@@ -379,7 +400,12 @@ def resolve_continuity_token(
     model_type: Optional[str] = None,
     user_agent: Optional[str] = None,
 ) -> Optional[str]:
-    """Verify and resolve continuity token to client_session_id."""
+    """Verify and resolve continuity token to client_session_id.
+
+    Refuses an expired token and one whose ``exp`` is unreadable
+    (``_token_exp_claim``), so a signed but absurd ``exp`` never reads as
+    "never expires".
+    """
     if not token or not isinstance(token, str):
         return None
     secret = _get_continuity_secret()
@@ -396,7 +422,11 @@ def resolve_continuity_token(
             return None
 
         payload = json.loads(_b64url_decode(payload_b64).decode())
-        if int(payload.get("exp", 0)) + _CLOCK_SKEW_TOLERANCE < int(time.time()):
+        if not isinstance(payload, dict):
+            return None
+        current = int(time.time())
+        exp = _token_exp_claim(payload, current)
+        if exp is None or exp + _CLOCK_SKEW_TOLERANCE < current:
             return None
 
         sid = payload.get("sid")
