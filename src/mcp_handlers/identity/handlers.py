@@ -17,6 +17,7 @@ import os
 import re
 
 from mcp.types import TextContent
+from . import credential_issuance as _credential_issuance  # noqa: F401  (load operator.py at import time)
 
 from src.logging_utils import get_logger
 from src.db import get_db
@@ -636,7 +637,16 @@ async def handle_identity_v2(
     agent_uuid = identity["agent_uuid"]
     persisted = identity.get("persisted", False)
 
-    # Set label if requested (this will persist the agent)
+    # Set label if requested (this will persist the agent). Renaming is a
+    # write on the agent, so a caller matched only by inference may not do it
+    # (identity/credential_issuance.py); its response also withholds credentials.
+    if name and not identity.get("created"):
+        from .credential_issuance import credentials_issuable, log_withheld
+
+        _label_allowed, _label_basis = credentials_issuable(agent_uuid)
+        if not _label_allowed:
+            log_withheld("identity(name)", agent_uuid, _label_basis)
+            name = None
     if name:
         success = await set_agent_label(agent_uuid, name, session_key=session_key)
         if success:
@@ -2267,6 +2277,35 @@ def _log_identity_resolution_observation(arguments, agent_uuid: str) -> None:
         logger.debug(f"[IRES] identity_resolution_observed write failed (non-fatal): {_ires_err}")
 
 
+def _onboard_unproven_resume_refusal(agent_uuid: Optional[str]) -> Optional[Sequence[TextContent]]:
+    """The refusal for an onboard resume this request did not prove, else None.
+
+    Resuming hands the agent's credentials to the caller and lets onboard write
+    to it (label, rebadge, unarchive, tags, bindings), so it needs the proof
+    identity/credential_issuance.py defines. Called before any of those writes.
+    """
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    issuable, basis = credentials_issuable(agent_uuid)
+    if issuable:
+        return None
+    log_withheld("onboard", agent_uuid, basis)
+    from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
+
+    return success_response(strict_identity_refusal_payload(
+        "onboard",
+        status="resume_proof_required",
+        hint=(
+            "This onboard would resume an existing agent that the call was "
+            "matched to only by inference (an onboard pin, a transport "
+            "fingerprint, or a name or agent_id it did not prove). Pass the "
+            "client_session_id your process received when it started, or "
+            "call start_session(force_new=true) to begin a new identity, "
+            "with parent_agent_id=<prior uuid> if it continues that work."
+        ),
+    ))
+
+
 @mcp_tool("onboard", timeout=15.0, requires_identity="pre_onboard")
 async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -2505,6 +2544,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             if existing_identity.get("archived"):
                 # ARCHIVED AGENT — auto-unarchive with same UUID (only when resume=True)
                 if resume:
+                    # Unarchiving is a write on the agent: it needs the same
+                    # proof as any resume (STEP 2c), checked before it happens.
+                    _refusal = _onboard_unproven_resume_refusal(existing_identity.get("agent_uuid"))
+                    if _refusal is not None:
+                        return _refusal
                     agent_uuid = existing_identity.get("agent_uuid")
                     agent_id = existing_identity.get("agent_id", agent_uuid)
                     label = existing_identity.get("label")
@@ -2695,25 +2739,9 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # unverified agent_id) is refused here, before the label, rebadge, tag,
     # binding or any other write below touches the agent.
     if not is_new:
-        from .credential_issuance import credentials_issuable, log_withheld
-
-        _issuable, _issuance_basis = credentials_issuable(agent_uuid)
-        if not _issuable:
-            log_withheld("onboard", agent_uuid, _issuance_basis)
-            from src.mcp_handlers.identity_bootstrap import strict_identity_refusal_payload
-
-            return success_response(strict_identity_refusal_payload(
-                "onboard",
-                status="resume_proof_required",
-                hint=(
-                    "This onboard would resume an existing agent that the call was "
-                    "matched to only by inference (an onboard pin, a transport "
-                    "fingerprint, or a name or agent_id it did not prove). Pass the "
-                    "client_session_id your process received when it started, or "
-                    "call start_session(force_new=true) to begin a new identity, "
-                    "with parent_agent_id=<prior uuid> if it continues that work."
-                ),
-            ))
+        _refusal = _onboard_unproven_resume_refusal(agent_uuid)
+        if _refusal is not None:
+            return _refusal
 
     # CRITICAL: Update request context so signature in response matches new identity
     try:

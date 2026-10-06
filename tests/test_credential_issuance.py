@@ -70,7 +70,7 @@ def test_a_proof_counts_only_for_the_agent_it_proved():
 
 def test_an_operator_gets_credentials():
     _inferred()
-    with patch("src.mcp_handlers.identity.operator.is_operator_caller", return_value=True):
+    with patch("src.mcp_handlers.identity.credential_issuance.is_operator_caller", return_value=True):
         assert credentials_issuable(VICTIM) == (True, "operator")
 
 
@@ -188,3 +188,48 @@ def test_any_other_mode_value_enforces(monkeypatch, value):
     monkeypatch.setenv("UNITARES_CREDENTIAL_ISSUANCE", value)
     _inferred()
     assert credentials_issuable(VICTIM)[0] is False
+
+
+@pytest.mark.asyncio
+async def test_onboard_does_not_unarchive_on_an_inferred_resume():
+    from src.mcp_handlers.identity import handlers
+
+    archived = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim",
+                "created": False, "archived": True}
+    db = MagicMock()
+    db.update_agent_fields = AsyncMock()
+    db.update_identity_status = AsyncMock()
+
+    async def resolve(*args, **kwargs):
+        _inferred()
+        return dict(archived)
+
+    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+         patch.object(handlers, "derive_session_key", AsyncMock(return_value="pin:shared-ua")), \
+         patch.object(handlers, "get_db", return_value=db), \
+         patch.object(handlers, "_cache_session", AsyncMock()):
+        result = await handlers.handle_onboard_v2({"name": "victim", "resume": True})
+
+    assert json.loads(result[0].text)["status"] == "resume_proof_required"
+    db.update_agent_fields.assert_not_awaited()
+    db.update_identity_status.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin, renamed", [("server_inferred", False), ("caller_asserted", True)])
+async def test_identity_name_renames_only_with_proof(origin, renamed):
+    from src.mcp_handlers.identity import handlers
+
+    async def resolve(*args, **kwargs):
+        set_session_resolution_source("pinned_onboard_session" if origin == "server_inferred"
+                                      else "explicit_client_session_id")
+        set_session_proof_origin(origin)
+        return {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
+
+    label = AsyncMock(return_value=True)
+    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+         patch.object(handlers, "set_agent_label", label):
+        result = await handlers.handle_identity_v2({"name": "attacker-chosen"}, "some-key")
+
+    assert label.await_count == (1 if renamed else 0)
+    assert result["display_name"] == ("attacker-chosen" if renamed else "victim")

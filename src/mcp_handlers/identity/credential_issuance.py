@@ -44,6 +44,11 @@ from typing import Optional
 
 from src.logging_utils import get_logger
 
+# Imported at module load, not inside credentials_issuable: operator.py binds
+# get_session_signals by name when it is first imported, so a first import
+# made while a caller has that function patched would keep the patch.
+from .operator import is_operator_caller
+
 logger = get_logger(__name__)
 
 WITHHELD_HINT = (
@@ -76,8 +81,6 @@ def credentials_issuable(agent_uuid: Optional[str], *, minted: bool = False) -> 
     if get_session_proof_origin() == "caller_asserted":
         return True, "caller_asserted_session"
     try:
-        from .operator import is_operator_caller
-
         if is_operator_caller():
             return True, "operator"
     except Exception:
