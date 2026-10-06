@@ -265,7 +265,14 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # such a resume with status resume_proof_required. A mint, a session the caller
 # sent, a continuity token or UDS attestation for the agent, or an operator
 # token still receives them. No input schema changes, so no digest moves.
-INTERFACE_CONTRACT_VERSION = "1.30.0"
+# 1.31.0 (2026-10-06): the stable client_session_id returned by onboard and
+# identity is agent-{uuid12}-{tag}, keyed with the server's continuity key, in
+# place of agent-{uuid12}. Callers that store and echo it are unaffected; a
+# legacy agent-{uuid12} id is refused by default (UNITARES_LEGACY_SESSION_IDS
+# = refuse | log | accept) with stable_session_id_rejected, and a verified
+# continuity token naming the agent converts to the keyed id. No input schema
+# changes, so no digest moves.
+INTERFACE_CONTRACT_VERSION = "1.31.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

@@ -219,6 +219,19 @@ async def _recover_audit_probe(
     }
 
 
+def _stored_session_identity(identity: Mapping[str, str]) -> dict[str, str]:
+    """``identity`` with its session id as audit.tool_usage stores it.
+
+    A keyed client_session_id is a credential, so the server records its
+    ``csid:`` digest; v0's attribution reader matches rows on the stored
+    form. v0 stays byte-identical to its attested runner, so the mapping
+    lives here.
+    """
+    from src.mcp_handlers.identity.stable_session import audit_reference
+
+    return {**identity, "client_session_id": audit_reference(identity["client_session_id"])}
+
+
 async def run_live_canary(
     *,
     enrollment_path: Path,
@@ -309,7 +322,7 @@ async def run_live_canary(
             search_payloads,
         )
         attribution = await v0._await_tool_usage_attribution(
-            identity=identity,
+            identity=_stored_session_identity(identity),
             started_at=started_at,
             expected_searches=len(search_checks),
             expected_details=details_pages,
