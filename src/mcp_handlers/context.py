@@ -296,6 +296,22 @@ def get_session_proof_origin() -> Optional[str]:
     return _session_proof_origin.get()
 
 
+# The agent UUID this request PROVED it owns by a route that does not go
+# through session-key derivation: a continuity token bound to that UUID or a
+# verified UDS substrate attestation on a direct UUID resume. It gates handing
+# out that agent's client_session_id and continuity_token
+# (identity/credential_issuance.py).
+_credential_proof_uuid: ContextVar[Optional[str]] = ContextVar('credential_proof_uuid', default=None)
+
+
+def set_credential_proof_uuid(agent_uuid: Optional[str]) -> object:
+    return _credential_proof_uuid.set(agent_uuid)
+
+
+def get_credential_proof_uuid() -> Optional[str]:
+    return _credential_proof_uuid.get()
+
+
 # Set True when the caller PRESENTED a continuity_token that failed
 # verification, regardless of whether the call later succeeded via another
 # proof (client_session_id, fingerprint pin, ...). session_resolution_source

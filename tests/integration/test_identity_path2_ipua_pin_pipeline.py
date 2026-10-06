@@ -183,42 +183,38 @@ def _hijack_events(events: list[dict]) -> list[dict]:
 # --- §7.3 scenarios -----------------------------------------------------------
 
 
-class TestStrictModePassthroughInvariant:
-    """The invariant named by RFC §3.1 surface F and §7.3: agent_id IS proof."""
+class TestStrictModePinResumeNeedsProof:
+    """A pin-matched onboard resume must rest on proof the caller sent.
+
+    This class used to pin the opposite (RFC §3.1 surface F, §7.3): an
+    ``agent_id`` or bare ``agent_uuid`` beside a pin match counted as proof and
+    the pinned identity resumed. Both values are public (agent listings, KG
+    attribution), and the pin is keyed on the User-Agent alone (#2142), which
+    any client sets, while on a Docker bridge or behind a tunnel every client
+    shares one address. So that resume handed the agent's client_session_id
+    and continuity_token to anyone who knew its public id. Under strict
+    identity a resume now needs the caller's own session, a token bound to the
+    agent, UDS attestation, or an operator token
+    (``identity/credential_issuance.py``); a public id is refused with
+    ``resume_proof_required`` and nothing is issued or minted.
+    """
 
     @pytest.mark.asyncio
-    async def test_agent_id_passthrough_resumes_pinned_identity(self, monkeypatch):
-        """Strict mode + agent_id in arguments → the pin-resolved session
-        resumes the pinned identity. No fresh mint, no hijack alert."""
+    @pytest.mark.parametrize("claim", [
+        {"agent_id": "PinnedAgent_20260101"},
+        {"agent_uuid": PINNED_UUID},
+    ])
+    async def test_a_public_id_beside_a_pin_does_not_resume(self, monkeypatch, claim):
         payload, events, _ = await drive_onboard(
-            {"agent_id": "PinnedAgent_20260101"},
+            claim,
             pin_mode="strict",
             monkeypatch=monkeypatch,
         )
 
-        assert payload.get("success") is True, payload
-        assert payload.get("uuid") == PINNED_UUID, (
-            "agent_id is ownership proof (project_ipua-pin-agent-id-proof) — "
-            "strict mode must pass the pin-resolved session through to resume, "
-            f"not mint fresh. Got uuid={payload.get('uuid')!r}"
-        )
-        assert payload.get("is_new") is not True, payload
-        assert _hijack_events(events) == [], (
-            "Proof-carrying onboard must not raise identity_hijack_suspected"
-        )
-
-    @pytest.mark.asyncio
-    async def test_agent_uuid_passthrough_resumes_pinned_identity(self, monkeypatch):
-        """agent_uuid is equivalent proof — same passthrough contract."""
-        payload, events, _ = await drive_onboard(
-            {"agent_uuid": PINNED_UUID},
-            pin_mode="strict",
-            monkeypatch=monkeypatch,
-        )
-
-        assert payload.get("success") is True, payload
-        assert payload.get("uuid") == PINNED_UUID, payload
-        assert _hijack_events(events) == []
+        assert payload.get("status") == "resume_proof_required", payload
+        assert payload.get("rollout_flag") == "STRICT_IDENTITY_REQUIRED"
+        assert payload.get("uuid") is None and "continuity_token" not in payload
+        assert payload.get("is_new") is not True, "a refused resume must not mint"
 
 
 class TestStrictModeNoProofForcesFreshMint:
@@ -269,7 +265,9 @@ class TestLogModeStillResumes:
     async def test_name_only_onboard_resumes_with_alert(self, monkeypatch):
         """Observation mode: same no-proof call resumes the pinned identity
         but the alert still fires. Pins the strict↔log behavioral delta at
-        the handler boundary for the BEAM-port parity run."""
+        the handler boundary for the BEAM-port parity run. The credential
+        rule has its own observation mode, so both are set to observe."""
+        monkeypatch.setenv("UNITARES_CREDENTIAL_ISSUANCE", "log")
         payload, events, _ = await drive_onboard(
             {"name": "SameMachineNewcomer"},
             pin_mode="log",
@@ -284,3 +282,19 @@ class TestLogModeStillResumes:
         hijacks = _hijack_events(events)
         assert hijacks, "Log mode must emit the observation event"
         assert (hijacks[0].get("payload") or {}).get("mode") == "log"
+
+    @pytest.mark.asyncio
+    async def test_pin_log_mode_alone_does_not_hand_out_credentials(self, monkeypatch):
+        """UNITARES_IPUA_PIN_CHECK=log only stops the pin check from blocking;
+        the credential rule still refuses a resume with no proof, and the
+        pin observation still fires first."""
+        monkeypatch.delenv("UNITARES_CREDENTIAL_ISSUANCE", raising=False)
+        payload, events, _ = await drive_onboard(
+            {"name": "SameMachineNewcomer"},
+            pin_mode="log",
+            monkeypatch=monkeypatch,
+        )
+
+        assert payload.get("status") == "resume_proof_required", payload
+        assert "continuity_token" not in payload
+        assert _hijack_events(events), "the pin observation still fires"

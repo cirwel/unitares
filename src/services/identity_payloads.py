@@ -165,7 +165,7 @@ def build_identity_diag_payload(
     agent_uuid: str,
     agent_id: str,
     display_name: Optional[str],
-    client_session_id: str,
+    client_session_id: Optional[str],
     continuity_source: Optional[str],
     continuity_support: Dict[str, Any],
     continuity_token: Optional[str],
