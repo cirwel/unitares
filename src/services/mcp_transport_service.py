@@ -840,7 +840,9 @@ async def _start_uds_listener(app: Any) -> tuple[str | None, asyncio.Task[None] 
             exc,
             exc_info=True,
         )
-        return socket_path, None
+        # Never claim a path this process did not bind: shutdown unlinks the
+        # returned path, which could belong to another live server (#2662).
+        return None, None
 
 
 async def _stop_uds_listener(
@@ -853,8 +855,11 @@ async def _stop_uds_listener(
             await task
         except (asyncio.CancelledError, Exception):
             pass
-    if socket_path and os.path.exists(socket_path):
-        try:
-            os.unlink(socket_path)
-        except OSError:
-            pass
+    if socket_path:
+        # Only the node this process bound: a replacement server may already
+        # have bound a fresh socket at the same path (#2662). It waits on the
+        # path lock, which another process's start may hold through a probe,
+        # so it runs off the event loop.
+        from src.uds_listener import unlink_own_socket
+
+        await asyncio.to_thread(unlink_own_socket, socket_path)

@@ -67,7 +67,12 @@ v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHE
 ```
 
 Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
-`http://localhost:8767/dashboard`.
+`http://localhost:8767/dashboard`. If port 8767 or 8788 is taken, set
+`GOVERNANCE_HOST_PORT` and `LEASE_PLANE_HOST_PORT`; see [Docker quickstart](docs/manual/02-install.md#21-docker-quickstart).
+
+An agent starts with `start_session(force_new=true)` and passes the returned
+`client_session_id` on every later call, which ties its writes to its own
+process; see [Integrating agents](docs/manual/04-integrating-agents.md).
 
 This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
 coordination plane.

@@ -29,6 +29,9 @@ from src.db.acquire_compat import compatible_acquire
 
 logger = get_logger(__name__)
 
+# Distinguishes "no compare-and-set predicate" from an observed None.
+_UNSET: Any = object()
+
 
 # =============================================================================
 # PostgreSQL Backend (Primary and Only)
@@ -453,6 +456,8 @@ class DialecticDB:
         self,
         session_id: str,
         *,
+        expected_phase: Any = _UNSET,
+        expected_updated_at: Any = _UNSET,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -483,18 +488,34 @@ class DialecticDB:
         `update_session_awaiting_facilitation`, which does bump — it is a
         caller-driven transition on a live session, not a sweep observation.
 
+        Compare-and-set (#2367): when ``expected_phase`` and/or
+        ``expected_updated_at`` are passed (the values the sweeper read), the
+        write lands only if the row still matches them, so a participant
+        message or phase move between the sweeper's read and this write
+        refuses it instead of flagging a session that is no longer stalled.
+        The CAS only READS `updated_at`; the SET clause still never writes it.
+        Omitted arguments add no predicate.
+
         Pass ``winner={}`` to learn who refused the write (see
         `_record_winner`); the return value is unchanged.
         """
         await self._ensure_pool()
+        cas = ""
+        args: List[Any] = [session_id]
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_updated_at is not _UNSET:
+            args.append(expected_updated_at)
+            cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET awaiting_facilitation = true
                 WHERE session_id = $1
-                  AND status NOT IN ('resolved', 'failed')
+                  AND status NOT IN ('resolved', 'failed'){cas}
                 RETURNING {self._EFFECT_TS}
-            """, session_id)
+            """, *args)
             self._record_effect(detail, row)
             if row is not None:
                 return True
@@ -502,6 +523,12 @@ class DialecticDB:
             self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"mark_awaiting_facilitation: {session_id[:16]}... not found")
+            elif existing["status"] not in ("resolved", "failed"):
+                logger.info(
+                    f"mark_awaiting_facilitation: {session_id[:16]}... moved since "
+                    "the sweeper read it (phase/updated_at changed); facilitation "
+                    "write refused, next sweep re-reads"
+                )
             else:
                 logger.warning(
                     f"mark_awaiting_facilitation: {session_id[:16]}... is terminal as "
@@ -724,47 +751,60 @@ class DialecticDB:
     ) -> int:
         """Add a message to a session.
 
-        Two statements: the message INSERT, and the session's ``updated_at``
-        bump (the sweeper's staleness clock). ``detail``, when given, receives
-        ``message_ts`` (the message row's own timestamp) and ``effect_ts`` (the
-        database clock at the ``updated_at`` bump -- the write that changes the
-        session's sweep eligibility).
+        Two statements in ONE transaction: the session's ``updated_at`` bump
+        (the sweeper's staleness clock), then the message INSERT. Atomic so the
+        sweeper's compare-and-set on ``updated_at`` (#2367) can never see a
+        committed message whose bump has not landed yet.
+
+        The bump runs FIRST so this transaction holds the session row's update
+        lock before the message exists. The INSERT alone would take only the
+        foreign key's KEY SHARE lock, which a non-key UPDATE does not wait on,
+        so a concurrent ``mark_awaiting_facilitation`` could still pass its
+        compare-and-set and flag a session that just progressed. Bumping first
+        makes that write wait for this commit and then re-check its predicate
+        against the new ``updated_at``, which refuses it.
+
+        ``detail``, when given, receives ``message_ts`` (the message row's own
+        timestamp) and ``effect_ts`` (the database clock at the ``updated_at``
+        bump -- the write that changes the session's sweep eligibility).
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
-            row = await conn.fetchrow("""
-                INSERT INTO core.dialectic_messages (
-                    session_id, agent_id, message_type,
-                    root_cause, proposed_conditions, reasoning,
-                    observed_metrics, concerns, agrees, signature
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                RETURNING message_id, timestamp
-            """,
-                session_id,
-                agent_id,
-                message_type,
-                root_cause,
-                json.dumps(proposed_conditions) if proposed_conditions else None,
-                reasoning,
-                json.dumps(observed_metrics) if observed_metrics else None,
-                json.dumps(concerns) if concerns else None,
-                agrees,
-                signature,
-            )
+            async with conn.transaction():
+                bump = await conn.fetchrow(f"""
+                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+                    RETURNING {self._EFFECT_TS}
+                """, session_id)
 
-            bump = await conn.fetchrow(f"""
-                UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-                RETURNING {self._EFFECT_TS}
-            """, session_id)
-            if detail is not None:
-                try:
-                    detail["message_ts"] = row["timestamp"] if row else None
-                    detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
-                    detail["written"] = row is not None
-                except Exception:  # pragma: no cover
-                    pass
+                row = await conn.fetchrow("""
+                    INSERT INTO core.dialectic_messages (
+                        session_id, agent_id, message_type,
+                        root_cause, proposed_conditions, reasoning,
+                        observed_metrics, concerns, agrees, signature
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    RETURNING message_id, timestamp
+                """,
+                    session_id,
+                    agent_id,
+                    message_type,
+                    root_cause,
+                    json.dumps(proposed_conditions) if proposed_conditions else None,
+                    reasoning,
+                    json.dumps(observed_metrics) if observed_metrics else None,
+                    json.dumps(concerns) if concerns else None,
+                    agrees,
+                    signature,
+                )
 
-            return row["message_id"] if row else 0
+                if detail is not None:
+                    try:
+                        detail["message_ts"] = row["timestamp"] if row else None
+                        detail["effect_ts"] = bump["effect_ts"] if bump is not None else None
+                        detail["written"] = row is not None
+                    except Exception:  # pragma: no cover
+                        pass
+
+                return row["message_id"] if row else 0
 
     async def add_bounded_message(
         self,
@@ -1282,6 +1322,8 @@ async def update_session_status_async(
 async def mark_awaiting_facilitation_async(
     session_id: str,
     *,
+    expected_phase: Any = _UNSET,
+    expected_updated_at: Any = _UNSET,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
@@ -1289,7 +1331,8 @@ async def mark_awaiting_facilitation_async(
     ) as rec:
         db = await get_dialectic_db()
         return await _recorded_write(rec, lambda d: db.mark_awaiting_facilitation(
-            session_id, winner=winner, detail=d), winner=winner)
+            session_id, expected_phase=expected_phase,
+            expected_updated_at=expected_updated_at, winner=winner, detail=d), winner=winner)
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:

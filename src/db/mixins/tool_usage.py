@@ -40,6 +40,7 @@ class ToolUsageMixin:
         error_type: Optional[str] = None,
         payload: Optional[Dict[str, Any]] = None,
     ) -> bool:
+        session_id = _session_ref(session_id)
         async with self.acquire() as conn:
             try:
                 await conn.execute(
@@ -83,6 +84,7 @@ class ToolUsageMixin:
         the CHECK constraint rejects other strings. Optional for backwards
         compatibility with pre-Phase-1 callers; future migration will require it.
         """
+        session_id = _session_ref(session_id)
         from src.outcome_corroboration import (
             ceiling_for_verification_source,
             enrich_detail_with_corroboration,
@@ -253,6 +255,7 @@ class ToolUsageMixin:
         Its claim and the range-partitioned outcome row share one transaction;
         identical callers replay canonical response material from the ledger.
         """
+        session_id = _session_ref(session_id)
         from config.governance_config import GovernanceConfig
 
         claim_token = uuid.uuid4()
@@ -671,3 +674,11 @@ class ToolUsageMixin:
                 }
                 for r in rows
             ]
+
+
+def _session_ref(session_id):
+    """Rows here are readable by other callers (outcome and usage queries), and
+    a keyed session id is a bearer credential: store its audit reference."""
+    from src.mcp_handlers.identity.stable_session import audit_reference
+
+    return audit_reference(session_id)

@@ -6,11 +6,16 @@ Reads every row in knowledge.discoveries, embeds summary + details with the
 model selected by UNITARES_EMBEDDING_MODEL, and upserts into that model's
 parallel pgvector table (see src/embeddings.py KNOWN_MODELS).
 
+By default only discoveries with no vector in the target table are embedded
+(recovery after installing sentence-transformers; existing vectors are not
+touched). Pass --rebuild to rewrite every row (model migration).
+
 Usage:
     UNITARES_EMBEDDING_MODEL=bge-m3 python scripts/migration/reembed_corpus.py
+    UNITARES_EMBEDDING_MODEL=bge-m3 python scripts/migration/reembed_corpus.py --rebuild
     UNITARES_EMBEDDING_MODEL=bge-m3 python scripts/migration/reembed_corpus.py --limit 50 --dry-run
 
-Idempotent: re-running upserts existing rows.
+Idempotent: re-running fills only what is still missing (--rebuild upserts all).
 
 Phase 2 of docs/plans/2026-04-20-kg-retrieval-rebuild.md.
 """
@@ -30,15 +35,40 @@ from src.embeddings import (
     DEFAULT_MODEL_KEY,
     EmbeddingsService,
 )
-
-
-MAX_DETAILS_CHARS = 500  # Keep embedding input bounded
+from src.mcp_handlers.knowledge.limits import EMBED_DETAILS_WINDOW
 
 
 def build_text(summary: str, details: str | None) -> str:
-    if details:
-        return f"{summary}\n{details[:MAX_DETAILS_CHARS]}"
-    return summary
+    """Embedding input, identical to what the server builds on store/refresh."""
+    return f"{summary}\n{details[:EMBED_DETAILS_WINDOW] if details else ''}"
+
+
+def select_targets(discoveries, already, rebuild: bool, limit: int | None):
+    """Pick what to embed. The missing filter runs BEFORE --limit, so a limited
+    backfill always advances through the rows that still lack a vector."""
+    if not rebuild:
+        discoveries = [d for d in discoveries if d[0] not in already]
+    if limit:
+        discoveries = discoveries[:limit]
+    return discoveries
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=DEFAULT_MODEL_KEY,
+                        help=f"Embedding model key (known: {list(KNOWN_MODELS)})")
+    parser.add_argument("--limit", type=int, default=None, help="Max discoveries to re-embed")
+    # 8, not 32: with the 6000-char EMBED_DETAILS_WINDOW a bge-m3 batch of 32
+    # peaked near 14.5 GB on MPS (about 4.1 GB at the old 500-char window).
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Re-embed and overwrite EVERY discovery, including ones that "
+                             "already have a vector (model migration). Default: only "
+                             "discoveries with no vector in the target table.")
+    parser.add_argument("--only-missing", action="store_true",
+                        help="Deprecated no-op: this is now the default.")
+    return parser
 
 
 async def ensure_table_exists(db, table_qualified: str) -> None:
@@ -101,18 +131,13 @@ async def upsert_batch(
 
 
 async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=DEFAULT_MODEL_KEY,
-                        help=f"Embedding model key (known: {list(KNOWN_MODELS)})")
-    parser.add_argument("--limit", type=int, default=None, help="Max discoveries to re-embed")
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--only-missing", action="store_true",
-                        help="Skip discoveries already present in the target table")
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.model not in KNOWN_MODELS:
         raise SystemExit(f"Unknown model {args.model!r}. Known: {list(KNOWN_MODELS)}")
+    if args.rebuild and args.only_missing:
+        parser.error("--rebuild and --only-missing are mutually exclusive.")
 
     # Force the embeddings service to use the chosen model regardless of env.
     svc = EmbeddingsService(model_key=args.model)
@@ -124,18 +149,20 @@ async def main():
     db = get_db()
     await ensure_table_exists(db, table)
 
-    discoveries = await fetch_all_ids(db)
-    if args.limit:
-        discoveries = discoveries[: args.limit]
-    print(f"Found {len(discoveries)} discoveries")
-
-    if args.only_missing:
+    all_discoveries = await fetch_all_ids(db)
+    already: set = set()
+    if not args.rebuild:
         async with db.acquire() as conn:
             rows = await conn.fetch(f"SELECT discovery_id FROM {table}")
         already = {r["discovery_id"] for r in rows}
-        before = len(discoveries)
-        discoveries = [d for d in discoveries if d[0] not in already]
-        print(f"{before - len(discoveries)} already embedded; re-embedding {len(discoveries)}")
+    discoveries = select_targets(all_discoveries, already, args.rebuild, args.limit)
+    if args.rebuild:
+        print(f"Found {len(all_discoveries)} discoveries; rebuild mode embeds "
+              f"{len(discoveries)} (existing vectors are overwritten)")
+    else:
+        n_already = sum(1 for d in all_discoveries if d[0] in already)
+        print(f"Found {len(all_discoveries)} discoveries; {n_already} already embedded; "
+              f"embedding {len(discoveries)}")
 
     if not discoveries:
         print("Nothing to do.")
