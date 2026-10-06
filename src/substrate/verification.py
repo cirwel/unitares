@@ -237,7 +237,7 @@ def verify_substrate_claim(
 
 
 # UUIDs this process has seen with a substrate claim: every lookup that finds
-# one adds it, a lookup that finds none drops it, and the server reloads the
+# one adds it, a lookup that finds none drops it, and the server adds the
 # whole table every minute (load_known_substrate_claims, from
 # background_tasks.substrate_claims_refresh), so an enrollment made by the
 # operator script is known within a minute even if nothing looks it up. The
@@ -263,16 +263,19 @@ def known_substrate_claimed(agent_id: Optional[str]) -> bool:
 
 
 async def load_known_substrate_claims() -> int:
-    """Replace the claimed set with the table's contents; returns how many.
+    """Add every claimed UUID in the table to the set; returns how many rows.
 
-    Raises if the read fails, leaving the previous set in place."""
+    Add-only: a snapshot read before a concurrent lookup recorded a new claim
+    must not erase it. Only a lookup that finds no claim removes a UUID, so a
+    stale entry can at worst refuse that UUID while lookups are failing.
+    Raises if the read fails, leaving the set as it was."""
     from src.db import get_db
 
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT agent_id FROM core.substrate_claims")
-    global _known_claimed, _claims_loaded
-    _known_claimed = {str(r["agent_id"]) for r in rows}
+    global _claims_loaded
+    _known_claimed.update(str(r["agent_id"]) for r in rows)
     _claims_loaded = True
     return len(rows)
 

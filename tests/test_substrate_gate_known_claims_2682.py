@@ -170,16 +170,21 @@ async def test_the_refresh_retries_the_first_load_then_reloads_every_interval(mo
 
 
 @pytest.mark.asyncio
-async def test_a_reload_replaces_the_set_and_a_failed_one_keeps_it():
-    with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": RESIDENT}])):
-        await verification.load_known_substrate_claims()
+async def test_a_reload_only_adds_so_it_cannot_erase_a_concurrent_lookup():
+    """A reload's snapshot may predate a claim a lookup just recorded; it must
+    not erase it. Only a lookup that finds no claim removes a UUID."""
+    verification._known_claimed.add(RESIDENT)  # recorded by a concurrent lookup
     with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": ORDINARY}])):
-        await verification.load_known_substrate_claims()
-    assert not verification.known_substrate_claimed(RESIDENT)  # unenrolled
+        await verification.load_known_substrate_claims()  # older snapshot
+    assert verification.known_substrate_claimed(RESIDENT)
     assert verification.known_substrate_claimed(ORDINARY)
+
+    with patch("src.db.get_db", return_value=_db(fetchrow=None)):
+        await verification.fetch_substrate_claim(ORDINARY)  # unenrolled
+    assert not verification.known_substrate_claimed(ORDINARY)
 
     failing = MagicMock()
     failing.acquire = MagicMock(side_effect=ConnectionError("down"))
     with patch("src.db.get_db", return_value=failing), pytest.raises(ConnectionError):
         await verification.load_known_substrate_claims()
-    assert verification.known_substrate_claimed(ORDINARY)
+    assert verification.known_substrate_claimed(RESIDENT)
