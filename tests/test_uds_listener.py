@@ -447,6 +447,36 @@ async def test_failure_after_bind_leaves_a_replaced_node_alone(monkeypatch):
         _shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replaced", [False, True])
+async def test_oserror_after_bind_unlinks_only_its_own_node(monkeypatch, replaced):
+    """An OSError between bind and listen removes the node we bound, and
+    leaves alone a node that replaced it."""
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    other = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+
+    def _chmod_fails(p, mode):
+        if replaced:
+            os.unlink(p)
+            other.bind(p)
+        raise PermissionError(13, "chmod refused")
+
+    monkeypatch.setattr(uds_listener.os, "chmod", _chmod_fails)
+    try:
+        with pytest.raises(PermissionError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert os.path.exists(path) is replaced
+    finally:
+        monkeypatch.undo()
+        other.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
 async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
     if scope["type"] == "http":
         await send({"type": "http.response.start", "status": 200, "headers": []})

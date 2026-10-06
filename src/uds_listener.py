@@ -214,14 +214,13 @@ async def start_uds_listener(
         # the explicit chmod re-asserts it (defense in depth) before listen(), so
         # the socket accepts no connection until it is owner-only.
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        bound = False
+        bound_ino: Optional[int] = None
         try:
             prev_umask = os.umask(0o177)
             try:
                 sock.bind(uds_path)
             finally:
                 os.umask(prev_umask)
-            bound = True
             bound_ino = os.stat(uds_path).st_ino
             os.chmod(uds_path, 0o600)
             # listen() before handing the socket to uvicorn so the kernel queues
@@ -233,10 +232,13 @@ async def start_uds_listener(
         except OSError:
             sock.close()
             # Clean up a partially-created socket file so a retry can rebind,
-            # but only one we bound ourselves.
-            if bound and os.path.exists(uds_path):
+            # but only the node we bound: compare its inode, as every other
+            # cleanup here does. The path lock is already held, so this checks
+            # inline rather than through unlink_own_socket, which takes it.
+            if bound_ino is not None:
                 try:
-                    os.unlink(uds_path)
+                    if os.stat(uds_path).st_ino == bound_ino:
+                        os.unlink(uds_path)
                 except OSError:
                     pass
             raise
