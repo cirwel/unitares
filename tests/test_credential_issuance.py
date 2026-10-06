@@ -400,3 +400,63 @@ async def test_each_dispatch_starts_without_an_earlier_calls_proof():
     from src.mcp_handlers.context import get_credential_proof_uuid, get_session_proof_origin
     assert get_credential_proof_uuid() is None
     assert get_session_proof_origin() is None
+
+
+@pytest.mark.asyncio
+async def test_bind_session_refuses_a_target_the_caller_did_not_prove():
+    """bind_session resolves client_session_id and binds that agent to the
+    caller's transport. With a fingerprint as client_session_id, it would hand
+    the caller the victim's agent; it must refuse instead."""
+    from src.mcp_handlers.identity import handlers
+
+    resolved = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
+
+    async def resolve(*args, **kwargs):
+        set_session_resolution_source("explicit_client_session_id")
+        set_session_proof_origin("caller_asserted")
+        note_session_proof(VICTIM, "203.0.113.7:d20c2f")  # the victim's fingerprint binding
+        return dict(resolved)
+
+    bind = AsyncMock()
+    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+         patch.object(handlers, "derive_session_key_with_source",
+                      AsyncMock(return_value=("attacker-own-transport", "x_session_id"))), \
+         patch.object(handlers, "_perform_session_bind", bind):
+        result = await handlers.handle_bind_session(
+            {"client_session_id": "203.0.113.7:d20c2f", "resume": True}
+        )
+
+    body = json.loads(result[0].text)
+    assert body["bound"] is False and body["rebind_refused"] == "ownership_unproven", body
+    bind.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env", [
+    {"UNITARES_CREDENTIAL_ISSUANCE": "log"},   # observation: behave as before, log
+    {"STRICT_IDENTITY_REQUIRED": "false"},      # permissive posture: unchanged
+])
+async def test_observation_and_permissive_modes_keep_the_old_bind(monkeypatch, env):
+    from src.mcp_handlers.identity import handlers
+
+    monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "log")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    server = MagicMock()
+    server.monitors = {}
+    cache = AsyncMock()
+    db = MagicMock()
+    db.read_lineage_state = AsyncMock(return_value=None)
+    with patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+         patch.object(handlers, "_emit_identity_hijack_event", AsyncMock()), \
+         patch.object(handlers, "_agent_exists_in_postgres", AsyncMock(return_value=True)), \
+         patch.object(handlers, "_get_agent_status", AsyncMock(return_value="active")), \
+         patch.object(handlers, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)), \
+         patch.object(handlers, "_get_agent_label", AsyncMock(return_value="victim")), \
+         patch.object(handlers, "get_db", return_value=db), \
+         patch.object(handlers, "_cache_session", cache):
+        await handlers.handle_identity_adapter(
+            {"agent_uuid": VICTIM, "client_session_id": "agent-own", "resume": True}
+        )
+
+    cache.assert_awaited()

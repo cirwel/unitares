@@ -1060,7 +1060,9 @@ async def _try_resume_by_agent_uuid_direct(
     # Bind the caller's session to this agent only when the request proved it
     # owns the agent: a bare UUID claim (allowed outside strict mode) must not
     # leave the caller's key resolving to the agent on later calls.
-    if _partc_owned:
+    from .credential_issuance import credentials_issuable as _issuable
+
+    if _issuable(_direct_uuid)[0]:
         await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
     try:
         from ..context import update_context_agent_id, set_session_resolution_source
@@ -1801,7 +1803,17 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
     # key differs from `client_session_id` by construction, so the guard passes
     # exactly when the destination is most dangerous.
     rebind_refused: Optional[str] = None
-    if mcp_session_key and mcp_session_key == client_session_id:
+    # Binding the target agent to this caller's session gives the caller that
+    # agent: the same proof receiving its credentials needs
+    # (identity/credential_issuance.py). Resolving client_session_id is not
+    # enough when it is a key the server inferred, such as a fingerprint.
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    _bind_allowed, _bind_basis = credentials_issuable(target_uuid)
+    if not _bind_allowed:
+        log_withheld("bind_session", target_uuid, _bind_basis)
+        rebind_refused = "ownership_unproven"
+    elif mcp_session_key and mcp_session_key == client_session_id:
         # Nothing to rebind — the caller already holds this key. Checked first
         # so the benign self-pin case is never reported as a refusal.
         pass
@@ -1855,6 +1867,11 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         ),
         "message": (
             f"Resolved agent '{target_label or target_agent_id}', but declined to "
+            f"bind this transport: this call did not prove it owns that agent "
+            f"(the client_session_id was matched by inference, such as a transport "
+            f"fingerprint). Your identity is unchanged."
+            if rebind_refused == "ownership_unproven"
+            else f"Resolved agent '{target_label or target_agent_id}', but declined to "
             f"bind this transport: the destination key's provenance was not "
             f"declared, so it cannot be shown to be yours. Your identity is unchanged."
             if rebind_refused == UNDECLARED_DESTINATION_PROVENANCE
@@ -1874,7 +1891,10 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
         bind_response["rebind_refused"] = rebind_refused
         bind_response["recovery"] = {
             "action": (
-                "Retry from a client that carries its own session identifier "
+                "Pass the client_session_id your process received from "
+                "start_session, or a continuity_token bound to the agent."
+                if rebind_refused == "ownership_unproven"
+                else "Retry from a client that carries its own session identifier "
                 "(Mcp-Session-Id or X-Session-ID), or rebind out of band."
             ),
             "related_tools": ["identity", "start_session"],
