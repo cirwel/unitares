@@ -202,3 +202,14 @@ async def test_unreadable_signals_count_as_not_uds():
     with patch("src.mcp_handlers.context.get_session_signals", side_effect=RuntimeError("ctx")):
         out = await resolution._substrate_http_reject(RESIDENT, "unit")
     assert out["error"] == "substrate_check_unavailable"
+
+
+@pytest.mark.parametrize("module_path", ["src/background_tasks.py", "src/mcp_server_std.py"])
+def test_both_server_startups_run_the_claims_refresh(module_path):
+    """HTTP (start_all_background_tasks) and standalone STDIO each start the
+    refresh; without it _claims_loaded stays false and every failed lookup
+    refuses, including the degraded keyed resume."""
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / module_path).read_text()
+    assert 'substrate_claims_refresh(), name="substrate_claims_refresh"' in source
