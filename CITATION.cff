@@ -4,8 +4,8 @@ message: >
   If you use this software or its underlying ideas, please cite both the
   software (this entry) and the paper (preferred-citation, below).
 type: software
-version: "3.2.0"
-date-released: "2026-10-04"
+version: "3.3.0"
+date-released: "2026-10-06"
 authors:
   - family-names: Wang
     given-names: Kenny
