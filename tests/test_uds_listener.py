@@ -321,3 +321,36 @@ async def test_uds_socket_created_mode_0600() -> None:
                 await listener_task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+# --- #2662: a failed start must not claim (or unlink) another server's socket ---
+import socket as _socket
+import tempfile as _tempfile
+
+
+@pytest.mark.asyncio
+async def test_failed_start_does_not_claim_or_unlink_live_socket(monkeypatch):
+    from src.services.mcp_transport_service import (
+        _start_uds_listener,
+        _stop_uds_listener,
+    )
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    live = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    live.bind(path)
+    live.listen(8)
+    try:
+        monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+        sock_path, task = await _start_uds_listener(object())
+        assert (sock_path, task) == (None, None)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.connect(path)  # still the live owner's socket
+        c.close()
+    finally:
+        live.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        os.rmdir(d)

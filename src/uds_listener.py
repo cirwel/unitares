@@ -25,6 +25,7 @@ via ``getsockopt(SOL_LOCAL, LOCAL_PEERPID)`` from the underlying socket, and
 from __future__ import annotations
 
 import asyncio
+import errno
 import logging
 import os
 import socket
@@ -135,6 +136,20 @@ async def start_uds_listener(
     if sock_dir:
         os.makedirs(sock_dir, mode=0o700, exist_ok=True)
     if os.path.exists(uds_path):
+        # Refuse to displace a live listener (#2662): only a stale socket
+        # file (nobody accepting) is safe to remove.
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.settimeout(1.0)
+            probe.connect(uds_path)
+        except OSError:
+            pass  # refused / not a socket / unreachable: stale
+        else:
+            raise OSError(
+                errno.EADDRINUSE, f"live listener already bound at {uds_path}"
+            )
+        finally:
+            probe.close()
         try:
             os.unlink(uds_path)
         except OSError as exc:
@@ -145,12 +160,14 @@ async def start_uds_listener(
     # the explicit chmod re-asserts it (defense in depth) before listen(), so
     # the socket accepts no connection until it is owner-only.
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    bound = False
     try:
         prev_umask = os.umask(0o177)
         try:
             sock.bind(uds_path)
         finally:
             os.umask(prev_umask)
+        bound = True
         os.chmod(uds_path, 0o600)
         # listen() before handing the socket to uvicorn so the kernel queues
         # connections immediately — otherwise a client connecting in the window
@@ -160,8 +177,9 @@ async def start_uds_listener(
         sock.setblocking(False)
     except OSError:
         sock.close()
-        # Clean up a partially-created socket file so a retry can rebind.
-        if os.path.exists(uds_path):
+        # Clean up a partially-created socket file so a retry can rebind,
+        # but only one we bound ourselves.
+        if bound and os.path.exists(uds_path):
             try:
                 os.unlink(uds_path)
             except OSError:

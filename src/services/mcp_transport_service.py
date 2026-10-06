@@ -840,7 +840,9 @@ async def _start_uds_listener(app: Any) -> tuple[str | None, asyncio.Task[None] 
             exc,
             exc_info=True,
         )
-        return socket_path, None
+        # Never claim a path this process did not bind: shutdown unlinks the
+        # returned path, which could belong to another live server (#2662).
+        return None, None
 
 
 async def _stop_uds_listener(
