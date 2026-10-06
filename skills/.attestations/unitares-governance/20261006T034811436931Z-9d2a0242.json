@@ -1,0 +1,34 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-10-06T03:48:11Z",
+  "verified_date": "2026-10-06",
+  "verifier": "claude (session 00f96160): admin/handlers.py debug_context now shows session-cache keys as references and uuid prefixes cut to 8; session.py gains session_id_reference(); list_process_bindings rows carry client_session_ref. Neither skill cites these outputs; their onboarding, continuity and admin guidance is unchanged and still accurate",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "086516b9f9636671",
+    "unitares/skills/governance-fundamentals/SKILL.md": "ad796e0f2ed82909",
+    "unitares/skills/governance-lifecycle/SKILL.md": "b8bea4b1d7ec5bb5",
+    "unitares/skills/knowledge-graph/SKILL.md": "aabbd26ad2a2ad60",
+    "unitares/skills/unitares-dashboard/SKILL.md": "a122c25c69491f1e",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/identity/handlers.py": "bcf6b21974614f14",
+    "unitares/src/mcp_handlers/identity/session.py": "6abe8682e8400493",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "bde37178d2a1c350",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1cfc626594e3c31f",
+    "unitares/src/mcp_handlers/schemas/identity.py": "fdefa058d2d3516d",
+    "unitares/src/mcp_handlers/tool_stability.py": "76060be105b596d0",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "2a604180b001fd9d"
+  },
+  "skill_digest": "56cb7b5e6ff3b461",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/identity/session.py": [
+      "cf6693d0d60da7be"
+    ]
+  }
+}

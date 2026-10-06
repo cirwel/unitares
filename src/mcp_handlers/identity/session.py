@@ -82,6 +82,21 @@ def normalize_client_session_id(value: Any) -> Optional[str]:
     return sanitized
 
 
+def session_id_reference(value: Any) -> Optional[str]:
+    """A display form of a session id that cannot be used as one.
+
+    A client_session_id is a bearer credential: whoever presents it acts as
+    the session it names. Diagnostics that show other sessions show this
+    instead, a short prefix and a digest, enough to tell rows apart and to
+    match a session you already hold, never enough to present.
+    """
+    if not value:
+        return None
+    text = str(value)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:10]
+    return f"{text[:8]}…{digest}"
+
+
 def normalize_client_session_id_argument(arguments: Dict[str, Any]) -> Optional[str]:
     """Normalize ``arguments['client_session_id']`` in place."""
     normalized = normalize_client_session_id(arguments.get("client_session_id"))
