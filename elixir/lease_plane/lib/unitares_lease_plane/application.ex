@@ -184,6 +184,7 @@ defmodule UnitaresLeasePlane.Application do
         UnitaresLeasePlane.IdentityMetrics,
         UnitaresLeasePlane.OperatorKeyCache,
         {Registry, keys: :unique, name: UnitaresLeasePlane.HolderRegistry},
+        {Registry, keys: :unique, name: UnitaresLeasePlane.EffectAttemptRegistry},
         UnitaresLeasePlane.LeaseSupervisor,
         UnitaresLeasePlane.HandoffServer,
         UnitaresLeasePlane.SurfaceRegistry,

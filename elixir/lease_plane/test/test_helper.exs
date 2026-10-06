@@ -47,6 +47,7 @@ parsed =
   )
 
 {:ok, _} = Registry.start_link(keys: :unique, name: UnitaresLeasePlane.HolderRegistry)
+{:ok, _} = Registry.start_link(keys: :unique, name: UnitaresLeasePlane.EffectAttemptRegistry)
 {:ok, _} = UnitaresLeasePlane.LeaseSupervisor.start_link(:ok)
 {:ok, _} = UnitaresLeasePlane.HandoffServer.start_link(:ok)
 {:ok, _} = UnitaresLeasePlane.IdentityMetrics.start_link(:ok)

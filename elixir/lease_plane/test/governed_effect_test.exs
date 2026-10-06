@@ -17,6 +17,24 @@ defmodule UnitaresLeasePlane.CrashGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.ParkedGovernanceVeto do
+  @moduledoc false
+  # The original attempt is ALIVE: parked inside the commit-path veto with its
+  # lease held until the test releases it.
+  def check(_env) do
+    test = Application.fetch_env!(:lease_plane, :parked_veto_test_pid)
+    send(test, {:parked, self()})
+
+    receive do
+      :go -> :allow
+    after
+      15_000 -> raise "parked veto never released"
+    end
+  end
+
+  def verify_identity_tier(_env), do: {:ok, "strong"}
+end
+
 defmodule UnitaresLeasePlane.FailingEffectFileOps do
   @moduledoc false
   # The commit write fails, and so does the restore: the effect quarantines.
@@ -912,6 +930,14 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
     end
   end
 
+  defp eventually(fun, tries \\ 50) do
+    cond do
+      fun.() -> true
+      tries == 0 -> false
+      true -> Process.sleep(20) && eventually(fun, tries - 1)
+    end
+  end
+
   describe "execute / file_write same-key retry after a request crash (#2620)" do
     defp crash_first_attempt(path, key, proposer) do
       surface = "file://#{path}"
@@ -1030,6 +1056,84 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       assert {:error, :lease_held} = GovernedEffect.handle(req.(%{}))
       refute File.exists?(path)
       assert lease_rows(surface) == [{false, nil}]
+    end
+  end
+
+  describe "execute / file_write same-key retry while the original is alive (#2620)" do
+    test "a live original attempt is NOT adopted; it finishes and the retry is idempotent" do
+      path =
+        Path.join(System.tmp_dir!(), "unitares-ge-live-#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> File.rm(path) end)
+      surface = "file://#{path}"
+      on_exit(fn -> LeaseTestHelpers.cleanup_surface(canonical(surface)) end)
+      set_file_write_flags(true)
+      key = tracked_key()
+
+      req = fn ->
+        base(%{
+          "idempotency_key" => key,
+          "custody_mode" => "execute",
+          "surface" => surface,
+          "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+          "payload" => %{"path" => path, "content" => "landed\n"},
+          "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000c1"}
+        })
+      end
+
+      Application.put_env(:lease_plane, :parked_veto_test_pid, self())
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.ParkedGovernanceVeto
+      )
+
+      original = Task.async(fn -> GovernedEffect.handle(req.()) end)
+      assert_receive {:parked, parked}, 5_000
+      assert lease_rows(surface) == [{false, nil}]
+
+      # Same key, same payload, same holder, original still running: refused.
+      assert {:error, :lease_held} = GovernedEffect.handle(req.())
+      refute File.exists?(path)
+      # The retry did not release the original's lease.
+      assert lease_rows(surface) == [{false, nil}]
+
+      send(parked, :go)
+      assert {:ok, %{ok: true, custody_mode: "execute"}} = Task.await(original, 10_000)
+      assert File.read!(path) == "landed\n"
+      assert lease_rows(surface) == [{true, "normal"}]
+
+      Application.put_env(
+        :lease_plane,
+        :governance_veto_client,
+        UnitaresLeasePlane.AllowGovernanceVeto
+      )
+
+      # Once finished, the key is free and a retry is served idempotently.
+      assert {:ok, %{ok: true}} = GovernedEffect.handle(req.())
+      assert lease_rows(surface) == [{true, "normal"}]
+    end
+
+    test "the fence entry is dropped when the owning process dies" do
+      key = tracked_key()
+      parent = self()
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          {:ok, _} = Registry.register(UnitaresLeasePlane.EffectAttemptRegistry, key, nil)
+          send(parent, :registered)
+          Process.sleep(:infinity)
+        end)
+
+      assert_receive :registered
+      Process.exit(pid, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :killed}
+
+      # The Registry cleans up asynchronously; it must converge to free.
+      assert eventually(fn ->
+               Registry.lookup(UnitaresLeasePlane.EffectAttemptRegistry, key) == []
+             end)
     end
   end
 

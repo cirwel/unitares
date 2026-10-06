@@ -745,6 +745,8 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   # recovery, so reject before any custody starts.
   @min_execute_ttl_s 120
 
+  @attempt_registry UnitaresLeasePlane.EffectAttemptRegistry
+
   defp execute_file_write(env) do
     with {:ok, env} <- bind_execution_target(env) do
       cond do
@@ -808,21 +810,44 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
       stamp = custody_stamp(env.idempotency_key, digest)
 
-      case acquire_all(canon_leases, env.proposer_agent_uuid, stamp, env.idempotency_key) do
-        {:ok, acquired} ->
-          # No `after`: an exception leaves the leases to the TTL reaper, the
-          # contract's crash path (§4), instead of releasing a surface whose
-          # state is unknown.
-          {reply, custody} = under_custody(env, effect_id, digest, canon_leases)
-          if custody == :release, do: release_all(acquired)
-          reply
-
-        {:error, :held_by_other} ->
+      # Fence (#2620): at most one live attempt per idempotency key. A leftover
+      # lease may only be adopted when no live process owns the key.
+      case claim_attempt(env.idempotency_key) do
+        :live ->
           {:error, :lease_held}
 
-        {:error, reason} ->
-          Logger.warning("governed_effect file_write lease acquire failed: #{inspect(reason)}")
-          {:error, :lease_acquire_failed}
+        claim ->
+          try do
+            adopt? = claim == :claimed
+
+            case acquire_all(
+                   canon_leases,
+                   env.proposer_agent_uuid,
+                   stamp,
+                   env.idempotency_key,
+                   adopt?
+                 ) do
+              {:ok, acquired} ->
+                # No lease `after`: an exception leaves the leases to the TTL
+                # reaper, the contract's crash path (§4), instead of releasing a
+                # surface whose state is unknown.
+                {reply, custody} = under_custody(env, effect_id, digest, canon_leases)
+                if custody == :release, do: release_all(acquired)
+                reply
+
+              {:error, :held_by_other} ->
+                {:error, :lease_held}
+
+              {:error, reason} ->
+                Logger.warning(
+                  "governed_effect file_write lease acquire failed: #{inspect(reason)}"
+                )
+
+                {:error, :lease_acquire_failed}
+            end
+          after
+            release_attempt(claim, env.idempotency_key)
+          end
       end
     end
   end
@@ -942,7 +967,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
   # Acquire every required lease; on the first conflict, release what we hold and
   # bail (atomic-ish: no partial custody escapes).
-  defp acquire_all(leases, proposer, stamp, idempotency_key) do
+  defp acquire_all(leases, proposer, stamp, idempotency_key, adopt?) do
     Enum.reduce_while(leases, {:ok, []}, fn l, {:ok, acc} ->
       params = %{
         surface_id: Map.get(l, "surface"),
@@ -967,7 +992,7 @@ defmodule UnitaresLeasePlane.GovernedEffect do
         # TTL. Never when a payload row survives for the key: that attempt got
         # as far as the commit path and EffectRecovery owns reconciling it.
         {:ok, lease, :idempotent} ->
-          if adoptable?(lease, stamp, idempotency_key) do
+          if adopt? and adoptable?(lease, stamp, idempotency_key) do
             {:cont, {:ok, [lease | acc]}}
           else
             release_all(acc)
@@ -994,6 +1019,34 @@ defmodule UnitaresLeasePlane.GovernedEffect do
 
     "governed_effect:" <> hash
   end
+
+  # Liveness fence for same-key attempts, built on a unique Registry keyed by
+  # idempotency key. The registering request process owns the entry; the Registry
+  # drops it when that process dies, so "key present" == "an attempt is alive on
+  # this node" with no lease-schema change. Entries are also removed explicitly
+  # when the attempt returns or raises, because a pooled connection process
+  # outlives its requests.
+  #   :claimed     this process owns the key; a dead attempt's lease may be adopted
+  #   :live        another live process owns it; the retry is lease_held
+  #   :unavailable the Registry is not running; liveness is unknown, so never
+  #                adopt (falls back to the pre-#2620 lease_held behaviour)
+  # Assumes one lease-plane VM per database; a second node would not see this
+  # registry (see PR comment).
+  defp claim_attempt(idempotency_key) do
+    case Registry.register(@attempt_registry, idempotency_key, nil) do
+      {:ok, _} -> :claimed
+      {:error, {:already_registered, _pid}} -> :live
+    end
+  rescue
+    ArgumentError -> :unavailable
+  end
+
+  defp release_attempt(:claimed, idempotency_key) do
+    Registry.unregister(@attempt_registry, idempotency_key)
+    :ok
+  end
+
+  defp release_attempt(_claim, _key), do: :ok
 
   defp adoptable?(lease, stamp, idempotency_key) do
     Map.get(lease, :intent) == stamp and
