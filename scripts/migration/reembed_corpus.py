@@ -58,7 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", default=DEFAULT_MODEL_KEY,
                         help=f"Embedding model key (known: {list(KNOWN_MODELS)})")
     parser.add_argument("--limit", type=int, default=None, help="Max discoveries to re-embed")
-    parser.add_argument("--batch-size", type=int, default=32)
+    # 8, not 32: with the 6000-char EMBED_DETAILS_WINDOW a bge-m3 batch of 32
+    # peaked near 14.5 GB on MPS (about 4.1 GB at the old 500-char window).
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--rebuild", action="store_true",
                         help="Re-embed and overwrite EVERY discovery, including ones that "
@@ -154,9 +156,13 @@ async def main():
             rows = await conn.fetch(f"SELECT discovery_id FROM {table}")
         already = {r["discovery_id"] for r in rows}
     discoveries = select_targets(all_discoveries, already, args.rebuild, args.limit)
-    n_already = sum(1 for d in all_discoveries if d[0] in already)
-    print(f"Found {len(all_discoveries)} discoveries; {n_already} already embedded; "
-          f"embedding {len(discoveries)}")
+    if args.rebuild:
+        print(f"Found {len(all_discoveries)} discoveries; rebuild mode embeds "
+              f"{len(discoveries)} (existing vectors are overwritten)")
+    else:
+        n_already = sum(1 for d in all_discoveries if d[0] in already)
+        print(f"Found {len(all_discoveries)} discoveries; {n_already} already embedded; "
+              f"embedding {len(discoveries)}")
 
     if not discoveries:
         print("Nothing to do.")
