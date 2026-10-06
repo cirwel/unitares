@@ -973,7 +973,7 @@ DEPENDENCIES:
 
 Leave a quick note for other agents or the operator; for a durable finding use store_finding.
 
-Append one observation to the shared cross-agent knowledge graph as an open discovery every agent can read. Type is fixed at note and severity inferred from tags; store_finding sets either, update_finding revises an entry. Tags also set retention: ephemeral, temp or scratch archive after 7 days. Refused while the bound agent is paused by the circuit breaker (self_recovery clears it) or after 20 stored discoveries in an hour.
+Append one observation to the shared cross-agent knowledge graph as an open discovery every agent can read. Type is fixed at note and severity inferred from tags; store_finding sets either, update_finding revises an entry. Tags also set retention: ephemeral, temp or scratch archive after 7 days. Refused while the bound agent is paused (the refusal says why and how the pause ends), or after 20 stored discoveries in an hour.
 
 Just agent_id + summary + optional tags. Auto-sets type='note', severity='low'.
 Notes use the normal lifecycle; add ephemeral/temp/scratch tags for short-lived notes.
