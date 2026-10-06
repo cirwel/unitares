@@ -605,6 +605,60 @@ class TestStoreKnowledgeGraph:
         assert discovery.agent_id.startswith("anonkg_")
 
     @pytest.mark.asyncio
+    async def test_store_server_inferred_binding_uses_anonymous_writer(
+        self, patch_common, registered_agent
+    ):
+        """A fingerprint-matched caller must not write as the agent it matched.
+
+        Dispatch injects the inferred agent into agent_id, so the write would
+        otherwise land on whichever agent last shared the caller's IP and
+        User-Agent (cold-start install test, 2026-10-06).
+        """
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.context import set_session_proof_origin
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        set_session_proof_origin("server_inferred")
+        try:
+            result = await handle_store_knowledge_graph({
+                "agent_id": registered_agent,
+                "summary": "Note from an unbound connection",
+            })
+        finally:
+            set_session_proof_origin(None)
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent_mode"] == "anonymous"
+        discovery = mock_graph.add_discovery.call_args[0][0]
+        assert discovery.agent_id.startswith("anonkg_")
+        assert discovery.agent_id != registered_agent
+
+    @pytest.mark.asyncio
+    async def test_store_caller_asserted_binding_keeps_agent(
+        self, patch_common, registered_agent
+    ):
+        """A caller-proven binding still writes as its own agent."""
+        mock_mcp_server, mock_graph = patch_common
+        from src.mcp_handlers.context import set_session_proof_origin
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        set_session_proof_origin("caller_asserted")
+        try:
+            result = await handle_store_knowledge_graph({
+                "agent_id": registered_agent,
+                "summary": "Note from a threaded session",
+            })
+        finally:
+            set_session_proof_origin(None)
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data.get("agent_mode") != "anonymous"
+        discovery = mock_graph.add_discovery.call_args[0][0]
+        assert discovery.agent_id == registered_agent
+
+    @pytest.mark.asyncio
     async def test_store_high_severity_requires_registered_agent(self, patch_common):
         """High severity discoveries require registered agent."""
         mock_mcp_server, mock_graph = patch_common

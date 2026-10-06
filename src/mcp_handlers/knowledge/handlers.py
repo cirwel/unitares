@@ -1263,8 +1263,22 @@ def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Option
 
     If the caller has no explicit or bound identity, use a stable anonymous writer
     ID instead of creating a new auto_* identity for each quick write.
+
+    A server-inferred binding (fingerprint pin, transport-injected
+    client_session_id, context fallback) also gets the anonymous writer. Every
+    client behind one address with one User-Agent shares a fingerprint, so
+    attributing the write to the inferred agent credits it to whichever agent
+    last matched, not to the caller. Dispatch has already injected that agent
+    into ``agent_id``, so the proof origin decides here, as it does for
+    ``_resolve_reader_agent_id`` and the strict write gate.
     """
-    from ..context import get_context_agent_id
+    from ..context import get_context_agent_id, get_session_proof_origin
+
+    if get_session_proof_origin() == "server_inferred":
+        arguments.pop("agent_id", None)
+        agent_id = _derive_anonymous_writer_id(arguments)
+        arguments["agent_id"] = agent_id
+        return agent_id, None, True
 
     if arguments.get("agent_id") or get_context_agent_id():
         agent_id, error = require_agent_id(arguments)
