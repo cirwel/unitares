@@ -157,10 +157,13 @@ PROBE_UNREACHABLE = "probe_unreachable"
 
 AUTO_HEALABLE = {C1_FALSE_PAUSE, C2_DNS_FREEZE}
 
+# The session key to rebind is the client_session_id in Lumen's anchor file:
+# stable ids are keyed now (agent-{uuid12}-{tag}) and cannot be rebuilt from
+# the UUID here.
 RUNBOOK_C4 = (
     "operator runbook (BY DESIGN, do not automate): "
     "unitares scripts/ops/rebind-resident-session.sh "
-    f"{LUMEN_UUID} agent-{LUMEN_UUID[:12]}"
+    f"{LUMEN_UUID} <client_session_id from Lumen's anchor file>"
 )
 
 

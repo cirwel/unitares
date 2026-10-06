@@ -539,6 +539,43 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
         return None
 
 
+async def _keyed_redis_binding(session_key: str) -> tuple[Optional[str], Optional[str]]:
+    """(agent_uuid, bind_ip_ua) of the Redis binding for a keyed id, or Nones."""
+    try:
+        import asyncio
+
+        redis = _get_redis()
+        # Redis is not ExecutorPool-wrapped: bound the await (AGENTS.md).
+        cached = await asyncio.wait_for(redis.get(session_key), timeout=2.0) if redis else None
+        if cached and cached.get("agent_id"):
+            cached_uuid, _ = await _decode_stored_identity(
+                cached["agent_id"], cached.get("display_agent_id")
+            )
+            return cached_uuid, cached.get("bind_ip_ua")
+    except Exception as e:
+        logger.debug(f"[STABLE_SESSION] redis binding read failed: {e}")
+    return None, None
+
+
+async def _keyed_bind_fingerprint(session_key: str, agent_uuid: str) -> Optional[str]:
+    """The fingerprint recorded when this keyed id was bound to ``agent_uuid``.
+
+    Read from the Redis binding, else the PG mirror; None when neither holds a
+    binding for this agent, which the global fingerprint check treats as no
+    evidence (it never penalizes a missing fingerprint).
+    """
+    bound_uuid, bound_fp = await _keyed_redis_binding(session_key)
+    if bound_uuid == agent_uuid and bound_fp:
+        return bound_fp
+    try:
+        binding = await get_db().get_session_binding(session_key)
+        if binding and str(binding.get("agent_uuid")) == agent_uuid:
+            return binding.get("bind_ip_ua")
+    except Exception as e:
+        logger.debug(f"[STABLE_SESSION] binding fingerprint read failed: {e}")
+    return None
+
+
 async def _fingerprint_hijack_check(
     session_key: str,
     bound_bind_ip_ua: Optional[str],
@@ -570,7 +607,10 @@ async def _fingerprint_hijack_check(
         session_fingerprint_check_mode,
         prefix_bind_fingerprint_mode,
     )
-    _is_prefix_key = session_key.startswith("agent-")
+    # A keyed agent-{uuid12}-{tag} id is not UUID-derivable, so it is exempt;
+    # every other agent- key keeps the stricter per-path mode.
+    from .stable_session import classify as _csid_kind
+    _is_prefix_key = session_key.startswith("agent-") and _csid_kind(session_key) != "keyed"
     _global_fp_mode = session_fingerprint_check_mode()
     _prefix_fp_mode = prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
     _FP_RANK = {"off": 0, "log": 1, "strict": 2}
@@ -1130,6 +1170,20 @@ async def resolve_session_identity(
                 token_agent_uuid[:8], exc, exc_info=True,
             )
 
+    # Stable session ids (identity/stable_session.py). A keyed id
+    # agent-{uuid12}-{tag} authenticates itself: it resolves when exactly one
+    # identity that is not deleted has that uuid prefix and the tag verifies
+    # for it (an archived one resolves as archived), with no
+    # stored binding and nothing written (F3 holds: verification is not a
+    # bind). A forged tag or an ambiguous prefix is terminal, never a fall
+    # through to PATH 1/2. A legacy agent-{uuid12} id, computable from the
+    # UUID, follows UNITARES_LEGACY_SESSION_IDS (refused by default).
+    #
+    # A keyed id is a credential that can be copied, so it still meets the
+    # hijack guards PATH 1 applies: a continuity_token naming another agent
+    # rejects the resume in favour of the token rebind, and a strict fingerprint mismatch
+    # against the id's recorded binding rejects the resume (#1319 refusal).
+    #
     # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
     # flips resume=False, both the PATH 2 resume and the S21-a fail-close are
     # keyed on `resume` and silently disarm — the call then falls through to a
@@ -1137,6 +1191,92 @@ async def resolve_session_identity(
     # (2026-07-01 dogfood incident, outcome 524032fd). Track WHY resume was
     # rejected so PATH 3 can refuse instead of minting.
     resume_rejected_reason: Optional[str] = None
+    if not force_new:
+        from .stable_session import classify as _csid_kind
+        from .stable_session import legacy_refused as _legacy_refused
+        from .stable_session import refusal as _csid_refusal
+        from .stable_session import resolve_keyed as _resolve_keyed
+
+        _kind = _csid_kind(session_key)
+        if _kind == "legacy" and _legacy_refused(session_key):
+            return _csid_refusal("legacy_session_id")
+        if _kind == "keyed":
+            # Validated whether or not the caller resumes: a forged, ambiguous
+            # or deleted id is refused, never quietly replaced by a fresh mint.
+            try:
+                _keyed_uuid, _keyed_refusal = await _resolve_keyed(session_key)
+            except Exception as e:
+                # Identity store unavailable. Degrade as PATH 1 does, to the
+                # Redis binding, but only for the agent the tag verifies for;
+                # the deletion check waits for the store to return.
+                from .stable_session import verifies_for as _csid_verifies
+
+                _bound_uuid, _ = await _keyed_redis_binding(session_key)
+                if _bound_uuid and _csid_verifies(session_key, _bound_uuid):
+                    logger.warning(
+                        "[STABLE_SESSION] identity lookup failed (%s); resuming %s... "
+                        "from its verified Redis binding",
+                        type(e).__name__,
+                        _bound_uuid[:8],
+                    )
+                    _keyed_uuid, _keyed_refusal = _bound_uuid, None
+                else:
+                    logger.warning(
+                        "[STABLE_SESSION] identity lookup failed (%s); no verified binding",
+                        type(e).__name__,
+                    )
+                    _keyed_uuid, _keyed_refusal = None, _csid_refusal("lookup_unavailable")
+            if _keyed_refusal is not None:
+                logger.warning(
+                    "[STABLE_SESSION] refused keyed session id (%s)", _keyed_refusal.get("reason"),
+                )
+                return _keyed_refusal
+        if _kind == "keyed" and resume:
+            _sub_reject = await _substrate_http_reject(_keyed_uuid, source="keyed_session")
+            if _sub_reject is not None:
+                return _sub_reject
+            if token_agent_uuid and token_agent_uuid != _keyed_uuid:
+                # A token naming another agent is proof of a different owner,
+                # as in PATH 1: no PATH 1/2 resume of the id's agent; the
+                # token rebind (PATH 2.8) takes over or the #1319 refusal holds.
+                logger.warning(
+                    "[STABLE_SESSION] keyed id names %s... but the token names %s...; "
+                    "deferring to token rebind",
+                    _keyed_uuid[:8],
+                    token_agent_uuid[:8],
+                )
+                resume = False
+                resume_rejected_reason = "token_mismatch"
+                _keyed_uuid = None
+            elif await _fingerprint_hijack_check(
+                session_key,
+                await _keyed_bind_fingerprint(session_key, _keyed_uuid),
+                _keyed_uuid,
+                path_label="keyed_session",
+                source_label="keyed_session_fingerprint_mismatch",
+            ):
+                resume = False
+                resume_rejected_reason = "fingerprint_mismatch"
+                _keyed_uuid = None
+        if _kind == "keyed" and resume and _keyed_uuid:
+            # Sliding TTL, as on a PATH 1 hit: the binding keeps its recorded
+            # fingerprint, which the strict check above compares against.
+            await _refresh_session_ttl(session_key)
+            _keyed_status = await _get_agent_status(_keyed_uuid)
+            return _resumed_identity_result(
+                agent_id=await _get_agent_id_from_metadata(_keyed_uuid) or _keyed_uuid,
+                agent_uuid=_keyed_uuid,
+                label=await _get_agent_label(_keyed_uuid),
+                persisted=True,
+                is_archived=_keyed_status == "archived",
+                agent_status=_keyed_status,
+                source="keyed_session",
+                traj_result=await _soft_verify_trajectory(
+                    _keyed_uuid, trajectory_signature, "keyed_session",
+                ),
+                session_key=session_key,
+            )
+
 
     # If force_new is requested, skip lookup paths and go straight to creation
 
@@ -1505,11 +1645,20 @@ async def resolve_session_identity(
                     agent_id = await _get_agent_id_from_metadata(token_agent_uuid) or token_agent_uuid
                     label = await _get_agent_label(token_agent_uuid)
 
-                    # Rebind session in Redis + PG
-                    await _cache_session(session_key, token_agent_uuid, display_agent_id=agent_id)
+                    # Rebind session in Redis + PG, unless the key is another
+                    # agent's keyed id: that id stays that agent's (as in PATH 3).
+                    from .stable_session import classify as _csid_kind
+                    from .stable_session import verifies_for as _csid_verifies
+
+                    _bind_key = not (
+                        _csid_kind(session_key) == "keyed"
+                        and not _csid_verifies(session_key, token_agent_uuid)
+                    )
+                    if _bind_key:
+                        await _cache_session(session_key, token_agent_uuid, display_agent_id=agent_id)
                     try:
                         db = get_db()
-                        identity = await db.get_identity(token_agent_uuid)
+                        identity = await db.get_identity(token_agent_uuid) if _bind_key else None
                         if identity:
                             await db.create_session(
                                 session_id=session_key,
@@ -1738,8 +1887,19 @@ async def resolve_session_identity(
             except Exception as e:
                 logger.warning(f"Eager dict hydration failed for {agent_uuid[:8]}: {e}")
 
-            # Create session binding
-            identity = await db.get_identity(agent_uuid)
+            # Create session binding, unless the key is another agent's keyed
+            # stable id (a force_new mint that presented one): a keyed id
+            # names its agent by itself, so binding it to this new uuid would
+            # only record a mapping the resolver never uses. The new agent
+            # gets its own keyed id from onboard.
+            from .stable_session import classify as _csid_kind
+            from .stable_session import verifies_for as _csid_verifies
+
+            _bind_mint_key = not (
+                _csid_kind(session_key) == "keyed"
+                and not _csid_verifies(session_key, agent_uuid)
+            )
+            identity = await db.get_identity(agent_uuid) if _bind_mint_key else None
             if identity:
                 await db.create_session(
                     session_id=session_key,
@@ -1752,11 +1912,12 @@ async def resolve_session_identity(
             # Cache in Redis (session -> UUID + display agent_id).
             # mint_guard=True: PATH 3 must not silently overwrite an
             # existing live binding for the same session_key (S21-a).
-            await _cache_session(
-                session_key, agent_uuid, display_agent_id=agent_id,
-                spawn_reason=spawn_reason,
-                mint_guard=True,
-            )
+            if _bind_mint_key:
+                await _cache_session(
+                    session_key, agent_uuid, display_agent_id=agent_id,
+                    spawn_reason=spawn_reason,
+                    mint_guard=True,
+                )
 
             logger.info(f"Created new agent: {agent_id} (uuid: {agent_uuid[:8]}...)")
 
