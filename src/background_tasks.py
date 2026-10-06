@@ -1681,6 +1681,22 @@ async def transport_binding_cache_warmup():
         logger.warning(f"[WARMUP] Transport binding warmup failed (non-fatal): {e}")
 
 
+async def substrate_claims_warmup():
+    """Load the substrate-claimed UUIDs, so the HTTP-reject gates can still
+    refuse an enrolled resident if a later claims lookup fails (#2682)."""
+    await asyncio.sleep(2)  # Wait for DB to be ready
+    for attempt in range(5):
+        try:
+            from src.substrate.verification import load_known_substrate_claims
+
+            count = await load_known_substrate_claims()
+            logger.info("[WARMUP] %d substrate-claimed identities loaded", count)
+            return
+        except Exception as e:
+            logger.warning("[WARMUP] substrate claims load failed (attempt %d): %s", attempt + 1, e)
+            await asyncio.sleep(10)
+
+
 async def identity_cache_warmup():
     """Pre-populate sticky transport identity cache from recent session bindings.
 
@@ -1946,4 +1962,5 @@ def start_all_background_tasks(set_ready):
     logger.info("[SILENCE] Started agent silence detection (every 10m)")
 
     _supervised_create_task(identity_cache_warmup(), name="identity_cache_warmup")
+    _supervised_create_task(substrate_claims_warmup(), name="substrate_claims_warmup")
     _supervised_create_task(transport_binding_cache_warmup(), name="transport_binding_cache_warmup")
