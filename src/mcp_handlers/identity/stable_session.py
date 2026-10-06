@@ -154,6 +154,10 @@ def refusal(reason: str) -> Dict[str, Any]:
         ),
         "no_such_agent": "No active agent owns this client_session_id.",
         "agent_deleted": "The agent this client_session_id names was deleted.",
+        "lookup_unavailable": (
+            "The identity store is unavailable and this session has no verified "
+            "binding to fall back on; retry shortly."
+        ),
     }
     return {
         "resume_failed": True,
@@ -198,7 +202,12 @@ async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[
     # identity's status is re-read by primary key, so a deletion (in this or
     # any other server process) refuses the id at once.
     if cached and cached[1] > time.monotonic() and verifies_for(session_key, cached[0]):
-        status = await _status(cached[0])
+        try:
+            status = await _status(cached[0])
+        except Exception as e:
+            # Store unavailable: the verification is under a minute old.
+            logger.warning("[STABLE_SESSION] status recheck failed (%s); using cache", type(e).__name__)
+            return cached[0], None
         if status is not None and status != "deleted":
             return cached[0], None
         _verified.pop(session_key, None)

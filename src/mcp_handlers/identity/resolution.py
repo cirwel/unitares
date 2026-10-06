@@ -539,6 +539,24 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
         return None
 
 
+async def _keyed_redis_binding(session_key: str) -> tuple[Optional[str], Optional[str]]:
+    """(agent_uuid, bind_ip_ua) of the Redis binding for a keyed id, or Nones."""
+    try:
+        import asyncio
+
+        redis = _get_redis()
+        # Redis is not ExecutorPool-wrapped: bound the await (AGENTS.md).
+        cached = await asyncio.wait_for(redis.get(session_key), timeout=2.0) if redis else None
+        if cached and cached.get("agent_id"):
+            cached_uuid, _ = await _decode_stored_identity(
+                cached["agent_id"], cached.get("display_agent_id")
+            )
+            return cached_uuid, cached.get("bind_ip_ua")
+    except Exception as e:
+        logger.debug(f"[STABLE_SESSION] redis binding read failed: {e}")
+    return None, None
+
+
 async def _keyed_bind_fingerprint(session_key: str, agent_uuid: str) -> Optional[str]:
     """The fingerprint recorded when this keyed id was bound to ``agent_uuid``.
 
@@ -546,21 +564,9 @@ async def _keyed_bind_fingerprint(session_key: str, agent_uuid: str) -> Optional
     binding for this agent, which the global fingerprint check treats as no
     evidence (it never penalizes a missing fingerprint).
     """
-    try:
-        import asyncio
-
-        redis = _get_redis()
-        # Redis is not ExecutorPool-wrapped: bound the await (AGENTS.md) so a
-        # stalled read falls back to the PG mirror below.
-        cached = await asyncio.wait_for(redis.get(session_key), timeout=2.0) if redis else None
-        if cached and cached.get("agent_id"):
-            cached_uuid, _ = await _decode_stored_identity(
-                cached["agent_id"], cached.get("display_agent_id")
-            )
-            if cached_uuid == agent_uuid and cached.get("bind_ip_ua"):
-                return cached["bind_ip_ua"]
-    except Exception as e:
-        logger.debug(f"[STABLE_SESSION] redis binding fingerprint read failed: {e}")
+    bound_uuid, bound_fp = await _keyed_redis_binding(session_key)
+    if bound_uuid == agent_uuid and bound_fp:
+        return bound_fp
     try:
         binding = await get_db().get_session_binding(session_key)
         if binding and str(binding.get("agent_uuid")) == agent_uuid:
@@ -1197,7 +1203,29 @@ async def resolve_session_identity(
         if _kind == "keyed":
             # Validated whether or not the caller resumes: a forged, ambiguous
             # or deleted id is refused, never quietly replaced by a fresh mint.
-            _keyed_uuid, _keyed_refusal = await _resolve_keyed(session_key)
+            try:
+                _keyed_uuid, _keyed_refusal = await _resolve_keyed(session_key)
+            except Exception as e:
+                # Identity store unavailable. Degrade as PATH 1 does, to the
+                # Redis binding, but only for the agent the tag verifies for;
+                # the deletion check waits for the store to return.
+                from .stable_session import verifies_for as _csid_verifies
+
+                _bound_uuid, _ = await _keyed_redis_binding(session_key)
+                if _bound_uuid and _csid_verifies(session_key, _bound_uuid):
+                    logger.warning(
+                        "[STABLE_SESSION] identity lookup failed (%s); resuming %s... "
+                        "from its verified Redis binding",
+                        type(e).__name__,
+                        _bound_uuid[:8],
+                    )
+                    _keyed_uuid, _keyed_refusal = _bound_uuid, None
+                else:
+                    logger.warning(
+                        "[STABLE_SESSION] identity lookup failed (%s); no verified binding",
+                        type(e).__name__,
+                    )
+                    _keyed_uuid, _keyed_refusal = None, _csid_refusal("lookup_unavailable")
             if _keyed_refusal is not None:
                 logger.warning(
                     "[STABLE_SESSION] refused keyed session id (%s)", _keyed_refusal.get("reason"),
@@ -1231,6 +1259,9 @@ async def resolve_session_identity(
                 resume_rejected_reason = "fingerprint_mismatch"
                 _keyed_uuid = None
         if _kind == "keyed" and resume and _keyed_uuid:
+            # Sliding TTL, as on a PATH 1 hit: the binding keeps its recorded
+            # fingerprint, which the strict check above compares against.
+            await _refresh_session_ttl(session_key)
             _keyed_status = await _get_agent_status(_keyed_uuid)
             return _resumed_identity_result(
                 agent_id=await _get_agent_id_from_metadata(_keyed_uuid) or _keyed_uuid,

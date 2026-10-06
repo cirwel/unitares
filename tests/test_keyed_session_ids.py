@@ -547,3 +547,68 @@ def test_the_audit_jsonl_stores_the_digest(keyed, tmp_path, monkeypatch):
 
     written = (tmp_path / "audit.jsonl").read_text()
     assert csid not in written and ss.audit_reference(csid) in written
+
+
+def _keyed_shortcut_patches(resolution):
+    return [
+        patch.object(resolution, "_get_agent_status", AsyncMock(return_value="active")),
+        patch.object(resolution, "_get_agent_label", AsyncMock(return_value="victim")),
+        patch.object(resolution, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)),
+        patch.object(resolution, "_substrate_http_reject", AsyncMock(return_value=None)),
+        patch.object(resolution, "_keyed_bind_fingerprint", AsyncMock(return_value=None)),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound, resumed", [(VICTIM, True), (OTHER, False), (None, False)])
+async def test_a_keyed_id_degrades_to_its_verified_redis_binding(keyed, bound, resumed):
+    """With the identity store down, a keyed id resumes from a Redis binding
+    only when its tag verifies for the bound agent; otherwise it is refused
+    as retryable, never resumed as whoever the binding names."""
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    with ExitStack() as stack:
+        for p in _keyed_shortcut_patches(resolution):
+            stack.enter_context(p)
+        stack.enter_context(patch.object(ss, "resolve_keyed", AsyncMock(side_effect=ConnectionError("pg down"))))
+        stack.enter_context(patch.object(
+            resolution, "_keyed_redis_binding", AsyncMock(return_value=(bound, None)),
+        ))
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    if resumed:
+        assert result["agent_uuid"] == VICTIM and result["source"] == "keyed_session"
+    else:
+        assert result.get("reason") == "lookup_unavailable" and result["resume_failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_resume_slides_its_binding_ttl(keyed):
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    refresh = AsyncMock()
+    with ExitStack() as stack:
+        for p in _keyed_shortcut_patches(resolution):
+            stack.enter_context(p)
+        stack.enter_context(_candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}))
+        stack.enter_context(patch.object(resolution, "_refresh_session_ttl", refresh))
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM
+    refresh.assert_awaited_once_with(csid)
+
+
+@pytest.mark.asyncio
+async def test_a_cache_hit_survives_a_failed_status_recheck(keyed):
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}), \
+         patch.object(ss, "_status", AsyncMock(return_value="active")):
+        assert await ss.resolve_keyed(csid) == (VICTIM, None)
+    with patch.object(ss, "_status", AsyncMock(side_effect=ConnectionError("pg down"))):
+        assert await ss.resolve_keyed(csid) == (VICTIM, None)
