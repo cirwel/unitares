@@ -94,25 +94,16 @@ def normalize_client_session_id_argument(arguments: Dict[str, Any]) -> Optional[
 
 def continuity_token_support_status() -> Dict[str, Any]:
     """Return continuity token support details for diagnostics."""
-    if os.getenv("UNITARES_CONTINUITY_TOKEN_SECRET"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_CONTINUITY_TOKEN_SECRET",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    if os.getenv("UNITARES_HTTP_API_TOKEN"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_HTTP_API_TOKEN",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    if os.getenv("UNITARES_API_TOKEN"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_API_TOKEN",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    return {"enabled": False, "secret_source": None}
+    from src.continuity_secret import resolve
+
+    resolved = resolve()
+    if resolved is None:
+        return {"enabled": False, "secret_source": None}
+    return {
+        "enabled": True,
+        "secret_source": resolved[1],
+        "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
+    }
 
 
 def build_token_deprecation_block(
@@ -165,15 +156,11 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def _get_continuity_secret() -> Optional[bytes]:
-    """Get the HMAC secret used for continuity tokens."""
-    secret = (
-        os.getenv("UNITARES_CONTINUITY_TOKEN_SECRET")
-        or os.getenv("UNITARES_HTTP_API_TOKEN")
-        or os.getenv("UNITARES_API_TOKEN")
-    )
-    if not secret:
-        return None
-    return secret.encode()
+    """Get the HMAC secret used for continuity tokens (see src/continuity_secret.py)."""
+    from src.continuity_secret import resolve
+
+    resolved = resolve()
+    return resolved[0] if resolved else None
 
 
 def create_continuity_token(

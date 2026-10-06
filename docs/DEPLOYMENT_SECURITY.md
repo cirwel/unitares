@@ -93,13 +93,15 @@ the dashboard on a LAN address or a hostname also needs its origin in
   (`/app/data`) and `lease-plane` compiles/runs an Elixir release, and both
   need their runtime file-permission needs verified against a non-root UID
   before switching, not assumed.
-- **The dev-only default secrets are still defaults.** `LEASE_PLANE_BEARER_TOKEN`,
-  `UNITARES_CONTINUITY_TOKEN_SECRET`, and `UNITARES_LEASE_ATTESTATION_SIGNING_KEY`
-  ship as literal values in `docker-compose.yml`, each commented
-  `# Development-only` / `# Known development-only` at its definition.
-  `.env.example` already carries `change-me-*` overrides for the bearer and
-  continuity secret; rotate all three (and set a real `POSTGRES_PASSWORD`)
-  before running this stack anywhere reachable beyond your own loopback.
+- **Two dev-only default secrets are still defaults.** `LEASE_PLANE_BEARER_TOKEN`
+  and `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` ship as literal values in
+  `docker-compose.yml`, each commented `# Development-only` /
+  `# Known development-only` at its definition. Rotate both (and set a real
+  `POSTGRES_PASSWORD`) before running this stack anywhere reachable beyond
+  your own loopback. `UNITARES_CONTINUITY_TOKEN_SECRET` no longer has a
+  default: unset, the server generates its own key on the `governance-data`
+  volume, and it ignores the value compose used to publish
+  (`src/continuity_secret.py`).
 - **No production-mode boot guard.** Nothing here refuses to start on a
   default credential, an unauthenticated Redis, or a missing MCP bearer —
   the quickstart can be pointed at a non-loopback interface without
