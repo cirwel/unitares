@@ -190,6 +190,18 @@ class TestEveryLiveCallSiteStillSucceeds:
 class TestBindSessionEndToEnd:
     """The REST-to-MCP bridge, through the real helper."""
 
+    @pytest.fixture(autouse=True)
+    def _caller_owns_target(self):
+        """These tests cover the destination rules. Proof that the caller owns
+        the target agent is what the real resolver records for a session the
+        caller sent; it is tested in tests/test_credential_issuance.py."""
+        from unittest.mock import patch as _patch
+        with _patch(
+            "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
+            return_value=(True, "test_caller_owns_target"),
+        ):
+            yield
+
     def _resolved(self, agent_uuid):
         return {
             "agent_uuid": agent_uuid,
