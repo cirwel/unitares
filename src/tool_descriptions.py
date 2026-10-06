@@ -127,8 +127,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "host nor proves its credentials work."
     ),
     "call_model": (
-        "Run a raw completion on a local or HF host; default privacy still "
-        "routes some model ids off-box; for advice prefer consult.\n\n"
+        "Run a raw completion on a local or HF host; HF needs privacy='cloud' "
+        "or 'auto'; for advice prefer consult.\n\n"
         "One synchronous advisory completion on the local Ollama lane or the "
         "Hugging Face router, returning tool evidence, never a governed review "
         "record. provider='hf' also needs privacy='cloud' or 'auto', "

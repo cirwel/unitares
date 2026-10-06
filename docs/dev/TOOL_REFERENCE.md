@@ -1276,7 +1276,7 @@ Send a brief, get back advisory model evidence, never a governed verdict. effort
 - **Timeout:** 240s
 - **Related:** `consult`, `list_inference_hosts`, `describe_inference_host`, `knowledge`, `dialectic`
 
-Run a raw completion on a local or HF host; default privacy still routes some model ids off-box; for advice prefer consult.
+Run a raw completion on a local or HF host; HF needs privacy='cloud' or 'auto'; for advice prefer consult.
 
 One synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
