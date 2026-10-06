@@ -37,7 +37,7 @@ _ROUTING_VERBS = frozenset({
     "get", "grade", "hand", "inspect", "leave", "list", "load", "log", "look",
     "manage", "mark", "mint", "open", "pause", "query", "read", "record",
     "register", "report", "request", "resolve", "restore", "resume", "return",
-    "review", "run", "save", "search", "send", "set", "show", "simulate", "start",
+    "review", "revise", "run", "save", "search", "send", "set", "show", "simulate", "start",
     "store", "submit", "summarize", "sync", "test", "update", "use", "verify",
     "view", "write",
 })
