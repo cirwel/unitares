@@ -751,17 +751,31 @@ class DialecticDB:
     ) -> int:
         """Add a message to a session.
 
-        Two statements in ONE transaction: the message INSERT, and the
-        session's ``updated_at`` bump (the sweeper's staleness clock). Atomic so
-        the sweeper's compare-and-set on ``updated_at`` (#2367) can never see a
-        committed message whose bump has not landed yet. ``detail``, when given, receives
-        ``message_ts`` (the message row's own timestamp) and ``effect_ts`` (the
-        database clock at the ``updated_at`` bump -- the write that changes the
-        session's sweep eligibility).
+        Two statements in ONE transaction: the session's ``updated_at`` bump
+        (the sweeper's staleness clock), then the message INSERT. Atomic so the
+        sweeper's compare-and-set on ``updated_at`` (#2367) can never see a
+        committed message whose bump has not landed yet.
+
+        The bump runs FIRST so this transaction holds the session row's update
+        lock before the message exists. The INSERT alone would take only the
+        foreign key's KEY SHARE lock, which a non-key UPDATE does not wait on,
+        so a concurrent ``mark_awaiting_facilitation`` could still pass its
+        compare-and-set and flag a session that just progressed. Bumping first
+        makes that write wait for this commit and then re-check its predicate
+        against the new ``updated_at``, which refuses it.
+
+        ``detail``, when given, receives ``message_ts`` (the message row's own
+        timestamp) and ``effect_ts`` (the database clock at the ``updated_at``
+        bump -- the write that changes the session's sweep eligibility).
         """
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             async with conn.transaction():
+                bump = await conn.fetchrow(f"""
+                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
+                    RETURNING {self._EFFECT_TS}
+                """, session_id)
+
                 row = await conn.fetchrow("""
                     INSERT INTO core.dialectic_messages (
                         session_id, agent_id, message_type,
@@ -782,10 +796,6 @@ class DialecticDB:
                     signature,
                 )
 
-                bump = await conn.fetchrow(f"""
-                    UPDATE core.dialectic_sessions SET updated_at = now() WHERE session_id = $1
-                    RETURNING {self._EFFECT_TS}
-                """, session_id)
                 if detail is not None:
                     try:
                         detail["message_ts"] = row["timestamp"] if row else None
