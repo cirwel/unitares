@@ -172,15 +172,25 @@ def note_session_proof(agent_uuid: Optional[str], session_key: Optional[str]) ->
     sending a fingerprint back as a header proves nothing.
     """
     from src.mcp_handlers.context import (
+        get_csid_injected_source,
         get_session_proof_origin,
         get_session_resolution_source,
         set_credential_proof_uuid,
     )
 
+    source = get_session_resolution_source()
+    # A client_session_id the transport put into the arguments (REST copies
+    # X-Session-ID or X-Client-Id there) is judged by the signal that produced
+    # it, not by where it now sits: an X-Client-Id names an application.
+    injected_from = get_csid_injected_source()
+    if injected_from is not None and source in (
+        "explicit_client_session_id", "explicit_client_session_id_scoped",
+    ):
+        source = injected_from
     if (
         agent_uuid
         and get_session_proof_origin() == "caller_asserted"
-        and get_session_resolution_source() in _PER_SESSION_SOURCES
+        and source in _PER_SESSION_SOURCES
         and not is_inferred_session_key(session_key)
     ):
         set_credential_proof_uuid(agent_uuid)
