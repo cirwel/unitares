@@ -71,7 +71,7 @@ import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
-from ..identity.stable_session import audit_reference
+from ..identity.stable_session import audit_reference, redact_provenance
 from src.knowledge_graph import (
     get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
     normalize_response_type,
@@ -3115,7 +3115,7 @@ def _serialize_search_discoveries(
                 # write; its `age_days` counts from creation instead.
                 item["last_activity_days"], item["staleness_warning"] = staleness
         if state.request.include_provenance:
-            item["provenance"] = document.provenance
+            item["provenance"] = redact_provenance(document.provenance)
             if document.provenance_chain:
                 item["provenance_chain"] = document.provenance_chain
         discoveries.append(item)

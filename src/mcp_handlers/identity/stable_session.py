@@ -222,6 +222,20 @@ def audit_reference(session_id: Optional[str]) -> Optional[str]:
     return session_id
 
 
+def redact_provenance(provenance: Any) -> Any:
+    """A copy of a discovery's provenance safe to show other readers.
+
+    Writers store ``writer_session_id_at_write`` as an audit reference, but a
+    row written before that (or imported) may hold a raw keyed id.
+    """
+    if not isinstance(provenance, dict):
+        return provenance
+    session = provenance.get("writer_session_id_at_write")
+    if not session or audit_reference(session) == session:
+        return provenance
+    return {**provenance, "writer_session_id_at_write": audit_reference(session)}
+
+
 def forget_verified() -> None:
     """Drop cached verifications (tests, key rotation)."""
     _verified.clear()

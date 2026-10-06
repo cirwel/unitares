@@ -1857,6 +1857,19 @@ class TestProvenanceWriterLabel:
         assert data["discoveries"][0]["session_id_at_write"] == audit_reference(csid)
         assert csid not in json.dumps(data)
 
+        # Nor inside the full provenance, on search or on any to_dict read.
+        data = parse_result(await handle_search_knowledge_graph({
+            "agent_id": registered_agent,
+            "query": "anything",
+            "include_provenance": True,
+            "include_details": True,
+        }))
+        shown = data["discoveries"][0]["provenance"]["writer_session_id_at_write"]
+        assert shown == audit_reference(csid)
+        assert csid not in json.dumps(data)
+        assert csid not in json.dumps(old_row.to_dict(include_details=True))
+        assert old_row.provenance["writer_session_id_at_write"] == csid  # stored row untouched
+
     @pytest.mark.asyncio
     async def test_search_falls_back_to_live_for_legacy_rows(
         self, patch_common, registered_agent
