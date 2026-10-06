@@ -15,11 +15,13 @@ tokens per byte than prose. Restoring a field an abnormal case needs is a
 reason to raise a budget, stated in the PR, not a regression.
 
 start_session budgets per mint class, measured on the real handler
-(2026-09-26):
+(2026-09-26; re-measured 2026-10-06 after the keyed client_session_id,
+which adds 49 B to every class: 21 characters in the id and its base64
+share of the continuity token, so each base budget rose by 50 B):
 
-- anonymous, thread position 1: 1,152 B against 1,200.
+- anonymous, thread position 1: 1,201 B against 1,250.
 - sibling_locus (a fresh uuid on a thread earlier process-instances
-  occupied): 1,461 B against 1,550. It adds predecessor_uuid,
+  occupied): 1,479 B against 1,600. It adds predecessor_uuid,
   episode_fork_kind and the ~210 B sentence saying co-location does not
   establish lineage. That sentence is kept, not trimmed to fit: it is what
   stops the earlier node's uuid being read as this process's parent.
@@ -28,8 +30,8 @@ start_session budgets per mint class, measured on the real handler
   (the status plus a short detail: what it costs, that this identity cannot
   gain the tags, and the roster -> restart -> fresh-mint fix) and 70-81 B for
   the other statuses; a written bootstrap ack is
-  224 B. Named at position 1: 1,434 B against 1,500; named sibling_locus:
-  1,743 B against 1,850.
+  224 B. Named at position 1: 1,483 B against 1,550; named sibling_locus:
+  1,761 B against 1,900.
 """
 
 from __future__ import annotations
@@ -55,8 +57,8 @@ if str(SDK_SRC) not in sys.path:
 from unitares_sdk._checkin_fields import resolve_checkin_fields  # noqa: E402
 
 # start_session, per mint class; see the module docstring.
-START_SESSION_BUDGET = 1_200
-START_SESSION_SIBLING_BUDGET = 1_550
+START_SESSION_BUDGET = 1_250
+START_SESSION_SIBLING_BUDGET = 1_600
 START_SESSION_NOTICE_ALLOWANCE = 300
 # Raised from 900 in #2448: the margin now carries its scope (~75 B), which
 # is the cost of an honest "comfortable" on the normal live decision.

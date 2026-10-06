@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.30.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.31.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -332,7 +332,15 @@ The two identifiers serve different jobs:
   `onboard()` refuses such a resume with `status: resume_proof_required`. A
   mint, a session the caller sent, a continuity token or UDS attestation for
   the agent, or an operator token still receives them. No input schema
-  changes, so no digest moves).
+  changes, so no digest moves;
+  1.31.0, 2026-10-06: the stable `client_session_id` that `onboard` and
+  `identity` return is `agent-{uuid12}-{tag}`, keyed with the server's
+  continuity key, in place of `agent-{uuid12}`. Callers that store and echo
+  it are unaffected. A legacy `agent-{uuid12}` id is refused by default
+  (`UNITARES_LEGACY_SESSION_IDS` = `refuse` | `log` | `accept`) with
+  `stable_session_id_rejected`, and a verified continuity token naming the
+  agent converts to the keyed id. No input schema changes, so no digest
+  moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

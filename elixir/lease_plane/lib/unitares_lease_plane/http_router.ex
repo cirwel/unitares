@@ -1040,7 +1040,8 @@ defmodule UnitaresLeasePlane.HTTPRouter do
                holder_kind: body["holder_kind"],
                ttl_s: body["ttl_s"],
                intent: Map.get(body, "intent"),
-               audit_session: Map.get(body, "audit_session"),
+               audit_session:
+                 UnitaresLeasePlane.SessionRef.reference(Map.get(body, "audit_session")),
                holder_pid: Map.get(body, "holder_pid"),
                substrate_state: substrate_state,
                substrate_state_observed_at: observed_at

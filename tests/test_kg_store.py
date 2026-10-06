@@ -1818,6 +1818,59 @@ class TestProvenanceWriterLabel:
         assert data["discoveries"][0].get("session_id_at_write") == "agent-original-001"
 
     @pytest.mark.asyncio
+    async def test_a_keyed_writer_session_is_stored_and_shown_by_reference(
+        self, patch_common, registered_agent, monkeypatch
+    ):
+        """A keyed client_session_id is a bearer credential; search output goes
+        to any reader, so provenance keeps only its audit reference."""
+        monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "kg-provenance-test-secret")
+        from src.mcp_handlers.identity.shared import make_client_session_id
+        from src.mcp_handlers.identity.stable_session import audit_reference
+        from src.mcp_handlers.knowledge.handlers import (
+            handle_search_knowledge_graph,
+            handle_store_knowledge_graph,
+        )
+
+        mock_mcp_server, mock_graph = patch_common
+        csid = make_client_session_id("5e728ecb-1234-4abc-8def-0123456789ab")
+        result = await handle_store_knowledge_graph({
+            "agent_id": registered_agent,
+            "summary": "Keyed provenance write",
+            "discovery_type": "note",
+            "client_session_id": csid,
+        })
+        assert parse_result(result)["success"] is True
+        stored = mock_graph.add_discovery.call_args[0][0].provenance["writer_session_id_at_write"]
+        assert stored == audit_reference(csid) and csid not in stored
+
+        # A row written before the change still shows only the reference.
+        old_row = make_discovery(
+            id="2026-10-05T06:00:00.000000+00:00",
+            agent_id=registered_agent,
+            provenance={"writer_label_at_write": "Writer", "writer_session_id_at_write": csid},
+        )
+        mock_graph.full_text_search = AsyncMock(return_value=[old_row])
+        data = parse_result(await handle_search_knowledge_graph({
+            "agent_id": registered_agent,
+            "query": "anything",
+        }))
+        assert data["discoveries"][0]["session_id_at_write"] == audit_reference(csid)
+        assert csid not in json.dumps(data)
+
+        # Nor inside the full provenance, on search or on any to_dict read.
+        data = parse_result(await handle_search_knowledge_graph({
+            "agent_id": registered_agent,
+            "query": "anything",
+            "include_provenance": True,
+            "include_details": True,
+        }))
+        shown = data["discoveries"][0]["provenance"]["writer_session_id_at_write"]
+        assert shown == audit_reference(csid)
+        assert csid not in json.dumps(data)
+        assert csid not in json.dumps(old_row.to_dict(include_details=True))
+        assert old_row.provenance["writer_session_id_at_write"] == csid  # stored row untouched
+
+    @pytest.mark.asyncio
     async def test_search_falls_back_to_live_for_legacy_rows(
         self, patch_common, registered_agent
     ):

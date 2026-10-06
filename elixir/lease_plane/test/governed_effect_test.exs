@@ -242,6 +242,24 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
       refute payload_text =~ "continuity_token"
     end
 
+    test "a keyed provenance session id is stored only as its audit digest" do
+      key = tracked_key()
+      keyed = "agent-5e728ecb-123-xjc4uauir6jvdvqxylny"
+
+      assert {:ok, _} =
+               GovernedEffect.handle(
+                 base(%{
+                   "idempotency_key" => key,
+                   "proposer" => %{"agent_uuid" => "5e728ecb-1234-4abc-8def-0123456789ab"},
+                   "provenance" => %{"session_id" => keyed}
+                 })
+               )
+
+      assert {_agent_id, session_id, payload_text} = governed_effect_attribution(key)
+      assert session_id == "csid:96ac49cb17c64d38ad2468be"
+      refute payload_text =~ keyed
+    end
+
     test "required leases persist only the surface and ttl allowlist" do
       key = tracked_key()
       surface = "dialectic:/lease-scrub-#{System.unique_integer([:positive])}"
