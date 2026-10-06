@@ -51,6 +51,7 @@ LEGACY_MODE_ENV = "UNITARES_LEGACY_SESSION_IDS"
 # Resolution result cache: key -> (agent_uuid, expires_at). Bounded TTL so an
 # archive or a disabled identity takes effect within a minute.
 _VERIFIED_TTL_S = 60.0
+_VERIFIED_MAX = 10_000
 _verified: Dict[str, tuple[str, float]] = {}
 _logged_no_key = False
 
@@ -167,7 +168,8 @@ async def _candidates(prefix: str) -> list[Dict[str, Any]]:
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT agent_id, status, disabled_at FROM core.identities WHERE agent_id LIKE $1 LIMIT 2",
+            "SELECT agent_id, status, disabled_at FROM core.identities "
+            "WHERE agent_id LIKE $1 AND status <> 'deleted' LIMIT 2",
             prefix + "%",
         )
     return [dict(r) for r in rows]
@@ -195,11 +197,13 @@ async def resolve_keyed(session_key: str) -> tuple[Optional[str], Optional[Dict[
     # here; an archived one resolves and the resolver reports it archived.
     if rows[0].get("status") == "deleted":
         return None, refusal("agent_deleted")
-    _verified[session_key] = (agent_uuid, time.monotonic() + _VERIFIED_TTL_S)
-    if len(_verified) > 10_000:
+    if len(_verified) >= _VERIFIED_MAX:
         now = time.monotonic()
         for k in [k for k, (_, exp) in _verified.items() if exp <= now]:
             _verified.pop(k, None)
+        if len(_verified) >= _VERIFIED_MAX:
+            _verified.clear()  # still full of live entries: start over
+    _verified[session_key] = (agent_uuid, time.monotonic() + _VERIFIED_TTL_S)
     return agent_uuid, None
 
 
