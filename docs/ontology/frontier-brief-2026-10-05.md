@@ -64,7 +64,7 @@ Brief's manifest fields vs that record:
 
 | Field | In S22 today |
 |---|---|
-| model, harness, tools, memory | Yes. Source labels come only on `process_agent_update` writes (see Limits) |
+| model, harness, tools, memory | Yes. Server-assigned source labels appear only on `process_agent_update` S22 writes (see Limits) |
 | task information regime (curated vs full role-visible state) | No. This is the variable the 9-24 brief §3 already flagged for the ablation |
 | permissions | Partly: `affordance_state`, not a permission set |
 | budget / retries / verifier present | No |
@@ -79,7 +79,8 @@ or `unavailable`, and harness values `harness_reported`, `caller_declared`,
 store and note writes do not get it, so there a manifest would see `model_source`
 only if the caller supplied it. `build_s22_write_context` overwrites
 client-supplied fork classification with the server's for all three current
-callers. A manifest should carry those labels through and must not
+callers, but only once agent metadata exists; for a brand-new agent a
+client-supplied `identity_lineage_fork` survives. A manifest should carry those labels through and must not
 collapse them into one "declared" tier, or it would discard evidence already
 in the record and could call for corroboration fields that exist. Values
 labelled `caller_declared` remain claims, not evidence.
