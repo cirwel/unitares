@@ -552,10 +552,11 @@ async def _explicit_bind_corroboration(arguments: dict) -> str:
        session of their own. `resolve_session_identity` (the codebase's
        single identity-resolution function, `persist=False` so this check
        creates nothing) must resolve the session to the SAME uuid.
-    3. Equality with the claimed uuid is STILL not proof, for the canonical
-       ``agent-{uuid[:12]}`` session-id form specifically: it is a pure,
-       documented function of the public uuid alone (`make_client_session_id`,
-       `identity/shared.py`) — the exact prefix-bind hijack a prior KG finding
+    3. Equality with the claimed uuid is STILL not proof, for the legacy
+       ``agent-{uuid[:12]}`` session-id form specifically: it is a pure
+       function of the public uuid alone (the keyed form that
+       `make_client_session_id` now issues is not; `identity/stable_session.py`)
+       — the exact prefix-bind hijack a prior KG finding
        (2026-04-20) and #802 already named, mitigated elsewhere only by a
        fingerprint check this codebase deliberately defaults to `log`, not
        `strict` (co-resident localhost clients legitimately share IP+UA).
@@ -597,7 +598,6 @@ async def _explicit_bind_corroboration(arguments: dict) -> str:
     if isinstance(client_session_id, str) and client_session_id:
         from src.mcp_handlers.context import get_csid_transport_injected
         from src.mcp_handlers.identity.session import normalize_client_session_id
-        from src.mcp_handlers.identity.shared import make_client_session_id
 
         # Normalize BEFORE comparing for the canonical-form exclusion, not
         # after: comparing the raw value and resolving the normalized one
@@ -606,14 +606,17 @@ async def _explicit_bind_corroboration(arguments: dict) -> str:
         # canonical session key — found live by a fourth codex review.
         normalized = normalize_client_session_id(client_session_id)
 
+        # Only the legacy agent-{uuid12} form is a function of the public uuid;
+        # the keyed form (identity/stable_session.py) is not computable from it
+        # and corroborates through resolve like any session the caller holds.
         is_canonical_prefix_form = False
-        if normalized and isinstance(claimed_agent_id, str):
-            try:
-                is_canonical_prefix_form = normalized == make_client_session_id(
-                    claimed_agent_id
-                )
-            except ValueError:
-                pass
+        if normalized and isinstance(claimed_agent_id, str) and len(claimed_agent_id) >= 12:
+            from src.mcp_handlers.identity.stable_session import classify
+
+            is_canonical_prefix_form = (
+                classify(normalized) == "legacy"
+                and normalized == f"agent-{claimed_agent_id[:12]}"
+            )
 
         if not get_csid_transport_injected() and not is_canonical_prefix_form:
             from src.mcp_handlers.identity.handlers import resolve_session_identity

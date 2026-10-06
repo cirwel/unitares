@@ -79,3 +79,38 @@ def test_a_refused_onboard_is_reported_as_an_error(lite, monkeypatch, capsys):
     assert result["success"] is False
     assert "Onboarded" not in capsys.readouterr().out
     assert lite.load_session() is None
+
+
+@pytest.mark.parametrize("argv", [
+    ["onboard"], ["update", "did a thing"], ["metrics"], ["status"],
+])
+def test_main_exits_nonzero_when_the_call_fails(lite, monkeypatch, capsys, argv):
+    def boom(req, timeout=None):
+        raise lite.urllib.error.URLError("refused")
+
+    monkeypatch.setattr(lite.urllib.request, "urlopen", boom)
+    monkeypatch.setattr(lite.sys, "argv", ["unitares_lite.py", *argv])
+
+    with pytest.raises(SystemExit) as exc:
+        lite.main()
+
+    assert exc.value.code == 1
+    assert "Error" in capsys.readouterr().out
+
+
+def test_main_exits_nonzero_on_a_strict_identity_refusal(lite, monkeypatch):
+    monkeypatch.setattr(lite.urllib.request, "urlopen", _Server(_refusal()))
+    monkeypatch.setattr(lite.sys, "argv", ["unitares_lite.py", "update", "x"])
+
+    with pytest.raises(SystemExit) as exc:
+        lite.main()
+
+    assert exc.value.code == 1
+
+
+def test_main_returns_normally_on_success(lite, monkeypatch):
+    monkeypatch.setattr(lite.urllib.request, "urlopen",
+                        _Server({"success": True, "decision": {"action": "proceed"}, "metrics": {"E": 0.7}}))
+    monkeypatch.setattr(lite.sys, "argv", ["unitares_lite.py", "update", "x"])
+
+    lite.main()

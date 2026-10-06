@@ -66,6 +66,7 @@ additions merge cleanly. -->
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
 | `UNITARES_CONTINUITY_TOKEN_SECRET_FILE` | `None (no reader fallback)` | Where the generated secret lives | src/continuity_secret.py |
+| `UNITARES_CREDENTIAL_ISSUANCE` | `None (no reader fallback)` | ``log`` to observe only; anything else enforces. | src/mcp_handlers/identity/credential_issuance.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DASHBOARD_EXT_DIR` | `''` | Serve operator dashboard extensions from UNITARES_DASHBOARD_EXT_DIR. | src/http_routes/dashboard.py |
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
@@ -140,6 +141,7 @@ additions merge cleanly. -->
 | `UNITARES_LEASE_ATTESTATION_SIGNING_KEY` | `None (no reader fallback)` | Load the operator's 32-byte Ed25519 seed; never generate implicitly. | src/lease_attestation.py |
 | `UNITARES_LEASE_INSECURE_GOVERNANCE_HOSTS` | `''` | Resolve a governance URL without sending credentials over remote HTTP. | agents/sdk/src/unitares_sdk/lease_plane/client.py |
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
+| `UNITARES_LEGACY_SESSION_IDS` | `'refuse'` | How presented legacy agent-{uuid12} ids are treated: refuse, log or accept. | src/mcp_handlers/identity/stable_session.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
 | `UNITARES_LLM_MODEL` | `''` | Alias of UNITARES_MODEL_ID until v3.3.0 | src/local_inference_env.py |
 | `UNITARES_LOCK_DIR` | `None (no reader fallback)` | — | src/state_locking.py |

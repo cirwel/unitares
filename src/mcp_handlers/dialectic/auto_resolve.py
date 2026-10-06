@@ -842,8 +842,13 @@ async def _auto_resolve_stuck_sessions(
                         details,
                         attempted=ATTEMPT_AWAITING_FACILITATION,
                         session=session,
+                        # Compare-and-set against what this sweep read (#2367):
+                        # a message/phase move since then refuses the write.
                         write=lambda winner: mark_awaiting_facilitation_async(
-                            session_id, winner=winner
+                            session_id,
+                            expected_phase=session.get("phase"),
+                            expected_updated_at=session.get("updated_at"),
+                            winner=winner,
                         ),
                         decision_read_ts=decision_read_ts,
                         early_check_ts=early_check_ts,
@@ -867,7 +872,8 @@ async def _auto_resolve_stuck_sessions(
                     # write above: don't narrate, don't count.
                     logger.info(
                         f"Session {session_id[:16]} facilitation write refused "
-                        "(row terminal or missing); request not recorded"
+                        "(row terminal, missing, or moved since the sweep read it); "
+                        "request not recorded"
                     )
                     continue
                 _sync_cached_session(session_id, awaiting_facilitation=True)

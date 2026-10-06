@@ -158,13 +158,14 @@ _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
 # Default start_session, per mint class (tests/test_response_budgets.py states
 # the measurements). An anonymous mint at thread position 1: continuity_token
-# alone is ~330 B of it.
-_START_SESSION_BUDGET_BYTES = 1_200
+# alone is ~330 B of it. The keyed client_session_id (identity/stable_session.py)
+# adds 49 B: 21 characters in the id and its base64 share of the token.
+_START_SESSION_BUDGET_BYTES = 1_250
 # A fresh mint on a thread earlier process-instances occupied (sibling_locus)
 # also carries predecessor_uuid, episode_fork_kind and the ~210 B sentence
 # saying co-location does not establish lineage, which stays: it is what stops
 # the earlier node being read as this process's parent.
-_START_SESSION_SIBLING_BUDGET_BYTES = 1_550
+_START_SESSION_SIBLING_BUDGET_BYTES = 1_600
 # Each mint notice lifted into a routine envelope (_ROUTINE_MINT_NOTICES) is
 # paid for on top of its class budget; the largest measured is 294 B (a
 # not_on_roster verdict), a written bootstrap ack 224 B.
