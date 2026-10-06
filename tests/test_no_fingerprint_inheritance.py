@@ -231,6 +231,7 @@ def test_explicit_parent_agent_id_records_lineage_without_state_transplant():
     assert child_monitor.state.V_history == []
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_continuity_token_only_roundtrip_is_rejected_s1c():
     """

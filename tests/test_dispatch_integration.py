@@ -633,6 +633,7 @@ class TestDispatchToolIntegration:
         text = result[0].text
         assert "not found" in text.lower()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_handler_exception_caught(self, mock_identity_pipeline, mock_track_patterns, clean_rate_limit):
         """Handler exception caught by @mcp_tool decorator returns error response."""
@@ -729,6 +730,7 @@ class TestDispatchToolIntegration:
         finally:
             TOOL_HANDLERS["health_check"] = original
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_consolidated_alias_injects_action(self, mock_identity_pipeline, mock_track_patterns, clean_rate_limit):
         """A router-pinning alias (request_review -> dialectic(action='request')) injects action param."""

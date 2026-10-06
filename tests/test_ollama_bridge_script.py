@@ -68,8 +68,10 @@ def test_invalid_spawn_reason_rejected():
 
 def test_env_supplies_defaults(monkeypatch):
     monkeypatch.setenv("UNITARES_AGENT_UUID", "durable-uuid")
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN", "v1.token")
     cfg = bridge.IdentityConfig.from_args(_args())
     assert cfg.agent_uuid == "durable-uuid"
+    assert cfg.continuity_token == "v1.token"
     assert "substrate-anchored" in cfg.describe()
 
 
@@ -137,3 +139,21 @@ def test_wrappers_echo_session_id_on_writes():
 
     tools["list_agents"]()
     assert calls["agent"]["client_session_id"] == "csid-9"
+
+
+def test_uuid_resume_requires_continuity_token(monkeypatch):
+    # Strict identity (the server default) refuses a bare UUID resume, so the
+    # bridge refuses to start one rather than failing at register_agent.
+    monkeypatch.delenv("UNITARES_CONTINUITY_TOKEN", raising=False)
+    with pytest.raises(SystemExit, match="UNITARES_CONTINUITY_TOKEN"):
+        bridge.IdentityConfig.from_args(
+            _args(agent_uuid="11111111-1111-4111-8111-111111111111")
+        )
+
+
+def test_uuid_resume_carries_the_continuity_token(monkeypatch):
+    monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN", "v1.token")
+    cfg = bridge.IdentityConfig.from_args(
+        _args(agent_uuid="11111111-1111-4111-8111-111111111111")
+    )
+    assert cfg.continuity_token == "v1.token"

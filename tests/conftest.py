@@ -642,6 +642,21 @@ def _isolate_knowledge_graph_singleton():
 
 
 @pytest.fixture(autouse=True)
+def _identity_posture(request, monkeypatch):
+    """Apply the permissive identity posture to tests marked for it.
+
+    Strict identity is the server default: STRICT_IDENTITY_REQUIRED unset means
+    on, and UNITARES_IDENTITY_STRICT unset means strict. Tests whose subject is
+    the opt-out posture (auto-mint on a session miss, bare UUID resume that
+    only logs) carry ``@pytest.mark.legacy_identity_defaults`` and get those
+    values set explicitly; every other test runs under the shipped default.
+    """
+    if request.node.get_closest_marker("legacy_identity_defaults") is not None:
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
+        monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "log")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_identity_state():
     """
     Reset all in-memory identity and session state between tests.

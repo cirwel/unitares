@@ -119,7 +119,7 @@ different UUID is refused unless you pass `--replace-identity`, which prints the
 displaced UUID: a silent repoint is how a resident forks.
 
 ⛔**A matching UUID is not proof, which is why the verify checks more than the
-UUID.** `UNITARES_IDENTITY_STRICT` defaults to `log`, and in that mode a PATH 0
+UUID.** With `UNITARES_IDENTITY_STRICT=log` (the default before strict identity became the default; a deployment can still set it), a PATH 0
 resume whose token fails its ownership check logs, broadcasts
 `identity_hijack_suspected`, and resumes anyway — with the correct UUID in the
 response. Reproduced against v2.22.1 with an expired token: `success: true`,

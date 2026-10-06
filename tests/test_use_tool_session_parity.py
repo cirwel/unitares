@@ -213,7 +213,7 @@ async def _call(
     if strict:
         monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "true")
     else:
-        monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+        monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
     registration._tool_wrappers_cache.clear()
 
     if route == "direct":

@@ -33,7 +33,8 @@ def strict_on(monkeypatch):
 
 @pytest.fixture
 def strict_off(monkeypatch):
-    monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+    # Strict identity is the default, so off must be stated.
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
 
 
 @pytest.fixture
@@ -288,6 +289,7 @@ async def test_execute_refuses_before_beam_routing(strict_on, unbound_context):
     proxy.assert_not_awaited()
 
 
+@pytest.mark.legacy_identity_defaults
 @pytest.mark.asyncio
 async def test_execute_flag_off_falls_through(strict_off, unbound_context):
     fallback = AsyncMock(return_value={"ok": True})

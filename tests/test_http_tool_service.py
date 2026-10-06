@@ -30,6 +30,7 @@ class TestHttpToolService:
         mock_handler.assert_awaited_once_with({})
         mock_dispatch.assert_not_called()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_non_core_tool_falls_back_to_dispatch(self):
         dispatch_result = [object()]
@@ -46,6 +47,7 @@ class TestHttpToolService:
         assert get_direct_http_tool_handler("identity") is not None
         assert get_direct_http_tool_handler("process_agent_update") is not None
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_process_agent_update_uses_direct_handler(self):
         direct_result = [TextContent(type="text", text='{"success": true, "verdict": "proceed"}')]

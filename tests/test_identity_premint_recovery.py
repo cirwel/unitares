@@ -294,6 +294,7 @@ class TestRecoveryLadder:
 
 class TestDispatchPrefersRecoveryOverMint:
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_pin_expiry_does_not_mint_a_new_uuid(self):
         """Full path: a tool call with no client_session_id, after pin expiry,
@@ -323,6 +324,7 @@ class TestDispatchPrefersRecoveryOverMint:
         assert ctx.identity_result["created"] is False
         assert ctx.identity_result["recovered_via"] == "identity_anchor"
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_recovery_rethreads_client_session_id(self):
         """Ask #3: a call that omitted client_session_id gets it back from the
@@ -343,6 +345,7 @@ class TestDispatchPrefersRecoveryOverMint:
         assert arguments["client_session_id"] == STABLE_CSID
         assert ctx.client_session_id == STABLE_CSID
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_rethreaded_csid_is_marked_transport_injected(self):
         """Recovery is server inference. It must not be laundered into
@@ -365,6 +368,7 @@ class TestDispatchPrefersRecoveryOverMint:
 
         assert get_csid_transport_injected() is True
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_still_mints_when_truly_unrecoverable(self):
         """The guard narrows minting; it must not abolish it. With nothing
@@ -426,6 +430,7 @@ class TestAnchorWrite:
         assert anchored, "a resumed dispatch must leave a recoverable anchor"
         assert json.loads(redis.store[anchored[0]])["agent_uuid"] == AGENT_UUID
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_minted_identity_is_never_anchored(self):
         """Invariant: anchoring a phantom would make it sticky — strictly worse
@@ -458,6 +463,7 @@ class TestKeyRotationAcrossCalls:
     threads client_session_id and resumes, call 2 omits it so the derived key
     rotates — against one shared Redis."""
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_uuid_survives_client_session_id_dropped_on_second_call(self):
         redis = FakeRedis()

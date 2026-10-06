@@ -98,7 +98,7 @@ Default rules:
 
 Avoid these patterns:
 
-- Bare `identity(agent_uuid=X, resume=true)`: UUID alone is an unsigned claim. It currently logs/emits hijack-suspected telemetry and is strict-mode rejected when `UNITARES_IDENTITY_STRICT=strict`.
+- Bare `identity(agent_uuid=X, resume=true)`: UUID alone is an unsigned claim. It is refused under the default `UNITARES_IDENTITY_STRICT=strict`; a server that sets `log` accepts it and emits hijack-suspected telemetry.
 - `onboard(continuity_token=...)` as cross-process resume: S1-c refuses it (`status: continuity_token_resume_rejected`); the S1-a deprecation window has closed. Declare lineage with `parent_agent_id` instead, or rebind the same live process with `identity(agent_uuid, continuity_token, resume=true)`.
 - Bare `onboard()`: older code may still pin-resume by weak session/IP:UA evidence. Use `force_new=true` when creating a new process identity.
 
