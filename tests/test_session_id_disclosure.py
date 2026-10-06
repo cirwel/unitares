@@ -31,17 +31,27 @@ def test_a_reference_cannot_be_presented_as_the_id():
     assert session_id_reference(None) is None and session_id_reference("") is None
 
 
+_FIXED_KEY = b"test-session-reference-key-0001!"
+
+
 # Hex-only ids, so a reference (hex itself) could contain them if it leaked
-# any part: a 6-character window of a 16-character id matching by chance is
-# about 1 in 100,000.
+# any part. The key is pinned so the expected reference is exact and the run
+# deterministic; under a random key an HMAC can contain a 6-character window
+# of its input by coincidence.
 @pytest.mark.parametrize("csid", ["c0ffee42", "5e728ecb1234", "0123456789abcdef", "deadbeefcafe0042"])
-def test_a_reference_reveals_no_part_of_the_id(csid):
+def test_a_reference_reveals_no_part_of_the_id(csid, monkeypatch):
+    import hashlib
+    import hmac
+
+    from src.mcp_handlers.identity import session
+
+    monkeypatch.setattr(session, "_SESSION_REFERENCE_KEY", _FIXED_KEY)
     ref = session_id_reference(csid)
 
-    assert ref.startswith("ref-") and len(ref) == 20
+    expected = hmac.new(_FIXED_KEY, csid.encode(), hashlib.sha256).hexdigest()[:16]
+    assert ref == "ref-" + expected
     windows = {csid[i:i + 6] for i in range(len(csid) - 5)}
     assert not any(w in ref for w in windows), (csid, ref)
-    assert ref[4:] != csid.encode().hex()[:16]
 
 
 def test_a_reference_is_keyed_so_it_is_no_offline_oracle(monkeypatch):
