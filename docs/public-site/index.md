@@ -10,7 +10,7 @@ work should remain attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
-**Current public releases:** [server v3.1.0](https://github.com/cirwel/unitares/releases/tag/v3.1.0)
+**Current public releases:** [server v3.2.0](https://github.com/cirwel/unitares/releases/tag/v3.2.0)
 · [Python SDK 0.4.0](https://pypi.org/project/unitares-sdk/0.4.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
 · Apache-2.0
@@ -48,7 +48,7 @@ The deployed policy path uses auditable behavioral state estimation.
 Run the documented stack and a six-check-in wiring demo:
 
 ```bash
-git clone --branch v3.1.0 --depth 1 https://github.com/cirwel/unitares.git
+git clone --branch v3.2.0 --depth 1 https://github.com/cirwel/unitares.git
 cd unitares
 docker compose up -d --wait
 make demo
@@ -63,7 +63,7 @@ python -m pip install unitares-sdk==0.4.0
 Or inspect the signed multi-architecture server image:
 
 ```bash
-docker pull ghcr.io/cirwel/unitares:v3.1.0
+docker pull ghcr.io/cirwel/unitares:v3.2.0
 ```
 
 The demo onboards an agent and runs six check-ins against your server. Each one

@@ -946,6 +946,18 @@ class TestOnboardPinExceptionPaths:
 
 class TestHandleBindSession:
 
+    @pytest.fixture(autouse=True)
+    def _caller_owns_target(self):
+        """These tests cover the destination rules. Proof that the caller owns
+        the target agent is what the real resolver records for a session the
+        caller sent; it is tested in tests/test_credential_issuance.py."""
+        from unittest.mock import patch as _patch
+        with _patch(
+            "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
+            return_value=(True, "test_caller_owns_target"),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_bind_session_accepts_matching_agent_id(self):
         """bind_session succeeds when expected agent_id matches resolved identity."""
@@ -2268,7 +2280,11 @@ class TestHandleOnboardV2:
         ), "identity() v2 gate must NOT fire when client_session_id is presented"
 
     @pytest.mark.asyncio
-    async def test_bind_session_non_coupling_to_s13_gate(self, patch_onboard_deps, mock_db, mock_redis, caplog):
+    @patch(
+        "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
+        return_value=(True, "test_caller_owns_target"),
+    )
+    async def test_bind_session_non_coupling_to_s13_gate(self, _owns, patch_onboard_deps, mock_db, mock_redis, caplog):
         """S13: bind_session shares the derive_session_key plumbing but must not
         be coupled to the identity-adapter v2 gate. bind_session callers always
         present an explicit client_session_id (it's the bind target), so the
