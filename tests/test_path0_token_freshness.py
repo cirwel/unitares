@@ -85,6 +85,21 @@ def test_freshness_treats_missing_or_malformed_exp_as_expired(exp):
     assert fresh["seconds_past_exp"] is None
 
 
+@pytest.mark.parametrize("claim", ["iat", "exp"])
+@pytest.mark.parametrize("value", [1e309, -1e309, float("nan"), "soon"])
+def test_claim_accessors_return_none_for_non_finite_or_malformed(claim, value):
+    """extract_token_iat / extract_token_exp feed observation callers, which
+    must get None for an unreadable claim rather than an OverflowError."""
+    from src.mcp_handlers.identity.session import extract_token_exp, extract_token_iat
+
+    now = int(time.time())
+    payload = {"sid": "agent-eeeeeeee-111", "aid": _UUID, "iat": now, "exp": now + 3600}
+    payload[claim] = value
+    token = _sign(payload)
+    accessor = extract_token_iat if claim == "iat" else extract_token_exp
+    assert accessor(token) is None
+
+
 def test_freshness_rejects_unverified_token():
     from src.mcp_handlers.identity.session import continuity_token_freshness
 
