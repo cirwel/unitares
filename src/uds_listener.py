@@ -30,8 +30,10 @@ import errno
 import fcntl
 import logging
 import os
+import secrets
 import socket
 import stat
+import string
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -41,7 +43,10 @@ logger = logging.getLogger(__name__)
 def _path_lock(uds_path: str):
     """Hold an exclusive flock on ``<uds_path>.lock`` for the with-body.
 
-    The lock file is left in place (removing it would reopen the race).
+    The lock file is left in place (removing it would reopen the race). The
+    flock blocks while another process holds it, for up to a full stale-socket
+    probe, so callers on an event loop run the locked section in a worker
+    thread rather than on the loop.
     """
     fd = os.open(uds_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -65,7 +70,8 @@ def unlink_own_socket(uds_path: str, ino: Optional[int] = None) -> bool:
     then delete its live socket. The check runs under the path lock, so no
     start can replace the node between the stat and the unlink. Never raises:
     a lock file that cannot be opened (EMFILE, a permission change) leaves the
-    node in place rather than failing a cleanup path.
+    node in place rather than failing a cleanup path. It blocks on that lock,
+    so an async caller runs it with ``asyncio.to_thread``.
     """
     if ino is None:
         ino = _bound_inodes.pop(uds_path, None)
@@ -150,34 +156,96 @@ def make_peer_cred_protocol_class() -> type:
 #: Listen backlog for the pre-bound UDS socket (uvicorn's own default is 2048).
 _UDS_BACKLOG = 2048
 
+_PRIVATE_DIR_ALPHABET = string.ascii_lowercase + string.digits
 
-async def start_uds_listener(
-    app, uds_path: str, *, log_level: str = "info"
-) -> "asyncio.Task[None]":
-    """Start a uvicorn UDS listener as a background task.
 
-    Returns the task; caller is responsible for cancellation at shutdown.
+def _make_private_dir(sock_dir: str, basename_len: int) -> str:
+    """Create an owner-only (0700) directory beside the socket path.
 
-    **Socket permissions are 0600 (owner-only), race-free.** We bind the
-    AF_UNIX socket *ourselves* and hand it to uvicorn via ``serve(sockets=...)``
-    rather than letting uvicorn bind a ``uds=`` path. The reason is a real
-    incident (governance.sock observed at mode 0666 live, 2026-06-17): when
-    uvicorn binds the uds itself it ``chmod``s the socket to ``0o666`` during
-    startup, which *races with and overwrites* any post-bind ``chmod 0600`` we
-    do — and on a restart that skips the tighten step, the socket simply stays
-    world-writable. World-writable defeats the same-UID threat boundary the S19
-    peer-cred design documents (proposal v2 §Adversary models): any local
-    process could connect and present a UUID.
-
-    By binding first under a tight umask and ``chmod``-ing before ``listen``,
-    the socket is *never* reachable at a looser mode, and because uvicorn is
-    given an already-bound socket it never applies its own 0666. The protocol
-    class from ``make_peer_cred_protocol_class()`` still injects
-    ``scope["unitares_peer_pid"]`` per request.
+    The name is sized so that ``<private_dir>/s`` is no longer than the socket's
+    own path whenever the basename has at least four characters, so a socket
+    path that fits ``sun_path`` (104 bytes on macOS) still fits while staged.
     """
-    import uvicorn
+    name_len = max(1, basename_len - 3)
+    for _ in range(100):
+        name = "." + "".join(
+            secrets.choice(_PRIVATE_DIR_ALPHABET) for _ in range(name_len)
+        )
+        path = os.path.join(sock_dir, name)
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            continue
+        # mkdir applies the umask, which can only remove bits: re-assert 0700 so
+        # an unusual umask cannot leave the owner unable to bind inside it.
+        os.chmod(path, 0o700)
+        return path
+    raise FileExistsError(errno.EEXIST, f"no free private bind directory in {sock_dir}")
 
-    # Pre-create the socket dir if needed; remove stale socket file.
+
+def _remove_private_dir(private_dir: str, staged: str) -> None:
+    try:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(staged)
+        os.rmdir(private_dir)
+    except OSError as exc:
+        # Litter, not a fault: the directory is owner-only and the listener at
+        # the real path is unaffected.
+        logger.warning("[UDS] could not remove bind directory %s: %s", private_dir, exc)
+
+
+def _bind_into_place(uds_path: str) -> tuple[socket.socket, int]:
+    """Bind a listening 0600 socket and link it into ``uds_path``.
+
+    The socket is bound inside a fresh 0700 directory, where no other user can
+    reach it, then ``chmod``-ed to 0600 and put into ``listen`` before
+    ``os.link`` gives it its real name. The node therefore appears at
+    ``uds_path`` already owner-only and already accepting, and the process
+    umask is never touched (changing it is process-wide, so a thread creating a
+    file in that window would inherit the restrictive mask). ``link`` refuses
+    an existing name, so a node that appeared at the path since the stale
+    probe is never displaced.
+
+    Returns the listening socket and the inode now at ``uds_path``. Nothing
+    after the link can fail, so a failure never leaves a node at the path.
+    """
+    sock_dir = os.path.dirname(uds_path) or "."
+    private_dir = _make_private_dir(sock_dir, len(os.path.basename(uds_path)))
+    staged = os.path.join(private_dir, "s")
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            sock.bind(staged)
+            os.chmod(staged, 0o600)
+            # listen() before handing the socket to uvicorn so the kernel
+            # queues connections immediately; otherwise a client connecting
+            # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
+            # asyncio's create_server(sock=...) calling listen() again is
+            # harmless.
+            sock.listen(_UDS_BACKLOG)
+            sock.setblocking(False)
+            bound_ino = os.stat(staged).st_ino
+            try:
+                os.link(staged, uds_path)
+            except FileExistsError as exc:
+                raise OSError(
+                    errno.EADDRINUSE,
+                    f"{uds_path} appeared during bind; refusing to displace it",
+                ) from exc
+        except BaseException:
+            sock.close()
+            raise
+    finally:
+        _remove_private_dir(private_dir, staged)
+    return sock, bound_ino
+
+
+def _claim_and_bind(uds_path: str) -> tuple[socket.socket, int]:
+    """Probe, clear a stale node and bind, under the path lock.
+
+    Blocking (the flock and the up-to-1s probe), so start_uds_listener runs it
+    in a worker thread.
+    """
     sock_dir = os.path.dirname(uds_path)
     if sock_dir:
         os.makedirs(sock_dir, mode=0o700, exist_ok=True)
@@ -210,40 +278,88 @@ async def start_uds_listener(
                 os.unlink(uds_path)
             except OSError as exc:
                 logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
+        return _bind_into_place(uds_path)
 
-        # Bind the AF_UNIX socket ourselves so we own its mode with no
-        # world-writable window. umask 0o177 → the socket node is created 0600;
-        # the explicit chmod re-asserts it (defense in depth) before listen(), so
-        # the socket accepts no connection until it is owner-only.
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        bound_ino: Optional[int] = None
-        try:
-            prev_umask = os.umask(0o177)
-            try:
-                sock.bind(uds_path)
-            finally:
-                os.umask(prev_umask)
-            bound_ino = os.stat(uds_path).st_ino
-            os.chmod(uds_path, 0o600)
-            # listen() before handing the socket to uvicorn so the kernel queues
-            # connections immediately — otherwise a client connecting in the window
-            # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
-            # asyncio's create_server(sock=...) calling listen() again is harmless.
-            sock.listen(_UDS_BACKLOG)
-            sock.setblocking(False)
-        except OSError:
-            sock.close()
-            # Clean up a partially-created socket file so a retry can rebind,
-            # but only the node we bound: compare its inode, as every other
-            # cleanup here does. The path lock is already held, so this checks
-            # inline rather than through unlink_own_socket, which takes it.
-            if bound_ino is not None:
-                try:
-                    if os.stat(uds_path).st_ino == bound_ino:
-                        os.unlink(uds_path)
-                except OSError:
-                    pass
-            raise
+
+def _release(uds_path: str, sock: socket.socket, ino: int) -> None:
+    """Remove our node (inode-checked, under the lock), then close the socket.
+
+    Unlinking first means a concurrent start still probes a live listener
+    rather than a stale path, and the inode check leaves alone any node that
+    is no longer ours.
+    """
+    try:
+        unlink_own_socket(uds_path, ino)
+    finally:
+        sock.close()
+
+
+def _release_off_loop(
+    loop: asyncio.AbstractEventLoop, uds_path: str, sock: socket.socket, ino: int
+) -> "asyncio.Future[None]":
+    """Run ``_release`` in a worker thread, so the lock wait never blocks the loop.
+
+    The release runs to completion even if whoever awaits it is cancelled.
+    """
+    try:
+        return loop.run_in_executor(None, _release, uds_path, sock, ino)
+    except RuntimeError:
+        # The executor is already shut down. Closing never blocks, and a closed
+        # socket's node is stale, which the next start's probe removes.
+        sock.close()
+        done = loop.create_future()
+        done.set_result(None)
+        return done
+
+
+async def start_uds_listener(
+    app, uds_path: str, *, log_level: str = "info"
+) -> "asyncio.Task[None]":
+    """Start a uvicorn UDS listener as a background task.
+
+    Returns the task; caller is responsible for cancellation at shutdown.
+
+    **Socket permissions are 0600 (owner-only), race-free.** We bind the
+    AF_UNIX socket *ourselves* and hand it to uvicorn via ``serve(sockets=...)``
+    rather than letting uvicorn bind a ``uds=`` path. The reason is a real
+    incident (governance.sock observed at mode 0666 live, 2026-06-17): when
+    uvicorn binds the uds itself it ``chmod``s the socket to ``0o666`` during
+    startup, which *races with and overwrites* any post-bind ``chmod 0600`` we
+    do — and on a restart that skips the tighten step, the socket simply stays
+    world-writable. World-writable defeats the same-UID threat boundary the S19
+    peer-cred design documents (proposal v2 §Adversary models): any local
+    process could connect and present a UUID.
+
+    By binding inside a private 0700 directory, ``chmod``-ing to 0600 and only
+    then linking the node to its real path (``_bind_into_place``), the socket
+    is *never* reachable at a looser mode, and because uvicorn is given an
+    already-bound socket it never applies its own 0666. This holds as long as
+    the socket's directory is not writable by another user without the sticky
+    bit; such a user could replace the node at the real path in any case. The
+    protocol class from ``make_peer_cred_protocol_class()`` still injects
+    ``scope["unitares_peer_pid"]`` per request.
+
+    The locked probe/unlink/bind section runs in a worker thread: its flock
+    waits while another process holds the path, and that wait must not stall
+    the event loop.
+    """
+    import uvicorn
+
+    loop = asyncio.get_running_loop()
+    claim = loop.run_in_executor(None, _claim_and_bind, uds_path)
+    try:
+        sock, bound_ino = await asyncio.shield(claim)
+    except asyncio.CancelledError:
+        # The worker keeps running and may still bind. Release whatever it
+        # binds, or the node would answer probes with nobody serving it.
+        def _release_abandoned(fut: "asyncio.Future[tuple[socket.socket, int]]") -> None:
+            if fut.cancelled() or fut.exception() is not None:
+                return
+            abandoned_sock, abandoned_ino = fut.result()
+            _release_off_loop(loop, uds_path, abandoned_sock, abandoned_ino)
+
+        claim.add_done_callback(_release_abandoned)
+        raise
 
     try:
         # Verify the on-disk mode is actually 0600 before we serve — surfaces any
@@ -279,14 +395,9 @@ async def start_uds_listener(
         )
     except BaseException:
         # The caller claims no path on failure (#2662), so nothing else will
-        # unlink this one: remove the node we bound before closing the socket.
-        # Unlinking first means a concurrent start still probes a live listener
-        # rather than a stale path, and the inode check leaves alone any node
-        # that is no longer ours.
-        try:
-            unlink_own_socket(uds_path, bound_ino)
-        finally:
-            sock.close()
+        # unlink this one: remove the node we bound and close the socket. The
+        # release completes even if this wait is cancelled.
+        await asyncio.shield(_release_off_loop(loop, uds_path, sock, bound_ino))
         raise
     _bound_inodes[uds_path] = bound_ino
     return task
