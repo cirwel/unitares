@@ -41,11 +41,10 @@ _session_identities: Dict[str, Dict[str, Any]] = {}
 _uuid_prefix_index: Dict[str, str] = {}
 
 # Parallel dict: session_key -> binding-time ip_ua_fingerprint.
-# Written by _cache_session (persistence.py) and the FALLBACK scan path
-# below — only when the key is not already present, so the legitimate
-# first bind is never silently overwritten by a later mismatched arrival
-# (e.g., after a server restart wipes _uuid_prefix_index). Read by the
-# PATH 1 sync fingerprint cross-check in _get_identity_record_sync.
+# Written by _cache_session (persistence.py) only when the key is not
+# already present, so the legitimate first bind is never silently
+# overwritten by a later mismatched arrival. Read by the PATH 1 sync
+# fingerprint cross-check in _get_identity_record_sync.
 # Mirrors the async-path check at resolution.py:441-487; closes the
 # residual sync half of KG 2026-04-20T00:57:45.
 _bind_fingerprints: Dict[str, str] = {}

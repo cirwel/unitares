@@ -431,33 +431,6 @@ class TestPath1SyncFingerprintCheck:
             assert _get_identity_record_sync(session_id=key)["bound_agent_id"] is None
         assert key not in _bind_fingerprints
 
-    def test_fallback_does_not_overwrite_existing_bind_fingerprint(self):
-        full_uuid = "abcdef123456-7890-abcd-ef01-234567890abc"
-        prefix = "abcdef123456"
-        key = f"agent-{prefix}"
-        # Pre-populate _bind_fingerprints as if _cache_session had recorded it
-        _bind_fingerprints[key] = "fp_legit_first_bind"
-
-        mock_server = MagicMock()
-        mock_meta = MagicMock()
-        mock_meta.api_key = None
-        mock_server.agent_metadata = {full_uuid: mock_meta}
-
-        # Attacker arrives via FALLBACK with a different fingerprint
-        with patch(
-            "src.mcp_handlers.shared.get_mcp_server",
-            return_value=mock_server,
-        ), patch(
-            "src.mcp_handlers.context.get_context_session_key",
-            return_value=None,
-        ), patch(
-            "src.mcp_handlers.identity.shared.get_session_signals",
-            return_value=self._make_signals("fp_attacker"),
-        ):
-            _get_identity_record_sync(session_id=key)
-
-        assert _bind_fingerprints[key] == "fp_legit_first_bind"
-
     def test_cache_session_populates_bind_fingerprints(self):
         """_cache_session writes the binding-time fingerprint to
         _bind_fingerprints so the sync PATH 1 check can read it."""
