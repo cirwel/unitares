@@ -236,6 +236,50 @@ def verify_substrate_claim(
 # =============================================================================
 
 
+# UUIDs this process has seen with a substrate claim: every lookup that finds
+# one adds it, and the server adds the whole table every minute (load_known_substrate_claims, from
+# background_tasks.substrate_claims_refresh), so an enrollment made by the
+# operator script is known within a minute even if nothing looks it up. The
+# HTTP-reject gates consult it only when a lookup fails, so an enrolled
+# resident is still refused over HTTP while the claims table is unreachable
+# (#2682). Until the table has loaded once, the set is incomplete, so every
+# UUID counts as possibly claimed.
+_known_claimed: set[str] = set()
+_claims_loaded = False
+
+
+def substrate_claims_loaded() -> bool:
+    """Whether the claims table has loaded at least once in this process."""
+    return _claims_loaded
+
+
+def known_substrate_claimed(agent_id: Optional[str]) -> bool:
+    """Whether ``agent_id`` may hold a substrate claim, for a gate whose own
+    lookup just failed: last seen with one, or the table not yet loaded."""
+    if not agent_id:
+        return False
+    return not _claims_loaded or str(agent_id) in _known_claimed
+
+
+async def load_known_substrate_claims() -> int:
+    """Add every claimed UUID in the table to the set; returns how many rows.
+
+    The set only grows: neither a reload's snapshot nor a lookup that found no
+    row can be ordered after a newer observation of the claim, so nothing
+    removes an entry. An unenrolled UUID stays listed until restart, which at
+    worst refuses it over HTTP while lookups are failing.
+    Raises if the read fails, leaving the set as it was."""
+    from src.db import get_db
+
+    db = get_db()
+    async with db.acquire() as conn:
+        rows = await conn.fetch("SELECT agent_id FROM core.substrate_claims")
+    global _claims_loaded
+    _known_claimed.update(str(r["agent_id"]) for r in rows)
+    _claims_loaded = True
+    return len(rows)
+
+
 async def fetch_substrate_claim(agent_id: str) -> Optional[SubstrateClaim]:
     """Async lookup of one row from ``core.substrate_claims``.
 
@@ -269,6 +313,7 @@ async def fetch_substrate_claim(agent_id: str) -> Optional[SubstrateClaim]:
         )
     if row is None:
         return None
+    _known_claimed.add(str(agent_id))
     return SubstrateClaim(
         agent_id=row["agent_id"],
         expected_launchd_label=row["expected_launchd_label"],
