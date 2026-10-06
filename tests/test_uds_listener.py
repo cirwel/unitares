@@ -447,6 +447,56 @@ async def test_failure_after_bind_leaves_a_replaced_node_alone(monkeypatch):
         _shutil.rmtree(d, ignore_errors=True)
 
 
+async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    if scope["type"] == "http":
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+
+@pytest.mark.asyncio
+async def test_stop_unlinks_the_socket_this_process_bound(monkeypatch):
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        assert sock_path == path and task is not None
+        await _stop_uds_listener(sock_path, task)
+        assert not os.path.exists(path)
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_leaves_a_replacement_servers_socket_alone(monkeypatch):
+    """After our listener stops accepting, a replacement server may bind a
+    fresh socket at the same path; our shutdown must not delete it (#2662)."""
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    replacement = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        assert sock_path == path
+        os.unlink(path)  # the replacement found our node stale and removed it
+        replacement.bind(path)
+        replacement.listen(8)
+        await _stop_uds_listener(sock_path, task)
+        assert os.path.exists(path)
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.connect(path)  # still the replacement's live socket
+        c.close()
+    finally:
+        replacement.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
 def test_path_lock_excludes_a_second_holder():
     import errno as _errno
     import fcntl

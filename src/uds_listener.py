@@ -51,6 +51,34 @@ def _path_lock(uds_path: str):
         os.close(fd)  # closing the fd releases the flock
 
 
+# Inode of the socket node this process bound at each path, set when a start
+# succeeds. Shutdown unlinks a path only while it still holds that inode.
+_bound_inodes: dict[str, int] = {}
+
+
+def unlink_own_socket(uds_path: str, ino: Optional[int] = None) -> bool:
+    """Unlink ``uds_path`` only if it is still the node this process bound.
+
+    ``ino`` defaults to the inode recorded by a successful start. Once our
+    listener stops accepting, a replacement server can probe the path as stale
+    and bind its own socket there (#2662); a blind unlink at our shutdown would
+    then delete its live socket. The check runs under the path lock, so no
+    start can replace the node between the stat and the unlink.
+    """
+    if ino is None:
+        ino = _bound_inodes.pop(uds_path, None)
+    if ino is None:
+        return False
+    with _path_lock(uds_path):
+        try:
+            if os.stat(uds_path).st_ino != ino:
+                return False
+            os.unlink(uds_path)
+        except OSError:
+            return False
+    return True
+
+
 def _read_peer_pid_from_transport(transport: asyncio.BaseTransport) -> Optional[int]:
     """Extract kernel-attested peer PID from the underlying socket.
 
@@ -251,12 +279,8 @@ async def start_uds_listener(
         # Unlinking first means a concurrent start still probes a live listener
         # rather than a stale path, and the inode check leaves alone any node
         # that is no longer ours.
-        with _path_lock(uds_path):
-            try:
-                if os.stat(uds_path).st_ino == bound_ino:
-                    os.unlink(uds_path)
-            except OSError:
-                pass
+        unlink_own_socket(uds_path, bound_ino)
         sock.close()
         raise
+    _bound_inodes[uds_path] = bound_ino
     return task

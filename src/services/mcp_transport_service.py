@@ -855,8 +855,9 @@ async def _stop_uds_listener(
             await task
         except (asyncio.CancelledError, Exception):
             pass
-    if socket_path and os.path.exists(socket_path):
-        try:
-            os.unlink(socket_path)
-        except OSError:
-            pass
+    if socket_path:
+        # Only the node this process bound: a replacement server may already
+        # have bound a fresh socket at the same path (#2662).
+        from src.uds_listener import unlink_own_socket
+
+        unlink_own_socket(socket_path)
