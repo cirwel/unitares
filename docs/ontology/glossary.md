@@ -277,7 +277,7 @@ The first is a *claim the subject makes*; the second is a *fact something watchi
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `attestation (descriptive, server-to-world)` | What can an outside party verify the deployment *asserts*, offline, with only a public key? (`aic.v2` identity credential, `drr.v1` dialectic resolution receipt; Ed25519, JWKS-published; confers no authority and carries no session proof) | `src/identity/agent_identity_credential.py::AICError` · `dialectic_receipt.py::mint_resolution_receipt` |
+| `attestation (descriptive, server-to-world)` | What can an outside party verify the deployment *asserts*, offline, with only a public key? (`aic.v2` identity credential, `drr.v1` dialectic resolution receipt; Ed25519, verifiable against a JWKS the deployment can export (`export_public_jwks`; no endpoint serves it yet); confers no authority and carries no session proof) | `src/identity/agent_identity_credential.py::AICError` · `dialectic_receipt.py::mint_resolution_receipt` |
 | `attestation (performative, request-bound)` | Who authorized *this one* lease mutation? (`lat.v1`: governance verifies a live continuity proof, then delegates a single short-lived HTTP call bound to method, path, and body SHA-256; the lease plane consumes `(issuer, jti)` once) | `lease_attestation.py::mint_lease_attestation` · `elixir/lease_plane` `IdentityBinding` |
 | `attestation (kernel peer)` | Which process is really on the other end of this Unix socket? (kernel-attested PID, owning launchd label, executable path, process start time to catch PID reuse; the S19 substrate-claim path. The orchestrator-vouched extension in `substrate/vouch.py` is inert, not wired into resolution) | `src/substrate/peer_attestation.py::read_peer_pid` · `identity.md` S19 |
 | `attestation (self-reported)` | What does the agent *claim* about its own state? (caller-attested EISV and confidence in a `sync_state` check-in; verification may raise risk but never lowers a worse self-attested signal; unscored until `record_result` attaches an outcome) | `governance_core/verification.py` |
@@ -292,7 +292,7 @@ The first sense is a *descriptive* stance (it reports standing already accrued),
 |---|---|---|
 | `anchor (substrate identity)` | What persistent on-disk pin lets a substrate-anchored resident *earn* continuity across restarts? (the `anchors/` directory; keyed by uuid) | `src/identity/substrate.py::_default_anchors_dir` · `identity.md` "Substrate-Earned Identity" |
 | `anchor (exogenous outcome)` | Does this outcome signal come from *outside* the governance loop, so the loop's references stay externally falsifiable? (a `verification_source` mapped to a trust tier; `--anchor-scope trusted` vs `all` selects the cohort) | `src/grounding/outcome_anchors.py::AnchorTier` · EISV maths roadmap Invariant 4 |
-| `anchor (sensor coupling)` | How strongly is the modelled E/I pulled toward sensor-derived values? (`k_anchor`, a spring coupling in the dynamics; 0 disables it) | `governance_core/parameters.py` · `governance_core/dynamics.py` |
+| `anchor (sensor coupling)` | How strongly is the modelled EISV state pulled toward sensor-derived values? (`k_anchor`, a spring coupling applied to each of E, I, S and V in the dynamics; 0 disables it) | `governance_core/parameters.py` · `governance_core/dynamics.py` |
 | `anchor (calibration class)` | Which per-behavior-class scale constants apply to this agent? (generic classes `embodied`, `resident_persistent`, `engaged_ephemeral`, `ephemeral`, `default`; a deployment overlay supplies per-resident values) | `config/governance_config.py::_apply_class_calibration_overlay` |
 
 Two of these are about *trust* (what may be believed), one is a *physical coupling constant*, and one is a *scale-selection key*. They share a word and nothing else: a "trusted anchor" filter does not touch `k_anchor`, and regenerating a class anchor does not change which outcomes count as exogenous. Always qualify which sense a sentence means, especially around `anchor-scope` and calibration regen.
@@ -304,7 +304,7 @@ Two of these are about *trust* (what may be believed), one is a *physical coupli
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `pause (policy verdict)` | Did the governance gate decide to stop this agent's governed writes? (`coherence_pause`, `risk_pause`, `void_pause`; an output of the decision, advisory `proceed`/`guide` being its siblings) | `src/coherence_gate_shadow.py` · `governance-fundamentals` skill |
-| `pause (agent lifecycle state)` | What status is this agent record *currently in*? (`lifecycle_status == "paused"`, `paused_at`; persists until `self_recovery`, dialectic, an operator, or the TTL) | `src/mcp_handlers/support/pause_ttl.py::maybe_auto_expire_pause_async` |
+| `pause (agent lifecycle state)` | What status is this agent record *currently in*? (`lifecycle_status == "paused"`, `paused_at`; persists until the dialectic review opened for the pause, an operator, or re-evaluation at expiry ends it; `self_recovery` applies only when the frozen risk is already below its gates) | `src/mcp_handlers/support/pause_ttl.py::maybe_auto_expire_pause_async` |
 | `pause (automation)` | Is this scheduled job (launchd, Hermes cron) switched off by an operator? (the census `paused` row; nothing to do with any agent's governance state) | the operator's automation registry runbook (`unitares-automations census`) |
 
 The first causes the second, but they answer different questions: the verdict is a *decision at a moment*, the lifecycle state is *what is persisted afterward*, and the TTL can clear the state without the gate re-deciding. The third is unrelated to both. A census "paused" row is not a governance pause, and a cleared lifecycle pause is not evidence the original verdict was wrong.
@@ -352,7 +352,7 @@ The `proof of life` entry's self-attested row says "heartbeat/check-in" as thoug
 
 | Sense | Question it answers | Canonical source |
 |---|---|---|
-| `resident (roster label)` | Is this identity's onboarding name declared in the deployment's `UNITARES_RESIDENTS` roster, so it is stamped `persistent` + `autonomous` at mint? (a missing roster entry leaves it untagged, and the orphan sweep can then archive it) | `docs/operations/resident-roster.md` · `src/grounding/onboard_classifier.py::RESIDENT_DEFAULT_TAGS` · `src/grounding/class_indicator.py::load_resident_labels` |
+| `resident (roster label)` | Is this identity's onboarding name declared in the deployment's `UNITARES_RESIDENTS` roster, so it is stamped `persistent` + `autonomous` at mint? (a name absent from the roster is stamped `ephemeral` instead) | `docs/operations/resident-roster.md` · `src/grounding/onboard_classifier.py::RESIDENT_DEFAULT_TAGS` · `src/grounding/class_indicator.py::load_resident_labels` |
 | `resident (calibration class)` | Which per-behavior-class scale constants apply to an agent carrying `persistent` + `autonomous` tags, independent of any roster name? (`resident_persistent`) | `src/grounding/class_indicator.py::CLASS_RESIDENT_PERSISTENT` · `src/grounding/class_indicator.py::classify_by_label_and_tags` |
 
 Precedence matters: `classify_by_label_and_tags` resolves a roster label *first* and returns the label itself as the class, so a roster resident is **not** in class `resident_persistent`; that class is the tag-derived fallback for agents whose name is not on the roster. The informal use, "a launchd or cron fleet agent", is a deployment label and, per `identity.md`, "not an ontological category".
@@ -364,7 +364,7 @@ Precedence matters: `classify_by_label_and_tags` resolves a roster label *first*
 | Sense | Question it answers | Canonical source |
 |---|---|---|
 | `verdict (behavioral tier)` | How risky does this agent's current EISV state read, on the three-step `safe` / `caution` / `high-risk` scale? | `src/behavioral_assessment.py::assess_behavioral_state` |
-| `verdict (policy decision)` | What did the governance gate decide: `proceed`, `guide`, `pause`, `reject`? | `src/monitor_decision.py::make_decision` · `src/governance_glossary.py::explain_verdict` |
+| `verdict (policy decision)` | What did the governance gate decide? (`action` is `proceed` or `pause`; `guide` is a `sub_action` of `proceed`; `reject` is a legacy label `explain_verdict` still explains, never emitted by the current gate) | `src/monitor_decision.py::make_decision` · `src/governance_glossary.py::explain_verdict` |
 
 The two are decoupled in code: per the `explain_verdict` docstring a `high-risk` tier can land with `proceed` and a `safe` tier can land with `pause`. The `VERDICTS` table in the runtime glossary lists words from both vocabularies, and the variable named `unitares_verdict` in the monitor holds the *tier* despite its name. Bind the sense before quoting either.
 
