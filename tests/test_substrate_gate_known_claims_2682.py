@@ -18,8 +18,10 @@ ORDINARY = "11111111-2222-4333-8444-555555555555"
 
 
 @pytest.fixture(autouse=True)
-def _clean_known():
+def _clean_known(monkeypatch):
+    """Each test starts with the table loaded and no claims known."""
     verification._known_claimed.clear()
+    monkeypatch.setattr(verification, "_claims_loaded", True)
     yield
     verification._known_claimed.clear()
 
@@ -116,3 +118,35 @@ async def test_the_token_gate_refuses_a_known_resident_when_the_lookup_fails():
     assert out["resume_failed"] is True
     assert out["error"] == "substrate_check_unavailable"
     assert out["token_agent_uuid"] == RESIDENT
+
+
+@pytest.mark.asyncio
+async def test_before_the_table_loads_a_failed_lookup_refuses_any_uuid(monkeypatch):
+    """A restart during a database outage starts with nothing known; until the
+    table loads, a failed lookup cannot tell a resident from anyone else, so it
+    refuses rather than admits."""
+    from src.mcp_handlers.identity import resolution
+
+    monkeypatch.setattr(verification, "_claims_loaded", False)
+    with _http(), _lookup_fails():
+        out = await resolution._substrate_http_reject(ORDINARY, "unit")
+    assert out["error"] == "substrate_check_unavailable"
+
+    with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": RESIDENT}])):
+        await verification.load_known_substrate_claims()
+    with _http(), _lookup_fails():
+        assert await resolution._substrate_http_reject(ORDINARY, "unit") is None
+        assert (await resolution._substrate_http_reject(RESIDENT, "unit"))["resume_failed"]
+
+
+@pytest.mark.asyncio
+async def test_the_startup_load_retries_until_it_succeeds(monkeypatch):
+    from src import background_tasks
+
+    monkeypatch.setattr(verification, "_claims_loaded", False)
+    load = AsyncMock(side_effect=[ConnectionError("down"), ConnectionError("down"), 1])
+    with patch.object(verification, "load_known_substrate_claims", load), \
+         patch.object(background_tasks.asyncio, "sleep", AsyncMock()):
+        await background_tasks.substrate_claims_warmup()
+
+    assert load.await_count == 3

@@ -240,13 +240,18 @@ def verify_substrate_claim(
 # one adds it, a lookup that finds none drops it, and the server loads the
 # whole table at startup (load_known_substrate_claims). The HTTP-reject gates
 # consult it only when a lookup fails, so an enrolled resident is still refused
-# over HTTP while the claims table is unreachable (#2682).
+# over HTTP while the claims table is unreachable (#2682). Until the table has
+# loaded once, the set is incomplete, so every UUID counts as possibly claimed.
 _known_claimed: set[str] = set()
+_claims_loaded = False
 
 
 def known_substrate_claimed(agent_id: Optional[str]) -> bool:
-    """Whether ``agent_id`` was last seen with a substrate claim."""
-    return bool(agent_id) and str(agent_id) in _known_claimed
+    """Whether ``agent_id`` may hold a substrate claim, for a gate whose own
+    lookup just failed: last seen with one, or the table not yet loaded."""
+    if not agent_id:
+        return False
+    return not _claims_loaded or str(agent_id) in _known_claimed
 
 
 async def load_known_substrate_claims() -> int:
@@ -256,7 +261,9 @@ async def load_known_substrate_claims() -> int:
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT agent_id FROM core.substrate_claims")
+    global _claims_loaded
     _known_claimed.update(str(r["agent_id"]) for r in rows)
+    _claims_loaded = True
     return len(rows)
 
 

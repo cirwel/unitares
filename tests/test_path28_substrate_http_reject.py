@@ -203,12 +203,18 @@ async def test_http_path_non_substrate_uuid_unaffected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_http_path_gate_exception_falls_through() -> None:
+async def test_http_path_gate_exception_falls_through(monkeypatch) -> None:
     """An unexpected error in the gate (e.g. DB connection issue during
     fetch_substrate_claim) does NOT block the resume — it falls through
     to existing PATH 2.8. Trade-off: a transient DB error must not lock
     out non-substrate clients (the gate is leak-closing, not the only
-    line of defense)."""
+    line of defense). #2682: only for a UUID not known to be claimed with
+    the claims table loaded; a known claim, or any UUID before the table
+    has loaded, is refused instead."""
+    from src.substrate import verification
+
+    monkeypatch.setattr(verification, "_claims_loaded", True)
+    monkeypatch.setattr(verification, "_known_claimed", set())
     signals_token = set_session_signals(SessionSignals())  # HTTP path
     try:
         with patch(
@@ -227,7 +233,9 @@ async def test_http_path_gate_exception_falls_through() -> None:
     finally:
         reset_session_signals(signals_token)
 
-    assert result.get("error") != "substrate_anchored_uuid_requires_uds"
+    assert result.get("error") not in (
+        "substrate_anchored_uuid_requires_uds", "substrate_check_unavailable",
+    )
 
 
 # =============================================================================
@@ -236,7 +244,7 @@ async def test_http_path_gate_exception_falls_through() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gate_b_refuses_when_gate_a_falls_through() -> None:
+async def test_gate_b_refuses_when_gate_a_falls_through(monkeypatch) -> None:
     """PATH 2.8's gate (Gate B) must refuse on its own, without Gate A.
 
     Two substrate-HTTP gates guard this function: Gate A (the PATH-pre /
@@ -257,6 +265,11 @@ async def test_gate_b_refuses_when_gate_a_falls_through() -> None:
     Gate B, on a deleted Gate B, and on a Gate B hoisted into a helper
     that is never called.
     """
+    from src.substrate import verification
+
+    # Gate A may fall through only for a UUID not known to be claimed (#2682).
+    monkeypatch.setattr(verification, "_claims_loaded", True)
+    monkeypatch.setattr(verification, "_known_claimed", set())
     claim = _make_claim()
     calls = {"n": 0}
 

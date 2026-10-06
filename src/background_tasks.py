@@ -1683,18 +1683,26 @@ async def transport_binding_cache_warmup():
 
 async def substrate_claims_warmup():
     """Load the substrate-claimed UUIDs, so the HTTP-reject gates can still
-    refuse an enrolled resident if a later claims lookup fails (#2682)."""
-    await asyncio.sleep(2)  # Wait for DB to be ready
-    for attempt in range(5):
-        try:
-            from src.substrate.verification import load_known_substrate_claims
+    refuse an enrolled resident if a later claims lookup fails (#2682).
 
+    Retries until it succeeds: until then a failed gate lookup treats every
+    UUID as possibly claimed (known_substrate_claimed), so starting during a
+    database outage refuses rather than admits."""
+    from src.substrate.verification import load_known_substrate_claims
+
+    await asyncio.sleep(2)  # Wait for DB to be ready
+    delay = 5.0
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
             count = await load_known_substrate_claims()
             logger.info("[WARMUP] %d substrate-claimed identities loaded", count)
             return
         except Exception as e:
-            logger.warning("[WARMUP] substrate claims load failed (attempt %d): %s", attempt + 1, e)
-            await asyncio.sleep(10)
+            logger.warning("[WARMUP] substrate claims load failed (attempt %d): %s", attempt, e)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60.0)
 
 
 async def identity_cache_warmup():
