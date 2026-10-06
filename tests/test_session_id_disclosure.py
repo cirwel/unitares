@@ -31,13 +31,17 @@ def test_a_reference_cannot_be_presented_as_the_id():
     assert session_id_reference(None) is None and session_id_reference("") is None
 
 
-@pytest.mark.parametrize("csid", ["secret42", "s3", VICTIM_CSID, OTHER_CSID])
+# Hex-only ids, so a reference (hex itself) could contain them if it leaked
+# any part: a 6-character window of a 16-character id matching by chance is
+# about 1 in 100,000.
+@pytest.mark.parametrize("csid", ["c0ffee42", "5e728ecb1234", "0123456789abcdef", "deadbeefcafe0042"])
 def test_a_reference_reveals_no_part_of_the_id(csid):
     ref = session_id_reference(csid)
 
     assert ref.startswith("ref-") and len(ref) == 20
-    for n in range(2, len(csid) + 1):
-        assert csid[:n] not in ref[4:]
+    windows = {csid[i:i + 6] for i in range(len(csid) - 5)}
+    assert not any(w in ref for w in windows), (csid, ref)
+    assert ref[4:] != csid.encode().hex()[:16]
 
 
 def test_a_reference_is_keyed_so_it_is_no_offline_oracle(monkeypatch):
@@ -80,7 +84,7 @@ async def test_list_process_bindings_shows_references_not_session_ids():
 
 
 @pytest.mark.asyncio
-async def test_debug_context_shows_references_and_short_prefixes():
+async def test_debug_context_shows_references_and_a_prefix_count():
     session_identities = {
         VICTIM_CSID: {"bound_agent_id": VICTIM_UUID},
         OTHER_CSID: {"bound_agent_id": None},
