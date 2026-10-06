@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.28.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.29.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -317,7 +317,14 @@ The two identifiers serve different jobs:
   succeed. `operator_resume_agent` keys on the same token; a self-claimed
   `operator` label or tag no longer counts, and `operator` is a server-granted
   tag. Nothing is added, removed, retyped or renamed, and no digest moves: the
-  version alone records the behavior change).
+  version alone records the behavior change;
+  1.29.0, 2026-10-06: output only. `list_process_bindings` rows carry
+  `client_session_ref`, an opaque reference keyed per server process, in
+  place of the `client_session_id` each process onboarded with, and
+  `admin(action='debug_context')` shows session-cache keys as references
+  and the uuid prefix index only as a count. A `client_session_id` is a bearer
+  credential, and both surfaces could name other agents' sessions. No input
+  schema changes, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

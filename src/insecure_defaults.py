@@ -1,6 +1,6 @@
 """Startup checks for credentials left at a value anyone can read.
 
-``docker-compose.yml`` gives three secrets a default so the quickstart runs
+``docker-compose.yml`` gives two secrets a default so the quickstart runs
 with no setup. Those defaults are published in this repository, so a server
 still using one has a credential everyone already knows. That is tolerable only
 for a single-user local evaluation (docs/DEPLOYMENT_SECURITY.md); the server
@@ -23,7 +23,6 @@ from collections.abc import Mapping
 # Environment variable -> sha256 of the default docker-compose.yml assigns it.
 PUBLISHED_DEFAULT_SHA256 = {
     "LEASE_PLANE_BEARER_TOKEN": "46378d16b298ff0b584fb7f7d9d11d74b36914788d9bf23c6426197bbff3322f",
-    "UNITARES_CONTINUITY_TOKEN_SECRET": "973513065628b7d58160a920f829e640921bb86d5b761dc821bfa83dc3457e29",
     "UNITARES_LEASE_ATTESTATION_SIGNING_KEY": "ea866a757e4c38babfa8127cbe9a409d3e1f93a00ff1488ff735fcf917afffd0",
 }
 
@@ -61,6 +60,19 @@ def startup_warnings(
             "evaluation: any process on this host can reach the loopback ports, and "
             "on native Linux the Compose bridge too (docs/DEPLOYMENT_SECURITY.md). "
             "Set your own values before sharing the host or exposing the server."
+        )
+
+    # docker-compose.yml used to give the continuity secret a published
+    # default. The server now ignores that value and signs with a generated
+    # key (src/continuity_secret.py); say so to anyone whose .env still has it.
+    from src.continuity_secret import ENV as CONTINUITY_ENV, is_retired_compose_default
+
+    if is_retired_compose_default(env.get(CONTINUITY_ENV) or ""):
+        warnings.append(
+            f"{CONTINUITY_ENV} is set to the default docker-compose.yml used to "
+            "publish. The server ignores that value and signs continuity tokens with "
+            "a generated secret in data/secrets/. Remove it from your environment, or "
+            "set your own value."
         )
 
     # Local REST posture admits a caller from a trusted network address

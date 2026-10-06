@@ -252,7 +252,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # retyped or renamed, and the tool descriptions that say the new rule are not
 # part of any input schema, so no input digest and not the surface digest
 # moves: the version alone records the behavior change.
-INTERFACE_CONTRACT_VERSION = "1.28.0"
+# 1.29.0 (2026-10-06): output only. list_process_bindings rows carry
+# client_session_ref, an opaque per-process keyed reference, in place of the
+# client_session_id each process onboarded with, and admin(action=debug_context)
+# shows session-cache keys as references and the uuid prefix index as a count.
+# A client_session_id is a bearer credential and both surfaces could name other
+# agents' sessions. No input schema changes, so no digest moves.
+INTERFACE_CONTRACT_VERSION = "1.29.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
