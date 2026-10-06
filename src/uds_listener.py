@@ -25,7 +25,9 @@ via ``getsockopt(SOL_LOCAL, LOCAL_PEERPID)`` from the underlying socket, and
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import errno
+import fcntl
 import logging
 import os
 import socket
@@ -33,6 +35,20 @@ import stat
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _path_lock(uds_path: str):
+    """Hold an exclusive flock on ``<uds_path>.lock`` for the with-body.
+
+    The lock file is left in place (removing it would reopen the race).
+    """
+    fd = os.open(uds_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)  # closing the fd releases the flock
 
 
 def _read_peer_pid_from_transport(transport: asyncio.BaseTransport) -> Optional[int]:
@@ -135,63 +151,66 @@ async def start_uds_listener(
     sock_dir = os.path.dirname(uds_path)
     if sock_dir:
         os.makedirs(sock_dir, mode=0o700, exist_ok=True)
-    if os.path.exists(uds_path):
-        # Refuse to displace a live listener (#2662): only a stale socket
-        # file (nobody accepting) is safe to remove.
-        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            probe.settimeout(1.0)
-            probe.connect(uds_path)
-        except OSError as exc:
-            # Only these mean nobody is accepting. Anything else (EACCES from
-            # another UID's 0600 socket, EAGAIN/ETIMEDOUT from a saturated
-            # listener) may be a live owner, so refuse rather than displace it.
-            if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK):
+    # Serialize probe/unlink/bind across processes: two starts that both see
+    # the same stale path must not unlink each other's fresh bind (#2662).
+    with _path_lock(uds_path):
+        if os.path.exists(uds_path):
+            # Refuse to displace a live listener (#2662): only a stale socket
+            # file (nobody accepting) is safe to remove.
+            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                probe.settimeout(1.0)
+                probe.connect(uds_path)
+            except OSError as exc:
+                # Only these mean nobody is accepting. Anything else (EACCES from
+                # another UID's 0600 socket, EAGAIN/ETIMEDOUT from a saturated
+                # listener) may be a live owner, so refuse rather than displace it.
+                if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK):
+                    raise OSError(
+                        errno.EADDRINUSE,
+                        f"cannot prove {uds_path} is stale ({exc}); refusing to displace it",
+                    ) from exc
+            else:
                 raise OSError(
-                    errno.EADDRINUSE,
-                    f"cannot prove {uds_path} is stale ({exc}); refusing to displace it",
-                ) from exc
-        else:
-            raise OSError(
-                errno.EADDRINUSE, f"live listener already bound at {uds_path}"
-            )
-        finally:
-            probe.close()
-        try:
-            os.unlink(uds_path)
-        except OSError as exc:
-            logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
-
-    # Bind the AF_UNIX socket ourselves so we own its mode with no
-    # world-writable window. umask 0o177 → the socket node is created 0600;
-    # the explicit chmod re-asserts it (defense in depth) before listen(), so
-    # the socket accepts no connection until it is owner-only.
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    bound = False
-    try:
-        prev_umask = os.umask(0o177)
-        try:
-            sock.bind(uds_path)
-        finally:
-            os.umask(prev_umask)
-        bound = True
-        os.chmod(uds_path, 0o600)
-        # listen() before handing the socket to uvicorn so the kernel queues
-        # connections immediately — otherwise a client connecting in the window
-        # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
-        # asyncio's create_server(sock=...) calling listen() again is harmless.
-        sock.listen(_UDS_BACKLOG)
-        sock.setblocking(False)
-    except OSError:
-        sock.close()
-        # Clean up a partially-created socket file so a retry can rebind,
-        # but only one we bound ourselves.
-        if bound and os.path.exists(uds_path):
+                    errno.EADDRINUSE, f"live listener already bound at {uds_path}"
+                )
+            finally:
+                probe.close()
             try:
                 os.unlink(uds_path)
-            except OSError:
-                pass
-        raise
+            except OSError as exc:
+                logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
+
+        # Bind the AF_UNIX socket ourselves so we own its mode with no
+        # world-writable window. umask 0o177 → the socket node is created 0600;
+        # the explicit chmod re-asserts it (defense in depth) before listen(), so
+        # the socket accepts no connection until it is owner-only.
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        bound = False
+        try:
+            prev_umask = os.umask(0o177)
+            try:
+                sock.bind(uds_path)
+            finally:
+                os.umask(prev_umask)
+            bound = True
+            os.chmod(uds_path, 0o600)
+            # listen() before handing the socket to uvicorn so the kernel queues
+            # connections immediately — otherwise a client connecting in the window
+            # before uvicorn's serve() task calls listen() gets ECONNREFUSED.
+            # asyncio's create_server(sock=...) calling listen() again is harmless.
+            sock.listen(_UDS_BACKLOG)
+            sock.setblocking(False)
+        except OSError:
+            sock.close()
+            # Clean up a partially-created socket file so a retry can rebind,
+            # but only one we bound ourselves.
+            if bound and os.path.exists(uds_path):
+                try:
+                    os.unlink(uds_path)
+                except OSError:
+                    pass
+            raise
 
     # Verify the on-disk mode is actually 0600 before we serve — surfaces any
     # future regression loudly instead of silently shipping a 0666 socket.

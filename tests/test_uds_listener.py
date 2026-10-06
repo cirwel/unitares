@@ -325,6 +325,7 @@ async def test_uds_socket_created_mode_0600() -> None:
 
 # --- #2662: a failed start must not claim (or unlink) another server's socket ---
 import socket as _socket
+import shutil as _shutil
 import tempfile as _tempfile
 
 
@@ -353,7 +354,7 @@ async def test_failed_start_does_not_claim_or_unlink_live_socket(monkeypatch):
         live.close()
         if os.path.exists(path):
             os.unlink(path)
-        os.rmdir(d)
+        _shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.mark.asyncio
@@ -392,4 +393,32 @@ async def test_unprovable_stale_socket_is_not_displaced(monkeypatch):
         live.close()
         if os.path.exists(path):
             os.unlink(path)
-        os.rmdir(d)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+def test_path_lock_excludes_a_second_holder():
+    import errno as _errno
+    import fcntl
+    from src.uds_listener import _path_lock
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with _path_lock(path):
+            fd = os.open(path + ".lock", os.O_RDWR)
+            try:
+                with pytest.raises(OSError) as exc:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                assert exc.value.errno in (_errno.EAGAIN, _errno.EWOULDBLOCK)
+            finally:
+                os.close(fd)
+        fd = os.open(path + ".lock", os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # released on exit
+        finally:
+            os.close(fd)
+    finally:
+        for f in (path + ".lock",):
+            if os.path.exists(f):
+                os.unlink(f)
+        _shutil.rmtree(d, ignore_errors=True)
