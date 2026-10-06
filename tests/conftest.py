@@ -657,6 +657,24 @@ def _identity_posture(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stable_session_policy(monkeypatch):
+    """Accept legacy agent-{uuid12} session ids across the suite.
+
+    The product default refuses them when the server has a continuity key
+    (identity/stable_session.py). Many fixtures bind legacy-shaped keys while
+    also setting a continuity secret; tests of the policy itself set
+    UNITARES_LEGACY_SESSION_IDS explicitly. Verified keyed ids are cached per
+    process, so the cache is cleared between tests.
+    """
+    monkeypatch.setenv("UNITARES_LEGACY_SESSION_IDS", "accept")
+    from src.mcp_handlers.identity.stable_session import forget_verified
+
+    forget_verified()
+    yield
+    forget_verified()
+
+
+@pytest.fixture(autouse=True)
 def _continuity_secret_file(tmp_path, monkeypatch):
     """Point the generated continuity secret at a file that does not exist.
 

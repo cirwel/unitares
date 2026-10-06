@@ -778,19 +778,30 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
 
     db = get_db()
     session = await db.get_session(session_id)
+    keyed_ok = False
     if session is None:
-        raise RuntimeObservationError(
-            "client session is not bound",
-            status_code=409,
-            code="session_unbound",
-        )
-    if getattr(session, "agent_id", None) != agent_uuid:
+        # A keyed stable session id authenticates itself and may have no
+        # stored session row (a resident that resumed by token or UDS
+        # attestation): accept it when it verifies for this agent and the
+        # identity is active (src/mcp_handlers/identity/stable_session.py).
+        from src.mcp_handlers.identity.stable_session import classify, resolve_keyed
+
+        if classify(session_id) == "keyed":
+            keyed_uuid, _refused = await resolve_keyed(session_id)
+            keyed_ok = keyed_uuid is not None and keyed_uuid == agent_uuid
+        if not keyed_ok:
+            raise RuntimeObservationError(
+                "client session is not bound",
+                status_code=409,
+                code="session_unbound",
+            )
+    if not keyed_ok and getattr(session, "agent_id", None) != agent_uuid:
         raise RuntimeObservationError(
             "client session is bound to a different identity",
             status_code=409,
             code="identity_session_mismatch",
         )
-    if not _session_is_live(session, datetime.now(timezone.utc)):
+    if not keyed_ok and not _session_is_live(session, datetime.now(timezone.utc)):
         raise RuntimeObservationError(
             "client session is inactive or expired",
             status_code=409,
