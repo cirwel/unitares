@@ -91,8 +91,12 @@
              Example: /PATH/TO/UNITARES/agents/chronicler/metrics_catalog.json -->
         <key>UNITARES_METRICS_CATALOG_EXTRA</key>
         <string></string>
+        <!-- 0 (default) binds to loopback only. Set to 1 only when clients on
+             other machines (LAN) connect directly; a reverse proxy or tunnel
+             on this same host reaches loopback and does not need it. Remote
+             connector hostnames still go in the allowlists below. -->
         <key>UNITARES_BIND_ALL_INTERFACES</key>
-        <string>1</string>
+        <string>0</string>
         <!-- Host/Origin allowlist (DNS-rebinding protection, on by default).
              A request whose Host header is not listed here is rejected with
              HTTP 403 BEFORE any auth runs. localhost-only is correct for a
