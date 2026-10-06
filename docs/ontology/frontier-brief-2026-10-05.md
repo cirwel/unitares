@@ -68,22 +68,16 @@ Brief's manifest fields vs that record:
 | task information regime (curated vs full role-visible state) | No. This is the variable the 9-24 brief §3 already flagged for the ablation |
 | permissions | Partly: `affordance_state`, not a permission set |
 | budget / retries / verifier present | No |
-| compaction policy | No. `spawn_reason` can say `compaction`, but nothing records the policy or what state survived |
+| compaction policy | No. A compaction can be recorded as a lineage reason, but not the policy or what state survived |
 
-Limits that apply to any manifest built from S22: trust is per field, not
-blanket. `runtime_provenance` (`src/model_harness_provenance.py`) labels model values
-`provider_reported`, `harness_reported`, `caller_declared`, `transport_inferred`
-or `unavailable`, and harness values `harness_reported`, `caller_declared`,
-`transport_user_agent` or `unavailable`. That envelope is built only on the
-`process_agent_update` path (`src/mcp_handlers/updates/phases.py`); knowledge
-store and note writes do not get it, so there a manifest would see `model_source`
-only if the caller supplied it. `build_s22_write_context` overwrites
-client-supplied fork classification with the server's for all three current
-callers, but only once agent metadata exists; for a brand-new agent a
-client-supplied `identity_lineage_fork` survives. A manifest should carry those labels through and must not
-collapse them into one "declared" tier, or it would discard evidence already
-in the record and could call for corroboration fields that exist. Values
-labelled `caller_declared` remain claims, not evidence.
+Limit that applies to any manifest built from S22: trust varies by field and
+by write path. Model and harness values carry source labels (for example
+`provider_reported`, `harness_reported`, `caller_declared`) in
+`src/model_harness_provenance.py`, and which write paths receive them differs.
+A manifest should read those labels and keep them, not flatten everything to
+one "declared" tier. Before relying on any field, check the source for the path
+that wrote it; this note does not enumerate them. Values labelled
+`caller_declared` remain claims, not evidence.
 
 The 54% rerun-variance finding is an independent reason to distrust single-run
 contrasts. It does not transfer a number to UNITARES tasks. Whether it widens
@@ -96,14 +90,10 @@ or digest. An empty field would read as absent, not as "no configuration".
 
 ### 3. AutoCompact: compaction as a governed state transition
 
-`infer_spawn_reason` and `classify_episode_fork` (`src/thread_identity.py`)
-already treat compaction as a registered lineage reason: a lineage reason with
-no `parent_uuid` is classified `identity_lineage`, and `episode_fork_kind` has
-no `compaction` value of its own. The server infers `compaction` (a Claude Code
-client hint with existing thread nodes) only when the caller already declared a
-`parent_agent_id`; a caller can also pass `spawn_reason="compaction"` explicitly.
-Either way it is part of declared lineage, not separate from it. It records that a
-compaction was claimed, not what state survived it. The brief's rule that a summary
+Compaction is already represented as a lineage reason in the identity code
+(`src/thread_identity.py`, `src/identity/lineage_semantics.py`). That records
+that a compaction was claimed or inferred, not what state survived it; read the
+source for the exact classification rules. The brief's rule that a summary
 must never expand permissions or erase contrary evidence is a design
 constraint on any future handoff format and is consistent with the current
 "declared lineage only" posture. The replay experiment (full history vs summary
