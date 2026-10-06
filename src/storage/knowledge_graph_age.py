@@ -63,10 +63,10 @@ def _log_embedding_skipped(discovery_id: str, op: str) -> None:
         '(pip install -e ".[full,embeddings]" -c constraints.txt; the Docker '
         "image needs sentence-transformers uncommented in requirements-docker.txt), "
         "then backfill with python scripts/migration/reembed_corpus.py "
-        "--only-missing, run with the server's UNITARES_EMBEDDING_MODEL in the "
+        "(fills only rows with no vector by default), run with the server's UNITARES_EMBEDDING_MODEL in the "
         "environment (or pass --model) so it fills the same table (a skipped "
-        "refresh leaves the entry's old vector in place, which --only-missing "
-        "will not rewrite; run without the flag to rebuild every row). "
+        "refresh leaves the entry's old vector in place, which the default "
+        "run will not rewrite; pass --rebuild to re-embed every row). "
         "Further skips log at debug."
     )
 
