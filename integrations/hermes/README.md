@@ -7,15 +7,13 @@ It deliberately keeps the integration boundary small:
 - Hermes remains the agent runtime.
 - UNITARES remains a separately operated accountability runtime.
 - The plugin connects Hermes to UNITARES over Streamable HTTP MCP.
-- A focused skill teaches the Hermes agent the UNITARES session and discovery conventions.
+- Session and discovery conventions come from the canonical [`unitares-governance` skill](../../skills/unitares-governance/SKILL.md), not a copy here. A 52-line fork lived in this package until 2026-10-06 and drifted from the 152-line original under no sync.
 
 ## What the plugin installs
 
 The package registers one MCP server named `unitares` at the standard loopback endpoint:
 
 `http://127.0.0.1:8767/mcp/`
-
-It also bundles the `unitares-governance` skill.
 
 The MCP entry carries four static, non-secret provenance headers:
 
@@ -35,7 +33,7 @@ Hermes can run on several model providers, including API-key providers, OpenAI C
 - Hermes provider ids such as `openai-codex`, `claude`, and `claude-code` look like other harness names. UNITARES' S22 comparison normalizes those strings to the Codex CLI and Claude Code harnesses, so a Hermes check-in that reported its provider as its harness would be filed under the wrong harness. The header wins over request-body harness claims, on check-ins and on knowledge-graph writes, which closes that path.
 - Some Hermes runtimes hand the tool loop to another agent process (the Codex app-server runtime and a proposed Claude Agent SDK runtime). If that process makes the MCP call, its User-Agent names Codex or Claude Code. A configured harness header still takes precedence over User-Agent detection, as long as the runtime forwards the configured headers. Confirm it does before relying on this for a given runtime.
 
-The model changes with the provider, so it cannot be a static header. The bundled skill asks the agent to report `model_provider` and `model` in `sync_state`'s `provenance_context`. Those values are recorded as caller-declared and never enter an exact-model cohort.
+The model changes with the provider, so it cannot be a static header. An agent reports it as `model_provider` and `model` in `sync_state`'s `provenance_context`, never in `harness_type`, where a provider id such as `openai-codex` would be read as a different harness. Those values are recorded as caller-declared and never enter an exact-model cohort.
 
 The package does **not** install, update, or start UNITARES and does not carry credentials.
 
@@ -62,6 +60,6 @@ The checked-in `mcp.json` intentionally contains no secrets. It targets UNITARES
 
 If an operator enables bearer authentication on UNITARES, configure the authenticated remote MCP connection in Hermes using the operator's secret-management path rather than committing a token here.
 
-## Catalog intent
+## Catalog
 
-Once this package passes Hermes validation and a live connection smoke test, the intended catalog entry is a community `tools` plugin pointing at the `integrations/hermes` subdirectory and pinned to the reviewed UNITARES commit SHA.
+The Nous Hermes plugin catalog does not install this package. Its `unitares` entry pins [`cirwel/unitares-host-adapter`](https://github.com/cirwel/unitares-host-adapter), which adds lifecycle hooks. Both are tracked in [`docs/operations/distribution-surfaces.toml`](../../docs/operations/distribution-surfaces.toml).
