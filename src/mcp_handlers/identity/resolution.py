@@ -539,6 +539,33 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
         return None
 
 
+async def _keyed_bind_fingerprint(session_key: str, agent_uuid: str) -> Optional[str]:
+    """The fingerprint recorded when this keyed id was bound to ``agent_uuid``.
+
+    Read from the Redis binding, else the PG mirror; None when neither holds a
+    binding for this agent, which the global fingerprint check treats as no
+    evidence (it never penalizes a missing fingerprint).
+    """
+    try:
+        redis = _get_redis()
+        cached = await redis.get(session_key) if redis else None
+        if cached and cached.get("agent_id"):
+            cached_uuid, _ = await _decode_stored_identity(
+                cached["agent_id"], cached.get("display_agent_id")
+            )
+            if cached_uuid == agent_uuid and cached.get("bind_ip_ua"):
+                return cached["bind_ip_ua"]
+    except Exception as e:
+        logger.debug(f"[STABLE_SESSION] redis binding fingerprint read failed: {e}")
+    try:
+        binding = await get_db().get_session_binding(session_key)
+        if binding and str(binding.get("agent_uuid")) == agent_uuid:
+            return binding.get("bind_ip_ua")
+    except Exception as e:
+        logger.debug(f"[STABLE_SESSION] binding fingerprint read failed: {e}")
+    return None
+
+
 async def _fingerprint_hijack_check(
     session_key: str,
     bound_bind_ip_ua: Optional[str],
@@ -1141,6 +1168,19 @@ async def resolve_session_identity(
     # bind). A forged tag or an ambiguous prefix is terminal, never a fall
     # through to PATH 1/2. A legacy agent-{uuid12} id, computable from the
     # UUID, follows UNITARES_LEGACY_SESSION_IDS (refused by default).
+    #
+    # A keyed id is a credential that can be copied, so it still meets the
+    # hijack guards PATH 1 applies: a continuity_token naming another agent
+    # leaves it to the token paths below, and a strict fingerprint mismatch
+    # against the id's recorded binding rejects the resume (#1319 refusal).
+    #
+    # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
+    # flips resume=False, both the PATH 2 resume and the S21-a fail-close are
+    # keyed on `resume` and silently disarm — the call then falls through to a
+    # PATH 3 mint bound to a phantom UUID while the tool proceeds success:true
+    # (2026-07-01 dogfood incident, outcome 524032fd). Track WHY resume was
+    # rejected so PATH 3 can refuse instead of minting.
+    resume_rejected_reason: Optional[str] = None
     if not force_new:
         from .stable_session import classify as _csid_kind
         from .stable_session import legacy_refused as _legacy_refused
@@ -1160,6 +1200,19 @@ async def resolve_session_identity(
             _sub_reject = await _substrate_http_reject(_keyed_uuid, source="keyed_session")
             if _sub_reject is not None:
                 return _sub_reject
+            if token_agent_uuid and token_agent_uuid != _keyed_uuid:
+                _keyed_uuid = None  # PATH 1's token cross-check takes it from here
+            elif await _fingerprint_hijack_check(
+                session_key,
+                await _keyed_bind_fingerprint(session_key, _keyed_uuid),
+                _keyed_uuid,
+                path_label="keyed_session",
+                source_label="keyed_session_fingerprint_mismatch",
+            ):
+                resume = False
+                resume_rejected_reason = "fingerprint_mismatch"
+                _keyed_uuid = None
+        if _kind == "keyed" and resume and _keyed_uuid:
             _keyed_status = await _get_agent_status(_keyed_uuid)
             return _resumed_identity_result(
                 agent_id=await _get_agent_id_from_metadata(_keyed_uuid) or _keyed_uuid,
@@ -1175,13 +1228,6 @@ async def resolve_session_identity(
                 session_key=session_key,
             )
 
-    # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
-    # flips resume=False, both the PATH 2 resume and the S21-a fail-close are
-    # keyed on `resume` and silently disarm — the call then falls through to a
-    # PATH 3 mint bound to a phantom UUID while the tool proceeds success:true
-    # (2026-07-01 dogfood incident, outcome 524032fd). Track WHY resume was
-    # rejected so PATH 3 can refuse instead of minting.
-    resume_rejected_reason: Optional[str] = None
 
     # If force_new is requested, skip lookup paths and go straight to creation
 
