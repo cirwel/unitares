@@ -219,6 +219,9 @@ def _run(
             "PR_QUEUE_STATE_FILE": str(state_file),
             "PR_QUEUE_NOTIFY": "0",
             "PR_QUEUE_SENSITIVITY_MANIFEST": str(_empty_manifest(tmp_path)),
+            # The queue's default is no extra required check (review is
+            # advisory); these tests exercise the opt-in gate.
+            "PR_QUEUE_REQUIRED_CHECKS": "review",
             **env,
         } if "PR_QUEUE_SENSITIVITY_MANIFEST_UNSET" not in env else {
             **{k: v for k, v in os.environ.items() if k != "PR_QUEUE_SENSITIVITY_MANIFEST"},
@@ -746,6 +749,14 @@ def test_a_pending_review_holds_the_order(tmp_path: Path) -> None:
     calls, out = _run(tmp_path, [pending, _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)})
     assert calls == []
     assert "review=PENDING" in out
+
+
+def test_review_is_advisory_by_default(tmp_path: Path) -> None:
+    # Empty PR_QUEUE_REQUIRED_CHECKS (the script's default): an unreviewed
+    # (NEUTRAL) PR is still armed.
+    pr = _pr(1, review=None, checks=[_check("test"), _check("review", "NEUTRAL", run=5)])
+    calls, _ = _run(tmp_path, [pr], PR_QUEUE_REQUIRED_CHECKS="")
+    assert calls == [_arm(1)]
 
 
 def test_required_checks_are_configurable(tmp_path: Path) -> None:

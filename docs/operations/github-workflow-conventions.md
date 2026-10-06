@@ -105,16 +105,17 @@ veto by removing the label.
   queue's, entered by the owning agent's `approved-to-merge` label (section
   4); arming by hand is the operator's. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
-  actually passed — CI green, a review attempted where one can run (see
-  "Review workflow" below) with any findings addressed, and no collision with
-  an in-flight branch. The `review` check is advisory, not a required check:
-  a neutral UNREVIEWED warning is not review completion, but where no
-  reviewer can run (a cloud session has no reviewer CLI) or the round cap is
-  spent, readiness needs the PR to say so: name the reviewer that was
-  unavailable, answer any open findings in a PR comment, and note that a
-  local session or the operator may add the second family later. Operator
-  decision, 2026-10-04: cloud sessions cannot run `review.sh`, and the gate
-  had become the main thing stopping finished PRs.
+  actually passed: CI green, a review run where a reviewer is available (see
+  "Review workflow" below) with any P0/P1 or security findings addressed, and
+  no collision with an in-flight branch. **Review is advisory and does not gate
+  merging** (operator decision, 2026-10-06): the `review` check is not a
+  required check, and the merge queue no longer waits on it
+  (`PR_QUEUE_REQUIRED_CHECKS=review` in `scripts/ops/pr-babysitter.sh` restores
+  that). Where no reviewer can run (a cloud session, a disabled provider, the
+  round cap spent), the PR body says so and the PR proceeds. Earlier decision,
+  2026-10-04: cloud sessions cannot run `review.sh`, and the gate had become
+  the main thing stopping finished PRs; 2026-10-06 removed the last queue-side
+  block.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -133,6 +134,11 @@ veto by removing the label.
   reviews, and the merge-loss guards.
 
 ### Review workflow
+
+> **Advisory since 2026-10-06.** Nothing below blocks merging: not the `review`
+> check, the round cap, `--authorize-full-review`, or the two-family rule. They
+> describe how to get a good review when one is available. Quality still comes
+> first; the point is that an unavailable reviewer never stops a finished PR.
 
 "Review round joined" used to be prose: some PRs carried a
 review in the body, some in a comment, most in neither, and nothing could tell
