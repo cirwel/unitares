@@ -478,27 +478,41 @@ async def _soft_verify_trajectory(
 # =============================================================================
 
 def _substrate_check_unavailable(agent_uuid: str, uuid_key: str, source: str) -> Dict[str, Any]:
-    """Refusal for an HTTP resume of a UUID last seen with a substrate claim
-    when the claims lookup itself failed (#2682).
+    """Refusal for an HTTP resume when the claims lookup itself failed and the
+    UUID may be substrate-anchored (#2682): it was last seen with a claim, or
+    this process has not loaded the claims table yet.
 
-    A UUID never seen with a claim still falls through, so an unreachable
-    claims table does not block ordinary agents; an enrolled resident, which
+    Once the table has loaded, a UUID not seen with a claim falls through, so
+    an unreachable claims table blocks ordinary agents only until the first
+    load succeeds (a restart during an outage); an enrolled resident, which
     must come over UDS anyway, is not let in over HTTP by the outage.
     """
+    from src.substrate.verification import substrate_claims_loaded
+
+    loaded = substrate_claims_loaded()
     logger.warning(
-        "[SUBSTRATE_HTTP_REJECT] %s claims lookup failed for %s..., last seen "
-        "substrate-anchored — refusing the HTTP resume",
+        "[SUBSTRATE_HTTP_REJECT] %s claims lookup failed for %s... (%s) — "
+        "refusing the HTTP resume",
         source, agent_uuid[:8],
+        "last seen substrate-anchored" if loaded else "claims not loaded yet",
     )
+    if loaded:
+        message = (
+            f"Agent {agent_uuid[:8]}... is substrate-anchored and its claim "
+            f"could not be checked. Resume over HTTP is refused; connect via "
+            f"the UNITARES_UDS_SOCKET path, or retry when the server recovers."
+        )
+    else:
+        message = (
+            "The server could not check whether this agent is substrate-"
+            "anchored (its claims are not loaded yet), so resume over HTTP is "
+            "refused for now. Retry shortly."
+        )
     return {
         "resume_failed": True,
         "error": "substrate_check_unavailable",
         uuid_key: agent_uuid,
-        "message": (
-            f"Agent {agent_uuid[:8]}... is substrate-anchored and its claim "
-            f"could not be checked. Resume over HTTP is refused; connect via "
-            f"the UNITARES_UDS_SOCKET path, or retry when the server recovers."
-        ),
+        "message": message,
     }
 
 
@@ -524,9 +538,10 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
     UUID arriving here without a kernel-attested peer PID is never legitimate.
 
     Returns a `resume_failed` refusal dict when rejected, else None. If the
-    claims lookup fails over HTTP, a UUID last seen with a claim is refused
-    (`substrate_check_unavailable`); any other error fails OPEN (returns None)
-    so it never breaks resolution for ordinary agents.
+    claims lookup fails over HTTP, a UUID last seen with a claim, or any UUID
+    before this process has loaded the claims table, is refused
+    (`substrate_check_unavailable`); otherwise the error fails OPEN (returns
+    None) so it does not break resolution for ordinary agents.
     """
     _http = False
     try:
