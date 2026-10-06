@@ -30,11 +30,13 @@ token names the agent. A request-wide "caller asserted" flag would let a
 caller's own session vouch for a different agent the same request resolved
 by a UUID claim or a recovery path.
 
-What this does not close: a ``client_session_id`` of the legacy shape
-``agent-{uuid[:12]}`` is computable from the agent's public UUID, and a
-caller who sends one counts as ``caller_asserted``. The rule cannot tell the
-owner from someone who computed it; that needs an id that cannot be derived
-from the UUID, which is a separate change.
+What this does not close: a session key is a bearer secret only as strong
+as its value. A ``client_session_id`` of the legacy shape ``agent-{uuid[:12]}``
+is computable from the agent's public UUID, and a key a client chose for
+itself (an ``X-Session-ID`` such as a fixed name, or an ``X-Client-Id`` value
+re-sent as one) is as guessable as the client made it. The rule cannot tell
+the owner from someone who computed or guessed such a key; that needs session
+ids the server issues and the client cannot derive, which is a separate change.
 
 The rule applies under strict identity, the default. A deployment that opted
 out (``STRICT_IDENTITY_REQUIRED=false``) keeps its permissive behavior.
@@ -133,11 +135,23 @@ _INFERRED_KEY = re.compile(
 )
 
 
+# Derivation sources whose key identifies one session the caller holds. The
+# OAuth client and X-Client-Id identify an application, shared by every caller
+# that uses it, so a binding under one proves nothing about who is calling.
+_PER_SESSION_SOURCES = frozenset({
+    "explicit_client_session_id",
+    "explicit_client_session_id_scoped",
+    "continuity_token",
+    "mcp_session_id",
+    "x_session_id",
+})
+
+
 def is_inferred_session_key(session_key: Optional[str]) -> bool:
     if not session_key:
         return True
     key = str(session_key).split("|", 1)[0]
-    if _INFERRED_KEY.match(key):
+    if _INFERRED_KEY.match(key) or key.startswith("oauth:"):
         return True
     try:
         from src.mcp_handlers.context import get_session_signals
@@ -157,11 +171,16 @@ def note_session_proof(agent_uuid: Optional[str], session_key: Optional[str]) ->
     is not a key the server derives by inference (``is_inferred_session_key``):
     sending a fingerprint back as a header proves nothing.
     """
-    from src.mcp_handlers.context import get_session_proof_origin, set_credential_proof_uuid
+    from src.mcp_handlers.context import (
+        get_session_proof_origin,
+        get_session_resolution_source,
+        set_credential_proof_uuid,
+    )
 
     if (
         agent_uuid
         and get_session_proof_origin() == "caller_asserted"
+        and get_session_resolution_source() in _PER_SESSION_SOURCES
         and not is_inferred_session_key(session_key)
     ):
         set_credential_proof_uuid(agent_uuid)

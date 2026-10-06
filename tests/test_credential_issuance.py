@@ -460,3 +460,25 @@ async def test_observation_and_permissive_modes_keep_the_old_bind(monkeypatch, e
         )
 
     cache.assert_awaited()
+
+
+@pytest.mark.parametrize("source, key", [
+    ("oauth_client_id", "oauth:public-connector-client"),
+    ("x_client_id", "some-client-app"),
+    ("x_session_id", "oauth:public-connector-client"),  # an OAuth key re-sent as a session header
+])
+def test_an_application_identifier_proves_no_agent(source, key):
+    """OAuth client ids and X-Client-Id name an application that many callers
+    share; a binding under one says nothing about which caller owns it."""
+    set_session_resolution_source(source)
+    set_session_proof_origin("caller_asserted")
+    note_session_proof(VICTIM, key)
+    assert credentials_issuable(VICTIM)[0] is False
+
+
+@pytest.mark.parametrize("source", ["mcp_session_id", "x_session_id", "continuity_token"])
+def test_per_session_signals_still_prove(source):
+    set_session_resolution_source(source)
+    set_session_proof_origin("caller_asserted")
+    note_session_proof(VICTIM, "mcp:9f1c2e4b8a7d6c5e4f3a2b1c0d9e8f7a")
+    assert credentials_issuable(VICTIM) == (True, "proven_uuid")
