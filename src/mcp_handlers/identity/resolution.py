@@ -1194,13 +1194,16 @@ async def resolve_session_identity(
         _kind = _csid_kind(session_key)
         if _kind == "legacy" and _legacy_refused(session_key):
             return _csid_refusal("legacy_session_id")
-        if _kind == "keyed" and resume:
+        if _kind == "keyed":
+            # Validated whether or not the caller resumes: a forged, ambiguous
+            # or deleted id is refused, never quietly replaced by a fresh mint.
             _keyed_uuid, _keyed_refusal = await _resolve_keyed(session_key)
             if _keyed_refusal is not None:
                 logger.warning(
                     "[STABLE_SESSION] refused keyed session id (%s)", _keyed_refusal.get("reason"),
                 )
                 return _keyed_refusal
+        if _kind == "keyed" and resume:
             _sub_reject = await _substrate_http_reject(_keyed_uuid, source="keyed_session")
             if _sub_reject is not None:
                 return _sub_reject

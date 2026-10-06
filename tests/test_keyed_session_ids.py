@@ -110,9 +110,10 @@ async def test_a_keyed_id_resolves_with_no_stored_binding_and_writes_nothing(key
      VICTIM, "ambiguous_prefix"),
     ([{"agent_id": VICTIM, "status": "deleted", "disabled_at": "2026-10-06"}], VICTIM, "agent_deleted"),
 ])
-async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reason):
+@pytest.mark.parametrize("resume", [True, False])
+async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reason, resume):
     """Forged, unknown, ambiguous or deleted: refused before PATH 1/2, never a
-    fall through to another lookup."""
+    fall through to another lookup or, without resume, to a fresh mint."""
     from src.mcp_handlers.identity import resolution
 
     csid = make_client_session_id(csid_for)
@@ -120,7 +121,7 @@ async def test_a_bad_keyed_id_is_a_terminal_refusal(keyed, rows, csid_for, reaso
         csid = f"agent-{VICTIM[:12]}-{csid.rsplit('-', 1)[1]}"
     with _candidates(*rows), \
          patch.object(resolution, "_get_redis", side_effect=AssertionError("no PATH 1")):
-        result = await resolution.resolve_session_identity(csid, resume=True)
+        result = await resolution.resolve_session_identity(csid, resume=resume)
 
     assert result["resume_failed"] is True
     assert result["error"] == "stable_session_id_rejected" and result["reason"] == reason
