@@ -168,6 +168,7 @@ def _isolate_db_backend(monkeypatch):
     # Session operations
     mock_backend.create_session.return_value = True
     mock_backend.get_session.return_value = None
+    mock_backend.get_session_binding.return_value = None
     mock_backend.update_session_activity.return_value = True
     mock_backend.end_session.return_value = True
     mock_backend.get_active_sessions_for_identity.return_value = []

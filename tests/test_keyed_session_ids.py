@@ -408,3 +408,66 @@ async def test_tool_usage_rows_store_the_digest(keyed):
 
     args = conn.execute.await_args.args
     assert csid not in args and ss.audit_reference(csid) in args
+
+
+def _keyed_resume_patches(resolution, bind_fp, current_fp, mode="strict"):
+    from types import SimpleNamespace
+
+    db = MagicMock()
+    db.get_session_binding = AsyncMock(return_value=(
+        {"agent_uuid": VICTIM, "bind_ip_ua": bind_fp} if bind_fp else None
+    ))
+    db.get_session = AsyncMock(return_value=None)
+    return [
+        _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}),
+        patch.object(resolution, "_get_redis", return_value=None),
+        patch.object(resolution, "get_db", return_value=db),
+        patch.object(resolution, "_get_agent_status", AsyncMock(return_value="active")),
+        patch.object(resolution, "_get_agent_label", AsyncMock(return_value="victim")),
+        patch.object(resolution, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)),
+        patch.object(resolution, "_substrate_http_reject", AsyncMock(return_value=None)),
+        patch("config.governance_config.session_fingerprint_check_mode", return_value=mode),
+        patch("src.mcp_handlers.context.get_session_signals",
+              return_value=SimpleNamespace(ip_ua_fingerprint=current_fp)),
+        patch("src.mcp_handlers.identity.handlers._broadcaster", return_value=None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_fp, resumed", [("fp-a", True), ("fp-b", False)])
+async def test_a_keyed_resume_meets_the_strict_fingerprint_guard(keyed, current_fp, resumed):
+    """A copied keyed id presented from another fingerprint is refused under
+    strict mode, as PATH 1 refuses any other session key."""
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(resolution, "fp-a", current_fp):
+            stack.enter_context(p)
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    if resumed:
+        assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
+    else:
+        assert result.get("error") == "resume_rejected_hijack_guard"
+        assert result.get("reason") == "fingerprint_mismatch"
+        assert result.get("agent_uuid") != VICTIM
+
+
+@pytest.mark.asyncio
+async def test_a_keyed_resume_without_a_recorded_fingerprint_proceeds(keyed):
+    """The global check never penalizes a missing fingerprint, and a keyed id
+    needs no stored binding at all."""
+    from contextlib import ExitStack
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(resolution, None, "fp-b"):
+            stack.enter_context(p)
+        result = await resolution.resolve_session_identity(csid, resume=True)
+
+    assert result["agent_uuid"] == VICTIM and not result.get("resume_failed")
