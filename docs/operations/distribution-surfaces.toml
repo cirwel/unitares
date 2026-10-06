@@ -1,0 +1,252 @@
+# Every place UNITARES is published, listed, or described outside this repo.
+#
+# Why this file exists: by 2026-10-06 the project was on a Hermes catalog pin,
+# two awesome lists, Glama, two plugin marketplaces, PyPI, GHCR, Hugging Face,
+# Zenodo and four websites. Several had drift checks; nothing listed them all,
+# so "where are we listed?" was answered by searching GitHub, and a listing PR
+# opened in another repo was visible only on that repo.
+#
+# Checked by scripts/ci/distribution_surfaces.py:
+#   --offline (every PR, via tests/test_distribution_surfaces.py): the file
+#     parses, every local path exists, every `covered_by` check exists, and
+#     every distribution manifest in this repo is registered here. A new
+#     glama.json / server.json / smithery.yaml / plugin.json / llms.txt that
+#     nobody registered fails CI.
+#   online (weekly, .github/workflows/positioning-surfaces.yml): runs each
+#     surface's probe against the live surface and prints one report.
+#
+# Adding a surface: add a [[surface]] in the same change that creates it (or
+# that opens the PR to someone else's list). Pick the probe that reads the
+# live thing; use `manual` only when nothing can be read without a key, and
+# then record what you saw and when.
+#
+# Kinds:
+#   upstream-pin      a file in someone else's repo pinning our commit/version
+#   upstream-listing  a line in someone else's list (awesome lists)
+#   hosted-listing    a page a third party renders from our repo (Glama)
+#   marketplace       a plugin manifest a client installs from
+#   package           a registry artifact (PyPI, GHCR)
+#   repo-metadata     GitHub description/topics, not a file
+#   site              a website or dataset card that describes UNITARES
+#   citation          DOI / CITATION.cff
+#
+# Probes (see the script for exact semantics):
+#   catalog-pin       upstream file's sha/version vs the source repo's latest
+#                     tag, and vs the pin our contract test exercises
+#   upstream-listing  upstream file mentions `needle`; else is `pr` still open
+#   manifest-versions every version field across a repo's manifests agrees
+#                     with each other and with the repo's latest tag
+#   repo-description  prints each repo's description; enforces `must_contain`
+#   http-ok           URL answers 200
+#   manual            `last_verified` is within `max_age_days`
+#   covered           an existing check owns this surface (`covered_by`)
+
+schema = 1
+
+# --------------------------------------------------------------------------
+# Listings in other people's repos
+# --------------------------------------------------------------------------
+
+[[surface]]
+id = "hermes-plugin-catalog"
+kind = "upstream-pin"
+title = "Nous Hermes Agent plugin catalog"
+where = "https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/unitares.yaml"
+source = "cirwel/unitares-host-adapter (plugin.yaml, pyproject.toml)"
+refresh = """Hand PR to NousResearch/hermes-agent bumping sha + version + description. \
+In the same unitares change, move CATALOG_PIN and the copied payloads in \
+tests/test_hermes_catalog_plugin_contract.py to the new commit."""
+covered_by = ["tests/test_hermes_catalog_plugin_contract.py"]
+probe = { type = "catalog-pin", repo = "NousResearch/hermes-agent", path = "plugin-catalog/unitares.yaml", source_repo = "cirwel/unitares-host-adapter", pin_file = "tests/test_hermes_catalog_plugin_contract.py", pin_pattern = 'CATALOG_PIN = "([0-9a-f]{40})"' }
+
+[[surface]]
+id = "awesome-mcp-servers"
+kind = "upstream-listing"
+title = "punkpeye/awesome-mcp-servers (Agreements & Coordination)"
+where = "https://github.com/punkpeye/awesome-mcp-servers/pull/15822"
+source = "one-line blurb + Glama badge, written by hand in the PR"
+refresh = "Edit the line by PR to punkpeye/awesome-mcp-servers. The list feeds Glama's directory."
+probe = { type = "upstream-listing", repo = "punkpeye/awesome-mcp-servers", path = "README.md", needle = "cirwel/unitares", pr = 15822 }
+
+[[surface]]
+id = "awesome-ai-agent-governance"
+kind = "upstream-listing"
+title = "systempromptio/awesome-ai-agent-governance (Open-Source Governance Toolkits)"
+where = "https://github.com/systempromptio/awesome-ai-agent-governance/pull/116"
+source = "one-line blurb written by hand in the PR"
+refresh = "Edit the line by PR to systempromptio/awesome-ai-agent-governance."
+probe = { type = "upstream-listing", repo = "systempromptio/awesome-ai-agent-governance", path = "README.md", needle = "cirwel/unitares", pr = 116 }
+
+# --------------------------------------------------------------------------
+# Hosted listings and marketplaces
+# --------------------------------------------------------------------------
+
+[[surface]]
+id = "glama"
+kind = "hosted-listing"
+title = "Glama MCP directory"
+where = "https://glama.ai/mcp/servers/cirwel/unitares"
+source = "glama.json, Dockerfile.glama, docker/glama/; listing copy is edited on Glama"
+paths = ["glama.json", "Dockerfile.glama", "docker/glama/build-spec.json", "docker/glama/environment-schema.json", "docs/deployment/glama.md"]
+refresh = "Bundle: glama-bundle.yml checks it on every PR. Listing copy: the operator checklist in docs/deployment/glama.md."
+covered_by = [".github/workflows/glama-bundle.yml", "scripts/ci/check_glama_bundle.py"]
+# Glama's API needs a key, so the listing is read by eye. 2026-10-06: v3.2.0,
+# 13 tools (the progressive first-party surface), Apache-2.0, DOI shown.
+probe = { type = "manual", url = "https://glama.ai/mcp/servers/cirwel/unitares", last_verified = "2026-10-06", max_age_days = 45, observed = "v3.2.0, 13 tools, short description 'A self-hosted accountability server for AI agents, exposed as MCP tools'" }
+
+[[surface]]
+id = "governance-plugin-marketplaces"
+kind = "marketplace"
+title = "Claude Code + Codex plugin (unitares-governance)"
+where = "https://github.com/cirwel/unitares-governance-plugin"
+source = ".claude-plugin/{plugin,marketplace}.json, .codex-plugin/plugin.json, .agents/plugins/marketplace.json"
+refresh = "Plugin release (version bump in every manifest + tag). Skills arrive by the plugin-skill-sync auto-PR."
+covered_by = [".github/workflows/plugin-skill-sync.yml"]
+probe = { type = "manifest-versions", repo = "cirwel/unitares-governance-plugin", files = [".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", ".codex-plugin/plugin.json"] }
+
+[[surface]]
+id = "hermes-agent-plugins-v1"
+kind = "marketplace"
+title = "Agent Plugins v1 package for Hermes (install from this repo's subdirectory)"
+where = "https://github.com/cirwel/unitares/tree/master/integrations/hermes"
+source = "integrations/hermes/"
+paths = ["integrations/hermes/plugin.json", "integrations/hermes/mcp.json", "integrations/hermes/README.md"]
+refresh = "Edit in this repo. Not the catalog entry: the catalog installs unitares-host-adapter."
+covered_by = ["tests/test_hermes_plugin_package.py"]
+probe = { type = "covered" }
+
+# --------------------------------------------------------------------------
+# Packages
+# --------------------------------------------------------------------------
+
+[[surface]]
+id = "pypi-unitares-sdk"
+kind = "package"
+title = "PyPI unitares-sdk"
+where = "https://pypi.org/project/unitares-sdk/"
+source = "agents/sdk/pyproject.toml"
+paths = ["agents/sdk/pyproject.toml"]
+refresh = "Push an sdk-v* tag; publish-sdk.yml uploads."
+covered_by = [".github/workflows/publish-sdk.yml", ".github/workflows/sdk-release-sync.yml", "scripts/ci/sdk_release_sync.py"]
+probe = { type = "covered" }
+
+[[surface]]
+id = "ghcr-images"
+kind = "package"
+title = "GHCR server + lease-plane images"
+where = "https://github.com/cirwel/unitares/pkgs/container/unitares"
+source = "VERSION, PUBLISHED_VERSION, Dockerfile, elixir/lease_plane/Dockerfile"
+paths = ["VERSION", "PUBLISHED_VERSION", "Dockerfile"]
+refresh = "Release cut + promote-release.yml (docs/operations/RELEASE_PROCESS.md)."
+covered_by = [".github/workflows/server-release-sync.yml", "scripts/ci/server_release_sync.py"]
+probe = { type = "covered" }
+
+# --------------------------------------------------------------------------
+# Repo metadata, citation, sites
+# --------------------------------------------------------------------------
+
+[[surface]]
+id = "github-repo-unitares"
+kind = "repo-metadata"
+title = "cirwel/unitares description"
+where = "https://github.com/cirwel/unitares"
+source = "CANONICAL_TAGLINE in scripts/diagnostics/check_doc_drift.py"
+refresh = "gh repo edit cirwel/unitares --description ..."
+covered_by = ["scripts/diagnostics/check_repo_description.py"]
+probe = { type = "repo-description", repos = ["cirwel/unitares"], must_contain_tagline = true }
+
+[[surface]]
+id = "github-repos-family"
+kind = "repo-metadata"
+title = "Descriptions of the public sibling repos"
+where = "https://github.com/cirwel"
+source = "set in the GitHub UI per repo"
+refresh = "gh repo edit <repo> --description ..."
+probe = { type = "repo-description", repos = ["cirwel/unitares-governance-plugin", "cirwel/unitares-host-adapter", "cirwel/unitares-discord-bridge", "cirwel/unitares-resident", "cirwel/anima-mcp", "cirwel/CIRWEL"] }
+
+[[surface]]
+id = "zenodo-citation"
+kind = "citation"
+title = "Zenodo DOI + CITATION.cff"
+where = "https://doi.org/10.5281/zenodo.19647159"
+source = "CITATION.cff"
+paths = ["CITATION.cff"]
+refresh = "New Zenodo version per paper release; CITATION.cff carries the tagline."
+covered_by = ["scripts/diagnostics/check_doc_drift.py"]
+probe = { type = "http-ok", url = "https://doi.org/10.5281/zenodo.19647159" }
+
+[[surface]]
+id = "github-pages"
+kind = "site"
+title = "cirwel.github.io/unitares (generated from docs/public-site)"
+where = "https://cirwel.github.io/unitares/"
+source = "docs/public-site/index.md"
+paths = ["docs/public-site/index.md"]
+refresh = "Merging docs/public-site/** redeploys (public-pages.yml)."
+covered_by = [".github/workflows/public-pages.yml", "scripts/diagnostics/check_doc_drift.py"]
+probe = { type = "http-ok", url = "https://cirwel.github.io/unitares/" }
+
+[[surface]]
+id = "cirwel-org"
+kind = "site"
+title = "cirwel.org"
+where = "https://cirwel.org"
+source = "cirwel/cirwel-site (src/data/claims.json, components)"
+refresh = "Edit and deploy cirwel-site."
+probe = { type = "http-ok", url = "https://cirwel.org" }
+
+[[surface]]
+id = "cirwelsystems-com"
+kind = "site"
+title = "cirwelsystems.com"
+where = "https://cirwelsystems.com"
+source = "cirwel/cirwelsystems-site"
+refresh = "Edit and deploy cirwelsystems-site."
+probe = { type = "http-ok", url = "https://cirwelsystems.com" }
+
+[[surface]]
+id = "cirwel-github-io"
+kind = "site"
+title = "cirwel.github.io index + CIRWEL profile README"
+where = "https://cirwel.github.io/"
+source = "cirwel/cirwel.github.io (index.html), cirwel/CIRWEL (README.md)"
+refresh = "Edit those repos."
+probe = { type = "http-ok", url = "https://cirwel.github.io/" }
+
+[[surface]]
+id = "hf-eisv-trajectories"
+kind = "site"
+title = "Hugging Face dataset hikewa/unitares-eisv-trajectories"
+where = "https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories"
+source = "cirwel/eisv-lumen"
+refresh = "Edit the dataset card on the Hub."
+probe = { type = "http-ok", url = "https://huggingface.co/api/datasets/hikewa/unitares-eisv-trajectories" }
+
+[[surface]]
+id = "hf-verdict-counterfactual"
+kind = "site"
+title = "Hugging Face dataset hikewa/unitares-verdict-counterfactual-v6.8"
+where = "https://huggingface.co/datasets/hikewa/unitares-verdict-counterfactual-v6.8"
+source = "cirwel/unitares-repro-v6"
+refresh = "Edit the dataset card on the Hub."
+probe = { type = "http-ok", url = "https://huggingface.co/api/datasets/hikewa/unitares-verdict-counterfactual-v6.8" }
+
+# --------------------------------------------------------------------------
+# Checked and absent (2026-10-06), so the question has a recorded answer.
+# Move one up to [[surface]] in the change that lists us there.
+# --------------------------------------------------------------------------
+
+[[not_listed]]
+where = "MCP Registry (registry.modelcontextprotocol.io)"
+checked = "2026-10-06"
+note = "search=unitares returns 0 servers; no server.json in the repo"
+
+[[not_listed]]
+where = "Smithery, mcp.so, LobeHub, PulseMCP"
+checked = "2026-10-06"
+note = "no listing found by URL probe or site search"
+
+[[not_listed]]
+where = "PyPI server package / npm"
+checked = "2026-10-06"
+note = "`unitares` and `governance-mcp` are 404 on PyPI; nothing on npm. Only unitares-sdk ships."
