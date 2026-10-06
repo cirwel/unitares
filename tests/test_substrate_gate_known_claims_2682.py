@@ -174,7 +174,7 @@ async def test_the_refresh_retries_the_first_load_then_reloads_every_interval(mo
 @pytest.mark.asyncio
 async def test_a_reload_only_adds_so_it_cannot_erase_a_concurrent_lookup():
     """A reload's snapshot may predate a claim a lookup just recorded; it must
-    not erase it. Only a lookup that finds no claim removes a UUID."""
+    not erase it. Nothing removes an entry, a negative lookup included."""
     verification._known_claimed.add(RESIDENT)  # recorded by a concurrent lookup
     with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": ORDINARY}])):
         await verification.load_known_substrate_claims()  # older snapshot
