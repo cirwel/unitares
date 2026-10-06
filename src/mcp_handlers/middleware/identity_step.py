@@ -549,6 +549,13 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
     # Same hygiene for why resolution bound nothing: the unbound metrics read
     # keys its recovery on it (core.unbound_read_cause).
     set_unbound_resolution(None)
+    # And for credential proof (identity/credential_issuance.py): proof is for
+    # one request. A reused dispatch task must not carry an earlier call's
+    # proof of an agent into a later call that only infers it. The proof
+    # origin is cleared with it; this request's derivation stamps it again.
+    from ..context import set_credential_proof_uuid, set_session_proof_origin
+    set_credential_proof_uuid(None)
+    set_session_proof_origin(None)
 
     # Unified session key derivation via SessionSignals + derive_session_key()
     from ..context import get_session_signals
@@ -795,6 +802,20 @@ async def resolve_identity(name: str, arguments: Dict[str, Any], ctx) -> Any:
                 await _emit_middleware_hijack("log")
             # mode == "off": unchanged behavior, no log, no broadcast
 
+        # The agent this request resolves to now comes from the agent_uuid
+        # claim, not from the caller's session, so a caller-asserted session
+        # derived earlier says nothing about it. Only a matching token proves
+        # it; otherwise the request is inferred for credential issuance
+        # (identity/credential_issuance.py). A UDS caller's substrate proof is
+        # recorded by the identity handler when it verifies.
+        try:
+            from ..context import set_credential_proof_uuid, set_session_proof_origin
+            if _partc_owned:
+                set_credential_proof_uuid(_direct_uuid)
+            else:
+                set_session_proof_origin("server_inferred")
+        except Exception:
+            pass
         from ..context import set_session_context, update_context_agent_id
         client_hint = arguments.get("client_hint") if arguments else None
         core_status = await _lookup_core_agent_row_status(_direct_uuid, "PATH0")
