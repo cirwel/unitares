@@ -1265,7 +1265,7 @@ Read accepts_host_id_from, not available, to learn which tool will take it. An u
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Ask a model for advisory help; evidence only, no review record. For on-record judgment use request_review.
+Ask a model for advice, no review record; effort='thorough' needs cloud privacy and an operator extension; on-record: request_review.
 
 Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
@@ -1276,7 +1276,7 @@ Send a brief, get back advisory model evidence, never a governed verdict. effort
 - **Timeout:** 240s
 - **Related:** `consult`, `list_inference_hosts`, `describe_inference_host`, `knowledge`, `dialectic`
 
-Run a raw completion on a local or Hugging Face inference host; for advisory help prefer consult.
+Run a raw completion on a local or HF host; default privacy still routes some model ids off-box; for advice prefer consult.
 
 One synchronous advisory completion on the local Ollama lane or the Hugging Face router, returning tool evidence, never a governed review record. provider='hf' also needs privacy='cloud' or 'auto', since the default privacy='local' refuses it — yet that local default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or openai/gpt-oss model still routes off-box. host_id rejects the Claude, Codex and Antigravity adapters; those are delegate_inference's. Requires a bound identity. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
@@ -1288,7 +1288,7 @@ One synchronous advisory completion on the local Ollama lane or the Hugging Face
 - **Depends on:** `list_inference_hosts`
 - **Related:** `consult`, `describe_inference_host`, `dialectic`
 
-Hand a bounded task to a strong-model host and get the result back; for a raw completion use call_model.
+Hand a bounded task to a strong-model CLI host (operator extension, off by default); for a raw completion use call_model.
 
 Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
