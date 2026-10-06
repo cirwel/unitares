@@ -10,10 +10,10 @@ A request may receive an agent's credentials when, in that request:
 - it created the agent (a mint);
 - it presented a continuity token bound to that agent, or passed the UDS
   substrate attestation for it, on a direct UUID resume;
-- its session was resolved from a signal the caller itself transmitted
-  (``proof_origin == "caller_asserted"``: its own ``client_session_id``, a
-  verified token, an ``Mcp-Session-Id`` or the like), the same standard
-  strict identity applies to a write; or
+- a session the caller itself transmitted (``proof_origin ==
+  "caller_asserted"``: its own ``client_session_id``, a verified token, an
+  ``Mcp-Session-Id`` or the like) resolved to that agent through a stored
+  binding, the same standard strict identity applies to a write; or
 - it carries a valid operator token.
 
 Anything else, a fingerprint pin, an onboard pin reached through a name or an
@@ -21,6 +21,14 @@ unverified ``agent_id``, an X-Agent-Id recovery, a transport-injected session,
 resolves the caller only by inference, and inference must not be exchanged for
 a credential: on a Docker bridge or behind a tunnel every client shares one
 address, and a user agent is whatever the client sends.
+
+Proof is recorded per agent (``credential_proof_uuid``), not per request:
+the resolver records it where a caller-asserted session key resolves through
+a stored binding (``note_session_proof``), PATH 0 where a matching token or a
+UDS attestation proves the claimed UUID, and token rebind where a verified
+token names the agent. A request-wide "caller asserted" flag would let a
+caller's own session vouch for a different agent the same request resolved
+by a UUID claim or a recovery path.
 
 What this does not close: a ``client_session_id`` of the legacy shape
 ``agent-{uuid[:12]}`` is computable from the agent's public UUID, and a
@@ -72,14 +80,11 @@ def credentials_issuable(agent_uuid: Optional[str], *, minted: bool = False) -> 
 
     from src.mcp_handlers.context import (
         get_credential_proof_uuid,
-        get_session_proof_origin,
         get_session_resolution_source,
     )
 
     if agent_uuid and get_credential_proof_uuid() == agent_uuid:
         return True, "proven_uuid"
-    if get_session_proof_origin() == "caller_asserted":
-        return True, "caller_asserted_session"
     try:
         if is_operator_caller():
             return True, "operator"
@@ -109,3 +114,15 @@ def log_withheld(tool: str, agent_uuid: Optional[str], basis: str) -> None:
         (agent_uuid or "?")[:8],
         basis,
     )
+
+
+def note_session_proof(agent_uuid: Optional[str]) -> None:
+    """Record that this request's own session resolved to ``agent_uuid``.
+
+    Called by the resolver when a session key resolves through a stored
+    binding. Counts only when the key came from a signal the caller sent.
+    """
+    from src.mcp_handlers.context import get_session_proof_origin, set_credential_proof_uuid
+
+    if agent_uuid and get_session_proof_origin() == "caller_asserted":
+        set_credential_proof_uuid(agent_uuid)

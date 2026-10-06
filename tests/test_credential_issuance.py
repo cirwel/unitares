@@ -20,7 +20,7 @@ from src.mcp_handlers.context import (
     set_session_proof_origin,
     set_session_resolution_source,
 )
-from src.mcp_handlers.identity.credential_issuance import credentials_issuable
+from src.mcp_handlers.identity.credential_issuance import credentials_issuable, note_session_proof
 
 VICTIM = "5e728ecb-1234-4abc-8def-0123456789ab"
 OTHER = "11111111-2222-4333-8444-555555555555"
@@ -54,10 +54,33 @@ def test_a_mint_always_gets_its_credentials():
     assert credentials_issuable(VICTIM, minted=True) == (True, "minted")
 
 
-def test_a_session_the_caller_sent_gets_credentials():
+def _caller_session_resolved_to(agent_uuid: str) -> None:
+    """What the resolver does when the caller's own session key resolves
+    through a stored binding (resolution._resumed_identity_result)."""
     set_session_resolution_source("explicit_client_session_id")
     set_session_proof_origin("caller_asserted")
-    assert credentials_issuable(VICTIM) == (True, "caller_asserted_session")
+    note_session_proof(agent_uuid)
+
+
+def test_a_session_the_caller_sent_gets_credentials_for_its_agent():
+    _caller_session_resolved_to(VICTIM)
+    assert credentials_issuable(VICTIM) == (True, "proven_uuid")
+
+
+def test_a_caller_asserted_session_proves_only_the_agent_it_resolved_to():
+    """The flag is per request; the proof is per agent. A caller's own session
+    for OTHER must not vouch for VICTIM, reached by a UUID claim or recovery."""
+    _caller_session_resolved_to(OTHER)
+    assert credentials_issuable(VICTIM)[0] is False
+    set_session_proof_origin("caller_asserted")  # origin alone, no resolution
+    set_credential_proof_uuid(None)
+    assert credentials_issuable(VICTIM)[0] is False
+
+
+def test_an_inferred_session_resolution_records_no_proof():
+    _inferred()
+    note_session_proof(VICTIM)
+    assert credentials_issuable(VICTIM)[0] is False
 
 
 def test_a_proof_counts_only_for_the_agent_it_proved():
@@ -160,8 +183,7 @@ async def test_onboard_resumes_when_the_caller_sent_its_session():
     existing = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "mine", "created": False}
 
     async def resolve(*args, **kwargs):
-        set_session_resolution_source("explicit_client_session_id")
-        set_session_proof_origin("caller_asserted")
+        _caller_session_resolved_to(VICTIM)
         return dict(existing)
 
     with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
@@ -221,9 +243,10 @@ async def test_identity_name_renames_only_with_proof(origin, renamed):
     from src.mcp_handlers.identity import handlers
 
     async def resolve(*args, **kwargs):
-        set_session_resolution_source("pinned_onboard_session" if origin == "server_inferred"
-                                      else "explicit_client_session_id")
-        set_session_proof_origin(origin)
+        if origin == "server_inferred":
+            _inferred()
+        else:
+            _caller_session_resolved_to(VICTIM)
         return {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
 
     label = AsyncMock(return_value=True)
@@ -245,9 +268,10 @@ async def test_identity_adapter_session_resume_renames_only_with_proof(origin, r
     existing = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
 
     async def resolve(*args, **kwargs):
-        set_session_resolution_source("pinned_onboard_session" if origin == "server_inferred"
-                                      else "explicit_client_session_id")
-        set_session_proof_origin(origin)
+        if origin == "server_inferred":
+            _inferred()
+        else:
+            _caller_session_resolved_to(VICTIM)
         return dict(existing)
 
     label = AsyncMock(return_value=True)
@@ -286,3 +310,33 @@ async def test_a_callers_own_session_does_not_vouch_for_a_claimed_uuid(monkeypat
     assert body.get("client_session_id") is None, body
     assert "continuity_token" not in body
     assert body["credentials_withheld"]["basis"].startswith("inferred:")
+
+
+@pytest.mark.asyncio
+async def test_an_unproven_uuid_resume_does_not_bind_the_callers_session(monkeypatch):
+    """Outside strict mode a bare agent_uuid resume proceeds on the slow path.
+    It must not map the caller's session key to the claimed agent: a later
+    call presenting that key would then resolve, caller-asserted, to it."""
+    from src.mcp_handlers.identity import handlers
+
+    monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "log")
+    server = MagicMock()
+    server.monitors = {}  # not cached: take the DB-backed slow path
+    cache = AsyncMock()
+    db = MagicMock()
+    db.read_lineage_state = AsyncMock(return_value=None)
+    with patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+         patch.object(handlers, "_emit_identity_hijack_event", AsyncMock()), \
+         patch.object(handlers, "_agent_exists_in_postgres", AsyncMock(return_value=True)), \
+         patch.object(handlers, "_get_agent_status", AsyncMock(return_value="active")), \
+         patch.object(handlers, "_get_agent_id_from_metadata", AsyncMock(return_value=VICTIM)), \
+         patch.object(handlers, "_get_agent_label", AsyncMock(return_value="victim")), \
+         patch.object(handlers, "get_db", return_value=db), \
+         patch.object(handlers, "_cache_session", cache):
+        result = await handlers.handle_identity_adapter(
+            {"agent_uuid": VICTIM, "client_session_id": "agent-attacker-own", "resume": True}
+        )
+
+    body = json.loads(result[0].text)
+    assert body.get("uuid") == VICTIM and body.get("client_session_id") is None, body
+    cache.assert_not_awaited()

@@ -1057,7 +1057,11 @@ async def _try_resume_by_agent_uuid_direct(
     if requested_name and requested_name != label and _label_write_allowed(_direct_uuid):
         if await set_agent_label(_direct_uuid, requested_name, session_key=base_session_key):
             label = requested_name
-    await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
+    # Bind the caller's session to this agent only when the request proved it
+    # owns the agent: a bare UUID claim (allowed outside strict mode) must not
+    # leave the caller's key resolving to the agent on later calls.
+    if _partc_owned:
+        await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
     try:
         from ..context import update_context_agent_id, set_session_resolution_source
         update_context_agent_id(_direct_uuid)

@@ -950,6 +950,14 @@ def _resumed_identity_result(
     keys, and folding them in here would hand their callers keys they do not
     see today.
     """
+    # A stored binding for the session key resolved to this agent; if the key
+    # came from the caller (caller_asserted), that proves ownership for
+    # credential issuance (credential_issuance.py).
+    try:
+        from .credential_issuance import note_session_proof
+        note_session_proof(agent_uuid)
+    except Exception:
+        pass
     return {
 
         "agent_id": agent_id,   # Human-readable (model+date). UUID for lookup is agent_uuid.
@@ -1514,6 +1522,12 @@ async def resolve_session_identity(
                         f"[TOKEN_REBIND] Rebound {token_agent_uuid[:8]}... via direct agent lookup "
                         f"(session binding had expired)"
                     )
+                    # A verified token named this agent: proof for credential issuance.
+                    try:
+                        from ..context import set_credential_proof_uuid
+                        set_credential_proof_uuid(token_agent_uuid)
+                    except Exception:
+                        pass
                     return {
                         "agent_id": agent_id,
                         "public_agent_id": agent_id,
