@@ -71,6 +71,7 @@ import time
 from ..utils import success_response, error_response, require_argument, require_agent_id, require_registered_agent
 from ..decorators import mcp_tool
 from ..validators import apply_param_aliases
+from ..identity.stable_session import audit_reference
 from src.knowledge_graph import (
     get_knowledge_graph, DiscoveryNode, ResponseTo, normalize_tags,
     normalize_response_type,
@@ -1612,7 +1613,9 @@ async def _capture_store_provenance(arguments: Dict[str, Any], agent_id: str) ->
                 except Exception:
                     writer_session = None
             if writer_session:
-                provenance["writer_session_id_at_write"] = writer_session
+                # Search results return this to any reader; a keyed session id
+                # is a bearer credential, so store its audit reference.
+                provenance["writer_session_id_at_write"] = audit_reference(writer_session)
 
         provenance_chain = await _build_s7_provenance_chain_with_fallback(agent_id, meta, _get_lineage)
         from src.provenance_context import classify_fork_for_s22_context
@@ -3068,7 +3071,7 @@ def _serialize_search_discoveries(
         item["authority"] = assess_authority(document).to_dict()
         session_at_write = (provenance or {}).get("writer_session_id_at_write")
         if session_at_write:
-            item["session_id_at_write"] = session_at_write
+            item["session_id_at_write"] = audit_reference(session_at_write)
 
         serialized = document.to_dict(include_details=include_details)
         # Summary-mode serialization already computes lifecycle metadata and a
@@ -3630,7 +3633,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
             }
             session_at_write = (prov or {}).get("writer_session_id_at_write")
             if session_at_write:
-                d_dict["session_id_at_write"] = session_at_write
+                d_dict["session_id_at_write"] = audit_reference(session_at_write)
             if include_details and full_dict.get("details"):
                 d_dict["details"] = full_dict.get("details")
             d_dict["_agent_id"] = d.agent_id
