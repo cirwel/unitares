@@ -946,14 +946,19 @@ async def _try_resume_by_agent_uuid_direct(
                 _direct_uuid[:8], _exc, exc_info=True,
             )
 
-    if _partc_owned:
-        # A token bound to this UUID or a verified substrate attestation: this
-        # request may receive the agent's credentials (credential_issuance.py).
-        try:
-            from ..context import set_credential_proof_uuid
+    # A token bound to this UUID or a verified substrate attestation lets this
+    # request receive the agent's credentials (credential_issuance.py). Without
+    # either, the agent comes from a bare UUID claim (allowed only outside
+    # strict mode), and a caller-asserted session derived earlier in the
+    # request must not vouch for it.
+    try:
+        from ..context import set_credential_proof_uuid, set_session_proof_origin
+        if _partc_owned:
             set_credential_proof_uuid(_direct_uuid)
-        except Exception:
-            pass
+        else:
+            set_session_proof_origin("server_inferred")
+    except Exception:
+        pass
 
     if not _partc_owned:
         from config.governance_config import identity_strict_mode

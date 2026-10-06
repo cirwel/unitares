@@ -259,3 +259,30 @@ async def test_identity_adapter_session_resume_renames_only_with_proof(origin, r
         await handlers.handle_identity_adapter({"name": "attacker-chosen", "resume": True})
 
     assert label.await_count == (1 if renamed else 0)
+
+
+@pytest.mark.asyncio
+async def test_a_callers_own_session_does_not_vouch_for_a_claimed_uuid(monkeypatch):
+    """IDENTITY_STRICT=log lets a bare agent_uuid resume proceed (with a hijack
+    log). The caller's own client_session_id made the request caller-asserted,
+    but the agent returned comes from the UUID claim, so it must not unlock the
+    victim's credentials."""
+    from src.mcp_handlers.identity import handlers
+
+    monkeypatch.setenv("UNITARES_IDENTITY_STRICT", "log")
+    set_session_resolution_source("explicit_client_session_id")
+    set_session_proof_origin("caller_asserted")  # from the caller's OWN session
+
+    server = MagicMock()
+    server.monitors = {VICTIM: MagicMock()}
+    with patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
+         patch.object(handlers, "_emit_identity_hijack_event", AsyncMock()):
+        result = await handlers.handle_identity_adapter(
+            {"agent_uuid": VICTIM, "client_session_id": "agent-attacker-own", "resume": True}
+        )
+
+    body = json.loads(result[0].text)
+    assert body.get("uuid") == VICTIM, body
+    assert body.get("client_session_id") is None, body
+    assert "continuity_token" not in body
+    assert body["credentials_withheld"]["basis"].startswith("inferred:")
