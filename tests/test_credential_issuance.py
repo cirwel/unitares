@@ -233,3 +233,29 @@ async def test_identity_name_renames_only_with_proof(origin, renamed):
 
     assert label.await_count == (1 if renamed else 0)
     assert result["display_name"] == ("attacker-chosen" if renamed else "victim")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin, renamed", [("server_inferred", False), ("caller_asserted", True)])
+async def test_identity_adapter_session_resume_renames_only_with_proof(origin, renamed):
+    """The adapter's session-key resume (STEP 1) writes a requested name before
+    returning; it must not for a caller matched to the agent by inference."""
+    from src.mcp_handlers.identity import handlers
+
+    existing = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "victim", "created": False}
+
+    async def resolve(*args, **kwargs):
+        set_session_resolution_source("pinned_onboard_session" if origin == "server_inferred"
+                                      else "explicit_client_session_id")
+        set_session_proof_origin(origin)
+        return dict(existing)
+
+    label = AsyncMock(return_value=True)
+    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+         patch.object(handlers, "derive_session_key", AsyncMock(return_value="pin:shared-ua")), \
+         patch.object(handlers, "set_agent_label", label), \
+         patch.object(handlers, "_cache_session", AsyncMock()), \
+         patch.object(handlers, "_perform_session_bind", AsyncMock()):
+        await handlers.handle_identity_adapter({"name": "attacker-chosen", "resume": True})
+
+    assert label.await_count == (1 if renamed else 0)

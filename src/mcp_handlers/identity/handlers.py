@@ -608,6 +608,18 @@ async def _collect_identity_aliases(
 # TOOL HANDLER (replaces identity() tool)
 # =============================================================================
 
+def _label_write_allowed(agent_uuid: Optional[str]) -> bool:
+    """May this request rename ``agent_uuid``? Renaming writes to the agent,
+    so it needs the proof that receiving its credentials needs
+    (identity/credential_issuance.py); a caller matched by inference may not."""
+    from .credential_issuance import credentials_issuable, log_withheld
+
+    allowed, basis = credentials_issuable(agent_uuid)
+    if not allowed:
+        log_withheld("identity(name)", agent_uuid, basis)
+    return allowed
+
+
 async def handle_identity_v2(
     arguments: Dict[str, Any],
     session_key: str,
@@ -640,13 +652,8 @@ async def handle_identity_v2(
     # Set label if requested (this will persist the agent). Renaming is a
     # write on the agent, so a caller matched only by inference may not do it
     # (identity/credential_issuance.py); its response also withholds credentials.
-    if name and not identity.get("created"):
-        from .credential_issuance import credentials_issuable, log_withheld
-
-        _label_allowed, _label_basis = credentials_issuable(agent_uuid)
-        if not _label_allowed:
-            log_withheld("identity(name)", agent_uuid, _label_basis)
-            name = None
+    if name and not identity.get("created") and not _label_write_allowed(agent_uuid):
+        name = None
     if name:
         success = await set_agent_label(agent_uuid, name, session_key=session_key)
         if success:
@@ -1042,7 +1049,7 @@ async def _try_resume_by_agent_uuid_direct(
     label = await _get_agent_label(_direct_uuid)
     # Update label if requested
     requested_name = arguments.get("name")
-    if requested_name and requested_name != label:
+    if requested_name and requested_name != label and _label_write_allowed(_direct_uuid):
         if await set_agent_label(_direct_uuid, requested_name, session_key=base_session_key):
             label = requested_name
     await _cache_session(base_session_key, _direct_uuid, display_agent_id=agent_id)
@@ -1191,8 +1198,12 @@ async def _try_resume_by_session_key(
 
     logger.info(f"[IDENTITY] Resuming existing agent {agent_uuid[:8]}... (explicit resume=true)")
 
-    # Update label if requested
-    if arguments.get("name") and arguments.get("name") != label:
+    # Update label if requested, and only by a caller that proved ownership.
+    if (
+        arguments.get("name")
+        and arguments.get("name") != label
+        and _label_write_allowed(agent_uuid)
+    ):
         success = await set_agent_label(agent_uuid, arguments.get("name"), session_key=base_session_key)
         if success:
             label = arguments.get("name")
