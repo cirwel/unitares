@@ -526,3 +526,23 @@ async def test_a_token_for_another_agent_wins_over_a_keyed_id(keyed):
     assert result.get("agent_uuid") == OTHER and result.get("source") == "token_rebind"
     cache.assert_not_awaited()
     db.create_session.assert_not_awaited()
+
+
+def test_the_audit_jsonl_stores_the_digest(keyed, tmp_path, monkeypatch):
+    """The JSONL audit file is readable on the host; it gets the digest too."""
+    from datetime import datetime, timezone
+
+    from src import audit_log
+
+    monkeypatch.setenv("UNITARES_AUDIT_WRITE_JSONL", "1")
+    logger = audit_log.AuditLogger(log_file=tmp_path / "audit.jsonl")
+    monkeypatch.setattr(logger, "_schedule_postgres_write", lambda entry: None)
+    csid = make_client_session_id(VICTIM)
+
+    logger._write_entry(audit_log.AuditEntry(
+        timestamp=datetime.now(timezone.utc).isoformat(), agent_id=VICTIM,
+        event_type="t", confidence=0.0, details={}, session_id=csid,
+    ))
+
+    written = (tmp_path / "audit.jsonl").read_text()
+    assert csid not in written and ss.audit_reference(csid) in written
