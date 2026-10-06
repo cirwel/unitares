@@ -78,3 +78,24 @@ async def test_dispatch_refuses_a_forged_session_id_even_with_force_new(monkeypa
     handler.assert_not_awaited()
     payload = json.loads(result[0].text)
     assert payload["surface_context"]["resume_rejected_reason"] == "stable_session_id_rejected"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sent", [False, "false", None, True, "true"])
+async def test_the_adapter_reads_the_flag_once_before_the_s13_default(sent):
+    """With no proof signal, the S13 default mints whatever form false takes,
+    and the coerced value is what handle_identity_v2 sees."""
+    seen = {}
+
+    async def v2(arguments, session_key, model_type=None):
+        seen["force_new"] = arguments["force_new"]
+        raise RuntimeError("stop after the handler is reached")
+
+    args = {} if sent is None else {"force_new": sent}
+    with patch.object(handlers, "handle_identity_v2", v2), \
+         patch.object(handlers, "derive_session_key", AsyncMock(return_value="fp-key")), \
+         patch.object(handlers, "_try_resume_by_agent_uuid_direct", AsyncMock(return_value=None)), \
+         patch.object(handlers, "_try_resume_by_session_key", AsyncMock(return_value=(None, None))):
+        await handlers.handle_identity_adapter(args)  # the tool wrapper reports the stop
+
+    assert seen["force_new"] is True

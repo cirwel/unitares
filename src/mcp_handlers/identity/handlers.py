@@ -1304,16 +1304,17 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
         or arguments.get("agent_id")
         or arguments.get("name")
     )
-    if not _has_proof_signal and not arguments.get("force_new"):
-        arguments["force_new"] = True
+    # Coerced once, before the S13 default and like handle_identity_v2's
+    # resolver call, so a string "false" is treated exactly as False here,
+    # in the default below and there.
+    force_new = coerce_bool(arguments.get("force_new"), default=False)
+    if not _has_proof_signal and not force_new:
+        force_new = True
         logger.info(
             "[FRESH_INSTANCE] arg-less identity() with no proof signal — "
             "defaulting to force_new=true per v2 ontology (S13)"
         )
-
-    # Coerced like handle_identity_v2's resolver call, so a string "false"
-    # neither skips the session-key resume here nor disagrees with it there.
-    force_new = coerce_bool(arguments.get("force_new"), default=False)
+    arguments["force_new"] = force_new
     resume = arguments.get("resume", True)
     model_type = arguments.get("model_type")
 
