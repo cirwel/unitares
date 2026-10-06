@@ -38,12 +38,11 @@ additions merge cleanly. -->
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD` | `''` | Which rows this deployment writes: ``all`` (default), ``firings``, ``off`` | src/verification_floor_shadow.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
-| `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
+| `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
 | `UNITARES_ANTIGRAVITY_CLI` | varies: `None (no reader fallback)` (src/mcp_handlers/dialectic/orchestrator_dispatch.py); `''` (src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py) | Return the operator-pinned CLI path for a known adapter, if any | src/mcp_handlers/dialectic/orchestrator_dispatch.py, src/mcp_handlers/support/host_adapter.py, agents/dialectic_reviewer/host_backends.py |
-| `UNITARES_API_TOKEN` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py |
 | `UNITARES_AUDIT_LOG` | `None (no reader fallback)` | — | src/audit_log.py |
 | `UNITARES_AUDIT_WRITE_JSONL` | `'1'` | read by __init__() | src/audit_log.py |
 | `UNITARES_AUTOMATION_CENSUS_PATH` | `default_path` | GET /api/automations — automation census snapshot for the dashboard | scripts/ops/automation_census_route.py |
@@ -65,7 +64,9 @@ additions merge cleanly. -->
 | `UNITARES_COHORT_PRIOR_MODE` | `None (no reader fallback)` | Behavior when cohort priors are enabled: 'observe' (default) or 'apply' | src/cohort_prior.py |
 | `UNITARES_CONNECT_RETRIES` | `'1'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
 | `UNITARES_CONNECT_TIMEOUT` | `'10'` | read by __init__() | agents/sdk/src/unitares_sdk/client.py |
-| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | Return continuity token support details for diagnostics. | src/mcp_handlers/identity/session.py, src/mcp_handlers/knowledge/handlers.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET` | `None (no reader fallback)` | The operator's secret, or None when unset, blank or the published default | src/continuity_secret.py, src/mcp_handlers/knowledge/handlers.py |
+| `UNITARES_CONTINUITY_TOKEN_SECRET_FILE` | `None (no reader fallback)` | Where the generated secret lives | src/continuity_secret.py |
+| `UNITARES_CREDENTIAL_ISSUANCE` | `None (no reader fallback)` | ``log`` to observe only; anything else enforces. | src/mcp_handlers/identity/credential_issuance.py |
 | `UNITARES_DASHBOARD_DB_BUDGET_S` | `None (no reader fallback)` | Inner DB-read budget in seconds | src/mcp_handlers/admin/dashboard.py |
 | `UNITARES_DASHBOARD_EXT_DIR` | `''` | Serve operator dashboard extensions from UNITARES_DASHBOARD_EXT_DIR. | src/http_routes/dashboard.py |
 | `UNITARES_DASHBOARD_OPERATOR_LABEL` | `'operator'` | read by _operator_label() | src/dashboard_auth.py |
@@ -122,12 +123,12 @@ additions merge cleanly. -->
 | `UNITARES_HEALTH_PROBE_INTERVAL_SECONDS` | `None (no reader fallback)` | Periodically run the deep health check and cache the result | src/background_tasks.py |
 | `UNITARES_HOST_ADAPTER_DISABLED_HOSTS` | `''` | Hosts the operator switched off individually | src/mcp_handlers/support/host_adapter.py |
 | `UNITARES_HOST_ADAPTER_ENABLED` | `''` | Opt-in flag | src/mcp_handlers/support/host_adapter.py |
-| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+17 more) |
+| `UNITARES_HTTP_API_TOKEN` | `None (no reader fallback)` | Serve the phase-space visualization | src/http_routes/dashboard.py, src/http_routes/effects.py (+16 more) |
 | `UNITARES_HTTP_CORS_ALLOW_ORIGIN` | `None (no reader fallback)` | read by _configure_middleware() | src/services/mcp_transport_service.py |
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
-| `UNITARES_IDENTITY_STRICT` | varies: `'log'` (config/governance_config.py:1633); `IDENTITY_STRICT_MODE` (config/governance_config.py:1642) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_IDENTITY_STRICT` | varies: `'strict'` (config/governance_config.py:1633); `IDENTITY_STRICT_MODE` (config/governance_config.py:1642) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `None (no reader fallback)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1755); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1766) | Runtime accessor — respects env changes set after module load | config/governance_config.py |

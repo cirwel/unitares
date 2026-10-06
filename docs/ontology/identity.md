@@ -110,6 +110,16 @@ resolvers (`src/mcp_handlers/support/agent_auth.py`).
 > not a field to persist or attach to every ordinary tool call, and it does not
 > resume identity across process boundaries.
 
+> **Who receives credentials.** A `client_session_id` and a `continuity_token`
+> each let the holder act as the agent, so under strict identity (the default)
+> `identity()` and `onboard()` return them only to a call that proved ownership:
+> a mint, a session or token the caller sent, a UDS substrate attestation, or an
+> operator token. A call matched only by inference (an onboard pin keyed on the
+> User-Agent, a transport fingerprint, a name or unverified `agent_id`) gets
+> `client_session_id: null` and `credentials_withheld` from `identity()`, and
+> `onboard()` refuses that resume with `resume_proof_required`
+> (`src/mcp_handlers/identity/credential_issuance.py`).
+
 ### Canonical resolution order
 
 When the server needs to answer "who is this caller?" the **canonical order
@@ -465,10 +475,9 @@ properties, not surprises:
   non-copyable — not a bearer token; a copyable cross-process token
   would only relocate this over-claim. Until such agents migrate
   there, UUID/lineage redaction stays load-bearing rather than
-  defense-in-depth. Whether a strict write-gate should keep accepting
-  this binding once `STRICT_IDENTITY_REQUIRED` defaults on is a
-  separate, evidence-driven question for that rollout boundary, not
-  one this document resolves.
+  defense-in-depth. `STRICT_IDENTITY_REQUIRED` now defaults on, and
+  whether its write-gate should keep accepting this binding is a
+  separate, evidence-driven question, not one this document resolves.
 
 ### Pre-mint recovery: preferring a stale resume over a fresh fork
 

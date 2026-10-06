@@ -91,14 +91,20 @@ process boundary after `UNITARES_IDENTITY_STRICT=strict` /
 the identity. Any baseline keyed on the original UUID is lost either way.
 
 `scripts/ops/provision_resident_anchor.py` is the operator-side repair. Run it
-where the governance server's environment is available, so the signing secret
-(`UNITARES_CONTINUITY_TOKEN_SECRET`, else `UNITARES_HTTP_API_TOKEN`, else
-`UNITARES_API_TOKEN`) matches the server's:
+from the server's checkout with the server's environment, so the signing secret
+matches the server's: `UNITARES_CONTINUITY_TOKEN_SECRET` when it is set, else
+the key the server generated in `data/secrets/continuity_token_secret`
+(`src/continuity_secret.py`):
 
 ```bash
 python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http          # dry run
 python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http --apply
 ```
+
+A changed signing key (a rotated `UNITARES_CONTINUITY_TOKEN_SECRET`, or the
+upgrade that stopped falling back to the HTTP API token) invalidates the token
+in every anchor. The provisioner leaves an anchor that already names the same
+UUID untouched, so move the anchor file aside first, then run it with `--apply`.
 
 `--transport` says how the resident reaches the server, and the script refuses
 without it whenever `UNITARES_UDS_SOCKET` is set. The server's own environment
@@ -119,7 +125,7 @@ different UUID is refused unless you pass `--replace-identity`, which prints the
 displaced UUID: a silent repoint is how a resident forks.
 
 ⛔**A matching UUID is not proof, which is why the verify checks more than the
-UUID.** `UNITARES_IDENTITY_STRICT` defaults to `log`, and in that mode a PATH 0
+UUID.** With `UNITARES_IDENTITY_STRICT=log` (the default before strict identity became the default; a deployment can still set it), a PATH 0
 resume whose token fails its ownership check logs, broadcasts
 `identity_hijack_suspected`, and resumes anyway — with the correct UUID in the
 response. Reproduced against v2.22.1 with an expired token: `success: true`,

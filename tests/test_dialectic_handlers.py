@@ -615,6 +615,7 @@ class TestHandleSubmitThesis:
         assert data["success"] is False
         assert "required" in data["error"].lower()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_missing_agent_id_no_bound(self, mock_context_agent):
         """Returns error when agent_id is missing and no bound identity."""

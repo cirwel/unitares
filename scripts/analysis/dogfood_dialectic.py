@@ -31,7 +31,7 @@ def main():
 
     # 1. Onboard (no session) - creates identity
     print("1. onboard() ...")
-    r1 = call_tool(URL, "onboard", {})
+    r1 = call_tool(URL, "onboard", {"force_new": True})
     if "error" in r1:
         print(f"   FAIL: {r1['error']}")
         sys.exit(1)

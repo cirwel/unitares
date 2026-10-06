@@ -13,6 +13,7 @@ import os
 import hashlib
 import base64
 import hmac
+import secrets
 import json
 import re
 import time
@@ -82,6 +83,27 @@ def normalize_client_session_id(value: Any) -> Optional[str]:
     return sanitized
 
 
+# Keys session_id_reference(). Random per process, so a reference is opaque
+# to anyone outside the server: it cannot be computed from a guessed id.
+_SESSION_REFERENCE_KEY = secrets.token_bytes(32)
+
+
+def session_id_reference(value: Any) -> Optional[str]:
+    """A display form of a session id that cannot be used as one.
+
+    A client_session_id is a bearer credential: whoever presents it acts as
+    the session it names. Diagnostics that show other sessions show this
+    instead. It reveals no character of the id, and it is keyed with a secret
+    held only by this process, so it is no oracle for guessing ids offline.
+    References are stable for the life of the process, which is enough to tell
+    rows apart and to follow one session across calls.
+    """
+    if not value:
+        return None
+    digest = hmac.new(_SESSION_REFERENCE_KEY, str(value).encode("utf-8"), hashlib.sha256)
+    return "ref-" + digest.hexdigest()[:16]
+
+
 def normalize_client_session_id_argument(arguments: Dict[str, Any]) -> Optional[str]:
     """Normalize ``arguments['client_session_id']`` in place."""
     normalized = normalize_client_session_id(arguments.get("client_session_id"))
@@ -94,25 +116,16 @@ def normalize_client_session_id_argument(arguments: Dict[str, Any]) -> Optional[
 
 def continuity_token_support_status() -> Dict[str, Any]:
     """Return continuity token support details for diagnostics."""
-    if os.getenv("UNITARES_CONTINUITY_TOKEN_SECRET"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_CONTINUITY_TOKEN_SECRET",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    if os.getenv("UNITARES_HTTP_API_TOKEN"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_HTTP_API_TOKEN",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    if os.getenv("UNITARES_API_TOKEN"):
-        return {
-            "enabled": True,
-            "secret_source": "UNITARES_API_TOKEN",
-            "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
-        }
-    return {"enabled": False, "secret_source": None}
+    from src.continuity_secret import resolve
+
+    resolved = resolve()
+    if resolved is None:
+        return {"enabled": False, "secret_source": None}
+    return {
+        "enabled": True,
+        "secret_source": resolved[1],
+        "ownership_proof_version": _OWNERSHIP_PROOF_VERSION,
+    }
 
 
 def build_token_deprecation_block(
@@ -165,15 +178,11 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def _get_continuity_secret() -> Optional[bytes]:
-    """Get the HMAC secret used for continuity tokens."""
-    secret = (
-        os.getenv("UNITARES_CONTINUITY_TOKEN_SECRET")
-        or os.getenv("UNITARES_HTTP_API_TOKEN")
-        or os.getenv("UNITARES_API_TOKEN")
-    )
-    if not secret:
-        return None
-    return secret.encode()
+    """Get the HMAC secret used for continuity tokens (see src/continuity_secret.py)."""
+    from src.continuity_secret import resolve
+
+    resolved = resolve()
+    return resolved[0] if resolved else None
 
 
 def create_continuity_token(
@@ -251,7 +260,7 @@ def extract_token_iat(token: str) -> Optional[int]:
         return None
     try:
         return int(iat)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
         return None
 
 
@@ -272,7 +281,7 @@ def extract_token_exp(token: str) -> Optional[int]:
         return None
     try:
         return int(exp)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # OverflowError: inf
         return None
 
 
@@ -301,7 +310,7 @@ def continuity_token_freshness(
     def _as_int(value: Any) -> Optional[int]:
         try:
             return int(value) if value is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # OverflowError: inf
             return None
 
     iat = _as_int(payload.get("iat"))

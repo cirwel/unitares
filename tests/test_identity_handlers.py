@@ -946,6 +946,18 @@ class TestOnboardPinExceptionPaths:
 
 class TestHandleBindSession:
 
+    @pytest.fixture(autouse=True)
+    def _caller_owns_target(self):
+        """These tests cover the destination rules. Proof that the caller owns
+        the target agent is what the real resolver records for a session the
+        caller sent; it is tested in tests/test_credential_issuance.py."""
+        from unittest.mock import patch as _patch
+        with _patch(
+            "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
+            return_value=(True, "test_caller_owns_target"),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_bind_session_accepts_matching_agent_id(self):
         """bind_session succeeds when expected agent_id matches resolved identity."""
@@ -1931,6 +1943,7 @@ class TestHandleOnboardV2:
              patch("src.mcp_handlers.identity.shared._register_uuid_prefix"):
             yield mock_server
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_basic_onboard_new_agent(self, patch_onboard_deps, mock_db, mock_redis):
         """Basic onboard() creates a new agent."""
@@ -1991,6 +2004,7 @@ class TestHandleOnboardV2:
         assert "workflow" not in data
         assert "what_this_does" not in data
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_stable_bind_passes_the_ownership_check(self, patch_onboard_deps, mock_db, mock_redis):
         """#2147: the helper now checks ownership itself. onboard()'s stable
@@ -2021,6 +2035,7 @@ class TestHandleOnboardV2:
         assert outcomes[0][1]["bound"] is True
         assert "bind_refused" not in outcomes[0][1]
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_schedules_presence_lease(
         self, patch_onboard_deps, mock_db, mock_redis
@@ -2046,6 +2061,7 @@ class TestHandleOnboardV2:
         assert data["success"] is True
         schedule_mock.assert_called_once_with(data["uuid"], data["client_session_id"])
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_full_mode_restores_descriptive_envelope(
         self, patch_onboard_deps, mock_db, mock_redis
@@ -2171,6 +2187,7 @@ class TestHandleOnboardV2:
         pin_mock.assert_awaited_once()
         assert pin_mock.await_args.kwargs.get("if_absent") is False
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_arg_less_onboard_gates_to_fresh_per_v2_ontology(self, patch_onboard_deps, mock_db, mock_redis, caplog):
         """S13: arg-less onboard() with no proof signal mints fresh per v2 ontology.
@@ -2263,7 +2280,11 @@ class TestHandleOnboardV2:
         ), "identity() v2 gate must NOT fire when client_session_id is presented"
 
     @pytest.mark.asyncio
-    async def test_bind_session_non_coupling_to_s13_gate(self, patch_onboard_deps, mock_db, mock_redis, caplog):
+    @patch(
+        "src.mcp_handlers.identity.credential_issuance.credentials_issuable",
+        return_value=(True, "test_caller_owns_target"),
+    )
+    async def test_bind_session_non_coupling_to_s13_gate(self, _owns, patch_onboard_deps, mock_db, mock_redis, caplog):
         """S13: bind_session shares the derive_session_key plumbing but must not
         be coupled to the identity-adapter v2 gate. bind_session callers always
         present an explicit client_session_id (it's the bind target), so the
@@ -2423,6 +2444,7 @@ class TestHandleOnboardV2:
         assert identity_data["uuid"] == existing_uuid
         assert identity_data["client_session_id"] == stable_session_id
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_persists_stable_session_id_for_redis_miss(self, patch_onboard_deps, mock_db, mock_redis, mock_raw_redis):
         """Returned stable client_session_id should still resume via PostgreSQL when Redis misses."""
@@ -2978,6 +3000,7 @@ class TestHandleOnboardV2:
         tip = data.get("session_continuity", {}).get("tip", "")
         assert "ChatGPT" in tip or "client_session_id" in tip
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_persist_failure_returns_error(self, patch_onboard_deps, mock_db, mock_redis):
         """When persist fails for fresh identity, returns error (line 1613-1615)."""
@@ -3014,6 +3037,7 @@ class TestHandleOnboardV2:
 
         assert data["success"] is True
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_onboard_structured_id_fallback(self, patch_onboard_deps, mock_db, mock_redis, mock_raw_redis):
         """When structured_id lookup from metadata returns nothing, falls back to agent_UUID prefix."""
@@ -3560,6 +3584,7 @@ class TestOnboardAlreadyPersistedFreshIdentity:
              patch("src.mcp_handlers.identity.shared._register_uuid_prefix"):
             yield mock_server
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_fresh_identity_already_persisted(self, patch_onboard_persisted_deps, mock_db, mock_redis):
         """When fresh identity is already persisted, ensure_agent_persisted returns False (line 1603)."""
@@ -3810,6 +3835,7 @@ class TestIdentityAgentUuidDirectLookup:
              patch("src.mcp_handlers.shared.get_mcp_server", return_value=mock_server):
             yield mock_server
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_resumes_active_agent(self, patch_uuid_deps, mock_db, mock_redis):
         """identity(agent_uuid=...) should resume an active agent directly."""
@@ -3834,6 +3860,7 @@ class TestIdentityAgentUuidDirectLookup:
         assert data.get("resumed") is True
         assert data.get("resumed_by_uuid") is True
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_not_found_returns_error(self, patch_uuid_deps, mock_db, mock_redis):
         """identity(agent_uuid=...) should fail if UUID not in DB."""
@@ -3852,6 +3879,7 @@ class TestIdentityAgentUuidDirectLookup:
         assert data["success"] is False
         assert "not found" in data.get("error", "").lower()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_not_active_returns_error(self, patch_uuid_deps, mock_db, mock_redis):
         """identity(agent_uuid=...) should fail if agent exists but is archived."""

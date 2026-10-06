@@ -354,3 +354,51 @@ def test_dict_to_discovery_preserves_provenance_chain():
     )
 
     assert discovery.provenance_chain == [{"agent_id": "parent"}]
+
+
+class _PersistedRowsConn:
+    """Fake connection that only knows rows persisted so far."""
+
+    def __init__(self, persisted):
+        self.persisted = persisted
+
+    async def fetchrow(self, sql, discovery_id):
+        for row in self.persisted:
+            if row["id"] == discovery_id:
+                return row
+        return None
+
+    async def fetch(self, sql, tags, exclude_id, limit):
+        hits = [
+            r for r in self.persisted
+            if r["id"] != exclude_id and set(r["tags"]) & set(tags)
+        ]
+        return hits[:limit]
+
+
+@pytest.mark.asyncio
+async def test_find_similar_matches_discovery_not_yet_persisted():
+    """Regression for #2655: find_similar runs before the row exists.
+
+    The store path links against an unpersisted discovery; the lookup must
+    use the discovery's own tags, not a SELECT by id that finds nothing.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    first = {"id": "d-first", "tags": ["alpha", "beta"]}
+    backend = _FakeKgBackend(_PersistedRowsConn([first]))
+    backend._row_to_discovery_dict = lambda row: {
+        "id": row["id"], "agent_id": "a", "type": "note",
+        "summary": "s", "tags": row["tags"], "timestamp": now,
+    }
+    graph = KnowledgeGraphPostgres()
+    graph._get_db = AsyncMock(return_value=backend)
+
+    new = DiscoveryNode(
+        id="d-second", agent_id="a", type="note", summary="s2",
+        tags=["beta", "gamma"],
+    )
+    result = await graph.find_similar(new, limit=8)
+    assert [d.id for d in result] == ["d-first"]
+
+    untagged = DiscoveryNode(id="d-third", agent_id="a", type="note", summary="s3", tags=[])
+    assert await graph.find_similar(untagged) == []

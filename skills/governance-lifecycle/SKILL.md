@@ -98,9 +98,9 @@ Default rules:
 
 Avoid these patterns:
 
-- Bare `identity(agent_uuid=X, resume=true)`: UUID alone is an unsigned claim. It currently logs/emits hijack-suspected telemetry and is strict-mode rejected when `UNITARES_IDENTITY_STRICT=strict`.
+- Bare `identity(agent_uuid=X, resume=true)`: UUID alone is an unsigned claim. It is refused under the default `UNITARES_IDENTITY_STRICT=strict`; a server that sets `log` accepts it and emits hijack-suspected telemetry.
 - `onboard(continuity_token=...)` as cross-process resume: S1-c refuses it (`status: continuity_token_resume_rejected`); the S1-a deprecation window has closed. Declare lineage with `parent_agent_id` instead, or rebind the same live process with `identity(agent_uuid, continuity_token, resume=true)`.
-- Bare `onboard()`: older code may still pin-resume by weak session/IP:UA evidence. Use `force_new=true` when creating a new process identity.
+- Bare `onboard()`: older servers may still pin-resume by weak session/IP:UA evidence; current ones refuse a resume reached only that way (`resume_proof_required`). Use `force_new=true` when creating a new process identity.
 
 `continuity_token` is now intentionally narrow: 1-hour TTL, rolling, and retained as possession proof for anti-hijack gates. It does not establish process-instance continuity by itself.
 
@@ -236,7 +236,7 @@ A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
 - Session binding can happen via a transport session signal the client sends (for example an `X-Session-ID` header set per process, never a static value shared across processes; stateless `/mcp/` issues no protocol session of its own), `client_session_id`, or short-lived continuity token
 - Binding a transport session is explicit — `bind_session`, not a side effect of `identity()` — and it can be **refused**. When the destination key resolves from a store keyed on the User-Agent alone it may belong to another caller, so the response carries `bound: false` with `rebind_refused` naming the source. A destination that is another agent's stable `agent-...` session id (for example one sent in an `X-Session-ID` header) is refused the same way, as `rebind_refused: "foreign_stable_session_id"`, whichever transport header carried it. Your identity is unchanged; retry from a client that sends its own session identifier.
 - When continuity seems unclear, call `identity(client_session_id="<your client_session_id>")`. Do not call it with no arguments: a call carrying no proof signal at all is gated to a fresh mint (`[FRESH_INSTANCE]`, S13), so it answers with a newly created identity rather than reporting on yours, and leaves a spurious record behind. The gate is what keeps the unauthenticated read off the User-Agent pin path; passing your own `client_session_id` is what makes the answer about you.
-- Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed.
+- Trust the answer only when `identity_assurance.caller_proven` is true; a `weak` tier with `proof_origin: "server_inferred"` means the server guessed. Under strict identity such a guessed answer carries `client_session_id: null`, no `continuity_token`, and `credentials_withheld`: credentials go only to a call that proved ownership.
 - Inspect:
   - `identity_status`
   - `bound_identity`

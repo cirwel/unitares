@@ -3968,6 +3968,9 @@ class TestWatcherIdentity:
 
         assert onboard_called["name"] == "Watcher"
         assert onboard_called["kwargs"].get("spawn_reason") == "resident_observer"
+        # Strict identity (the server default) refuses an onboard that
+        # declares neither force_new nor a parent.
+        assert onboard_called["kwargs"].get("force_new") is True
         assert identity["agent_uuid"] == "uuid-watcher-001"
         assert session_file.exists()
 

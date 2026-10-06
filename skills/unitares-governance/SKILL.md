@@ -98,10 +98,14 @@ rebinding the same live owner to an existing UUID. The `continuity_token` is
 short-lived ownership proof for anti-hijack gates, not indefinite
 cross-process continuity. A bare `identity(agent_uuid=..., resume=true)` is an
 unsigned UUID claim (hijack-shaped, rejected under strict identity mode). An
-argument-less `onboard()` from a fresh process now mints fresh, but an
-`onboard()` that presents only weak signals, a cosmetic `name` or the
-transport session / IP:UA fingerprint on the resume path, can still pin-resume
-on weak evidence; do not teach those as normal flow.
+argument-less `onboard()` is refused under strict identity, the default, with
+`lineage_declaration_required`: call `start_session(force_new=true)`. An
+`onboard()` that would resume on weak signals only, a cosmetic `name` or the
+transport session / IP:UA fingerprint, is refused under strict identity with
+`resume_proof_required`; an `identity()` matched that way reports who it
+matched but returns `client_session_id: null`, no `continuity_token`, and
+`credentials_withheld`. Credentials go only to a call that sent its own
+session or token, attested over UDS, or minted.
 
 In-process tool calls thread the response's `client_session_id` through
 subsequent invocations to maintain transport continuity within a single

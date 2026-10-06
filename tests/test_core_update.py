@@ -297,6 +297,7 @@ class TestProcessAgentUpdate:
             assert data.get("success") is False
             assert "strong identity" in data.get("error", "").lower()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_weak_identity_downweights_confidence_and_reports_assurance(self, mock_server):
         """Weak identity source dampens confidence and is reported in response."""
@@ -1079,6 +1080,7 @@ class TestProcessAgentUpdateExtended:
     # ------------------------------------------------------------------
     # Lines 962-970: New agent creation PostgreSQL failure fallback
     # ------------------------------------------------------------------
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_new_agent_creation_pg_failure_fallback(self, mock_server, mock_monitor):
         """When PostgreSQL create_agent fails, falls back to legacy path."""
@@ -1110,6 +1112,7 @@ class TestProcessAgentUpdateExtended:
     # The freshly-generated api_key (already persisted to PG) must NOT be
     # silently replaced by the metadata-cache fallback in the except branch.
     # ------------------------------------------------------------------
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_new_agent_pg_insert_succeeds_but_meta_setup_fails_keeps_apikey(
         self, mock_server, mock_monitor,
@@ -1294,6 +1297,7 @@ class TestProcessAgentUpdateExtended:
     # ------------------------------------------------------------------
     # Lines 1106-1132: Record agent state ValueError fallback
     # ------------------------------------------------------------------
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_record_state_valueerror_creates_agent_first(self, mock_server, mock_monitor):
         """When record_agent_state raises ValueError, creates agent first then records."""

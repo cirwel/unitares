@@ -247,9 +247,10 @@ services:
       # Deployment metrics catalog (JSON path inside the container); empty
       # registers only the product metrics. See .env.example.
       UNITARES_METRICS_CATALOG_EXTRA: ${UNITARES_METRICS_CATALOG_EXTRA:-}
-      # Development-only signing key so onboard() can issue the identity proof
-      # exercised by the coordination demo. Override on shared/non-loopback hosts.
-      UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-unitares-local-continuity-secret}
+      # Signs continuity tokens (the identity proof onboard() issues). Left
+      # empty, the server generates one at startup and keeps it on the
+      # governance-data volume (data/secrets/). Set it only to share a key.
+      UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-}
       # Known development-only Ed25519 seed + issuer for the loopback quickstart.
       # Replace the seed and choose a globally stable issuer on shared installs.
       UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}
