@@ -161,9 +161,20 @@ class KnowledgeGraphPostgres:
         return discoveries
 
     async def find_similar(self, discovery: DiscoveryNode, limit: int = 10) -> List[DiscoveryNode]:
-        """Find similar discoveries by tag overlap."""
+        """Find similar discoveries by tag overlap.
+
+        Matches on ``discovery.tags`` rather than looking the row up by id:
+        the store path links against a discovery that is not persisted yet,
+        so an id lookup finds nothing and linking silently returns [].
+        """
+        if not discovery.tags:
+            return []
         db = await self._get_db()
-        rows = await db.kg_find_similar(discovery.id, limit)
+        rows = await db.kg_find_similar_by_tags(
+            discovery.tags,
+            exclude_id=discovery.id,
+            limit=limit,
+        )
         return [self._dict_to_discovery(r) for r in rows]
 
     async def get_discovery(self, discovery_id: str) -> Optional[DiscoveryNode]:
