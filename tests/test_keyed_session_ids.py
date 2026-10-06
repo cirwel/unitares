@@ -490,3 +490,39 @@ async def test_a_cached_keyed_id_is_refused_once_its_agent_is_deleted(keyed, sta
 
     assert uuid is None and refused["reason"] == reason
     assert csid not in ss._verified
+
+
+@pytest.mark.asyncio
+async def test_a_token_for_another_agent_wins_over_a_keyed_id(keyed):
+    """A keyed id for VICTIM with a continuity token naming OTHER: the token is
+    proof of a different owner, so VICTIM is not resumed from its PG session row,
+    and OTHER's token rebind does not take VICTIM's keyed id as its binding."""
+    from contextlib import ExitStack
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.identity import resolution
+
+    csid = make_client_session_id(VICTIM)
+    cache = AsyncMock()
+    with ExitStack() as stack:
+        for p in _keyed_resume_patches(resolution, None, "fp-a"):
+            stack.enter_context(p)
+        db = resolution.get_db()
+        db.init = AsyncMock()
+        db.get_session = AsyncMock(return_value=SimpleNamespace(agent_id=VICTIM, identity_id=1))
+        db.get_identity = AsyncMock(return_value=MagicMock(identity_id="i-other"))
+        db.create_session = AsyncMock()
+        stack.enter_context(patch.object(resolution, "_cache_session", cache))
+        stack.enter_context(patch.object(
+            resolution, "_agent_exists_in_postgres", AsyncMock(return_value=True),
+        ))
+        stack.enter_context(patch.object(
+            resolution, "_get_agent_id_from_metadata", AsyncMock(return_value=OTHER),
+        ))
+        result = await resolution.resolve_session_identity(
+            csid, resume=True, token_agent_uuid=OTHER,
+        )
+
+    assert result.get("agent_uuid") == OTHER and result.get("source") == "token_rebind"
+    cache.assert_not_awaited()
+    db.create_session.assert_not_awaited()

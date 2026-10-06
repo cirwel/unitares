@@ -1175,7 +1175,7 @@ async def resolve_session_identity(
     #
     # A keyed id is a credential that can be copied, so it still meets the
     # hijack guards PATH 1 applies: a continuity_token naming another agent
-    # leaves it to the token paths below, and a strict fingerprint mismatch
+    # rejects the resume in favour of the token rebind, and a strict fingerprint mismatch
     # against the id's recorded binding rejects the resume (#1319 refusal).
     #
     # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
@@ -1205,7 +1205,18 @@ async def resolve_session_identity(
             if _sub_reject is not None:
                 return _sub_reject
             if token_agent_uuid and token_agent_uuid != _keyed_uuid:
-                _keyed_uuid = None  # PATH 1's token cross-check takes it from here
+                # A token naming another agent is proof of a different owner,
+                # as in PATH 1: no PATH 1/2 resume of the id's agent; the
+                # token rebind (PATH 2.8) takes over or the #1319 refusal holds.
+                logger.warning(
+                    "[STABLE_SESSION] keyed id names %s... but the token names %s...; "
+                    "deferring to token rebind",
+                    _keyed_uuid[:8],
+                    token_agent_uuid[:8],
+                )
+                resume = False
+                resume_rejected_reason = "token_mismatch"
+                _keyed_uuid = None
             elif await _fingerprint_hijack_check(
                 session_key,
                 await _keyed_bind_fingerprint(session_key, _keyed_uuid),
@@ -1600,11 +1611,20 @@ async def resolve_session_identity(
                     agent_id = await _get_agent_id_from_metadata(token_agent_uuid) or token_agent_uuid
                     label = await _get_agent_label(token_agent_uuid)
 
-                    # Rebind session in Redis + PG
-                    await _cache_session(session_key, token_agent_uuid, display_agent_id=agent_id)
+                    # Rebind session in Redis + PG, unless the key is another
+                    # agent's keyed id: that id stays that agent's (as in PATH 3).
+                    from .stable_session import classify as _csid_kind
+                    from .stable_session import verifies_for as _csid_verifies
+
+                    _bind_key = not (
+                        _csid_kind(session_key) == "keyed"
+                        and not _csid_verifies(session_key, token_agent_uuid)
+                    )
+                    if _bind_key:
+                        await _cache_session(session_key, token_agent_uuid, display_agent_id=agent_id)
                     try:
                         db = get_db()
-                        identity = await db.get_identity(token_agent_uuid)
+                        identity = await db.get_identity(token_agent_uuid) if _bind_key else None
                         if identity:
                             await db.create_session(
                                 session_id=session_key,
