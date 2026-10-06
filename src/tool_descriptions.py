@@ -160,7 +160,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "consult": (
-        "Ask a model for advisory help; evidence only, no governance record. "
+        "Ask a model for advisory help; evidence only, no review record. "
         "For on-record judgment use request_review.\n\n"
         "Send a brief, get back advisory model evidence, never a governed "
         "verdict. effort='thorough' asks a strong model (Claude, Codex or "

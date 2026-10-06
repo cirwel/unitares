@@ -1263,7 +1263,7 @@ Read accepts_host_id_from, not available, to learn which tool will take it. An u
 - **Timeout:** 480s
 - **Related:** `call_model`, `delegate_inference`, `request_review`
 
-Ask a model for advisory help; evidence only, no governance record. For on-record judgment use request_review.
+Ask a model for advisory help; evidence only, no review record. For on-record judgment use request_review.
 
 Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
 
