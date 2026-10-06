@@ -927,6 +927,18 @@ async def _derive_session_key_impl(
         )
         if resolved:
             _mark("continuity_token")
+            # A token issued before keyed stable ids embeds the legacy
+            # agent-{uuid12} id. The token itself is verified and names its
+            # agent, so convert to that agent's keyed id rather than present a
+            # legacy id the server may refuse (identity/stable_session.py).
+            from .stable_session import classify as _csid_kind
+
+            if _csid_kind(resolved) == "legacy":
+                _aid = extract_token_agent_uuid_safe(str(arguments["continuity_token"]))
+                if _aid and _aid.lower()[:12] == resolved[6:18]:
+                    from .shared import make_client_session_id
+
+                    resolved = make_client_session_id(_aid)
             return resolved
         _mark("continuity_token_invalid")
         # Sticky per-request flag (#1351): _mark records only the proof that

@@ -570,7 +570,10 @@ async def _fingerprint_hijack_check(
         session_fingerprint_check_mode,
         prefix_bind_fingerprint_mode,
     )
-    _is_prefix_key = session_key.startswith("agent-")
+    # A keyed agent-{uuid12}-{tag} id is not UUID-derivable, so it is exempt;
+    # every other agent- key keeps the stricter per-path mode.
+    from .stable_session import classify as _csid_kind
+    _is_prefix_key = session_key.startswith("agent-") and _csid_kind(session_key) != "keyed"
     _global_fp_mode = session_fingerprint_check_mode()
     _prefix_fp_mode = prefix_bind_fingerprint_mode() if _is_prefix_key else "off"
     _FP_RANK = {"off": 0, "log": 1, "strict": 2}
@@ -1128,6 +1131,47 @@ async def resolve_session_identity(
                 "[SUBSTRATE_HTTP_REJECT] pre-session gate raised for %s...: %s; "
                 "falling through to existing resolution",
                 token_agent_uuid[:8], exc, exc_info=True,
+            )
+
+    # Stable session ids (identity/stable_session.py). A keyed id
+    # agent-{uuid12}-{tag} authenticates itself: it resolves when exactly one
+    # active identity has that uuid prefix and the tag verifies for it, with no
+    # stored binding and nothing written (F3 holds: verification is not a
+    # bind). A forged tag or an ambiguous prefix is terminal, never a fall
+    # through to PATH 1/2. A legacy agent-{uuid12} id, computable from the
+    # UUID, follows UNITARES_LEGACY_SESSION_IDS (refused by default).
+    if not force_new:
+        from .stable_session import classify as _csid_kind
+        from .stable_session import legacy_refused as _legacy_refused
+        from .stable_session import refusal as _csid_refusal
+        from .stable_session import resolve_keyed as _resolve_keyed
+
+        _kind = _csid_kind(session_key)
+        if _kind == "legacy" and _legacy_refused(session_key):
+            return _csid_refusal("legacy_session_id")
+        if _kind == "keyed" and resume:
+            _keyed_uuid, _keyed_refusal = await _resolve_keyed(session_key)
+            if _keyed_refusal is not None:
+                logger.warning(
+                    "[STABLE_SESSION] refused keyed session id (%s)", _keyed_refusal.get("reason"),
+                )
+                return _keyed_refusal
+            _sub_reject = await _substrate_http_reject(_keyed_uuid, source="keyed_session")
+            if _sub_reject is not None:
+                return _sub_reject
+            _keyed_status = await _get_agent_status(_keyed_uuid)
+            return _resumed_identity_result(
+                agent_id=await _get_agent_id_from_metadata(_keyed_uuid) or _keyed_uuid,
+                agent_uuid=_keyed_uuid,
+                label=await _get_agent_label(_keyed_uuid),
+                persisted=True,
+                is_archived=_keyed_status == "archived",
+                agent_status=_keyed_status,
+                source="keyed_session",
+                traj_result=await _soft_verify_trajectory(
+                    _keyed_uuid, trajectory_signature, "keyed_session",
+                ),
+                session_key=session_key,
             )
 
     # #1319: when a hijack guard (token mismatch / strict fingerprint mismatch)
