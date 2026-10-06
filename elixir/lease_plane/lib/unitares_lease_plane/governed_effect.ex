@@ -163,7 +163,11 @@ defmodule UnitaresLeasePlane.GovernedEffect do
     # Attribution only — non-secret fields. The proposer's `client_session_id`
     # is a credential (Invariant 7) and is deliberately NOT extracted or stored.
     proposer_agent_uuid = nested_string(body, "proposer", "agent_uuid")
-    provenance_session_id = nested_string(body, "provenance", "session_id")
+    # A keyed session id authenticates as its agent, so attribution keeps its
+    # digest (SessionRef), like every other audit surface.
+    provenance_session_id =
+      UnitaresLeasePlane.SessionRef.reference(nested_string(body, "provenance", "session_id"))
+
     provenance = sanitize_provenance(Map.get(body, "provenance"))
 
     # §7 strong-tier re-cert proof — the proposer's continuity_token, carried in
@@ -316,7 +320,10 @@ defmodule UnitaresLeasePlane.GovernedEffect do
   end
 
   defp sanitize_provenance(%{} = provenance) do
-    Map.take(provenance, ~w(harness session_id verification_source))
+    provenance
+    |> Map.take(~w(harness session_id verification_source))
+    |> Map.update("session_id", nil, &UnitaresLeasePlane.SessionRef.reference/1)
+    |> Map.reject(fn {key, value} -> key == "session_id" and is_nil(value) end)
   end
 
   defp sanitize_provenance(_), do: %{}
