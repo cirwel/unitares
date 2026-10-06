@@ -477,6 +477,45 @@ async def _soft_verify_trajectory(
 # CORE IDENTITY RESOLUTION (3 paths)
 # =============================================================================
 
+def _substrate_check_unavailable(agent_uuid: str, uuid_key: str, source: str) -> Dict[str, Any]:
+    """Refusal for an HTTP resume when the claims lookup itself failed and the
+    UUID may be substrate-anchored (#2682): it was last seen with a claim, or
+    this process has not loaded the claims table yet.
+
+    Once the table has loaded, a UUID not seen with a claim falls through, so
+    an unreachable claims table blocks ordinary agents only until the first
+    load succeeds (a restart during an outage); an enrolled resident, which
+    must come over UDS anyway, is not let in over HTTP by the outage.
+    """
+    from src.substrate.verification import substrate_claims_loaded
+
+    loaded = substrate_claims_loaded()
+    logger.warning(
+        "[SUBSTRATE_HTTP_REJECT] %s claims lookup failed for %s... (%s) — "
+        "refusing the HTTP resume",
+        source, agent_uuid[:8],
+        "last seen substrate-anchored" if loaded else "claims not loaded yet",
+    )
+    if loaded:
+        message = (
+            f"Agent {agent_uuid[:8]}... is substrate-anchored and its claim "
+            f"could not be checked. Resume over HTTP is refused; connect via "
+            f"the UNITARES_UDS_SOCKET path, or retry when the server recovers."
+        )
+    else:
+        message = (
+            "The server could not check whether this agent is substrate-"
+            "anchored (its claims are not loaded yet), so resume over HTTP is "
+            "refused for now. Retry shortly."
+        )
+    return {
+        "resume_failed": True,
+        "error": "substrate_check_unavailable",
+        uuid_key: agent_uuid,
+        "message": message,
+    }
+
+
 async def _substrate_http_reject(agent_uuid: str, source: str):
     """S19 extension (#802): a substrate-anchored UUID must not resume over a
     non-UDS (HTTP) transport via ANY session path — not just continuity_token.
@@ -498,9 +537,15 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
     (agent_uuid direct), never the prefix/session path over HTTP, so a substrate
     UUID arriving here without a kernel-attested peer PID is never legitimate.
 
-    Returns a `resume_failed` refusal dict when rejected, else None. Any
-    unexpected error fails OPEN (returns None) — never breaks resolution.
+    Returns a `resume_failed` refusal dict when rejected, else None. If the
+    claims lookup fails over HTTP, a UUID last seen with a claim, or any UUID
+    before this process has loaded the claims table, is refused
+    (`substrate_check_unavailable`); otherwise the error fails OPEN (returns
+    None) so it does not break resolution for ordinary agents.
     """
+    # Only a proven UDS caller (a peer PID) returns before the lookup, so a
+    # failure below, including reading the signals, comes from a request not
+    # shown to be UDS.
     try:
         from src.mcp_handlers.context import get_session_signals
         _signals = get_session_signals()
@@ -531,6 +576,10 @@ async def _substrate_http_reject(agent_uuid: str, source: str):
             ),
         }
     except Exception as exc:
+        from src.substrate.verification import known_substrate_claimed
+
+        if known_substrate_claimed(agent_uuid):
+            return _substrate_check_unavailable(agent_uuid, "agent_uuid", source)
         logger.warning(
             "[SUBSTRATE_HTTP_REJECT] %s gate raised for %s...: %s; falling "
             "through to existing resolution",
@@ -1136,6 +1185,7 @@ async def resolve_session_identity(
     # must not resume over non-UDS transport even when the token's embedded
     # session id still has a live Redis/PG binding. Check before PATH 1/2.
     if token_agent_uuid and not force_new:
+        # Only a proven UDS caller returns before the lookup (see _substrate_http_reject).
         try:
             from src.mcp_handlers.context import get_session_signals
             _signals = get_session_signals()
@@ -1164,6 +1214,12 @@ async def resolve_session_identity(
                         ),
                     }
         except Exception as exc:
+            from src.substrate.verification import known_substrate_claimed
+
+            if known_substrate_claimed(token_agent_uuid):
+                return _substrate_check_unavailable(
+                    token_agent_uuid, "token_agent_uuid", "pre_session_token",
+                )
             logger.warning(
                 "[SUBSTRATE_HTTP_REJECT] pre-session gate raised for %s...: %s; "
                 "falling through to existing resolution",
@@ -1601,6 +1657,7 @@ async def resolve_session_identity(
         # to UDS. Closes the Hermes-incident leak path in production.
         # The gate is self-scoping by the substrate_claims table —
         # non-substrate UUIDs are unaffected (no row, no rejection).
+        # Only a proven UDS caller returns before the lookup (see _substrate_http_reject).
         try:
             from src.mcp_handlers.context import get_session_signals
             _signals = get_session_signals()
@@ -1629,9 +1686,15 @@ async def resolve_session_identity(
                         ),
                     }
         except Exception as exc:
-            # Defense-in-depth: any unexpected error in the gate falls
-            # through to the existing PATH 2.8 behavior. Never default-
-            # accepts AND never silently breaks the existing flow.
+            # A failed claims lookup still refuses a UUID last seen with a
+            # claim (#2682); for any other UUID the error falls through to
+            # the existing PATH 2.8 behavior rather than breaking the flow.
+            from src.substrate.verification import known_substrate_claimed
+
+            if known_substrate_claimed(token_agent_uuid):
+                return _substrate_check_unavailable(
+                    token_agent_uuid, "token_agent_uuid", "path2_8_token",
+                )
             logger.warning(
                 "[SUBSTRATE_HTTP_REJECT] gate raised for %s...: %s; falling "
                 "through to existing PATH 2.8 (HTTP path unchanged)",
