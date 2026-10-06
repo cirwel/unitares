@@ -507,8 +507,9 @@ class TestAddDiscovery:
         msg = warnings[0].getMessage()
         assert "disc-a" in msg
         assert "semantic search will not find this entry" in msg
-        # --only-missing: a bare run rewrites every existing vector (#2364).
-        assert "reembed_corpus.py --only-missing" in msg
+        # Bare run fills only missing rows; --rebuild is the explicit rewrite (#2364).
+        assert "reembed_corpus.py" in msg
+        assert "--rebuild" in msg
         assert "UNITARES_EMBEDDING_MODEL" in msg
         # The command must paste into a POSIX shell as-is: `VAR=<model>` is a
         # redirection from a file named "model", not a placeholder.
@@ -541,10 +542,10 @@ class TestAddDiscovery:
         assert len(warnings) == 1, [r.getMessage() for r in caplog.records]
         msg = warnings[0].getMessage()
         assert "disc-r1" in msg
-        # A skipped refresh leaves the OLD vector in place, so --only-missing
+        # A skipped refresh leaves the OLD vector in place, so the default run
         # skips this row on backfill; the warning must say so.
         assert "old vector" in msg
-        assert "--only-missing will not rewrite" in msg
+        assert "the default run will not rewrite" in msg
         assert len(self._embedding_skip_records(caplog, logging.DEBUG)) == 1
         # The skip returns before the discovery is ever fetched.
         kg.get_discovery.assert_not_awaited()

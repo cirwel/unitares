@@ -451,9 +451,12 @@ properties, not surprises:
 - **`tier: strong` on an echoed `agent-{uuid}` is itself a
   performative claim across a process boundary — a known, bounded
   over-claim, named here so it is a property and not a surprise.** The
-  `agent-{uuid12}` session string is copyable and UUID-derivable, so
-  the server cannot distinguish "the process that minted this string
-  echoing its own" from "a co-resident process presenting it." The
+  stable session string is copyable, so the server cannot distinguish
+  "the process that minted this string echoing its own" from "a
+  co-resident process presenting it." (It is no longer derivable from
+  the UUID: the keyed form `agent-{uuid12}-{tag}` needs the server's
+  key, `src/mcp_handlers/identity/stable_session.py`. The legacy
+  `agent-{uuid12}` form was derivable, and is refused by default.) The
   `strong` / `caller_proven: true` stamp the echo earns is therefore
   the *same* "same string = same subject" leap as the pin above, taken
   at a higher tier: honest *within* a live process, unverifiable
