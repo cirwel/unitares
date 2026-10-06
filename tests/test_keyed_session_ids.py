@@ -221,7 +221,8 @@ async def test_runtime_observations_accept_a_keyed_id_without_a_session_row(keye
          patch.object(ro, "_normalize", return_value=(OTHER, csid, "e1", None, {})):
         with pytest.raises(ro.RuntimeObservationError) as exc:
             await ro.record_runtime_observation({"any": "payload"})
-    assert exc.value.code == "session_unbound"
+    assert exc.value.code == "identity_session_mismatch"  # refused, never looked up as a row
+    db.get_session.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -292,3 +293,42 @@ async def test_a_keyed_observation_passes_despite_an_expired_row(keyed):
          patch("src.audit_db.append_audit_event_async", AsyncMock(side_effect=RuntimeError("past the gate"))):
         with pytest.raises(RuntimeError, match="past the gate"):
             await ro.record_runtime_observation({"any": "payload"})
+
+
+@pytest.mark.asyncio
+async def test_a_fresh_mint_does_not_bind_a_keyed_id_it_was_given(keyed):
+    """force_new while presenting an existing keyed id: the new agent must not
+    be recorded under the other agent's keyed id."""
+    from src.mcp_handlers.identity import resolution
+
+    old_csid = make_client_session_id(VICTIM)
+    db = MagicMock()
+    db.get_identity = AsyncMock(return_value=MagicMock(identity_id="i-new"))
+    db.create_session = AsyncMock()
+    db.upsert_agent = AsyncMock()
+    db.upsert_identity = AsyncMock()
+    cache = AsyncMock()
+    with patch.object(resolution, "get_db", return_value=db), \
+         patch.object(resolution, "_cache_session", cache):
+        try:
+            await resolution.resolve_session_identity(old_csid, persist=True, force_new=True)
+        except Exception:
+            pass  # the mint's other writes are not under test
+
+    db.create_session.assert_not_awaited()
+    cache.assert_not_awaited()
+
+
+def test_the_verified_cache_stays_bounded(keyed, monkeypatch):
+    import time as _time
+
+    monkeypatch.setattr(ss, "_VERIFIED_MAX", 3)
+    later = _time.monotonic() + 600
+    for i in range(3):
+        ss._verified[f"k{i}"] = (VICTIM, later)
+    assert len(ss._verified) == 3
+    # A fourth live entry with the cache full of live entries starts over.
+    import asyncio
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}):
+        asyncio.run(ss.resolve_keyed(make_client_session_id(VICTIM)))
+    assert len(ss._verified) == 1

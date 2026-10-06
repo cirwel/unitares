@@ -1783,8 +1783,19 @@ async def resolve_session_identity(
             except Exception as e:
                 logger.warning(f"Eager dict hydration failed for {agent_uuid[:8]}: {e}")
 
-            # Create session binding
-            identity = await db.get_identity(agent_uuid)
+            # Create session binding, unless the key is another agent's keyed
+            # stable id (a force_new mint that presented one): a keyed id
+            # names its agent by itself, so binding it to this new uuid would
+            # only record a mapping the resolver never uses. The new agent
+            # gets its own keyed id from onboard.
+            from .stable_session import classify as _csid_kind
+            from .stable_session import verifies_for as _csid_verifies
+
+            _bind_mint_key = not (
+                _csid_kind(session_key) == "keyed"
+                and not _csid_verifies(session_key, agent_uuid)
+            )
+            identity = await db.get_identity(agent_uuid) if _bind_mint_key else None
             if identity:
                 await db.create_session(
                     session_id=session_key,
@@ -1797,11 +1808,12 @@ async def resolve_session_identity(
             # Cache in Redis (session -> UUID + display agent_id).
             # mint_guard=True: PATH 3 must not silently overwrite an
             # existing live binding for the same session_key (S21-a).
-            await _cache_session(
-                session_key, agent_uuid, display_agent_id=agent_id,
-                spawn_reason=spawn_reason,
-                mint_guard=True,
-            )
+            if _bind_mint_key:
+                await _cache_session(
+                    session_key, agent_uuid, display_agent_id=agent_id,
+                    spawn_reason=spawn_reason,
+                    mint_guard=True,
+                )
 
             logger.info(f"Created new agent: {agent_id} (uuid: {agent_uuid[:8]}...)")
 

@@ -788,6 +788,14 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
     if classify(session_id) == "keyed":
         keyed_uuid, _refused = await resolve_keyed(session_id)
         keyed_ok = keyed_uuid is not None and keyed_uuid == agent_uuid
+        if not keyed_ok:
+            # A keyed id that does not verify for this agent is refused here,
+            # never looked up as a stored row.
+            raise RuntimeObservationError(
+                "client session is not valid for this identity",
+                status_code=409,
+                code="identity_session_mismatch",
+            )
     session = None if keyed_ok else await db.get_session(session_id)
     if session is None:
         if not keyed_ok:
