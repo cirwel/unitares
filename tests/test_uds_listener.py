@@ -396,6 +396,57 @@ async def test_unprovable_stale_socket_is_not_displaced(monkeypatch):
         _shutil.rmtree(d, ignore_errors=True)
 
 
+@pytest.mark.asyncio
+async def test_failure_after_bind_removes_own_socket(monkeypatch):
+    """A failure between bind and serve leaves no stale node behind: the caller
+    claims no path on failure, so shutdown would never unlink it."""
+    from src import uds_listener
+    from src.services.mcp_transport_service import _start_uds_listener
+
+    def _boom():
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _boom)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert not os.path.exists(path)
+
+        monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+        assert await _start_uds_listener(object()) == (None, None)
+        assert not os.path.exists(path)
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_failure_after_bind_leaves_a_replaced_node_alone(monkeypatch):
+    """The cleanup unlinks only the node it bound, never one that replaced it."""
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    other = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+
+    def _replace_then_fail():
+        os.unlink(path)
+        other.bind(path)
+        raise RuntimeError("protocol class unavailable")
+
+    monkeypatch.setattr(uds_listener, "make_peer_cred_protocol_class", _replace_then_fail)
+    try:
+        with pytest.raises(RuntimeError):
+            await uds_listener.start_uds_listener(object(), path)
+        assert os.path.exists(path)
+    finally:
+        other.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
 def test_path_lock_excludes_a_second_holder():
     import errno as _errno
     import fcntl

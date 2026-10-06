@@ -194,6 +194,7 @@ async def start_uds_listener(
             finally:
                 os.umask(prev_umask)
             bound = True
+            bound_ino = os.stat(uds_path).st_ino
             os.chmod(uds_path, 0o600)
             # listen() before handing the socket to uvicorn so the kernel queues
             # connections immediately — otherwise a client connecting in the window
@@ -212,35 +213,50 @@ async def start_uds_listener(
                     pass
             raise
 
-    # Verify the on-disk mode is actually 0600 before we serve — surfaces any
-    # future regression loudly instead of silently shipping a 0666 socket.
-    actual_mode = stat.S_IMODE(os.stat(uds_path).st_mode)
-    if actual_mode != 0o600:
-        logger.warning(
-            "[UDS] socket %s mode is %o after bind+chmod, expected 0600",
-            uds_path, actual_mode,
-        )
-    else:
-        logger.info(
-            "[UDS] listening at %s (mode 0600, peer-cred enabled)", uds_path
-        )
+    try:
+        # Verify the on-disk mode is actually 0600 before we serve — surfaces any
+        # future regression loudly instead of silently shipping a 0666 socket.
+        actual_mode = stat.S_IMODE(os.stat(uds_path).st_mode)
+        if actual_mode != 0o600:
+            logger.warning(
+                "[UDS] socket %s mode is %o after bind+chmod, expected 0600",
+                uds_path, actual_mode,
+            )
+        else:
+            logger.info(
+                "[UDS] listening at %s (mode 0600, peer-cred enabled)", uds_path
+            )
 
-    protocol_class = make_peer_cred_protocol_class()
-    config = uvicorn.Config(
-        app=app,
-        # NOTE: no uds= here — we pass the pre-bound socket to serve() so
-        # uvicorn does not re-bind (and does not apply its own 0666 chmod).
-        http=protocol_class,
-        log_level=log_level,
-        # Disable uvicorn's lifespan and CORS — those are handled by the
-        # primary HTTP listener; UDS is just a transport into the same app.
-        lifespan="off",
-        ws="none",
-        access_log=False,
-        backlog=_UDS_BACKLOG,
-    )
-    server = uvicorn.Server(config)
-    task = asyncio.create_task(
-        server.serve(sockets=[sock]), name="unitares-uds-listener"
-    )
+        protocol_class = make_peer_cred_protocol_class()
+        config = uvicorn.Config(
+            app=app,
+            # NOTE: no uds= here — we pass the pre-bound socket to serve() so
+            # uvicorn does not re-bind (and does not apply its own 0666 chmod).
+            http=protocol_class,
+            log_level=log_level,
+            # Disable uvicorn's lifespan and CORS — those are handled by the
+            # primary HTTP listener; UDS is just a transport into the same app.
+            lifespan="off",
+            ws="none",
+            access_log=False,
+            backlog=_UDS_BACKLOG,
+        )
+        server = uvicorn.Server(config)
+        task = asyncio.create_task(
+            server.serve(sockets=[sock]), name="unitares-uds-listener"
+        )
+    except BaseException:
+        # The caller claims no path on failure (#2662), so nothing else will
+        # unlink this one: remove the node we bound before closing the socket.
+        # Unlinking first means a concurrent start still probes a live listener
+        # rather than a stale path, and the inode check leaves alone any node
+        # that is no longer ours.
+        with _path_lock(uds_path):
+            try:
+                if os.stat(uds_path).st_ino == bound_ino:
+                    os.unlink(uds_path)
+            except OSError:
+                pass
+        sock.close()
+        raise
     return task
