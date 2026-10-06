@@ -40,9 +40,17 @@ from src.mcp_handlers.knowledge.limits import EMBED_DETAILS_WINDOW
 
 def build_text(summary: str, details: str | None) -> str:
     """Embedding input, identical to what the server builds on store/refresh."""
-    if details:
-        return f"{summary}\n{details[:EMBED_DETAILS_WINDOW]}"
-    return summary
+    return f"{summary}\n{details[:EMBED_DETAILS_WINDOW] if details else ''}"
+
+
+def select_targets(discoveries, already, rebuild: bool, limit: int | None):
+    """Pick what to embed. The missing filter runs BEFORE --limit, so a limited
+    backfill always advances through the rows that still lack a vector."""
+    if not rebuild:
+        discoveries = [d for d in discoveries if d[0] not in already]
+    if limit:
+        discoveries = discoveries[:limit]
+    return discoveries
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,6 +134,8 @@ async def main():
 
     if args.model not in KNOWN_MODELS:
         raise SystemExit(f"Unknown model {args.model!r}. Known: {list(KNOWN_MODELS)}")
+    if args.rebuild and args.only_missing:
+        parser.error("--rebuild and --only-missing are mutually exclusive.")
 
     # Force the embeddings service to use the chosen model regardless of env.
     svc = EmbeddingsService(model_key=args.model)
@@ -137,21 +147,16 @@ async def main():
     db = get_db()
     await ensure_table_exists(db, table)
 
-    discoveries = await fetch_all_ids(db)
-    if args.limit:
-        discoveries = discoveries[: args.limit]
-    print(f"Found {len(discoveries)} discoveries")
-
-    if args.rebuild and args.only_missing:
-        raise SystemExit("--rebuild and --only-missing are mutually exclusive.")
-
+    all_discoveries = await fetch_all_ids(db)
+    already: set = set()
     if not args.rebuild:
         async with db.acquire() as conn:
             rows = await conn.fetch(f"SELECT discovery_id FROM {table}")
         already = {r["discovery_id"] for r in rows}
-        before = len(discoveries)
-        discoveries = [d for d in discoveries if d[0] not in already]
-        print(f"{before - len(discoveries)} already embedded; re-embedding {len(discoveries)}")
+    discoveries = select_targets(all_discoveries, already, args.rebuild, args.limit)
+    n_already = sum(1 for d in all_discoveries if d[0] in already)
+    print(f"Found {len(all_discoveries)} discoveries; {n_already} already embedded; "
+          f"embedding {len(discoveries)}")
 
     if not discoveries:
         print("Nothing to do.")
