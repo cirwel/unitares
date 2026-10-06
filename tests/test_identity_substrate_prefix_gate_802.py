@@ -93,8 +93,14 @@ class TestSubstrateHttpRejectHelper:
         assert out is None
 
     @pytest.mark.asyncio
-    async def test_fails_open_on_exception(self):
+    async def test_fails_open_on_exception(self, monkeypatch):
+        """With the claims table loaded and this UUID not among the claimed,
+        a failed lookup falls through (#2682 refuses only known claims)."""
         from src.mcp_handlers.identity import resolution as res
+        from src.substrate import verification
+
+        monkeypatch.setattr(verification, "_claims_loaded", True)
+        monkeypatch.setattr(verification, "_known_claimed", set())
 
         with patch(
             "src.mcp_handlers.context.get_session_signals",

@@ -116,18 +116,23 @@ def make_client_session_id(agent_uuid: str) -> str:
     This is THE canonical formatter for session IDs. All code that generates
     session IDs must use this function to prevent format drift.
 
-    Format: "agent-{uuid_prefix_12}"
-    Example: "agent-5e728ecb1234"
+    Format: "agent-{uuid_prefix_12}-{tag}" (keyed), or the legacy
+    "agent-{uuid_prefix_12}" when the server has no continuity key.
 
     Args:
         agent_uuid: The full 36-char UUID
 
     Returns:
-        Stable session ID in format "agent-{uuid[:12]}"
+        This agent's stable session id
     """
     if not agent_uuid or len(agent_uuid) < 12:
         raise ValueError(f"Invalid UUID: {agent_uuid}")
-    return f"agent-{agent_uuid[:12]}"
+    # Keyed when the server has a continuity key (identity/stable_session.py):
+    # agent-{uuid[:12]}-{tag}, which cannot be derived from the UUID. Without a
+    # key the legacy form is the only one this server can issue.
+    from .stable_session import keyed_session_id
+
+    return keyed_session_id(agent_uuid) or f"agent-{agent_uuid[:12]}"
 
 # =============================================================================
 # BOUND AGENT LOOKUP
@@ -253,10 +258,22 @@ def _get_identity_record_sync(session_id: Optional[str] = None, arguments: Optio
 
     key = _get_session_key(arguments=arguments, session_id=session_id)
 
-    # Check in-memory cache first
+    # Check in-memory cache first. A stable session id gets the same checks the
+    # async resolver applies (identity/stable_session.py): a keyed id must
+    # verify for the agent it is bound to, and a legacy one follows the
+    # legacy-id policy.
     if key in _session_identities:
         cached = _session_identities[key]
-        if _check_path1_fingerprint_sync(key, cached.get("bound_agent_id")):
+        from .stable_session import classify, legacy_refused, verifies_for
+
+        kind = classify(key)
+        bound = cached.get("bound_agent_id")
+        if bound and (
+            (kind == "keyed" and not verifies_for(key, bound))
+            or (kind == "legacy" and legacy_refused(key))
+        ):
+            return _strict_mismatch_record()
+        if _check_path1_fingerprint_sync(key, bound):
             return cached
         return _strict_mismatch_record()
 

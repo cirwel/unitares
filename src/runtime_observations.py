@@ -777,20 +777,48 @@ async def record_runtime_observation(payload: dict[str, Any]) -> dict[str, Any]:
     from src.db import get_db
 
     db = get_db()
-    session = await db.get_session(session_id)
-    if session is None:
+    # A keyed stable session id authenticates itself and need not have a live
+    # stored session row (a resident that resumed by token or UDS
+    # attestation, or one whose row expired): accept it when it verifies for
+    # this agent, whatever the row says (src/mcp_handlers/identity/
+    # stable_session.py). Other ids still need a live row bound to the agent.
+    from src.mcp_handlers.identity.stable_session import classify, legacy_refused, resolve_keyed
+
+    if legacy_refused(session_id):
+        # A legacy agent-{uuid12} id is computable from the public UUID; the
+        # legacy policy applies here as at resolution.
         raise RuntimeObservationError(
-            "client session is not bound",
+            "legacy client session id is not accepted",
             status_code=409,
-            code="session_unbound",
+            code="legacy_session_id",
         )
-    if getattr(session, "agent_id", None) != agent_uuid:
+    keyed_ok = False
+    if classify(session_id) == "keyed":
+        keyed_uuid, _refused = await resolve_keyed(session_id)
+        keyed_ok = keyed_uuid is not None and keyed_uuid == agent_uuid
+        if not keyed_ok:
+            # A keyed id that does not verify for this agent is refused here,
+            # never looked up as a stored row.
+            raise RuntimeObservationError(
+                "client session is not valid for this identity",
+                status_code=409,
+                code="identity_session_mismatch",
+            )
+    session = None if keyed_ok else await db.get_session(session_id)
+    if session is None:
+        if not keyed_ok:
+            raise RuntimeObservationError(
+                "client session is not bound",
+                status_code=409,
+                code="session_unbound",
+            )
+    if not keyed_ok and getattr(session, "agent_id", None) != agent_uuid:
         raise RuntimeObservationError(
             "client session is bound to a different identity",
             status_code=409,
             code="identity_session_mismatch",
         )
-    if not _session_is_live(session, datetime.now(timezone.utc)):
+    if not keyed_ok and not _session_is_live(session, datetime.now(timezone.utc)):
         raise RuntimeObservationError(
             "client session is inactive or expired",
             status_code=409,
