@@ -648,7 +648,7 @@ async def handle_identity_v2(
         session_key,
         persist=False,
         model_type=model_type or arguments.get("model_type"),
-        force_new=bool(arguments.get("force_new", False)),
+        force_new=coerce_bool(arguments.get("force_new"), default=False),
     )
     agent_id = identity.get("agent_id", identity["agent_uuid"])
     agent_uuid = identity["agent_uuid"]
@@ -1311,7 +1311,9 @@ async def handle_identity_adapter(arguments: Dict[str, Any]) -> Sequence[TextCon
             "defaulting to force_new=true per v2 ontology (S13)"
         )
 
-    force_new = arguments.get("force_new", False)
+    # Coerced like handle_identity_v2's resolver call, so a string "false"
+    # neither skips the session-key resume here nor disagrees with it there.
+    force_new = coerce_bool(arguments.get("force_new"), default=False)
     resume = arguments.get("resume", True)
     model_type = arguments.get("model_type")
 

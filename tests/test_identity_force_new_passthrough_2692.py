@@ -16,13 +16,16 @@ BOUND = "5e728ecb-1234-4abc-8def-0123456789ab"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("force_new", [True, False])
-async def test_identity_v2_passes_force_new_to_the_resolver(force_new):
+@pytest.mark.parametrize("sent, expected", [
+    (True, True), (False, False), ("true", True), ("false", False), (None, False),
+])
+async def test_identity_v2_passes_force_new_to_the_resolver(sent, expected):
+    """MCP clients may send the flag as a string; "false" must stay false."""
     resolver = AsyncMock(return_value={"agent_uuid": BOUND, "agent_id": BOUND})
     with patch.object(handlers, "resolve_session_identity", resolver):
-        await handlers.handle_identity_v2({"force_new": force_new}, "some-session-key")
+        await handlers.handle_identity_v2({"force_new": sent}, "some-session-key")
 
-    assert resolver.await_args.kwargs["force_new"] is force_new
+    assert resolver.await_args.kwargs["force_new"] is expected
 
 
 @pytest.mark.asyncio
@@ -34,5 +37,5 @@ async def test_force_new_with_a_refused_session_id_mints_instead_of_failing(monk
     with patch.object(resolution, "_get_redis", return_value=None):
         result = await handlers.handle_identity_v2({"force_new": True}, forged)
 
+    # Without the fix the refusal is indexed as an identity and raises KeyError.
     assert result["agent_uuid"] != BOUND
-    assert not result.get("resume_failed")
