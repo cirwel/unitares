@@ -248,7 +248,8 @@ def _strict_mismatch_record() -> Dict[str, Any]:
 def _get_identity_record_sync(session_id: Optional[str] = None, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Get identity record for a session (synchronous, in-memory only).
 
-    This is a lightweight sync version that only checks in-memory cache.
+    This is a lightweight sync version that only checks the in-memory cache of
+    stored bindings; it never derives an identity from the shape of the key.
     For full PostgreSQL support, use the async version in identity_v2.py.
     """
 
@@ -261,59 +262,12 @@ def _get_identity_record_sync(session_id: Optional[str] = None, arguments: Optio
             return cached
         return _strict_mismatch_record()
 
-    # SPECIAL CASE: agent-{uuid12} format session IDs
-    if key.startswith("agent-"):
-        uuid_prefix = key[6:]  # Remove "agent-" prefix
-
-        # O(1) LOOKUP via index
-        full_uuid = _lookup_uuid_by_prefix(uuid_prefix)
-        if full_uuid:
-            meta = mcp_server.agent_metadata.get(full_uuid)
-            if meta:
-                if not _check_path1_fingerprint_sync(key, full_uuid):
-                    return _strict_mismatch_record()
-                _session_identities[key] = {
-                    "bound_agent_id": full_uuid,
-                    "api_key": getattr(meta, 'api_key', None),
-                    "spawn_reason": getattr(meta, "spawn_reason", None),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "bind_count": 0,
-                }
-                return _session_identities[key]
-
-        # FALLBACK: Scan agent metadata
-        for agent_uuid, meta in mcp_server.agent_metadata.items():
-            if agent_uuid.startswith(uuid_prefix):
-                _register_uuid_prefix(uuid_prefix, agent_uuid)
-                # Capture binding-time fingerprint on FIRST bind only.
-                # After a restart wipes _uuid_prefix_index, FALLBACK fires
-                # again — without this guard an attacker on a different
-                # IP/UA could overwrite the legitimate bind fingerprint.
-                if key not in _bind_fingerprints:
-                    try:
-                        sig = get_session_signals()
-                        current_fp = getattr(sig, "ip_ua_fingerprint", None) if sig else None
-                        if current_fp:
-                            _bind_fingerprints[key] = current_fp
-                    except Exception:
-                        pass
-                _session_identities[key] = {
-                    "bound_agent_id": agent_uuid,
-                    "api_key": getattr(meta, 'api_key', None),
-                    "spawn_reason": getattr(meta, "spawn_reason", None),
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "bind_count": 0,
-                }
-                return _session_identities[key]
-
-        # No match
-        return {
-            "bound_agent_id": None,
-            "api_key": None,
-            "bound_at": None,
-            "bind_count": 0,
-            "_session_key_type": "agent_prefix_not_found",
-        }
+    # A session key resolves only through a binding that was stored for it.
+    # This used to derive an identity from any key starting with "agent-": the
+    # rest of the key was treated as a uuid prefix and matched against the
+    # prefix index or, failing that, the first agent whose uuid started with
+    # it. So "agent-a" resolved to whichever agent's uuid began with "a", with
+    # no binding and no proof. The async resolver needs a stored binding too.
 
     # Not in cache, return empty (async version handles DB lookup)
     if key not in _session_identities:
