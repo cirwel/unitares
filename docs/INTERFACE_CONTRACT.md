@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.29.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.30.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -324,7 +324,15 @@ The two identifiers serve different jobs:
   `admin(action='debug_context')` shows session-cache keys as references
   and the uuid prefix index only as a count. A `client_session_id` is a bearer
   credential, and both surfaces could name other agents' sessions. No input
-  schema changes, so no digest moves).
+  schema changes, so no digest moves;
+  1.30.0, 2026-10-06: authorization of outputs. Under strict identity,
+  `identity()` returns `client_session_id: null` and no `continuity_token`,
+  with `credentials_withheld: {basis, hint}`, when the call was matched to
+  the agent only by inference (an onboard pin or transport fingerprint), and
+  `onboard()` refuses such a resume with `status: resume_proof_required`. A
+  mint, a session the caller sent, a continuity token or UDS attestation for
+  the agent, or an operator token still receives them. No input schema
+  changes, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
