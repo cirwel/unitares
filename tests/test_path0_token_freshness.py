@@ -66,7 +66,7 @@ def _sign(payload: dict) -> str:
     return f"v1.{payload_b64}.{session._b64url_encode(sig)}"
 
 
-@pytest.mark.parametrize("exp", [None, "soon"])
+@pytest.mark.parametrize("exp", [None, "soon", 1e309, float("nan")])
 def test_freshness_treats_missing_or_malformed_exp_as_expired(exp):
     """resolve_continuity_token refuses these, so the observation must agree."""
     from src.mcp_handlers.identity.session import (

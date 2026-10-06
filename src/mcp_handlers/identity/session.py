@@ -310,7 +310,7 @@ def continuity_token_freshness(
     def _as_int(value: Any) -> Optional[int]:
         try:
             return int(value) if value is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):  # OverflowError: inf
             return None
 
     iat = _as_int(payload.get("iat"))
