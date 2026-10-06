@@ -57,7 +57,7 @@ write: `harness_id`/`type`/`version`, `model`, `model_provider`, `model_source`,
 `transport`, `tool_surface`, `memory_context`, `governance_mode`,
 `comparison_key`, `task_type`, `episode_id`, and `episode_fork_kind`. The layer
 taxonomy in [`harness-substrate-plurality.md`](harness-substrate-plurality.md)
-already says harness, model and tool surface are "context, not collapsed into
+already says the harness layer is recorded as "context, not collapsed into
 identity".
 
 Brief's manifest fields vs that record:
