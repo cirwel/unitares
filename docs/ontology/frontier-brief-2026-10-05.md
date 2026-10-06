@@ -84,9 +84,32 @@ contrasts. It does not transfer a number to UNITARES tasks. Whether it widens
 the paired-difference variance assumed in pilot plan §2.4 is a hypothesis for
 whoever reopens that study, not a conclusion.
 
-**Proposed first step (not done):** measure, from the live store, how often each
-S22 field above is populated, split by harness, before proposing any new field
-or digest. An empty field would read as absent, not as "no configuration".
+**Measured 2026-10-05 (read-only).** `scripts/diagnostics/s22_candidate_envelope_coverage.py
+--since 2026-09-05T00:00:00Z` against the live store, 32,531 `core.agent_state`
+rows and 236 knowledge-graph rows:
+
+| Field | agent_state rows | KG rows |
+|---|---|---|
+| `harness_type` | 5,005 (15.4%) | 75 (31.8%) |
+| `model` | 1,070 (3.3%) | 0 |
+| `model_provider` | 14 | 0 |
+| `tool_surface` | 91 (0.3%) | 0 |
+| `comparison_key` | 2 | 14 |
+| `memory_context` | 7 | 6 |
+| `harness_id`, `process_instance_id`, `affordance_state` | 0 | 0 |
+
+What this does and does not establish:
+
+- **Rows, not agents.** These count persisted write-context rows. A few
+  high-frequency writers can dominate them, so no percentage here describes the
+  fleet or any one agent. The diagnostic does not split by harness or agent,
+  so the by-harness view proposed earlier is still not done.
+- **Zeros are not "unused".** The three zero-count fields are in the
+  diagnostic's `candidate` tier. A zero there could mean never surfaced to
+  callers, not wired, or not recorded; this measurement does not say which.
+- **What it does support.** A manifest assembled from S22 today would be mostly
+  empty for model, provider and tool surface, so wiring those fields in
+  precedes any new schema or digest.
 
 ### 3. AutoCompact: compaction as a governed state transition
 
@@ -117,7 +140,7 @@ needs a labeled set that does not yet exist in this repository.
   authority layer" wording is held with the 9-25 positioning disposition until
   the assurance case has been assessed by someone other than its authoring
   session.
-- No live measurement and no read of the full papers.
+- No read of the full papers. The only live measurement is the read-only coverage count in section 2.
 
 ## Watch
 
