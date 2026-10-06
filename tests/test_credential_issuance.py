@@ -482,3 +482,23 @@ def test_per_session_signals_still_prove(source):
     set_session_proof_origin("caller_asserted")
     note_session_proof(VICTIM, "mcp:9f1c2e4b8a7d6c5e4f3a2b1c0d9e8f7a")
     assert credentials_issuable(VICTIM) == (True, "proven_uuid")
+
+
+@pytest.mark.parametrize("injected_from, proves", [
+    ("x_client_id", False),   # REST copied X-Client-Id into client_session_id
+    ("oauth_client_id", False),
+    ("x_session_id", True),   # REST copied the caller's X-Session-ID
+    (None, True),             # the caller put it in the arguments itself
+])
+def test_a_transport_put_session_id_is_judged_by_its_source(injected_from, proves):
+    from src.mcp_handlers.context import set_csid_injected_source
+
+    token = set_csid_injected_source(injected_from)
+    try:
+        set_session_resolution_source("explicit_client_session_id")
+        set_session_proof_origin("caller_asserted")
+        note_session_proof(VICTIM, "shared-client-app")
+        assert credentials_issuable(VICTIM)[0] is proves
+    finally:
+        from src.mcp_handlers.context import reset_csid_injected_source
+        reset_csid_injected_source(token)
