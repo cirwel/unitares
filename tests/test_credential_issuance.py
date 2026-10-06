@@ -502,3 +502,30 @@ def test_a_transport_put_session_id_is_judged_by_its_source(injected_from, prove
     finally:
         from src.mcp_handlers.context import reset_csid_injected_source
         reset_csid_injected_source(token)
+
+
+@pytest.mark.asyncio
+async def test_bind_session_with_the_callers_own_session_binds():
+    """No middleware stamp (REST runs bind_session without it) and no mocked
+    rule: the caller's own client_session_id, resolved through a stored
+    binding, proves the target and the bind goes through."""
+    from src.mcp_handlers.identity import handlers
+
+    resolved = {"agent_uuid": VICTIM, "agent_id": VICTIM, "label": "mine", "created": False}
+
+    async def resolve(key, *args, **kwargs):
+        note_session_proof(VICTIM, key)  # what resolution._resumed_identity_result does
+        return dict(resolved)
+
+    bind = AsyncMock(return_value={"bound": True})
+    with patch.object(handlers, "resolve_session_identity", side_effect=resolve), \
+         patch.object(handlers, "derive_session_key_with_source",
+                      AsyncMock(return_value=("my-new-transport", "x_session_id"))), \
+         patch.object(handlers, "_perform_session_bind", bind):
+        result = await handlers.handle_bind_session(
+            {"client_session_id": "agent-my-own-session", "resume": True}
+        )
+
+    body = json.loads(result[0].text)
+    assert body.get("rebind_refused") != "ownership_unproven", body
+    bind.assert_awaited()

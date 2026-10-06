@@ -1754,6 +1754,22 @@ async def handle_bind_session(arguments: Dict[str, Any]) -> Sequence[TextContent
 
     # Resolve the agent from the provided client_session_id
     # resume=True is correct here — bind_session is explicitly resuming an existing identity
+    # The target is the caller's own client_session_id: record that provenance
+    # before resolving it, so a stored binding for it proves the agent
+    # (credential_issuance.note_session_proof). The destination derivation
+    # above does not stamp, and REST runs bind_session without the identity
+    # middleware. A transport-injected id keeps whatever its source says.
+    try:
+        from ..context import (
+            get_csid_transport_injected,
+            set_session_proof_origin,
+            set_session_resolution_source,
+        )
+        if not get_csid_transport_injected():
+            set_session_resolution_source("explicit_client_session_id")
+            set_session_proof_origin("caller_asserted")
+    except Exception:
+        pass
     target_identity = await resolve_session_identity(client_session_id, persist=False, resume=True)
     # S21-a: resume=True with no PG row now returns resume_failed instead
     # of silently minting a ghost. Treat that the same as "no existing agent".
