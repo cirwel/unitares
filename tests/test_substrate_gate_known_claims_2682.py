@@ -52,7 +52,7 @@ def _lookup_fails():
 
 
 @pytest.mark.asyncio
-async def test_lookups_record_and_drop_claimed_uuids():
+async def test_lookups_record_claimed_uuids_and_never_drop_them():
     row = {
         "agent_id": RESIDENT, "expected_launchd_label": "com.unitares.sentinel",
         "expected_executable_path": "/x", "enrolled_at": None,
@@ -62,9 +62,11 @@ async def test_lookups_record_and_drop_claimed_uuids():
         assert await verification.fetch_substrate_claim(RESIDENT) is not None
     assert verification.known_substrate_claimed(RESIDENT)
 
+    # A lookup that finds no row cannot be ordered after a newer observation
+    # of the claim, so it removes nothing.
     with patch("src.db.get_db", return_value=_db(fetchrow=None)):
         assert await verification.fetch_substrate_claim(RESIDENT) is None
-    assert not verification.known_substrate_claimed(RESIDENT)
+    assert verification.known_substrate_claimed(RESIDENT)
 
 
 @pytest.mark.asyncio
@@ -180,8 +182,8 @@ async def test_a_reload_only_adds_so_it_cannot_erase_a_concurrent_lookup():
     assert verification.known_substrate_claimed(ORDINARY)
 
     with patch("src.db.get_db", return_value=_db(fetchrow=None)):
-        await verification.fetch_substrate_claim(ORDINARY)  # unenrolled
-    assert not verification.known_substrate_claimed(ORDINARY)
+        await verification.fetch_substrate_claim(ORDINARY)  # a stale negative read
+    assert verification.known_substrate_claimed(ORDINARY)
 
     failing = MagicMock()
     failing.acquire = MagicMock(side_effect=ConnectionError("down"))

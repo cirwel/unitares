@@ -1689,7 +1689,7 @@ async def substrate_claims_refresh(interval_s: float = 60.0):
     gate lookup treats every UUID as possibly claimed, so starting during a
     database outage refuses rather than admits. After that the table is
     reloaded every ``interval_s`` so an enrollment is known within a minute.
-    Reloads only add (see load_known_substrate_claims)."""
+    The set only grows (see load_known_substrate_claims)."""
     from src.substrate.verification import load_known_substrate_claims
 
     await asyncio.sleep(2)  # Wait for DB to be ready
