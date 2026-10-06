@@ -76,18 +76,20 @@ def _read(path: Path) -> tuple[str | None, str | None]:
         return None, None
     except OSError as exc:
         return None, f"cannot open {path}: {exc.strerror or exc}"
-    with os.fdopen(fd, encoding="utf-8") as fh:
-        st = os.fstat(fh.fileno())
+    try:
+        st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return None, f"{path} is not a regular file"
         if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
             return None, f"{path} is not owned by the server's user"
         if st.st_mode & 0o077:
             return None, f"{path} is readable by other users (mode {stat.S_IMODE(st.st_mode):o}); chmod 600 it"
-        try:
+        with os.fdopen(fd, encoding="utf-8", closefd=False) as fh:
             value = fh.read().strip()
-        except (OSError, UnicodeDecodeError) as exc:
-            return None, f"cannot read {path}: {exc}"
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"cannot read {path}: {exc}"
+    finally:
+        os.close(fd)
     return (value, None) if value else (None, f"{path} is empty")
 
 

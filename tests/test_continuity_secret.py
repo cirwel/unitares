@@ -177,3 +177,31 @@ def test_stdio_startup_creates_the_key(secret_path, monkeypatch):
         asyncio.run(std.main())
 
     assert session_mod._get_continuity_secret()
+
+
+def _open_fds() -> int:
+    return len(os.listdir("/dev/fd"))
+
+
+def test_a_directory_at_the_key_path_is_refused_without_leaking(secret_path):
+    secret_path.mkdir(parents=True)
+    before = _open_fds()
+
+    for _ in range(5):
+        assert session_mod._get_continuity_secret() is None
+        assert session_mod.continuity_token_support_status() == {"enabled": False, "secret_source": None}
+    with pytest.raises(OSError, match="not a regular file"):
+        cs.ensure_generated_secret()
+
+    assert _open_fds() == before
+
+
+def test_a_refused_key_file_does_not_leak_descriptors(secret_path):
+    cs.ensure_generated_secret()
+    os.chmod(secret_path, 0o644)
+    before = _open_fds()
+
+    for _ in range(5):
+        assert session_mod._get_continuity_secret() is None
+
+    assert _open_fds() == before

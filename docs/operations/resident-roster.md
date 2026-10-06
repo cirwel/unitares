@@ -101,6 +101,11 @@ python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <nam
 python3 scripts/ops/provision_resident_anchor.py --agent-uuid <UUID> --name <name> --transport http --apply
 ```
 
+A changed signing key (a rotated `UNITARES_CONTINUITY_TOKEN_SECRET`, or the
+upgrade that stopped falling back to the HTTP API token) invalidates the token
+in every anchor. The provisioner leaves an anchor that already names the same
+UUID untouched, so move the anchor file aside first, then run it with `--apply`.
+
 `--transport` says how the resident reaches the server, and the script refuses
 without it whenever `UNITARES_UDS_SOCKET` is set. The server's own environment
 always sets that variable (it names the socket the server listens on), so it
