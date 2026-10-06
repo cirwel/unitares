@@ -1,0 +1,30 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-06T07:12:17Z",
+  "verified_date": "2026-10-06",
+  "verifier": "claude: change to knowledge_graph_age.py is only the embedding-skip WARNING text; skills/knowledge-graph/SKILL.md has no embed/reembed claims, re-read and still accurate",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "e02fda0b601e0f14",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "ec52083d084f65b2",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "e2c1217b173fc7aa",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "e96e25b95ed8b014",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "bde37178d2a1c350",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "76060be105b596d0",
+    "unitares/src/storage/knowledge_graph_age.py": "90bf3d99b7ff8e96",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "281754afff36ec54"
+  },
+  "skill_digest": "aabbd26ad2a2ad60",
+  "superseded_digests": {
+    "unitares/src/storage/knowledge_graph_age.py": [
+      "59ee851a425185e0"
+    ]
+  }
+}
