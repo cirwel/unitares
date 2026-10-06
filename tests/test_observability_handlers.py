@@ -810,6 +810,7 @@ class TestHandleCompareMeToSimilar:
         assert data["success"] is True
         assert "no similar" in data.get("message", "").lower()
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_unregistered_agent_returns_error(self):
         """Agent not in metadata -> require_registered_agent fails."""

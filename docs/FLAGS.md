@@ -38,7 +38,7 @@ additions merge cleanly. -->
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW` | `'true'` | — | config/governance_config.py |
 | `GOVERNANCE_VERIFICATION_FLOOR_SHADOW_RECORD` | `''` | Which rows this deployment writes: ``all`` (default), ``firings``, ``off`` | src/verification_floor_shadow.py |
 | `GOVERNANCE_WARMUP_STRUCTURAL_GRACE` | `'true'` | — | config/governance_config.py |
-| `STRICT_IDENTITY_REQUIRED` | `''` | True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value | src/mcp_handlers/identity_bootstrap.py |
+| `STRICT_IDENTITY_REQUIRED` | `''` | True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off | src/mcp_handlers/identity_bootstrap.py |
 | `UNITARES_AGENT_LOCK_BACKEND` | `'advisory'` | Select the agent-lock backend: Postgres advisory locks or fcntl file locks | src/state_locking.py |
 | `UNITARES_AIC_SIGNING_KEY` | `None (no reader fallback)` | Load the server signing key (identity attestations and dialectic resolution receipts) from a seed, or from the env var | src/identity/agent_identity_credential.py |
 | `UNITARES_ANCHORS_DIR` | `None (no reader fallback)` | Return the anchors directory path | src/identity/substrate.py |
@@ -127,7 +127,7 @@ additions merge cleanly. -->
 | `UNITARES_HTTP_CORS_EXTRA_ORIGINS` | `[] (via split_csv_env)` | Optional extra CORS origins from UNITARES_HTTP_CORS_EXTRA_ORIGINS | src/mcp_listen_config.py |
 | `UNITARES_IDENTITY_ANCHOR_RECOVERY` | `'1'` | Whether pre-mint anchor/pin recovery runs (UNITARES_IDENTITY_ANCHOR_RECOVERY) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
-| `UNITARES_IDENTITY_STRICT` | varies: `'log'` (config/governance_config.py:1633); `IDENTITY_STRICT_MODE` (config/governance_config.py:1642) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
+| `UNITARES_IDENTITY_STRICT` | varies: `'strict'` (config/governance_config.py:1633); `IDENTITY_STRICT_MODE` (config/governance_config.py:1642) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `None (no reader fallback)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1755); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1766) | Runtime accessor — respects env changes set after module load | config/governance_config.py |

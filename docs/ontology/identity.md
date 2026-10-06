@@ -465,10 +465,9 @@ properties, not surprises:
   non-copyable — not a bearer token; a copyable cross-process token
   would only relocate this over-claim. Until such agents migrate
   there, UUID/lineage redaction stays load-bearing rather than
-  defense-in-depth. Whether a strict write-gate should keep accepting
-  this binding once `STRICT_IDENTITY_REQUIRED` defaults on is a
-  separate, evidence-driven question for that rollout boundary, not
-  one this document resolves.
+  defense-in-depth. `STRICT_IDENTITY_REQUIRED` now defaults on, and
+  whether its write-gate should keep accepting this binding is a
+  separate, evidence-driven question, not one this document resolves.
 
 ### Pre-mint recovery: preferring a stale resume over a fresh fork
 

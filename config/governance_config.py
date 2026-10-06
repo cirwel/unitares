@@ -1630,17 +1630,17 @@ def get_s_setpoint(agent_class: str = "default") -> float:
 #   "log"    — emit [IDENTITY_STRICT] warnings, do nothing else (default)
 #   "strict" — reject the request with guidance, no ghost created
 # Override: UNITARES_IDENTITY_STRICT env var.
-IDENTITY_STRICT_MODE: str = os.getenv("UNITARES_IDENTITY_STRICT", "log").strip().lower()
+IDENTITY_STRICT_MODE: str = os.getenv("UNITARES_IDENTITY_STRICT", "strict").strip().lower()
 
 _VALID_STRICT_MODES = frozenset({"off", "log", "strict"})
 if IDENTITY_STRICT_MODE not in _VALID_STRICT_MODES:
-    IDENTITY_STRICT_MODE = "log"
+    IDENTITY_STRICT_MODE = "strict"
 
 
 def identity_strict_mode() -> str:
     """Runtime accessor — respects env changes set after module load (tests)."""
     m = os.getenv("UNITARES_IDENTITY_STRICT", IDENTITY_STRICT_MODE).strip().lower()
-    return m if m in _VALID_STRICT_MODES else "log"
+    return m if m in _VALID_STRICT_MODES else "strict"
 
 
 # =============================================================================

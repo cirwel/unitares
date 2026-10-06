@@ -361,7 +361,11 @@ def resolve_identity(client) -> None:
         _watcher_identity = None
         return
     try:
-        client.onboard("Watcher", spawn_reason="resident_observer")
+        # UNITARES_FIRST_RUN=1 is the operator's authorization for a fresh
+        # identity, so say so: under strict identity (the server default) an
+        # onboard with neither force_new nor parent_agent_id is refused as
+        # lineage_declaration_required.
+        client.onboard("Watcher", force_new=True, spawn_reason="resident_observer")
         _sync_identity(client)
         # Stamp the resident tag set:
         #   - 'persistent':  auto_archive_orphan_agents skips this identity

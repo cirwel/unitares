@@ -19,9 +19,15 @@ ANCHOR_DIR = Path.home() / ".unitares" / "anchors"
 
 def main(arg: str) -> int:
     if len(arg) == 36 and arg.count("-") == 4:
-        uuid = arg
-        token = None
-        print(f"using bare UUID (no anchor): {uuid}")
+        # A UUID alone is not ownership proof: strict identity (the server
+        # default) refuses identity(agent_uuid, resume=true) without the
+        # UUID's continuity token, so resume through the resident's anchor.
+        print(
+            "a bare UUID cannot resume under strict identity; pass the "
+            "resident's anchor name so its continuity token is used",
+            file=sys.stderr,
+        )
+        return 2
     else:
         anchor_path = ANCHOR_DIR / f"{arg}.json"
         if not anchor_path.exists():
@@ -30,12 +36,26 @@ def main(arg: str) -> int:
         anchor = json.loads(anchor_path.read_text())
         uuid = anchor["agent_uuid"]
         token = anchor.get("continuity_token")
+        if not token:
+            # Persistent residents on UNITARES_UDS_SOCKET deliberately keep
+            # UUID-only anchors: their ownership proof is the kernel-attested
+            # socket, not a token. Over REST that would be a bare UUID resume,
+            # which strict identity (the server default) refuses.
+            print(
+                f"anchor {anchor_path} has no continuity_token (a UDS-attested "
+                "resident). Recover it over its UDS socket instead: restart the "
+                "resident so it resumes through UNITARES_UDS_SOCKET.",
+                file=sys.stderr,
+            )
+            return 2
 
     client = SyncGovernanceClient(rest_url=GOV_REST_URL, transport="rest", timeout=30)
     if token:
         client.continuity_token = token
     try:
-        ident = client.identity(agent_uuid=uuid, resume=True)
+        # The SDK does not inject the client's token into identity tools, so
+        # pass it explicitly.
+        ident = client.identity(agent_uuid=uuid, resume=True, continuity_token=token)
         print(f"identity bound: uuid={uuid[:12]} ({ident!r})")
         # Refresh client's continuity_token from the identity response so subsequent
         # REST calls carry proof of the bound identity.
