@@ -64,18 +64,22 @@ Brief's manifest fields vs that record:
 
 | Field | In S22 today |
 |---|---|
-| model, harness, tools, memory | Yes, with per-field source labels (see Limits) |
+| model, harness, tools, memory | Yes. Source labels come only on `process_agent_update` writes (see Limits) |
 | task information regime (curated vs full role-visible state) | No. This is the variable the 9-24 brief §3 already flagged for the ablation |
 | permissions | Partly: `affordance_state`, not a permission set |
 | budget / retries / verifier present | No |
 | compaction policy | No. `spawn_reason` can say `compaction`, but nothing records the policy or what state survived |
 
 Limits that apply to any manifest built from S22: trust is per field, not
-blanket. `runtime_provenance` (`src/model_harness_provenance.py`) labels model
-and harness values as `provider_reported`, `harness_reported`,
-`transport_user_agent`, `transport_inferred` or `caller_declared`, and
-`build_s22_write_context` replaces any client-supplied fork classification with
-the server's. A manifest should carry those labels through and must not
+blanket. `runtime_provenance` (`src/model_harness_provenance.py`) labels model values
+`provider_reported`, `harness_reported`, `caller_declared`, `transport_inferred`
+or `unavailable`, and harness values `harness_reported`, `caller_declared`,
+`transport_user_agent` or `unavailable`. That envelope is built only on the
+`process_agent_update` path (`src/mcp_handlers/updates/phases.py`); knowledge
+store and note writes do not get it, so there a manifest would see `model_source`
+only if the caller supplied it. `build_s22_write_context` overwrites
+client-supplied fork classification with the server's for all three current
+callers. A manifest should carry those labels through and must not
 collapse them into one "declared" tier, or it would discard evidence already
 in the record and could call for corroboration fields that exist. Values
 labelled `caller_declared` remain claims, not evidence.
@@ -92,11 +96,12 @@ or digest. An empty field would read as absent, not as "no configuration".
 ### 3. AutoCompact: compaction as a governed state transition
 
 `infer_spawn_reason` and `classify_episode_fork` (`src/thread_identity.py`)
-already treat compaction as a lineage reason: `spawn_reason="compaction"` makes
-the fork `identity_lineage`, and `episode_fork_kind` has no `compaction` value
-of its own. The reason is only inferred (a Claude Code client hint with
-existing thread nodes) when the caller already declared a `parent_agent_id`, so
-it is part of declared lineage, not separate from it. It records that a
+already treat compaction as a registered lineage reason: a lineage reason with
+no `parent_uuid` is classified `identity_lineage`, and `episode_fork_kind` has
+no `compaction` value of its own. The server infers `compaction` (a Claude Code
+client hint with existing thread nodes) only when the caller already declared a
+`parent_agent_id`; a caller can also pass `spawn_reason="compaction"` explicitly.
+Either way it is part of declared lineage, not separate from it. It records that a
 compaction was claimed, not what state survived it. The brief's rule that a summary
 must never expand permissions or erase contrary evidence is a design
 constraint on any future handoff format and is consistent with the current
