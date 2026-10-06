@@ -48,6 +48,7 @@ enforcing. Unset, or any other value, enforces.
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from src.logging_utils import get_logger
@@ -116,13 +117,44 @@ def log_withheld(tool: str, agent_uuid: Optional[str], basis: str) -> None:
     )
 
 
-def note_session_proof(agent_uuid: Optional[str]) -> None:
+# Session keys the server derives by inference: the IP:UA fingerprint
+# ``{host}:{md5(user-agent)[:6]}`` (optionally scoped with ``|client|model``),
+# the bare ``ua:{hash}`` and the stdio process key. A binding stored under one
+# was made for a caller the server only inferred, and the key is low-entropy:
+# anyone who knows or shares the address and User-Agent can construct it and
+# send it back as an explicit session header.
+_INFERRED_KEY = re.compile(r"^(?:ua:[0-9a-f]{6}|stdio:\d+|.+:[0-9a-f]{6})$")
+
+
+def is_inferred_session_key(session_key: Optional[str]) -> bool:
+    if not session_key:
+        return True
+    key = str(session_key).split("|", 1)[0]
+    if _INFERRED_KEY.match(key):
+        return True
+    try:
+        from src.mcp_handlers.context import get_session_signals
+
+        signals = get_session_signals()
+        fingerprint = getattr(signals, "ip_ua_fingerprint", None) if signals else None
+    except Exception:
+        fingerprint = None
+    return bool(fingerprint) and key == fingerprint
+
+
+def note_session_proof(agent_uuid: Optional[str], session_key: Optional[str]) -> None:
     """Record that this request's own session resolved to ``agent_uuid``.
 
-    Called by the resolver when a session key resolves through a stored
-    binding. Counts only when the key came from a signal the caller sent.
+    Called by the resolver when ``session_key`` resolves through a stored
+    binding. Counts only when the key came from a signal the caller sent and
+    is not a key the server derives by inference (``is_inferred_session_key``):
+    sending a fingerprint back as a header proves nothing.
     """
     from src.mcp_handlers.context import get_session_proof_origin, set_credential_proof_uuid
 
-    if agent_uuid and get_session_proof_origin() == "caller_asserted":
+    if (
+        agent_uuid
+        and get_session_proof_origin() == "caller_asserted"
+        and not is_inferred_session_key(session_key)
+    ):
         set_credential_proof_uuid(agent_uuid)

@@ -938,6 +938,7 @@ def _resumed_identity_result(
     agent_status,
     source: str,
     traj_result: dict,
+    session_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the resumed-identity result shared by PATH 1 and PATH 2.
 
@@ -955,7 +956,7 @@ def _resumed_identity_result(
     # credential issuance (credential_issuance.py).
     try:
         from .credential_issuance import note_session_proof
-        note_session_proof(agent_uuid)
+        note_session_proof(agent_uuid, session_key)
     except Exception:
         pass
     return {
@@ -1273,6 +1274,7 @@ async def resolve_session_identity(
                                 agent_status=agent_status,
                                 source="redis",
                                 traj_result=traj_result,
+                                session_key=session_key,
                             )
 
             except Exception as e:
@@ -1395,6 +1397,7 @@ async def resolve_session_identity(
                     agent_status=agent_status,
                     source="postgres",
                     traj_result=traj_result,
+                    session_key=session_key,
                 )
 
         except Exception as e:

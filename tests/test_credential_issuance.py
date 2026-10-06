@@ -59,7 +59,7 @@ def _caller_session_resolved_to(agent_uuid: str) -> None:
     through a stored binding (resolution._resumed_identity_result)."""
     set_session_resolution_source("explicit_client_session_id")
     set_session_proof_origin("caller_asserted")
-    note_session_proof(agent_uuid)
+    note_session_proof(agent_uuid, "agent-callers-own-session")
 
 
 def test_a_session_the_caller_sent_gets_credentials_for_its_agent():
@@ -79,8 +79,38 @@ def test_a_caller_asserted_session_proves_only_the_agent_it_resolved_to():
 
 def test_an_inferred_session_resolution_records_no_proof():
     _inferred()
-    note_session_proof(VICTIM)
+    note_session_proof(VICTIM, "agent-callers-own-session")
     assert credentials_issuable(VICTIM)[0] is False
+
+
+@pytest.mark.parametrize("key", [
+    "203.0.113.7:d20c2f",              # IP:UA fingerprint a weak mint is bound under
+    "127.0.0.1:d20c2f|claude|opus",     # scoped fingerprint
+    "::1:abc123",
+    "ua:abc123",
+    "stdio:4242",
+])
+def test_a_fingerprint_key_sent_back_as_a_header_proves_nothing(key):
+    """A victim that onboards without a session header is bound under its IP:UA
+    fingerprint. Behind a shared address a client with the same User-Agent can
+    send that string as X-Session-ID, which derivation marks caller-asserted;
+    resolving it must not prove the victim's agent."""
+    set_session_resolution_source("x_session_id")
+    set_session_proof_origin("caller_asserted")
+    note_session_proof(VICTIM, key)
+    assert credentials_issuable(VICTIM)[0] is False
+
+
+def test_the_requests_own_fingerprint_proves_nothing_whatever_its_shape():
+    from src.mcp_handlers.context import SessionSignals, reset_session_signals, set_session_signals
+
+    token = set_session_signals(SessionSignals(ip_ua_fingerprint="gateway-host:zzzzzz", transport="rest"))
+    try:
+        set_session_proof_origin("caller_asserted")
+        note_session_proof(VICTIM, "gateway-host:zzzzzz")
+        assert credentials_issuable(VICTIM)[0] is False
+    finally:
+        reset_session_signals(token)
 
 
 def test_a_proof_counts_only_for_the_agent_it_proved():
