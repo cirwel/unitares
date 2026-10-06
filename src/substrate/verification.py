@@ -237,13 +237,21 @@ def verify_substrate_claim(
 
 
 # UUIDs this process has seen with a substrate claim: every lookup that finds
-# one adds it, a lookup that finds none drops it, and the server loads the
-# whole table at startup (load_known_substrate_claims). The HTTP-reject gates
-# consult it only when a lookup fails, so an enrolled resident is still refused
-# over HTTP while the claims table is unreachable (#2682). Until the table has
-# loaded once, the set is incomplete, so every UUID counts as possibly claimed.
+# one adds it, a lookup that finds none drops it, and the server reloads the
+# whole table every minute (load_known_substrate_claims, from
+# background_tasks.substrate_claims_refresh), so an enrollment made by the
+# operator script is known within a minute even if nothing looks it up. The
+# HTTP-reject gates consult it only when a lookup fails, so an enrolled
+# resident is still refused over HTTP while the claims table is unreachable
+# (#2682). Until the table has loaded once, the set is incomplete, so every
+# UUID counts as possibly claimed.
 _known_claimed: set[str] = set()
 _claims_loaded = False
+
+
+def substrate_claims_loaded() -> bool:
+    """Whether the claims table has loaded at least once in this process."""
+    return _claims_loaded
 
 
 def known_substrate_claimed(agent_id: Optional[str]) -> bool:
@@ -255,14 +263,16 @@ def known_substrate_claimed(agent_id: Optional[str]) -> bool:
 
 
 async def load_known_substrate_claims() -> int:
-    """Load every claimed UUID; returns how many. Raises if the read fails."""
+    """Replace the claimed set with the table's contents; returns how many.
+
+    Raises if the read fails, leaving the previous set in place."""
     from src.db import get_db
 
     db = get_db()
     async with db.acquire() as conn:
         rows = await conn.fetch("SELECT agent_id FROM core.substrate_claims")
-    global _claims_loaded
-    _known_claimed.update(str(r["agent_id"]) for r in rows)
+    global _known_claimed, _claims_loaded
+    _known_claimed = {str(r["agent_id"]) for r in rows}
     _claims_loaded = True
     return len(rows)
 

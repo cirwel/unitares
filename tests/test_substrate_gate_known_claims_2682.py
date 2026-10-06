@@ -131,6 +131,7 @@ async def test_before_the_table_loads_a_failed_lookup_refuses_any_uuid(monkeypat
     with _http(), _lookup_fails():
         out = await resolution._substrate_http_reject(ORDINARY, "unit")
     assert out["error"] == "substrate_check_unavailable"
+    assert "not loaded yet" in out["message"]
 
     with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": RESIDENT}])):
         await verification.load_known_substrate_claims()
@@ -139,14 +140,46 @@ async def test_before_the_table_loads_a_failed_lookup_refuses_any_uuid(monkeypat
         assert (await resolution._substrate_http_reject(RESIDENT, "unit"))["resume_failed"]
 
 
+class _Stop(Exception):
+    pass
+
+
 @pytest.mark.asyncio
-async def test_the_startup_load_retries_until_it_succeeds(monkeypatch):
+async def test_the_refresh_retries_the_first_load_then_reloads_every_interval(monkeypatch):
+    """The first load backs off until it succeeds; after that the table is
+    reloaded at the interval, so a later enrollment becomes known."""
     from src import background_tasks
 
     monkeypatch.setattr(verification, "_claims_loaded", False)
-    load = AsyncMock(side_effect=[ConnectionError("down"), ConnectionError("down"), 1])
-    with patch.object(verification, "load_known_substrate_claims", load), \
-         patch.object(background_tasks.asyncio, "sleep", AsyncMock()):
-        await background_tasks.substrate_claims_warmup()
+    load = AsyncMock(side_effect=[ConnectionError("down"), ConnectionError("down"), 1, 2])
+    sleeps = []
 
-    assert load.await_count == 3
+    async def sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 5:
+            raise _Stop
+
+    with patch.object(verification, "load_known_substrate_claims", load), \
+         patch.object(background_tasks.asyncio, "sleep", sleep):
+        with pytest.raises(_Stop):
+            await background_tasks.substrate_claims_refresh(interval_s=60.0)
+
+    assert load.await_count == 4
+    # startup wait, two backoffs, then the reload interval twice
+    assert sleeps == [2, 5.0, 10.0, 60.0, 60.0]
+
+
+@pytest.mark.asyncio
+async def test_a_reload_replaces_the_set_and_a_failed_one_keeps_it():
+    with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": RESIDENT}])):
+        await verification.load_known_substrate_claims()
+    with patch("src.db.get_db", return_value=_db(fetch=[{"agent_id": ORDINARY}])):
+        await verification.load_known_substrate_claims()
+    assert not verification.known_substrate_claimed(RESIDENT)  # unenrolled
+    assert verification.known_substrate_claimed(ORDINARY)
+
+    failing = MagicMock()
+    failing.acquire = MagicMock(side_effect=ConnectionError("down"))
+    with patch("src.db.get_db", return_value=failing), pytest.raises(ConnectionError):
+        await verification.load_known_substrate_claims()
+    assert verification.known_substrate_claimed(ORDINARY)

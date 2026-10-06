@@ -1681,28 +1681,35 @@ async def transport_binding_cache_warmup():
         logger.warning(f"[WARMUP] Transport binding warmup failed (non-fatal): {e}")
 
 
-async def substrate_claims_warmup():
-    """Load the substrate-claimed UUIDs, so the HTTP-reject gates can still
-    refuse an enrolled resident if a later claims lookup fails (#2682).
+async def substrate_claims_refresh(interval_s: float = 60.0):
+    """Keep the substrate-claimed UUIDs current, so the HTTP-reject gates can
+    still refuse an enrolled resident if a claims lookup fails (#2682).
 
-    Retries until it succeeds: until then a failed gate lookup treats every
-    UUID as possibly claimed (known_substrate_claimed), so starting during a
-    database outage refuses rather than admits."""
+    The first load retries with backoff until it succeeds; until then a failed
+    gate lookup treats every UUID as possibly claimed, so starting during a
+    database outage refuses rather than admits. After that the table is
+    reloaded every ``interval_s`` so an enrollment is known within a minute;
+    a failed reload keeps the previous set."""
     from src.substrate.verification import load_known_substrate_claims
 
     await asyncio.sleep(2)  # Wait for DB to be ready
-    delay = 5.0
+    backoff = 5.0
     attempt = 0
+    loaded = False
     while True:
         attempt += 1
         try:
             count = await load_known_substrate_claims()
-            logger.info("[WARMUP] %d substrate-claimed identities loaded", count)
-            return
+            if not loaded:
+                logger.info("[WARMUP] %d substrate-claimed identities loaded", count)
+                loaded = True
         except Exception as e:
-            logger.warning("[WARMUP] substrate claims load failed (attempt %d): %s", attempt, e)
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 60.0)
+            logger.warning("[SUBSTRATE_CLAIMS] load failed (attempt %d): %s", attempt, e)
+        if loaded:
+            await asyncio.sleep(interval_s)
+        else:
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 60.0)
 
 
 async def identity_cache_warmup():
@@ -1970,5 +1977,5 @@ def start_all_background_tasks(set_ready):
     logger.info("[SILENCE] Started agent silence detection (every 10m)")
 
     _supervised_create_task(identity_cache_warmup(), name="identity_cache_warmup")
-    _supervised_create_task(substrate_claims_warmup(), name="substrate_claims_warmup")
+    _supervised_create_task(substrate_claims_refresh(), name="substrate_claims_refresh")
     _supervised_create_task(transport_binding_cache_warmup(), name="transport_binding_cache_warmup")
