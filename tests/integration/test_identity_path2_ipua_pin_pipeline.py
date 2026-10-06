@@ -12,16 +12,19 @@ stubbed; the resolution-source contextvar wiring between ``session.py`` and
 ``tests/test_identity_path2_ipua_pin.py`` bypass by patching
 ``get_session_resolution_source`` directly — runs for real.
 
-The load-bearing assertion is the **strict-mode passthrough invariant**
-(RFC §3.1 surface F: "IPUA pin treats agent_id as proof"; the invariant
-CANNOT be relaxed): an onboard that resolves through the IP:UA pin while
-carrying ``agent_id`` in arguments must pass through and resume the pinned
-identity even in strict mode — strict only forces a fresh mint when the
-caller presented NO ownership proof.
+The load-bearing assertion is that **a pin-matched resume needs ownership
+proof** (``TestStrictModePinResumeNeedsProof``). Under strict identity an
+onboard that resolves through the IP:UA pin while carrying only a public
+``agent_id`` or a bare ``agent_uuid`` is refused with ``resume_proof_required``:
+both values are public, the pin is keyed on the User-Agent alone, and behind a
+shared address that combination handed out the pinned agent's credentials
+(identity/credential_issuance.py). This replaced the earlier RFC §3.1 surface
+F invariant that ``agent_id`` beside a pin is proof. With no proof signal at
+all, strict still mints fresh.
 
 Per RFC §7.3, the Wave 3 BEAM identity-middleware port must reuse this test
 against the BEAM-side dispatch entry: ``drive_onboard`` is the single entry
-point to swap.
+point to swap, and the port must keep the refusal, not the old passthrough.
 """
 
 from __future__ import annotations
