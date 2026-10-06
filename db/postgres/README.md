@@ -97,8 +97,10 @@ Current maintenance utilities are targeted scripts under `scripts/migration/` an
 Example:
 
 ```bash
-# Re-embed the discovery corpus into the active pgvector table
+# Embed discoveries that have no vector in the active pgvector table
 python scripts/migration/reembed_corpus.py --dry-run
+# Rewrite every vector (model migration)
+python scripts/migration/reembed_corpus.py --rebuild --dry-run
 ```
 
 ## Schema Overview

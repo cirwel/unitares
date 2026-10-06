@@ -6,6 +6,7 @@ async wrappers. All asyncpg pool/connection interactions are mocked.
 """
 
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import asyncio
@@ -59,6 +60,14 @@ def _make_mock_pool():
     acm.__aenter__ = AsyncMock(return_value=conn)
     acm.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = acm
+
+    # Default no-op transaction so writers that open one (add_message, #2367)
+    # work against the mock; tests may still replace conn.transaction.
+    @asynccontextmanager
+    async def _transaction():
+        yield
+
+    conn.transaction = _transaction
 
     return pool, conn
 
@@ -855,7 +864,42 @@ class TestMarkAwaitingFacilitation:
 
         await instance.mark_awaiting_facilitation("sess-001")
 
-        assert "updated_at" not in conn.fetchrow.call_args_list[0][0][0]
+        sql = " ".join(conn.fetchrow.call_args_list[0][0][0].split())
+        assert "SET awaiting_facilitation = true WHERE" in sql
+        assert "updated_at" not in sql  # no CAS args passed: no predicate either
+
+    @pytest.mark.asyncio
+    async def test_compare_and_set_on_observed_phase_and_updated_at(self, db):
+        """#2367: the write lands only if phase/updated_at still match the sweep's read.
+
+        The CAS READS `updated_at` in the WHERE clause; the SET clause must
+        still never write it.
+        """
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        ts = object()
+
+        assert await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="synthesis", expected_updated_at=ts) is True
+
+        call = conn.fetchrow.call_args_list[0][0]
+        sql = " ".join(call[0].split())
+        assert "SET awaiting_facilitation = true WHERE" in sql
+        assert "AND phase IS NOT DISTINCT FROM $2" in sql
+        assert "AND updated_at IS NOT DISTINCT FROM $3" in sql
+        assert call[1:] == ("sess-001", "synthesis", ts)
+
+    @pytest.mark.asyncio
+    async def test_compare_and_set_refused_when_row_moved(self, db):
+        """A live row that no longer matches is refused (False), not an error."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"status": "active"}])
+        winner = {}
+
+        assert await instance.mark_awaiting_facilitation(
+            "sess-001", expected_phase="antithesis", expected_updated_at=None,
+            winner=winner) is False
+        assert winner["winner_status"] == "active"
 
     @pytest.mark.asyncio
     async def test_refused_on_a_terminal_row(self, db):
@@ -931,6 +975,31 @@ class TestResolveSession:
 
 class TestAddMessage:
     @pytest.mark.asyncio
+    async def test_add_message_bumps_then_inserts_in_one_transaction(self, db):
+        """The sweeper CAS (#2367) must never see a committed message whose
+        updated_at bump has not landed: both statements run inside one
+        transaction. The bump runs first, so the session row is update-locked
+        before the message exists; the INSERT alone takes only the foreign
+        key's KEY SHARE lock, which the CAS UPDATE does not wait on."""
+        instance, pool, conn = db
+        events = []
+
+        @asynccontextmanager
+        async def transaction():
+            events.append("begin")
+            yield
+            events.append("commit")
+
+        async def fetchrow(sql, *a):
+            events.append("insert" if "INSERT" in sql else "bump")
+            return {"message_id": 1, "timestamp": None, "effect_ts": None}
+
+        conn.transaction = transaction
+        conn.fetchrow = fetchrow
+        await instance.add_message("sess-001", "agent-A", "thesis")
+        assert events == ["begin", "bump", "insert", "commit"]
+
+    @pytest.mark.asyncio
     async def test_add_message_full_args(self, db):
         """add_message inserts with all parameters and returns message_id."""
         instance, pool, conn = db
@@ -940,7 +1009,7 @@ class TestAddMessage:
                 return dict.__getitem__(self, key)
 
         msg_row = DictRecord({"message_id": 42})
-        conn.fetchrow = AsyncMock(side_effect=[msg_row, EFFECT_ROW])
+        conn.fetchrow = AsyncMock(side_effect=[EFFECT_ROW, msg_row])
 
         result = await instance.add_message(
             session_id="sess-001",
@@ -957,8 +1026,8 @@ class TestAddMessage:
 
         assert result == 42
 
-        # Verify INSERT call
-        insert_call = conn.fetchrow.call_args_list[0][0]
+        # Verify INSERT call (after the updated_at bump)
+        insert_call = conn.fetchrow.call_args_list[1][0]
         assert insert_call[1] == "sess-001"
         assert insert_call[2] == "agent-A"
         assert insert_call[3] == "thesis"
@@ -1065,7 +1134,7 @@ class TestAddMessage:
                 return dict.__getitem__(self, key)
 
         msg_row = DictRecord({"message_id": 7})
-        conn.fetchrow = AsyncMock(side_effect=[msg_row, EFFECT_ROW])
+        conn.fetchrow = AsyncMock(side_effect=[EFFECT_ROW, msg_row])
 
         result = await instance.add_message(
             session_id="sess-002",
@@ -1074,7 +1143,7 @@ class TestAddMessage:
         )
 
         assert result == 7
-        insert_call = conn.fetchrow.call_args_list[0][0]
+        insert_call = conn.fetchrow.call_args_list[1][0]
         assert insert_call[4] is None   # root_cause
         assert insert_call[5] is None   # proposed_conditions
         assert insert_call[7] is None   # observed_metrics
@@ -1085,7 +1154,7 @@ class TestAddMessage:
     async def test_add_message_returns_0_on_null_row(self, db):
         """add_message returns 0 when INSERT RETURNING yields None."""
         instance, pool, conn = db
-        conn.fetchrow = AsyncMock(side_effect=[None, EFFECT_ROW])
+        conn.fetchrow = AsyncMock(side_effect=[EFFECT_ROW, None])
 
         result = await instance.add_message(
             session_id="sess-003",
@@ -1674,8 +1743,7 @@ class TestEdgeCases:
             def __getitem__(self, key):
                 return dict.__getitem__(self, key)
 
-        conn.fetchrow = AsyncMock(return_value=DictRecord({"message_id": 1}))
-        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        conn.fetchrow = AsyncMock(side_effect=[EFFECT_ROW, DictRecord({"message_id": 1})])
 
         conditions = ["cond1", "cond2"]
         metrics = {"m1": 0.5}
@@ -1690,7 +1758,7 @@ class TestEdgeCases:
             concerns=concerns,
         )
 
-        insert_call = conn.fetchrow.call_args_list[0][0]
+        insert_call = conn.fetchrow.call_args_list[1][0]
         assert json.loads(insert_call[5]) == conditions
         assert json.loads(insert_call[7]) == metrics
         assert json.loads(insert_call[8]) == concerns
@@ -2112,11 +2180,11 @@ class TestEffectTimeFromTheDatabaseClock:
     async def test_add_message_reports_the_updated_at_bump_time(self, db):
         instance, _pool, conn = db
         msg = {"message_id": 7, "timestamp": datetime(2026, 9, 27, 11, 59, tzinfo=timezone.utc)}
-        conn.fetchrow = AsyncMock(side_effect=[msg, EFFECT_ROW])
+        conn.fetchrow = AsyncMock(side_effect=[EFFECT_ROW, msg])
         detail = {}
         assert await instance.add_message(session_id="s", agent_id="a", message_type="thesis",
                                           detail=detail) == 7
-        bump_sql = conn.fetchrow.call_args_list[1][0][0]
+        bump_sql = conn.fetchrow.call_args_list[0][0][0]
         assert "SET updated_at = now()" in bump_sql and "clock_timestamp()" in bump_sql
         assert detail["effect_ts"] == EFFECT_ROW["effect_ts"]
         assert detail["message_ts"] == msg["timestamp"]
