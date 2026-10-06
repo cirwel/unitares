@@ -25,6 +25,18 @@ def test_non_verb_opener_flagged():
     assert any("verb" in p for p in problems)
 
 
+def test_unknown_opener_is_not_waved_through():
+    # Not on any denylist, but not a verb either: the check is positive.
+    for line in ("Bananas route calls.", "Fleet-wide sweep of agents."):
+        assert any("recognised verb" in p for p in checker.check_description("t", line))
+
+
+def test_alias_descriptions_are_scanned():
+    descriptions = checker.advertised_descriptions()
+    for alias in ("start_session", "sync_state", "request_review", "store_finding"):
+        assert alias in descriptions
+
+
 def test_dated_policy_id_flagged_anywhere_in_text():
     desc = "Mint an identity.\n\nPosture (S1-c, 2026-05-23): fresh by default."
     problems = checker.check_description("onboard", desc)
