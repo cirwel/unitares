@@ -332,3 +332,28 @@ def test_the_verified_cache_stays_bounded(keyed, monkeypatch):
     with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}):
         asyncio.run(ss.resolve_keyed(make_client_session_id(VICTIM)))
     assert len(ss._verified) == 1
+
+
+@pytest.mark.asyncio
+async def test_runtime_observations_apply_the_legacy_policy(keyed, monkeypatch):
+    from src import runtime_observations as ro
+
+    monkeypatch.setenv("UNITARES_LEGACY_SESSION_IDS", "refuse")
+    db = MagicMock()
+    db.get_session = AsyncMock(return_value=MagicMock(agent_id=VICTIM))
+    with patch("src.db.get_db", return_value=db), \
+         patch.object(ro, "_normalize", return_value=(VICTIM, f"agent-{VICTIM[:12]}", "e1", None, {"observation_kind": "t"})):
+        with pytest.raises(ro.RuntimeObservationError) as exc:
+            await ro.record_runtime_observation({"any": "payload"})
+    assert exc.value.code == "legacy_session_id"
+    db.get_session.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rotating_the_key_revokes_a_cached_verification(keyed, monkeypatch):
+    csid = make_client_session_id(VICTIM)
+    with _candidates({"agent_id": VICTIM, "status": "active", "disabled_at": None}):
+        assert (await ss.resolve_keyed(csid))[0] == VICTIM
+        monkeypatch.setenv("UNITARES_CONTINUITY_TOKEN_SECRET", "rotated")
+        uuid, refusal = await ss.resolve_keyed(csid)
+    assert uuid is None and refusal["reason"] == "tag_mismatch"
