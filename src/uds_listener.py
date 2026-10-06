@@ -142,8 +142,15 @@ async def start_uds_listener(
         try:
             probe.settimeout(1.0)
             probe.connect(uds_path)
-        except OSError:
-            pass  # refused / not a socket / unreachable: stale
+        except OSError as exc:
+            # Only these mean nobody is accepting. Anything else (EACCES from
+            # another UID's 0600 socket, EAGAIN/ETIMEDOUT from a saturated
+            # listener) may be a live owner, so refuse rather than displace it.
+            if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK):
+                raise OSError(
+                    errno.EADDRINUSE,
+                    f"cannot prove {uds_path} is stale ({exc}); refusing to displace it",
+                ) from exc
         else:
             raise OSError(
                 errno.EADDRINUSE, f"live listener already bound at {uds_path}"

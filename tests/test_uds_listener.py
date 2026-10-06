@@ -354,3 +354,42 @@ async def test_failed_start_does_not_claim_or_unlink_live_socket(monkeypatch):
         if os.path.exists(path):
             os.unlink(path)
         os.rmdir(d)
+
+
+@pytest.mark.asyncio
+async def test_unprovable_stale_socket_is_not_displaced(monkeypatch):
+    """An EACCES probe (e.g. another UID's 0600 socket) must not be read as stale."""
+    import errno as _errno
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    live = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    live.bind(path)
+    live.listen(8)
+    real_socket = _socket.socket
+
+    class _DenyingProbe:
+        def __init__(self, *a, **k):
+            self._s = real_socket(*a, **k)
+
+        def settimeout(self, t):
+            self._s.settimeout(t)
+
+        def connect(self, addr):
+            raise PermissionError(_errno.EACCES, "denied")
+
+        def close(self):
+            self._s.close()
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _DenyingProbe)
+    try:
+        with pytest.raises(OSError) as exc:
+            await uds_listener.start_uds_listener(object(), path)
+        assert exc.value.errno == _errno.EADDRINUSE
+        assert os.path.exists(path)
+    finally:
+        live.close()
+        if os.path.exists(path):
+            os.unlink(path)
+        os.rmdir(d)
