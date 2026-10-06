@@ -10,6 +10,7 @@ import importlib.util
 import os
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -215,7 +216,7 @@ def test_handoff_accepts_a_base_merge_made_during_the_review(carry_repo, monkeyp
         _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"baseRefName": "master", "state": "OPEN"}
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     # The real pr_comments, so the handoff's carry registration is what re-keys.
     monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
     # _resolve registered the reviewed key's view. The second-family pass that
@@ -251,7 +252,7 @@ def test_handoff_refreshes_the_base_ref_when_only_the_base_moved(carry_repo, mon
         _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"baseRefName": "master", "state": "OPEN"}
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])  # the PR's comments
     assert completed_review_exit("o/r", 1, key, head, 0) == 0
     assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == \
@@ -283,7 +284,7 @@ def test_handoff_reads_the_merged_head_when_a_base_merge_keeps_the_key(carry_rep
         found = native_finding and head == merged["head"]
         return rg.NativeReview([full_record(key, "FINDINGS", 1, False, "codex-native")] if found else [])
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     monkeypatch.setattr(rg, "read_native", read_native)
     monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
@@ -320,7 +321,7 @@ def test_after_the_handoff_the_view_keeps_same_key_heads_ci_reads(carry_repo, mo
         _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"baseRefName": "master", "state": "OPEN"}
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (key, [(key, h0)])})
     assert completed_review_exit("o/r", 1, key, h, 0) == 0
@@ -450,7 +451,7 @@ def test_handoff_validates_against_the_base_the_ref_holds(carry_repo, monkeypatc
             return out
 
         monkeypatch.setattr(rg, "git", git)
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"baseRefName": "master", "state": "OPEN"})
     assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
     assert said in capsys.readouterr().out
     assert _git(carry_repo, "rev-parse", "refs/remotes/origin/master") == retained_base
@@ -465,7 +466,7 @@ def test_handoff_refuses_a_base_ref_it_could_not_move(carry_repo, monkeypatch, c
     key = rg.diff_key("master", "HEAD")
     _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
     monkeypatch.setattr(rg, "_advance_ref", lambda ref, new: "stuck")
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"baseRefName": "master", "state": "OPEN"})
     assert completed_review_exit("o/r", 1, key, head, 0) == rg.UNREVIEWED
     assert "could not move origin/master" in capsys.readouterr().out
 
@@ -498,7 +499,7 @@ def test_after_the_handoff_a_family_recorded_on_the_merged_head_counts(carry_rep
         _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"baseRefName": "master", "state": "OPEN"}
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     monkeypatch.setattr(rg, "api_pages", lambda *args: comments)
     monkeypatch.setattr(rg, "_CARRY", {("o/r", 1): (reviewed_key, [])})
     assert completed_review_exit("o/r", 1, reviewed_key, reviewed_head, 0) == 0
@@ -561,7 +562,7 @@ def _base_merged_pr(carry_repo, monkeypatch):
     _git(carry_repo, "update-ref", "refs/remotes/origin/master", "master")
     _git(carry_repo, "update-ref", "refs/pull/1/head", "HEAD")
     monkeypatch.setattr(rg, "changed_paths", _REAL_CHANGED_PATHS)
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"baseRefName": "master", "state": "OPEN"})
     return reviewed_key, rg.diff_key("master", "HEAD"), _git(carry_repo, "rev-parse", "HEAD")
 
 
@@ -1007,6 +1008,136 @@ def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
+def _rest_pr(n=7, state="open", **extra):
+    return {"number": n, "state": state, "draft": False, "user": {"login": "cirwel"},
+            "updated_at": "2026-10-03T00:00:00Z", "labels": [{"name": "x", "id": 1}],
+            "head": {"sha": "abc", "ref": "claude/topic"}, "base": {"ref": "master"}, **extra}
+
+
+@pytest.mark.parametrize("state,extra,expected", [
+    ("open", {}, "OPEN"),
+    ("closed", {"merged": False}, "CLOSED"),
+    ("closed", {"merged": True}, "MERGED"),                    # single-PR endpoint
+    ("closed", {"merged_at": "2026-10-01T00:00:00Z"}, "MERGED"),  # listing endpoint
+    ("closed", {"merged_at": None}, "CLOSED"),
+])
+def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, expected):
+    # Cloud sessions refuse GraphQL, so every PR read is REST; callers and
+    # require_open still read the GraphQL names and OPEN/CLOSED/MERGED states.
+    info = rg.pr_fields(_rest_pr(state=state, **extra))
+    assert info == {"number": 7, "headRefOid": "abc", "headRefName": "claude/topic",
+                    "baseRefName": "master", "state": expected, "isDraft": False,
+                    "author": {"login": "cirwel"}, "updatedAt": "2026-10-03T00:00:00Z",
+                    "labels": [{"name": "x"}]}
+
+
+def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
+    calls = []
+
+    def run(cmd, *, check=True, cwd=None):
+        calls.append(cmd)
+        if "pulls?head=" in cmd[-1]:
+            return json.dumps([_rest_pr(1, "closed", merged_at="t"), _rest_pr(2)])
+        return json.dumps(_rest_pr(3) if "/pulls/" in cmd[-1] else {"full_name": "o/r"})
+
+    monkeypatch.setattr(rg, "_run", run)
+    monkeypatch.setattr(rg, "head_ref", lambda: ("{owner}", "claude/x y"))
+    launched = []
+    monkeypatch.setattr(rg, "_launch", lambda cmd, **kw: launched.append((cmd, kw["input"])))
+    assert rg.pr_view(3)["state"] == "OPEN"
+    assert rg.current_pr()["number"] == 2  # the open PR wins over an older merged one
+    assert rg.repo_slug() == "o/r"
+    rg.post_comment(4, "body\n")
+    assert calls[0] == ["gh", "api", "repos/{owner}/{repo}/pulls/3"]
+    assert calls[1][-1] == ("repos/{owner}/{repo}/pulls?head={owner}:claude/x%20y"
+                            "&state=all&per_page=100")
+    assert launched == [(["gh", "api", "--method", "POST",
+                          "repos/{owner}/{repo}/issues/4/comments", "-F", "body=@-"], "body\n")]
+    assert all(cmd[1] == "api" for cmd in calls + [c for c, _ in launched])
+
+
+def _fake_git(config):
+    def git(*args, check=True):
+        return config.get(args, "")
+    return git
+
+
+@pytest.mark.parametrize("config,expected", [
+    # No upstream: the branch is assumed pushed under its name to the base repo.
+    ({}, ("{owner}", "topic")),
+    # A fork: the head is owned by the fork's account, as `gh pr view` finds it.
+    ({("config", "branch.topic.remote"): "fork",
+      ("config", "branch.topic.merge"): "refs/heads/their-topic",
+      ("remote", "get-url", "--push", "fork"): "git@github.com:contributor/unitares.git"},
+     ("contributor", "their-topic")),
+    ({("config", "branch.topic.remote"): "origin",
+      ("config", "branch.topic.merge"): "refs/heads/topic",
+      ("remote", "get-url", "--push", "origin"): "https://github.com/cirwel/unitares"},
+     ("cirwel", "topic")),
+    # A local tracking branch, or a remote URL with no owner/repo shape.
+    ({("config", "branch.topic.remote"): ".",
+      ("config", "branch.topic.merge"): "refs/heads/master"}, ("{owner}", "master")),
+])
+def test_head_ref_finds_the_owner_of_the_pushed_head(monkeypatch, config, expected):
+    monkeypatch.setattr(rg, "git", _fake_git({("rev-parse", "--abbrev-ref", "HEAD"): "topic\n", **config}))
+    assert rg.head_ref() == expected
+
+
+@pytest.mark.parametrize("setup,expected", [
+    ([], ("{owner}", "topic")),
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic"], ("cirwel", "topic")),
+    # Triangular: tracks upstream/master, pushes to the fork. Under the
+    # default push.default=simple, @{push} refuses this; the fork still wins.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "branch.topic.pushRemote=fork"], ("contributor", "topic")),
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "remote.pushDefault=fork"], ("contributor", "topic")),
+    # push.default=current: @{push} needs a fork tracking ref that is absent
+    # here, so the explicit push-remote read must give the same head.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/master",
+      "branch.topic.pushRemote=fork", "push.default=current"], ("contributor", "topic")),
+    # One remote, upstream fetch URL, fork push URL: the owner is the push side's.
+    (["branch.topic.remote=origin", "branch.topic.merge=refs/heads/topic",
+      "remote.origin.pushurl=git@github.com:contributor/unitares.git"], ("contributor", "topic")),
+])
+def test_head_ref_follows_git_push_destination(tmp_path, monkeypatch, setup, expected):
+    _git(tmp_path, "init", "-q", "-b", "master")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+         "--allow-empty", "-m", "x")
+    _git(tmp_path, "remote", "add", "origin", "https://github.com/cirwel/unitares.git")
+    _git(tmp_path, "remote", "add", "fork", "git@github.com:contributor/unitares.git")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/master", "HEAD")
+    _git(tmp_path, "checkout", "-q", "-b", "topic")
+    for item in setup:
+        key, value = item.split("=", 1)
+        _git(tmp_path, "config", key, value)
+    monkeypatch.chdir(tmp_path)
+    assert rg.head_ref() == expected
+
+
+def test_current_pr_queries_a_fork_head_by_its_owner(monkeypatch):
+    calls = []
+    monkeypatch.setattr(rg, "head_ref", lambda: ("contributor", "their-topic"))
+    monkeypatch.setattr(rg, "gh_json", lambda *a: calls.append(a) or [_rest_pr(9)])
+    assert rg.current_pr()["number"] == 9
+    assert calls == [("api", "repos/{owner}/{repo}/pulls?head=contributor:their-topic"
+                             "&state=all&per_page=100")]
+
+
+@pytest.mark.parametrize("listing,expected", [([], None), ([_rest_pr(1, "closed", merged_at="t")], "MERGED")])
+def test_current_pr_reports_a_merged_branch_as_merged_not_absent(monkeypatch, listing, expected):
+    monkeypatch.setattr(rg, "head_ref", lambda: ("{owner}", "b"))
+    monkeypatch.setattr(rg, "gh_json", lambda *a: listing)
+    info = rg.current_pr()
+    assert (info and info["state"]) == expected
+
+
+def test_current_pr_on_a_detached_head_is_none(monkeypatch):
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "HEAD")
+    monkeypatch.setattr(rg, "gh_json", lambda *a: pytest.fail("looked up a detached HEAD"))
+    assert rg.current_pr() is None
+
+
 def test_sweep_covers_quiet_drafts_but_respects_trust_and_explicit_holds():
     from datetime import datetime, timezone
     now = datetime(2026, 9, 19, 1, 0, tzinfo=timezone.utc).timestamp()
@@ -1082,10 +1213,10 @@ def test_failed_reviewer_exposes_cause_and_an_alternative(tmp_path, monkeypatch,
 def test_sweep_dry_run_reports_draft_without_launching_or_claiming_empty(monkeypatch, capsys):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
-    def listing(*args):
-        assert "labels" in args[-1]
+    def listing(repo):
+        assert repo == "cirwel/repo"
         return [_pr(3, draft=True)]
-    monkeypatch.setattr(rg, "gh_json", listing)
+    monkeypatch.setattr(rg, "open_prs", listing)
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
@@ -1104,7 +1235,7 @@ def test_sweep_reads_a_prs_records_as_ci_does(monkeypatch):
     monkeypatch.setattr(rg, "_CARRY", {})
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
-    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "base_merge_equivalents", lambda base, head: [("old", "c0ffee")])
@@ -1516,7 +1647,7 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
         _git(repo, "update-ref", "refs/pull/1/head", "HEAD")
         return {"headRefOid": head, "baseRefName": "master", "state": "OPEN"}
 
-    monkeypatch.setattr(rg, "gh_json", pr_info)
+    monkeypatch.setattr(rg, "pr_view", pr_info)
     # An amend moves the head, so the handoff reads the PR's records as CI does.
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     assert completed_review_exit("o/r", 1, key, head, 0) == expected
@@ -1525,7 +1656,7 @@ def test_handoff_validates_fetched_diff_when_api_head_is_stale(repo, monkeypatch
 
 @pytest.mark.parametrize("fetch_fails", [False, True])
 def test_handoff_fetches_do_not_share_refs_and_clean_up_on_failure(monkeypatch, fetch_fails):
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"baseRefName": "master", "state": "OPEN"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"baseRefName": "master", "state": "OPEN"})
     monkeypatch.setattr(rg, "api_pages", lambda *args: [])
     destinations, removed, compared = [], [], []
 
@@ -1596,7 +1727,7 @@ def test_native_receipt_write_racing_a_push_cannot_complete_an_old_diff(monkeypa
 def test_sweep_records_native_clean_without_starting_another_review(repo, monkeypatch):
     monkeypatch.setattr(rg, "changed_paths", lambda *a: [])  # not a sensitive diff
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
-    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
@@ -1612,7 +1743,7 @@ def test_sweep_records_native_clean_without_starting_another_review(repo, monkey
 @pytest.mark.parametrize("state", ["CLOSED", "MERGED"])
 def test_closed_pr_stops_before_native_request_or_record(monkeypatch, state):
     monkeypatch.setattr(rg, "require_open", require_open)
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"state": state, "headRefOid": "h"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"state": state, "headRefOid": "h"})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: pytest.fail("read closed PR evidence"))
     monkeypatch.setattr(rg.subprocess, "run", lambda *args, **kw: pytest.fail("published on a closed PR"))
     with pytest.raises(rg.ClosedPullRequest):
@@ -1682,7 +1813,7 @@ def test_join_native_requests_missing_draft_once_and_returns_result(repo, monkey
     clock = [1000.0]
     monkeypatch.setattr(rg.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(rg.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     posted = []
     monkeypatch.setattr(rg.subprocess, "run", lambda *a, **kw: posted.append(kw["input"]))
@@ -1704,7 +1835,7 @@ def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, b
     monkeypatch.setattr(rg, "_resolve", lambda args: (1, "o/r", "k", "codex/change"))
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: head)
     monkeypatch.setattr(rg, "native_enabled", lambda: True)
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview(
         [], running=activity == "running", completed=activity == "completed"))
@@ -1724,7 +1855,7 @@ def test_native_timeout_leaves_budget_to_start_local_review(repo, monkeypatch, b
 def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, running):
     head = _git(repo, "rev-parse", "HEAD")
     marker = f"<!-- {rg.NATIVE_REQUEST} head={head} key=k -->"
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": head})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"headRefOid": head})
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [{"author_association": "OWNER", "body": marker,
                                                         "created_at": "2000-01-01T00:00:00Z"}])
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([], running=running))
@@ -1734,7 +1865,7 @@ def test_join_native_does_not_repeat_an_expired_request(repo, monkeypatch, runni
 
 
 def test_join_native_rejects_a_push_during_review(repo, monkeypatch):
-    monkeypatch.setattr(rg, "gh_json", lambda *args: {"headRefOid": "new"})
+    monkeypatch.setattr(rg, "pr_view", lambda *args: {"headRefOid": "new"})
     rec = rg.join_native(SimpleNamespace(budget=30), "o/r", 1, "k", "old")
     assert rec.verdict == "FAILED" and "head changed" in rec.reviewer
 
@@ -1772,7 +1903,11 @@ def test_check_publication_updates_its_own_run_with_neutral_warning(monkeypatch)
 def test_missing_gh_is_unreviewed_not_findings(monkeypatch, tmp_path, capsys, argv):
     # Exit 1 means "findings need author action". A machine without `gh`
     # reviewed nothing, so it must report UNREVIEWED (2), not a traceback
-    # whose exit status reads as findings. Empty PATH gives the real error.
+    # whose exit status reads as findings. A PATH holding only git gives the
+    # real error. The head ref is pinned: a detached checkout (CI's) has no
+    # branch, and the lookup would stop at "no PR" before it ever ran `gh`.
+    monkeypatch.setattr(rg, "head_ref", lambda: ("o", "b"))
+    (tmp_path / "git").symlink_to(shutil.which("git"))
     monkeypatch.setenv("PATH", str(tmp_path))
     assert rg.main(argv) == rg.UNREVIEWED
     out = capsys.readouterr().out
@@ -3255,7 +3390,7 @@ def test_the_codex_receipt_posts_even_when_another_family_is_clean(monkeypatch):
 
 def test_the_sweep_does_not_report_a_left_to_author_pr_as_a_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
-    monkeypatch.setattr(rg, "gh_json", lambda *args: [_pr(3, draft=True)])
+    monkeypatch.setattr(rg, "open_prs", lambda *args: [_pr(3, draft=True)])
     monkeypatch.setattr(rg, "git", lambda *args, **kwargs: "h")
     monkeypatch.setattr(rg, "diff_key", lambda *args: "k")
     monkeypatch.setattr(rg, "pr_comments", lambda *args: [])

@@ -295,6 +295,7 @@ class TestStickyResolveIdentity:
                         # Should use the explicitly resolved identity, not the cached one
                         assert out_ctx.bound_agent_id == "uuid-explicit"
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_skips_resolution(self):
         """agent_uuid in arguments bypasses resolve_session_identity entirely."""
@@ -320,6 +321,7 @@ class TestStickyResolveIdentity:
                             mock_resolve.assert_not_called()
                             status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_threads_archived_core_status(self):
         """PATH 0 passthrough carries core row status for downstream auth."""
@@ -341,6 +343,7 @@ class TestStickyResolveIdentity:
         assert out_ctx.identity_result["core_agent_row_status"] == "archived"
         assert out_args["_middleware_identity_result"]["core_agent_row_status"] == "archived"
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_populates_sticky_cache(self):
         """agent_uuid passthrough should populate the sticky cache for future calls."""
@@ -364,6 +367,7 @@ class TestStickyResolveIdentity:
         assert _transport_identity_cache[cache_key].agent_uuid == "e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4"
         status_spy.assert_awaited_once_with("e55caaf1-43a7-4fbb-a8fa-c69a9a8f50e4")
 
+    @pytest.mark.legacy_identity_defaults
     @pytest.mark.asyncio
     async def test_agent_uuid_passthrough_archived_status_rejected_by_auth(self):
         """PATH 0 archived row status must drive require_registered_agent."""

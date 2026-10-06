@@ -19,9 +19,13 @@ Identity posture (v2 ontology — see docs/ontology/identity.md):
 
     UNITARES_AGENT_UUID   substrate-anchored continuity: resume a fixed UUID
                           across restarts (the long-lived-resident pattern,
-                          `identity(agent_uuid=..., resume=true)`) instead of
-                          minting fresh. Use only for a genuinely persistent
-                          local agent that earns one durable identity.
+                          `identity(agent_uuid=..., continuity_token=...,
+                          resume=true)`) instead of minting fresh. Use only
+                          for a genuinely persistent local agent that earns
+                          one durable identity. Requires
+                          UNITARES_CONTINUITY_TOKEN: the server refuses a
+                          bare UUID resume under strict identity (default).
+    UNITARES_CONTINUITY_TOKEN  the continuity token issued to that UUID.
     UNITARES_PARENT_AGENT_ID  declare causal lineage to a prior agent. Pair
                           with a causal --spawn-reason (e.g. "explicit" for a
                           handoff from an EXITED prior session). Declaring a
@@ -104,8 +108,12 @@ class IdentityConfig:
     configured posture (fresh / substrate-anchored / declared-lineage).
     """
 
-    def __init__(self, agent_uuid=None, parent_agent_id=None, spawn_reason="new_session"):
+    def __init__(
+        self, agent_uuid=None, parent_agent_id=None, spawn_reason="new_session",
+        continuity_token=None,
+    ):
         self.agent_uuid = agent_uuid or None
+        self.continuity_token = continuity_token or None
         self.parent_agent_id = parent_agent_id or None
         self.spawn_reason = spawn_reason or "new_session"
 
@@ -115,6 +123,7 @@ class IdentityConfig:
             agent_uuid=args.agent_uuid or os.getenv("UNITARES_AGENT_UUID"),
             parent_agent_id=args.parent_agent_id or os.getenv("UNITARES_PARENT_AGENT_ID"),
             spawn_reason=(args.spawn_reason or os.getenv("UNITARES_SPAWN_REASON") or "new_session"),
+            continuity_token=os.getenv("UNITARES_CONTINUITY_TOKEN"),
         )
         cfg.validate()
         return cfg
@@ -124,6 +133,15 @@ class IdentityConfig:
             raise SystemExit(
                 f"Invalid --spawn-reason '{self.spawn_reason}'. "
                 f"Expected one of: {', '.join(VALID_SPAWN_REASONS)}."
+            )
+        # A UUID alone is not ownership proof: under strict identity, the
+        # server default, identity(agent_uuid, resume=true) without the
+        # UUID's continuity token is refused.
+        if self.agent_uuid and not self.continuity_token:
+            raise SystemExit(
+                "UNITARES_AGENT_UUID needs UNITARES_CONTINUITY_TOKEN, the continuity "
+                "token issued to that UUID: the server refuses a bare UUID resume. "
+                "Unset UNITARES_AGENT_UUID to start a fresh identity instead."
             )
         # A causal spawn_reason names a real spawn/handoff and needs a parent.
         if self.spawn_reason in CAUSAL_SPAWN_REASONS and not self.parent_agent_id:
@@ -221,7 +239,11 @@ def make_wrappers(mcp_tools: dict, identity: "IdentityConfig", session: "Session
         # trajectory (strict-identity requires a caller-proven binding).
         if identity.agent_uuid:
             return session.capture(
-                mcp_tools["identity"](agent_uuid=identity.agent_uuid, resume=True)
+                mcp_tools["identity"](
+                    agent_uuid=identity.agent_uuid,
+                    continuity_token=identity.continuity_token,
+                    resume=True,
+                )
             )
         kwargs = dict(name=name, force_new=True, spawn_reason=identity.spawn_reason)
         if identity.parent_agent_id:

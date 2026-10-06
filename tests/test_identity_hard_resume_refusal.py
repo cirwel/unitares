@@ -33,7 +33,7 @@ _SUBSTRATE_HTTP_REFUSAL = {
 @pytest.mark.asyncio
 async def test_substrate_http_refusal_short_circuits_dispatch(monkeypatch):
     """A hard resolver refusal reaches no binding, cache, TTL, or handler path."""
-    monkeypatch.delenv("STRICT_IDENTITY_REQUIRED", raising=False)
+    monkeypatch.setenv("STRICT_IDENTITY_REQUIRED", "false")
 
     signals = SessionSignals(
         transport="rest",

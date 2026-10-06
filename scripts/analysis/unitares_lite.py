@@ -65,13 +65,7 @@ def call_tool(tool_name, arguments=None):
     
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-            
-            # Save session ID if returned
-            if "client_session_id" in result:
-                save_session(result["client_session_id"])
-            
-            return result
+            envelope = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         error_body = e.read().decode() if hasattr(e, 'read') else ""
         return {"success": False, "error": f"HTTP {e.code}: {e.reason}", "body": error_body}
@@ -80,10 +74,42 @@ def call_tool(tool_name, arguments=None):
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+    # /v1/tools/call wraps the tool's own payload as {"name", "result",
+    # "success"}; the session id and any identity refusal are inside it.
+    result = envelope.get("result") if isinstance(envelope.get("result"), dict) else envelope
+
+    # Save session ID if returned
+    if result.get("client_session_id"):
+        save_session(result["client_session_id"])
+
+    # An identity refusal is success-shaped by design, so report it as the
+    # failure it is rather than as a call that worked.
+    refusal = _identity_refusal_status(result)
+    if refusal:
+        detail = result.get("hint") or result.get("next_step") or ""
+        return {"success": False, "refused": refusal,
+                "error": f"identity refused ({refusal}). {detail}".strip()}
+
+    return result
+
+
+def _identity_refusal_status(payload) -> str | None:
+    """Mirror of identity_bootstrap.identity_refusal_status for this
+    standalone client: a typed strict-identity refusal carries
+    rollout_flag=STRICT_IDENTITY_REQUIRED and its status."""
+    if not isinstance(payload, dict) or payload.get("rollout_flag") != "STRICT_IDENTITY_REQUIRED":
+        return None
+    return str(payload.get("status") or "identity_required")
+
 
 def onboard_cmd(name=None):
-    """Call onboard() tool."""
-    args = {}
+    """Call onboard() tool for a fresh identity.
+
+    force_new is explicit: under strict identity (the server default) an
+    onboard with neither force_new nor parent_agent_id is refused as
+    lineage_declaration_required.
+    """
+    args = {"force_new": True}
     if name:
         args["name"] = name
     

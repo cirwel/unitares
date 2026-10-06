@@ -11,21 +11,22 @@ from __future__ import annotations
 import os
 
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
+_FALSY = frozenset({"0", "false", "no", "off"})
 
 
 def is_strict_identity_required() -> bool:
-    """True iff STRICT_IDENTITY_REQUIRED env var is set to a truthy value.
+    """True unless STRICT_IDENTITY_REQUIRED explicitly turns strict identity off.
 
-    Truthy values: "1", "true", "yes", "on" (case-insensitive). Anything
-    else, including unset, is False.
+    Strict identity is the default. Only "0", "false", "no" or "off"
+    (case-insensitive) disable it; unset, empty and any other value keep it on,
+    so a typo fails closed rather than opening every auto-mint path.
 
     When True, all auto-mint paths MUST refuse-or-skip rather than create
     an ephemeral identity. See CLAUDE.md "STRICT_IDENTITY_REQUIRED (#425
     staged rollout)" for the contract and rollout sequence.
     """
     raw = os.getenv("STRICT_IDENTITY_REQUIRED", "").strip().lower()
-    return raw in _TRUTHY
+    return raw not in _FALSY
 
 
 _DEFAULT_REFUSAL_HINT = (
