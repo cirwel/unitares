@@ -104,7 +104,9 @@ _IDENTITY_DESCRIPTION_OVERRIDES = {
 
 _INFERENCE_DESCRIPTION_OVERRIDES = {
     "list_inference_hosts": (
-        "List registered inference hosts with live readiness. Read two fields "
+        "List the inference hosts this deployment has registered, with live "
+        "readiness; for one known id use describe_inference_host.\n\n"
+        "Read two fields "
         "as different questions: available says the adapter could run (a "
         "cached readiness check, not a promise), accepts_host_id_from says "
         "which tool will take that host as host_id — Ollama and Hugging Face "
@@ -112,12 +114,12 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "delegate_inference. Those adapters are an operator extension (the "
         "agent orchestrator) that a default install does not run; the "
         "extensions field says whether this server has it. Listing works "
-        "before onboarding; inference calls need a bound identity. Use "
-        "describe_inference_host for one known id."
+        "before onboarding; inference calls need a bound identity."
     ),
     "describe_inference_host": (
-        "Return the registry record for one inference host named by host_id, "
-        "including readiness: read accepts_host_id_from, not available, to "
+        "Inspect one inference host by host_id: registry record and "
+        "readiness; to find ids use list_inference_hosts.\n\n"
+        "Read accepts_host_id_from, not available, to "
         "learn which tool will take it. An unregistered id returns "
         "INFERENCE_HOST_NOT_FOUND rather than an empty record, so enumerate "
         "ids with list_inference_hosts; call_model or delegate_inference "
@@ -125,10 +127,11 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "host nor proves its credentials work."
     ),
     "call_model": (
-        "Run one synchronous advisory completion on the local Ollama lane or "
-        "the Hugging Face router, returning tool evidence, never a governed "
-        "review record; consult is the better default unless you need this "
-        "route control. provider='hf' also needs privacy='cloud' or 'auto', "
+        "Run a raw completion on a local or Hugging Face inference host; "
+        "for advisory help prefer consult.\n\n"
+        "One synchronous advisory completion on the local Ollama lane or the "
+        "Hugging Face router, returning tool evidence, never a governed review "
+        "record. provider='hf' also needs privacy='cloud' or 'auto', "
         "since the default privacy='local' refuses it — yet that local "
         "default does not screen model ids, so a deepseek-ai/, Qwen/, hf: or "
         "openai/gpt-oss model still routes off-box. host_id rejects the "
@@ -138,7 +141,9 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "delegate_inference": (
-        "Operator extension, off on a default install. Send one bounded "
+        "Hand a bounded task to a strong-model host and get the result back; "
+        "for a raw completion use call_model.\n\n"
+        "Operator extension, off on a default install. Sends one bounded "
         "prompt to an operator-authorized subscription CLI "
         "(Claude, Codex or Antigravity), spawned as an isolated child with no "
         "tools, a read-only sandbox, or plan mode in an empty workspace: it "
@@ -155,9 +160,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "consult": (
-        "Primary advisory model-help surface: send a brief, get back advisory "
-        "model evidence, never a governed verdict — request_review produces "
-        "that. effort='thorough' asks a strong model (Claude, Codex or "
+        "Ask a model for advisory help; evidence only, no governance record. "
+        "For on-record judgment use request_review.\n\n"
+        "Send a brief, get back advisory model evidence, never a governed "
+        "verdict. effort='thorough' asks a strong model (Claude, Codex or "
         "Antigravity) from a family other than the caller's, when detectable. "
         "It needs privacy='cloud_allowed' and an operator extension a default "
         "install lacks (see list_inference_hosts); without both it fails "
