@@ -14,6 +14,7 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import socket
 import stat
@@ -448,27 +449,59 @@ async def test_failure_after_bind_leaves_a_replaced_node_alone(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("replaced", [False, True])
-async def test_oserror_after_bind_unlinks_only_its_own_node(monkeypatch, replaced):
-    """An OSError between bind and listen removes the node we bound, and
-    leaves alone a node that replaced it."""
+async def test_oserror_before_link_leaves_nothing_behind(monkeypatch):
+    """An OSError between bind and link leaves no node at the path and no
+    private bind directory: the socket only ever reaches the path by link."""
+    from src import uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    real_chmod = os.chmod
+
+    def _socket_chmod_fails(p, mode):
+        if os.path.basename(p) == "s":
+            raise PermissionError(13, "chmod refused")
+        real_chmod(p, mode)
+
+    monkeypatch.setattr(uds_listener.os, "chmod", _socket_chmod_fails)
+    try:
+        with pytest.raises(PermissionError):
+            await uds_listener.start_uds_listener(object(), path)
+        monkeypatch.undo()
+        assert not os.path.exists(path)
+        assert sorted(os.listdir(d)) == ["g.sock.lock"]
+    finally:
+        monkeypatch.undo()
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_node_appearing_during_bind_is_not_displaced(monkeypatch):
+    """A node that takes the path after the stale probe is refused, not
+    replaced: link() will not overwrite an existing name."""
+    import errno as _errno
     from src import uds_listener
 
     d = _tempfile.mkdtemp(prefix="uds")
     path = os.path.join(d, "g.sock")
     other = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    real_link = os.link
 
-    def _chmod_fails(p, mode):
-        if replaced:
-            os.unlink(p)
-            other.bind(p)
-        raise PermissionError(13, "chmod refused")
+    def _other_binds_first(src, dst):
+        other.bind(dst)
+        other.listen(8)
+        real_link(src, dst)
 
-    monkeypatch.setattr(uds_listener.os, "chmod", _chmod_fails)
+    monkeypatch.setattr(uds_listener.os, "link", _other_binds_first)
     try:
-        with pytest.raises(PermissionError):
+        with pytest.raises(OSError) as exc:
             await uds_listener.start_uds_listener(object(), path)
-        assert os.path.exists(path) is replaced
+        monkeypatch.undo()
+        assert exc.value.errno == _errno.EADDRINUSE
+        c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        c.connect(path)  # still the other socket
+        c.close()
+        assert sorted(os.listdir(d)) == ["g.sock", "g.sock.lock"]
     finally:
         monkeypatch.undo()
         other.close()
@@ -594,4 +627,219 @@ def test_path_lock_excludes_a_second_holder():
         for f in (path + ".lock",):
             if os.path.exists(f):
                 os.unlink(f)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+# --- The path lock must not block the event loop; the bind must not touch the umask ---
+import fcntl as _fcntl
+import threading as _threading
+import time as _time
+
+_LOCK_HELD_FOR = 0.6
+_MAX_LOOP_GAP = 0.3
+
+
+def _hold_path_lock_for(path: str, seconds: float) -> None:
+    """Take the path lock on a separate open file (as another process would)
+    and release it from a timer thread, independent of the event loop."""
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    _fcntl.flock(fd, _fcntl.LOCK_EX)
+    _threading.Timer(seconds, os.close, args=(fd,)).start()
+
+
+async def _run_with_loop_gap(coro):
+    """Await ``coro`` while a ticker measures the longest stall of the loop."""
+    stamps = [_time.monotonic()]
+    stop = asyncio.Event()
+
+    async def _tick():
+        while not stop.is_set():
+            await asyncio.sleep(0.01)
+            stamps.append(_time.monotonic())
+
+    ticker = asyncio.create_task(_tick())
+    await asyncio.sleep(0)
+    try:
+        result = await coro
+    finally:
+        stop.set()
+        await ticker
+    return result, max(b - a for a, b in zip(stamps, stamps[1:]))
+
+
+@pytest.mark.asyncio
+async def test_start_waits_for_a_held_path_lock_without_blocking_the_loop():
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    task = None
+    try:
+        _hold_path_lock_for(path, _LOCK_HELD_FOR)
+        started = _time.monotonic()
+        task, gap = await _run_with_loop_gap(
+            uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        )
+        assert _time.monotonic() - started >= _LOCK_HELD_FOR * 0.8  # it did wait
+        assert gap < _MAX_LOOP_GAP, f"event loop stalled {gap:.2f}s on the path lock"
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_stop_waits_for_a_held_path_lock_without_blocking_the_loop(monkeypatch):
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    try:
+        sock_path, task = await _start_uds_listener(_ok_app)
+        assert sock_path == path
+        _hold_path_lock_for(path, _LOCK_HELD_FOR)
+        _, gap = await _run_with_loop_gap(_stop_uds_listener(sock_path, task))
+        assert gap < _MAX_LOOP_GAP, f"event loop stalled {gap:.2f}s on the path lock"
+        assert not os.path.exists(path)
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_start_releases_the_socket_it_goes_on_to_bind(monkeypatch):
+    """Cancelled while waiting on the lock, the start's worker still binds once
+    the lock frees; that socket must be released, not left answering probes."""
+    bound = _threading.Event()
+    real_bind_into_place = uds_listener._bind_into_place
+
+    def _bind_and_signal(p):
+        try:
+            return real_bind_into_place(p)
+        finally:
+            bound.set()
+
+    monkeypatch.setattr(uds_listener, "_bind_into_place", _bind_and_signal)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        _hold_path_lock_for(path, 0.3)
+        task = asyncio.create_task(
+            uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        )
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not bound.is_set()  # cancelled while the worker waited on the lock
+        assert await asyncio.to_thread(bound.wait, 5)  # ...which then bound anyway
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if sorted(os.listdir(d)) == ["g.sock.lock"]:
+                break
+        assert sorted(os.listdir(d)) == ["g.sock.lock"]
+    finally:
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_bind_leaves_the_process_umask_alone(monkeypatch):
+    """The umask is process-wide: setting it around bind would hand any thread
+    creating a file in that window the restrictive mask."""
+    calls = []
+    real_umask = os.umask
+
+    def _spy(mask):
+        calls.append(mask)
+        return real_umask(mask)
+
+    monkeypatch.setattr(uds_listener.os, "umask", _spy)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    task = None
+    try:
+        task = await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        assert calls == []
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        assert sorted(os.listdir(d)) == ["g.sock", "g.sock.lock"]
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_socket_reaches_its_path_owner_only_and_accepting(monkeypatch):
+    """Under a fully permissive umask the freshly bound node is world-writable;
+    it must already be 0600 and listening when it first appears at the path."""
+    seen = []
+    real_link = os.link
+
+    def _check_then_link(src, dst):
+        probe = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        try:
+            probe.connect(src)
+            accepting = True
+        except OSError:
+            accepting = False
+        finally:
+            probe.close()
+        seen.append((stat.S_IMODE(os.stat(src).st_mode), accepting))
+        real_link(src, dst)
+
+    monkeypatch.setattr(uds_listener.os, "link", _check_then_link)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    task = None
+    previous = os.umask(0)
+    try:
+        task = await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        assert seen == [(0o600, True)]
+    finally:
+        os.umask(previous)
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_a_socket_path_near_the_length_limit_still_binds():
+    """The staged path inside the private directory is no longer than the real
+    one, so a path that fits sun_path (104 bytes on macOS) still binds."""
+    root = _tempfile.mkdtemp(prefix="u", dir="/tmp")
+    try:
+        target_len = 100
+        pad = target_len - len(root) - len("/") - len("/g.sock")
+        sock_dir = os.path.join(root, "d" * pad)
+        path = os.path.join(sock_dir, "g.sock")
+        assert len(path) == target_len
+        task = await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        assert os.path.exists(path)
+    finally:
+        _shutil.rmtree(root, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_socket_creation_failure_leaves_no_private_directory(monkeypatch):
+    import errno as _errno
+
+    def _no_fds(*a, **k):
+        raise OSError(_errno.EMFILE, "too many open files")
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _no_fds)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    try:
+        with pytest.raises(OSError):
+            await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        assert sorted(os.listdir(d)) == ["g.sock.lock"]
+    finally:
         _shutil.rmtree(d, ignore_errors=True)

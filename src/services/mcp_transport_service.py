@@ -857,7 +857,9 @@ async def _stop_uds_listener(
             pass
     if socket_path:
         # Only the node this process bound: a replacement server may already
-        # have bound a fresh socket at the same path (#2662).
+        # have bound a fresh socket at the same path (#2662). It waits on the
+        # path lock, which another process's start may hold through a probe,
+        # so it runs off the event loop.
         from src.uds_listener import unlink_own_socket
 
-        unlink_own_socket(socket_path)
+        await asyncio.to_thread(unlink_own_socket, socket_path)
