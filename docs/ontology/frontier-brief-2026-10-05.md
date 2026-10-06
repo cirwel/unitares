@@ -52,19 +52,20 @@ same substrate decision (D4).
 
 ### 2. System score, not model score: the manifest idea
 
-`s22.write_context.v1` (`src/provenance_context.py`) already records, per
+`s22.write_context.v1` (`src/provenance_context.py`) defines fields for, per
 write: `harness_id`/`type`/`version`, `model`, `model_provider`, `model_source`,
 `transport`, `tool_surface`, `memory_context`, `governance_mode`,
-`comparison_key`, `task_type`, `episode_id`, and `episode_fork_kind`. The layer
+`comparison_key`, `task_type`, `episode_id`, and `episode_fork_kind`. A defined field
+is not necessarily populated; see the measured counts below. The layer
 taxonomy in [`harness-substrate-plurality.md`](harness-substrate-plurality.md)
 already says the harness layer is recorded as "context, not collapsed into
 identity".
 
 Brief's manifest fields vs that record:
 
-| Field | In S22 today |
+| Field | Defined in S22 today |
 |---|---|
-| model, harness, tools, memory | Yes. Server-assigned source labels appear only on `process_agent_update` S22 writes (see Limits) |
+| model, harness, tools, memory | Defined (sparsely populated, see below). Server-assigned source labels appear only on `process_agent_update` S22 writes (see Limits) |
 | task information regime (curated vs full role-visible state) | No. This is the variable the 9-24 brief §3 already flagged for the ablation |
 | permissions | Partly: `affordance_state`, not a permission set |
 | budget / retries / verifier present | No |
@@ -86,9 +87,9 @@ whoever reopens that study, not a conclusion.
 
 **Measured 2026-10-05 (read-only).** `scripts/diagnostics/s22_candidate_envelope_coverage.py
 --since 2026-09-05T00:00:00Z` against the live store, 32,531 `core.agent_state`
-rows and 236 knowledge-graph rows:
+rows and 236 knowledge-graph rows that carry an S22 context in the window:
 
-| Field | agent_state rows | KG rows |
+| Field | agent_state rows with S22 context | KG rows with S22 context |
 |---|---|---|
 | `harness_type` | 5,005 (15.4%) | 75 (31.8%) |
 | `model` | 1,070 (3.3%) | 0 |
@@ -103,7 +104,7 @@ What this does and does not establish:
 - **Rows, not agents.** These count persisted write-context rows. A few
   high-frequency writers can dominate them, so no percentage here describes the
   fleet or any one agent. The diagnostic does not split by harness or agent,
-  so the by-harness view proposed earlier is still not done.
+  so a by-harness or by-agent view has not been produced.
 - **Zeros are not "unused".** The three zero-count fields are in the
   diagnostic's `candidate` tier. A zero there could mean never surfaced to
   callers, not wired, or not recorded; this measurement does not say which.
