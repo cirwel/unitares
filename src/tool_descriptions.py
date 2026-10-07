@@ -141,8 +141,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "delegate_inference": (
-        "Hand a bounded task to a strong-model host and get the result back; "
-        "for a raw completion use call_model.\n\n"
+        "Hand a bounded task to a strong-model CLI host (operator extension, "
+        "off by default); for a raw completion use call_model.\n\n"
         "Operator extension, off on a default install. Sends one bounded "
         "prompt to an operator-authorized subscription CLI "
         "(Claude, Codex or Antigravity), spawned as an isolated child with no "
@@ -160,8 +160,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "auto_attest row."
     ),
     "consult": (
-        "Ask a model for advisory help; evidence only, no review record. "
-        "For on-record judgment use request_review.\n\n"
+        "Ask a model for advice, no review record; effort='thorough' needs "
+        "cloud privacy and an operator extension; on-record: request_review.\n\n"
         "Send a brief, get back advisory model evidence, never a governed "
         "verdict. effort='thorough' asks a strong model (Claude, Codex or "
         "Antigravity) from a family other than the caller's, when detectable. "
