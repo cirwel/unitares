@@ -99,8 +99,9 @@ jobs:
       # A digest under the tag without this workflow's provenance fails the
       # run instead. An interrupted publication cannot be told apart from an
       # out-of-band push, and attesting a digest this run did not build would
-      # let Promote Release accept an image of unknown origin. The operator
-      # deletes the tag and re-dispatches, which rebuilds and attests it.
+      # let Promote Release accept an image of unknown origin. Only when this
+      # repository holds no attestation for the digest at all is deleting it
+      # the remedy; a check that could not run is never reported that way.
       - name: Keep a published release tag immutable
         id: existing
         env:
@@ -116,12 +117,28 @@ jobs:
           fi
           # The same binding Promote Release verifies: this workflow, this tag,
           # this tag's source commit.
-          if ! gh attestation verify "oci://$REPOSITORY@$digest" \
+          if ! verify_out=$(gh attestation verify "oci://$REPOSITORY@$digest" \
             --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
             --source-ref "refs/tags/$RELEASE_TAG" \
-            --source-digest "$(git rev-parse HEAD)" >/dev/null 2>&1; then
-            echo "::error::$image ($digest) has no provenance from publish-container.yml at $RELEASE_TAG. This run did not build it and will not attest it. Delete that package version in GHCR, then re-dispatch to rebuild and attest it."
+            --source-digest "$(git rev-parse HEAD)" 2>&1); then
+            echo "$verify_out"
+            # A failed verify is either no provenance or a check that could
+            # not run. Ask for the attestations directly before naming a remedy.
+            if ! count=$(gh api "repos/$GITHUB_REPOSITORY/attestations/$digest" --jq '.attestations | length' 2>&1); then
+              if [[ "$count" == *"HTTP 404"* ]]; then
+                count=0
+              else
+                echo "$count"
+                echo "::error::Could not check provenance for $image ($digest). Re-run this workflow; do not delete the image."
+                exit 1
+              fi
+            fi
+            if [ "$count" = "0" ]; then
+              echo "::error::$image ($digest) has no attestation from this repository, so this workflow did not publish it, and this run will not attest it. Delete that package version in GHCR, then re-dispatch to rebuild and attest it."
+            else
+              echo "::error::$image ($digest) has $count attestation(s) in this repository, but none verifies as publish-container.yml at $RELEASE_TAG and this tag's commit (output above). Investigate before deleting anything; if the check itself failed, re-run."
+            fi
             exit 1
           fi
           echo "::notice::$image is already published; not rebuilding or replacing it."

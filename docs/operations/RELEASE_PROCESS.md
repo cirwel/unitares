@@ -114,8 +114,12 @@ branch does not deploy the master-only public Pages workflow.
    published: a re-dispatch for a release that already has an image skips that
    build, because Compose pulls each image by that tag. If the existing image
    has no provenance from this workflow at that tag, the re-dispatch fails
-   rather than attesting an image it did not build; delete that package
-   version in GHCR and dispatch again to rebuild and attest it. A manual
+   rather than attesting an image it did not build. The run says which case
+   it found. When the repository holds no attestation for the digest at all,
+   delete that package version in GHCR and dispatch again to rebuild and
+   attest it. When attestations exist but none binds to this tag, or the
+   check could not run, delete nothing: read the output, and re-run if the
+   check failed. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A
