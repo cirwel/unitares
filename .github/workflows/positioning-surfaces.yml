@@ -32,3 +32,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/diagnostics/check_repo_description.py
+
+  # Every listing outside this repo: the Hermes catalog pin, awesome-list
+  # lines, Glama, plugin marketplaces, sites. The registry is
+  # docs/operations/distribution-surfaces.toml; a PR that adds a manifest
+  # without registering it fails tests/test_distribution_surfaces.py, and this
+  # job reads the live surfaces. PENDING (an open PR moves it) does not fail.
+  distribution:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check every distribution surface against what is live
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci/distribution_surfaces.py
