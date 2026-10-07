@@ -1,0 +1,33 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-06T07:28:14Z",
+  "verified_date": "2026-10-06",
+  "verifier": "claude (agent): diffed tool_stability.py and tool_descriptions.json on claude/memory-routing-lines; only the leading text of the search_shared_memory/store_finding/update_finding migration notes and leave_note changed, alias to action mapping, inject_action and params unchanged, skill claims about them re-read and still hold",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "e02fda0b601e0f14",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "6d84560d08d1e574",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "ec52083d084f65b2",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "e2c1217b173fc7aa",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "e96e25b95ed8b014",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "bde37178d2a1c350",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "59d527f77fa1c58b",
+    "unitares/src/storage/knowledge_graph_age.py": "59ee851a425185e0",
+    "unitares/src/storage/knowledge_graph_postgres.py": "21641d27b903e950",
+    "unitares/src/tool_descriptions.json": "041b31ca20bc5e37"
+  },
+  "skill_digest": "aabbd26ad2a2ad60",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/tool_stability.py": [
+      "76060be105b596d0"
+    ],
+    "unitares/src/tool_descriptions.json": [
+      "281754afff36ec54"
+    ]
+  }
+}

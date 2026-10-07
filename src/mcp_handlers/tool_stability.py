@@ -215,7 +215,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "search_shared_memory": ToolAlias(
         old_name="search_shared_memory", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Search the cross-agent knowledge graph for prior findings. Rows in "
+            "Search shared memory (the knowledge graph) before you write; to "
+            "add a finding use store_finding.\n\n"
+            "Searches the cross-agent knowledge graph. Rows in "
             "status archived or cold are excluded unless you set status "
             "explicitly or pass include_archived / include_cold; a resolved or "
             "closed finding is still returned. Reading is not free of effect: "
@@ -242,8 +244,10 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "store_finding": ToolAlias(
         old_name="store_finding", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Write one new durable finding into the cross-agent knowledge graph "
-            "and get back its discovery_id. summary is required at call time even "
+            "Write a durable finding to the knowledge graph; search first, to "
+            "revise one use update_finding.\n\n"
+            "Writes one new finding into the cross-agent knowledge graph "
+            "and returns its discovery_id. summary is required at call time even "
             "though the schema marks every field optional; severity high or "
             "critical is refused unless the session is bound to a registered "
             "agent, while low and medium fall back to an anonymous writer id. "
@@ -256,7 +260,9 @@ _TOOL_ALIASES: Dict[str, ToolAlias] = {
     "update_finding": ToolAlias(
         old_name="update_finding", new_name="knowledge", reason="intuitive_alias",
         migration_note=(
-            "Revise a discovery already in the knowledge graph. discovery_id is "
+            "Revise a finding already in the knowledge graph; for a new one "
+            "use store_finding.\n\n"
+            "Revises a discovery already in the knowledge graph. discovery_id is "
             "required at call time even though the schema marks it optional; get "
             "one from search_shared_memory. summary and details replace what was "
             "there, while resolution_notes appends a timestamped block, so a "

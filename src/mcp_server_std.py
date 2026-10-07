@@ -675,6 +675,14 @@ async def main():
         """Run startup tasks in background after server starts"""
         await asyncio.sleep(0.5)
 
+        # The substrate HTTP-reject gates read the claimed set when a claims
+        # lookup fails; until it has loaded they refuse every UUID (#2682).
+        try:
+            from src.background_tasks import create_tracked_task, substrate_claims_refresh
+            create_tracked_task(substrate_claims_refresh(), name="substrate_claims_refresh")
+        except Exception as e:
+            logger.warning(f"Could not start the substrate claims refresh: {e}", exc_info=True)
+
         try:
             await load_metadata_async()
         except Exception as e:
