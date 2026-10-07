@@ -428,7 +428,9 @@ def _keyed_resume_patches(resolution, bind_fp, current_fp, mode="strict"):
         patch.object(resolution, "_substrate_http_reject", AsyncMock(return_value=None)),
         patch("config.governance_config.session_fingerprint_check_mode", return_value=mode),
         patch("src.mcp_handlers.context.get_session_signals",
-              return_value=SimpleNamespace(ip_ua_fingerprint=current_fp)),
+              return_value=SimpleNamespace(ip_ua_fingerprint=current_fp, peer_pid=None)),
+        # Not substrate-anchored: the HTTP-reject gates look it up and pass.
+        patch("src.substrate.verification.fetch_substrate_claim", AsyncMock(return_value=None)),
         patch("src.mcp_handlers.identity.handlers._broadcaster", return_value=None),
     ]
 
