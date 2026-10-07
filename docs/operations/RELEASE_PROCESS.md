@@ -112,7 +112,10 @@ branch does not deploy the master-only public Pages workflow.
    or this publishing workflow, so an emulated arm64 build that breaks fails on
    its pull request rather than at release. No release tag is replaced once
    published: a re-dispatch for a release that already has an image skips that
-   build, because Compose pulls each image by that tag. A manual
+   build, because Compose pulls each image by that tag. If the existing image
+   has no provenance from this workflow at that tag, the re-dispatch fails
+   rather than attesting an image it did not build; delete that package
+   version in GHCR and dispatch again to rebuild and attest it. A manual
    dispatch must select the same tag as both workflow ref and input:
    `gh workflow run publish-container.yml --ref vX.Y.Z -f ref=vX.Y.Z`. This
    keeps the attestation certificate bound to that tag and source commit. A

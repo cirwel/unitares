@@ -66,9 +66,7 @@ def test_one_release_publishes_every_image_compose_pulls():
         if "attest-build-provenance" in step.get("uses", "")
     )
     assert attest["with"]["subject-name"] == image
-    assert attest["with"]["subject-digest"] == (
-        "${{ steps.push.outputs.digest || steps.existing.outputs.digest }}"
-    )
+    assert attest["with"]["subject-digest"] == "${{ steps.push.outputs.digest }}"
     assert attest["with"]["push-to-registry"] is True
 
 
@@ -86,28 +84,29 @@ def test_a_published_release_tag_is_never_replaced():
     assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
 
 
-def test_a_rerun_attests_a_published_image_that_lacks_provenance():
-    """A push that landed without its attestation must stay recoverable.
+def test_a_published_image_without_provenance_fails_instead_of_being_attested():
+    """A digest under the tag that this workflow cannot vouch for stops the run.
 
-    Skipping the attestation along with the rebuild would leave the tag
-    permanently unverifiable by Promote Release.
+    An interrupted publication and an out-of-band push look the same here.
+    Attesting the existing digest would sign build provenance for an image
+    this run never built, and Promote Release would then accept it. The run
+    fails closed instead, and never attests anything it did not push.
     """
     guard = _step("existing")
+    run = guard["run"]
     # The guard checks the binding Promote Release verifies before skipping.
     for flag in ("--signer-workflow", "publish-container.yml",
                  '--source-ref "refs/tags/$RELEASE_TAG"', "--source-digest"):
-        assert flag in guard["run"]
-    assert "gh attestation verify" in guard["run"]
-    assert 'digest=$digest' in guard["run"]
-    assert "attested=true" in guard["run"] and "attested=false" in guard["run"]
+        assert flag in run
+    verify = run.index("gh attestation verify")
+    # Unverifiable: fail before reporting the tag as safely published.
+    assert run.index("exit 1", verify) < run.index("skip=true")
+    assert "attested=" not in run
     steps = PUBLISH["steps"]
     attest = next(st for st in steps if "attest-build-provenance" in st.get("uses", ""))
-    assert attest["if"] == (
-        "steps.existing.outputs.skip != 'true' || steps.existing.outputs.attested != 'true'"
-    )
-    assert attest["with"]["subject-digest"] == (
-        "${{ steps.push.outputs.digest || steps.existing.outputs.digest }}"
-    )
+    assert attest["if"] == "steps.existing.outputs.skip != 'true'"
+    assert attest["with"]["subject-digest"] == "${{ steps.push.outputs.digest }}"
+    assert "existing" not in attest["with"]["subject-digest"]
     # Never a rebuild: the push stays gated on skip alone.
     assert _step("push")["if"] == "steps.existing.outputs.skip != 'true'"
 
