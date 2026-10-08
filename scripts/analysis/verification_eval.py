@@ -120,7 +120,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--llm", action="store_true",
                     help="Also run the local-model backend (needs Ollama).")
-    ap.add_argument("--model", default=None, help="Override UNITARES_LLM_MODEL.")
+    ap.add_argument("--model", default=None, help="Override UNITARES_MODEL_ID.")
     ap.add_argument("--timeout", type=float, default=60.0)
     ap.add_argument("--output", default=None, help="Write the markdown report here.")
     args = ap.parse_args()
@@ -143,7 +143,7 @@ def main():
         if llm_scores == regex_only:
             blocks += ["", "_(--llm requested but every score equals the regex floor — "
                        "Ollama was unreachable or fell back; the union added nothing. "
-                       "Check UNITARES_OLLAMA_BASE / UNITARES_LLM_MODEL.)_"]
+                       "Check UNITARES_MODEL_BASE_URL / UNITARES_MODEL_ID.)_"]
         blocks += ["", _report("Local-model union (regex ⊔ model)", llm_scores, labels)]
         gained = sum(1 for a, b, y in zip(regex_only, llm_scores, labels)
                      if y == 1 and a < HIGH_RISK_THRESHOLD <= b)

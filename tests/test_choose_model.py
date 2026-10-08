@@ -149,11 +149,14 @@ def test_source_install_prints_host_settings_and_writes_nothing(tmp_path: Path, 
     assert not env.exists() and calls == []
 
 
-def test_warns_about_a_conflicting_alias_line(tmp_path: Path, stubs, capsys):
+def test_notes_a_removed_name_it_did_not_write(tmp_path: Path, stubs, capsys):
     env = tmp_path / ".env"
     env.write_text("UNITARES_OLLAMA_BASE_URL=http://elsewhere:11434/v1\n")
     assert cm.main(["--yes", "--no-rebuild", "--env-file", str(env)]) == 0
-    assert "UNITARES_MODEL_BASE_URL takes precedence" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "no longer reads (removed in v3.3.0); delete that line" in out
+    # Not this script's line: reported, left in place.
+    assert "UNITARES_OLLAMA_BASE_URL=http://elsewhere:11434/v1" in env.read_text().splitlines()
 
 
 def test_writing_replaces_the_older_names_this_script_wrote(tmp_path: Path, stubs, capsys):

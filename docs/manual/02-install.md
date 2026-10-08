@@ -155,11 +155,15 @@ no `UNITARES_MODEL_BASE_URL` line, the checkout predates this step. If it has
 one but `consult` reports a missing dependency, the image predates it; rebuild
 with `--build`.
 
-Older names still work until v3.3.0: `UNITARES_OLLAMA_BASE` and
-`UNITARES_OLLAMA_BASE_URL` (an Ollama root URL, with or without `/v1`) for the
-endpoint, and `UNITARES_LLM_MODEL` for the model. The new name wins when both
-are set. `scripts/dev/unitares_doctor.py` prints one line for each older name
-it sees, with the name to use instead.
+The older names `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (for
+the endpoint) and `UNITARES_LLM_MODEL` (for the model) were removed in v3.3.0.
+Nothing reads them any more, and nothing warns about them: an install that
+still sets only those uses the defaults (Ollama on `localhost:11434` and
+`gemma4:latest`). Rename them to `UNITARES_MODEL_BASE_URL` and
+`UNITARES_MODEL_ID`, in `.env` or in the LaunchAgent plist. An Ollama root URL
+can be moved over as it is: a base with no path gets `/v1` added. Running
+`./scripts/unitares model` rewrites `.env` with the new names and removes the old
+`UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
 
 **Where the prompt goes.** `consult` and `call_model` default to
 `privacy='local'`, and the in-process reviewer, check-in coaching and

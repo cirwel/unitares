@@ -554,11 +554,11 @@ from src.mcp_handlers.support.llm_delegation import (
 
 class TestGetDefaultModel:
     def test_default(self, monkeypatch):
-        monkeypatch.delenv("UNITARES_LLM_MODEL", raising=False)
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
         assert _get_default_model() == "gemma4:latest"
 
     def test_env_override(self, monkeypatch):
-        monkeypatch.setenv("UNITARES_LLM_MODEL", "custom:7b")
+        monkeypatch.setenv("UNITARES_MODEL_ID", "custom:7b")
         assert _get_default_model() == "custom:7b"
 
 

@@ -4,7 +4,8 @@ Before this consolidation, ``llm_delegation.py`` (dialectic synthetic
 reviewer, knowledge synthesis, check-in coaching) carried its own Ollama
 client, its own default-model resolver, its own availability ping, and the
 base URL was resolved differently per path: the structured dialectic route
-honored ``UNITARES_OLLAMA_BASE`` while ``call_model`` and the OpenAI-compat
+honored the base setting (then ``UNITARES_OLLAMA_BASE``, now
+``UNITARES_MODEL_BASE_URL``) while ``call_model`` and the OpenAI-compat
 internal route hardcoded localhost — so setting the env var silently split
 inference between two hosts. These tests pin the shared primitives in
 ``inference_registry`` as the single source: one base URL, one default model,
@@ -33,11 +34,10 @@ BASE_OVERRIDE = "http://inference-box.lan:11500"
 
 
 def test_one_base_url_for_every_local_route(monkeypatch):
-    """UNITARES_OLLAMA_BASE must move the OpenAI-compat client, the native
+    """UNITARES_MODEL_BASE_URL must move the OpenAI-compat client, the native
     structured endpoint, AND the availability probe together — a base override
     that only some routes honor splits the plane between two hosts."""
-    monkeypatch.delenv("UNITARES_OLLAMA_BASE_URL", raising=False)
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", BASE_OVERRIDE)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", BASE_OVERRIDE + "/v1")
 
     assert inference_registry.ollama_base_url() == BASE_OVERRIDE
     assert llm_delegation._ollama_native_url() == BASE_OVERRIDE + "/api/chat"
@@ -49,22 +49,20 @@ def test_one_base_url_for_every_local_route(monkeypatch):
 
 
 def test_trailing_slash_and_default_port_are_normalized(monkeypatch):
-    # The alias (see tests/test_local_inference_env.py) would otherwise decide
-    # the unset case below on a machine that exports it.
-    monkeypatch.delenv("UNITARES_OLLAMA_BASE_URL", raising=False)
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://10.0.0.5:11434/")
+    # A bare root (no /v1) with a trailing slash is the same endpoint.
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://10.0.0.5:11434/")
     assert inference_registry.ollama_base_url() == "http://10.0.0.5:11434"
     assert inference_registry._ollama_host_port() == ("10.0.0.5", 11434)
 
-    monkeypatch.delenv("UNITARES_OLLAMA_BASE", raising=False)
+    monkeypatch.delenv("UNITARES_MODEL_BASE_URL", raising=False)
     assert inference_registry.ollama_base_url() == "http://localhost:11434"
     assert inference_registry._ollama_host_port() == ("localhost", 11434)
 
 
 def test_one_default_model_resolver(monkeypatch):
-    """UNITARES_LLM_MODEL resolves through exactly one function; the internal
+    """UNITARES_MODEL_ID resolves through exactly one function; the internal
     lane must not keep a private copy that can drift from the registry's."""
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     assert inference_registry.default_local_model() == "qwen3:8b"
     # The internal lane's resolver IS the registry's, not a lookalike.
     assert llm_delegation._get_default_model is inference_registry.default_local_model

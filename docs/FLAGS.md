@@ -143,7 +143,6 @@ additions merge cleanly. -->
 | `UNITARES_LEASE_PLANE_URL` | `'http://127.0.0.1:8788'` | read by _lease_plane_url() | src/mcp_handlers/dialectic/governed_spawn.py |
 | `UNITARES_LEGACY_SESSION_IDS` | `'refuse'` | How presented legacy agent-{uuid12} ids are treated: refuse, log or accept. | src/mcp_handlers/identity/stable_session.py |
 | `UNITARES_LINEAGE_TRANSITIVE_ARCHIVAL` | `None (no reader fallback)` | Whether transitive succession-reachability DRIVES archival (vs shadow) | src/mcp_handlers/lifecycle/stuck.py |
-| `UNITARES_LLM_MODEL` | `''` | Alias of UNITARES_MODEL_ID until v3.3.0 | src/local_inference_env.py |
 | `UNITARES_LOCK_DIR` | `None (no reader fallback)` | — | src/state_locking.py |
 | `UNITARES_MCP_ALLOWED_HOSTS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
 | `UNITARES_MCP_ALLOWED_ORIGINS` | `[] (via split_csv_env)` | Build TransportSecuritySettings for FastMCP | src/mcp_listen_config.py |
@@ -172,8 +171,6 @@ additions merge cleanly. -->
 | `UNITARES_OAUTH_STATIC_CLIENT_ID` | varies: `None (no reader fallback)` (src/mcp_server.py); `''` (src/oauth_provider.py) | Build the static client from the environment, or none if unconfigured | src/mcp_server.py, src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_CLIENT_SECRET` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
 | `UNITARES_OAUTH_STATIC_REDIRECT_URIS` | `''` | Build the static client from the environment, or none if unconfigured | src/oauth_provider.py |
-| `UNITARES_OLLAMA_BASE` | `''` | Alias of UNITARES_MODEL_BASE_URL until v3.3.0 | src/local_inference_env.py |
-| `UNITARES_OLLAMA_BASE_URL` | `''` | Alias of UNITARES_MODEL_BASE_URL until v3.3.0 | src/local_inference_env.py |
 | `UNITARES_OPERATOR_TOKEN` | `''` | POST a resolution outcome to the operator-gated harness endpoint | agents/watcher/agent.py |
 | `UNITARES_OPERATOR_TOKENS` | `''` | Parse the operator-token allowlist from env at call time | src/mcp_handlers/identity/operator.py, src/mcp_handlers/wave3a_admin.py |
 | `UNITARES_ORCHESTRATOR_VOUCH` | `''` | Return whether the (inert, default-off) vouch path is enabled | src/substrate/vouch.py |

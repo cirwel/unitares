@@ -27,6 +27,8 @@ NAMES = (
     "UNITARES_OLLAMA_BASE_URL",
     "UNITARES_LLM_MODEL",
 )
+OLD_MODEL = "UNITARES_TEST_OLD_MODEL"
+OLD_BASE = "UNITARES_TEST_OLD_BASE"
 
 
 @pytest.fixture(scope="module")
@@ -130,24 +132,48 @@ def test_credentials_in_the_url_are_not_printed(doctor, monkeypatch):
     assert "secret" not in result.message + result.detail
 
 
-def test_one_info_line_per_old_name_in_use(doctor, monkeypatch):
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://gpu:11434")
+@pytest.fixture
+def stand_in_aliases(monkeypatch):
+    """The alias table is empty since v3.3.0; stand-in rows keep the doctor's
+    INFO path tested for the next rename."""
+    from src import local_inference_env as lie
+
+    monkeypatch.setattr(
+        lie,
+        "SETTING_ALIASES",
+        (
+            lie.SettingAlias(OLD_MODEL, lie.MODEL_ENV, "99.0.0"),
+            lie.SettingAlias(OLD_BASE, lie.MODEL_BASE_URL_ENV, "99.0.0"),
+        ),
+    )
+
+
+def test_one_info_line_per_old_name_in_use(doctor, monkeypatch, stand_in_aliases):
+    monkeypatch.setenv(OLD_MODEL, "qwen3:8b")
+    monkeypatch.setenv(OLD_BASE, "http://gpu:11434")
     checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
     results = doctor.run_checks(checks, "local")
-    assert {r.name for r in results} == {"setting_alias:UNITARES_LLM_MODEL", "setting_alias:UNITARES_OLLAMA_BASE"}
+    assert {r.name for r in results} == {f"setting_alias:{OLD_MODEL}", f"setting_alias:{OLD_BASE}"}
     assert all(r.status == doctor.Status.INFO for r in results)
     by_name = {r.name: r.message for r in results}
-    assert "UNITARES_MODEL_ID until v3.3.0" in by_name["setting_alias:UNITARES_LLM_MODEL"]
-    assert "UNITARES_MODEL_BASE_URL" in by_name["setting_alias:UNITARES_OLLAMA_BASE"]
+    assert "UNITARES_MODEL_ID until v99.0.0" in by_name[f"setting_alias:{OLD_MODEL}"]
+    assert "UNITARES_MODEL_BASE_URL" in by_name[f"setting_alias:{OLD_BASE}"]
     rendered = doctor.render_text(results, use_color=False)
-    assert "i setting_alias:UNITARES_LLM_MODEL" in rendered
+    assert f"i setting_alias:{OLD_MODEL}" in rendered
     assert doctor.exit_code(results) == 0
 
 
-def test_no_old_names_means_no_lines(doctor):
+def test_no_old_names_means_no_lines(doctor, stand_in_aliases):
     checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
     assert checks, "one alias check per table row"
+    assert doctor.run_checks(checks, "local") == []
+
+
+def test_names_removed_in_3_3_get_no_line(doctor, monkeypatch):
+    """v3.3.0 removed the Ollama-era names: the doctor no longer mentions them."""
+    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://gpu:11434")
+    checks = [c for c in doctor.build_checks(REPO_ROOT, "postgresql://x") if c.name.startswith("setting_alias:")]
     assert doctor.run_checks(checks, "local") == []
 
 

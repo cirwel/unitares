@@ -20,10 +20,14 @@ Callers get the form they need: ``model_base_url()`` for an OpenAI-compatible
 client, and ``ollama_base_url()`` (the base without its trailing ``/v1``) for
 Ollama's native routes and the reachability probe.
 
-Older names are read through ``SETTING_ALIASES`` until the release each entry
-names; ``tests/test_local_inference_env.py`` fails once ``VERSION`` reaches it.
-An empty value counts as unset, so a compose file that passes ``${VAR:-}``
-through keeps the default instead of producing a model of ``""``.
+After a rename, the older name is read through ``SETTING_ALIASES`` until the
+release its row names; ``tests/test_local_inference_env.py`` fails once
+``VERSION`` reaches it. The table is empty since v3.3.0, which removed
+``UNITARES_OLLAMA_BASE``, ``UNITARES_OLLAMA_BASE_URL`` and
+``UNITARES_LLM_MODEL``: nothing reads them, so an install that still sets only
+those gets the defaults. An empty value counts as unset, so a compose file that
+passes ``${VAR:-}`` through keeps the default instead of producing a model of
+``""``.
 
 Stdlib only and outside ``src/mcp_handlers``: the agent processes import this,
 and importing anything under ``src.mcp_handlers`` loads the whole handler
@@ -89,11 +93,11 @@ class SettingAlias:
 # VERSION reaches that release, so the release cut deletes the row or a
 # reviewed diff moves its date. Order matters within one new name: an earlier
 # row wins over a later one when both are set.
-SETTING_ALIASES: tuple[SettingAlias, ...] = (
-    SettingAlias("UNITARES_OLLAMA_BASE", MODEL_BASE_URL_ENV, "3.3.0"),
-    SettingAlias("UNITARES_OLLAMA_BASE_URL", MODEL_BASE_URL_ENV, "3.3.0"),
-    SettingAlias("UNITARES_LLM_MODEL", MODEL_ENV, "3.3.0"),
-)
+#
+# Empty since v3.3.0, which removed the three Ollama-era names
+# (UNITARES_OLLAMA_BASE, UNITARES_OLLAMA_BASE_URL -> UNITARES_MODEL_BASE_URL;
+# UNITARES_LLM_MODEL -> UNITARES_MODEL_ID). Kept for the next rename.
+SETTING_ALIASES: tuple[SettingAlias, ...] = ()
 
 # (winning name, its value, other name, its value) disagreements already
 # warned about, so a per-call resolver does not repeat the same warning on
@@ -180,32 +184,30 @@ def normalize_model_base_url(value: str | None) -> str:
 
 
 def _normalize_base_setting(name: str, value: str) -> str:
-    """The new name is already an OpenAI-compatible base; the older names are
-    Ollama roots (``/v1`` optional), so they get exactly one ``/v1``."""
-    if name == MODEL_BASE_URL_ENV:
-        return normalize_model_base_url(value)
-    root = normalize_ollama_base(value)
-    return root + "/v1" if root else ""
+    """Every name the base URL resolves through holds an OpenAI-compatible
+    base, read the same way. (The Ollama-root names that needed their own
+    ``/v1`` handling were removed in v3.3.0.)"""
+    return normalize_model_base_url(value)
 
 
 def model_base_url() -> str:
     """OpenAI-compatible base URL of the local model endpoint, including ``/v1``.
 
-    ``UNITARES_MODEL_BASE_URL``, else an alias from ``SETTING_ALIASES`` (the
-    older Ollama root names, with or without ``/v1``), else
-    ``http://localhost:11434/v1``.
+    ``UNITARES_MODEL_BASE_URL``, else an alias from ``SETTING_ALIASES`` (none
+    since v3.3.0), else ``http://localhost:11434/v1``.
     """
     return _resolve(MODEL_BASE_URL_ENV, _normalize_base_setting) or DEFAULT_MODEL_BASE_URL
 
 
 def _alias_ollama_base() -> str:
-    """``UNITARES_OLLAMA_BASE_URL`` reduced to its root; nothing here calls it.
+    """Always ``""``: the alias this once read was removed in v3.3.0, and
+    nothing calls it.
 
     Kept only because master gained it in #2495 on 2026-09-26 and the fleet
     push guard treats removing a symbol that new as a likely rebase revert.
-    ``SETTING_ALIASES`` is the real alias path. Delete after 2026-10-26.
+    Delete after 2026-10-26.
     """
-    return normalize_ollama_base(os.getenv("UNITARES_OLLAMA_BASE_URL", ""))
+    return ""
 
 
 def ollama_base_url() -> str:
@@ -223,7 +225,8 @@ def ollama_openai_base_url() -> str:
 
 
 def default_local_model() -> str:
-    """Model for local inference: ``UNITARES_MODEL_ID``, else its alias, else gemma4:latest."""
+    """Model for local inference: ``UNITARES_MODEL_ID``, else an alias from
+    ``SETTING_ALIASES`` (none since v3.3.0), else gemma4:latest."""
     return _resolve(MODEL_ENV, lambda _name, v: v.strip()) or DEFAULT_LOCAL_MODEL
 
 

@@ -10,7 +10,7 @@ exposes them to the model via CodeAgent (which writes Python, not JSON tool call
 Configuration (env vars; CLI flags override):
     UNITARES_MCP_URL      governance MCP endpoint   (default http://127.0.0.1:8767/mcp/)
     UNITARES_OLLAMA_URL   Ollama OpenAI-compat API  (default: UNITARES_MODEL_BASE_URL, else http://127.0.0.1:11434/v1)
-    UNITARES_MODEL_ID     Ollama model to drive     (default gemma4:latest; UNITARES_LLM_MODEL is read until v3.3.0)
+    UNITARES_MODEL_ID     Ollama model to drive     (default gemma4:latest; the older UNITARES_LLM_MODEL was removed in v3.3.0)
 
 Identity posture (v2 ontology — see docs/ontology/identity.md):
     A fresh bridge run mints a fresh process-instance identity
@@ -51,7 +51,7 @@ from smolagents import tool, ToolCollection, OpenAIServerModel, CodeAgent
 
 # Defaults match repo conventions: UNITARES_MCP_URL (client URL, cf.
 # scripts/dev/with_checkin.py) and UNITARES_MODEL_ID (cf. the call_model /
-# llm_delegation local path; UNITARES_LLM_MODEL is its older name, read until
+# llm_delegation local path; its older name UNITARES_LLM_MODEL was removed in
 # v3.3.0). Endpoints are config, not identity.
 DEFAULT_MCP_URL = os.getenv("UNITARES_MCP_URL", "http://127.0.0.1:8767/mcp/")
 # This script's own setting first, then the repo-wide endpoint (the same
@@ -73,9 +73,7 @@ DEFAULT_OLLAMA_URL = (
     or (_openai_base(os.environ["UNITARES_MODEL_BASE_URL"]) if os.getenv("UNITARES_MODEL_BASE_URL", "").strip() else "")
     or "http://127.0.0.1:11434/v1"
 )
-DEFAULT_MODEL = (
-    os.getenv("UNITARES_MODEL_ID") or os.getenv("UNITARES_LLM_MODEL") or "gemma4:latest"
-)
+DEFAULT_MODEL = os.getenv("UNITARES_MODEL_ID", "").strip() or "gemma4:latest"
 
 # Valid spawn_reason values per the v2 ontology. "new_session" is the honest
 # fresh default (no parent); the rest are causal and expect a parent_agent_id.
@@ -365,7 +363,7 @@ def main():
     parser = argparse.ArgumentParser(description="Ollama-UNITARES Bridge")
     parser.add_argument(
         "--model", default=DEFAULT_MODEL,
-        help=f"Ollama model to use (default: {DEFAULT_MODEL}; env UNITARES_LLM_MODEL)",
+        help=f"Ollama model to use (default: {DEFAULT_MODEL}; env UNITARES_MODEL_ID)",
     )
     parser.add_argument(
         "--mcp-url", default=DEFAULT_MCP_URL,
