@@ -8,7 +8,7 @@ artifact in another.
 
 | Artifact | Current version | Role and compatibility |
 |---|---:|---|
-| UNITARES server | `v3.2.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
+| UNITARES server | `v3.3.0` | Source version string. Master also contains unreleased API and skills changes beyond this tag; see the Unreleased changelog. Source delivery alone does not establish artifact availability. |
 | Published server/container | `v3.2.0` | Verified release. The tag, its published release page, the server and lease-plane images for linux/amd64 and linux/arm64, their SPDX SBOMs, and provenance bound to the tag's source commit were verified before GHCR `latest` moved to this release in [Promote Release run 37445369555](https://github.com/cirwel/unitares/actions/runs/37445369555). What changed and how to upgrade: [release notes](https://github.com/cirwel/unitares/releases/tag/v3.2.0). |
 | `unitares-governance` plugin | `v0.4.19` | Carries the skills bundle for server `v3.1.0`: its `skills/` mirrors master at `ef127104`, compared file by file at release. This is bundle parity, not a new end-to-end host test. The previously recorded host baseline is Claude Code 2.1.220+ and Codex CLI 0.146.0+. [Release notes](https://github.com/cirwel/unitares-governance-plugin/releases/tag/v0.4.19). |
 | `unitares-sdk` | `0.4.0` | Published Python client for resident and custom integrations, released with server v3.0.0. A behavioral minor release: `checkin` reads the verdict from the response envelope, so `GovernanceAgent`'s pause and reject handling (`VerdictError`) can now fire where every verdict used to parse as proceed; `get_metrics().action` is the policy action; `audit_knowledge` no longer requests a model by default; and the async `GovernanceClient` raises `GovernanceToolRefused`, a subclass of `GovernanceConnectionError`, when a tool answers `success: false`. It adds an optional NeMo Relay integration (`unitares-sdk[nemo-relay]`). Install it with `pip install unitares-sdk==0.4.0`; use a server Git tag only when deliberately testing an unreleased SDK build. |
@@ -35,7 +35,41 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v3.3.0 removes the three older local-model setting names that v3.2.0 kept
+- v3.3.0 removes no registered callable's canonical name and no input
+  parameter. It changes identity defaults in ways an existing install can
+  notice; the release is a minor by operator decision (2026-10-08), because
+  each change has a setting that restores the old behavior or a one-time
+  step, and a client that mints with `start_session(force_new=true)` and
+  passes back the returned `client_session_id` (the SDK, the governance
+  plugin, the Hermes host adapter, the reference residents) needs neither.
+  Strict identity is the default: a bare UUID resume without a continuity
+  token, an unresolved write, and an arg-less `onboard()` are refused, and
+  `STRICT_IDENTITY_REQUIRED=false` with `UNITARES_IDENTITY_STRICT=log`
+  restores the permissive behavior (#2666). Credentials go only to a caller
+  that proved ownership; `UNITARES_CREDENTIAL_ISSUANCE=log` issues as before
+  and logs what it would withhold (#2681). Stable session ids are keyed
+  (`agent-{uuid12}-{tag}`) and a legacy `agent-{uuid12}` id is refused;
+  `UNITARES_LEGACY_SESSION_IDS=log` or `accept` admits it during a migration
+  (#2702). The continuity key is the server's own: an install that left
+  `UNITARES_CONTINUITY_TOKEN_SECRET` unset, blank or at the Compose default
+  loses its outstanding continuity tokens and effect grants once, and each
+  resident anchor holding such a token must be moved aside and re-provisioned
+  with `scripts/ops/provision_resident_anchor.py --apply` (#2674). Archiving,
+  deleting or resuming another agent needs a valid `X-Unitares-Operator`
+  token (#2667). The LaunchAgent template and `scripts/ops/start_unitares.sh`
+  bind to loopback; clients on other machines need
+  `UNITARES_BIND_ALL_INTERFACES=1`, and Docker Compose installs are unchanged
+  (#2659). The interface contract moves 1.27.0 → 1.31.0 to record
+  authorization and output changes; no parameter is added, removed or
+  renamed. One database migration is
+  introduced, `db/postgres/migrations/073_retention_keep_record.sql`, which
+  stops partition maintenance from deleting check-ins and outcome events and
+  dropping old audit months; until it is applied the old retention keeps
+  running. Apply it with `scripts/unitares update` on Docker Compose or
+  `python3 scripts/dev/apply_migrations.py --apply` on an operator install;
+  the code does not depend on it, so rolling back with it applied keeps the
+  record and is safe (#2711). v3.3.0 also removes the three older
+  local-model setting names that v3.2.0 kept
   as aliases: `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (replaced
   by `UNITARES_MODEL_BASE_URL`) and `UNITARES_LLM_MODEL` (replaced by
   `UNITARES_MODEL_ID`). Nothing reads them any more, and Docker Compose no
