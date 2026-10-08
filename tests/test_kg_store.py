@@ -2431,6 +2431,27 @@ class TestInferredBindingWriter:
         _assert_response_does_not_credit(data, inferred_env.agent)
 
     @pytest.mark.asyncio
+    async def test_unexempt_inferred_low_update_response_does_not_credit_the_agent(self, inferred_env):
+        from src.mcp_handlers.knowledge.handlers import handle_update_discovery_status_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(False)
+        inferred_env.graph.get_discovery = AsyncMock(
+            return_value=make_discovery(id="d1", agent_id="someone-else", severity="low")
+        )
+        data = parse_result(
+            await handle_update_discovery_status_graph({
+                "agent_id": inferred_env.agent,
+                "discovery_id": "d1",
+                "status": "resolved",
+            })
+        )
+
+        assert data["success"] is True
+        inferred_env.graph.update_discovery.assert_awaited()
+        _assert_response_does_not_credit(data, inferred_env.agent)
+
+    @pytest.mark.asyncio
     async def test_dedicated_substrate_resident_is_exempt_too(self, inferred_env):
         """The second source of the exemption: dedicated_substrate."""
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph

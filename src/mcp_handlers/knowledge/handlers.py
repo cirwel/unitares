@@ -4774,7 +4774,9 @@ def _build_update_response(
                 normalized_status,
                 notes_passed=request.resolution_note is not None,
             )
-    return success_response(payload, arguments=request.arguments)
+    return success_response(
+        payload, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_discovery_update(
@@ -5911,7 +5913,9 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
                         f"knowledge(action='update', discovery_id='{old_id}', "
                         "status='superseded', resolution_notes=...)."
                     )
-            return success_response(result, arguments=arguments)
+            return success_response(
+                result, arguments=_anonymous_writer_signature_arguments(arguments)
+            )
         else:
             return [error_response(result.get("error", "Failed to create SUPERSEDES edge"))]
     except Exception as e:
