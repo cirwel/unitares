@@ -1,0 +1,30 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "knowledge-graph",
+  "verified_at": "2026-10-08T06:05:54Z",
+  "verified_date": "2026-10-08",
+  "verifier": "claude-opus re-checked for PR #2695 codex-round fix: knowledge/handlers.py now keeps an anonymous write's response from naming the inferred agent and points a refused update at update_finding; the knowledge-graph skill's server-inferred paragraph and other claims are unchanged and consistent",
+  "source_digests": {
+    "unitares/src/alias_schema.py": "e02fda0b601e0f14",
+    "unitares/src/db/mixins/knowledge_graph.py": "8e9508034a1a6c63",
+    "unitares/src/knowledge_authority.py": "6ccedd68880c0f87",
+    "unitares/src/knowledge_graph.py": "d76c1b4a5da778c2",
+    "unitares/src/knowledge_graph_lifecycle.py": "8d9d5dd600f15543",
+    "unitares/src/mcp_handlers/consolidated.py": "ec52083d084f65b2",
+    "unitares/src/mcp_handlers/knowledge/handlers.py": "2640cb098b8794de",
+    "unitares/src/mcp_handlers/knowledge/synthesis.py": "e96e25b95ed8b014",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "cbee09747cd6f0c7",
+    "unitares/src/mcp_handlers/schemas/knowledge.py": "ccbd0f23a290df31",
+    "unitares/src/mcp_handlers/support/param_normalization.py": "d64fa93a0fbe92d5",
+    "unitares/src/mcp_handlers/tool_stability.py": "59d527f77fa1c58b",
+    "unitares/src/storage/knowledge_graph_age.py": "90bf3d99b7ff8e96",
+    "unitares/src/storage/knowledge_graph_postgres.py": "6a8cc06c6a2b65bf",
+    "unitares/src/tool_descriptions.json": "bfedee38eb28c8aa"
+  },
+  "skill_digest": "0fafb35f5e5d4191",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/knowledge/handlers.py": [
+      "a8c53d3301981d69"
+    ]
+  }
+}
