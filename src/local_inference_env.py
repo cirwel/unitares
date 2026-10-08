@@ -352,6 +352,85 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
     )
 
 
+def _endpoint_addresses(url: str) -> tuple[str, int | None, set[str]] | None:
+    """The host, port and every address ``url`` can reach: its IP literal,
+    numeric IPv4 shorthand the resolver accepts (``127.1``, ``2130706433``,
+    ``0x7f000001``) parsed as the C library parses it, and whatever the name
+    resolves to now. None for a URL that names no host or does not parse."""
+    import socket
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    addresses: set[str] = set()
+    addr = _ip_literal(host)
+    if addr is not None:
+        addresses.add(str(addr))
+    else:
+        try:
+            addresses.add(str(ipaddress.IPv4Address(socket.inet_aton(host))))
+        except (OSError, ValueError):
+            pass
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, UnicodeError):
+            infos = []
+        for info in infos:
+            try:
+                addresses.add(str(ipaddress.ip_address(info[4][0].split("%", 1)[0])))
+            except ValueError:
+                continue
+    return host, port, addresses
+
+
+def endpoint_reaches_local_address(url: str) -> bool:
+    """Whether ``url`` can reach the operator's own machine or network.
+
+    The opposite question from ``classify_endpoint``, and so the opposite
+    default. That classifier must never call an endpoint local that is not, so
+    it decides from the URL alone and treats anything unrecognized as
+    external. This one must never miss an endpoint that IS local, so it widens
+    every way a URL can name a local address: ``classify_endpoint``'s address
+    rules without the ``UNITARES_MODEL_PRIVACY`` override (trusted networks,
+    names listed as local), loopback and the unspecified address (``0.0.0.0``,
+    ``::``), numeric IPv4 shorthand, and any address the name resolves to now.
+    A failed lookup adds nothing; a URL that does not parse is not local here,
+    and callers that need it to parse must check that themselves.
+
+    The dialectic reviewer refuses to list an ``external`` host for which this
+    is true, because any of these can be the local floor under another name
+    (docs/proposals/active/dialectic-reviewer-hosts-v0.md 2.2).
+    """
+    found = _endpoint_addresses(url)
+    if found is None:
+        return False
+    host, _port, addresses = found
+    if host in _local_hostnames():
+        return True
+    for text in addresses:
+        addr = ipaddress.ip_address(text)
+        if addr.is_unspecified or addr.is_loopback or is_trusted_address(addr):
+            return True
+    return False
+
+
+def same_endpoint(url_a: str, url_b: str) -> bool:
+    """Whether two URLs reach the same server: the same port, and the same host
+    name or a shared address. For refusing a URL that is another setting's
+    endpoint under a different spelling; False when either does not parse."""
+    a, b = _endpoint_addresses(url_a), _endpoint_addresses(url_b)
+    if a is None or b is None or a[1] != b[1]:
+        return False
+    return a[0] == b[0] or bool(a[2] & b[2])
+
+
 _ssl_context_cache: tuple[tuple, object] | None = None
 
 

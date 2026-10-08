@@ -14,6 +14,8 @@ from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import httpx
+
 from src.mcp_handlers.support.antigravity_cli_client import (
     AGY_FLAGS as _AGY_FLAGS,
     guard_prompt as _guard_prompt,
@@ -46,6 +48,12 @@ class HostReviewResult:
     # Which backend produced this. Defaults to the original (and only) producer
     # so existing Claude call sites keep byte-identical provenance.
     backend: str = "claude"
+    # The model's own reply when it held no verdict object: the model answered,
+    # possibly with an objection in prose. A host list treats it as that host's
+    # answer and repairs it with the same host, never asking the next one
+    # (docs/proposals/active/dialectic-reviewer-hosts-v0.md 2.1). Bounded, and
+    # not part of the persisted provenance.
+    unparsed_reply: Optional[str] = None
 
     def provenance(self) -> dict[str, Any]:
         return {
@@ -60,6 +68,16 @@ class HostReviewResult:
             "finish_reason": self.finish_reason,
             "warnings": list(self.warnings),
         }
+
+
+_UNPARSED_REPLY_CHARS = 8000
+
+
+def _bounded_reply(text: Optional[str]) -> Optional[str]:
+    """A model reply worth keeping as an answer: non-empty after stripping,
+    cut to the tail, where a verdict or its prose conclusion sits."""
+    stripped = (text or "").strip()
+    return stripped[-_UNPARSED_REPLY_CHARS:] if stripped else None
 
 
 def _extract_verdict(text: str) -> Optional[str]:
@@ -208,6 +226,7 @@ async def call_claude_backend(prompt: str) -> HostReviewResult:
             finish_reason=metadata.get("finish_reason"),
             warnings=list(metadata.get("warnings") or []),
             error="Claude CLI returned no parseable dialectic verdict",
+            unparsed_reply=_bounded_reply(text),
         )
 
     return HostReviewResult(
@@ -331,11 +350,22 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
     except (TypeError, ValueError):
         max_tokens = DEFAULT_EXTERNAL_MAX_TOKENS
 
+    # Redirects are refused, not followed. The host list vetted base_url as
+    # not the local floor; a 3xx to a loopback or trusted address would let the
+    # floor answer with this host's approval authority. The OpenAI SDK's own
+    # client follows redirects, so it gets one that does not. It is built inside
+    # the guarded block: construction reads proxy settings from the environment
+    # and can raise (an unsupported HTTPS_PROXY scheme is a ValueError), which
+    # must fail this host and let the list try the next one, not escape.
+    http_client: Optional[httpx.AsyncClient] = None
     started = time.monotonic()
     try:
+        http_client = httpx.AsyncClient(follow_redirects=False, timeout=timeout_s)
         from openai import AsyncOpenAI  # local import: only the runner needs it
 
-        client = AsyncOpenAI(base_url=base_url, api_key=api_key, timeout=timeout_s)
+        client = AsyncOpenAI(
+            base_url=base_url, api_key=api_key, timeout=timeout_s, http_client=http_client
+        )
         resp = await asyncio.wait_for(
             client.chat.completions.create(
                 model=model,
@@ -364,6 +394,9 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
             backend="external",
             error=f"External reviewer call failed: {type(exc).__name__}",
         )
+    finally:
+        if http_client is not None:
+            await http_client.aclose()
 
     latency_ms = int((time.monotonic() - started) * 1000)
     model_used = getattr(resp, "model", None) or model
@@ -398,6 +431,7 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
             finish_reason=finish_reason,
             backend="external",
             error=reason,
+            unparsed_reply=_bounded_reply(content),
         )
 
     return HostReviewResult(
@@ -630,6 +664,7 @@ async def call_antigravity_backend(prompt: str) -> HostReviewResult:
         if not response.strip() and denied:
             error = ("Antigravity CLI returned an empty reply after denied tool use: "
                      + ", ".join(denied))
-        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)
+        return fail(error, tokens_used=tokens, latency_ms=latency_ms, warnings=warnings,
+                    unparsed_reply=_bounded_reply(response))
     return HostReviewResult(text=verdict_text, host_id=host_id, backend="antigravity",
                             tokens_used=tokens, latency_ms=latency_ms, warnings=warnings)

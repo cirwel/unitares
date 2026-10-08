@@ -131,6 +131,8 @@ def test_claude_backend_rejects_non_verdict_answer(monkeypatch):
     assert result.text is None
     assert result.models_used == ["claude-sonnet-4-5"]
     assert "no parseable" in (result.error or "")
+    # The reply is kept as Claude's answer for a host list to repair.
+    assert result.unparsed_reply == "I cannot decide."
 
 
 def test_claude_backend_rejects_provider_declared_error(monkeypatch):

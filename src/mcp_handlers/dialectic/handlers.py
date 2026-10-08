@@ -2215,6 +2215,16 @@ _REVIEWER_PROVENANCE_KEYS = (
     "note",
     "consult_source",
     "consulted_at",
+    # The orchestrated reviewer's host list (docs/proposals/active/
+    # dialectic-reviewer-hosts-v0.md 2.6): which list a verdict was produced
+    # under, every host tried, and whether the answering host may approve.
+    "host_list",
+    "host_config_digest",
+    "attempts",
+    "vouched",
+    "vouched_by",
+    "authorized_by",
+    "answered_family",
 )
 _REVIEWER_KINDS = {
     "in_process_synthetic",

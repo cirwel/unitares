@@ -43,6 +43,7 @@ from src.local_inference_env import (
     require_local_endpoint,
 )
 
+from .host_list import ListedHost, reviewer_host_plan
 from .host_backends import (
     HostReviewResult,
     call_antigravity_backend,
@@ -109,7 +110,62 @@ def _record_reviewer_provenance(value: dict[str, Any]) -> None:
         "finish_reason": value.get("finish_reason"),
         "fallback_from": value.get("fallback_from"),
         "warnings": list(value.get("warnings") or []),
+        **{key: value.get(key) for key in _HOST_LIST_PROVENANCE_KEYS},
     }
+
+
+# The host-list fields of a verdict's provenance (design 2.2 and 2.6): which
+# list it was produced under, every host tried, and whether the answering host
+# may approve. ``vouched`` is the one approval reads; absent means withheld.
+_HOST_LIST_PROVENANCE_KEYS = (
+    "host_list",
+    "host_config_digest",
+    "attempts",
+    "vouched",
+    "vouched_by",
+    "authorized_by",
+    "answered_family",
+)
+
+
+class ReviewerText(str):
+    """A reviewer reply that carries the provenance of the call that produced
+    it, so a later call that raises before recording cannot leave an earlier
+    call's provenance (and its ``vouched``) attached to this verdict.
+
+    ``host_key`` is the listed host that answered, or ``FLOOR`` for the local
+    endpoint; a continuation pins to it (design 2.2)."""
+
+    provenance: dict[str, Any]
+    host_key: str
+
+    def __new__(cls, text: str, provenance: dict[str, Any], host_key: str) -> "ReviewerText":
+        value = super().__new__(cls, text)
+        value.provenance = dict(provenance)
+        value.host_key = host_key
+        return value
+
+
+FLOOR = "__floor__"
+_UNPARSED_REPLY_CHARS = 8000
+
+
+class UnparsedReply(str):
+    """A host's reply that held no verdict object. The host answered, so its
+    reply is its answer: the caller's repair goes back to it, and a host list
+    does not move on to the next host."""
+
+
+def _provenance_of(text: Any) -> dict[str, Any]:
+    """The provenance of the call that produced ``text``. A plain string (a
+    test double) falls back to the process record."""
+    own = getattr(text, "provenance", None)
+    return dict(own) if isinstance(own, dict) else reviewer_backend_provenance()
+
+
+def _listed_host_of(text: Any) -> Optional[str]:
+    key = getattr(text, "host_key", None)
+    return key if isinstance(key, str) and key != FLOOR else None
 
 
 def _reviewer_model_type(provenance: dict[str, Any]) -> str:
@@ -150,6 +206,7 @@ _PERSISTED_PROVENANCE_KEYS = (
     "finish_reason",
     "fallback_from",
     "warnings",
+    *_HOST_LIST_PROVENANCE_KEYS,
 )
 
 
@@ -415,21 +472,24 @@ def parse_reviewer_verdict(model_text: str) -> Verdict:
 
 
 def withhold_fallback_approval(verdict: Verdict, provenance: dict[str, Any]) -> Verdict:
-    """A FALLBACK MAY OBJECT. IT MAY NEVER APPROVE. Pure.
+    """AN APPROVAL NEEDS AN AFFIRMATIVE MARK. Pure.
 
-    ``fallback_from`` means the operator selected a reviewer host, that host
-    produced no verdict, and the local model answered in its place. The
-    operator asked for that host's judgment, so a fallback verdict is a
-    substitute. ``fallback_from`` is what records that; ``degraded`` keeps its
-    existing meaning (could a judgment be extracted) and is not changed here,
-    so the stored field means the same thing on both sides of this change.
+    A verdict may approve only when its provenance says ``vouched: true``,
+    which ``obtain_reviewer_text`` sets in two cases: a host the operator
+    listed, with ``may_approve``, answered this call; or no list is set and
+    the local model is the reviewer, as it was before lists existed. Anything
+    else, a missing field included, withholds. A rule keyed on a field that
+    marks a fallback would fail open on every path that forgot to set it; this
+    one fails closed (design: docs/proposals/active/dialectic-reviewer-hosts-v0.md
+    section 2.2).
 
-    A substitute objection is still filed: it names terms the paused agent can
-    answer, and the session stays open while it does. A substitute APPROVAL
-    can release the paused agent, so it is withheld and the reviewer abstains,
-    leaving the slot open for a reviewer that can judge. The same rule
-    ``run()`` already applies to a repaired reply, for the same reason: an
-    approval must not rest on a model the operator did not choose.
+    The case it exists for: the operator listed hosts, none answered, and the
+    local model answered in their place. That substitute may object, and its
+    objection is still filed: it names terms the paused agent can answer, and
+    the session stays open while it does. A substitute APPROVAL can release the
+    paused agent, so it is withheld and the reviewer abstains, leaving the slot
+    open for a reviewer that can judge. ``degraded`` keeps its existing
+    meaning (could a judgment be extracted) and is not changed here.
 
     Live instance, #2379: session 17ca66285f91e61e selected gemini-3.8-flash,
     which was truncated before its verdict; gemma4 restated the thesis's own
@@ -438,22 +498,30 @@ def withhold_fallback_approval(verdict: Verdict, provenance: dict[str, Any]) -> 
     addressed.
     """
     if (
-        not provenance.get("fallback_from")
+        provenance.get("vouched") is True
         or not verdict.judgment_formed
         or not verdict.agrees
     ):
         return verdict
+    fallback_from = provenance.get("fallback_from")
+    if fallback_from:
+        reasoning = (
+            f"The selected reviewer host ({fallback_from}) returned no verdict, "
+            "and the local fallback model approved. A fallback approval is "
+            "withheld rather than filed: the selected host did not review this "
+            "thesis."
+        )
+    else:
+        reasoning = (
+            "The verdict's provenance does not show a reviewer with approval "
+            "authority, so its approval is withheld rather than filed."
+        )
     return replace(
         verdict,
         agrees=False,
         proposed_conditions=[],
-        reasoning=(
-            f"The selected reviewer host ({provenance['fallback_from']}) returned "
-            "no verdict, and the local fallback model approved. A fallback "
-            "approval is withheld rather than filed: the selected host did not "
-            "review this thesis."
-        ),
-        # Not a claim that the fallback model failed to judge. The judgment
+        reasoning=reasoning,
+        # Not a claim that the answering model failed to judge. The judgment
         # the operator selected was not formed, and this one is not accepted
         # in its place, so the protocol records an abstention.
         judgment_formed=False,
@@ -597,9 +665,9 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     it — the judgment gap is model class, not prompt or parse).
 
     Opt-in via ``UNITARES_DIALECTIC_REVIEWER_HOST=codex``; returns the final
-    JSON verdict string, or None on ANY failure (CLI absent, non-zero exit,
-    timeout, no parseable verdict) — the caller then falls back to the free
-    local model, so the no-budget default path is never removed (execution-cost
+    JSON verdict string, an ``UnparsedReply`` when codex answered without one,
+    or None on a failure (CLI absent, non-zero exit, timeout, no output) — the
+    caller then falls back to the free local model, so the no-budget default path is never removed (execution-cost
     policy: subscription CLI is an opt-in backend, never a requirement).
 
     Spawn recipe mirrors the host adapter's proven one: ``sh -c 'exec
@@ -644,7 +712,15 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
         return None
     if proc.returncode != 0:
         return None
-    return extract_last_json_object(stdout.decode(errors="replace"))
+    transcript = stdout.decode(errors="replace")
+    verdict = extract_last_json_object(transcript)
+    if verdict is None:
+        # Codex ran and answered without a verdict object, possibly objecting
+        # in prose. That is its answer, not a failure: a host list repairs it
+        # with codex and never asks the next host (design 2.1).
+        tail = transcript.strip()[-_UNPARSED_REPLY_CHARS:]
+        return UnparsedReply(tail) if tail else None
+    return verdict
 
 
 async def call_claude_reviewer(prompt: str) -> HostReviewResult:
@@ -665,56 +741,114 @@ async def call_external_reviewer(prompt: str) -> HostReviewResult:
     return await call_openai_compat_backend(prompt)
 
 
-async def obtain_reviewer_text(prompt: str) -> str:
-    """Route to the configured reviewer backend, falling back to the free
-    local model. Default (env unset) is byte-identical to the pre-existing
-    gemma4 path."""
-    host = os.getenv("UNITARES_DIALECTIC_REVIEWER_HOST", "").strip().lower()
-    fallback_from: Optional[str] = None
-    fallback_warning: Optional[str] = None
-    if host in ("claude", "claude:host-adapter"):
-        result = await call_claude_reviewer(prompt)
-        if result.text is not None:
-            _record_reviewer_provenance(result.provenance())
-            return result.text
-        fallback_from = result.host_id
-        fallback_warning = result.error
-    elif host in ("codex", "codex:host-adapter"):
-        text = await call_codex_reviewer(prompt)
-        if text is not None:
-            _record_reviewer_provenance({
-                "backend": "codex",
-                "host_id": "codex:host-adapter",
-                "models_used": [],
-                "warnings": ["Codex CLI did not report an exact model identifier"],
-            })
-            return text
-        fallback_from = "codex:host-adapter"
-        fallback_warning = "Codex backend unavailable or returned no verdict"
-    elif host in ("antigravity", "agy", "antigravity:host-adapter"):
-        result = await call_antigravity_reviewer(prompt)
-        if result.text is not None:
-            _record_reviewer_provenance(result.provenance())
-            return result.text
-        fallback_from = result.host_id
-        fallback_warning = result.error
-    elif host in ("external", "openai_compat", "openai-compatible", "gemini"):
-        # ``gemini`` is accepted as an ALIAS for the configured external host —
-        # it selects no vendor logic, only this path. Misconfiguration surfaces
-        # as a warning on the local fallback, never as a silent vendor default.
-        result = await call_external_reviewer(prompt)
-        if result.text is not None:
-            _record_reviewer_provenance(result.provenance())
-            return result.text
-        fallback_from = result.host_id
-        fallback_warning = result.error
-    elif host not in ("", "local", "ollama", "ollama:local"):
-        fallback_from = host
-        fallback_warning = f"Unknown reviewer host '{host}'"
+async def _call_listed_host(
+    host: ListedHost, prompt: str
+) -> tuple[Optional[str], dict[str, Any], Optional[str]]:
+    """One listed host's reply, its provenance, and why it gave none.
 
-    # Any selected-host failure degrades to the local default, never harder
-    # than the pre-existing path.
-    warnings = [fallback_warning] if fallback_warning else []
+    The reply is the host's answer whether or not it holds a verdict object:
+    a reply without one comes back as itself, for the caller's repair. ``None``
+    means the host did not answer at all (an error, a timeout, a nonzero exit,
+    an empty reply), which is the only case in which the list moves on."""
+    if host.key == "codex":
+        text = await call_codex_reviewer(prompt)
+        provenance = {
+            "backend": "codex",
+            "host_id": host.host_id,
+            "models_used": [],
+            "warnings": ["Codex CLI did not report an exact model identifier"],
+        }
+        if isinstance(text, UnparsedReply):
+            provenance["warnings"].append("Codex replied without a verdict object")
+            return str(text), provenance, None
+        return text, provenance, None if text is not None else (
+            "Codex backend unavailable or returned no reply"
+        )
+    if host.key == "claude":
+        result = await call_claude_reviewer(prompt)
+    elif host.key == "antigravity":
+        result = await call_antigravity_reviewer(prompt)
+    else:
+        # ``external``: the operator-configured OpenAI-compatible host. Its
+        # misconfiguration surfaces as an attempt's reason, never as a silent
+        # vendor default.
+        result = await call_external_reviewer(prompt)
+    provenance = result.provenance()
+    if result.text is None and result.unparsed_reply:
+        provenance["warnings"] = [*provenance["warnings"], str(result.error or "no verdict object")]
+        return result.unparsed_reply, provenance, None
+    return result.text, provenance, result.error
+
+
+async def obtain_reviewer_text(prompt: str, *, pinned: Optional[str] = None) -> ReviewerText:
+    """Ask the operator's listed hosts in order, then the free local model.
+
+    A host that does not answer (an error, a timeout, a nonzero exit, an empty
+    reply) is skipped for the next one. A host that answers ends the list,
+    whether or not its reply holds a verdict object: the reply goes to the
+    caller's parse and repair, and is never traded for another host's, because
+    a reply that does not parse may still be an objection in prose. The order is the operator's and is only ever
+    shortened (design: docs/proposals/active/dialectic-reviewer-hosts-v0.md).
+
+    ``pinned``: a listed host's key, to ask only that host before the floor,
+    or ``FLOOR`` for the local model alone. With no list set, the local model
+    is the reviewer and the reply is byte-identical to the pre-list path.
+    """
+    plan = reviewer_host_plan()
+    if pinned == FLOOR:
+        hosts: tuple[ListedHost, ...] = ()
+    elif pinned is not None:
+        hosts = tuple(host for host in plan.hosts if host.key == pinned)
+    else:
+        hosts = plan.hosts
+    listing: dict[str, Any] = {
+        "host_list": plan.keys or None,
+        "host_config_digest": plan.digest or None,
+        # One operator today. Recorded so a later federation can tell whose
+        # configuration released an agent.
+        "authorized_by": "deployment_config" if plan.listed else None,
+    }
+    warnings: list[str] = [plan.error] if plan.error else []
+    attempts: list[dict[str, Any]] = []
+    for host in hosts:
+        text, provenance, error = await _call_listed_host(host, prompt)
+        # The backend's own host id where it reports one (the external host
+        # names its endpoint), else the listed id.
+        host_id = provenance.get("host_id") or host.host_id
+        if text is not None:
+            attempts.append({"host": host_id, "outcome": "reply"})
+            answered = {
+                **provenance,
+                **listing,
+                "attempts": attempts,
+                "warnings": [*warnings, *(provenance.get("warnings") or [])],
+                "fallback_from": attempts[0]["host"] if len(attempts) > 1 else None,
+                "vouched": host.may_approve,
+                "vouched_by": "listed_host" if host.may_approve else None,
+                "answered_family": host.family,
+            }
+            _record_reviewer_provenance(answered)
+            return ReviewerText(text, answered, host.key)
+        reason = str(error or "no reply")[:200]
+        attempts.append({"host": host_id, "outcome": "no_reply", "reason": reason})
+        warnings.append(reason)
+
+    # The floor. With a list it may object but not approve: the operator asked
+    # for a listed host's judgment. With no list it is the reviewer and keeps
+    # the approval authority it always had.
+    if attempts:
+        fallback_from: Optional[str] = attempts[0]["host"]
+    elif plan.error:
+        fallback_from = plan.raw or "invalid_host_list"
+    else:
+        fallback_from = None
+    vouched = not plan.listed
+    floor_listing = {
+        **listing,
+        "attempts": attempts or None,
+        "vouched": vouched,
+        "vouched_by": "no_list_default" if vouched else None,
+    }
     try:
         text = await call_reviewer_model(prompt)
     except EndpointNotLocalError as exc:
@@ -723,24 +857,30 @@ async def obtain_reviewer_text(prompt: str) -> str:
         # parses to no judgment, so the reviewer abstains, and the reason
         # travels in the provenance warnings recorded with the abstention.
         logger.warning("Dialectic reviewer local backend refused: %s", exc)
-        _record_reviewer_provenance({
+        refused = {
             "backend": "ollama",
             "host_id": "ollama:local",
             "model_requested": DEFAULT_MODEL,
             "models_used": [],
             "fallback_from": fallback_from,
             "warnings": [*warnings, f"{exc.code}: {exc}"],
-        })
-        return ""
-    _record_reviewer_provenance({
+            **floor_listing,
+            "vouched": False,
+            "vouched_by": None,
+        }
+        _record_reviewer_provenance(refused)
+        return ReviewerText("", refused, FLOOR)
+    floor = {
         "backend": "ollama",
         "host_id": "ollama:local",
         "model_used": DEFAULT_MODEL,
         "models_used": [DEFAULT_MODEL],
         "fallback_from": fallback_from,
         "warnings": warnings,
-    })
-    return text
+        **floor_listing,
+    }
+    _record_reviewer_provenance(floor)
+    return ReviewerText(text, floor, FLOOR)
 
 
 async def call_reviewer_model(prompt: str, model: str = DEFAULT_MODEL) -> str:
@@ -1010,11 +1150,19 @@ async def continue_after_disagreement(
     *,
     paused_agent_id: Optional[str],
     reviewer_agent_id: Optional[str],
+    pinned_host: Optional[str] = None,
 ) -> Verdict:
     """Run bounded objection → response → reconsideration rounds.
 
     The wall-clock budget includes polling and every follow-up model call. This
     leaves the orchestrator's process deadline as a separate hard backstop.
+
+    ``pinned_host``: the listed host whose judgment is standing. Every
+    reconsideration goes to it, and if it fails the floor answers without
+    approval authority; the list never restarts. Otherwise one host could
+    object, time out on the reconsideration, and the next host could approve a
+    thesis the first never accepted (design 2.2). With no listed host pinned
+    yet, the first listed host to answer is pinned from then on.
     """
     wait_s = _env_float(
         "UNITARES_DIALECTIC_CONTINUATION_WAIT_S", DEFAULT_CONTINUATION_WAIT_S
@@ -1033,7 +1181,7 @@ async def continue_after_disagreement(
     # answers. It is re-filed as formed, never re-judged: a second model call
     # can reach a different verdict, and a dropped connection must not be able
     # to change a governance outcome.
-    unfiled: Optional[tuple[dict[str, Any], Verdict]] = None
+    unfiled: Optional[tuple[dict[str, Any], Verdict, dict[str, Any]]] = None
 
     while True:
         remaining = deadline - time.monotonic()
@@ -1093,26 +1241,29 @@ async def continue_after_disagreement(
         if remaining <= 0:
             return current_verdict
         if unfiled is not None:
-            next_verdict = unfiled[1]
+            next_verdict, next_provenance = unfiled[1], unfiled[2]
         else:
             prompt = build_continuation_prompt(
                 thesis, current_verdict, paused_response, synthesis_round
             )
             try:
                 model_text = await asyncio.wait_for(
-                    obtain_reviewer_text(prompt), timeout=remaining
+                    obtain_reviewer_text(prompt, pinned=pinned_host), timeout=remaining
                 )
             except asyncio.TimeoutError:
                 return current_verdict
             except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
                 logger.warning("Dialectic continuation model failed: %r", exc)
                 return current_verdict
+            next_provenance = _provenance_of(model_text)
             next_verdict = withhold_fallback_approval(
                 _verdict_with_ratified_conditions(
                     parse_reviewer_verdict(model_text), paused_response, current_verdict
                 ),
-                reviewer_backend_provenance(),
+                next_provenance,
             )
+            if pinned_host is None:
+                pinned_host = _listed_host_of(model_text)
         if not next_verdict.judgment_formed:
             # Same rule as the initial verdict. Filing this would burn a
             # synthesis round and overwrite a REASONED standing rejection with
@@ -1138,6 +1289,13 @@ async def continue_after_disagreement(
                     # There is no second antithesis call, so the reconsideration's
                     # rationale belongs on this follow-up synthesis.
                     "reasoning": next_verdict.reasoning,
+                    # So is its attribution: the host that answered this round
+                    # can differ from the antithesis's (the floor objected, a
+                    # listed host later approved), and the row that decides the
+                    # session must name it (codex review of #2652).
+                    "reviewer_provenance": _provenance_for_message(
+                        next_provenance, degraded=next_verdict.degraded
+                    ),
                 },
             )
         except Exception as exc:  # noqa: BLE001 — classified below
@@ -1152,7 +1310,7 @@ async def continue_after_disagreement(
             # pending, and this same verdict is filed again. Neither case
             # files twice or judges twice.
             logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
-            unfiled = (paused_response, next_verdict)
+            unfiled = (paused_response, next_verdict, next_provenance)
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue
         unfiled = None
@@ -1169,7 +1327,15 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
     from unitares_sdk.client import GovernanceClient  # type: ignore
 
     reviewer_text = await obtain_reviewer_text(build_review_prompt(thesis))
+    # The session's pin: the listed host that answered first. It is fixed here
+    # and never taken from a later reply. If that host's reply needs a repair
+    # and the repair falls to the floor, the floor's reply may be the one
+    # filed, and a pin read from it would be none, letting a reconsideration
+    # restart the list (codex review of #2652).
+    pinned_host = _listed_host_of(reviewer_text)
     verdict = parse_reviewer_verdict(reviewer_text)
+    # The reply whose verdict is filed; its own provenance decides approval.
+    verdict_text = reviewer_text
     for _ in range(_VERDICT_REPAIR_ATTEMPTS):
         if verdict.judgment_formed:
             break
@@ -1180,8 +1346,11 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             thesis.session_id,
         )
         try:
+            # The repair restates a reply, so it goes to the host that wrote
+            # it, never down the list.
             reviewer_text = await obtain_reviewer_text(
-                build_repair_prompt(thesis, reviewer_text)
+                build_repair_prompt(thesis, reviewer_text),
+                pinned=getattr(reviewer_text, "host_key", None),
             )
         except Exception as exc:  # noqa: BLE001 — a failed repair just abstains
             logger.warning("Dialectic reviewer repair attempt failed: %r", exc)
@@ -1217,9 +1386,10 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
             )
             break
         verdict = repaired
-    # Read provenance AFTER the last attempt, so it names the backend that
-    # actually produced the verdict being filed rather than the first one tried.
-    provenance = reviewer_backend_provenance()
+        verdict_text = reviewer_text
+    # The provenance of the reply whose verdict is filed, carried by that reply,
+    # so a later call that raised cannot leave its own record attached here.
+    provenance = _provenance_of(verdict_text)
     verdict = withhold_fallback_approval(verdict, provenance)
 
     # ABSTAIN rather than file a non-judgment.
@@ -1382,6 +1552,7 @@ async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str
                 verdict,
                 paused_agent_id=parent_agent_id,
                 reviewer_agent_id=client.agent_uuid,
+                pinned_host=pinned_host,
             )
         return verdict
     finally:
