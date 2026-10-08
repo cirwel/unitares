@@ -79,9 +79,10 @@ STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
 # Extra checks (space-separated names) that must have passed on the head before
 # it is armed, beyond the ones branch protection requires. Empty by default:
-# review is advisory (operator decision, 2026-10-06), so the queue merges on
+# review is advisory (operator decision, 2026-10-08), so the queue merges on
 # ready + label + required CI. `PR_QUEUE_REQUIRED_CHECKS=review` restores the
 # old gate; note a NEUTRAL `review` conclusion means "unreviewed".
+# An auth-path diff needs `review` regardless (auth_path, below).
 REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-}"
 # PRs carrying any of these labels are never armed: the operator merges them
 # by hand. `governance-sensitive` is what CI applies to a PR touching an
@@ -234,15 +235,65 @@ still_approved() {  # <pr> <head>
 # is not SUCCESS; empty when all passed. MISSING and PENDING are normal for
 # about a minute after a base update, while the review gate re-evaluates.
 unmet_required_checks() {
-  local check state unmet=""
-  for check in $REQUIRED_CHECKS; do
+  local check state unmet="" checks="$REQUIRED_CHECKS" auth=""
+  # Review is advisory, except on an auth path (auth_path below): there it is
+  # required whatever PR_QUEUE_REQUIRED_CHECKS says.
+  case " $checks " in
+    *" review "*) ;;
+    *) auth=$(auth_path "$(jq -r .headRefOid <<<"$1")") && checks+=" review" || auth="" ;;
+  esac
+  for check in $checks; do
     state=$(jq -r --arg c "$check" '[.statusCheckRollup[]? | select((.name // .context) == $c)
              | (.conclusion // .state // "") | if . == "" then "PENDING" else . end]
              | if length == 0 then "MISSING" elif all(. == "SUCCESS") then "SUCCESS"
                else map(select(. != "SUCCESS")) | .[0] end' <<<"$1")
-    [ "$state" = "SUCCESS" ] || unmet+=" $check=$state"
+    [ "$state" = "SUCCESS" ] && continue
+    unmet+=" $check=$state"
+    [ "$check" = "review" ] && [ -n "$auth" ] && unmet+=" (required on an auth path: $auth)"
   done
   echo "${unmet# }"
+}
+
+# A diff touching one of review_policy.json's second_family_paths (the auth
+# and identity surfaces) needs `review` to pass before the queue arms it, even
+# with review otherwise advisory: on those files the review gate is what
+# enforces the two-family rule, and a NEUTRAL (unreviewed) check would let one
+# through with no review at all (operator decision, 2026-10-08, when #2684
+# made review advisory). The policy is read from the base through GitHub, as
+# CI reads it, so a PR cannot drop itself from the list. Fails closed: an
+# unreadable policy or diff counts as an auth path. PR_QUEUE_REVIEW_POLICY
+# names a local file instead (tests; "" disables). Read once per tick.
+REVIEW_POLICY_PATH_IN_REPO="scripts/dev/review_policy.json"
+auth_globs=""
+auth_state=""  # "", "ok", "off" or "unreadable"
+load_review_policy() {
+  [ -n "$auth_state" ] && return 0
+  local raw=""
+  if [ -n "${PR_QUEUE_REVIEW_POLICY+set}" ]; then
+    if [ -z "$PR_QUEUE_REVIEW_POLICY" ]; then auth_state="off"; return 0; fi
+    raw=$(cat "$PR_QUEUE_REVIEW_POLICY" 2>/dev/null)
+  elif [ -n "$tick_base_sha" ]; then
+    raw=$(gh api "repos/$REPO/contents/$REVIEW_POLICY_PATH_IN_REPO?ref=$tick_base_sha" --jq .content 2>/dev/null | base64 -d 2>/dev/null)
+  fi
+  auth_globs=$(jq -er '.second_family_paths | if length > 0 then .[] else error end' <<<"$raw" 2>/dev/null) \
+    && auth_state="ok" || auth_state="unreadable"
+}
+auth_path() {  # <head-sha> -> prints the auth path it touches; fails when none
+  [ "$auth_state" = "off" ] && return 1
+  [ "$auth_state" = "ok" ] || { echo "the review policy could not be read"; return 0; }
+  local cmp file glob
+  cmp=$(gh api "repos/$REPO/compare/${tick_base_sha:-$BASE}...$1" 2>/dev/null) \
+    && jq -e '(.files | length) < 300' <<<"$cmp" >/dev/null 2>&1 \
+    || { echo "its diff could not be checked"; return 0; }
+  while IFS= read -r file; do
+    [ -n "$file" ] || continue
+    while IFS= read -r glob; do
+      # Unquoted on purpose: a glob, and `*` matches `/` here as fnmatch does in review_gate.py.
+      # shellcheck disable=SC2053
+      [ -n "$glob" ] && [[ "$file" == $glob ]] && { echo "$file"; return 0; }
+    done <<<"$auth_globs"
+  done < <(jq -r '.files[] | .filename, (.previous_filename // empty)' <<<"$cmp")
+  return 1
 }
 
 # The label is best-effort (CI tolerates failing to apply it), so before
@@ -300,6 +351,7 @@ latest_label_time() {
 }
 
 load_manifest  # once per tick, in this shell (sensitive_path runs in subshells)
+load_review_policy  # likewise for auth_path
 
 # --- 1. tidy the slot -----------------------------------------------------------
 # Arms this script made: "<pr> <armed-at>" per line. An armed PR is the

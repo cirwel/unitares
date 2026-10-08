@@ -108,7 +108,8 @@ veto by removing the label.
   actually passed: CI green, a review run where a reviewer is available (see
   "Review workflow" below) with any findings addressed (fixed, or answered
   with `review.sh dispose`), and no collision with an in-flight branch.
-  **An unreviewed PR is not held** (operator decision, 2026-10-06): the
+  **An unreviewed PR is not held** (operator decision, 2026-10-08), except on
+  an auth path (below): the
   `review` check is not a required check, and the merge queue no longer waits
   for it to pass (`PR_QUEUE_REQUIRED_CHECKS=review` in
   `scripts/ops/pr-babysitter.sh` restores that). A neutral `review` (no review,
@@ -123,8 +124,14 @@ veto by removing the label.
   passes or the operator grants a [waiver](#second-family-review); saying so
   in the PR body does not release it. Earlier decision,
   2026-10-04: cloud sessions cannot run `review.sh`, and the gate had become
-  the main thing stopping finished PRs; 2026-10-06 removed the last queue-side
-  block.
+  the main thing stopping finished PRs; 2026-10-08 removed the last queue-side
+  block. **Auth paths are the exception:** a diff touching any of
+  `scripts/dev/review_policy.json`'s `second_family_paths` is not armed until
+  `review` passes, whatever `PR_QUEUE_REQUIRED_CHECKS` says, because on those
+  files a neutral review would otherwise let a PR through with no review at
+  all (operator decision, 2026-10-08, made with #2684). The queue reads the
+  policy from the base, as CI does, and fails closed when it cannot read the
+  policy or the diff.
 - **Readiness is agent-declared, never operator-inferred.** The operator
   pressing merge in order cannot verify content and should not have to
   guess doneness: a PR still in draft is "still working — hands off," even
@@ -144,8 +151,9 @@ veto by removing the label.
 
 ### Review workflow
 
-> **Not a merge gate since 2026-10-06.** A missing or unfinished review no
-> longer holds a PR: the merge queue arms on ready + label + required CI. What
+> **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
+> longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
+> `second_family_paths` file still needs `review` to pass. What
 > follows still applies to the review you run. The round cap still bounds paid
 > full rounds (another needs the operator's own `--authorize-full-review`), and
 > a `review` check of `action_required` (undisposed findings, or a sensitive
@@ -544,8 +552,8 @@ agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
 explicitly defers this step and prints the author's next action. If review
 cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
 (exit 1). Report the blocker and the exact command to resume in the PR body;
-since 2026-10-06 an unreviewed PR is not held, so it may still be marked ready
-(section above). Exit 3 is not this case: it stays parked.
+since 2026-10-08 an unreviewed PR is not held unless it touches an auth path,
+so it may still be marked ready (section above). Exit 3 is not this case: it stays parked.
 The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
