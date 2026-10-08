@@ -121,14 +121,53 @@ def test_count_counts_records_not_lines(archiver, tmp_path):
     assert archiver.count_csv_records(path) == 2
 
 
-def test_archive_is_reused_only_while_its_hash_matches(archiver, tmp_path):
+SOURCE = {"system_identifier": "7608", "database": "governance", "oid": 28353}
+BOUND = "FOR VALUES FROM ('a') TO ('b')"
+
+
+def _archive(archiver, tmp_path, source=SOURCE, bound=BOUND):
     path = tmp_path / "events_2026_03.csv.gz"
     _write_csv(path, [["1", "x"]])
-    entry = {"partition": "events_2026_03", "rows": 1, "sha256": archiver.sha256(path)}
+    entry = {"partition": "events_2026_03", "rows": 1, "sha256": archiver.sha256(path),
+             "source": source, "bound": bound}
     (tmp_path / "manifest.jsonl").write_text(json.dumps(entry) + "\n")
-    assert archiver.archived_entry(tmp_path, "events_2026_03") == entry
+    return path, entry
+
+
+def test_count_handles_fields_beyond_the_csv_default_limit(archiver, tmp_path):
+    path = tmp_path / "big.csv.gz"
+    _write_csv(path, [["1", "x" * 300_000], ["2", "y"]])
+    assert archiver.count_csv_records(path) == 2
+
+
+def test_archive_is_reused_only_for_the_same_table(archiver, tmp_path):
+    _, entry = _archive(archiver, tmp_path)
+    assert archiver.archived_entry(tmp_path, "events_2026_03", SOURCE, BOUND) == entry
+
+
+@pytest.mark.parametrize("source, bound", [
+    ({**SOURCE, "database": "governance_test"}, BOUND),   # another database
+    ({**SOURCE, "oid": 99999}, BOUND),                     # recreated table
+    ({**SOURCE, "system_identifier": "1"}, BOUND),         # another cluster
+    (SOURCE, "FOR VALUES FROM ('c') TO ('d')"),            # other bounds
+])
+def test_an_archive_of_another_table_is_refused_not_trusted(archiver, tmp_path, source, bound):
+    path, _ = _archive(archiver, tmp_path)
+    before = path.read_bytes()
+    with pytest.raises(SystemExit):
+        archiver.archived_entry(tmp_path, "events_2026_03", source, bound)
+    assert path.read_bytes() == before  # left in place, not overwritten
+
+
+def test_a_changed_archive_file_is_refused(archiver, tmp_path):
+    path, _ = _archive(archiver, tmp_path)
     _write_csv(path, [["1", "changed"]])
-    assert archiver.archived_entry(tmp_path, "events_2026_03") is None
+    with pytest.raises(SystemExit):
+        archiver.archived_entry(tmp_path, "events_2026_03", SOURCE, BOUND)
+
+
+def test_no_archive_file_means_export(archiver, tmp_path):
+    assert archiver.archived_entry(tmp_path, "events_2026_03", SOURCE, BOUND) is None
 
 
 def test_dry_run_is_the_default_and_writes_nothing(archiver, tmp_path, monkeypatch, capsys):
@@ -153,17 +192,27 @@ def test_export_without_apply_never_drops(archiver, tmp_path, monkeypatch):
         archiver, "eligible",
         lambda dsn, parent, days: [(f"{parent}_2026_03", "b")] if parent == "events" else [],
     )
-    monkeypatch.setattr(
-        archiver, "export",
-        lambda dsn, name, out_dir: {"partition": name, "rows": 3, "bytes": 1,
-                                    "sha256": "0", "file": f"{name}.csv.gz"},
-    )
+    monkeypatch.setattr(archiver, "source_of", lambda dsn, name: SOURCE)
+    exported = []
+
+    def fake_export(dsn, name, out_dir):
+        exported.append(name)
+        _write_csv(out_dir / f"{name}.csv.gz", [["1", "x"]] * 3)
+        return {"partition": name, "rows": 3, "bytes": 1,
+                "sha256": archiver.sha256(out_dir / f"{name}.csv.gz"),
+                "file": f"{name}.csv.gz"}
+
+    monkeypatch.setattr(archiver, "export", fake_export)
     dropped = []
-    monkeypatch.setattr(archiver, "drop", lambda dsn, name, rows: dropped.append(name))
+    monkeypatch.setattr(archiver, "drop",
+                        lambda dsn, name, rows, oid: dropped.append((name, rows, oid)))
     assert archiver.main(["--export", "--archive-dir", str(tmp_path)]) == 0
     assert dropped == []
+    # --apply reuses the archive just written (same source, same bound) and
+    # drops with the archived count and the OID it was taken from.
     assert archiver.main(["--apply", "--archive-dir", str(tmp_path)]) == 0
-    assert dropped == ["events_2026_03"]
+    assert exported == ["events_2026_03"]
+    assert dropped == [("events_2026_03", 3, SOURCE["oid"])]
 
 
 def test_unexpected_partition_names_are_refused(archiver, tmp_path, monkeypatch):

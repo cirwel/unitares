@@ -17,8 +17,13 @@ migration 055), evaluated in SQL so the two cannot disagree. Check-ins
 (operator decision, 2026-10-07).
 
 Per partition the archive is <dir>/<partition>.csv.gz plus one line in
-<dir>/manifest.jsonl (rows, bytes, sha256, bounds). A drop rechecks the live
-row count inside the dropping transaction and refuses if it changed.
+<dir>/manifest.jsonl (rows, bytes, sha256, bounds, source). The source is the
+cluster's system identifier, the database name and the partition's OID, so an
+archive is reused only for the very table it was taken from: never for a
+same-named partition in another or a recreated database. A drop rechecks the
+OID and the live row count inside the dropping transaction and refuses if
+either changed. An existing archive file that does not match is never
+overwritten.
 Uses psql, like the other ops scripts; the DSN comes from
 GOVERNANCE_DATABASE_URL.
 """
@@ -42,6 +47,8 @@ DEFAULT_DIR = Path.home() / "backups" / "archive" / "audit-partitions"
 # The retentions partition_maintenance() applied before 073.
 PARENTS = {"events": 180, "tool_usage": 90}
 NAME = re.compile(r"^[a-z0-9_]+$")
+# JSONB payloads can exceed the csv module's default 128 KiB field limit.
+csv.field_size_limit(2**31 - 1)
 
 ELIGIBLE_SQL = """
 SELECT c.relname, pg_get_expr(c.relpartbound, c.oid)
@@ -68,6 +75,14 @@ def psql(dsn: str, sql: str) -> str:
 def eligible(dsn: str, parent: str, days: int) -> list[tuple[str, str]]:
     rows = psql(dsn, ELIGIBLE_SQL.format(parent=parent, days=int(days))).splitlines()
     return [tuple(r.split("\t", 1)) for r in rows if r]
+
+
+def source_of(dsn: str, name: str) -> dict:
+    """Which table this is: cluster, database and partition OID."""
+    system_id, database, oid = psql(dsn, f"""
+SELECT (SELECT system_identifier FROM pg_control_system()), current_database(),
+       'audit.{name}'::regclass::oid""").strip().split("\t")
+    return {"system_identifier": system_id, "database": database, "oid": int(oid)}
 
 
 def count_csv_records(path: Path) -> int:
@@ -109,11 +124,14 @@ def export(dsn: str, name: str, out_dir: Path) -> dict:
             "sha256": sha256(final), "file": final.name}
 
 
-def drop(dsn: str, name: str, rows: int) -> None:
+def drop(dsn: str, name: str, rows: int, oid: int) -> None:
     psql(dsn, f"""
 BEGIN;
 LOCK TABLE audit.{name} IN ACCESS EXCLUSIVE MODE;
 DO $$ BEGIN
+  IF 'audit.{name}'::regclass::oid <> {int(oid)} THEN
+    RAISE EXCEPTION 'audit.{name} is not the table that was archived';
+  END IF;
   IF (SELECT count(*) FROM audit.{name}) <> {int(rows)} THEN
     RAISE EXCEPTION 'audit.{name} changed since it was archived';
   END IF;
@@ -122,17 +140,30 @@ DROP TABLE audit.{name};
 COMMIT;""")
 
 
-def archived_entry(out_dir: Path, name: str) -> dict | None:
-    """The manifest entry for an archive that still matches its file, if any."""
+def archived_entry(out_dir: Path, name: str, source: dict, bound: str) -> dict | None:
+    """The manifest entry for an archive of exactly this table, if one exists.
+
+    Raises if an archive file of that name exists but is not that: it belongs
+    to another source or bound, or no longer matches its manifest hash. It is
+    left in place for the operator rather than overwritten or trusted.
+    """
     manifest = out_dir / "manifest.jsonl"
     final = out_dir / f"{name}.csv.gz"
-    if not (manifest.exists() and final.exists()):
+    if not final.exists():
         return None
-    entries = [json.loads(line) for line in manifest.read_text().splitlines() if line.strip()]
+    entries = []
+    if manifest.exists():
+        entries = [json.loads(line) for line in manifest.read_text().splitlines() if line.strip()]
     for entry in reversed(entries):
         if entry["partition"] == name:
-            return entry if entry["sha256"] == sha256(final) else None
-    return None
+            if (entry.get("source") == source and entry.get("bound") == bound
+                    and entry["sha256"] == sha256(final)):
+                return entry
+            break
+    raise SystemExit(
+        f"{final} exists but is not an archive of this audit.{name} "
+        "(other source, other bounds or changed file); move it aside to re-archive"
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,17 +197,19 @@ def main(argv: list[str] | None = None) -> int:
 
     args.archive_dir.mkdir(parents=True, exist_ok=True)
     for name, bound in plan:
-        entry = archived_entry(args.archive_dir, name)
+        source = source_of(dsn, name)
+        entry = archived_entry(args.archive_dir, name, source, bound)
         if entry is None:
             entry = export(dsn, name, args.archive_dir)
-            entry.update(bound=bound, archived_at=datetime.now(timezone.utc).isoformat())
+            entry.update(bound=bound, source=source,
+                         archived_at=datetime.now(timezone.utc).isoformat())
             with (args.archive_dir / "manifest.jsonl").open("a") as fh:
                 fh.write(json.dumps(entry) + "\n")
             print(f"archived: audit.{name}  {entry['rows']} rows  {entry['file']}")
         else:
             print(f"already archived: audit.{name}  {entry['rows']} rows")
         if args.apply:
-            drop(dsn, name, entry["rows"])
+            drop(dsn, name, entry["rows"], source["oid"])
             print(f"dropped: audit.{name}")
     return 0
 
