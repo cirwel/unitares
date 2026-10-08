@@ -2,12 +2,13 @@
 
 One task, two processes, every call an agent makes, with what the server
 returned. Process A finds the cause of a flaky test, records it, checks in,
-grades the check-in against the test result and exits cleanly. Process B starts
+grades the check-in against the test result, closes the finding and exits
+cleanly. Process B starts
 later, finds A's record before redoing the work, and declares A as its
 predecessor.
 
 The task is illustrative. The responses are not: they were captured on
-2026-10-08 (04:26 UTC) from a fresh Docker quickstart install at commit
+2026-10-08 (04:32 UTC) from a fresh Docker quickstart install at commit
 `df13c7166`, over MCP Streamable HTTP, with no model configured. Responses are
 abridged to the fields the step is about; field names and values are verbatim.
 Identifiers will differ on every install.
@@ -44,8 +45,8 @@ start_session {"force_new": true, "name": "upload-fixer", "model_type": "claude"
 
 ```json
 {
- "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w",
- "agent_uuid": "9e956a20-c2a9-4ad0-a8e9-e69244b4d030",
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
+ "agent_uuid": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349",
  "display_name": "upload-fixer",
  "is_new": true,
  "identity_resolution_outcome": "minted_force_new",
@@ -64,12 +65,12 @@ its own. It does not mean later calls are unthreaded; step 3 checks that.
 ### 3. Confirm the calls are threaded
 
 ```json
-check_working_state {"client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w", "lite": true}
+check_working_state {"client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl", "lite": true}
 ```
 
 ```json
 {
- "agent_uuid": "9e956a20-c2a9-4ad0-a8e9-e69244b4d030",
+ "agent_uuid": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349",
  "action_summary": {"action": "uninitialized", "verdict": "uninitialized", "verdict_confidence": "provisional", "evidence_basis": "ode_fallback"},
  "next_action": {"tool": "sync_state", "example": "sync_state(response_text='Completed a meaningful step', complexity=0.3)", "note": "check_working_state is read-only; it does not initialize state."}
 }
@@ -82,7 +83,7 @@ this process's calls to its own identity.
 
 ```json
 store_finding {
- "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w",
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
  "discovery_type": "bug_found",
  "summary": "test_upload_retry flakes because the fake clock fixture is module-scoped and leaks time between tests",
  "content": "Under random test order the retry backoff sees time already advanced by an earlier test and gives up before the third attempt. Making the fixture function-scoped removes the failure in 50 consecutive shuffled runs.",
@@ -92,8 +93,8 @@ store_finding {
 
 ```json
 {
- "discovery_id": "2026-10-08T04:26:01.719647+00:00",
- "next_action": "When this is addressed, close the loop: use_tool(tool_name='update_finding', arguments={\"discovery_id\": \"2026-10-08T04:26:01.719647+00:00\", \"status\": \"resolved\"})",
+ "discovery_id": "2026-10-08T04:32:44.421205+00:00",
+ "next_action": "When this is addressed, close the loop: use_tool(tool_name='update_finding', arguments={\"discovery_id\": \"2026-10-08T04:32:44.421205+00:00\", \"status\": \"resolved\"})",
  "state_summary": {"type": "bug_found", "status": "open", "message": "Discovery stored for agent 'upload-fixer'"}
 }
 ```
@@ -102,7 +103,7 @@ store_finding {
 
 ```json
 sync_state {
- "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w",
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
  "response_text": "Found why test_upload_retry flakes (shared fake clock); fixture made function-scoped, verifying with shuffled runs.",
  "complexity": 0.4,
  "confidence": 0.7,
@@ -120,7 +121,7 @@ sync_state {
   "evidence_basis": "ode_fallback"
  },
  "next_action": "Keep working; sync_state after your next substantial step. When an outcome lands, pass this prediction_id to record_result so it grades this check-in.",
- "prediction_id": "6d24011f-4e7c-4750-a108-ff4078588d9d",
+ "prediction_id": "e269304b-65a2-4a30-87ba-85668eb3022c",
  "verdict_caveat": "Verdict is provisional: the behavioral baseline is not warm. 'safe'/'proceed' means no trouble detected under the cold-start prior, not a validated all-clear. Evidence basis: ode_fallback."
 }
 ```
@@ -133,10 +134,10 @@ identity it is provisional, and the response says so. Keep the
 
 ```json
 record_result {
- "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w",
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
  "outcome_type": "test_passed",
  "detail": {"test_name": "test_upload_retry", "runs": 50, "order": "shuffled"},
- "prediction_id": "6d24011f-4e7c-4750-a108-ff4078588d9d"
+ "prediction_id": "e269304b-65a2-4a30-87ba-85668eb3022c"
 }
 ```
 
@@ -165,13 +166,50 @@ stamped calibration_excluded (binding: prev_confidence_fallback), so it does
 not train calibration. Pass the prediction_id from the sync_state you are
 grading to bind the outcome to it."
 
-### 7. Exit cleanly
+### 7. Close the finding
+
+The fix is verified, so the finding from step 4 should not stay open for the
+next process to rediscover.
 
 ```json
 use_tool {
- "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w",
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
+ "tool_name": "update_finding",
+ "arguments": {
+  "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
+  "discovery_id": "2026-10-08T04:32:44.421205+00:00",
+  "status": "resolved",
+  "closure_class": "fix_verified",
+  "closure_evidence": {
+   "deployed": "fake clock fixture changed from module scope to function scope",
+   "observed": "test_upload_retry passed 50 consecutive runs in shuffled order"
+  }
+ }
+}
+```
+
+```json
+{
+ "message": "Discovery '2026-10-08T04:32:44.421205+00:00' status updated to 'resolved'",
+ "closure_class": "fix_verified",
+ "state_summary": {"type": "bug_found", "status": "resolved", "resolved_at": "2026-10-08T04:32:44.562641+00:00"}
+}
+```
+
+`closure_class` records what the closure rests on. A bare `status: resolved`
+is accepted, but on an earlier capture the server warned: "This closure
+declares no standard and reads as unclassified: a later reader cannot tell it
+from a closure resting on a deployed fix whose effect was observed."
+`fix_verified` needs `closure_evidence` with what was deployed and what was
+observed.
+
+### 8. Exit cleanly
+
+```json
+use_tool {
+ "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl",
  "tool_name": "agent",
- "arguments": {"action": "release_presence", "client_session_id": "agent-9e956a20-c2a-2xmausxhi7plmrqnjo6w"}
+ "arguments": {"action": "release_presence", "client_session_id": "agent-2dca3de6-b0d-ulgnzjn7l3qkmn5zalhl"}
 }
 ```
 
@@ -190,7 +228,7 @@ backstop.
 
 ## Process B
 
-### 8. Search first, again
+### 9. Search first, again
 
 ```json
 search_shared_memory {"query": "flaky upload retry test", "limit": 5}
@@ -201,37 +239,38 @@ search_shared_memory {"query": "flaky upload retry test", "limit": 5}
  "next_action": "1 prior discoveries matched - read before redoing work. Full context: knowledge(action='details', discovery_id=...). Record new findings: store_finding(summary='...'). Revise one: use_tool(tool_name='update_finding', arguments={\"discovery_id\": \"...\", \"summary\": \"...\"}).",
  "memory_suggestions": [{
   "type": "bug_found",
-  "status": "open",
-  "discovery_id": "2026-10-08T04:26:01.719647+00:00",
+  "status": "resolved",
+  "closure_class": "fix_verified",
+  "discovery_id": "2026-10-08T04:32:44.421205+00:00",
   "summary": "test_upload_retry flakes because the fake clock fixture is module-scoped and leaks time between tests",
   "by": "upload-fixer",
-  "agent_id": "9e956a20-c2a9-4ad0-a8e9-e69244b4d030"
+  "agent_id": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349"
  }]
 }
 ```
 
-B finds A's record before it has an identity, and the record names the
-process that wrote it.
+B finds A's record before it has an identity. The record names the process
+that wrote it and says the fix was verified, so B does not redo the work.
 
-### 9. Start fresh and declare the handoff
+### 10. Start fresh and declare the handoff
 
 ```json
 start_session {
  "force_new": true,
  "name": "upload-fixer-2",
  "model_type": "claude",
- "parent_agent_id": "9e956a20-c2a9-4ad0-a8e9-e69244b4d030",
+ "parent_agent_id": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349",
  "spawn_reason": "explicit"
 }
 ```
 
 ```json
 {
- "client_session_id": "agent-fb0ddadc-b6d-bwdn54rvodvoqtklo76z",
- "agent_uuid": "fb0ddadc-b6d5-4fe7-9082-6e702cf1c5dd",
+ "client_session_id": "agent-f70d8be8-366-bbftq35ql5vjpwxlcifx",
+ "agent_uuid": "f70d8be8-3669-482b-936d-66a1b150eccf",
  "identity_resolution_outcome": "minted_force_new",
  "next_action": "Save agent_uuid and client_session_id, then check in with sync_state(response_text='...', complexity=0.5, client_session_id=...) as you work. Declared lineage for this fork is already recorded; do not redeclare it on the current session.",
- "state_summary": {"lineage_state": "provisional", "episode_fork_kind": "identity_lineage", "predecessor_uuid": "9e956a20-c2a9-4ad0-a8e9-e69244b4d030"}
+ "state_summary": {"lineage_state": "provisional", "episode_fork_kind": "identity_lineage", "predecessor_uuid": "2dca3de6-b0d8-4c5b-aa83-916bc1f62349"}
 }
 ```
 
