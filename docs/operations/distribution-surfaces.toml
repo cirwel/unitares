@@ -136,6 +136,16 @@ covered_by = [".github/workflows/publish-sdk.yml", ".github/workflows/sdk-releas
 probe = { type = "covered" }
 
 [[surface]]
+id = "mcp-registry"
+kind = "hosted-listing"
+title = "Official MCP Registry entry io.github.cirwel/unitares"
+where = "https://registry.modelcontextprotocol.io/v0/servers/io.github.cirwel%2Funitares/versions/latest"
+source = "server.json (metadata only, no package: the GHCR server image needs the Compose Postgres and Redis to start)"
+paths = ["server.json", ".github/workflows/publish-mcp-registry.yml"]
+refresh = "publish-mcp-registry.yml runs on every master push that touches PUBLISHED_VERSION or server.json, stamps the version from PUBLISHED_VERSION, and skips a version the registry already holds. workflow_dispatch republishes by hand."
+probe = { type = "http-ok", url = "https://registry.modelcontextprotocol.io/v0/servers/io.github.cirwel%2Funitares/versions/latest" }
+
+[[surface]]
 id = "ghcr-images"
 kind = "package"
 title = "GHCR server + lease-plane images"
@@ -198,7 +208,7 @@ title = "cirwel.org"
 where = "https://cirwel.org"
 source = "cirwel/cirwel-site (src/data/claims.json, components)"
 refresh = "Edit and deploy cirwel-site."
-content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json", "served-surfaces check: hero, share card, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
+content_checked_by = ["cirwel-site scripts/check-claims.py against src/data/claims.json (pages include /llms.txt, the plain-text summary for language models)", "served-surfaces check: hero, share card, retired phrasings", "launchd com.cirwel.site-refresh-stats (daily, operator Mac)"]
 probe = { type = "http-ok", url = "https://cirwel.org" }
 
 [[surface]]
@@ -244,11 +254,6 @@ probe = { type = "http-ok", url = "https://huggingface.co/api/datasets/hikewa/un
 # Checked and absent (2026-10-06), so the question has a recorded answer.
 # Move one up to [[surface]] in the change that lists us there.
 # --------------------------------------------------------------------------
-
-[[not_listed]]
-where = "MCP Registry (registry.modelcontextprotocol.io)"
-checked = "2026-10-06"
-note = "search=unitares returns 0 servers; no server.json in the repo"
 
 [[not_listed]]
 where = "Smithery, mcp.so, LobeHub, PulseMCP"

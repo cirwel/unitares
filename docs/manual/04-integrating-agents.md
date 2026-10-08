@@ -30,6 +30,10 @@ result = sync_state(
 )
 ```
 
+For a complete two-process session captured from a fresh install, with every
+call and the server's responses, see the
+[agent session walkthrough](../guides/AGENT_SESSION_WALKTHROUGH.md).
+
 ## 4.2 Identity rule
 
 > A UUID is a server record, not proof that the current process owns it.
