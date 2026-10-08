@@ -1,0 +1,32 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-08T04:43:16Z",
+  "verified_date": "2026-10-08",
+  "verifier": "claude-opus re-checked for PR #2695: phases.py moves the #425 strict write gate's exemption and refusal into identity_bootstrap helpers with an unchanged refusal payload, so governance-lifecycle's strict-refusal and server_inferred claims still hold; knowledge/handlers.py now anonymizes low/medium and refuses high/critical writes on an unexempt server-inferred binding, which the knowledge-graph skill now states",
+  "source_digests": {
+    "unitares/src/governance_monitor.py": "4d68d91bbe357638",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "86cf1303adea1b1b",
+    "unitares/src/mcp_handlers/identity/handlers.py": "9afd74351b757304",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "cbee09747cd6f0c7",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/tool_stability.py": "59d527f77fa1c58b",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "069f9f4db7b20bfa",
+    "unitares/src/mcp_handlers/updates/phases.py": "269a7abcfd29fa3c",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "2a604180b001fd9d"
+  },
+  "skill_digest": "9678afacb6a1a7b5",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/updates/phases.py": [
+      "4080d56cabc16cbd"
+    ]
+  }
+}

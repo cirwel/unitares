@@ -58,6 +58,7 @@ Operating guidance for individual subsystems lives next to the code as Skills, n
 
 User- and integrator-facing how-tos. Thin by design — most architecture lives in `UNIFIED_ARCHITECTURE.md` and the repo README.
 
+- [`AGENT_SESSION_WALKTHROUGH.md`](guides/AGENT_SESSION_WALKTHROUGH.md) — one task across two processes, every call with the server's captured response: search, start, check in, grade, exit cleanly, hand off
 - [`CODEX_START.md`](guides/CODEX_START.md) — human-facing Codex quickstart for direct repository work
 - [`START_HERE.md`](guides/START_HERE.md) — compatibility redirect to the current audience paths
 - [`TROUBLESHOOTING.md`](guides/TROUBLESHOOTING.md) — canonical symptom-and-recovery guide
