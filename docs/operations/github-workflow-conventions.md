@@ -115,9 +115,13 @@ veto by removing the label.
   or a reviewer that could not finish) no longer holds a labelled PR. A
   `review` of `action_required` still does: findings without dispositions, or
   a sensitive diff that has passed one model family but not two, park the PR
-  in the queue like any check waiting on action. Where no reviewer can run (a
-  cloud session, a disabled provider, the round cap spent), the PR body says
-  so, names the unavailable reviewer, and the PR proceeds. Earlier decision,
+  in the queue like any check waiting on action. Where no review ran (a cloud
+  session, a disabled provider, the round cap spent before any pass), the
+  check stays neutral: the PR body says so, names the unavailable reviewer,
+  and the PR proceeds. A sensitive diff with one passing family (`review.sh`
+  exit 3) is the other case: it stays parked until a second eligible family
+  passes or the operator grants a [waiver](#second-family-review); saying so
+  in the PR body does not release it. Earlier decision,
   2026-10-04: cloud sessions cannot run `review.sh`, and the gate had become
   the main thing stopping finished PRs; 2026-10-06 removed the last queue-side
   block.
