@@ -22,13 +22,15 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
-On a release checkout, Compose pulls the coordination lease plane as the image
-published from that release tag (`ghcr.io/cirwel/unitares-lease-plane`) instead
-of compiling Elixir on your machine. If that image cannot be pulled, for
-example for a release that predates it, Compose prints a pull warning and builds
-the lease plane from source. On a `master` checkout, run
-`docker compose up -d --wait --build`: without `--build` the lease plane would
-be the last release's image rather than the source you checked out.
+On a release checkout, Compose pulls the server, the coordination lease plane
+and the database as the images published from that release tag
+(`ghcr.io/cirwel/unitares`, `ghcr.io/cirwel/unitares-lease-plane` and
+`ghcr.io/cirwel/unitares-postgres`) instead of building them on your machine.
+If an image cannot be pulled, for example for a release that predates it,
+Compose prints a pull warning and builds that service from source. On a
+`master` checkout, run `docker compose up -d --wait --build`: without `--build`
+those services would be the last release's images rather than the source you
+checked out.
 
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
