@@ -19,6 +19,8 @@ DIGEST_A = "sha256:" + "a" * 64
 DIGEST_B = "sha256:" + "b" * 64
 DIGEST_C = "sha256:" + "c" * 64
 DIGEST_L = "sha256:" + "d" * 64
+DIGEST_P = "sha256:" + "e" * 64
+TAGGED_COMPOSE_STEP = "Require the tagged Compose file to pull this release's images"
 
 
 def _step(job: str, name: str) -> dict:
@@ -71,6 +73,8 @@ def _run_freshness(
     latest_digest: str = DIGEST_B,
     prior_latest: str = DIGEST_B,
     lease_plane_digest: str = DIGEST_L,
+    verified_postgres: str = "",
+    postgres_digest: str = DIGEST_P,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "freshness-bin"
     bin_dir.mkdir(exist_ok=True)
@@ -81,6 +85,8 @@ set -euo pipefail
 case "$*" in
   *"-lease-plane:latest"*) echo "the lease plane has no latest tag" >&2; exit 2 ;;
   *"-lease-plane:$RELEASE_TAG"*) digest="$FAKE_LEASE_PLANE_DIGEST" ;;
+  *"-postgres:latest"*) echo "the database has no latest tag" >&2; exit 2 ;;
+  *"-postgres:$RELEASE_TAG"*) digest="$FAKE_POSTGRES_DIGEST" ;;
   *":latest"*) digest="$FAKE_LATEST_DIGEST" ;;
   *":$RELEASE_TAG"*) digest="$FAKE_TAG_DIGEST" ;;
   *) echo "unexpected docker invocation: $*" >&2; exit 2 ;;
@@ -101,6 +107,9 @@ printf '{"digest":"%s"}\n' "$digest"
         "IMAGE_NAME": "cirwel/unitares",
         "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
         "LEASE_PLANE_DIGEST": DIGEST_L,
+        "POSTGRES_IMAGE_NAME": "cirwel/unitares-postgres",
+        "POSTGRES_DIGEST": verified_postgres,
+        "FAKE_POSTGRES_DIGEST": postgres_digest,
         "FAKE_TAG_DIGEST": tag_digest,
         "FAKE_LATEST_DIGEST": latest_digest,
         "FAKE_LEASE_PLANE_DIGEST": lease_plane_digest,
@@ -274,6 +283,59 @@ def test_freshness_guard_requires_lease_plane_evidence(tmp_path: Path):
     assert "LEASE_PLANE_DIGEST is required" in result.stderr
 
 
+def test_freshness_guard_checks_the_database_image_when_the_release_has_one(tmp_path: Path):
+    """A release whose Compose file pulls the database must still name the verified image."""
+    repo, source_sha = _freshness_repo(tmp_path)
+    for mode, latest in (("promote", DIGEST_B), ("pin", DIGEST_A)):
+        ok = _run_freshness(
+            tmp_path, repo, source_sha, mode=mode, latest_digest=latest,
+            verified_postgres=DIGEST_P,
+        )
+        assert ok.returncode == 0, (mode, ok.stderr)
+        moved = _run_freshness(
+            tmp_path, repo, source_sha, mode=mode, latest_digest=latest,
+            verified_postgres=DIGEST_P, postgres_digest=DIGEST_C,
+        )
+        assert moved.returncode != 0, mode
+        assert "database's v2.22.1 now resolves to" in moved.stderr
+
+
+def test_freshness_guard_skips_the_database_for_a_release_without_one(tmp_path: Path):
+    """Releases that build the database locally publish no image to re-read."""
+    repo, source_sha = _freshness_repo(tmp_path)
+    result = _run_freshness(
+        tmp_path, repo, source_sha, mode="promote", postgres_digest="unresolvable"
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_freshness_guard_requires_database_evidence_to_be_passed(tmp_path: Path):
+    repo, source_sha = _freshness_repo(tmp_path)
+    env = {
+        **os.environ,
+        "RELEASE_TAG": "v2.22.1",
+        "VERSION": "2.22.1",
+        "SOURCE_SHA": source_sha,
+        "DIGEST": DIGEST_A,
+        "REGISTRY": "ghcr.io",
+        "IMAGE_NAME": "cirwel/unitares",
+        "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+        "LEASE_PLANE_DIGEST": DIGEST_L,
+        "POSTGRES_IMAGE_NAME": "cirwel/unitares-postgres",
+    }
+    env.pop("POSTGRES_DIGEST", None)
+    result = subprocess.run(
+        [str(FRESHNESS_PATH), "pin"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "POSTGRES_DIGEST must be set" in result.stderr
+
+
 def test_freshness_guard_refuses_latest_drift_during_approval(tmp_path: Path):
     repo, source_sha = _freshness_repo(tmp_path)
     result = _run_freshness(
@@ -335,11 +397,43 @@ def test_lease_plane_is_pinned_by_version_never_tagged_latest():
     freshness = FRESHNESS_PATH.read_text()
     assert "LEASE_PLANE_IMAGE_NAME:latest" not in freshness
     names = [step.get("name") for step in JOBS["verify"]["steps"]]
-    tagged = "Require the tagged Compose file to pull this release's lease plane"
-    assert names.index(tagged) < names.index("Record release evidence")
+    assert names.index(TAGGED_COMPOSE_STEP) < names.index("Record release evidence")
 
 
-def _run_tagged_compose_check(tmp_path: Path, compose_tag: str) -> subprocess.CompletedProcess[str]:
+def test_database_is_verified_wherever_the_tagged_compose_pulls_it():
+    assert WORKFLOW["env"]["POSTGRES_IMAGE_NAME"] == "${{ github.repository }}-postgres"
+    assert JOBS["verify"]["outputs"]["postgres_digest"] == "${{ steps.postgres.outputs.digest }}"
+    names = [step.get("name") for step in JOBS["verify"]["steps"]]
+    # The tagged-Compose check decides what to verify, so it runs first.
+    for later in (
+        "Resolve the database digest, platforms, and SBOMs",
+        "Verify database provenance from the release tag",
+    ):
+        assert names.index(TAGGED_COMPOSE_STEP) < names.index(later)
+        assert _step("verify", later)["if"] == "steps.compose.outputs.postgres == 'true'"
+    image = _step("verify", "Resolve the database digest, platforms, and SBOMs")
+    assert image["id"] == "postgres"
+    assert '"$REGISTRY/$POSTGRES_IMAGE_NAME:$RELEASE_TAG"' in image["run"]
+    assert '"linux/amd64,linux/arm64"' in image["run"]
+    assert ".SBOM" in image["run"]
+    provenance = _step("verify", "Verify database provenance from the release tag")["run"]
+    assert '"oci://$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST"' in provenance
+    assert '--source-ref "refs/tags/$RELEASE_TAG"' in provenance
+    assert '--source-digest "$SOURCE_SHA"' in provenance
+    for job, name in (
+        ("promote", "Revalidate release evidence after approval"),
+        ("pin", "Refuse a stale pin re-run"),
+    ):
+        step = _step(job, name)
+        assert step["env"]["POSTGRES_DIGEST"] == "${{ needs.verify.outputs.postgres_digest }}"
+        assert '"oci://$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST"' in step["run"]
+    text = WORKFLOW_PATH.read_text()
+    assert "POSTGRES_IMAGE_NAME:latest" not in text
+
+
+def _run_tagged_compose_check(
+    tmp_path: Path, compose_tag: str, *, legacy: bool = False
+) -> tuple[subprocess.CompletedProcess[str], str]:
     repo = tmp_path / "compose-repo"
     subprocess.run(
         ["git", "init", "-b", "master", str(repo)], capture_output=True, text=True, check=True
@@ -348,20 +442,29 @@ def _run_tagged_compose_check(tmp_path: Path, compose_tag: str) -> subprocess.Co
     _git(repo, "config", "user.email", "release-test@example.com")
     compose = (ROOT / "docker-compose.yml").read_text()
     current = (ROOT / "VERSION").read_text().strip()
+    if legacy:
+        # A release cut before Compose pulled the server and database images.
+        for image in ("ghcr.io/cirwel/unitares-postgres", "ghcr.io/cirwel/unitares"):
+            compose = compose.replace(f"    image: {image}:v{current}\n", "")
     (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", f":{compose_tag}"))
     _git(repo, "add", "docker-compose.yml")
     _git(repo, "commit", "-m", "release")
     _git(repo, "tag", "v2.23.0")
     # A later master edit must not satisfy a check about the tagged tree.
     (repo / "docker-compose.yml").write_text(compose.replace(f":v{current}", ":v2.23.0"))
-    script = _step("verify", "Require the tagged Compose file to pull this release's lease plane")["run"]
+    script = _step("verify", TAGGED_COMPOSE_STEP)["run"]
+    output = tmp_path / "github-output"
+    output.write_text("")
     env = {
         **os.environ,
         "RELEASE_TAG": "v2.23.0",
         "REGISTRY": "ghcr.io",
+        "IMAGE_NAME": "cirwel/unitares",
         "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+        "POSTGRES_IMAGE_NAME": "cirwel/unitares-postgres",
+        "GITHUB_OUTPUT": str(output),
     }
-    return subprocess.run(
+    result = subprocess.run(
         ["bash", "-e", "-o", "pipefail", "-c", script],
         cwd=repo,
         capture_output=True,
@@ -369,13 +472,55 @@ def _run_tagged_compose_check(tmp_path: Path, compose_tag: str) -> subprocess.Co
         env=env,
         check=False,
     )
+    return result, output.read_text()
 
 
-def test_tagged_compose_must_pull_the_verified_lease_plane(tmp_path: Path):
-    assert _run_tagged_compose_check(tmp_path / "ok", "v2.23.0").returncode == 0
-    stale = _run_tagged_compose_check(tmp_path / "stale", "v2.22.1")
+def test_tagged_compose_must_pull_the_verified_images(tmp_path: Path):
+    ok, output = _run_tagged_compose_check(tmp_path / "ok", "v2.23.0")
+    assert ok.returncode == 0, ok.stderr
+    assert "postgres=true" in output
+    stale, _ = _run_tagged_compose_check(tmp_path / "stale", "v2.22.1")
     assert stale.returncode != 0
     assert "does not pin ghcr.io/cirwel/unitares-lease-plane:v2.23.0" in stale.stderr
+
+
+def test_tagged_compose_from_before_pulled_images_verifies_the_lease_plane_only(tmp_path: Path):
+    """v3.2.0 and earlier build the server and database locally; promotion must still work."""
+    ok, output = _run_tagged_compose_check(tmp_path / "legacy", "v2.23.0", legacy=True)
+    assert ok.returncode == 0, ok.stderr
+    assert "postgres=false" in output
+
+
+def test_tagged_compose_refuses_a_database_or_server_pin_from_another_release(tmp_path: Path):
+    for image in ("ghcr.io/cirwel/unitares-postgres", "ghcr.io/cirwel/unitares"):
+        repo_dir = tmp_path / image.rsplit("/", 1)[1]
+        result, _ = _run_tagged_compose_check(repo_dir, "v2.23.0")
+        assert result.returncode == 0, result.stderr
+        compose = (repo_dir / "compose-repo" / "docker-compose.yml")
+        tagged = _git(repo_dir / "compose-repo", "show", "v2.23.0:docker-compose.yml")
+        compose.write_text(tagged.replace(f"image: {image}:v2.23.0", f"image: {image}:v2.22.1") + "\n")
+        _git(repo_dir / "compose-repo", "commit", "-qam", "stale pin")
+        _git(repo_dir / "compose-repo", "tag", "-f", "v2.23.0")
+        script = _step("verify", TAGGED_COMPOSE_STEP)["run"]
+        env = {
+            **os.environ,
+            "RELEASE_TAG": "v2.23.0",
+            "REGISTRY": "ghcr.io",
+            "IMAGE_NAME": "cirwel/unitares",
+            "LEASE_PLANE_IMAGE_NAME": "cirwel/unitares-lease-plane",
+            "POSTGRES_IMAGE_NAME": "cirwel/unitares-postgres",
+            "GITHUB_OUTPUT": str(repo_dir / "out"),
+        }
+        stale = subprocess.run(
+            ["bash", "-e", "-o", "pipefail", "-c", script],
+            cwd=repo_dir / "compose-repo",
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+        assert stale.returncode != 0, image
+        assert f"does not pin {image}:v2.23.0" in stale.stderr
 
 
 def test_an_existing_pin_branch_stops_the_run_before_approval():
