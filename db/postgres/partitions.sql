@@ -565,19 +565,12 @@ BEGIN
         v_result := v_result || jsonb_build_object('r1_score_audit_next', v_msg);
     END IF;
 
-    -- Clean up old partitions
-    v_result := v_result || jsonb_build_object(
-        'events_dropped',
-        (SELECT jsonb_agg(partition_name) FROM audit.drop_old_events_partitions(180))
-    );
-    v_result := v_result || jsonb_build_object(
-        'tool_usage_dropped',
-        (SELECT jsonb_agg(partition_name) FROM audit.drop_old_tool_usage_partitions(90))
-    );
-    v_result := v_result || jsonb_build_object(
-        'outcome_events_dropped',
-        (SELECT jsonb_agg(partition_name) FROM audit.drop_old_outcome_partitions(365))
-    );
+    -- No retention here (migration 073). This function also runs on demand
+    -- whenever an outcome insert finds its partition missing, so it must not
+    -- delete anything. Check-ins (core.agent_state) and outcome_events are
+    -- kept; old audit.events and audit.tool_usage months are exported and
+    -- then dropped by scripts/ops/archive-audit-partitions.py. The drop and
+    -- cleanup functions remain for that script and for manual use.
 
     -- Clean up expired sessions
     v_result := v_result || jsonb_build_object(
@@ -585,23 +578,18 @@ BEGIN
         core.cleanup_expired_sessions()
     );
 
-    -- Clean up old agent_state rows (keep last 90 days)
-    v_result := v_result || jsonb_build_object(
-        'agent_state_cleaned',
-        core.cleanup_old_agent_state(90)
-    );
-
     RETURN v_result;
 END;
 $$ LANGUAGE plpgsql;
 
 COMMENT ON FUNCTION audit.partition_maintenance() IS
-    'Fills detected gaps, then ensures previous/current/next month partitions '
-    'exist for the monthly-partitioned audit parents and applies retention. '
+    'Fills detected gaps and ensures previous/current/next month partitions '
+    'exist for the monthly-partitioned audit parents. Deletes nothing except '
+    'expired sessions (migration 073); audit.events and audit.tool_usage '
+    'retention is archive-then-drop in scripts/ops/archive-audit-partitions.py. '
     'Month selection is pinned to UTC (migration 055) so it agrees with the '
     'UTC month bounds regardless of the session TimeZone; bare current_date '
     'must never be reintroduced here.';
-
 
 -- =============================================================================
 -- INITIAL PARTITION CREATION
