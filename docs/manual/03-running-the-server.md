@@ -116,7 +116,7 @@ curl -i https://gov.example.org/mcp/ -H 'Accept: text/event-stream'
 | `UNITARES_OAUTH_RESOURCE_URL` | Optional OAuth protected-resource URL override (defaults to `<issuer>/mcp`) |
 | `UNITARES_HTTP_API_TOKEN` / `UNITARES_OPERATOR_TOKENS` | Dashboard read / operator-write tokens |
 | `UNITARES_RESIDENTS` | The named resident agent set (config, not hardcoded) |
-| `UNITARES_MODEL_BASE_URL` / `UNITARES_MODEL_ID` | OpenAI-compatible base URL (`/v1` included) and model id for `consult` and the local reviewer; the older `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` are read until v3.3.0 ([Choose a model](02-install.md#choose-a-model-optional)) |
+| `UNITARES_MODEL_BASE_URL` / `UNITARES_MODEL_ID` | OpenAI-compatible base URL (`/v1` included) and model id for `consult` and the local reviewer; the older `UNITARES_OLLAMA_BASE`, `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` were removed in v3.3.0 and are ignored, so rename them ([Choose a model](02-install.md#choose-a-model-optional)) |
 
 ## 3.7 Run at login (macOS LaunchAgent)
 

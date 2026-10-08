@@ -1078,8 +1078,15 @@ def test_a_blackholed_first_address_does_not_starve_the_second(monkeypatch):
 ])
 def test_a_disagreement_warning_never_logs_endpoint_credentials(monkeypatch, caplog, secret_url):
     monkeypatch.setattr(env, "_warned_disagreements", set())
+    # The alias table is empty since v3.3.0; a stand-in row keeps the
+    # disagreement path (and its redaction) tested for the next rename.
+    monkeypatch.setattr(
+        env,
+        "SETTING_ALIASES",
+        (env.SettingAlias("UNITARES_TEST_OLD_BASE", env.MODEL_BASE_URL_ENV, "99.0.0"),),
+    )
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", secret_url)
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://other-host:11434/v1")
+    monkeypatch.setenv("UNITARES_TEST_OLD_BASE", "http://other-host:11434/v1")
     with caplog.at_level("WARNING"):
         env.model_base_url()
     assert "disagree" in caplog.text

@@ -64,7 +64,7 @@ from .host_adapter import (
 # Ollama endpoint — call_model, delegate_inference evidence hashing, and the
 # internal llm_delegation lane (dialectic synthetic reviewer, knowledge
 # synthesis, check-in coaching) — resolves the base URL, default model, and
-# availability through these, so UNITARES_OLLAMA_BASE / UNITARES_LLM_MODEL
+# availability through these, so UNITARES_MODEL_BASE_URL / UNITARES_MODEL_ID
 # cannot split the plane between two hosts or two defaults. The base URL and
 # default model are resolved in src/local_inference_env.py (re-exported here),
 # which the agent processes share, so the orchestrated reviewer and the local

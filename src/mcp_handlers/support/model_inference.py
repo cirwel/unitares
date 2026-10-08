@@ -701,7 +701,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             logger.debug("No agent_id available for Energy tracking (model inference still successful)")
         
         # Determine routing method by the resolved provider, not by substring
-        # matching on the URL — UNITARES_OLLAMA_BASE may point at a non-local
+        # matching on the URL — UNITARES_MODEL_BASE_URL may point at a non-local
         # host and the route is still Ollama.
         if provider == "hf":
             routed_via = "huggingface"
