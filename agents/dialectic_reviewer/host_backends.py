@@ -353,10 +353,14 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
     # Redirects are refused, not followed. The host list vetted base_url as
     # not the local floor; a 3xx to a loopback or trusted address would let the
     # floor answer with this host's approval authority. The OpenAI SDK's own
-    # client follows redirects, so it gets one that does not.
-    http_client = httpx.AsyncClient(follow_redirects=False, timeout=timeout_s)
+    # client follows redirects, so it gets one that does not. It is built inside
+    # the guarded block: construction reads proxy settings from the environment
+    # and can raise (an unsupported HTTPS_PROXY scheme is a ValueError), which
+    # must fail this host and let the list try the next one, not escape.
+    http_client: Optional[httpx.AsyncClient] = None
     started = time.monotonic()
     try:
+        http_client = httpx.AsyncClient(follow_redirects=False, timeout=timeout_s)
         from openai import AsyncOpenAI  # local import: only the runner needs it
 
         client = AsyncOpenAI(
@@ -391,7 +395,8 @@ async def call_openai_compat_backend(prompt: str) -> HostReviewResult:
             error=f"External reviewer call failed: {type(exc).__name__}",
         )
     finally:
-        await http_client.aclose()
+        if http_client is not None:
+            await http_client.aclose()
 
     latency_ms = int((time.monotonic() - started) * 1000)
     model_used = getattr(resp, "model", None) or model

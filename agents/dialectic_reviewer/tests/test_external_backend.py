@@ -276,6 +276,25 @@ def test_missing_openai_dependency_degrades_instead_of_raising():
     assert "call failed" in (result.error or "")
 
 
+def test_client_construction_failure_is_a_host_failure_not_an_exception():
+    """httpx reads proxy settings when the client is built, and an unsupported
+    HTTPS_PROXY scheme raises there. That must fail this host (so the list can
+    try the next one), not escape the backend."""
+
+    def _broken(**kwargs):
+        raise ValueError("Unknown scheme for proxy URL")
+
+    client = _FakeClient(_response('{"agrees": true, "reasoning": "ok"}'))
+    with patch.dict("os.environ", CONFIGURED, clear=True):
+        with _patch_openai(client), patch.object(hb.httpx, "AsyncClient", _broken):
+            result = asyncio.run(hb.call_openai_compat_backend("p"))
+
+    assert result.text is None
+    assert result.backend == "external"
+    assert result.error == "External reviewer call failed: ValueError"
+    assert client.seen == {}
+
+
 def test_client_is_built_to_refuse_redirects():
     """The host list vets the configured URL, not where a 3xx would send the
     call. The SDK's own client follows redirects, so the backend supplies one
