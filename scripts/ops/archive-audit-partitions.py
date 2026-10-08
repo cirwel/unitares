@@ -17,13 +17,20 @@ migration 055), evaluated in SQL so the two cannot disagree. Check-ins
 (operator decision, 2026-10-07).
 
 Per partition the archive is <dir>/<partition>.csv.gz plus one line in
-<dir>/manifest.jsonl (rows, bytes, sha256, bounds, source). The source is the
-cluster's system identifier, the database name and the partition's OID, so an
-archive is reused only for the very table it was taken from: never for a
-same-named partition in another or a recreated database. A drop rechecks the
-OID and the live row count inside the dropping transaction and refuses if
-either changed. An existing archive file that does not match is never
-overwritten.
+<dir>/manifest.jsonl (rows, bytes, sha256, bounds, source, fingerprint).
+
+- source: the cluster's system identifier, the database name and the
+  partition's OID, so an archive is reused only for the very table it was
+  taken from, never a same-named partition elsewhere or after a recreate.
+- fingerprint: the row count plus the sum of a 64-bit hash of every row's
+  text, computed in the same REPEATABLE READ snapshot the export is copied
+  from. A drop recomputes it under ACCESS EXCLUSIVE and refuses on any
+  difference, so a change between export and drop (an update, or a delete
+  plus an insert that keeps the count) stops the drop. Both sides pin the
+  settings that affect row text (TimeZone, DateStyle, IntervalStyle,
+  extra_float_digits).
+
+An existing archive file that does not match is never overwritten.
 Uses psql, like the other ops scripts; the DSN comes from
 GOVERNANCE_DATABASE_URL.
 """
@@ -64,6 +71,27 @@ ORDER BY 1
 """
 
 
+# Row text depends on these; export and drop must render rows identically.
+SESSION = """\\set QUIET on
+SET TimeZone = 'UTC';
+SET DateStyle = 'ISO, YMD';
+SET IntervalStyle = 'postgres';
+SET extra_float_digits = 1;
+"""
+FINGERPRINT = (
+    "SELECT count(*)::text || ' ' || coalesce(sum(hashtextextended(t::text, 0)), 0)::text"
+    " FROM audit.{name} t"
+)
+
+
+def psql_script(dsn: str, script: str) -> str:
+    out = subprocess.run(
+        ["psql", dsn, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+        input=SESSION + script, check=True, capture_output=True, text=True,
+    )
+    return out.stdout
+
+
 def psql(dsn: str, sql: str) -> str:
     out = subprocess.run(
         ["psql", dsn, "-X", "-At", "-F", "\t", "-v", "ON_ERROR_STOP=1", "-c", sql],
@@ -100,44 +128,53 @@ def sha256(path: Path) -> str:
 
 
 def export(dsn: str, name: str, out_dir: Path) -> dict:
-    """Write <name>.csv.gz, read it back, and return its manifest entry."""
-    rows = int(psql(dsn, f"SELECT count(*) FROM audit.{name}").strip())
+    """Write <name>.csv.gz and its fingerprint from one snapshot, read the file
+    back, and return its manifest entry."""
     final = out_dir / f"{name}.csv.gz"
     partial = final.with_suffix(".gz.partial")
-    with gzip.open(partial, "wb") as gz:
-        proc = subprocess.Popen(
-            ["psql", dsn, "-X", "-v", "ON_ERROR_STOP=1", "-c",
-             f"\\copy (SELECT * FROM audit.{name}) TO STDOUT WITH (FORMAT csv, HEADER)"],
-            stdout=subprocess.PIPE,
-        )
-        for chunk in iter(lambda: proc.stdout.read(1 << 20), b""):
-            gz.write(chunk)
-        if proc.wait() != 0:
-            partial.unlink(missing_ok=True)
-            raise RuntimeError(f"export of audit.{name} failed (psql exit {proc.returncode})")
+    if "'" in str(partial):
+        raise SystemExit(f"archive path may not contain a quote: {partial}")
+    try:
+        fingerprint = psql_script(dsn, f"""
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+{FINGERPRINT.format(name=name)};
+\\copy (SELECT * FROM audit.{name}) TO PROGRAM 'gzip -c > {partial}' WITH (FORMAT csv, HEADER)
+COMMIT;
+""").strip()
+    except subprocess.CalledProcessError as exc:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"export of audit.{name} failed: {exc.stderr.strip()}") from exc
+    rows = int(fingerprint.split(" ", 1)[0])
     archived = count_csv_records(partial)
     if archived != rows:
         partial.unlink(missing_ok=True)
-        raise RuntimeError(f"audit.{name}: archive holds {archived} rows, table {rows}")
+        raise RuntimeError(f"audit.{name}: archive holds {archived} rows, snapshot {rows}")
     partial.rename(final)
-    return {"partition": name, "rows": rows, "bytes": final.stat().st_size,
-            "sha256": sha256(final), "file": final.name}
+    return {"partition": name, "rows": rows, "fingerprint": fingerprint,
+            "bytes": final.stat().st_size, "sha256": sha256(final), "file": final.name}
 
 
-def drop(dsn: str, name: str, rows: int, oid: int) -> None:
-    psql(dsn, f"""
+def drop_script(name: str, oid: int, fingerprint: str) -> str:
+    if not re.fullmatch(r"\d+ -?\d+", fingerprint):
+        raise SystemExit(f"malformed fingerprint for audit.{name}: {fingerprint!r}")
+    return f"""
 BEGIN;
 LOCK TABLE audit.{name} IN ACCESS EXCLUSIVE MODE;
 DO $$ BEGIN
   IF 'audit.{name}'::regclass::oid <> {int(oid)} THEN
     RAISE EXCEPTION 'audit.{name} is not the table that was archived';
   END IF;
-  IF (SELECT count(*) FROM audit.{name}) <> {int(rows)} THEN
+  IF ({FINGERPRINT.format(name=name)}) <> '{fingerprint}' THEN
     RAISE EXCEPTION 'audit.{name} changed since it was archived';
   END IF;
 END $$;
 DROP TABLE audit.{name};
-COMMIT;""")
+COMMIT;
+"""
+
+
+def drop(dsn: str, name: str, oid: int, fingerprint: str) -> None:
+    psql_script(dsn, drop_script(name, oid, fingerprint))
 
 
 def archived_entry(out_dir: Path, name: str, source: dict, bound: str) -> dict | None:
@@ -157,12 +194,13 @@ def archived_entry(out_dir: Path, name: str, source: dict, bound: str) -> dict |
     for entry in reversed(entries):
         if entry["partition"] == name:
             if (entry.get("source") == source and entry.get("bound") == bound
-                    and entry["sha256"] == sha256(final)):
+                    and entry.get("fingerprint") and entry["sha256"] == sha256(final)):
                 return entry
             break
     raise SystemExit(
         f"{final} exists but is not an archive of this audit.{name} "
-        "(other source, other bounds or changed file); move it aside to re-archive"
+        "(other source, other bounds, no fingerprint or changed file); "
+        "move it aside to re-archive"
     )
 
 
@@ -209,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"already archived: audit.{name}  {entry['rows']} rows")
         if args.apply:
-            drop(dsn, name, entry["rows"], source["oid"])
+            drop(dsn, name, source["oid"], entry["fingerprint"])
             print(f"dropped: audit.{name}")
     return 0
 

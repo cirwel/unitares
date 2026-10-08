@@ -129,7 +129,7 @@ def _archive(archiver, tmp_path, source=SOURCE, bound=BOUND):
     path = tmp_path / "events_2026_03.csv.gz"
     _write_csv(path, [["1", "x"]])
     entry = {"partition": "events_2026_03", "rows": 1, "sha256": archiver.sha256(path),
-             "source": source, "bound": bound}
+             "source": source, "bound": bound, "fingerprint": "1 42"}
     (tmp_path / "manifest.jsonl").write_text(json.dumps(entry) + "\n")
     return path, entry
 
@@ -157,6 +157,39 @@ def test_an_archive_of_another_table_is_refused_not_trusted(archiver, tmp_path, 
     with pytest.raises(SystemExit):
         archiver.archived_entry(tmp_path, "events_2026_03", source, bound)
     assert path.read_bytes() == before  # left in place, not overwritten
+
+
+def test_an_archive_without_a_fingerprint_is_refused(archiver, tmp_path):
+    """Entries from before the fingerprint cannot prove the contents match."""
+    path, entry = _archive(archiver, tmp_path)
+    del entry["fingerprint"]
+    (tmp_path / "manifest.jsonl").write_text(json.dumps(entry) + "\n")
+    with pytest.raises(SystemExit):
+        archiver.archived_entry(tmp_path, "events_2026_03", SOURCE, BOUND)
+
+
+def test_the_drop_rechecks_oid_and_contents_under_the_lock(archiver):
+    sql = archiver.drop_script("events_2026_03", 28353, "245140 -3215627")
+    lock = sql.index("LOCK TABLE audit.events_2026_03 IN ACCESS EXCLUSIVE MODE")
+    assert lock < sql.index("::regclass::oid <> 28353") < sql.index("DROP TABLE")
+    assert lock < sql.index("<> '245140 -3215627'") < sql.index("DROP TABLE")
+    assert archiver.FINGERPRINT.format(name="events_2026_03") in sql
+
+
+def test_a_malformed_fingerprint_never_reaches_sql(archiver):
+    with pytest.raises(SystemExit):
+        archiver.drop_script("events_2026_03", 1, "1'; DROP TABLE x; --")
+
+
+def test_export_and_drop_render_rows_under_the_same_settings(archiver):
+    """The fingerprint is only comparable if both sessions render row text
+    identically; both go through psql_script, which prepends SESSION."""
+    for setting in ("TimeZone = 'UTC'", "DateStyle = 'ISO, YMD'",
+                    "IntervalStyle = 'postgres'", "extra_float_digits = 1"):
+        assert setting in archiver.SESSION
+    source = SCRIPT.read_text()
+    assert "REPEATABLE READ" in source
+    assert "input=SESSION + script" in source
 
 
 def test_a_changed_archive_file_is_refused(archiver, tmp_path):
@@ -198,21 +231,21 @@ def test_export_without_apply_never_drops(archiver, tmp_path, monkeypatch):
     def fake_export(dsn, name, out_dir):
         exported.append(name)
         _write_csv(out_dir / f"{name}.csv.gz", [["1", "x"]] * 3)
-        return {"partition": name, "rows": 3, "bytes": 1,
+        return {"partition": name, "rows": 3, "fingerprint": "3 99", "bytes": 1,
                 "sha256": archiver.sha256(out_dir / f"{name}.csv.gz"),
                 "file": f"{name}.csv.gz"}
 
     monkeypatch.setattr(archiver, "export", fake_export)
     dropped = []
     monkeypatch.setattr(archiver, "drop",
-                        lambda dsn, name, rows, oid: dropped.append((name, rows, oid)))
+                        lambda dsn, name, oid, fingerprint: dropped.append((name, oid, fingerprint)))
     assert archiver.main(["--export", "--archive-dir", str(tmp_path)]) == 0
     assert dropped == []
     # --apply reuses the archive just written (same source, same bound) and
-    # drops with the archived count and the OID it was taken from.
+    # drops against the OID and the fingerprint it was taken with.
     assert archiver.main(["--apply", "--archive-dir", str(tmp_path)]) == 0
     assert exported == ["events_2026_03"]
-    assert dropped == [("events_2026_03", 3, SOURCE["oid"])]
+    assert dropped == [("events_2026_03", SOURCE["oid"], "3 99")]
 
 
 def test_unexpected_partition_names_are_refused(archiver, tmp_path, monkeypatch):
