@@ -43,7 +43,7 @@ services:
   postgres-age:
     # Pulled from this release's tag like the lease plane below, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares-postgres:v3.2.0
+    image: ghcr.io/cirwel/unitares-postgres:v3.3.0
     pull_policy: missing
     build:
       context: db/postgres
@@ -123,7 +123,7 @@ services:
     # published, or no registry access), Compose builds from the block below
     # instead. On a master checkout the tag names a release, not your source:
     # run `docker compose up --build` to build what you have checked out.
-    image: ghcr.io/cirwel/unitares-lease-plane:v3.2.0
+    image: ghcr.io/cirwel/unitares-lease-plane:v3.3.0
     pull_policy: missing
     build:
       context: .
@@ -174,7 +174,7 @@ services:
   governance-mcp:
     # Pulled from this release's tag like the lease plane above, with the same
     # build fallback. `make version-bump` moves the tag; do not edit it by hand.
-    image: ghcr.io/cirwel/unitares:v3.2.0
+    image: ghcr.io/cirwel/unitares:v3.3.0
     pull_policy: missing
     build:
       context: .
