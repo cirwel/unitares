@@ -20,10 +20,14 @@ Callers get the form they need: ``model_base_url()`` for an OpenAI-compatible
 client, and ``ollama_base_url()`` (the base without its trailing ``/v1``) for
 Ollama's native routes and the reachability probe.
 
-Older names are read through ``SETTING_ALIASES`` until the release each entry
-names; ``tests/test_local_inference_env.py`` fails once ``VERSION`` reaches it.
-An empty value counts as unset, so a compose file that passes ``${VAR:-}``
-through keeps the default instead of producing a model of ``""``.
+After a rename, the older name is read through ``SETTING_ALIASES`` until the
+release its row names; ``tests/test_local_inference_env.py`` fails once
+``VERSION`` reaches it. The table is empty since v3.3.0, which removed
+``UNITARES_OLLAMA_BASE``, ``UNITARES_OLLAMA_BASE_URL`` and
+``UNITARES_LLM_MODEL``: nothing reads them, so an install that still sets only
+those gets the defaults. An empty value counts as unset, so a compose file that
+passes ``${VAR:-}`` through keeps the default instead of producing a model of
+``""``.
 
 Stdlib only and outside ``src/mcp_handlers``: the agent processes import this,
 and importing anything under ``src.mcp_handlers`` loads the whole handler
@@ -89,11 +93,11 @@ class SettingAlias:
 # VERSION reaches that release, so the release cut deletes the row or a
 # reviewed diff moves its date. Order matters within one new name: an earlier
 # row wins over a later one when both are set.
-SETTING_ALIASES: tuple[SettingAlias, ...] = (
-    SettingAlias("UNITARES_OLLAMA_BASE", MODEL_BASE_URL_ENV, "3.3.0"),
-    SettingAlias("UNITARES_OLLAMA_BASE_URL", MODEL_BASE_URL_ENV, "3.3.0"),
-    SettingAlias("UNITARES_LLM_MODEL", MODEL_ENV, "3.3.0"),
-)
+#
+# Empty since v3.3.0, which removed the three Ollama-era names
+# (UNITARES_OLLAMA_BASE, UNITARES_OLLAMA_BASE_URL -> UNITARES_MODEL_BASE_URL;
+# UNITARES_LLM_MODEL -> UNITARES_MODEL_ID). Kept for the next rename.
+SETTING_ALIASES: tuple[SettingAlias, ...] = ()
 
 # (winning name, its value, other name, its value) disagreements already
 # warned about, so a per-call resolver does not repeat the same warning on
@@ -180,32 +184,30 @@ def normalize_model_base_url(value: str | None) -> str:
 
 
 def _normalize_base_setting(name: str, value: str) -> str:
-    """The new name is already an OpenAI-compatible base; the older names are
-    Ollama roots (``/v1`` optional), so they get exactly one ``/v1``."""
-    if name == MODEL_BASE_URL_ENV:
-        return normalize_model_base_url(value)
-    root = normalize_ollama_base(value)
-    return root + "/v1" if root else ""
+    """Every name the base URL resolves through holds an OpenAI-compatible
+    base, read the same way. (The Ollama-root names that needed their own
+    ``/v1`` handling were removed in v3.3.0.)"""
+    return normalize_model_base_url(value)
 
 
 def model_base_url() -> str:
     """OpenAI-compatible base URL of the local model endpoint, including ``/v1``.
 
-    ``UNITARES_MODEL_BASE_URL``, else an alias from ``SETTING_ALIASES`` (the
-    older Ollama root names, with or without ``/v1``), else
-    ``http://localhost:11434/v1``.
+    ``UNITARES_MODEL_BASE_URL``, else an alias from ``SETTING_ALIASES`` (none
+    since v3.3.0), else ``http://localhost:11434/v1``.
     """
     return _resolve(MODEL_BASE_URL_ENV, _normalize_base_setting) or DEFAULT_MODEL_BASE_URL
 
 
 def _alias_ollama_base() -> str:
-    """``UNITARES_OLLAMA_BASE_URL`` reduced to its root; nothing here calls it.
+    """Always ``""``: the alias this once read was removed in v3.3.0, and
+    nothing calls it.
 
     Kept only because master gained it in #2495 on 2026-09-26 and the fleet
     push guard treats removing a symbol that new as a likely rebase revert.
-    ``SETTING_ALIASES`` is the real alias path. Delete after 2026-10-26.
+    Delete after 2026-10-26.
     """
-    return normalize_ollama_base(os.getenv("UNITARES_OLLAMA_BASE_URL", ""))
+    return ""
 
 
 def ollama_base_url() -> str:
@@ -223,7 +225,8 @@ def ollama_openai_base_url() -> str:
 
 
 def default_local_model() -> str:
-    """Model for local inference: ``UNITARES_MODEL_ID``, else its alias, else gemma4:latest."""
+    """Model for local inference: ``UNITARES_MODEL_ID``, else an alias from
+    ``SETTING_ALIASES`` (none since v3.3.0), else gemma4:latest."""
     return _resolve(MODEL_ENV, lambda _name, v: v.strip()) or DEFAULT_LOCAL_MODEL
 
 
@@ -350,6 +353,85 @@ def classify_endpoint(url: str | None = None) -> EndpointPrivacy:
         f"hostname {host} is not listed as local; add it to "
         f"{MODEL_LOCAL_HOSTS_ENV} if the server is yours",
     )
+
+
+def _endpoint_addresses(url: str) -> tuple[str, int | None, set[str]] | None:
+    """The host, port and every address ``url`` can reach: its IP literal,
+    numeric IPv4 shorthand the resolver accepts (``127.1``, ``2130706433``,
+    ``0x7f000001``) parsed as the C library parses it, and whatever the name
+    resolves to now. None for a URL that names no host or does not parse."""
+    import socket
+
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        port = parts.port
+    except ValueError:
+        return None
+    if not host:
+        return None
+    if port is None:
+        port = {"http": 80, "https": 443}.get(parts.scheme.lower())
+    addresses: set[str] = set()
+    addr = _ip_literal(host)
+    if addr is not None:
+        addresses.add(str(addr))
+    else:
+        try:
+            addresses.add(str(ipaddress.IPv4Address(socket.inet_aton(host))))
+        except (OSError, ValueError):
+            pass
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        except (OSError, UnicodeError):
+            infos = []
+        for info in infos:
+            try:
+                addresses.add(str(ipaddress.ip_address(info[4][0].split("%", 1)[0])))
+            except ValueError:
+                continue
+    return host, port, addresses
+
+
+def endpoint_reaches_local_address(url: str) -> bool:
+    """Whether ``url`` can reach the operator's own machine or network.
+
+    The opposite question from ``classify_endpoint``, and so the opposite
+    default. That classifier must never call an endpoint local that is not, so
+    it decides from the URL alone and treats anything unrecognized as
+    external. This one must never miss an endpoint that IS local, so it widens
+    every way a URL can name a local address: ``classify_endpoint``'s address
+    rules without the ``UNITARES_MODEL_PRIVACY`` override (trusted networks,
+    names listed as local), loopback and the unspecified address (``0.0.0.0``,
+    ``::``), numeric IPv4 shorthand, and any address the name resolves to now.
+    A failed lookup adds nothing; a URL that does not parse is not local here,
+    and callers that need it to parse must check that themselves.
+
+    The dialectic reviewer refuses to list an ``external`` host for which this
+    is true, because any of these can be the local floor under another name
+    (docs/proposals/active/dialectic-reviewer-hosts-v0.md 2.2).
+    """
+    found = _endpoint_addresses(url)
+    if found is None:
+        return False
+    host, _port, addresses = found
+    if host in _local_hostnames():
+        return True
+    for text in addresses:
+        addr = ipaddress.ip_address(text)
+        if addr.is_unspecified or addr.is_loopback or is_trusted_address(addr):
+            return True
+    return False
+
+
+def same_endpoint(url_a: str, url_b: str) -> bool:
+    """Whether two URLs reach the same server: the same port, and the same host
+    name or a shared address. For refusing a URL that is another setting's
+    endpoint under a different spelling; False when either does not parse."""
+    a, b = _endpoint_addresses(url_a), _endpoint_addresses(url_b)
+    if a is None or b is None or a[1] != b[1]:
+        return False
+    return a[0] == b[0] or bool(a[2] & b[2])
 
 
 _ssl_context_cache: tuple[tuple, object] | None = None

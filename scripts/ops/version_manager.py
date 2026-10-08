@@ -74,14 +74,18 @@ VERSION_REFERENCES = [
     ("CITATION.cff", [
         (r'version: "([\d.]+)"', r'version: "{version}"'),
     ]),
-    # The lease-plane image Compose pulls. It follows the SOURCE version, not
+    # The images Compose pulls. They follow the SOURCE version, not
     # PUBLISHED_VERSION: the file ships inside the release tag, so the tag's own
-    # tree must name the image built from that tag. A pin moved only after
+    # tree must name the images built from that tag. A pin moved only after
     # promotion would leave every tagged tree pointing at the previous release.
-    # Promote Release checks the tagged file names the image it verified.
+    # Promote Release checks the tagged file names the images it verified.
     ("docker-compose.yml", [
         (r'image: ghcr\.io/cirwel/unitares-lease-plane:v([\d.]+)',
          r'image: ghcr.io/cirwel/unitares-lease-plane:v{version}'),
+        (r'image: ghcr\.io/cirwel/unitares-postgres:v([\d.]+)',
+         r'image: ghcr.io/cirwel/unitares-postgres:v{version}'),
+        (r'image: ghcr\.io/cirwel/unitares:v([\d.]+)',
+         r'image: ghcr.io/cirwel/unitares:v{version}'),
     ]),
     ("docs/COMPATIBILITY.md", [
         (r'\| UNITARES server \| `v([\d.]+)`',

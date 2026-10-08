@@ -173,6 +173,19 @@ def test_operator_manual_keeps_coordination_validation_detail() -> None:
     assert "    pull_policy: missing\n" in lease_plane
     assert "    build:\n" in lease_plane
     assert ":latest" not in lease_plane
+    # The database and server follow the same pattern: pulled from the
+    # release's own tag, built from source when the tag is missing or on --build.
+    postgres = compose.split("\n  postgres-age:\n", 1)[1].split("\n  redis:\n", 1)[0]
+    server = compose.split("\n  governance-mcp:\n", 1)[1]
+    for block, image in (
+        (postgres, "ghcr.io/cirwel/unitares-postgres"),
+        (server, "ghcr.io/cirwel/unitares"),
+    ):
+        assert f"    image: {image}:v{_current_version()}\n" in block
+        assert "    pull_policy: missing\n" in block
+        assert "    build:\n" in block
+    assert ":latest" not in postgres
+    assert "unitares:latest" not in server
     assert '"127.0.0.1:${LEASE_PLANE_HOST_PORT:-8788}:8788"' in compose
     assert "LEASE_PLANE_BASE_URL: http://lease-plane:8788" in compose
     assert "UNITARES_LEASE_PLANE_URL: http://lease-plane:8788" in compose

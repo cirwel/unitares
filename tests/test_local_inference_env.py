@@ -9,9 +9,12 @@ works in either form, a trailing ``/v1`` is normalized so every caller gets the
 form it needs, and an empty value counts as unset.
 
 Since the endpoint became any OpenAI-compatible server, the documented names
-are ``UNITARES_MODEL_BASE_URL`` and ``UNITARES_MODEL_ID``; the Ollama names are
-rows in ``SETTING_ALIASES`` with a removal release, and the tests below also pin
-that table: precedence, quiet aliases, and the expiry the release cut enforces.
+are ``UNITARES_MODEL_BASE_URL`` and ``UNITARES_MODEL_ID``. The Ollama names
+(``UNITARES_OLLAMA_BASE``, ``UNITARES_OLLAMA_BASE_URL``, ``UNITARES_LLM_MODEL``)
+were rows in ``SETTING_ALIASES`` until v3.3.0 removed them; the tests below pin
+that they reach no reader any more, and pin the (now empty) table's mechanism
+with a stand-in row: precedence, quiet aliases, and the expiry the release cut
+enforces.
 """
 
 from __future__ import annotations
@@ -30,18 +33,42 @@ from src import local_inference_env as env
 
 REPO = Path(__file__).resolve().parent.parent
 
+# Removed in v3.3.0. Nothing may read them: an install that still sets only
+# these gets the defaults.
+REMOVED_NAMES = ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL")
+
+# Stand-in rows for the alias mechanism, which stays for the next rename.
+OLD_BASE = "UNITARES_TEST_OLD_BASE"
+OLDER_BASE = "UNITARES_TEST_OLDER_BASE"
+OLD_MODEL = "UNITARES_TEST_OLD_MODEL"
+
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for name in (
-        "UNITARES_OLLAMA_BASE",
-        "UNITARES_OLLAMA_BASE_URL",
-        "UNITARES_LLM_MODEL",
+        *REMOVED_NAMES,
+        OLD_BASE,
+        OLDER_BASE,
+        OLD_MODEL,
         *env.LOCAL_MODEL_SETTINGS,
         "UNITARES_TRUSTED_NETWORKS",
     ):
         monkeypatch.delenv(name, raising=False)
     env._warned_disagreements.clear()
+
+
+@pytest.fixture
+def stand_in_aliases(monkeypatch):
+    """A hypothetical rename, so the empty table's resolver path stays tested."""
+    monkeypatch.setattr(
+        env,
+        "SETTING_ALIASES",
+        (
+            env.SettingAlias(OLD_BASE, env.MODEL_BASE_URL_ENV, "99.0.0"),
+            env.SettingAlias(OLDER_BASE, env.MODEL_BASE_URL_ENV, "99.0.0"),
+            env.SettingAlias(OLD_MODEL, env.MODEL_ENV, "99.0.0"),
+        ),
+    )
 
 
 def _both(expected_root: str) -> None:
@@ -59,24 +86,35 @@ def test_neither_set_keeps_both_historical_defaults():
     ["http://gpu-box:11434", "http://gpu-box:11434/", "http://gpu-box:11434/v1", "http://gpu-box:11434/v1/"],
 )
 def test_documented_name_with_or_without_v1(monkeypatch, value):
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", value)
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", value)
     _both("http://gpu-box:11434")
 
 
 @pytest.mark.parametrize(
-    "value",
-    ["http://gpu-box:11434/v1", "http://gpu-box:11434", " http://gpu-box:11434/v1/ "],
+    "removed",
+    [
+        {"UNITARES_OLLAMA_BASE": "http://gpu-box:11434"},
+        {"UNITARES_OLLAMA_BASE_URL": "http://gpu-box:11434/v1"},
+        {"UNITARES_LLM_MODEL": "qwen3:8b"},
+    ],
 )
-def test_alias_alone_with_or_without_v1(monkeypatch, value):
-    # A deployment that set only the reviewer's old name keeps its host, and the
-    # agents still get exactly one /v1 (the old value, unchanged, for /v1 input).
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", value)
-    _both("http://gpu-box:11434")
+def test_removed_names_are_ignored(monkeypatch, caplog, removed):
+    """v3.3.0: an install still setting only an old name gets the defaults,
+    and nothing is logged about it."""
+    for name, value in removed.items():
+        monkeypatch.setenv(name, value)
+    with caplog.at_level(logging.DEBUG, logger=env.__name__):
+        _both("http://localhost:11434")
+        assert env.default_local_model() == "gemma4:latest"
+    assert caplog.records == []
+    assert env.old_names_in_use() == []
 
 
-def test_documented_name_wins_and_disagreement_is_logged_once(monkeypatch, caplog):
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://a:11434")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://b:11434/v1")
+def test_documented_name_wins_and_disagreement_is_logged_once(
+    monkeypatch, caplog, stand_in_aliases
+):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://a:11434/v1")
+    monkeypatch.setenv(OLD_BASE, "http://b:11434/v1")
     with caplog.at_level(logging.WARNING, logger=env.__name__):
         _both("http://a:11434")
         env.ollama_base_url()
@@ -84,33 +122,32 @@ def test_documented_name_wins_and_disagreement_is_logged_once(monkeypatch, caplo
     assert len(warnings) == 1
 
 
-def test_agreeing_names_do_not_warn(monkeypatch, caplog):
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://a:11434")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://a:11434/v1")
+def test_agreeing_names_do_not_warn(monkeypatch, caplog, stand_in_aliases):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://a:11434")
+    monkeypatch.setenv(OLD_BASE, "http://a:11434/v1")
     with caplog.at_level(logging.WARNING, logger=env.__name__):
         _both("http://a:11434")
     assert not [r for r in caplog.records if "disagree" in r.getMessage()]
 
 
-def test_empty_values_count_as_unset(monkeypatch):
+def test_empty_values_count_as_unset(monkeypatch, stand_in_aliases):
     # docker-compose passes ${VAR:-} through as "" — that must not become a base
     # URL of "/v1" or a model named "".
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "")
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "")
+    for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL_ID", OLD_BASE, OLDER_BASE, OLD_MODEL):
+        monkeypatch.setenv(name, "")
     _both("http://localhost:11434")
     assert env.default_local_model() == "gemma4:latest"
 
 
-def test_empty_documented_name_falls_through_to_alias(monkeypatch):
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://b:11434/v1")
+def test_empty_documented_name_falls_through_to_alias(monkeypatch, stand_in_aliases):
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "")
+    monkeypatch.setenv(OLD_BASE, "http://b:11434/v1")
     _both("http://b:11434")
 
 
 def test_model_override_and_default(monkeypatch):
     assert env.default_local_model() == "gemma4:latest"
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     assert env.default_local_model() == "qwen3:8b"
 
 
@@ -119,7 +156,7 @@ def test_server_registry_uses_the_shared_resolver(monkeypatch):
 
     assert inference_registry.ollama_base_url is env.ollama_base_url
     assert inference_registry.default_local_model is env.default_local_model
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://b:11500/v1")
+    monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://b:11500/v1")
     assert inference_registry._ollama_host_port() == ("b", 11500)
 
 
@@ -130,11 +167,16 @@ def test_server_registry_uses_the_shared_resolver(monkeypatch):
 @pytest.mark.parametrize(
     ("extra_env", "expected_url"),
     [
-        # Only the documented name: the agents now follow it (they used to stay
-        # on localhost), with exactly one /v1 for their OpenAI-compatible client.
-        ({"UNITARES_OLLAMA_BASE": "http://gpu-box:11434"}, "http://gpu-box:11434/v1"),
-        # Only the old name, as agent deployments set it: unchanged.
-        ({"UNITARES_OLLAMA_BASE_URL": "http://gpu-box:11434/v1"}, "http://gpu-box:11434/v1"),
+        # A bare root under the documented name gets exactly one /v1 for the
+        # agents' OpenAI-compatible client.
+        ({"UNITARES_MODEL_BASE_URL": "http://gpu-box:11434"}, "http://gpu-box:11434/v1"),
+        # Only the names removed in v3.3.0, as agent deployments set them: the
+        # agents ignore them and use the default.
+        (
+            {"UNITARES_OLLAMA_BASE": "http://gpu-box:11434",
+             "UNITARES_OLLAMA_BASE_URL": "http://gpu-box:11434/v1"},
+            "http://localhost:11434/v1",
+        ),
         # Neither: the agents' historical default.
         ({}, "http://localhost:11434/v1"),
         # The new name, for any OpenAI-compatible server, taken as given.
@@ -147,19 +189,17 @@ def test_agent_processes_resolve_the_same_host(module_name, extra_env, expected_
     child_env = {
         k: v
         for k, v in os.environ.items()
-        if k not in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL")
+        if k not in REMOVED_NAMES
         and k not in env.LOCAL_MODEL_SETTINGS
     }
     # Present-but-empty, not absent: the agent modules load the repo's .env on
     # import, and dotenv never overrides a variable that is already set, so an
     # operator's own .env cannot leak into the case. The resolver reads empty
     # as unset.
-    child_env["UNITARES_OLLAMA_BASE"] = ""
-    child_env["UNITARES_OLLAMA_BASE_URL"] = ""
-    for name in env.LOCAL_MODEL_SETTINGS:
+    for name in (*REMOVED_NAMES, *env.LOCAL_MODEL_SETTINGS):
         child_env[name] = ""
     child_env.update(extra_env)
-    child_env["UNITARES_LLM_MODEL"] = "qwen3:8b"
+    child_env["UNITARES_MODEL_ID"] = "qwen3:8b"
     out = subprocess.run(
         [
             sys.executable,
@@ -187,29 +227,41 @@ def _reviewer_spawn_env() -> dict:
 
 
 def test_orchestrator_forwards_the_servers_resolved_host_for_an_alias_only_server(
-    monkeypatch,
+    monkeypatch, stand_in_aliases
 ):
     """Alias-only server: the spawn env carries the server's resolved endpoint
     under the new name, so an older name the child inherits from the
     orchestrator daemon cannot outrank it and split the reviewer from the server."""
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://gpu:11434/v1")
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv(OLD_BASE, "http://gpu:11434/v1")
+    monkeypatch.setenv(OLD_MODEL, "qwen3:8b")
     spawn = _reviewer_spawn_env()
     assert spawn["UNITARES_MODEL_BASE_URL"] == "http://gpu:11434/v1"
     assert spawn["UNITARES_MODEL_ID"] == "qwen3:8b"
     # Only the names this release reads first; the old ones are not re-emitted.
-    for old in ("UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"):
+    for old in (OLD_BASE, OLDER_BASE, OLD_MODEL):
         assert old not in spawn
 
     # The child's env is the orchestrator's env overlaid with the spec env.
-    monkeypatch.delenv("UNITARES_OLLAMA_BASE_URL", raising=False)
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://orch-default:11434")
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "orch-default:1b")
+    monkeypatch.delenv(OLD_BASE, raising=False)
+    monkeypatch.setenv(OLDER_BASE, "http://orch-default:11434")
+    monkeypatch.setenv(OLD_MODEL, "orch-default:1b")
     for name in ("UNITARES_MODEL_BASE_URL", "UNITARES_MODEL_ID"):
         monkeypatch.setenv(name, spawn[name])
     assert env.model_base_url() == "http://gpu:11434/v1"
     assert env.ollama_base_url() == "http://gpu:11434"
     assert env.default_local_model() == "qwen3:8b"
+
+
+def test_orchestrator_does_not_forward_a_removed_name(monkeypatch):
+    """v3.3.0: a server still setting only the removed names forwards the
+    defaults, not the old values."""
+    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://gpu:11434/v1")
+    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    spawn = _reviewer_spawn_env()
+    assert spawn["UNITARES_MODEL_BASE_URL"] == "http://localhost:11434/v1"
+    assert spawn["UNITARES_MODEL_ID"] == "gemma4:latest"
+    for old in REMOVED_NAMES:
+        assert old not in spawn
 
 
 def test_orchestrator_forwards_the_new_name_when_several_are_set(monkeypatch):
@@ -241,12 +293,12 @@ def test_orchestrator_gets_the_servers_defaults_when_the_server_sets_none(
 # --- the alias table (docs/proposals/active/local-inference-one-endpoint-v0.md 2.1.1)
 
 
-def test_new_names_win_over_every_alias(monkeypatch):
+def test_new_names_win_over_every_alias(monkeypatch, stand_in_aliases):
     monkeypatch.setenv("UNITARES_MODEL_BASE_URL", "http://new:8000/v1")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://old:11434")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE_URL", "http://older:11434/v1")
+    monkeypatch.setenv(OLD_BASE, "http://old:11434")
+    monkeypatch.setenv(OLDER_BASE, "http://older:11434/v1")
     monkeypatch.setenv("UNITARES_MODEL_ID", "new-model")
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "old-model")
+    monkeypatch.setenv(OLD_MODEL, "old-model")
     assert env.model_base_url() == "http://new:8000/v1"
     assert env.ollama_base_url() == "http://new:8000"
     assert env.default_local_model() == "new-model"
@@ -269,9 +321,9 @@ def test_new_base_name_forms(monkeypatch, value, base):
     assert env.ollama_base_url() == re.sub(r"/v1$", "", base)
 
 
-def test_an_old_name_alone_is_quiet(monkeypatch, caplog):
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "http://gpu:11434")
+def test_an_old_name_alone_is_quiet(monkeypatch, caplog, stand_in_aliases):
+    monkeypatch.setenv(OLD_MODEL, "qwen3:8b")
+    monkeypatch.setenv(OLD_BASE, "http://gpu:11434")
     with caplog.at_level(logging.DEBUG, logger=env.__name__):
         for _ in range(3):
             assert env.default_local_model() == "qwen3:8b"
@@ -279,21 +331,21 @@ def test_an_old_name_alone_is_quiet(monkeypatch, caplog):
     assert caplog.records == []
 
 
-def test_new_and_old_disagreeing_warn_once(monkeypatch, caplog):
+def test_new_and_old_disagreeing_warn_once(monkeypatch, caplog, stand_in_aliases):
     monkeypatch.setenv("UNITARES_MODEL_ID", "a")
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "b")
+    monkeypatch.setenv(OLD_MODEL, "b")
     with caplog.at_level(logging.WARNING, logger=env.__name__):
         for _ in range(3):
             assert env.default_local_model() == "a"
     warnings = [r.getMessage() for r in caplog.records if "disagree" in r.getMessage()]
     assert len(warnings) == 1
-    assert "UNITARES_MODEL_ID" in warnings[0] and "UNITARES_LLM_MODEL" in warnings[0]
+    assert "UNITARES_MODEL_ID" in warnings[0] and OLD_MODEL in warnings[0]
 
 
 def test_every_old_name_has_one_row_and_a_new_name_that_is_a_setting():
     olds = [a.old for a in env.SETTING_ALIASES]
     assert len(olds) == len(set(olds))
-    assert set(olds) == {"UNITARES_OLLAMA_BASE", "UNITARES_OLLAMA_BASE_URL", "UNITARES_LLM_MODEL"}
+    assert not set(olds) & set(REMOVED_NAMES), "a name removed in v3.3.0 is back in the table"
     for alias in env.SETTING_ALIASES:
         assert alias.new in env.LOCAL_MODEL_SETTINGS
         assert re.fullmatch(r"\d+\.\d+\.\d+", alias.removed_in)
@@ -319,11 +371,11 @@ def test_no_alias_outlives_its_removal_release():
     assert not expired, "; ".join(expired)
 
 
-def test_old_names_in_use_reports_only_set_names(monkeypatch):
+def test_old_names_in_use_reports_only_set_names(monkeypatch, stand_in_aliases):
     assert env.old_names_in_use() == []
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "x")
-    monkeypatch.setenv("UNITARES_OLLAMA_BASE", "  ")
-    assert [a.old for a in env.old_names_in_use()] == ["UNITARES_LLM_MODEL"]
+    monkeypatch.setenv(OLD_MODEL, "x")
+    monkeypatch.setenv(OLD_BASE, "  ")
+    assert [a.old for a in env.old_names_in_use()] == [OLD_MODEL]
 
 
 # --- every setting reaches every process that reads it (2.1.2)
@@ -365,6 +417,28 @@ def test_every_local_model_setting_reaches_every_reader(monkeypatch):
         assert compose_env.get(name) == "${%s:-}" % name, f"{name} not mapped in docker-compose.yml"
         assert plist.count(f"<key>{name}</key>") == 1, f"{name} not in the LaunchAgent template exactly once"
         assert spawn.get(name) == values[name], f"{name} not forwarded to the orchestrated reviewer"
+    # Removed in v3.3.0: passing one through would make it look read.
+    for name in REMOVED_NAMES:
+        assert name not in compose_env, f"{name} is still mapped in docker-compose.yml"
+        assert f"<key>{name}</key>" not in plist, f"{name} is still a key in the LaunchAgent template"
+
+
+def test_no_python_reader_names_a_removed_setting():
+    """A string literal equal to a removed name (an ``os.getenv`` key, a
+    forwarding list entry) in the server, the agents or the client scripts
+    means something still reads it. Prose that mentions the name is fine."""
+    import ast
+
+    hits = []
+    for root in ("src", "agents", "governance_core", "config", "scripts/client"):
+        for path in sorted((REPO / root).rglob("*.py")):
+            if "tests" in path.relative_to(REPO).parts:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Constant) and node.value in REMOVED_NAMES:
+                    hits.append(f"{path.relative_to(REPO)}:{node.lineno} {node.value}")
+    assert not hits, hits
 
 
 def test_the_flag_catalog_lists_each_alias_with_its_removal_release():
@@ -373,3 +447,5 @@ def test_the_flag_catalog_lists_each_alias_with_its_removal_release():
         assert f"| `{alias.old}` | `''` | Alias of {alias.new} until v{alias.removed_in} |" in flags
     for name in env.LOCAL_MODEL_SETTINGS:
         assert f"| `{name}` |" in flags
+    for name in REMOVED_NAMES:
+        assert f"| `{name}` |" not in flags

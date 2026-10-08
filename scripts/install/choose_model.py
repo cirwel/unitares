@@ -38,10 +38,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 BASE_KEY = "UNITARES_MODEL_BASE_URL"
 MODEL_KEY = "UNITARES_MODEL_ID"
 # Names this script wrote before the endpoint became any OpenAI-compatible
-# server. They are aliases now (src/local_inference_env.py), so writing the new
-# names removes them rather than leaving two answers in .env.
+# server. Nothing reads them since v3.3.0 (src/local_inference_env.py), so
+# writing the new names removes them: an upgraded .env then holds one answer,
+# not a dead line that looks configured.
 OLD_KEYS = ("UNITARES_OLLAMA_BASE", "UNITARES_LLM_MODEL")
-# An older name this script never wrote: reported, not removed.
+# An older name this script never wrote, also unread since v3.3.0: reported,
+# not removed (--clear removes it).
 ALIAS_KEY = "UNITARES_OLLAMA_BASE_URL"
 # How this script reaches the model server by default (it runs on the host).
 # The server, in the container, reaches the same endpoint through
@@ -353,8 +355,8 @@ def main(argv: list[str] | None = None) -> int:
             env_file.write_text(
                 update_env_text(
                     env_file.read_text(),
-                    # Every name the resolver reads, aliases included, or an
-                    # old alias left behind becomes the endpoint again.
+                    # The older names too: none is read since v3.3.0, but a
+                    # line left behind reads as a configured model.
                     {BASE_KEY: None, MODEL_KEY: None, ALIAS_KEY: None, **owned_old},
                 )
             )
@@ -399,7 +401,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Replaced the older {' and '.join(replaced)} line(s) with these.")
     alias = read_env_value(before, ALIAS_KEY)
     if alias:
-        print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}. {BASE_KEY} takes precedence; remove the other line to avoid confusion.")
+        print(f"  Note: {env_file.name} also sets {ALIAS_KEY}={alias}, which UNITARES no longer reads (removed in v3.3.0); delete that line.")
     endpoint_local = print_privacy_note(server_base, composed_classifier_values(before))
 
     if args.no_rebuild:

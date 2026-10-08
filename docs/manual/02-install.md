@@ -22,13 +22,15 @@ docker compose up -d --wait
 make coordination-demo
 ```
 
-On a release checkout, Compose pulls the coordination lease plane as the image
-published from that release tag (`ghcr.io/cirwel/unitares-lease-plane`) instead
-of compiling Elixir on your machine. If that image cannot be pulled, for
-example for a release that predates it, Compose prints a pull warning and builds
-the lease plane from source. On a `master` checkout, run
-`docker compose up -d --wait --build`: without `--build` the lease plane would
-be the last release's image rather than the source you checked out.
+On a release checkout, Compose pulls the server, the coordination lease plane
+and the database as the images published from that release tag
+(`ghcr.io/cirwel/unitares`, `ghcr.io/cirwel/unitares-lease-plane` and
+`ghcr.io/cirwel/unitares-postgres`) instead of building them on your machine.
+If an image cannot be pulled, for example for a release that predates it,
+Compose prints a pull warning and builds that service from source. On a
+`master` checkout, run `docker compose up -d --wait --build`: without `--build`
+those services would be the last release's images rather than the source you
+checked out.
 
 After cloning, `docker compose up -d --wait` is the one-command install/start;
 there is no separate schema bootstrap. `make coordination-demo` verifies the
@@ -153,11 +155,15 @@ no `UNITARES_MODEL_BASE_URL` line, the checkout predates this step. If it has
 one but `consult` reports a missing dependency, the image predates it; rebuild
 with `--build`.
 
-Older names still work until v3.3.0: `UNITARES_OLLAMA_BASE` and
-`UNITARES_OLLAMA_BASE_URL` (an Ollama root URL, with or without `/v1`) for the
-endpoint, and `UNITARES_LLM_MODEL` for the model. The new name wins when both
-are set. `scripts/dev/unitares_doctor.py` prints one line for each older name
-it sees, with the name to use instead.
+The older names `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (for
+the endpoint) and `UNITARES_LLM_MODEL` (for the model) were removed in v3.3.0.
+Nothing reads them any more, and nothing warns about them: an install that
+still sets only those uses the defaults (Ollama on `localhost:11434` and
+`gemma4:latest`). Rename them to `UNITARES_MODEL_BASE_URL` and
+`UNITARES_MODEL_ID`, in `.env` or in the LaunchAgent plist. An Ollama root URL
+can be moved over as it is: a base with no path gets `/v1` added. Running
+`./scripts/unitares model` rewrites `.env` with the new names and removes the old
+`UNITARES_OLLAMA_BASE` and `UNITARES_LLM_MODEL` lines.
 
 **Where the prompt goes.** `consult` and `call_model` default to
 `privacy='local'`, and the in-process reviewer, check-in coaching and

@@ -182,6 +182,19 @@ def test_thesis_from_env_discards_malformed_or_non_object_pause_evidence(raw_sta
     assert Thesis.from_env(env).paused_agent_state == {}
 
 
+# A reply from a listed host that may approve (design 2.2): the provenance an
+# approval needs. The run() wiring tests below are about the protocol, not the
+# host list, so their model doubles answer as such a host.
+_LISTED_CODEX = {
+    "backend": "codex",
+    "host_id": "codex:host-adapter",
+    "models_used": [],
+    "warnings": [],
+    "vouched": True,
+    "vouched_by": "listed_host",
+}
+
+
 # --------------------------- SDK interface conformance --------------------------- #
 def _raw_client_methods_called() -> set[str]:
     """Every method the reviewer calls on a real GovernanceClient, read from its
@@ -350,9 +363,9 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
         ]
     )
 
-    async def fake_obtain(prompt):
+    async def fake_obtain(prompt, pinned=None):
         prompts.append(prompt)
-        return next(outputs)
+        return r.ReviewerText(next(outputs), _LISTED_CODEX, "codex")
 
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")
@@ -461,6 +474,11 @@ async def test_run_reconsiders_paused_response_with_same_reviewer(monkeypatch):
     syntheses = [call for call in dialectic_calls if call["action"] == "synthesis"]
     assert [call["agrees"] for call in syntheses] == [False, True]
     assert syntheses[1]["reasoning"] == "addressed"
+    # The reconsideration's own attribution rides the synthesis that decides
+    # the session (codex review of #2652).
+    stamp = syntheses[1]["reviewer_provenance"]
+    assert stamp["host_id"] == "codex:host-adapter" and stamp["vouched"] is True
+    assert stamp["reviewer_kind"] == "orchestrated"
     assert session.phase == DialecticPhase.RESOLVED
     assert session.synthesis_round == 3
     assert [message.agent_id for message in session.transcript[-3:]] == [
@@ -545,8 +563,8 @@ async def test_continuation_does_not_file_a_non_judgment_over_a_standing_rejecti
         ]
     )
 
-    async def fake_obtain(prompt):
-        return next(outputs)
+    async def fake_obtain(prompt, pinned=None):
+        return r.ReviewerText(next(outputs), _LISTED_CODEX, "codex")
 
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "1")

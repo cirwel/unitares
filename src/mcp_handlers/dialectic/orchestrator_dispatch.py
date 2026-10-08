@@ -42,6 +42,15 @@ _CLASSIFIER_SETTINGS = (
     "UNITARES_TRUSTED_NETWORKS",
 )
 
+# Settings that decide which reviewer hosts the child may call and where the
+# external one points: forwarded even when empty, so the daemon's own values
+# never stand in for this server's (literal names, also in reviewer_config).
+_HOST_SELECTION_SETTINGS = (
+    "UNITARES_DIALECTIC_REVIEWER_HOSTS",
+    "UNITARES_DIALECTIC_REVIEWER_HOST",
+    "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
+)
+
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -105,7 +114,52 @@ def _reviewer_max_runtime_ms() -> int:
         wait_s = DEFAULT_CONTINUATION_WAIT_S
     if wait_s < 0:
         wait_s = DEFAULT_CONTINUATION_WAIT_S
-    return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S) * 1000))
+    return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
+
+
+# Per-call timeout settings and defaults of the hosts a reviewer list may name,
+# by every name the list accepts. Must match agents.dialectic_reviewer.host_list
+# (HOSTS and its aliases); a contract test pins the two together without
+# importing the runner into the governance server.
+_HOST_TIMEOUTS = {
+    "codex": ("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", 420.0),
+    "claude": ("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", 420.0),
+    "antigravity": ("UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", 420.0),
+    "external": ("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", 180.0),
+}
+_HOST_TIMEOUT_ALIASES = {
+    "codex:host-adapter": "codex",
+    "claude:host-adapter": "claude",
+    "agy": "antigravity",
+    "antigravity:host-adapter": "antigravity",
+    "openai_compat": "external",
+    "openai-compatible": "external",
+    "gemini": "external",
+}
+
+
+def _extra_host_budget_s() -> float:
+    """Time for the listed hosts after the first.
+
+    REVIEWER_RUNTIME_GRACE_S covers one model call. When the first listed host
+    fails, each later one may take its full timeout before the verdict, so the
+    lifetime cap grows by those timeouts (design: docs/proposals/active/
+    dialectic-reviewer-hosts-v0.md 2.7). Unknown names add nothing: the
+    reviewer refuses such a list and calls no host.
+    """
+    raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
+    names = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    extra = 0.0
+    for name in names[1:3]:
+        key = _HOST_TIMEOUT_ALIASES.get(name, name)
+        if key not in _HOST_TIMEOUTS:
+            continue
+        env_name, default = _HOST_TIMEOUTS[key]
+        try:
+            extra += max(0.0, float(os.environ.get(env_name, default)))
+        except (TypeError, ValueError):
+            extra += default
+    return extra
 
 
 def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Optional[str]) -> Dict[str, Any]:
@@ -146,6 +200,9 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     # only the bounded reviewer configuration — never auth tokens. The Claude
     # CLI itself inherits operator subscription auth from the child runtime.
     reviewer_config = (
+        # The ordered host list (design: dialectic-reviewer-hosts-v0); the
+        # single-host name is read as a one-item list when it is unset.
+        "UNITARES_DIALECTIC_REVIEWER_HOSTS",
         "UNITARES_DIALECTIC_REVIEWER_HOST",
         "UNITARES_DIALECTIC_CLAUDE_MODEL",
         "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
@@ -194,6 +251,14 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         value = os.environ.get(name)
         if value:
             env[name] = value
+
+    # Host selection is forwarded even when empty, like the classifier
+    # settings below: the orchestrator merges this env over its own, so an
+    # omitted list would let the child keep the daemon's (say HOSTS=claude)
+    # and approve through a host this server never selected. Empty reads as
+    # unset in host_list.
+    for name in _HOST_SELECTION_SETTINGS:
+        env[name] = os.environ.get(name, "")
 
     # The classifier inputs are forwarded even when empty. The orchestrator
     # merges this env OVER its own inherited environment, so an omitted key

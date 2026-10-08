@@ -181,13 +181,15 @@ def _model_replies(monkeypatch):
         ]
     )
 
-    async def fake_obtain(prompt):
+    async def fake_obtain(prompt, pinned=None):
         calls.append(prompt)
-        # The selected host answered; no fallback fired.
-        r._record_reviewer_provenance(
-            {"backend": "codex", "host_id": "codex:host-adapter", "models_used": [], "warnings": []}
+        # A listed host that may approve answered; no fallback fired.
+        return r.ReviewerText(
+            next(outputs),
+            {"backend": "codex", "host_id": "codex:host-adapter", "models_used": [],
+             "warnings": [], "vouched": True, "vouched_by": "listed_host"},
+            "codex",
         )
-        return next(outputs)
 
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "2")

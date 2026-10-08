@@ -72,15 +72,23 @@ agent's family (2.3). It never adds a host, reorders the list, or chooses by
 cost, latency, quality or past verdicts. That is the line between this and a
 router, and a test asserts the order is never permuted.
 
-A host's attempt ends the list when its reply parses to a formed judgment:
-`parse_reviewer_verdict` returns `judgment_formed` with an explicit `agrees`.
-The check runs where the reply is parsed, not on raw text, because today a
-codex reply counts as text as soon as it holds any JSON object
-(`extract_last_json_object`). A reply that parses as an objection is an
-objection even when it was truncated, so inducing a truncation cannot shop for
-the next host. An error, a timeout, a nonzero exit or a reply with no formed
-judgment moves to the next host. After the list, the local endpoint runs as
-the floor.
+A host that does not answer moves the list to the next host: an error, a
+timeout, a nonzero exit, or an empty reply. A host that answers ends the list,
+whether or not its reply holds a verdict object. The adapters used to report a
+reply without a verdict object as no reply at all; they now return it as the
+host's answer (`HostReviewResult.unparsed_reply`, bounded to 8,000 characters
+and never persisted; codex's as `UnparsedReply`). Its reply goes through the existing parse and the one repair
+attempt, and the repair goes to the same host (2.2). A reply that does not
+parse is never traded for the next host's, because it may be an objection
+written in prose; a reply that parses as an objection is an objection even when
+it was truncated, so inducing a failure cannot shop for a host that approves.
+After the list, the local endpoint runs as the floor.
+
+*As built (step 1):* this replaces the first draft's rule, failing over on any
+reply without a formed judgment, which would have dropped a host's prose
+objection in favour of the next host's verdict. The first build still lost it
+through the adapters (codex review of #2652), which is why they now return the
+reply.
 
 `UNITARES_DIALECTIC_REVIEWER_HOST` stays as a one-item list, under the
 expiring-alias rule of `local-inference-one-endpoint-v0.md` section 2.1.1. The
@@ -96,8 +104,10 @@ declared separately, on the host's registry entry:
 - `egress_class`: what data the host may receive. Listing a host for
   dialectic review requires a class that admits agent work content.
 - `may_approve`: whether its verdict can release a paused agent. True on the
-  built-in codex, claude and antigravity entries; false on the local endpoint,
-  `ollama:local` and `hf:router`; false by default on declared hosts (2.4).
+  built-in codex, claude and antigravity entries, and on the single configured
+  `external` host, which could approve before lists existed; false on the
+  local endpoint, `ollama:local` and `hf:router`; false by default on declared
+  hosts (2.4).
 - `authorized_by`: the operator principal that declared or listed the host.
   One operator today; recorded so a later federation can tell whose trust
   released an agent.
@@ -112,23 +122,37 @@ set it; this one fails closed.
 **The floor cannot be listed.** Configuration load rejects a list that names
 the local endpoint, by endpoint identity rather than by name: `ollama:local`,
 or any host whose base URL resolves to `UNITARES_MODEL_BASE_URL` or its
-fallback. Otherwise listing it would launder the 07-02 rule.
+fallback. Otherwise listing it would launder the 07-02 rule. *As built:* an
+`external` host is refused when its address is local by the server's own
+rules, widened (`endpoint_reaches_local_address`: loopback in any spelling,
+numeric IPv4 shorthand such as `127.1`, the unspecified address, a trusted
+network, a name listed as local or resolving to a local address now), ignoring
+the privacy override, and when it is the configured local endpoint itself
+under any spelling (`same_endpoint`: the same port and a shared name or
+address), wherever that endpoint sits. A URL that does not parse makes the
+list invalid. A string comparison let `127.0.0.1` stand in for `localhost` (codex
+review of #2652). A strong model on the operator's own network is a declared
+host with an explicit `may_approve` (step 4).
 
 **With no list set, behavior is unchanged.** An install with no reviewer host
 runs the local model as its reviewer today, with no `fallback_from`, and that
-reviewer can approve. This design keeps that: the `vouched` rule applies when
-a list is set. Whether a no-list install's local reviewer should keep approval
+reviewer can approve. This design keeps that: with no list, the local
+reviewer's provenance records `vouched: true` with `vouched_by:
+"no_list_default"`, so the rule is uniform and the record says why. Whether a no-list install's local reviewer should keep approval
 authority is outside this design; section 6 records it.
 
 **Provenance is per call.** `obtain_reviewer_text` returns its provenance with
 its text instead of writing the process-global `_LAST_REVIEWER_PROVENANCE`
 (`reviewer.py:98`), so a later call that raises before recording cannot leave
-an earlier call's `vouched` in place.
+an earlier call's `vouched` in place. *As built:* the reply is a `str`
+subclass carrying its provenance and the key of the host that wrote it, and
+`run()` judges the filed verdict by the provenance of the reply it came from.
 
-**The answering host is pinned for the session.** The host whose judgment
+**The answering host is pinned for the session.** The host whose reply
 formed the first verdict answers every later call in the session: the
 continuation after a disagreement (`reviewer.py:1103`) and the repair call
-(`:1183`). If the pinned host fails on a later call, that call's result is
+(`:1183`). When the floor answered first, nothing is pinned until a listed host
+answers, since no listed host has objected yet. If the pinned host fails on a later call, that call's result is
 block-only; the list does not restart. Otherwise codex could object, time out
 on the continuation, and antigravity could approve a thesis codex never
 accepted.
@@ -211,7 +235,15 @@ Each verdict's provenance carries:
 - `independence`, `vouched` and `authorized_by`.
 
 These are recorded from step 1, before the rules that use them, because a
-verdict written without them can never be re-attributed.
+verdict written without them can never be re-attributed. Each reconsideration
+sends its own provenance with its synthesis, because the host that answered a
+later round can differ from the antithesis's. *As built:* step 1
+records the list, digest, attempts, `vouched`, `vouched_by`, `authorized_by`
+(`deployment_config`) and the answering host's declared family. The paused
+agent's family needs the dispatcher lookup of 2.3, so it is recorded from
+step 3. The server's own allowlist of persisted provenance keys
+(`dialectic/handlers.py` `_REVIEWER_PROVENANCE_KEYS`) gains the same keys, and a
+test pins the two lists together.
 
 ### 2.7 Time budget
 
@@ -259,9 +291,13 @@ approval is withheld, nor the dispatcher or `consultation.py`, where steps 1
 and 3 put the family and forwarding logic. The gate matches changed files
 against that list (`scripts/dev/review_gate.py:1054-1056`), so a step that
 touched only those files would need one family. Step 1 therefore adds
-`reviewer.py` and `src/mcp_handlers/dialectic/orchestrator_dispatch.py` to the
-policy, and step 3 adds `consultation.py`'s family code, so that every step
-touching the approval path needs reviews from two model families.
+`reviewer.py` and the new `host_list.py` to the policy, so that every step
+touching the approval path needs reviews from two model families. *As built:*
+the dispatcher and `consultation.py` stay off the list, under the policy's own
+boundary (operator decision 2026-09-27: large, often-edited files that only
+forward configuration or route are left out to keep review cost down); the
+approval decision itself is in `reviewer.py`. The policy is read from the base
+branch, so the new entries bind the PRs after step 1.
 
 ## 5. Evidence required before each step ships
 
