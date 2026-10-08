@@ -71,6 +71,15 @@ REVIEWER_NAME = "DialecticReviewer"
 # to answer, stranding the response without the reviewer identity that alone can
 # reconsider it.
 DEFAULT_CONTINUATION_WAIT_S = 3600.0
+# The wait above restarts each time the reviewer files a synthesis, because the
+# protocol's one-hour window is per synthesis response. Session 8973efacebb17e11
+# (2026-10-08): the paused agent answered the second objection 67 minutes after
+# the first, the reviewer's single one-hour budget had run out 7 minutes
+# earlier, and the concession sat unread until the 4h liveness reap marked the
+# session failed. Restarting is bounded: the whole continuation may not outlast
+# this many waits, and the orchestrator's lifetime cap is sized from the same
+# factor (orchestrator_dispatch.CONTINUATION_TOTAL_WAIT_FACTOR).
+CONTINUATION_TOTAL_WAIT_FACTOR = 3
 # A synthesis response is human/agent-paced, so sub-second visibility buys
 # nothing. Fifteen seconds bounds response pickup while avoiding 1,800 reads per
 # reviewer during an otherwise idle one-hour window.
@@ -1174,7 +1183,9 @@ async def continue_after_disagreement(
         DEFAULT_CONTINUATION_POLL_S,
         minimum=0.01,
     )
-    deadline = time.monotonic() + wait_s
+    started = time.monotonic()
+    deadline = started + wait_s
+    hard_deadline = started + wait_s * CONTINUATION_TOTAL_WAIT_FACTOR
     current_verdict = initial_verdict
     read_failures = 0
     # A formed verdict whose filing was cut off, with the paused response it
@@ -1320,6 +1331,8 @@ async def continue_after_disagreement(
         current_verdict = next_verdict
         if next_verdict.agrees:
             return current_verdict
+        # A filed objection opens a fresh response window for the paused agent.
+        deadline = min(time.monotonic() + wait_s, hard_deadline)
 
 
 async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str]) -> Verdict:

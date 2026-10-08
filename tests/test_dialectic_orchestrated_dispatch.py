@@ -45,7 +45,7 @@ def test_build_spec_marshals_thesis_and_paths():
     assert spec["cmd"] == sys.executable
     assert spec["args"] == ["-m", "agents.dialectic_reviewer"]
     assert od.DEFAULT_CONTINUATION_WAIT_S == reviewer_runner.DEFAULT_CONTINUATION_WAIT_S
-    assert spec["max_runtime_ms"] == 4_500_000  # 1h response + 15m setup/model grace
+    assert spec["max_runtime_ms"] == 11_700_000  # 3 x 1h response windows + 15m setup/model grace
     env = spec["env"]
     assert env["DIALECTIC_SESSION_ID"] == "sess-1"
     assert env["DIALECTIC_THESIS_ROOT_CAUSE"] == "rc"
@@ -146,13 +146,13 @@ def test_build_spec_forwards_continuation_timing_and_sizes_runtime(monkeypatch):
 
     assert spec["env"]["UNITARES_DIALECTIC_CONTINUATION_WAIT_S"] == "120"
     assert spec["env"]["UNITARES_DIALECTIC_CONTINUATION_POLL_S"] == "7.5"
-    assert spec["max_runtime_ms"] == 1_020_000  # 120s + 15m grace
+    assert spec["max_runtime_ms"] == 1_260_000  # 3 x 120s + 15m grace
 
 
 @pytest.mark.parametrize("value", ["bad", "-1"])
 def test_invalid_continuation_wait_cannot_disable_runtime_reaper(monkeypatch, value):
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", value)
-    assert od._reviewer_max_runtime_ms() == 4_500_000
+    assert od._reviewer_max_runtime_ms() == 11_700_000
 
 
 def test_build_spec_does_not_forward_beam_flag(monkeypatch):
@@ -336,7 +336,7 @@ def test_runtime_cap_grows_by_the_hosts_after_the_first(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", "120")
     monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
     base = od._reviewer_max_runtime_ms()
-    assert base == 1_020_000
+    assert base == 1_260_000
 
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,agy,external")
     assert od._reviewer_max_runtime_ms() == base + (420 + 180) * 1000
@@ -358,14 +358,18 @@ def test_a_nonfinite_host_timeout_counts_as_its_default(monkeypatch, value):
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,claude,external")
     monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", value)
     monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", value)
-    assert od._reviewer_max_runtime_ms() == 1_020_000 + (420 + 180) * 1000
+    assert od._reviewer_max_runtime_ms() == 1_260_000 + (420 + 180) * 1000
+
+
+def test_the_reaper_cap_matches_the_reviewers_total_wait_factor():
+    assert od.CONTINUATION_TOTAL_WAIT_FACTOR == reviewer_runner.CONTINUATION_TOTAL_WAIT_FACTOR
 
 
 @pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "1e308", "604801"])
 def test_a_nonfinite_continuation_wait_counts_as_its_default(monkeypatch, value):
     monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", value)
-    assert od._reviewer_max_runtime_ms() == 4_500_000
+    assert od._reviewer_max_runtime_ms() == 11_700_000
 
 
 @pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "1e308", "604801", "soon"])
@@ -400,7 +404,7 @@ def test_a_nonfinite_host_timeout_still_builds_the_spec(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,claude")
     monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", "1e309")
     spec = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)
-    assert spec["max_runtime_ms"] == 1_020_000 + 420 * 1000
+    assert spec["max_runtime_ms"] == 1_260_000 + 420 * 1000
 
 
 def test_host_timeouts_match_the_reviewers_host_table():

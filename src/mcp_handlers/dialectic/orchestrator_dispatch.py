@@ -61,6 +61,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # backends allow up to seven minutes), onboarding, and protocol writes before
 # the continuation clock starts.
 DEFAULT_CONTINUATION_WAIT_S = 3600.0
+# Must match agents.dialectic_reviewer.reviewer.CONTINUATION_TOTAL_WAIT_FACTOR:
+# the reviewer restarts its wait after each filed synthesis, so its lifetime is
+# up to this many waits and the reaper cap must outlast it.
+CONTINUATION_TOTAL_WAIT_FACTOR = 3
 REVIEWER_RUNTIME_GRACE_S = 900.0
 
 
@@ -112,7 +116,8 @@ def _reviewer_max_runtime_ms() -> int:
     wait_s = _seconds(raw, DEFAULT_CONTINUATION_WAIT_S)
     if wait_s < 0:
         wait_s = DEFAULT_CONTINUATION_WAIT_S
-    return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
+    total_s = wait_s * CONTINUATION_TOTAL_WAIT_FACTOR
+    return max(1, int((total_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
 
 
 # The largest seconds override honoured; anything above it counts as unset.
