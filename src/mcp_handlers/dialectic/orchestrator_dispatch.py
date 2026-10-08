@@ -123,11 +123,14 @@ def _seconds(raw: Any, default: float) -> float:
     ``_build_spec``, before the dispatcher's exception handler, so it would
     escape instead of degrading to the in-process reviewer.
     """
+    return float(raw) if _is_finite_number(raw) else default
+
+
+def _is_finite_number(raw: Any) -> bool:
     try:
-        value = float(raw)
+        return math.isfinite(float(raw))
     except (TypeError, ValueError):
-        return default
-    return value if math.isfinite(value) else default
+        return False
 
 
 # Per-call timeout settings and defaults of the hosts a reviewer list may name,
@@ -261,6 +264,16 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         value = os.environ.get(name)
         if value:
             env[name] = value
+    # A seconds value that is not a finite number reaches the child as its
+    # default, not as given: the reviewer passes its host timeout to
+    # asyncio.wait_for, so `inf` would let a hung host hold it until the reaper,
+    # never reaching the next host. Replaced rather than dropped, since the
+    # child also inherits the orchestrator daemon's own environment.
+    seconds_settings = dict(_HOST_TIMEOUTS.values())
+    seconds_settings["UNITARES_DIALECTIC_CONTINUATION_WAIT_S"] = DEFAULT_CONTINUATION_WAIT_S
+    for name, default in seconds_settings.items():
+        if name in env and not _is_finite_number(env[name]):
+            env[name] = f"{default:g}"
 
     # Host selection is forwarded even when empty, like the classifier
     # settings below: the orchestrator merges this env over its own, so an

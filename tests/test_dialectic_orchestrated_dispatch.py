@@ -368,6 +368,31 @@ def test_a_nonfinite_continuation_wait_counts_as_its_default(monkeypatch, value)
     assert od._reviewer_max_runtime_ms() == 4_500_000
 
 
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "soon"])
+def test_a_nonfinite_seconds_value_is_forwarded_as_its_default(monkeypatch, value):
+    # The reviewer hands its host timeout to asyncio.wait_for, so forwarding
+    # `inf` would leave a hung host holding it until the reaper (codex review of #2713).
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,external")
+    for name in ("UNITARES_DIALECTIC_CODEX_TIMEOUT_S", "UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S",
+                 "UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S", "UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S",
+                 "UNITARES_DIALECTIC_CONTINUATION_WAIT_S"):
+        monkeypatch.setenv(name, value)
+    env = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)["env"]
+    assert env["UNITARES_DIALECTIC_CODEX_TIMEOUT_S"] == "420"
+    assert env["UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S"] == "420"
+    assert env["UNITARES_DIALECTIC_ANTIGRAVITY_TIMEOUT_S"] == "420"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S"] == "180"
+    assert env["UNITARES_DIALECTIC_CONTINUATION_WAIT_S"] == "3600"
+
+
+def test_a_finite_seconds_value_is_forwarded_as_given(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", "95.5")
+    monkeypatch.setenv("UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S", "-1")
+    env = od._build_spec("s", {"root_cause": "", "proposed_conditions": [], "reasoning": ""}, None)["env"]
+    assert env["UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S"] == "95.5"
+    assert env["UNITARES_DIALECTIC_EXTERNAL_TIMEOUT_S"] == "-1"
+
+
 def test_a_nonfinite_host_timeout_still_builds_the_spec(monkeypatch):
     # _build_spec runs before the dispatcher's exception handler; it must not
     # raise, so a dispatch failure still degrades to None (in-process review).
