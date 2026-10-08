@@ -11,7 +11,7 @@ is gated on ``RUN_INTEGRATION_STACK=1`` *and* on reachability preflights. With n
 stack up it skips cleanly (pytest skip, never error), keeping the default fast
 gate green. Bring a stack up with either::
 
-    docker compose up -d --wait
+    docker compose up -d --wait --build   # --build: test this checkout, not the last release
     # or a bare-metal server: python src/mcp_server.py --port 8767
 
 then run::

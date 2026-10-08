@@ -24,12 +24,14 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
-# One release publishes two images from the same tag, with the same hardening:
-# the server (`ghcr.io/<repo>`) and the Compose lease plane
-# (`ghcr.io/<repo>-lease-plane`). docker-compose.yml pins the lease plane to the
-# verified release and falls back to building it from source when the tag cannot
-# be pulled. Neither image gets `latest` here; Promote Release moves only the
-# server's `latest` and pins the lease plane by version.
+# One release publishes three images from the same tag, with the same
+# hardening: the server (`ghcr.io/<repo>`), the Compose lease plane
+# (`ghcr.io/<repo>-lease-plane`) and the Compose database
+# (`ghcr.io/<repo>-postgres`: Postgres with Apache AGE and pgvector).
+# docker-compose.yml pins all three to the verified release and falls back to
+# building each from source when its tag cannot be pulled. No image gets
+# `latest` here; Promote Release moves only the server's `latest` and pins the
+# others by version.
 jobs:
   publish:
     name: publish (${{ matrix.artifact }})
@@ -38,17 +40,23 @@ jobs:
       (github.event_name == 'workflow_dispatch' && startsWith(inputs.ref, 'v'))
     runs-on: ubuntu-latest
     strategy:
-      # The server image must not be cancelled by a lease-plane failure, or the
-      # reverse; Promote Release refuses a release unless both verify.
+      # One image's failure must not cancel another's build; Promote Release
+      # refuses a release unless every image its Compose file pulls verifies.
       fail-fast: false
       matrix:
         include:
           - artifact: server
             image_suffix: ""
+            context: .
             dockerfile: Dockerfile
           - artifact: lease-plane
             image_suffix: -lease-plane
+            context: .
             dockerfile: elixir/lease_plane/Dockerfile
+          - artifact: postgres
+            image_suffix: -postgres
+            context: db/postgres
+            dockerfile: db/postgres/Dockerfile.age-vector
     steps:
       - name: Resolve release tag
         id: release
@@ -84,23 +92,57 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # docker-compose.yml pulls the lease plane by its release tag, not by
-      # digest, and Promote Release verified the digest that tag named. A
-      # re-dispatch for a release that already has the image must not replace
+      # docker-compose.yml pulls every image by its release tag, not by
+      # digest, and Promote Release verified the digest each tag named. A
+      # re-dispatch for a release that already has an image must not replace
       # it with a rebuild (a moved base image or package gives a new digest).
-      # The server image is unaffected: installs never pull it by tag.
-      - name: Keep a published lease-plane tag immutable
+      # A digest under the tag without this workflow's provenance fails the
+      # run instead. An interrupted publication cannot be told apart from an
+      # out-of-band push, and attesting a digest this run did not build would
+      # let Promote Release accept an image of unknown origin. Only when this
+      # repository holds no attestation for the digest at all is deleting it
+      # the remedy; a check that could not run is never reported that way.
+      - name: Keep a published release tag immutable
         id: existing
-        if: matrix.artifact == 'lease-plane'
         env:
-          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}:${{ steps.release.outputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          REPOSITORY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
         run: |
-          if docker buildx imagetools inspect "$IMAGE" >/dev/null 2>&1; then
-            echo "::notice::$IMAGE is already published; not rebuilding or replacing it."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          image="$REPOSITORY:$RELEASE_TAG"
+          if ! digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' 2>/dev/null | jq -r .digest) \
+            || [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # The same binding Promote Release verifies: this workflow, this tag,
+          # this tag's source commit.
+          if ! verify_out=$(gh attestation verify "oci://$REPOSITORY@$digest" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$(git rev-parse HEAD)" 2>&1); then
+            echo "$verify_out"
+            # A failed verify is either no provenance or a check that could
+            # not run. Ask for the attestations directly before naming a remedy.
+            if ! count=$(gh api "repos/$GITHUB_REPOSITORY/attestations/$digest" --jq '.attestations | length' 2>&1); then
+              if [[ "$count" == *"HTTP 404"* ]]; then
+                count=0
+              else
+                echo "$count"
+                echo "::error::Could not check provenance for $image ($digest). Re-run this workflow; do not delete the image."
+                exit 1
+              fi
+            fi
+            if [ "$count" = "0" ]; then
+              echo "::error::$image ($digest) has no attestation from this repository, so this workflow did not publish it, and this run will not attest it. Delete that package version in GHCR, then re-dispatch to rebuild and attest it."
+            else
+              echo "::error::$image ($digest) has $count attestation(s) in this repository, but none verifies as publish-container.yml at $RELEASE_TAG and this tag's commit (output above). Investigate before deleting anything; if the check itself failed, re-run."
+            fi
+            exit 1
+          fi
+          echo "::notice::$image is already published; not rebuilding or replacing it."
+          echo "skip=true" >> "$GITHUB_OUTPUT"
 
       - name: Generate image metadata
         id: meta
@@ -116,7 +158,7 @@ jobs:
         if: steps.existing.outputs.skip != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
@@ -126,7 +168,7 @@ jobs:
           # its /health reports a build_sha instead of "unknown". The server
           # Dockerfile declares no such argument, so it gets none.
           build-args: ${{ matrix.artifact == 'lease-plane' && format('UNITARES_BUILD_SHA={0}', steps.source.outputs.sha) || '' }}
-          # Separate cache scopes so the two builds do not evict each other.
+          # Separate cache scopes so the builds do not evict each other.
           cache-from: type=gha,scope=${{ matrix.artifact }}
           cache-to: type=gha,mode=max,scope=${{ matrix.artifact }}
           sbom: true
@@ -137,5 +179,6 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
         with:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}${{ matrix.image_suffix }}
+          # Only what this run built and pushed.
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
