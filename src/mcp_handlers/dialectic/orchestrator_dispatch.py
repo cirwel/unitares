@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -108,13 +109,25 @@ def _reviewer_max_runtime_ms() -> int:
         "UNITARES_DIALECTIC_CONTINUATION_WAIT_S",
         "3600",
     )
-    try:
-        wait_s = float(raw)
-    except (TypeError, ValueError):
-        wait_s = DEFAULT_CONTINUATION_WAIT_S
+    wait_s = _seconds(raw, DEFAULT_CONTINUATION_WAIT_S)
     if wait_s < 0:
         wait_s = DEFAULT_CONTINUATION_WAIT_S
     return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
+
+
+def _seconds(raw: Any, default: float) -> float:
+    """A seconds override, or ``default`` when it is not a finite number.
+
+    ``float()`` accepts ``inf``, ``nan`` and ``1e309`` (which overflows to
+    infinity), and ``int()`` of the resulting cap raises. That raise happens in
+    ``_build_spec``, before the dispatcher's exception handler, so it would
+    escape instead of degrading to the in-process reviewer.
+    """
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) else default
 
 
 # Per-call timeout settings and defaults of the hosts a reviewer list may name,
@@ -155,10 +168,7 @@ def _extra_host_budget_s() -> float:
         if key not in _HOST_TIMEOUTS:
             continue
         env_name, default = _HOST_TIMEOUTS[key]
-        try:
-            extra += max(0.0, float(os.environ.get(env_name, default)))
-        except (TypeError, ValueError):
-            extra += default
+        extra += max(0.0, _seconds(os.environ.get(env_name, default), default))
     return extra
 
 
