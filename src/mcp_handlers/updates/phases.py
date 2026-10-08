@@ -25,8 +25,6 @@ from src.perf_monitor import record_ms as _perf_record_ms
 from .context import UpdateContext
 from ..identity_bootstrap import (
     CALLER_PROOF_REMEDY as _CALLER_PROOF_REMEDY,
-    DO_NOT_MINT_A_SECOND_IDENTITY as _DO_NOT_MINT_A_SECOND_IDENTITY,
-    REBIND_RETURNS_SESSION_ID as _REBIND_RETURNS_SESSION_ID,
 )
 from ..utils import error_response
 from ..support.tool_hints import (
@@ -375,32 +373,13 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
     if ctx.identity_assurance.get("proof_origin") == "server_inferred":
         from src.mcp_handlers.identity_bootstrap import is_strict_identity_required
         if is_strict_identity_required():
-            exempt = False
-            try:
-                from src.db import get_db
-                exempt = await get_db().is_substrate_earned(ctx.agent_uuid)
-                if not exempt:
-                    # is_substrate_earned only checks core.substrate_claims +
-                    # the (currently sentinel-only) Pi allowlist. Also honor the
-                    # canonical substrate-earned pattern so embodied/anchored
-                    # residents that resolve by fingerprint are not refused —
-                    # notably Lumen (embodied tag, NOT in substrate_claims).
-                    # Key on `dedicated_substrate` (embodied, or persistent+
-                    # anchor) — the "real substrate-anchored resident" signal —
-                    # not full R4 `earned`, so a freshly-restarted resident that
-                    # hasn't yet met the tenure bar is still exempt. Fail-closed.
-                    from src.identity.substrate import verify_substrate_earned
-                    result = await verify_substrate_earned(ctx.agent_uuid)
-                    exempt = bool(
-                        (result.get("conditions") or {}).get("dedicated_substrate")
-                    )
-            except Exception:
-                exempt = False
-            if not exempt:
-                from src.mcp_handlers.identity_bootstrap import (
-                    _DEFAULT_REFUSAL_DO_NOT,
-                    strict_identity_refusal_payload,
-                )
+            # One exemption predicate, shared with the knowledge write path
+            # (identity_bootstrap.is_exempt_from_caller_proof). Fail-closed.
+            from src.mcp_handlers.identity_bootstrap import (
+                inferred_binding_refusal_payload,
+                is_exempt_from_caller_proof,
+            )
+            if not await is_exempt_from_caller_proof(ctx.agent_uuid):
                 from src.mcp_handlers.response_base import success_response
                 logger.info(
                     "[PROCESS_UPDATE] STRICT refusing write: identity resolved via "
@@ -409,77 +388,10 @@ async def resolve_identity_and_guards(ctx: UpdateContext) -> Optional[Sequence[T
                     ctx.identity_assurance.get("proof_origin"),
                     (ctx.agent_uuid or "")[:12],
                 )
-                # Every route below leads back to this process's own
-                # client_session_id. continuity_token appears only inside
-                # identity(), and a mint is offered last and only to a process
-                # that never called start_session (the pin can resolve a
-                # never-onboarded process to a co-located sibling); nothing
-                # here tells a process that already holds an identity to mint
-                # a second one.
-                return success_response(strict_identity_refusal_payload(
+                return success_response(inferred_binding_refusal_payload(
                     "process_agent_update",
-                    hint=(
-                        "This write resolved an identity by transport inference "
-                        "(fingerprint, pin or injected session id), not by a proof "
-                        "you supplied, and under strict identity a write needs a "
-                        "caller-proven binding. To retry, "
-                        + _CALLER_PROOF_REMEDY
-                        + "."
-                    ),
-                    next_step=(
-                        "Retry this write (sync_state / process_agent_update) "
-                        "with the client_session_id your start_session() "
-                        "returned. If you no longer have it, "
-                        + _REBIND_RETURNS_SESSION_ID
-                        + "; a retry without it is refused "
-                        "again. If this process never called start_session, "
-                        "call start_session(force_new=true) first."
-                    ),
-                    safe_options=[
-                        {
-                            "action": "retry_with_client_session_id",
-                            "call": "sync_state(..., client_session_id=<from start_session>)",
-                            "when": (
-                                "This process called start_session and still has "
-                                "the client_session_id it returned."
-                            ),
-                        },
-                        {
-                            "action": "rebind_then_retry",
-                            "call": (
-                                "identity(agent_uuid=<uuid>, continuity_token=<token>, "
-                                "resume=true), then sync_state(..., "
-                                "client_session_id=<from identity>)"
-                            ),
-                            "when": (
-                                "You lost the client_session_id but still hold this "
-                                "live process's uuid and continuity_token."
-                            ),
-                        },
-                        {
-                            "action": "stay_read_only",
-                            "call": "check_working_state(client_session_id=<from start_session>)",
-                            "when": (
-                                "You want to read state without writing. Without the "
-                                "client_session_id the read returns unbound."
-                            ),
-                        },
-                        {
-                            "action": "start_session_first",
-                            "call": (
-                                "start_session(force_new=true), then sync_state(..., "
-                                "client_session_id=<from start_session>)"
-                            ),
-                            "when": (
-                                "This process never called start_session; the "
-                                "identity this write resolved to is not its own."
-                            ),
-                        },
-                    ],
-                    do_not=[
-                        *_DEFAULT_REFUSAL_DO_NOT,
-                        _DO_NOT_MINT_A_SECOND_IDENTITY,
-                    ],
+                    retry_call="sync_state",
+                    retry_label="sync_state / process_agent_update",
                     identity_assurance=ctx.identity_assurance,
                     surface_context={
                         "transport_surface": "process_agent_update",

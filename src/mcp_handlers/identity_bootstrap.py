@@ -699,3 +699,137 @@ def strict_identity_refusal_payload(
     if surface_context is not None:
         payload["surface_context"] = dict(surface_context)
     return payload
+
+
+# ─── #425 server-inferred binding: one exemption, one refusal ───
+#
+# The strict check-in gate (updates/phases.py) and the knowledge write path
+# (knowledge/handlers.py) both decide what to do with a write whose identity
+# was server-inferred: a fingerprint pin, a transport-injected
+# client_session_id or a context fallback, not a proof the caller supplied.
+# Both ask the same question of the RESOLVED agent and both refuse the same
+# way, so the rule lives here once.
+
+
+async def is_exempt_from_caller_proof(agent_uuid: str | None) -> bool:
+    """True when the resolved agent may write on a server-inferred binding.
+
+    Substrate-earned residents legitimately re-resolve a stable identity
+    across restarts by fingerprint or sticky binding, so their binding is
+    server-inferred by design. The exemption is keyed on the RESOLVED agent,
+    so a colliding sibling cannot borrow it.
+
+    Exempt when ``is_substrate_earned`` holds (core.substrate_claims and the
+    Pi allowlist), or when ``verify_substrate_earned`` reports
+    ``dedicated_substrate`` (embodied, or persistent plus an anchor). The
+    second covers embodied or anchored residents that are not in
+    substrate_claims, and keys on ``dedicated_substrate`` rather than full
+    R4 ``earned`` so a freshly restarted resident that has not yet met the
+    tenure bar is still exempt.
+
+    Fails closed: no agent, or any error from either predicate, is not exempt.
+    """
+    if not agent_uuid:
+        return False
+    try:
+        from src.db import get_db
+
+        if await get_db().is_substrate_earned(agent_uuid):
+            return True
+        from src.identity.substrate import verify_substrate_earned
+
+        result = await verify_substrate_earned(agent_uuid)
+        return bool((result.get("conditions") or {}).get("dedicated_substrate"))
+    except Exception:
+        return False
+
+
+def inferred_binding_refusal_payload(
+    tool_name: str,
+    *,
+    retry_call: str,
+    retry_label: str,
+    identity_assurance: dict | None,
+    surface_context: dict | None,
+    read_only_option: dict | None = None,
+) -> dict:
+    """The strict refusal for a write that resolved by transport inference.
+
+    ``retry_call`` is the tool the caller retries with its client_session_id
+    (``sync_state`` for a check-in) and ``retry_label`` how the next step
+    names the write. ``read_only_option`` replaces the default read-only
+    route (a state read, which suits a check-in) with the read that suits the
+    refused tool. Every route leads back to this process's own
+    client_session_id. continuity_token appears only inside identity(), and a
+    mint is offered last and only to a process that never called
+    start_session (the pin can resolve a never-onboarded process to a
+    co-located sibling); nothing here tells a process that already holds an
+    identity to mint a second one.
+    """
+    return strict_identity_refusal_payload(
+        tool_name,
+        hint=(
+            "This write resolved an identity by transport inference "
+            "(fingerprint, pin or injected session id), not by a proof "
+            "you supplied, and under strict identity a write needs a "
+            "caller-proven binding. To retry, "
+            + CALLER_PROOF_REMEDY
+            + "."
+        ),
+        next_step=(
+            f"Retry this write ({retry_label}) "
+            "with the client_session_id your start_session() "
+            "returned. If you no longer have it, "
+            + REBIND_RETURNS_SESSION_ID
+            + "; a retry without it is refused "
+            "again. If this process never called start_session, "
+            "call start_session(force_new=true) first."
+        ),
+        safe_options=[
+            {
+                "action": "retry_with_client_session_id",
+                "call": f"{retry_call}(..., client_session_id=<from start_session>)",
+                "when": (
+                    "This process called start_session and still has "
+                    "the client_session_id it returned."
+                ),
+            },
+            {
+                "action": "rebind_then_retry",
+                "call": (
+                    "identity(agent_uuid=<uuid>, continuity_token=<token>, "
+                    f"resume=true), then {retry_call}(..., "
+                    "client_session_id=<from identity>)"
+                ),
+                "when": (
+                    "You lost the client_session_id but still hold this "
+                    "live process's uuid and continuity_token."
+                ),
+            },
+            dict(read_only_option) if read_only_option is not None else {
+                "action": "stay_read_only",
+                "call": "check_working_state(client_session_id=<from start_session>)",
+                "when": (
+                    "You want to read state without writing. Without the "
+                    "client_session_id the read returns unbound."
+                ),
+            },
+            {
+                "action": "start_session_first",
+                "call": (
+                    f"start_session(force_new=true), then {retry_call}(..., "
+                    "client_session_id=<from start_session>)"
+                ),
+                "when": (
+                    "This process never called start_session; the "
+                    "identity this write resolved to is not its own."
+                ),
+            },
+        ],
+        do_not=[
+            *_DEFAULT_REFUSAL_DO_NOT,
+            DO_NOT_MINT_A_SECOND_IDENTITY,
+        ],
+        identity_assurance=identity_assurance,
+        surface_context=surface_context,
+    )
