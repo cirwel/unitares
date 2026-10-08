@@ -350,7 +350,7 @@ def test_runtime_cap_grows_by_the_hosts_after_the_first(monkeypatch):
     assert od._reviewer_max_runtime_ms() == base + 420 * 1000
 
 
-@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309"])
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "1e308", "604801"])
 def test_a_nonfinite_host_timeout_counts_as_its_default(monkeypatch, value):
     # float() accepts these; int() of an infinite cap raised OverflowError in
     # _build_spec, before the dispatcher's handler (codex review of #2652).
@@ -361,14 +361,14 @@ def test_a_nonfinite_host_timeout_counts_as_its_default(monkeypatch, value):
     assert od._reviewer_max_runtime_ms() == 1_020_000 + (420 + 180) * 1000
 
 
-@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309"])
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "1e308", "604801"])
 def test_a_nonfinite_continuation_wait_counts_as_its_default(monkeypatch, value):
     monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
     monkeypatch.setenv("UNITARES_DIALECTIC_CONTINUATION_WAIT_S", value)
     assert od._reviewer_max_runtime_ms() == 4_500_000
 
 
-@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "soon"])
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "1e309", "1e308", "604801", "soon"])
 def test_a_nonfinite_seconds_value_is_forwarded_as_its_default(monkeypatch, value):
     # The reviewer hands its host timeout to asyncio.wait_for, so forwarding
     # `inf` would leave a hung host holding it until the reaper (codex review of #2713).

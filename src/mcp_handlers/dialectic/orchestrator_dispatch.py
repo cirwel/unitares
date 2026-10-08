@@ -115,22 +115,32 @@ def _reviewer_max_runtime_ms() -> int:
     return max(1, int((wait_s + REVIEWER_RUNTIME_GRACE_S + _extra_host_budget_s()) * 1000))
 
 
+# The largest seconds override honoured; anything above it counts as unset.
+# Seven days is far past any real reviewer timeout or continuation window, and
+# keeps the summed cap (three hosts plus the wait, in milliseconds) finite.
+MAX_SECONDS_OVERRIDE = 7 * 24 * 3600.0
+
+
 def _seconds(raw: Any, default: float) -> float:
-    """A seconds override, or ``default`` when it is not a finite number.
+    """A seconds override, or ``default`` when it is not a usable number.
 
     ``float()`` accepts ``inf``, ``nan`` and ``1e309`` (which overflows to
-    infinity), and ``int()`` of the resulting cap raises. That raise happens in
-    ``_build_spec``, before the dispatcher's exception handler, so it would
-    escape instead of degrading to the in-process reviewer.
+    infinity), and a finite ``1e308`` still overflows once the cap is summed
+    and scaled to milliseconds; ``int()`` of that cap raises. That raise
+    happens in ``_build_spec``, before the dispatcher's exception handler, so
+    it would escape instead of degrading to the in-process reviewer.
     """
-    return float(raw) if _is_finite_number(raw) else default
+    return float(raw) if _is_usable_seconds(raw) else default
 
 
-def _is_finite_number(raw: Any) -> bool:
+def _is_usable_seconds(raw: Any) -> bool:
+    """Finite and no larger than MAX_SECONDS_OVERRIDE (negatives pass: each
+    reader gives a negative its own meaning)."""
     try:
-        return math.isfinite(float(raw))
+        value = float(raw)
     except (TypeError, ValueError):
         return False
+    return math.isfinite(value) and value <= MAX_SECONDS_OVERRIDE
 
 
 # Per-call timeout settings and defaults of the hosts a reviewer list may name,
@@ -264,15 +274,15 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
         value = os.environ.get(name)
         if value:
             env[name] = value
-    # A seconds value that is not a finite number reaches the child as its
-    # default, not as given: the reviewer passes its host timeout to
+    # A seconds value that is not usable (_is_usable_seconds) reaches the child
+    # as its default, not as given: the reviewer passes its host timeout to
     # asyncio.wait_for, so `inf` would let a hung host hold it until the reaper,
     # never reaching the next host. Replaced rather than dropped, since the
     # child also inherits the orchestrator daemon's own environment.
     seconds_settings = dict(_HOST_TIMEOUTS.values())
     seconds_settings["UNITARES_DIALECTIC_CONTINUATION_WAIT_S"] = DEFAULT_CONTINUATION_WAIT_S
     for name, default in seconds_settings.items():
-        if name in env and not _is_finite_number(env[name]):
+        if name in env and not _is_usable_seconds(env[name]):
             env[name] = f"{default:g}"
 
     # Host selection is forwarded even when empty, like the classifier
