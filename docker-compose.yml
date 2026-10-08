@@ -251,6 +251,17 @@ services:
       # empty, the server generates one at startup and keeps it on the
       # governance-data volume (data/secrets/). Set it only to share a key.
       UNITARES_CONTINUITY_TOKEN_SECRET: ${UNITARES_CONTINUITY_TOKEN_SECRET:-}
+      # Identity posture (v3.3.0 made strict the default). Empty keeps the
+      # default: strict identity on, credentials only on proof, legacy
+      # agent-{uuid12} session ids refused. The opt-outs the upgrade notes
+      # name are set in .env and reach the server only through these lines:
+      # STRICT_IDENTITY_REQUIRED=false with UNITARES_IDENTITY_STRICT=log
+      # restores the permissive behavior; UNITARES_CREDENTIAL_ISSUANCE=log and
+      # UNITARES_LEGACY_SESSION_IDS=log observe before enforcing.
+      STRICT_IDENTITY_REQUIRED: ${STRICT_IDENTITY_REQUIRED:-}
+      UNITARES_IDENTITY_STRICT: ${UNITARES_IDENTITY_STRICT:-}
+      UNITARES_CREDENTIAL_ISSUANCE: ${UNITARES_CREDENTIAL_ISSUANCE:-}
+      UNITARES_LEGACY_SESSION_IDS: ${UNITARES_LEGACY_SESSION_IDS:-}
       # Known development-only Ed25519 seed + issuer for the loopback quickstart.
       # Replace the seed and choose a globally stable issuer on shared installs.
       UNITARES_LEASE_ATTESTATION_SIGNING_KEY: ${UNITARES_LEASE_ATTESTATION_SIGNING_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8}

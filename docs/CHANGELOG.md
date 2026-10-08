@@ -39,10 +39,15 @@ the detail.
   ownership. Clients that mint with `start_session(force_new=true)` and pass
   back `client_session_id` are unaffected. To find clients that depend on the
   old behavior, set `UNITARES_CREDENTIAL_ISSUANCE=log`; to restore it, set
-  `STRICT_IDENTITY_REQUIRED=false` and `UNITARES_IDENTITY_STRICT=log`.
+  `STRICT_IDENTITY_REQUIRED=false` and `UNITARES_IDENTITY_STRICT=log`. On
+  Docker Compose, set these in `.env`: `docker-compose.yml` now passes them,
+  and `UNITARES_LEGACY_SESSION_IDS`, into the server container (before this
+  release `.env` alone did not reach it).
 - **Legacy session ids are refused.** A presented `agent-{uuid12}` id is
   refused by default; ids the server issues now carry a keyed tag. Clients that
-  store and echo the returned id pick up the new one at their next onboard. Set
+  store and echo the returned id pick up the new one at their next
+  `start_session(force_new=true)` or continuity-token resume; presenting a
+  stored legacy id is refused rather than converted. Set
   `UNITARES_LEGACY_SESSION_IDS=log` during a migration to accept and log legacy
   ids. The lease plane digests session ids too, so upgrade it with the server.
 - **The continuity key is the server's own.** If
@@ -55,6 +60,17 @@ the detail.
 - **Cross-agent lifecycle needs an operator token.** Archiving, deleting or
   resuming another agent now needs `X-Unitares-Operator` with a token from
   `UNITARES_OPERATOR_TOKENS`; give one to any operator script that does this.
+- **Dialectic reviewer approvals fail closed.** With
+  `UNITARES_DIALECTIC_REVIEWER_HOST` or `UNITARES_DIALECTIC_REVIEWER_HOSTS`
+  set, the local model may now object but not approve, an unknown host name
+  makes the list invalid (no host is called), and an `external` host at a
+  local, loopback or trusted-network address is refused. A paused agent that a
+  local fallback used to clear can now stay paused: check the configured hosts
+  after upgrading.
+- **Binding diagnostics show references.** `list_process_bindings` rows carry
+  `client_session_ref` instead of `client_session_id`, and
+  `admin(action='debug_context')` reports session references and only the size
+  of the uuid prefix index. Update any script that read the old field.
 - **Old model setting names are gone.** `UNITARES_OLLAMA_BASE`,
   `UNITARES_OLLAMA_BASE_URL` and `UNITARES_LLM_MODEL` are ignored without a
   warning. Rename them to `UNITARES_MODEL_BASE_URL` and `UNITARES_MODEL_ID`

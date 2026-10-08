@@ -428,3 +428,18 @@ def test_compose_hardening_stays_applied() -> None:
     admin_overlay = _read("docker-compose.admin.yml")
     assert '"127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"' in admin_overlay
     assert '"127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"' in admin_overlay
+
+
+def test_compose_passes_the_identity_opt_outs_to_the_server() -> None:
+    # The v3.3.0 upgrade notes tell a Compose operator to set these in .env;
+    # .env alone does not reach the container, so each needs a passthrough on
+    # the governance-mcp service, with an empty default that keeps strict on.
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    server = compose.split("\n  governance-mcp:\n", 1)[1]
+    for name in (
+        "STRICT_IDENTITY_REQUIRED",
+        "UNITARES_IDENTITY_STRICT",
+        "UNITARES_CREDENTIAL_ISSUANCE",
+        "UNITARES_LEGACY_SESSION_IDS",
+    ):
+        assert f"      {name}: ${{{name}:-}}\n" in server, name
