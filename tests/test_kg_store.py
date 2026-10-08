@@ -605,60 +605,6 @@ class TestStoreKnowledgeGraph:
         assert discovery.agent_id.startswith("anonkg_")
 
     @pytest.mark.asyncio
-    async def test_store_server_inferred_binding_uses_anonymous_writer(
-        self, patch_common, registered_agent
-    ):
-        """A fingerprint-matched caller must not write as the agent it matched.
-
-        Dispatch injects the inferred agent into agent_id, so the write would
-        otherwise land on whichever agent last shared the caller's IP and
-        User-Agent (cold-start install test, 2026-10-06).
-        """
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.context import set_session_proof_origin
-        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
-
-        set_session_proof_origin("server_inferred")
-        try:
-            result = await handle_store_knowledge_graph({
-                "agent_id": registered_agent,
-                "summary": "Note from an unbound connection",
-            })
-        finally:
-            set_session_proof_origin(None)
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert data["agent_mode"] == "anonymous"
-        discovery = mock_graph.add_discovery.call_args[0][0]
-        assert discovery.agent_id.startswith("anonkg_")
-        assert discovery.agent_id != registered_agent
-
-    @pytest.mark.asyncio
-    async def test_store_caller_asserted_binding_keeps_agent(
-        self, patch_common, registered_agent
-    ):
-        """A caller-proven binding still writes as its own agent."""
-        mock_mcp_server, mock_graph = patch_common
-        from src.mcp_handlers.context import set_session_proof_origin
-        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
-
-        set_session_proof_origin("caller_asserted")
-        try:
-            result = await handle_store_knowledge_graph({
-                "agent_id": registered_agent,
-                "summary": "Note from a threaded session",
-            })
-        finally:
-            set_session_proof_origin(None)
-
-        data = parse_result(result)
-        assert data["success"] is True
-        assert data.get("agent_mode") != "anonymous"
-        discovery = mock_graph.add_discovery.call_args[0][0]
-        assert discovery.agent_id == registered_agent
-
-    @pytest.mark.asyncio
     async def test_store_high_severity_requires_registered_agent(self, patch_common):
         """High severity discoveries require registered agent."""
         mock_mcp_server, mock_graph = patch_common
@@ -2359,3 +2305,303 @@ class TestResponseToContract:
         assert data["errors"][0].startswith("Discovery 0:")
         mock_graph.add_discovery.assert_awaited_once()
         assert mock_graph.add_discovery.await_args.args[0].summary == "plain sibling"
+
+
+# ============================================================================
+# Server-inferred bindings (#2695): the strict check-in gate's exemption
+# ============================================================================
+
+
+@pytest.fixture
+def inferred_env(patch_common, registered_agent):
+    """The handler sees ``registered_agent`` as this session's binding.
+
+    ``set_origin`` sets the proof origin; ``set_exempt`` drives the shared
+    exemption predicate through the two sources it reads (``exempt`` True or
+    False, or "error" to make the first predicate raise). Strict identity is
+    on unless a test turns it off.
+    """
+    from src.mcp_handlers.context import set_session_proof_origin
+
+    mock_mcp_server, mock_graph = patch_common
+    state = {"earned": False, "asked": []}
+
+    class _DB:
+        async def is_substrate_earned(self, agent_id):
+            state["asked"].append(agent_id)
+            if state["earned"] == "error":
+                raise RuntimeError("substrate_claims unavailable")
+            return state["earned"]
+
+    def set_exempt(value):
+        state["earned"] = value
+
+    with patch("src.mcp_handlers.context.get_context_agent_id", return_value=registered_agent), \
+         patch("src.db.get_db", return_value=_DB()), \
+         patch(
+             "src.identity.substrate.verify_substrate_earned",
+             AsyncMock(return_value={"conditions": {"dedicated_substrate": False}}),
+         ), \
+         patch(
+             "src.mcp_handlers.identity_bootstrap.is_strict_identity_required",
+             return_value=True,
+         ) as strict:
+        try:
+            yield SimpleNamespace(
+                agent=registered_agent,
+                graph=mock_graph,
+                set_origin=set_session_proof_origin,
+                set_exempt=set_exempt,
+                asked=state["asked"],
+                strict=strict,
+            )
+        finally:
+            set_session_proof_origin(None)
+
+
+def _store_args(agent_id, severity):
+    return {"agent_id": agent_id, "summary": f"a {severity} finding", "severity": severity}
+
+
+class TestInferredBindingWriter:
+    """Every cell: proof origin x exemption x severity band."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("severity", ["low", "medium", "high", "critical"])
+    @pytest.mark.parametrize("exempt", [True, False])
+    async def test_caller_proven_binding_keeps_its_agent(self, inferred_env, exempt, severity):
+        """A caller-proven binding writes as its agent, exempt or not."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("caller_asserted")
+        inferred_env.set_exempt(exempt)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args(inferred_env.agent, severity))
+        )
+
+        assert data["success"] is True
+        assert data.get("agent_mode") != "anonymous"
+        assert inferred_env.graph.add_discovery.call_args[0][0].agent_id == inferred_env.agent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("severity", ["low", "medium", "high", "critical"])
+    async def test_exempt_resident_on_inferred_binding_keeps_its_agent(self, inferred_env, severity):
+        """A substrate-earned resident resolves by fingerprint by design: the
+        check-in gate lets it through, and so does the knowledge write."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(True)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args(inferred_env.agent, severity))
+        )
+
+        assert data["success"] is True
+        assert data.get("agent_mode") != "anonymous"
+        assert inferred_env.graph.add_discovery.call_args[0][0].agent_id == inferred_env.agent
+
+    @pytest.mark.asyncio
+    async def test_dedicated_substrate_resident_is_exempt_too(self, inferred_env):
+        """The second source of the exemption: dedicated_substrate."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(False)
+        with patch(
+            "src.identity.substrate.verify_substrate_earned",
+            AsyncMock(return_value={"conditions": {"dedicated_substrate": True}}),
+        ):
+            data = parse_result(
+                await handle_store_knowledge_graph(_store_args(inferred_env.agent, "high"))
+            )
+
+        assert data["success"] is True
+        assert inferred_env.graph.add_discovery.call_args[0][0].agent_id == inferred_env.agent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exempt", [False, "error"])
+    @pytest.mark.parametrize("severity", ["low", "medium"])
+    async def test_unexempt_inferred_low_write_goes_anonymous(self, inferred_env, exempt, severity):
+        """The fingerprint matched some agent; the write does not credit it.
+        A predicate error counts as not exempt."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(exempt)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args(inferred_env.agent, severity))
+        )
+
+        assert data["success"] is True
+        assert data["agent_mode"] == "anonymous"
+        written = inferred_env.graph.add_discovery.call_args[0][0].agent_id
+        assert written.startswith("anonkg_") and written != inferred_env.agent
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("exempt", [False, "error"])
+    @pytest.mark.parametrize("severity", ["high", "critical"])
+    async def test_unexempt_inferred_gated_write_is_refused(self, inferred_env, exempt, severity):
+        """A gated write needs a proven agent: refused the way the strict
+        check-in gate refuses, pointing at the caller's client_session_id.
+        A predicate error fails closed."""
+        from src.mcp_handlers.identity_bootstrap import identity_refusal_status
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(exempt)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args(inferred_env.agent, severity))
+        )
+
+        assert identity_refusal_status(data) == "identity_required"
+        assert data["refused"] is True
+        assert "client_session_id" in data["next_step"]
+        assert data["safe_options"][0]["action"] == "retry_with_client_session_id"
+        assert data["safe_options"][0]["call"].startswith("store_finding(")
+        assert data["surface_context"]["proof_origin"] == "server_inferred"
+        inferred_env.graph.add_discovery.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gated_refusal_follows_the_strict_switch(self, inferred_env):
+        """With strict identity off the registered-agent path runs as before."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.strict.return_value = False
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(False)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args(inferred_env.agent, "high"))
+        )
+
+        assert data["success"] is True
+        assert inferred_env.graph.add_discovery.call_args[0][0].agent_id == inferred_env.agent
+
+    @pytest.mark.asyncio
+    async def test_exemption_ignores_a_named_agent_id(self, inferred_env, mock_mcp_server):
+        """The predicate is asked of the session's binding, not of an agent_id
+        the call names, so naming a resident does not borrow its exemption."""
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(False)
+        data = parse_result(
+            await handle_store_knowledge_graph(_store_args("some-resident", "low"))
+        )
+
+        assert data["agent_mode"] == "anonymous"
+        assert inferred_env.asked == [inferred_env.agent]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "origin, exempt, anonymous",
+        [
+            ("server_inferred", True, False),
+            ("server_inferred", False, True),
+            ("server_inferred", "error", True),
+            ("caller_asserted", False, False),
+        ],
+    )
+    async def test_note_follows_the_same_rule(self, inferred_env, origin, exempt, anonymous):
+        from src.mcp_handlers.knowledge.handlers import handle_knowledge_note
+
+        inferred_env.set_origin(origin)
+        inferred_env.set_exempt(exempt)
+        data = parse_result(
+            await handle_knowledge_note({"agent_id": inferred_env.agent, "summary": "a note"})
+        )
+
+        assert data["success"] is True
+        written = inferred_env.graph.add_discovery.call_args[0][0].agent_id
+        if anonymous:
+            assert written.startswith("anonkg_")
+        else:
+            assert written == inferred_env.agent
+
+    @pytest.mark.parametrize(
+        "exempt, expect",
+        [(True, "agent"), (False, "refused"), (None, "refused")],
+    )
+    def test_gated_update_follows_the_same_rule(self, inferred_env, exempt, expect):
+        """Escalating or editing a high finding on an inferred binding is the
+        same gated write; None (not asked) fails closed."""
+        from src.mcp_handlers.knowledge.handlers import (
+            _KnowledgeUpdateRequest,
+            _UpdateResponseError,
+            _resolve_update_writer,
+        )
+
+        inferred_env.set_origin("server_inferred")
+        request = _KnowledgeUpdateRequest(
+            arguments={"agent_id": inferred_env.agent},
+            discovery_id="d1", status=None, details=None, resolution_note=None,
+            summary=None, severity="high", discovery_type=None, tags=None,
+            superseded_by=None,
+        )
+        discovery = make_discovery(agent_id=inferred_env.agent, severity="low")
+        if expect == "agent":
+            assert _resolve_update_writer(request, discovery, inferred_exempt=exempt) == inferred_env.agent
+        else:
+            with pytest.raises(_UpdateResponseError) as raised:
+                _resolve_update_writer(request, discovery, inferred_exempt=exempt)
+            payload = json.loads(raised.value.response.text)
+            assert payload["status"] == "identity_required"
+
+    def test_timeout_recovery_does_not_guess_an_inferred_author(self, inferred_env):
+        from src.mcp_handlers.knowledge.handlers import resolve_knowledge_write_author
+
+        inferred_env.set_origin("server_inferred")
+        assert resolve_knowledge_write_author({"summary": "s"}, store=True) is None
+
+
+class TestCallerProofExemptionPredicate:
+    """The one predicate the check-in gate and the knowledge path share."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "earned, conditions, expected",
+        [
+            (True, {}, True),
+            (False, {"dedicated_substrate": True}, True),
+            (False, {"dedicated_substrate": False}, False),
+            (False, None, False),
+        ],
+    )
+    async def test_sources(self, earned, conditions, expected):
+        from src.mcp_handlers.identity_bootstrap import is_exempt_from_caller_proof
+
+        db = SimpleNamespace(is_substrate_earned=AsyncMock(return_value=earned))
+        with patch("src.db.get_db", return_value=db), patch(
+            "src.identity.substrate.verify_substrate_earned",
+            AsyncMock(return_value={"conditions": conditions}),
+        ):
+            assert await is_exempt_from_caller_proof("u-1") is expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("which", ["earned", "verify"])
+    async def test_predicate_error_fails_closed(self, which):
+        from src.mcp_handlers.identity_bootstrap import is_exempt_from_caller_proof
+
+        boom = AsyncMock(side_effect=RuntimeError("down"))
+        db = SimpleNamespace(
+            is_substrate_earned=boom if which == "earned" else AsyncMock(return_value=False)
+        )
+        with patch("src.db.get_db", return_value=db), patch(
+            "src.identity.substrate.verify_substrate_earned",
+            boom if which == "verify" else AsyncMock(return_value={"conditions": {}}),
+        ):
+            assert await is_exempt_from_caller_proof("u-1") is False
+
+    @pytest.mark.asyncio
+    async def test_no_agent_is_not_exempt(self):
+        from src.mcp_handlers.identity_bootstrap import is_exempt_from_caller_proof
+
+        assert await is_exempt_from_caller_proof(None) is False
+
+    def test_the_check_in_gate_uses_the_shared_predicate(self):
+        """No second definition: the gate calls the shared helper."""
+        import inspect
+        from src.mcp_handlers.updates import phases
+
+        source = inspect.getsource(phases.resolve_identity_and_guards)
+        assert "is_exempt_from_caller_proof" in source
+        assert "is_substrate_earned" not in source
