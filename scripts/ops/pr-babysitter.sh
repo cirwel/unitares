@@ -77,11 +77,12 @@ RETRIED_LABEL="${PR_QUEUE_RETRIED_LABEL:-merge-retried}"
 BASE_GRACE_MIN="${PR_QUEUE_BASE_GRACE_MIN:-3}"
 STALL_WARN_MIN="${PR_QUEUE_STALL_WARN_MIN:-90}"
 PIN_WINDOW_MIN="${PR_QUEUE_PIN_WINDOW_MIN:-15}"
-# Checks that must have passed on the head before it is armed, beyond the ones
-# branch protection requires. `review` is not a required check on master, and
-# its NEUTRAL conclusion means "unreviewed", so without this an agent's label
-# on a PR whose review never ran would merge it.
-REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-review}"
+# Extra checks (space-separated names) that must have passed on the head before
+# it is armed, beyond the ones branch protection requires. Empty by default:
+# review is advisory (operator decision, 2026-10-06), so the queue merges on
+# ready + label + required CI. `PR_QUEUE_REQUIRED_CHECKS=review` restores the
+# old gate; note a NEUTRAL `review` conclusion means "unreviewed".
+REQUIRED_CHECKS="${PR_QUEUE_REQUIRED_CHECKS-}"
 # PRs carrying any of these labels are never armed: the operator merges them
 # by hand. `governance-sensitive` is what CI applies to a PR touching an
 # enforcement constant, and docs/SCOPE_AND_THREAT_MODEL.md names the human
@@ -345,7 +346,7 @@ while read -r pr; do
   jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
   if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
     reason="it was armed outside the queue"
-    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
   elif [ -n "$operator_arm" ]; then
     reason="the operator armed #$operator_arm, which takes the slot"
   elif held_by=$(operator_only "$pr"); then
