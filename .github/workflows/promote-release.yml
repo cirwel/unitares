@@ -7,12 +7,18 @@ name: Promote Release
 # that advances PUBLISHED_VERSION. Merging that branch's PR stays a human act,
 # and GITHUB_TOKEN cannot open pull requests in this repository by setting.
 #
-# The lease-plane image is verified but never tagged `latest`. The tagged
-# docker-compose.yml already names it by the release tag (version_manager.py
-# moves that pin with VERSION when the release is prepared), so the install pins
-# that `pin` advances are what direct users to it. Compose names an exact
-# release, the doctor fails a floating tag, and a second mutable pointer would
-# need its own guard across the approval wait.
+# The lease-plane and database images are verified but never tagged `latest`.
+# The tagged docker-compose.yml already names them by the release tag
+# (version_manager.py moves those pins with VERSION when the release is
+# prepared), so the install pins that `pin` advances are what direct users to
+# them. Compose names an exact release, the doctor fails a floating tag, and a
+# second mutable pointer would need its own guard across the approval wait.
+#
+# What gets verified follows the tagged Compose file, because that file is what
+# a release checkout pulls. The lease plane is always required. The server and
+# database images are required wherever the tagged file pins them; a release
+# cut before Compose pulled them builds both locally and has no database image
+# to verify.
 
 on:
   workflow_dispatch:
@@ -33,6 +39,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   LEASE_PLANE_IMAGE_NAME: ${{ github.repository }}-lease-plane
+  POSTGRES_IMAGE_NAME: ${{ github.repository }}-postgres
   PROMOTION_ENVIRONMENT: release-promotion
 
 jobs:
@@ -50,6 +57,8 @@ jobs:
       digest: ${{ steps.image.outputs.digest }}
       prior_latest: ${{ steps.image.outputs.prior_latest }}
       lease_plane_digest: ${{ steps.lease_plane.outputs.digest }}
+      # Empty when the tagged Compose file does not pull a database image.
+      postgres_digest: ${{ steps.postgres.outputs.digest }}
     steps:
       - name: Validate the requested tag
         id: tag
@@ -122,6 +131,33 @@ jobs:
             exit 1
           fi
 
+      - name: Require the tagged Compose file to pull this release's images
+        id: compose
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # A release checkout pulls whatever its own docker-compose.yml names, so
+          # each verified image must be the one the tagged tree asks for.
+          tagged=$(git show "$RELEASE_TAG:docker-compose.yml")
+          require_pin() {
+            if ! grep -q "image: $1:$RELEASE_TAG\$" <<< "$tagged"; then
+              echo "docker-compose.yml at $RELEASE_TAG does not pin $1:$RELEASE_TAG." >&2
+              exit 1
+            fi
+          }
+          require_pin "$REGISTRY/$LEASE_PLANE_IMAGE_NAME"
+          # Earlier releases build the server and database locally. A release
+          # that names either image at all must name this release's.
+          if grep -q "image: $REGISTRY/$IMAGE_NAME:" <<< "$tagged"; then
+            require_pin "$REGISTRY/$IMAGE_NAME"
+          fi
+          postgres=false
+          if grep -q "image: $REGISTRY/$POSTGRES_IMAGE_NAME:" <<< "$tagged"; then
+            require_pin "$REGISTRY/$POSTGRES_IMAGE_NAME"
+            postgres=true
+          fi
+          echo "postgres=$postgres" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4
 
@@ -178,6 +214,31 @@ jobs:
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve the database digest, platforms, and SBOMs
+        id: postgres
+        if: steps.compose.outputs.postgres == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Anonymous like the lease plane: a private package fails here.
+          image="$REGISTRY/$POSTGRES_IMAGE_NAME:$RELEASE_TAG"
+          digest=$(docker buildx imagetools inspect "$image" --format '{{json .Manifest}}' | jq -r .digest)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "No index digest for $image" >&2; exit 1; }
+          platforms=$(docker buildx imagetools inspect "$REGISTRY/$POSTGRES_IMAGE_NAME@$digest" --format '{{json .Manifest}}' \
+            | jq -r '[.manifests[]? | select(.platform.os != "unknown") | "\(.platform.os)/\(.platform.architecture)"] | sort | join(",")')
+          if [ "$platforms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected linux/amd64 and linux/arm64 for $image; got: $platforms" >&2
+            exit 1
+          fi
+          sboms=$(docker buildx imagetools inspect "$REGISTRY/$POSTGRES_IMAGE_NAME@$digest" --format '{{json .SBOM}}' \
+            | jq -r '[to_entries[] | select(.value.SPDX != null) | .key] | sort | join(",")')
+          if [ "$sboms" != "linux/amd64,linux/arm64" ]; then
+            echo "Expected an SPDX SBOM for both database platforms; got: $sboms" >&2
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "platforms=$platforms" >> "$GITHUB_OUTPUT"
+
       - name: Verify build provenance from the release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -192,18 +253,6 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > attestation.json
           jq -e 'length >= 1' attestation.json > /dev/null
-
-      - name: Require the tagged Compose file to pull this release's lease plane
-        env:
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          # A release checkout pulls whatever its own docker-compose.yml names, so
-          # the verified image must be the one the tagged tree asks for.
-          if ! git show "$RELEASE_TAG:docker-compose.yml" \
-            | grep -q "image: $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG\$"; then
-            echo "docker-compose.yml at $RELEASE_TAG does not pin $REGISTRY/$LEASE_PLANE_IMAGE_NAME:$RELEASE_TAG." >&2
-            exit 1
-          fi
 
       - name: Verify lease-plane provenance from the release tag
         env:
@@ -220,6 +269,22 @@ jobs:
             --format json > lease-plane-attestation.json
           jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
 
+      - name: Verify database provenance from the release tag
+        if: steps.compose.outputs.postgres == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+          SOURCE_SHA: ${{ steps.release.outputs.source_sha }}
+          POSTGRES_DIGEST: ${{ steps.postgres.outputs.digest }}
+        run: |
+          gh attestation verify "oci://$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST" \
+            --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+            --source-ref "refs/tags/$RELEASE_TAG" \
+            --source-digest "$SOURCE_SHA" \
+            --format json > postgres-attestation.json
+          jq -e 'length >= 1' postgres-attestation.json > /dev/null
+
       - name: Record release evidence
         env:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
@@ -228,6 +293,8 @@ jobs:
           PLATFORMS: ${{ steps.image.outputs.platforms }}
           LEASE_PLANE_DIGEST: ${{ steps.lease_plane.outputs.digest }}
           LEASE_PLANE_PLATFORMS: ${{ steps.lease_plane.outputs.platforms }}
+          POSTGRES_DIGEST: ${{ steps.postgres.outputs.digest }}
+          POSTGRES_PLATFORMS: ${{ steps.postgres.outputs.platforms }}
         run: |
           {
             echo "## Release evidence for $RELEASE_TAG"
@@ -243,6 +310,14 @@ jobs:
             echo "| Lease-plane platforms | $LEASE_PLANE_PLATFORMS |"
             echo "| Lease-plane SBOM | SPDX for both platforms |"
             echo "| Lease-plane provenance | verified: publish-container.yml at refs/tags/$RELEASE_TAG |"
+            if [ -n "$POSTGRES_DIGEST" ]; then
+              echo "| Database index digest | \`$POSTGRES_DIGEST\` |"
+              echo "| Database platforms | $POSTGRES_PLATFORMS |"
+              echo "| Database SBOM | SPDX for both platforms |"
+              echo "| Database provenance | verified: publish-container.yml at refs/tags/$RELEASE_TAG |"
+            else
+              echo "| Database image | none: the tagged Compose file builds it locally |"
+            fi
             echo "| Release page | published |"
             echo
             echo "Promotion waits for approval on the \`$PROMOTION_ENVIRONMENT\` environment."
@@ -277,6 +352,7 @@ jobs:
           DIGEST: ${{ needs.verify.outputs.digest }}
           PRIOR_LATEST: ${{ needs.verify.outputs.prior_latest }}
           LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
+          POSTGRES_DIGEST: ${{ needs.verify.outputs.postgres_digest }}
         run: |
           # A job-specific re-run can reuse verify outputs for 30 days. Re-read
           # every mutable pointer immediately before touching latest.
@@ -309,6 +385,15 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > lease-plane-attestation.json
           jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
+          if [ -n "$POSTGRES_DIGEST" ]; then
+            gh attestation verify "oci://$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$SOURCE_SHA" \
+              --format json > postgres-attestation.json
+            jq -e 'length >= 1' postgres-attestation.json > /dev/null
+          fi
 
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -355,6 +440,7 @@ jobs:
           SOURCE_SHA: ${{ needs.verify.outputs.source_sha }}
           DIGEST: ${{ needs.verify.outputs.digest }}
           LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
+          POSTGRES_DIGEST: ${{ needs.verify.outputs.postgres_digest }}
         run: |
           scripts/ci/release_promotion_freshness.sh pin
           draft=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
@@ -376,6 +462,15 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --format json > lease-plane-attestation.json
           jq -e 'length >= 1' lease-plane-attestation.json > /dev/null
+          if [ -n "$POSTGRES_DIGEST" ]; then
+            gh attestation verify "oci://$REGISTRY/$POSTGRES_IMAGE_NAME@$POSTGRES_DIGEST" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/publish-container.yml" \
+              --source-ref "refs/tags/$RELEASE_TAG" \
+              --source-digest "$SOURCE_SHA" \
+              --format json > postgres-attestation.json
+            jq -e 'length >= 1' postgres-attestation.json > /dev/null
+          fi
 
       - name: Push a branch that advances PUBLISHED_VERSION
         env:
@@ -383,6 +478,7 @@ jobs:
           VERSION: ${{ needs.verify.outputs.version }}
           DIGEST: ${{ needs.verify.outputs.digest }}
           LEASE_PLANE_DIGEST: ${{ needs.verify.outputs.lease_plane_digest }}
+          POSTGRES_DIGEST: ${{ needs.verify.outputs.postgres_digest }}
         run: |
           branch="publish/$RELEASE_TAG"
           # A re-run after an unmerged earlier run must not die on a raw push
@@ -407,9 +503,14 @@ jobs:
           git config user.email "41898+github-actions[bot]@users.noreply.github.com"
           git add PUBLISHED_VERSION
           git add -u
+          database="The release's Compose database is built locally."
+          if [ -n "$POSTGRES_DIGEST" ]; then
+            database="The release's Compose database is $RELEASE_TAG, index digest $POSTGRES_DIGEST."
+          fi
           git commit -m "chore(release): publish $RELEASE_TAG" \
             -m "Verified and promoted by the Promote Release workflow; GHCR latest serves $DIGEST." \
-            -m "The release's Compose lease plane is $RELEASE_TAG, index digest $LEASE_PLANE_DIGEST."
+            -m "The release's Compose lease plane is $RELEASE_TAG, index digest $LEASE_PLANE_DIGEST." \
+            -m "$database"
           git push origin "$branch"
           {
             echo "Pushed \`$branch\`. Open its pull request so required checks run:"
