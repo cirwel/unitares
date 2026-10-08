@@ -543,7 +543,9 @@ marks **its own** PR ready before declaring completion. A detached review
 agent must call `review.sh` again to join before leaving. `SHIP_NO_REVIEW=1`
 explicitly defers this step and prints the author's next action. If review
 cannot finish, exit 2 distinguishes an **UNREVIEWED** handoff from findings
-(exit 1). Report the blocker and the exact command to resume; keep the draft.
+(exit 1). Report the blocker and the exact command to resume in the PR body;
+since 2026-10-06 an unreviewed PR is not held, so it may still be marked ready
+(section above). Exit 3 is not this case: it stays parked.
 The sweep
 supplies a missing review; it does not fix code, declare readiness, or merge.
 
