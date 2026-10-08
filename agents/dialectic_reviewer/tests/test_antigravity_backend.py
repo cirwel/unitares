@@ -286,3 +286,18 @@ def test_a_timeout_kills_the_process_group_and_never_raises(monkeypatch):
     monkeypatch.setattr(hb.asyncio, "wait_for", short_wait_for)
     result = asyncio.run(hb.call_antigravity_backend("P"))
     assert "timeout" in result.error and killed == [4242]
+
+
+def test_a_reply_without_a_verdict_is_kept_as_the_hosts_answer(monkeypatch):
+    # A host list must not trade a prose objection for the next host's verdict
+    # (codex review of #2652), so the reply comes back, bounded, beside the error.
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": "I object: no evidence."}).encode())
+    result = asyncio.run(hb.call_antigravity_backend("P"))
+    assert result.text is None and result.unparsed_reply == "I object: no evidence."
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": "x" * 9000}).encode())
+    assert len(asyncio.run(hb.call_antigravity_backend("P")).unparsed_reply) == 8000
+    # An empty reply is not an answer: the list may move on.
+    _spawn(monkeypatch, json.dumps({"status": "SUCCESS", "response": "  "}).encode())
+    assert asyncio.run(hb.call_antigravity_backend("P")).unparsed_reply is None
+    # The reply is never part of the persisted provenance.
+    assert "unparsed_reply" not in result.provenance()

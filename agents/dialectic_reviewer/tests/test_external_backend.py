@@ -21,6 +21,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
+import httpx
+import pytest
+
 from agents.dialectic_reviewer import host_backends as hb
 from agents.dialectic_reviewer import reviewer as r
 
@@ -205,6 +208,7 @@ def test_unparseable_reply_reports_no_verdict_and_keeps_provenance():
     assert result.text is None
     assert "no parseable dialectic verdict" in (result.error or "")
     assert result.models_used == ["some-model-id-002"]
+    assert result.unparsed_reply == "I would rather not answer in JSON."
 
 
 def test_thinking_block_is_stripped_before_verdict_extraction():
@@ -270,6 +274,80 @@ def test_missing_openai_dependency_degrades_instead_of_raising():
     assert result.text is None
     assert result.backend == "external"
     assert "call failed" in (result.error or "")
+
+
+def test_client_construction_failure_is_a_host_failure_not_an_exception():
+    """httpx reads proxy settings when the client is built, and an unsupported
+    HTTPS_PROXY scheme raises there. That must fail this host (so the list can
+    try the next one), not escape the backend."""
+
+    def _broken(**kwargs):
+        raise ValueError("Unknown scheme for proxy URL")
+
+    client = _FakeClient(_response('{"agrees": true, "reasoning": "ok"}'))
+    with patch.dict("os.environ", CONFIGURED, clear=True):
+        with _patch_openai(client), patch.object(hb.httpx, "AsyncClient", _broken):
+            result = asyncio.run(hb.call_openai_compat_backend("p"))
+
+    assert result.text is None
+    assert result.backend == "external"
+    assert result.error == "External reviewer call failed: ValueError"
+    assert client.seen == {}
+
+
+def test_client_is_built_to_refuse_redirects():
+    """The host list vets the configured URL, not where a 3xx would send the
+    call. The SDK's own client follows redirects, so the backend supplies one
+    that does not."""
+    seen: dict = {}
+    client = _FakeClient(_response('{"agrees": true, "reasoning": "ok"}'))
+    stub = ModuleType("openai")
+
+    def _build(**kwargs):
+        seen.update(kwargs)
+        return client
+
+    stub.AsyncOpenAI = _build  # type: ignore[attr-defined]
+    with patch.dict("os.environ", CONFIGURED, clear=True):
+        with patch.dict(sys.modules, {"openai": stub}):
+            asyncio.run(hb.call_openai_compat_backend("p"))
+
+    assert seen["http_client"].follow_redirects is False
+
+
+def test_redirect_to_the_local_floor_is_not_followed():
+    """End to end through the real SDK (skipped where ``openai`` is absent): a
+    public endpoint answering 307 to loopback must not let the local model
+    reply under the external host's approval authority."""
+    pytest.importorskip("openai")
+    local_hits: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "127.0.0.1":
+            local_hits.append(str(request.url))
+            return httpx.Response(200, json={
+                "id": "x", "object": "chat.completion", "created": 0, "model": "floor",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                    "role": "assistant", "content": '{"agrees": true, "reasoning": "floor"}'}}],
+            })
+        return httpx.Response(
+            307, headers={"location": "http://127.0.0.1:11434/v1/chat/completions"}
+        )
+
+    # A subclass, not a factory: the SDK checks isinstance(http_client,
+    # httpx.AsyncClient), and a failed check would pass this test vacuously.
+    class _WithTransport(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(handler), **kwargs)
+
+    with patch.dict("os.environ", CONFIGURED, clear=True):
+        with patch.object(hb.httpx, "AsyncClient", _WithTransport):
+            result = asyncio.run(hb.call_openai_compat_backend("p"))
+
+    assert local_hits == []
+    assert result.text is None
+    # The 307 itself is the failure, not anything earlier in the call.
+    assert result.error == "External reviewer call failed: APIStatusError"
 
 
 def test_default_env_still_routes_to_local_model():

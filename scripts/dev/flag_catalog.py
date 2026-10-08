@@ -148,6 +148,19 @@ INDIRECT_FLAGS = (
     ),
 )
 
+# Settings whose first reader's docstring describes that reader, not the
+# setting. These outrank every inferred purpose.
+PURPOSES = {
+    "UNITARES_DIALECTIC_REVIEWER_HOSTS": (
+        "Reviewer hosts in the order they are tried, comma-separated, at most "
+        "three (codex, claude, antigravity, external)"
+    ),
+    "UNITARES_DIALECTIC_REVIEWER_HOST": (
+        "Single reviewer host, read as a one-item list when "
+        "UNITARES_DIALECTIC_REVIEWER_HOSTS is unset"
+    ),
+}
+
 # Tables of older setting names still read in place of a new one until a named
 # release: (module path, table name). Each row is a call with three arguments
 # (old name, new name, removal release), each a string or a module constant.
@@ -522,6 +535,11 @@ def collect() -> dict[str, Flag]:
         tgt = flags.setdefault(name, Flag(name))
         tgt.add_read(indirect.fallback, f"{indirect.path}:0")
         tgt.consider_purpose(indirect.purpose, priority=1)
+
+    for name, purpose in PURPOSES.items():
+        if name not in flags:
+            raise RuntimeError(f"PURPOSES names {name}, which nothing reads")
+        flags[name].consider_purpose(purpose, priority=3)
 
     # _binding_enforced() constructs a flag suffix from the forwarded effect
     # type. Tie the catalog to both halves of that runtime contract: the actual
