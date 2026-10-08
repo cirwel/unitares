@@ -38,6 +38,10 @@ env:
 
 jobs:
   publish:
+    # A manual dispatch can name any ref, and the job's OIDC token can publish
+    # or overwrite any io.github.cirwel/* entry, so only master's reviewed
+    # server.json may reach the registry.
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     permissions:
       contents: read
