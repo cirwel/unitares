@@ -1184,7 +1184,9 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     try:
         from ..support import agent_auth as _auth
 
-        signature = _auth.compute_agent_signature(arguments=arguments)
+        signature = _auth.compute_agent_signature(
+            arguments=_anonymous_writer_signature_arguments(arguments)
+        )
     except Exception as exc:
         logger.debug("Could not enrich KG agent display with signature: %s", exc)
         return agent_display
@@ -1204,6 +1206,25 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
             agent_display[key] = signature[key]
 
     return agent_display
+
+
+def _anonymous_writer_signature_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """The arguments a response's signature is computed from.
+
+    An anonymous write records ``anonkg_*`` in ``agent_id``, but the session
+    may still carry a server-inferred binding to some agent, and
+    ``compute_agent_signature`` reads that binding whenever the arguments name
+    an identity. A response for an anonymous write must not then name the
+    inferred agent as its author, so the identity keys are dropped from a
+    copy: with none, an inferred binding signs as no one, and an unbound
+    session already did. Other arguments pass through unchanged.
+    """
+    if not str(arguments.get("agent_id") or "").startswith(_ANONYMOUS_WRITER_PREFIX):
+        return arguments
+    unsigned = dict(arguments)
+    unsigned.pop("agent_id", None)
+    unsigned.pop("_agent_uuid", None)
+    return unsigned
 
 
 _ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
@@ -1259,13 +1280,98 @@ def _derive_anonymous_writer_id(arguments: Dict[str, Any]) -> str:
     return f"{_ANONYMOUS_WRITER_PREFIX}{client_hint}{_ANONYMOUS_WRITER_SHARED_SUFFIX}"
 
 
-def _resolve_low_friction_writer(arguments: Dict[str, Any]) -> tuple[str, Optional[TextContent], bool]:
+async def _inferred_writer_exempt() -> Optional[bool]:
+    """Whether this call's server-inferred binding may keep its attribution.
+
+    None when the binding is not server-inferred (nothing to decide). Otherwise
+    the strict check-in gate's own predicate, asked of the RESOLVED agent (the
+    session's binding, never an agent_id the call passes), so a colliding
+    sibling cannot borrow a resident's exemption. Fails closed.
+    """
+    from ..context import get_context_agent_id, get_session_proof_origin
+    from ..identity_bootstrap import is_exempt_from_caller_proof
+
+    if get_session_proof_origin() != "server_inferred":
+        return None
+    return await is_exempt_from_caller_proof(get_context_agent_id())
+
+
+def _inferred_binding_untrusted(inferred_exempt: Optional[bool]) -> bool:
+    """True when the binding is server-inferred and its agent is not exempt.
+
+    ``inferred_exempt`` is what ``_inferred_writer_exempt`` returned for this
+    call. A caller that did not ask passes None, which on a server-inferred
+    binding counts as not exempt: the predicate failing closed.
+    """
+    from ..context import get_session_proof_origin
+
+    return get_session_proof_origin() == "server_inferred" and not inferred_exempt
+
+
+def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
+    """The strict gate's refusal, for a gated write on an inferred binding.
+
+    ``update`` names the update tool in the retry routes, so a refused update
+    is not sent to the store tool (which would mint a second finding).
+    """
+    from ..context import get_session_proof_origin, get_session_resolution_source
+    from ..identity_bootstrap import inferred_binding_refusal_payload
+
+    return success_response(
+        inferred_binding_refusal_payload(
+            "knowledge",
+            retry_call="update_finding" if update else "store_finding",
+            retry_label=(
+                "update_finding / knowledge(action='update')"
+                if update
+                else "store_finding / knowledge(action='store')"
+            ),
+            identity_assurance=None,
+            read_only_option={
+                "action": "stay_read_only",
+                "call": "search_shared_memory(query=<what you need>)",
+                "when": (
+                    "You want to read shared memory without writing. "
+                    "Knowledge reads need no identity."
+                ),
+            },
+            surface_context={
+                "transport_surface": "knowledge",
+                "session_resolution_source": get_session_resolution_source(),
+                "proof_origin": get_session_proof_origin(),
+                "lifecycle_automation": "not_confirmed",
+            },
+        )
+    )[0]
+
+
+def _resolve_low_friction_writer(
+    arguments: Dict[str, Any], *, inferred_exempt: Optional[bool] = None
+) -> tuple[str, Optional[TextContent], bool]:
     """Resolve agent_id for low/medium knowledge writes.
 
     If the caller has no explicit or bound identity, use a stable anonymous writer
     ID instead of creating a new auto_* identity for each quick write.
+
+    A server-inferred binding (fingerprint pin, transport-injected
+    client_session_id, context fallback) also gets the anonymous writer,
+    unless its resolved agent is exempt from caller proof (``inferred_exempt``,
+    see ``_inferred_writer_exempt``). Every client behind one address with one
+    User-Agent shares a fingerprint, so attributing the write to the inferred
+    agent credits it to whichever agent last matched, not to the caller.
+    Dispatch has already injected that agent into ``agent_id``, so the proof
+    origin decides here, as it does for ``_resolve_reader_agent_id`` and the
+    strict write gate. A substrate-earned or dedicated-substrate resident
+    resolves by fingerprint by design and keeps its attribution, as the strict
+    check-in gate lets it through.
     """
     from ..context import get_context_agent_id
+
+    if _inferred_binding_untrusted(inferred_exempt):
+        arguments.pop("agent_id", None)
+        agent_id = _derive_anonymous_writer_id(arguments)
+        arguments["agent_id"] = agent_id
+        return agent_id, None, True
 
     if arguments.get("agent_id") or get_context_agent_id():
         agent_id, error = require_agent_id(arguments)
@@ -1318,14 +1424,38 @@ def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
     return str(arguments.get("severity", "low")).lower() in {"high", "critical"}
 
 
-def _resolve_store_writer(
+def _gated_write_refused_on_inferred_binding(
+    inferred_exempt: Optional[bool], *, update: bool = False
+) -> Optional[TextContent]:
+    """The refusal for a high or critical write on an untrusted inferred binding.
+
+    Low and medium writes fall back to the anonymous writer; a gated write
+    must come from a registered agent, and the inferred one is not proven to
+    be the caller, so under strict identity it is refused the way the check-in
+    gate refuses, pointing the caller at its own client_session_id. With
+    strict identity off the registered-agent path runs unchanged.
+    """
+    from ..identity_bootstrap import is_strict_identity_required
+
+    if _inferred_binding_untrusted(inferred_exempt) and is_strict_identity_required():
+        return _inferred_binding_refusal(update=update)
+    return None
+
+
+async def _resolve_store_writer(
     arguments: Dict[str, Any],
 ) -> tuple[str, Optional[TextContent], Optional[str], bool]:
     """Resolve the writer using the severity-dependent identity policy."""
+    inferred_exempt = await _inferred_writer_exempt()
     if not _store_needs_registered_writer(arguments):
-        agent_id, error, is_anonymous = _resolve_low_friction_writer(arguments)
+        agent_id, error, is_anonymous = _resolve_low_friction_writer(
+            arguments, inferred_exempt=inferred_exempt
+        )
         return agent_id, error, None, is_anonymous
 
+    refusal = _gated_write_refused_on_inferred_binding(inferred_exempt)
+    if refusal is not None:
+        return "", refusal, None, False
     agent_id, error = require_registered_agent(arguments)
     if error:
         return agent_id, error, None, False
@@ -1369,8 +1499,13 @@ def resolve_knowledge_write_author(
     agent but never changes the author. None when the handler would refuse
     the writer or the resolution fails, which it logs.
     """
-    from ..context import get_context_agent_id
+    from ..context import get_context_agent_id, get_session_proof_origin
 
+    if get_session_proof_origin() == "server_inferred":
+        # On a server-inferred binding the handler's writer turns on an async
+        # exemption check of the resolved agent (_inferred_writer_exempt) that
+        # this synchronous recovery cannot repeat, so it does not guess.
+        return None
     candidate = dict(arguments)
     try:
         if store and _store_needs_registered_writer(candidate):
@@ -1819,7 +1954,9 @@ def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
     }
     _attach_store_response_hints(response, state)
     _attach_store_related_discoveries(response, state)
-    return success_response(response, arguments=request.arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> Sequence[TextContent]:
@@ -1845,7 +1982,7 @@ async def handle_store_knowledge_graph(
 ) -> Sequence[TextContent]:
     """Store one discovery or delegate a discovery batch."""
     arguments = apply_param_aliases("store_knowledge_graph", arguments)
-    agent_id, error, display_name_warning, is_anonymous_writer = _resolve_store_writer(arguments)
+    agent_id, error, display_name_warning, is_anonymous_writer = await _resolve_store_writer(arguments)
     if error:
         return [error]
 
@@ -3895,13 +4032,27 @@ def _effective_update_severity(
 
 
 def _resolve_update_writer(
-    request: _KnowledgeUpdateRequest, discovery: DiscoveryNode
+    request: _KnowledgeUpdateRequest,
+    discovery: DiscoveryNode,
+    *,
+    inferred_exempt: Optional[bool] = None,
 ) -> str:
-    """Apply the effective-severity identity gate for discovery updates."""
+    """Apply the effective-severity identity gate for discovery updates.
+
+    ``inferred_exempt`` is ``_inferred_writer_exempt()`` for this call; the
+    same server-inferred binding rule as ``_resolve_store_writer`` applies.
+    """
     if _effective_update_severity(request, discovery) in _GATED_SEVERITIES:
+        refusal = _gated_write_refused_on_inferred_binding(
+            inferred_exempt, update=True
+        )
+        if refusal is not None:
+            raise _UpdateResponseError(refusal)
         agent_id, error = require_registered_agent(request.arguments)
     else:
-        agent_id, error, _ = _resolve_low_friction_writer(request.arguments)
+        agent_id, error, _ = _resolve_low_friction_writer(
+            request.arguments, inferred_exempt=inferred_exempt
+        )
     if error:
         raise _UpdateResponseError(error)
     return agent_id
@@ -4623,7 +4774,9 @@ def _build_update_response(
                 normalized_status,
                 notes_passed=request.resolution_note is not None,
             )
-    return success_response(payload, arguments=request.arguments)
+    return success_response(
+        payload, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_discovery_update(
@@ -4636,7 +4789,9 @@ async def _execute_discovery_update(
             await _discovery_not_found(request.discovery_id, graph)
         )
 
-    agent_id = _resolve_update_writer(request, discovery)
+    agent_id = _resolve_update_writer(
+        request, discovery, inferred_exempt=await _inferred_writer_exempt()
+    )
     _authorize_high_severity_update(request, discovery, agent_id)
     updates, normalized_status = _build_discovery_updates(request, discovery)
 
@@ -5082,7 +5237,9 @@ def _build_batch_store_response(
             f"{truncated_count} discovery(ies) had content truncated. "
             f"Limits: summary={MAX_SUMMARY_LEN}, details={MAX_DETAILS_LEN} chars."
         )
-    return success_response(response, arguments=arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(arguments)
+    )
 
 
 async def _handle_store_knowledge_graph_batch(
@@ -5288,7 +5445,9 @@ def _build_note_response(
             "Stored under a lightweight anonymous writer ID. "
             "Bind an identity first if you want authorship continuity."
         )
-    return success_response(response, arguments=request.arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_note_write(
@@ -5306,7 +5465,7 @@ async def handle_knowledge_note(
     """Implement the preferred knowledge(action='note') write path."""
     arguments.setdefault("_tool_name", "knowledge")
     agent_id, error, is_anonymous_writer = _resolve_low_friction_writer(
-        arguments
+        arguments, inferred_exempt=await _inferred_writer_exempt()
     )
     if error:
         return [error]
@@ -5552,16 +5711,23 @@ def _supersede_notes_block_details(
 
 
 def _authorize_supersede_notes(
-    request: _KnowledgeUpdateRequest, finding: DiscoveryNode, old_id: str
+    request: _KnowledgeUpdateRequest,
+    finding: DiscoveryNode,
+    old_id: str,
+    *,
+    inferred_exempt: Optional[bool] = None,
 ) -> None:
     """Refuse notes on a high or critical finding from anyone but its owner.
 
     Run on the first read, before the supersede writes anything, and again on
     the read taken just before the flip: a finding raised to high or critical
     in between is held to the rule as it stands then. Raises
-    _UpdateResponseError.
+    _UpdateResponseError. ``inferred_exempt`` is ``_inferred_writer_exempt()``
+    for this call.
     """
-    agent_id = _resolve_update_writer(request, finding)
+    agent_id = _resolve_update_writer(
+        request, finding, inferred_exempt=inferred_exempt
+    )
     if _effective_update_severity(request, finding) in _GATED_SEVERITIES:
         _require_owned_binding(request, agent_id)
         if finding.agent_id != agent_id:
@@ -5620,7 +5786,9 @@ async def _prepare_supersede_notes(
         tags=None,
         superseded_by=new_id,
     )
-    _authorize_supersede_notes(request, old, old_id)
+    _authorize_supersede_notes(
+        request, old, old_id, inferred_exempt=await _inferred_writer_exempt()
+    )
     _supersede_notes_block_details(request, old)
     return request
 
@@ -5641,8 +5809,11 @@ async def _supersede_flip_details(
     latest = await graph.get_discovery(old_id)
     if latest is None:
         return None, f"'{old_id}' could not be read again before the flip."
+    inferred_exempt = await _inferred_writer_exempt()
     try:
-        _authorize_supersede_notes(request, latest, old_id)
+        _authorize_supersede_notes(
+            request, latest, old_id, inferred_exempt=inferred_exempt
+        )
     except _UpdateResponseError:
         return None, (
             f"'{old_id}' was raised to high or critical while the supersede "
@@ -5742,7 +5913,9 @@ async def handle_supersede_discovery(arguments: Dict[str, Any]) -> Sequence[Text
                         f"knowledge(action='update', discovery_id='{old_id}', "
                         "status='superseded', resolution_notes=...)."
                     )
-            return success_response(result, arguments=arguments)
+            return success_response(
+                result, arguments=_anonymous_writer_signature_arguments(arguments)
+            )
         else:
             return [error_response(result.get("error", "Failed to create SUPERSEDES edge"))]
     except Exception as e:

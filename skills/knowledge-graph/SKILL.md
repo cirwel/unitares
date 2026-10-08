@@ -222,6 +222,15 @@ system-managed, not a routine agent transition. High/critical discoveries have
 stricter identity and ownership rules; a non-owner may close one only through
 the allowed terminal status path (`resolved`, `closed`, `wont_fix`).
 
+A write whose binding the server only inferred (`proof_origin:
+"server_inferred"`: a fingerprint or pin match, not your `client_session_id`)
+is not credited to the agent it matched. A low or medium store, note or update
+is written under the anonymous writer id (`anonkg_*`); under strict identity a
+high or critical store or update is refused with the typed `identity_required`
+refusal and nothing is written. Pass your `client_session_id` to write as
+yourself. Substrate-earned residents, which resolve by fingerprint by design,
+keep their attribution, as they do for check-ins.
+
 ## Tagging Best Practices
 
 Tags are how future agents find your contributions. Be intentional:
