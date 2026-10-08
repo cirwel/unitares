@@ -37,6 +37,13 @@ for the component comparison under the substitute map. The classes of both
 claims are unchanged; claim 8 is the one it presses hardest (see open
 question 4).
 
+**Addendum 2026-10-06:** the Agent Passport System (APS) was added to the
+substitute map, with a component comparison, after an operator asked
+whether it encroaches. Its README was opened, then its dispute,
+contestability and reputation sources were read at commit `c31d94a`. No
+claim's class changes; claim 5 is the one it presses hardest (see open
+question 5).
+
 ---
 
 ## TL;DR
@@ -110,6 +117,7 @@ result only, not byte-verified; **blocked** = the primary domain refused.
 | **Langfuse** (MIT, representative of LangSmith, Phoenix, Weave, Braintrust) | Tracing of LLM calls and agent actions, LLM-as-judge and manual evaluation, prompt management, self-hosting | Cross-process identity, claims versus outcomes, adjudication, pausing | opened (README) |
 | **AgentLens** (MIT, 23 stars) | SHA-256 hash-chained append-only audit of LLM calls, tool invocations, approvals and errors; OTel GenAI ingestion without an SDK; MCP server; self-hosted on SQLite or Postgres; EU AI Act Article 12 framing; guardrails with dry-run; multi-tenancy | Identity continuity across restarts, outcome feedback loops, review workflows, policy enforcement or pausing, claim-to-evidence linking | opened (README) |
 | **Hindsight** (vectorize-io, MIT; added 2026-10-04) | Agent memory over Postgres and pgvector: `retain` (LLM extraction of facts, entities, relationships, time), `recall` (semantic, BM25, graph and temporal in parallel), `reflect` (synthesis); *observations*, deduplicated beliefs that keep supporting quotes and a proof count and are refined rather than overwritten; *mental models* and *knowledge pages*, standing answers rewritten in the background; isolated *banks* per user, agent or project; a built-in MCP endpoint per bank; a coding-agents package (Claude Code, Codex, Cursor and others) that builds a per-repo bank from git history and past sessions and injects knowledge pages on in-flight work at session start; opt-in secret and PII scanning; LLM required for retain and reflect, local backends (Ollama, llama.cpp) supported | Process-attributed writes and lineage (a bank is a storage partition, not a writer identity), epistemic labels on claims, review or adjudication records, binding of predictions or check-ins to later outcomes, policy verdicts or pausing | opened (README) |
+| **Agent Passport System (APS)** (Apache-2.0; TypeScript reference, Python, Go and Rust SDKs; IETF `draft-pidlisnyi-aps-03`; added 2026-10-06) | Ed25519 passports and DIDs (credential identity); delegation that can only narrow, with cascade revocation; a gateway that denies out-of-scope actions before they run; a signed receipt for every allow or deny, JCS-canonical, verifiable across implementations by a conformance suite; `scope_of_claim` with `asserts` and `does_not_assert` on every receipt; `ContestabilityReceipt` (contest filed against an action receipt, standing basis, grounds, requested remedy, a separately signed controller response with status); signed dispute artifacts whose open state freezes the disputed scopes (built and exported, with no test); per-(principal, agent, scope) reputation as (mu, sigma) updated on success or failure, gating authority tiers; MCP server | Process-instance attribution and lineage across restarts; binding of a prior claim or prediction to a later outcome (receipts state they do not prove the side effect or the business outcome); continuity, shared memory, reconstruction; implemented enforcement on dispute artifacts: their resolution fields (bond return or slash, reputation impact, revocation, resolver role) exist only as types, and the freeze overlay is not called anywhere in this repository (the gateway package, `@aeoess/gateway`, was not read). For an upheld or remedied contest receipt there is an implemented, tested primitive that computes which receipts depending on the contested action are tainted, over a reference graph the caller supplies; nothing in this repository calls it | opened (README and source) |
 | **IETF `draft-sharif-agent-audit-trail`** (-03, 2026-09) | JSON audit records with agent identity, action classification, outcome and trust level; SHA-256 hash chain over JCS; optional ECDSA; EU AI Act, SOC 2, ISO 42001 mappings | Linking a prior claim or prediction to a later outcome, adjudication records, parent-child lineage (per a conformant implementation's own "lossy mapping" note) | impl (omega-evidence README); datatracker blocked |
 | **IETF `draft-kuehlewind-audit-architecture`** | An architecture for auditing agent delegation and interactions | Not opened; listed for follow-up | snippet; datatracker blocked |
 | **Temporal** (durable execution) | Workflows that survive process failure with automatic retry; event history | Agents, behavioral monitoring, claims versus outcomes, adjudication (not its problem) | opened (README) |
@@ -149,6 +157,42 @@ models) are field-standard and say nothing about copying.
 retrieval, deduplication and handoff, the strongest open memory substitute
 is ahead.
 
+### Component comparison: Agent Passport System (2026-10-06)
+
+APS's README and its dispute, contestability and reputation sources were
+read once, at commit `c31d94a`. "Implemented" below means a function that
+builds or evaluates the structure and a test that exercises it; a field that
+appears only in a type declaration is listed as declared.
+
+| Component | APS | UNITARES | Reading |
+|---|---|---|---|
+| Identity | Ed25519 passports, DIDs, key rotation: credential identity | Process-instance record for attribution, with declared lineage | Different meanings of the word; APS sits with Entra and SPIFFE (gap 3) |
+| Record of actions | Signed, JCS-canonical receipts for allow and deny, cross-implementation conformance, browser verifier | Queryable, replayable audit log; not hash-chained or signed (gap 1) | APS ahead |
+| Claim boundaries | `scope_of_claim` `asserts` / `does_not_assert` on every receipt; verifiers must reject a valid receipt used for another claim | Provenance on every emitted value (trust contract §1); "what this does not establish" in the evidence ledger | Same discipline; APS carries it in the signed record |
+| Contest filing | `ContestabilityReceipt`: implemented and tested. Signed `DisputeArtifact` with evidence, bond and freeze scope: built and exported, with no test | `request_review` opens a dialectic session tied to a discovery or a pause | Comparable |
+| Contest resolution | Controller response with a status. For an upheld or remedied contest, a pure function computes the receipts that depend on the contested action, directly and transitively, as tainted, over a caller-supplied reference graph (`computeDownstreamTaint`: implemented and tested, not called in this repository). Dispute-artifact enforcement (bond, reputation, revocation, resolver role): declared, not implemented | Thesis, antithesis and synthesis messages; conditions recorded on resolution, of which only a complexity cap binds (a risk target can only raise guidance, and conditions are held in memory, lost on reload); resumes a paused agent, even when a condition fails to apply; annotates the linked discovery | Different consequences: APS can flag dependent records (a tested primitive, unwired), UNITARES releases the agent (wired). Neither enforces most of what a resolution states |
+| Holding an agent during a contest | Freeze overlay on disputed scopes: built and exported, with no test, and not called in this repository; the separate gateway package was not read | Pause holds governed writes until dialectic, recovery or expiry | UNITARES's is wired; APS's is unverified |
+| Enforcement | Gateway denies before execution | Advisory proceed/guide/pause; enforcement delegated to runtimes (claim 7) | APS ahead; commodity per claim 7 |
+| Behavioural trust | (mu, sigma) per scope from a caller-supplied success flag, fixed deltas by task class, tier gating, temporal decay | Continuous EISV estimate from check-ins, with outcomes that can bind to a prior prediction | Different mechanisms; neither validated against the other |
+| Outcomes | Explicitly out of a receipt's claim | `record_result` with single-use prediction binding | UNITARES only |
+| Continuity and memory | None found | Lineage, shared knowledge graph | UNITARES only |
+
+**Provenance check.** Not run: no reason surfaced to suspect copying, and
+the two projects use different vocabularies for overlapping ideas.
+
+**Reading.** APS is the closest substitute yet for the review record (claim
+5): it has a standards-track contest record where the map previously listed
+only methods and approval states. What it does not have, as read, is an
+implemented resolution with enforced conditions, but neither does UNITARES:
+its conditions are advisory apart from a complexity cap. APS has a tested
+primitive that flags the receipts downstream of an upheld contest, which
+nothing in its repository calls; UNITARES's resolution is wired, resuming
+the agent and annotating the discovery.
+What remains different is that UNITARES's review sits in the same record as
+the agent's check-ins and outcomes. Whether that still earns claim 5's
+"strongest" label is open question 5. APS is the strongest available answer
+to gap 1.
+
 ---
 
 ## Claim-by-claim audit
@@ -159,13 +203,13 @@ is ahead.
 | 2 | "Its federation kernel connects independent runtimes to one operator-controlled server" (README, public site) | capability with implied uniqueness | A2A 1.0.0 owns cross-runtime interoperability | **Unsupported as read** | — | Rewrite: the runtimes interoperate over A2A or their own transports; UNITARES is the shared record behind them. Define "federation" once, in the narrow sense, with the A2A disambiguation |
 | 3 | "Identity and lineage — know which process acted and where inherited work came from" (README) | capability | Entra Agent ID, Google attested identity, AgentCore Identity (credential identity); Relay scopes (execution lineage) | Differentiated | Exercised path | Keep; add "for attribution, not authentication", which `SCOPE_AND_THREAT_MODEL.md` already states |
 | 4 | "Claims and evidence — retain important findings, corrections, and their provenance outside any one context window" (README) | capability | Memory services (Hindsight observations, AgentCore Memory), evaluation datasets (Langfuse), audit logs (AgentLens, IETF AAT record actions, not claims) | Differentiated | Exercised path | Keep |
-| 5 | "Governed review — preserve disagreement, conditions, and resolution as part of the work record" (README) | capability | Multiagent debate (a method, no record); approval and input-required states (AgentLens approvals, A2A `INPUT_REQUIRED`); IETF human-in-the-loop drafts (not opened) | **Differentiated, strongest** | Exercised path (81 non-canary verdicts; reviewer-label study) | Keep; this and row 6 are the sentence to lead with |
+| 5 | "Governed review — preserve disagreement, conditions, and resolution as part of the work record" (README) | capability | APS `ContestabilityReceipt` and signed dispute artifacts (contest receipt implemented and tested; a downstream-taint primitive implemented and tested but not called; dispute artifact and freeze overlay built but untested; dispute enforcement declared only); multiagent debate (a method, no record); approval and input-required states (AgentLens approvals, A2A `INPUT_REQUIRED`); IETF human-in-the-loop drafts (not opened) | **Differentiated, strongest** | Exercised path (81 non-canary verdicts; reviewer-label study) | Keep; this and row 6 are the sentence to lead with |
 | 6 | "Outcome grounding — connect predictions and check-ins to what later happened" (README) | capability | IETF AAT `outcome` (action outcome, no prediction binding); evaluation platforms score outputs without binding to prior self-reports | Differentiated | Exercised path; predictive lift: non-detection, inconclusive | Keep the capability wording; never let "grounding" read as validated prediction |
-| 7 | "Runtime policy — return an action, reason, and next step at meaningful checkpoints" (README) | capability | Relay middleware, AgentCore Policy (Cedar), Google Agent Gateway and Model Armor, DriftGate | Commodity as enforcement; differentiated only in the contestability fields (reason, next step, review path) | Pause actuation: event reconciled, protection untested | Keep; state that enforcement is delegated to runtimes (the 2026-09-16 Relay gate is the pattern) |
+| 7 | "Runtime policy — return an action, reason, and next step at meaningful checkpoints" (README) | capability | Relay middleware, AgentCore Policy (Cedar), Google Agent Gateway and Model Armor, DriftGate, APS gateway | Commodity as enforcement; differentiated only in the contestability fields (reason, next step, review path) | Pause actuation: event reconciled, protection untested | Keep; state that enforcement is delegated to runtimes (the 2026-09-16 Relay gate is the pattern) |
 | 8 | "Reconstruction — give a successor the records needed to understand and continue earlier work" (README) | capability | Temporal event history (execution state); Relay ATIF trajectories; AgentCore Memory; Hindsight coding-agent knowledge pages | Commodity for execution state; differentiated for records of claims, review and outcomes | Untested versus git plus handoff (already stated) | Keep with the existing caveat |
 | 9 | "an operator-owned accountability layer across coding agents, research agents, residents, and custom runtimes" (README) | positioning | AgentLens (self-hosted, MIT) plus OTel GenAI plus an AAT export | Differentiated | — | Sharpen to "self-hosted and vendor-neutral"; name the open substitute honestly |
 | 10 | "self-hosted federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction" (`PRODUCT_DEFINITION.md`) | combination | None opened covers all five | Differentiated combination | Benefit untested | Keep the five nouns; fix "federation" per row 2 |
-| 11 | "The deployed policy path uses auditable behavioral state estimation" (public site) | capability | MI9 (conformance, risk index, drift); DriftGate drift | Differentiated technically (continuous estimator versus discrete conformance) | Predictive validity: research claim, not guarantee (trust contract §4) | Keep with the caveat that already follows it |
+| 11 | "The deployed policy path uses auditable behavioral state estimation" (public site) | capability | MI9 (conformance, risk index, drift); DriftGate drift; APS per-scope (mu, sigma) reputation (outcome counting, not state estimation) | Differentiated technically (continuous estimator versus discrete conformance) | Predictive validity: research claim, not guarantee (trust contract §4) | Keep with the caveat that already follows it |
 | 12 | "Many agents, one record" (public site tagline) | positioning | Any multi-agent observability product | Commodity | — | Keep; it is a description, not a claim |
 | 13 | "runs beside evals, guardrails, and sandboxes and replaces none of them" (public site) | scope | — | honest | — | Keep |
 | 14 | "Every value UNITARES emits carries provenance" (trust contract §1) | system guarantee | Not a competitive claim | — | Enforced by lint | Keep |
@@ -185,6 +229,9 @@ is ahead.
    carried in `action_detail` as one conformant implementation already does,
    is a small change that makes the record legible to every tool built for
    that draft.
+   APS receipts (signed, JCS-canonical, conformance-tested, with explicit
+   `asserts` / `does_not_assert`) are a second candidate shape, closer than
+   the audit-trail draft to the record's own claim discipline.
 2. **No standard emission.** Until the Relay exporter (2026-09-16) the record
    received events only through its own tools and hooks. An OpenTelemetry
    GenAI exporter would let any Langfuse, Phoenix, or AgentLens user see
@@ -252,3 +299,14 @@ each should land with the canonical wording registered in
    so, it belongs in the control arm of any reconstruction test, beside the
    transcript, and a "differentiated" class on claim 8 has to survive that
    comparison rather than a comparison with execution history.
+5. Should a UNITARES review resolution be exportable as an APS
+   `ContestabilityReceipt` with its controller response, or should UNITARES
+   sign its own records in that shape? Either answers gap 1 for the review
+   record. APS already has a tested primitive for one resolution
+   consequence (flagging the receipts downstream of an upheld contest),
+   though nothing in its repository calls it, and UNITARES's own
+   resolution conditions are mostly advisory, so the "strongest" label on
+   claim 5 is due a re-read against APS now. That is the operator's
+   judgement; this document does not change the label. If APS also
+   implements the dispute enforcement it declares (bond, reputation impact,
+   revocation, resolver role), the distance from claim 5 narrows further.

@@ -21,6 +21,10 @@ esac
 : "${IMAGE_NAME:?IMAGE_NAME is required}"
 : "${LEASE_PLANE_IMAGE_NAME:?LEASE_PLANE_IMAGE_NAME is required}"
 : "${LEASE_PLANE_DIGEST:?LEASE_PLANE_DIGEST is required}"
+: "${POSTGRES_IMAGE_NAME:?POSTGRES_IMAGE_NAME is required}"
+# Set but empty when the release's Compose file builds its database locally, so
+# a caller that forgets to pass the database evidence still fails here.
+: "${POSTGRES_DIGEST?POSTGRES_DIGEST must be set (empty when the release has no database image)}"
 
 [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid release tag: $RELEASE_TAG"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "Invalid release version: $VERSION"
@@ -28,6 +32,9 @@ esac
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || die "Invalid release source SHA: $SOURCE_SHA"
 [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid release digest: $DIGEST"
 [[ "$LEASE_PLANE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid lease-plane digest: $LEASE_PLANE_DIGEST"
+if [ -n "$POSTGRES_DIGEST" ]; then
+  [[ "$POSTGRES_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid database digest: $POSTGRES_DIGEST"
+fi
 
 current_source=$(git rev-list -n 1 "$RELEASE_TAG" 2>/dev/null) || \
   die "$RELEASE_TAG is no longer a readable tag."
@@ -76,6 +83,19 @@ fi
   die "Invalid current lease-plane digest for $RELEASE_TAG: $lease_plane_digest"
 if [ "$lease_plane_digest" != "$LEASE_PLANE_DIGEST" ]; then
   die "The lease plane's $RELEASE_TAG now resolves to $lease_plane_digest, not verified digest $LEASE_PLANE_DIGEST."
+fi
+
+# The same holds for the database image, when the release's Compose file pulls one.
+if [ -n "$POSTGRES_DIGEST" ]; then
+  if ! postgres_digest=$(docker buildx imagetools inspect \
+    "$REGISTRY/$POSTGRES_IMAGE_NAME:$RELEASE_TAG" --format '{{json .Manifest}}' | jq -r .digest); then
+    die "Could not resolve the current database digest for $RELEASE_TAG."
+  fi
+  [[ "$postgres_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || \
+    die "Invalid current database digest for $RELEASE_TAG: $postgres_digest"
+  if [ "$postgres_digest" != "$POSTGRES_DIGEST" ]; then
+    die "The database's $RELEASE_TAG now resolves to $postgres_digest, not verified digest $POSTGRES_DIGEST."
+  fi
 fi
 
 if ! current_latest=$(docker buildx imagetools inspect \
