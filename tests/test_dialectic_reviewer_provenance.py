@@ -104,7 +104,7 @@ def _rows_by_type(add_message_mock):
 async def test_synthetic_verdict_rows_carry_reviewer_backend(server_patch, monkeypatch):
     from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
 
-    monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3:8b")
+    monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3:8b")
     session = _make_session(reviewer_id=None)
     ACTIVE_SESSIONS[session.session_id] = session
 

@@ -35,6 +35,19 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
+- v3.3.0 removes the three older local-model setting names that v3.2.0 kept
+  as aliases: `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (replaced
+  by `UNITARES_MODEL_BASE_URL`) and `UNITARES_LLM_MODEL` (replaced by
+  `UNITARES_MODEL_ID`). Nothing reads them any more, and Docker Compose no
+  longer passes them into the server container. An install that still sets
+  only the old names gets no error and no warning: the server, the
+  orchestrated reviewer and the local residents fall back to the defaults
+  (`http://localhost:11434/v1` and `gemma4:latest`), which inside a container
+  usually means consult and the local reviewer cannot reach a model. Rename
+  the settings in `.env`, the LaunchAgent plist, or wherever the environment
+  is set; an Ollama root URL can move over unchanged, because a base with no
+  path gets `/v1` added. `./scripts/unitares model` rewrites `.env` with the
+  new names.
 - v3.2.0 removes no registered callable's canonical name. It retires 37 of
   the last 38 pre-consolidation aliases, each of which renamed one router call
   and injected its action (`list_agents`, `observe_agent`,

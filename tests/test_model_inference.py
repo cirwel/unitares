@@ -134,7 +134,7 @@ class TestInferenceHostRegistry:
     async def test_list_inference_hosts_includes_active_and_placeholder_hosts(self):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
-             patch.dict(os.environ, {"UNITARES_LLM_MODEL": "test-local:latest"}, clear=False):
+             patch.dict(os.environ, {"UNITARES_MODEL_ID": "test-local:latest"}, clear=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
             result = await handle_list_inference_hosts({})
 
@@ -500,8 +500,8 @@ class TestOllamaRouting:
 
     @pytest.mark.asyncio
     async def test_ollama_uses_default_model_for_auto(self, monkeypatch):
-        """Ollama with model=auto defaults to gemma4:latest (UNITARES_LLM_MODEL fallback)."""
-        monkeypatch.delenv("UNITARES_LLM_MODEL", raising=False)
+        """Ollama with model=auto defaults to gemma4:latest (no UNITARES_MODEL_ID set)."""
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
         mock_client_instance = MagicMock()
         mock_client_instance.chat.completions.create.return_value = _make_mock_response(
             model="gemma4:latest"
@@ -520,9 +520,9 @@ class TestOllamaRouting:
         assert call_kwargs["model"] == "gemma4:latest"
 
     @pytest.mark.asyncio
-    async def test_ollama_auto_respects_unitares_llm_model_env(self, monkeypatch):
-        """UNITARES_LLM_MODEL env var overrides the gemma4:latest default."""
-        monkeypatch.setenv("UNITARES_LLM_MODEL", "qwen3-coder-next:latest")
+    async def test_ollama_auto_respects_unitares_model_id_env(self, monkeypatch):
+        """UNITARES_MODEL_ID env var overrides the gemma4:latest default."""
+        monkeypatch.setenv("UNITARES_MODEL_ID", "qwen3-coder-next:latest")
         mock_client_instance = MagicMock()
         mock_client_instance.chat.completions.create.return_value = _make_mock_response(
             model="qwen3-coder-next:latest"
@@ -862,7 +862,7 @@ class TestAutoProviderSelection:
         mock_socket.connect_ex.return_value = 1  # No Ollama
 
         # Google key present but should be ignored; HF should win.
-        monkeypatch.delenv("UNITARES_LLM_MODEL", raising=False)
+        monkeypatch.delenv("UNITARES_MODEL_ID", raising=False)
         env = {"GOOGLE_AI_API_KEY": "ignored_key", "HF_TOKEN": "hf_test_token"}
         with patch("src.mcp_handlers.support.model_inference.OPENAI_AVAILABLE", True), \
              patch("src.mcp_handlers.support.model_inference.OpenAI", return_value=mock_client_instance), \

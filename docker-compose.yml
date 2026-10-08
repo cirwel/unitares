@@ -267,8 +267,9 @@ services:
       # http://host.docker.internal:11434/v1), and UNITARES_MODEL_ID a model it
       # serves. A privacy='local' request goes only to an endpoint the server
       # classifies local; a Compose service name such as vllm is local only
-      # when listed in UNITARES_MODEL_LOCAL_HOSTS. The older names below are
-      # aliases until v3.3.0 and are read only when the new ones are empty.
+      # when listed in UNITARES_MODEL_LOCAL_HOSTS. The older
+      # UNITARES_OLLAMA_BASE, UNITARES_OLLAMA_BASE_URL and UNITARES_LLM_MODEL
+      # were removed in v3.3.0 and are no longer passed in: rename them in .env.
       UNITARES_MODEL_BASE_URL: ${UNITARES_MODEL_BASE_URL:-}
       UNITARES_MODEL_ID: ${UNITARES_MODEL_ID:-}
       UNITARES_MODEL_LOCAL_HOSTS: ${UNITARES_MODEL_LOCAL_HOSTS:-}
@@ -276,9 +277,6 @@ services:
       # The classifier also reads UNITARES_TRUSTED_NETWORKS (mapped above), so a
       # model on a tailnet peer (100.64.0.0/10) is local once that range is
       # listed there.
-      UNITARES_OLLAMA_BASE: ${UNITARES_OLLAMA_BASE:-}
-      UNITARES_OLLAMA_BASE_URL: ${UNITARES_OLLAMA_BASE_URL:-}
-      UNITARES_LLM_MODEL: ${UNITARES_LLM_MODEL:-}
       # Optional: pick embedding backend. Default falls back to PG FTS if
       # sentence-transformers / model not available at runtime.
       # UNITARES_EMBEDDING_MODEL: bge-m3
