@@ -346,7 +346,7 @@ while read -r pr; do
   jq -e --arg l "$OPERATOR_ARMED_LABEL" 'any(.labels[]?; .name == $l)' <<<"$pr" >/dev/null && continue
   if ! armed_by_script "$n" "$(jq -r '.autoMergeRequest.enabledAt // empty' <<<"$pr")"; then
     reason="it was armed outside the queue"
-    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks and \`review\` pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
+    hand_notice="disarmed: this PR was armed by hand, outside the merge queue. The queue arms one PR at a time, and an arm it did not make holds that slot. Please don't re-arm it. If it carries \`$LABEL\`, the queue arms it in turn once its checks pass; if it does not, it waits for that label (AGENTS.md says who may apply it). The operator can land a PR outside the queue by labelling it \`$OPERATOR_ARMED_LABEL\` first."
   elif [ -n "$operator_arm" ]; then
     reason="the operator armed #$operator_arm, which takes the slot"
   elif held_by=$(operator_only "$pr"); then

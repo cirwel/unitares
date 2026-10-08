@@ -106,13 +106,18 @@ veto by removing the label.
   4); arming by hand is the operator's. **Marking ready** is the working agent's:
   the agent that owns the PR declares readiness itself, once its validation
   actually passed: CI green, a review run where a reviewer is available (see
-  "Review workflow" below) with any P0/P1 or security findings addressed, and
-  no collision with an in-flight branch. **Review is advisory and does not gate
-  merging** (operator decision, 2026-10-06): the `review` check is not a
-  required check, and the merge queue no longer waits on it
-  (`PR_QUEUE_REQUIRED_CHECKS=review` in `scripts/ops/pr-babysitter.sh` restores
-  that). Where no reviewer can run (a cloud session, a disabled provider, the
-  round cap spent), the PR body says so and the PR proceeds. Earlier decision,
+  "Review workflow" below) with any findings addressed (fixed, or answered
+  with `review.sh dispose`), and no collision with an in-flight branch.
+  **An unreviewed PR is not held** (operator decision, 2026-10-06): the
+  `review` check is not a required check, and the merge queue no longer waits
+  for it to pass (`PR_QUEUE_REQUIRED_CHECKS=review` in
+  `scripts/ops/pr-babysitter.sh` restores that). A neutral `review` (no review,
+  or a reviewer that could not finish) no longer holds a labelled PR. A
+  `review` of `action_required` still does: findings without dispositions, or
+  a sensitive diff that has passed one model family but not two, park the PR
+  in the queue like any check waiting on action. Where no reviewer can run (a
+  cloud session, a disabled provider, the round cap spent), the PR body says
+  so, names the unavailable reviewer, and the PR proceeds. Earlier decision,
   2026-10-04: cloud sessions cannot run `review.sh`, and the gate had become
   the main thing stopping finished PRs; 2026-10-06 removed the last queue-side
   block.
@@ -135,10 +140,14 @@ veto by removing the label.
 
 ### Review workflow
 
-> **Advisory since 2026-10-06.** Nothing below blocks merging: not the `review`
-> check, the round cap, `--authorize-full-review`, or the two-family rule. They
-> describe how to get a good review when one is available. Quality still comes
-> first; the point is that an unavailable reviewer never stops a finished PR.
+> **Not a merge gate since 2026-10-06.** A missing or unfinished review no
+> longer holds a PR: the merge queue arms on ready + label + required CI. What
+> follows still applies to the review you run. The round cap still bounds paid
+> full rounds (another needs the operator's own `--authorize-full-review`), and
+> a `review` check of `action_required` (undisposed findings, or a sensitive
+> diff with one passing family of two) still parks the PR in the queue. Quality
+> still comes first; the point is that an unavailable reviewer never stops a
+> finished PR.
 
 "Review round joined" used to be prose: some PRs carried a
 review in the body, some in a comment, most in neither, and nothing could tell

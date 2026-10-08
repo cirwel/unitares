@@ -759,6 +759,38 @@ def test_review_is_advisory_by_default(tmp_path: Path) -> None:
     assert calls == [_arm(1)]
 
 
+def test_review_action_required_still_holds_by_default(tmp_path: Path) -> None:
+    # Undisposed findings, or a sensitive diff with one family of two, post
+    # `review` as ACTION_REQUIRED; the default still parks that PR.
+    pr = _pr(1, review=None, checks=[_check("test"), _check("review", "ACTION_REQUIRED", run=5)])
+    calls, out = _run(tmp_path, [pr, _pr(2)], timelines={1: _timeline(12), 2: _timeline(8)},
+                      PR_QUEUE_REQUIRED_CHECKS="")
+    assert _arm(1) not in calls and calls[-1] == _arm(2)
+    assert "ACTION_REQUIRED" in out
+
+
+@pytest.mark.parametrize("case", ["fork", "operator-only", "manifest-missing", "behind", "armed-behind"])
+def test_safety_holds_do_not_depend_on_the_review_gate(tmp_path: Path, case: str) -> None:
+    # The same holds as with PR_QUEUE_REQUIRED_CHECKS=review, under the default.
+    env: dict = {"PR_QUEUE_REQUIRED_CHECKS": ""}
+    kw: dict = {}
+    if case == "fork":
+        prs, expected = [_pr(1, fork=True)], []
+    elif case == "operator-only":
+        prs, expected = [_pr(1, labels=(LABEL, "governance-sensitive"))], []
+    elif case == "manifest-missing":
+        prs, expected = [_pr(1)], []
+        env["PR_QUEUE_SENSITIVITY_MANIFEST"] = str(tmp_path / "gone.tsv")
+    elif case == "behind":  # updated first, never armed on the stale head
+        prs, expected = [_pr(1, state="BEHIND")], ["pr update-branch 1 -R o/r"]
+    else:  # a queue arm seen BEHIND is disarmed before the update
+        prs = [_pr(3, armed_min_ago=30, state="BEHIND")]
+        expected = ["pr merge 3 -R o/r --disable-auto", "pr update-branch 3 -R o/r"]
+        kw = {"base_idle_min": 0, "arms": {3: 30}}
+    calls, _ = _run(tmp_path, prs, **kw, **env)
+    assert calls == expected
+
+
 def test_required_checks_are_configurable(tmp_path: Path) -> None:
     calls, _ = _run(tmp_path, [_pr(1, review=None)], PR_QUEUE_REQUIRED_CHECKS="")
     assert calls == [_arm(1)]
