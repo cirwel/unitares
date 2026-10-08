@@ -1,0 +1,65 @@
+name: Postgres Image
+
+# Builds the Compose database image exactly as Publish Container does at
+# release (same Dockerfile, context and platforms), without pushing. A release
+# publishes it for linux/amd64 and linux/arm64; arm64 is built under QEMU on an
+# amd64 runner, and Promote Release refuses a release whose Compose file pulls
+# an image that does not verify. So a build that breaks on either platform must
+# fail here, on the pull request that caused it, not at the next release.
+#
+# Path-filtered to what the image is built from: the Dockerfile and the one
+# file it copies (migrations are mounted at runtime, not baked in), plus the
+# publishing workflow.
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'db/postgres/Dockerfile.age-vector'
+      - 'db/postgres/init-extensions.sql'
+      - '.github/workflows/publish-container.yml'
+      - '.github/workflows/postgres-image.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'db/postgres/Dockerfile.age-vector'
+      - 'db/postgres/init-extensions.sql'
+      - '.github/workflows/publish-container.yml'
+      - '.github/workflows/postgres-image.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: postgres-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (linux/amd64, linux/arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4
+
+      - name: Build both release platforms without pushing
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: db/postgres
+          file: db/postgres/Dockerfile.age-vector
+          platforms: linux/amd64,linux/arm64
+          push: false
+          # The same cache scope Publish Container uses for this image, so a
+          # green check here also warms the release build.
+          cache-from: type=gha,scope=postgres
+          cache-to: type=gha,mode=max,scope=postgres
