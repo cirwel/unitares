@@ -1184,7 +1184,9 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
     try:
         from ..support import agent_auth as _auth
 
-        signature = _auth.compute_agent_signature(arguments=arguments)
+        signature = _auth.compute_agent_signature(
+            arguments=_anonymous_writer_signature_arguments(arguments)
+        )
     except Exception as exc:
         logger.debug("Could not enrich KG agent display with signature: %s", exc)
         return agent_display
@@ -1204,6 +1206,25 @@ def _agent_display_for_response(agent_id: str, arguments: Dict[str, Any]) -> Dic
             agent_display[key] = signature[key]
 
     return agent_display
+
+
+def _anonymous_writer_signature_arguments(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """The arguments a response's signature is computed from.
+
+    An anonymous write records ``anonkg_*`` in ``agent_id``, but the session
+    may still carry a server-inferred binding to some agent, and
+    ``compute_agent_signature`` reads that binding whenever the arguments name
+    an identity. A response for an anonymous write must not then name the
+    inferred agent as its author, so the identity keys are dropped from a
+    copy: with none, an inferred binding signs as no one, and an unbound
+    session already did. Other arguments pass through unchanged.
+    """
+    if not str(arguments.get("agent_id") or "").startswith(_ANONYMOUS_WRITER_PREFIX):
+        return arguments
+    unsigned = dict(arguments)
+    unsigned.pop("agent_id", None)
+    unsigned.pop("_agent_uuid", None)
+    return unsigned
 
 
 _ANONYMOUS_WRITER_KEY_ENV = "UNITARES_CONTINUITY_TOKEN_SECRET"
@@ -1287,16 +1308,24 @@ def _inferred_binding_untrusted(inferred_exempt: Optional[bool]) -> bool:
     return get_session_proof_origin() == "server_inferred" and not inferred_exempt
 
 
-def _inferred_binding_refusal() -> TextContent:
-    """The strict gate's refusal, for a gated write on an inferred binding."""
+def _inferred_binding_refusal(*, update: bool = False) -> TextContent:
+    """The strict gate's refusal, for a gated write on an inferred binding.
+
+    ``update`` names the update tool in the retry routes, so a refused update
+    is not sent to the store tool (which would mint a second finding).
+    """
     from ..context import get_session_proof_origin, get_session_resolution_source
     from ..identity_bootstrap import inferred_binding_refusal_payload
 
     return success_response(
         inferred_binding_refusal_payload(
             "knowledge",
-            retry_call="store_finding",
-            retry_label="store_finding / knowledge(action='store' or 'update')",
+            retry_call="update_finding" if update else "store_finding",
+            retry_label=(
+                "update_finding / knowledge(action='update')"
+                if update
+                else "store_finding / knowledge(action='store')"
+            ),
             identity_assurance=None,
             read_only_option={
                 "action": "stay_read_only",
@@ -1396,7 +1425,7 @@ def _store_needs_registered_writer(arguments: Dict[str, Any]) -> bool:
 
 
 def _gated_write_refused_on_inferred_binding(
-    inferred_exempt: Optional[bool],
+    inferred_exempt: Optional[bool], *, update: bool = False
 ) -> Optional[TextContent]:
     """The refusal for a high or critical write on an untrusted inferred binding.
 
@@ -1409,7 +1438,7 @@ def _gated_write_refused_on_inferred_binding(
     from ..identity_bootstrap import is_strict_identity_required
 
     if _inferred_binding_untrusted(inferred_exempt) and is_strict_identity_required():
-        return _inferred_binding_refusal()
+        return _inferred_binding_refusal(update=update)
     return None
 
 
@@ -1925,7 +1954,9 @@ def _build_store_response(state: _KnowledgeStoreState) -> Sequence[TextContent]:
     }
     _attach_store_response_hints(response, state)
     _attach_store_related_discoveries(response, state)
-    return success_response(response, arguments=request.arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_single_store(request: _KnowledgeStoreRequest, graph: Any) -> Sequence[TextContent]:
@@ -4012,7 +4043,9 @@ def _resolve_update_writer(
     same server-inferred binding rule as ``_resolve_store_writer`` applies.
     """
     if _effective_update_severity(request, discovery) in _GATED_SEVERITIES:
-        refusal = _gated_write_refused_on_inferred_binding(inferred_exempt)
+        refusal = _gated_write_refused_on_inferred_binding(
+            inferred_exempt, update=True
+        )
         if refusal is not None:
             raise _UpdateResponseError(refusal)
         agent_id, error = require_registered_agent(request.arguments)
@@ -5202,7 +5235,9 @@ def _build_batch_store_response(
             f"{truncated_count} discovery(ies) had content truncated. "
             f"Limits: summary={MAX_SUMMARY_LEN}, details={MAX_DETAILS_LEN} chars."
         )
-    return success_response(response, arguments=arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(arguments)
+    )
 
 
 async def _handle_store_knowledge_graph_batch(
@@ -5408,7 +5443,9 @@ def _build_note_response(
             "Stored under a lightweight anonymous writer ID. "
             "Bind an identity first if you want authorship continuity."
         )
-    return success_response(response, arguments=request.arguments)
+    return success_response(
+        response, arguments=_anonymous_writer_signature_arguments(request.arguments)
+    )
 
 
 async def _execute_note_write(

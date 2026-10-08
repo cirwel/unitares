@@ -2364,6 +2364,14 @@ def inferred_env(patch_common, registered_agent):
             set_session_proof_origin(None)
 
 
+def _assert_response_does_not_credit(data, agent):
+    """No author field of an anonymous write's response names ``agent``."""
+    for block in (data.get("agent") or {}, data.get("agent_signature") or {}):
+        for key in ("uuid", "agent_id", "structured_agent_id", "display_name"):
+            assert block.get(key) != agent, (key, block)
+    assert agent not in data.get("message", "")
+
+
 def _store_args(agent_id, severity):
     return {"agent_id": agent_id, "summary": f"a {severity} finding", "severity": severity}
 
@@ -2406,6 +2414,23 @@ class TestInferredBindingWriter:
         assert inferred_env.graph.add_discovery.call_args[0][0].agent_id == inferred_env.agent
 
     @pytest.mark.asyncio
+    async def test_unexempt_inferred_batch_response_does_not_credit_the_agent(self, inferred_env):
+        from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
+
+        inferred_env.set_origin("server_inferred")
+        inferred_env.set_exempt(False)
+        data = parse_result(
+            await handle_store_knowledge_graph({
+                "agent_id": inferred_env.agent,
+                "discoveries": [{"summary": "one", "discovery_type": "note"}],
+            })
+        )
+
+        written = inferred_env.graph.add_discovery.call_args[0][0].agent_id
+        assert written.startswith("anonkg_")
+        _assert_response_does_not_credit(data, inferred_env.agent)
+
+    @pytest.mark.asyncio
     async def test_dedicated_substrate_resident_is_exempt_too(self, inferred_env):
         """The second source of the exemption: dedicated_substrate."""
         from src.mcp_handlers.knowledge.handlers import handle_store_knowledge_graph
@@ -2441,6 +2466,7 @@ class TestInferredBindingWriter:
         assert data["agent_mode"] == "anonymous"
         written = inferred_env.graph.add_discovery.call_args[0][0].agent_id
         assert written.startswith("anonkg_") and written != inferred_env.agent
+        _assert_response_does_not_credit(data, inferred_env.agent)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("exempt", [False, "error"])
@@ -2521,6 +2547,7 @@ class TestInferredBindingWriter:
         written = inferred_env.graph.add_discovery.call_args[0][0].agent_id
         if anonymous:
             assert written.startswith("anonkg_")
+            _assert_response_does_not_credit(data, inferred_env.agent)
         else:
             assert written == inferred_env.agent
 
@@ -2552,6 +2579,11 @@ class TestInferredBindingWriter:
                 _resolve_update_writer(request, discovery, inferred_exempt=exempt)
             payload = json.loads(raised.value.response.text)
             assert payload["status"] == "identity_required"
+            # A refused update is pointed at the update tool, never the store
+            # tool, which would mint a second finding.
+            calls = " ".join(option["call"] for option in payload["safe_options"])
+            assert "update_finding(" in calls and "store_finding(" not in calls
+            assert "update_finding" in payload["next_step"]
 
     def test_timeout_recovery_does_not_guess_an_inferred_author(self, inferred_env):
         from src.mcp_handlers.knowledge.handlers import resolve_knowledge_write_author
