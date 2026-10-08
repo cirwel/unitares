@@ -9,6 +9,7 @@
 1 B1 agents/local_resident/runner.py
 1 B1 agents/sentinel/agent.py
 2 B1 agents/vigil/agent.py -> scripts/eval/retrieval_eval.py
+1 B1p agents/sentinel/routes.py
 8 B2 agents/chronicler/scrapers.py
 4 B2 agents/sentinel/forced_release_alarm.py
 8 B2 agents/sentinel/phase_b_promotion.py -> scripts/lease_plane/evaluate_phase_b_promotion.py

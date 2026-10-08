@@ -40,8 +40,9 @@ The ratchet:
 
 - Each violation is counted per rule and per file. A (rule, file) pair not in
   the baseline fails; a count above its baseline fails.
-- A count below its baseline is reported; ``--lower`` ratchets the baseline
-  down. A baselined pair whose count reached zero must be removed, so an
+- A count below its baseline fails until the baseline is lowered in the same
+  change (``--lower``), so a fixed violation cannot quietly come back. A
+  baselined pair whose count reached zero must be removed the same way, so an
   emptied rule admits nothing new.
 - With ``--base REF`` (CI passes the PR's diff base) the baseline itself is
   checked against its version at REF: an entry may not be added or raised, so
@@ -74,15 +75,14 @@ ELIXIR_ROOT = "elixir"
 
 MEMBER_SQL_SCHEMAS = ("core", "audit", "knowledge", "lease_plane", "effects")
 
-# The src modules route packs imported when this guard was written. A pack
-# importing anything else fails B1p. Shrink this list; do not grow it.
+# The src modules route packs imported when this guard was written, minus a
+# module imported only for a private name (that import is baselined instead).
+# A pack importing anything else fails B1p. Shrink this list; do not grow it.
 PACK_ALLOWED_MODULES = frozenset({
     "src.audit_db",
     "src.broadcaster",
     "src.event_detector",
-    "src.http_routes",
     "src.http_routes.access",
-    "src.http_routes.findings",
     "src.http_routes.residents",
     "src.logging_utils",
     "src.mcp_handlers.shared",
@@ -223,18 +223,31 @@ def _imports(tree: ast.Module, rel: str) -> list[tuple[ast.stmt, str, list[str]]
     return found
 
 
+def _imported_modules(root: Path, node: ast.stmt, module: str, names: list[str]) -> list[str]:
+    """The modules an import actually binds: ``from pkg import sub`` is ``pkg.sub``."""
+    if not isinstance(node, ast.ImportFrom):
+        return [module]
+    found = []
+    for name in names:
+        candidate = f"{module}.{name}"
+        found.append(candidate if _module_path(root, candidate) else module)
+    return sorted(set(found))
+
+
 def _is_src(module: str) -> bool:
     return module == "src" or module.startswith("src.")
 
 
 def _guarded_by_returning_try(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> bool:
-    """True when ``node`` sits in a ``try`` body whose every handler returns."""
+    """True when ``node`` sits in a ``try`` body whose every handler ends in ``return``.
+
+    Only the handler's own last statement counts: a ``return`` inside a nested
+    function or one branch of a conditional does not make the failure path return.
+    """
     child, current = node, parents.get(node)
     while current is not None:
         if isinstance(current, ast.Try) and child in current.body and current.handlers:
-            return all(
-                any(isinstance(n, ast.Return) for n in ast.walk(h)) for h in current.handlers
-            )
+            return all(h.body and isinstance(h.body[-1], ast.Return) for h in current.handlers)
         child, current = current, parents.get(current)
     return False
 
@@ -267,13 +280,11 @@ def _python_sql(tree: ast.Module, pattern: re.Pattern[str]) -> list[tuple[int, s
 
 
 def _elixir_sql(root: Path, rel: str, pattern: re.Pattern[str]) -> list[tuple[int, str]]:
-    hits = []
-    for lineno, line in enumerate((root / rel).read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        if line.lstrip().startswith("#"):
-            continue
-        for match in pattern.finditer(line):
-            hits.append((lineno, match.group(1).lower()))
-    return hits
+    """Match across line breaks, as heredoc SQL often splits a keyword from its table."""
+    lines = (root / rel).read_text(encoding="utf-8", errors="replace").splitlines()
+    # Blank comment lines instead of dropping them, so line numbers stay true.
+    text = "\n".join("" if line.lstrip().startswith("#") else line for line in lines)
+    return [(text.count("\n", 0, m.start(1)) + 1, m.group(1).lower()) for m in pattern.finditer(text)]
 
 
 def _path_references(tree: ast.Module) -> set[str]:
@@ -364,9 +375,12 @@ def check_members(root: Path, packs: set[str]) -> list[Violation]:
         if tree is None:
             continue
         if rel in packs:
-            for node, module, _names in _imports(tree, rel):
-                if _is_src(module) and module not in PACK_ALLOWED_MODULES:
-                    out.append(("B1p", rel, node.lineno, f"imports {module}, not on the pack allowlist"))
+            for node, module, names in _imports(tree, rel):
+                if not _is_src(module):
+                    continue
+                for target in _imported_modules(root, node, module, names):
+                    if target not in PACK_ALLOWED_MODULES:
+                        out.append(("B1p", rel, node.lineno, f"imports {target}, not on the pack allowlist"))
             for lineno, table in _python_sql(tree, _MEMBER_SQL_RE):
                 out.append(("B2", rel, lineno, f"SQL against {table}"))
         else:
@@ -464,7 +478,17 @@ def read_baseline(path: Path) -> tuple[list[str], dict[tuple[str, str], int]]:
     return header, parse_baseline_text(text)
 
 
+def ref_exists(root: Path, ref: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def read_base_baseline(root: Path, ref: str) -> dict[tuple[str, str], int] | None:
+    """The baseline as of ``ref``, or None when it did not exist there."""
     result = subprocess.run(
         ["git", "-C", str(root), "show", f"{ref}:{BASELINE_REL.as_posix()}"],
         capture_output=True,
@@ -508,7 +532,8 @@ def check(root: Path) -> tuple[list[str], list[str]]:
     current = counts(violations)
     where: dict[tuple[str, str], list[str]] = defaultdict(list)
     for rule, key, line, detail in violations:
-        where[(rule, key)].append(f"{key.split(' -> ')[0]}:{line} {detail}")
+        # A launched script's detail already names the script and its line.
+        where[(rule, key)].append(detail if " -> " in key else f"{key}:{line} {detail}")
     problems: list[str] = []
     notes: list[str] = []
     script = Path(__file__).name
@@ -520,7 +545,10 @@ def check(root: Path) -> tuple[list[str], list[str]]:
         elif n > allowed:
             problems.append(f"{rule} {key} grew to {n}, past its baseline of {allowed}: " + "; ".join(where[pair]))
         elif n < allowed:
-            notes.append(f"{rule} {key} dropped to {n} (baseline {allowed}); run {script} --lower.")
+            problems.append(
+                f"{rule} {key} dropped to {n} (baseline {allowed}). Lower its entry in the same "
+                f"change (run {script} --lower), so the fixed violation cannot come back."
+            )
     for pair in sorted(set(baseline) - set(current)):
         rule, key = pair
         problems.append(f"stale baseline entry: {rule} {key} no longer occurs. Remove it (run {script} --lower).")
@@ -561,7 +589,9 @@ def main(argv: list[str] | None = None) -> int:
         return lower(args.root)
 
     problems, notes = check(args.root)
-    if args.base:
+    if args.base and not ref_exists(args.root, args.base):
+        problems.append(f"--base {args.base} does not resolve to a commit; fetch it or fix the ref.")
+    elif args.base:
         base_entries = read_base_baseline(args.root, args.base)
         if base_entries is None:
             notes.append(f"no baseline at {args.base}; skipping the add/raise comparison")
