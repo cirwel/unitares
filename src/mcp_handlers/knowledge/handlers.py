@@ -1298,6 +1298,14 @@ def _inferred_binding_refusal() -> TextContent:
             retry_call="store_finding",
             retry_label="store_finding / knowledge(action='store' or 'update')",
             identity_assurance=None,
+            read_only_option={
+                "action": "stay_read_only",
+                "call": "search_shared_memory(query=<what you need>)",
+                "when": (
+                    "You want to read shared memory without writing. "
+                    "Knowledge reads need no identity."
+                ),
+            },
             surface_context={
                 "transport_surface": "knowledge",
                 "session_resolution_source": get_session_resolution_source(),

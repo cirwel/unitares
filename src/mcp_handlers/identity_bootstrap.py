@@ -751,12 +751,15 @@ def inferred_binding_refusal_payload(
     retry_label: str,
     identity_assurance: dict | None,
     surface_context: dict | None,
+    read_only_option: dict | None = None,
 ) -> dict:
     """The strict refusal for a write that resolved by transport inference.
 
     ``retry_call`` is the tool the caller retries with its client_session_id
     (``sync_state`` for a check-in) and ``retry_label`` how the next step
-    names the write. Every route leads back to this process's own
+    names the write. ``read_only_option`` replaces the default read-only
+    route (a state read, which suits a check-in) with the read that suits the
+    refused tool. Every route leads back to this process's own
     client_session_id. continuity_token appears only inside identity(), and a
     mint is offered last and only to a process that never called
     start_session (the pin can resolve a never-onboarded process to a
@@ -803,7 +806,7 @@ def inferred_binding_refusal_payload(
                     "live process's uuid and continuity_token."
                 ),
             },
-            {
+            dict(read_only_option) if read_only_option is not None else {
                 "action": "stay_read_only",
                 "call": "check_working_state(client_session_id=<from start_session>)",
                 "when": (

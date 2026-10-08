@@ -2333,6 +2333,11 @@ def inferred_env(patch_common, registered_agent):
                 raise RuntimeError("substrate_claims unavailable")
             return state["earned"]
 
+    async def _verify(agent_uuid, **kwargs):
+        # After a first-predicate error the second one would say exempt, so a
+        # test passes only if the error itself fails closed.
+        return {"conditions": {"dedicated_substrate": state["earned"] == "error"}}
+
     def set_exempt(value):
         state["earned"] = value
 
@@ -2340,7 +2345,7 @@ def inferred_env(patch_common, registered_agent):
          patch("src.db.get_db", return_value=_DB()), \
          patch(
              "src.identity.substrate.verify_substrate_earned",
-             AsyncMock(return_value={"conditions": {"dedicated_substrate": False}}),
+             AsyncMock(side_effect=_verify),
          ), \
          patch(
              "src.mcp_handlers.identity_bootstrap.is_strict_identity_required",
@@ -2458,6 +2463,8 @@ class TestInferredBindingWriter:
         assert "client_session_id" in data["next_step"]
         assert data["safe_options"][0]["action"] == "retry_with_client_session_id"
         assert data["safe_options"][0]["call"].startswith("store_finding(")
+        read_only = next(o for o in data["safe_options"] if o["action"] == "stay_read_only")
+        assert read_only["call"].startswith("search_shared_memory(")
         assert data["surface_context"]["proof_origin"] == "server_inferred"
         inferred_env.graph.add_discovery.assert_not_called()
 
@@ -2585,9 +2592,12 @@ class TestCallerProofExemptionPredicate:
         db = SimpleNamespace(
             is_substrate_earned=boom if which == "earned" else AsyncMock(return_value=False)
         )
+        # When the first predicate raises, the second would say exempt: the
+        # test passes only if the error fails closed rather than falling through.
         with patch("src.db.get_db", return_value=db), patch(
             "src.identity.substrate.verify_substrate_earned",
-            boom if which == "verify" else AsyncMock(return_value={"conditions": {}}),
+            boom if which == "verify"
+            else AsyncMock(return_value={"conditions": {"dedicated_substrate": True}}),
         ):
             assert await is_exempt_from_caller_proof("u-1") is False
 
