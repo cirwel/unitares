@@ -58,7 +58,7 @@ NAME = re.compile(r"^[a-z0-9_]+$")
 csv.field_size_limit(2**31 - 1)
 
 ELIGIBLE_SQL = """
-SELECT c.relname, pg_get_expr(c.relpartbound, c.oid)
+SELECT c.relname, pg_get_expr(c.relpartbound, c.oid), c.oid
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 JOIN pg_inherits i ON i.inhrelid = c.oid
@@ -84,10 +84,11 @@ FINGERPRINT = (
 )
 
 
-def psql_script(dsn: str, script: str) -> str:
+def psql_script(dsn: str, script: str, env: dict | None = None) -> str:
     out = subprocess.run(
         ["psql", dsn, "-X", "-q", "-At", "-v", "ON_ERROR_STOP=1", "-f", "-"],
         input=SESSION + script, check=True, capture_output=True, text=True,
+        env={**os.environ, **(env or {})},
     )
     return out.stdout
 
@@ -100,9 +101,24 @@ def psql(dsn: str, sql: str) -> str:
     return out.stdout
 
 
-def eligible(dsn: str, parent: str, days: int) -> list[tuple[str, str]]:
+def eligible(dsn: str, parent: str, days: int) -> list[tuple[str, str, int]]:
+    """(name, bound, oid) for each month past retention. The OID is the
+    table the decision was made about; export and drop both require it."""
     rows = psql(dsn, ELIGIBLE_SQL.format(parent=parent, days=int(days))).splitlines()
-    return [tuple(r.split("\t", 1)) for r in rows if r]
+    out = []
+    for r in rows:
+        if r:
+            name, bound, oid = r.split("\t")
+            out.append((name, bound, int(oid)))
+    return out
+
+
+def oid_guard(name: str, oid: int) -> str:
+    return f"""DO $$ BEGIN
+  IF 'audit.{name}'::regclass::oid <> {int(oid)} THEN
+    RAISE EXCEPTION 'audit.{name} is not the table that was found eligible';
+  END IF;
+END $$;"""
 
 
 def source_of(dsn: str, name: str) -> dict:
@@ -127,20 +143,21 @@ def sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def export(dsn: str, name: str, out_dir: Path) -> dict:
-    """Write <name>.csv.gz and its fingerprint from one snapshot, read the file
-    back, and return its manifest entry."""
+def export(dsn: str, name: str, oid: int, out_dir: Path) -> dict:
+    """Write <name>.csv.gz and its fingerprint from one snapshot of the table
+    with this OID, read the file back, and return its manifest entry."""
     final = out_dir / f"{name}.csv.gz"
     partial = final.with_suffix(".gz.partial")
-    if "'" in str(partial):
-        raise SystemExit(f"archive path may not contain a quote: {partial}")
+    # The path reaches the shell only as a quoted variable, never as text in
+    # the command, so spaces or metacharacters in --archive-dir are inert.
     try:
         fingerprint = psql_script(dsn, f"""
 BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+{oid_guard(name, oid)}
 {FINGERPRINT.format(name=name)};
-\\copy (SELECT * FROM audit.{name}) TO PROGRAM 'gzip -c > {partial}' WITH (FORMAT csv, HEADER)
+\\copy (SELECT * FROM audit.{name}) TO PROGRAM 'gzip -c > "$ARCHIVE_PARTIAL"' WITH (FORMAT csv, HEADER)
 COMMIT;
-""").strip()
+""", env={"ARCHIVE_PARTIAL": str(partial)}).strip()
     except subprocess.CalledProcessError as exc:
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"export of audit.{name} failed: {exc.stderr.strip()}") from exc
@@ -160,10 +177,8 @@ def drop_script(name: str, oid: int, fingerprint: str) -> str:
     return f"""
 BEGIN;
 LOCK TABLE audit.{name} IN ACCESS EXCLUSIVE MODE;
+{oid_guard(name, oid)}
 DO $$ BEGIN
-  IF 'audit.{name}'::regclass::oid <> {int(oid)} THEN
-    RAISE EXCEPTION 'audit.{name} is not the table that was archived';
-  END IF;
   IF ({FINGERPRINT.format(name=name)}) <> '{fingerprint}' THEN
     RAISE EXCEPTION 'audit.{name} changed since it was archived';
   END IF;
@@ -220,25 +235,27 @@ def main(argv: list[str] | None = None) -> int:
         days = getattr(args, f"{parent}_days")
         if days < 0:
             ap.error("retention days must be non-negative")
-        for name, bound in eligible(dsn, parent, days):
+        for name, bound, oid in eligible(dsn, parent, days):
             if not NAME.match(name):
                 raise SystemExit(f"refusing unexpected partition name {name!r}")
-            plan.append((name, bound))
+            plan.append((name, bound, oid))
     if not plan:
         print("nothing eligible")
         return 0
-    for name, bound in plan:
+    for name, bound, _oid in plan:
         print(f"eligible: audit.{name}  {bound}")
     if not (args.export or args.apply):
         print("dry run: nothing written or dropped (--export or --apply to act)")
         return 0
 
     args.archive_dir.mkdir(parents=True, exist_ok=True)
-    for name, bound in plan:
+    for name, bound, oid in plan:
         source = source_of(dsn, name)
+        if source["oid"] != oid:
+            raise SystemExit(f"audit.{name} was replaced after it was found eligible")
         entry = archived_entry(args.archive_dir, name, source, bound)
         if entry is None:
-            entry = export(dsn, name, args.archive_dir)
+            entry = export(dsn, name, oid, args.archive_dir)
             entry.update(bound=bound, source=source,
                          archived_at=datetime.now(timezone.utc).isoformat())
             with (args.archive_dir / "manifest.jsonl").open("a") as fh:
@@ -247,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(f"already archived: audit.{name}  {entry['rows']} rows")
         if args.apply:
-            drop(dsn, name, source["oid"], entry["fingerprint"])
+            drop(dsn, name, oid, entry["fingerprint"])
             print(f"dropped: audit.{name}")
     return 0
 

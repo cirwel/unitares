@@ -176,6 +176,39 @@ def test_the_drop_rechecks_oid_and_contents_under_the_lock(archiver):
     assert archiver.FINGERPRINT.format(name="events_2026_03") in sql
 
 
+def test_a_partition_replaced_after_planning_is_refused(archiver, tmp_path, monkeypatch):
+    monkeypatch.setattr(archiver, "eligible",
+                        lambda dsn, parent, days: [("events_2026_03", BOUND, 111)]
+                        if parent == "events" else [])
+    monkeypatch.setattr(archiver, "source_of", lambda dsn, name: {**SOURCE, "oid": 222})
+
+    def never(*args, **kwargs):
+        raise AssertionError("a replaced partition must not be exported or dropped")
+
+    monkeypatch.setattr(archiver, "export", never)
+    monkeypatch.setattr(archiver, "drop", never)
+    with pytest.raises(SystemExit):
+        archiver.main(["--apply", "--archive-dir", str(tmp_path)])
+
+
+def test_export_pins_the_oid_and_keeps_the_path_out_of_the_command(archiver, tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_script(dsn, script, env=None):
+        seen.update(script=script, env=env)
+        raise archiver.subprocess.CalledProcessError(1, "psql", stderr="stop")
+
+    monkeypatch.setattr(archiver, "psql_script", fake_script)
+    odd = tmp_path / "a dir; touch x"
+    odd.mkdir()
+    with pytest.raises(RuntimeError):
+        archiver.export("dsn", "events_2026_03", 4242, odd)
+    script = seen["script"]
+    assert script.index("::regclass::oid <> 4242") < script.index("hashtextextended")
+    assert '"$ARCHIVE_PARTIAL"' in script and str(odd) not in script
+    assert seen["env"] == {"ARCHIVE_PARTIAL": str(odd / "events_2026_03.csv.gz.partial")}
+
+
 def test_a_malformed_fingerprint_never_reaches_sql(archiver):
     with pytest.raises(SystemExit):
         archiver.drop_script("events_2026_03", 1, "1'; DROP TABLE x; --")
@@ -206,7 +239,7 @@ def test_no_archive_file_means_export(archiver, tmp_path):
 def test_dry_run_is_the_default_and_writes_nothing(archiver, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(
         archiver, "eligible",
-        lambda dsn, parent, days: [(f"{parent}_2026_03", "FOR VALUES FROM ('a') TO ('b')")],
+        lambda dsn, parent, days: [(f"{parent}_2026_03", "FOR VALUES FROM ('a') TO ('b')", 1)],
     )
 
     def no_writes(*args, **kwargs):
@@ -223,12 +256,13 @@ def test_dry_run_is_the_default_and_writes_nothing(archiver, tmp_path, monkeypat
 def test_export_without_apply_never_drops(archiver, tmp_path, monkeypatch):
     monkeypatch.setattr(
         archiver, "eligible",
-        lambda dsn, parent, days: [(f"{parent}_2026_03", "b")] if parent == "events" else [],
+        lambda dsn, parent, days: [(f"{parent}_2026_03", BOUND, SOURCE["oid"])]
+        if parent == "events" else [],
     )
     monkeypatch.setattr(archiver, "source_of", lambda dsn, name: SOURCE)
     exported = []
 
-    def fake_export(dsn, name, out_dir):
+    def fake_export(dsn, name, oid, out_dir):
         exported.append(name)
         _write_csv(out_dir / f"{name}.csv.gz", [["1", "x"]] * 3)
         return {"partition": name, "rows": 3, "fingerprint": "3 99", "bytes": 1,
@@ -249,7 +283,7 @@ def test_export_without_apply_never_drops(archiver, tmp_path, monkeypatch):
 
 
 def test_unexpected_partition_names_are_refused(archiver, tmp_path, monkeypatch):
-    monkeypatch.setattr(archiver, "eligible", lambda dsn, parent, days: [("x; drop", "b")])
+    monkeypatch.setattr(archiver, "eligible", lambda dsn, parent, days: [("x; drop", "b", 1)])
     with pytest.raises(SystemExit):
         archiver.main(["--archive-dir", str(tmp_path)])
 
