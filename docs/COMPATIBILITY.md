@@ -35,7 +35,41 @@ lead with **UNITARES server** and treat `governance-mcp` as package metadata.
 
 ## Compatibility policy
 
-- v3.3.0 removes the three older local-model setting names that v3.2.0 kept
+- v3.3.0 removes no registered callable's canonical name and no input
+  parameter. It changes identity defaults in ways an existing install can
+  notice; the release is a minor by operator decision (2026-10-08), because
+  each change has a setting that restores the old behavior or a one-time
+  step, and a client that mints with `start_session(force_new=true)` and
+  passes back the returned `client_session_id` (the SDK, the governance
+  plugin, the Hermes host adapter, the reference residents) needs neither.
+  Strict identity is the default: a bare UUID resume without a continuity
+  token, an unresolved write, and an arg-less `onboard()` are refused, and
+  `STRICT_IDENTITY_REQUIRED=false` with `UNITARES_IDENTITY_STRICT=log`
+  restores the permissive behavior (#2666). Credentials go only to a caller
+  that proved ownership; `UNITARES_CREDENTIAL_ISSUANCE=log` issues as before
+  and logs what it would withhold (#2681). Stable session ids are keyed
+  (`agent-{uuid12}-{tag}`) and a legacy `agent-{uuid12}` id is refused;
+  `UNITARES_LEGACY_SESSION_IDS=log` or `accept` admits it during a migration
+  (#2702). The continuity key is the server's own: an install that left
+  `UNITARES_CONTINUITY_TOKEN_SECRET` unset, blank or at the Compose default
+  loses its outstanding continuity tokens and effect grants once, and each
+  resident anchor holding such a token must be moved aside and re-provisioned
+  with `scripts/ops/provision_resident_anchor.py --apply` (#2674). Archiving,
+  deleting or resuming another agent needs a valid `X-Unitares-Operator`
+  token (#2667). The LaunchAgent template and `scripts/ops/start_unitares.sh`
+  bind to loopback; clients on other machines need
+  `UNITARES_BIND_ALL_INTERFACES=1`, and Docker Compose installs are unchanged
+  (#2659). The interface contract moves 1.27.0 → 1.31.0 to record
+  authorization and output changes; no parameter is added, removed or
+  renamed. One database migration is
+  introduced, `db/postgres/migrations/073_retention_keep_record.sql`, which
+  stops partition maintenance from deleting check-ins and outcome events and
+  dropping old audit months; until it is applied the old retention keeps
+  running. Apply it with `scripts/unitares update` on Docker Compose or
+  `python3 scripts/dev/apply_migrations.py --apply` on an operator install;
+  the code does not depend on it, so rolling back with it applied keeps the
+  record and is safe (#2711). v3.3.0 also removes the three older
+  local-model setting names that v3.2.0 kept
   as aliases: `UNITARES_OLLAMA_BASE` and `UNITARES_OLLAMA_BASE_URL` (replaced
   by `UNITARES_MODEL_BASE_URL`) and `UNITARES_LLM_MODEL` (replaced by
   `UNITARES_MODEL_ID`). Nothing reads them any more, and Docker Compose no
