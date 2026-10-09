@@ -67,6 +67,15 @@ jobs:
       - name: Run proposals length ratchet
         run: python3 scripts/dev/check_proposals_length.py --base "${{ steps.base.outputs.ref }}"
 
+      # The federation boundary (docs/proposals/active/federation-component-
+      # boundaries-v0.md, Section 6): members use public surfaces, components own
+      # their tables, no private reach across components. Violations that existed
+      # when it was written are listed in
+      # scripts/dev/component_boundaries_baseline.txt and may shrink but not
+      # grow; --base stops a PR from adding or raising its own entry.
+      - name: Run component boundary ratchet
+        run: python3 scripts/dev/check_component_boundaries.py --base "${{ steps.base.outputs.ref }}"
+
       # AGENTS.md and CLAUDE.md are adapter-specific preambles over one shared
       # contract block, and both files (plus docs/dev/DRIFT_LEDGER.md) state
       # that CI enforces byte-parity between them. Until this step existed the
