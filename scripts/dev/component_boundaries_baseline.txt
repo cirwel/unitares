@@ -1,0 +1,74 @@
+# Component boundary violations that existed when the guard was written, per rule and file.
+# Checked by scripts/dev/check_component_boundaries.py (see its docstring for the rules).
+# Lower an entry when its count drops (run the script with --lower); never add or raise one.
+# The counts are telemetry: they authorize no retirement of anything.
+# Format: <count> <rule> <file, or 'member -> script' for a launched script>
+2 B1 agents/dialectic_reviewer/host_backends.py
+1 B1 agents/dialectic_reviewer/host_list.py
+2 B1 agents/dialectic_reviewer/reviewer.py
+1 B1 agents/local_resident/runner.py
+1 B1 agents/sentinel/agent.py
+2 B1 agents/vigil/agent.py -> scripts/eval/retrieval_eval.py
+1 B1p agents/sentinel/routes.py
+8 B2 agents/chronicler/scrapers.py
+4 B2 agents/sentinel/forced_release_alarm.py
+8 B2 agents/sentinel/phase_b_promotion.py -> scripts/lease_plane/evaluate_phase_b_promotion.py
+1 B3 agents/sentinel/routes.py
+1 B3 src/agent_lifecycle.py
+1 B3 src/agent_state.py
+2 B3 src/dialectic_receipt.py
+1 B3 src/effect_grant.py
+1 B3 src/http_routes/access.py
+1 B3 src/http_routes/substrate.py
+1 B3 src/identity/trajectory_continuity.py
+3 B3 src/mcp_handlers/admin/handlers.py
+1 B3 src/mcp_handlers/core.py
+1 B3 src/mcp_handlers/dialectic/auth.py
+1 B3 src/mcp_handlers/dialectic/resolution.py
+1 B3 src/mcp_handlers/identity/handlers.py
+2 B3 src/mcp_handlers/introspection/tool_introspection.py
+1 B3 src/mcp_handlers/knowledge/handlers.py
+2 B3 src/mcp_handlers/lifecycle/operations.py
+4 B3 src/mcp_handlers/middleware/envelope_step.py
+6 B3 src/mcp_handlers/middleware/identity_step.py
+1 B3 src/mcp_handlers/middleware/params_step.py
+1 B3 src/mcp_handlers/middleware/rate_limit_step.py
+1 B3 src/mcp_handlers/observability/handlers.py
+1 B3 src/mcp_handlers/observability/outcome_events.py
+1 B3 src/mcp_handlers/support/host_availability.py
+1 B3 src/mcp_handlers/updates/phases.py
+1 B3 src/mcp_handlers/utils.py
+1 B3 src/services/http_tool_service.py
+3 B3 src/tool_schemas.py
+1 B3 src/verification_backend.py
+3 B4 elixir/lease_plane/lib/unitares_lease_plane/repo.ex
+1 B4 elixir/sentinel/lib/unitares_sentinel/audit_volume_watch.ex
+1 B4 src/db/mixins/identity.py
+3 B4 src/db/mixins/session.py
+7 B4 src/db/mixins/state.py
+3 B4 src/db/mixins/tool_usage.py
+1 B4 src/db/postgres_backend.py
+4 B4 src/eisv_telemetry_health.py
+1 B4 src/fleet_metrics/catalog.py
+1 B4 src/governance_trend.py
+5 B4 src/grounding/class_promotion.py
+2 B4 src/http_routes/effects.py
+1 B4 src/http_routes/findings.py
+4 B4 src/http_routes/overview.py
+3 B4 src/http_routes/residents.py
+3 B4 src/http_routes/telemetry.py
+3 B4 src/identity/agent_fragmentation.py
+1 B4 src/identity/model_risk_cohort.py
+1 B4 src/identity/provenance_index_readiness.py
+3 B4 src/identity/r1_maintenance.py
+1 B4 src/identity/r2_phase1_telemetry.py
+2 B4 src/identity/s22_h5_comparison.py
+1 B4 src/mcp_handlers/identity/agent_presence_lease.py
+1 B4 src/mcp_handlers/identity/process_binding.py
+2 B4 src/mcp_handlers/lifecycle/lineage_reachability.py
+1 B4 src/mcp_handlers/lifecycle/query.py
+3 B4 src/mcp_handlers/lifecycle/stuck.py
+5 B4 src/mcp_handlers/observability/handlers.py
+2 B4 src/outcome_correlation.py
+4 B4 src/resident_progress/sources.py
+2 B4 src/runtime_observations.py

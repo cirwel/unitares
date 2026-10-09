@@ -31,6 +31,17 @@ if [ -f scripts/dev/check_fleet_identity_leak.py ]; then
     }
 fi
 
+# Component boundary ratchet — no new member reach into src/, foreign table
+# SQL or cross-component private imports (federation-component-boundaries-v0
+# Section 6). Existing ones are baselined and may only shrink.
+if [ -f scripts/dev/check_component_boundaries.py ]; then
+    python3 scripts/dev/check_component_boundaries.py || {
+        echo ""
+        echo "   Use the owning component's public API instead of its internals or tables."
+        exit 1
+    }
+fi
+
 # HARD LIMIT: Total tracked markdown files.
 # Uses git ls-files so worktrees, caches, and gitignored dirs are
 # automatically excluded — no brittle find-exclusion list needed.
