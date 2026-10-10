@@ -69,6 +69,8 @@ INDEX_EXEMPT = {
     # Published Zenodo metadata and the deposited paper cite these paths.
     "accountable-testbed-metrics-preregistration-v0.md",
     "accountable-testbed-metrics-preregistration-v1.md",
+    # A submitted grant application cites this path as a reference.
+    "accountable-testbed-preliminary-trace.md",
     # Published references in historical SQL migrations remain valid without
     # editing those migrations (including their diagnostic strings).
     "agent-channel-wake-gate-v0.md",
