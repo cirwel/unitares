@@ -77,6 +77,7 @@ User- and integrator-facing how-tos. Thin by design — most architecture lives 
 
 - [`MCP_CLIENTS.md`](integration/MCP_CLIENTS.md) — Streamable HTTP MCP endpoints, stdio bridges, and hosted/client-neutral setup
 - [`CLIENT_CAPABILITY_MATRIX.md`](integration/CLIENT_CAPABILITY_MATRIX.md) — what direct MCP, host plugins, adapters, and UNITARES Resident do and do not automate
+- [`INTENT_MAP.md`](integration/INTENT_MAP.md) — *draft:* the tool surface organized by agent need, with overlaps and gaps
 
 ### `ontology/` — identity ontology
 
