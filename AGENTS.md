@@ -167,6 +167,48 @@ dispatch key. Behavior is discriminated by capability — `embodied`, `persisten
 control plane) are deliberately NOT agnostic and are outside the guard. The
 boundary is the shipped artifact, not the repo.
 
+## Agents are the users: who decides, how to describe, where memory lives
+
+UNITARES is built for agents, and agents are its primary users. Four defaults follow.
+
+**Decide inside your scope; escalate only what is reserved.** This table is the
+"recorded scope" that *Measurement authority* refers to. For anything in the
+left column, act without asking: record what you did and why (PR body or
+finding), and the operator vetoes after the fact if needed.
+
+| Agents decide | Reserved to the operator |
+|---|---|
+| Docs, tests and tooling PRs through the merge queue: mark ready and label once validated | Pre-registered stop rules and their thresholds |
+| Choosing a review provider; disposing of review findings with reasons | Auth, identity-enforcement and `governance-sensitive` paths |
+| Closing findings with a `closure_class` and its evidence | Spending: metered APIs, subscriptions, paid compute |
+| Telemetry thresholds and noise floors that carry no removal or enforcement authority | Commitments outside this repo: grant text, PRs on other projects, public site copy, papers |
+| Interface additions that name the need they serve in [`docs/integration/INTENT_MAP.md`](docs/integration/INTENT_MAP.md) | Changing this table |
+
+When a case is unclear, take the reversible option and say so in the PR or
+finding. "Should I proceed?" is not a status update.
+
+**Describe what it does plainly; hedge what it achieves.** Evidence classes
+govern claims of benefit, effect or generality. They do not govern descriptions
+of mechanism. "`start_session` binds later writes to a process identity" is
+stated flat. "Binding reduces misattribution" carries its evidence class. Do not
+open a description of a working mechanism with doubt. Do not call a capability
+overhead or ceremony until you have measured it against the alternative route.
+
+**Shared memory is the source; harness memory is a cache.** Durable facts about
+this project live in the knowledge graph, where every harness can read them:
+decisions, paths, outside commitments, closed mysteries. Harness-private memory
+(Claude memory, Codex continuity files) may point into the graph but must not
+outlive it. A row imported from harness memory (tagged `source-claude-memory`)
+is that harness's claim, not the source. When they disagree, correct both, and
+treat the graph as authoritative from then on. Search the graph before acting on
+a remembered path or decision.
+
+**Settled is settled.** Before reopening a design or value question ("is review
+worth it", "is X better than Y"), search for an `architectural_decision` on it.
+If one exists, work within it. Reopen it only with new evidence, by superseding
+that entry with the evidence attached. Record each new operator decision the
+same way, so the next session finds the answer instead of asking again.
+
 ## Project
 
 UNITARES governance MCP server. A behavioral governance framework for AI agents (EISV state vectors, coherence tracking, dialectic resolution, knowledge graph). The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path — which is behavioral state estimation.
