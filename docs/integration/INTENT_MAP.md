@@ -7,7 +7,9 @@ date; where a claim rests on source, the file is named. If this page and the
 catalog disagree, the catalog wins and this page is stale.
 
 This page is organized by what an agent wants to do, not by how the server
-implements it. The authoritative per-tool reference is the generated
+implements it. Overlaps, gaps and a proposed check for new tools live in the
+companion [audit](INTENT_MAP_AUDIT.md). [Recipes](#recipes) below give exact
+calls for common tasks. The authoritative per-tool reference is the generated
 [`dev/TOOL_REFERENCE.md`](../dev/TOOL_REFERENCE.md); the versioned contract is
 [`INTERFACE_CONTRACT.md`](../INTERFACE_CONTRACT.md).
 
@@ -17,6 +19,31 @@ tool outside that set: find it with `list_tools`, read its schema with
 `describe_tool`, then call it as `use_tool(tool_name=..., arguments={...})`.
 The server would dispatch it directly, but most MCP clients will not call a
 name they were never given a schema for.
+
+> **What this surface does not guarantee**
+>
+> - **You cannot choose an on-record reviewer.** `request_review` has no
+>   reviewer field. The default reviewer is the server's local model; the
+>   orchestrated reviewer and its backend are operator configuration.
+>   Reassigning a reviewer needs an operator credential or the current
+>   reviewer.
+> - **Family exclusion in `consult` is inferred; you cannot set it, only check it afterwards.** The
+>   server guesses your family from transport signals (reported model,
+>   harness, client hint, user agent) and skips it. If it cannot tell, a
+>   Claude host is tried first. The compact response does not name the host;
+>   `response_mode="full"` adds `diagnostics` with `host_id`, `provider_kind`
+>   and `model_used`, and a `failover` list appears whenever the call
+>   failed over to another peer. Check it if the family matters; to choose a family, use
+>   `delegate_inference` (recipe a).
+> - **"Strong model" has no stated criterion.** `effort="thorough"` means the
+>   operator-authorized subscription-CLI lane (Claude, Codex, Antigravity),
+>   not a measured capability tier.
+> - **Behavior depends on configuration.** The agent-orchestrator extension
+>   behind `consult(effort="thorough")` and `delegate_inference` is off on a
+>   default install. Without it, thorough `consult` fails with a recovery
+>   hint unless `allow_degraded=true`, which returns a standard local answer
+>   marked `status: "degraded"` instead. `delegate_inference` has no
+>   fallback. `list_inference_hosts` shows what this deployment has.
 
 ## By need
 
@@ -52,86 +79,133 @@ record**. Privacy narrows the first.
 | Which hosts exist and are ready | `list_inference_hosts`, `describe_inference_host` *(hidden)* | readable before `start_session`; calling any inference tool needs an identity |
 | A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
 
-## Overlaps and gaps
+## Recipes
 
-Observations, each with a pointer. None is a proposal to remove a capability;
-the questions at the end are for the maintainer.
+Every recipe except reading the fleet assumes you have run
+`start_session(force_new=true)` and pass the returned `client_session_id` on
+each later call (adapters may do this for you). Hidden tools go through
+`use_tool(tool_name="...", arguments={...})`. Argument names below were
+checked against `describe_tool` and the schemas; anything not checked says so.
 
-**Overlaps (one need, several tools)**
+### (a) Advice from a strong non-Anthropic model, no review record
 
-1. *Model calls are split by transport.* `call_model` accepts only the
-   synchronous HTTP hosts and `delegate_inference` only the orchestrator CLI
-   hosts (`accepts_host_id_from` in `list_inference_hosts`; the refusal at
-   `src/mcp_handlers/support/model_inference.py`, "Pick a host whose
-   accepts_host_id_from includes call_model"). For an agent, both mean "ask
-   model X".
-2. *Descriptions route agents between each other.* `consult`: "on-record:
-   request_review"; `call_model`: "for advisory help prefer consult";
-   `delegate_inference`: "for a raw completion use call_model"; `dialectic`:
-   "For advice outside a governed-review session, use consult"
-   (`src/tool_descriptions.py` and the catalog).
-3. *"consult" names two things.* The `consult` tool gives advice with no
-   review record; `dialectic(action="consult")` files an outside verdict on an
-   existing session as a non-authoritative record (`dialectic` description).
-4. *Three search entry points, one handler:* `search_shared_memory`,
-   `search_knowledge_graph`, `knowledge(action="search")` (stated in the
-   `search_knowledge_graph` description).
-5. *Two note entry points, one handler:* `leave_note` and
-   `knowledge(action="note")` (`handle_leave_note`,
-   `src/mcp_handlers/knowledge/handlers.py`).
-6. *Alias pairs carry different timeouts.* `sync_state` 30 s vs
-   `process_agent_update` 60 s; `check_working_state` 30 s vs
-   `get_governance_metrics` 10 s (`timeout` field in `list_tools(lite=false)`).
-   Whether that is intended is not established here.
-7. *Operator reads and writes appear twice:* `get_thresholds`/`set_thresholds`
-   vs `config(action="get" | "set")`; `get_workspace_health` vs
-   `admin(action="workspace_health")`; `archive_*` vs `agent(action="archive")`;
-   `operator_resume_agent` vs `agent(action="resume")`.
+1. Optional: `use_tool(tool_name="list_inference_hosts", arguments={})` and
+   look for `available: true` on the `*:host-adapter` entries.
+2. `consult(brief="<question plus the material, pasted inline>",
+   purpose="critique", effort="thorough", privacy="cloud_allowed",
+   response_mode="full")`. The material goes in `brief` (up to 32,000
+   characters); there is no file or attachment argument. `purpose` is
+   `answer`, `critique`, `summarize` or `generate`.
+3. Read `advice`. Keep `consultation_id`; `record.hash_key` lets you prove
+   later which audit row describes the exchange (the server keeps hashes, not
+   text).
+4. Check `diagnostics.host_id`. The server skips only the family it inferred
+   for you and takes the first available peer: Codex first for a recognised
+   Claude caller, Claude first if it could not tell. If the host is wrong for
+   you, or you need a particular family, call it directly:
+   `use_tool(tool_name="delegate_inference", arguments={"prompt": "<same
+   text>", "host_id": "codex:host-adapter" | "antigravity:host-adapter" |
+   "claude:host-adapter", "task_type": "review"})`. Note `prompt`, not
+   `brief`; `task_type` is `reasoning`, `review` or `summarize`. The response
+   carries the answer with provenance; its exact field names were not
+   checked for this draft.
 
-**Needs no single tool expresses**
+Nothing to close: neither call opens a review. For a verdict on the record,
+see (f).
 
-1. *"A strong model that is not family X."* `consult` excludes only the
-   caller's own inferred family. A Claude caller wanting a non-Codex answer
-   gets Codex first (`_THOROUGH_PEERS["anthropic"]`); to choose, it must drop
-   to `delegate_inference`, which is hidden and reached through `use_tool`.
-2. *"A cloud model, chosen by me, as advice."* `consult` has no model or host
-   field (`ConsultParams` forbids extra keys); `call_model` has them but is
-   hidden. Whether `call_model` leaves an audit row comparable to
-   `consult`'s was not checked for this draft.
-3. *"A strong model, on the record, chosen by me."* `request_review` has no
-   reviewer field; the backend is deployment config, and the default reviewer
-   is the local model.
-4. *Coordinating over a surface.* No lease or claim tool is in the catalog;
-   `cirs_protocol` is the only live channel and is lost on restart.
+### (b) Grade an earlier check-in
 
-**Hidden tools that a listed need depends on** (absent from
-`PROGRESSIVE_MODE_TOOLS`)
+1. `sync_state(response_text="<what you did>", complexity=0.5,
+   confidence=0.8)`. A `prediction_id` comes back only when you pass
+   `confidence`. Keep it. It is single-use and expires (an hour by default).
+2. When the real result is known: `record_result(outcome_type="task_completed",
+   prediction_id="<id>", outcome_score=1.0, detail={"test_name": "..."})`.
+   `outcome_type` is required; it is one of the enum values in
+   `describe_tool(tool_name="record_result")`, for example `task_completed`,
+   `task_failed`, `test_passed` or `test_failed`. `outcome_score` and
+   `is_bad` are inferred from the type if omitted.
+3. If you lost the `prediction_id` or it expired, call `record_result`
+   without it. The server then uses your last check-in's confidence as a
+   proxy, or the `confidence` you pass; the outcome is recorded but not bound
+   to that check-in.
 
-- Revising a finding needs `update_finding`. `src/tool_modes.py` says why it
-  is hidden: advertising it costs ~3.4 KB against a down-only byte ratchet.
-- Choosing a model needs `list_inference_hosts`, plus `call_model` or
-  `delegate_inference`.
-- Advancing an open review needs `dialectic`.
-- Tier and advertisement disagree: `leave_note` and `health_check` are tier
-  `essential` but hidden; `self_recovery` is tier `common` but advertised.
+### (c) Store a finding, then close it
 
-**Open questions for the maintainer**
+1. Search first: `search_shared_memory(query="<topic>")`. If it exists,
+   revise it instead (step 3).
+2. `store_finding(summary="<one line>", details="<evidence>",
+   discovery_type="bug_found", severity="medium", tags=["<topic>"])`. Keep the
+   returned `discovery_id`. Every call creates a new finding.
+3. Close it: `use_tool(tool_name="update_finding", arguments={"discovery_id":
+   "<id>", "status": "resolved", "closure_class": "fix_verified",
+   "closure_evidence": {"deployed": "<what shipped, confirmed in the running
+   build>", "observed": "<the new behavior you saw>"}, "resolution_notes":
+   "<why>"})`.
+   - `closure_class` is one of `fix_verified`, `unobserved`,
+     `not_reproducible`, `obsolete`, `duplicate`. It is optional but the
+     reply asks for it when missing.
+   - `fix_verified` needs `closure_evidence` with `deployed` and `observed`.
+     If all you have is the symptom no longer appearing, use `unobserved`,
+     with `window` (the period it did not occur) and `instrument_check` (how
+     you know the recorder for this condition is still live).
+   - For `duplicate`, the server suggests `{"of": "<discovery_id>"}`.
+   - `closure_class` is accepted with `resolved`, `closed`, `wont_fix`,
+     `superseded`, `archived` and `cold`, and refused on `open` or
+     `disputed`. `resolution_notes` appends rather than replaces. Source:
+     `_validate_closure_class`, `src/mcp_handlers/knowledge/handlers.py`.
 
-- Could one advice entry point take an optional "who answers" input (any,
-  a named family, not a named family, local only) and route to the existing
-  lanes, leaving `call_model` and `delegate_inference` as they are?
-- Should every tool a listed need depends on be advertised, or should the
-  initial listing at least name them?
-- Should `dialectic(action="consult")` get a name that does not collide with
-  `consult`?
+### (d) Paused: get going again
 
-## Adding to the surface (proposal)
+1. `self_recovery(action="check")` diagnoses without changing anything.
+2. Choose by the risk it reports. `action="quick"` (optional `reason`) works
+   only at risk 0.40 or below. `action="review"` works up to 0.65 and needs
+   `reflection` of at least 20 characters on what happened and what changes,
+   optionally `conditions`. The reflection is stored in shared memory
+   whether or not you resume. Neither works while a void is active, and
+   each attempt that reaches the safety checks is recorded, so a retry is
+   not free.
+3. If refused, open a review: `request_review(issue_description="<what
+   happened and why you should resume>")`. A converged verdict from an
+   independent reviewer resumes you when the resolution executes: look for
+   `action: "resume"` and a `next_step` saying the agent resumed. A verdict
+   whose resolution did not execute says so in `next_step`. A self-review
+   never resumes you (`SELF_REVIEW_NOT_AUTHORIZING`).
+4. Otherwise an operator can resume you (`operator_resume_agent` needs an
+   operator token), or the pause expires.
 
-Before a new tool, alias, action or model channel is added:
+### (e) See what other agents are doing now
 
-1. Find the need on this page it serves. If none fits, add the need first.
-2. Say in the PR why the entries already listed for that need do not cover it.
-   "A different transport or host" is an implementation reason, not a need.
-3. Update this page in the same PR.
+- `use_tool(tool_name="agent", arguments={"action": "list", "lite": true,
+  "limit": 20})` gives the agents active in the last 7 days (`recent_days=0`
+  for all; `status_filter` for `paused`, `waiting_input` and the rest).
+  Works before `start_session`.
+- `use_tool(tool_name="observe", arguments={"action": "agent",
+  "target_agent_id": "<id>"})` gives one agent's governance patterns;
+  `{"action": "aggregate"}` gives the fleet overview.
 
-This is a proposal for the maintainer, not an adopted rule.
+Neither reports current work. `agent` returns registration and lifecycle:
+label, status, a declared `purpose`, update count and last-seen date.
+`observe` returns EISV state and verdict patterns. The server does not keep
+check-in text as history, and `cirs_protocol(protocol="state_announce")`
+carries EISV state and a trajectory signature, not a task description
+(`src/mcp_handlers/cirs/state.py`). The nearest thing to "what are they
+working on" is what agents chose to write to shared memory:
+`search_shared_memory`.
+
+### (f) An on-record review by a reviewer you choose
+
+You cannot choose one. `request_review` takes no reviewer argument; which
+model reviews is deployment configuration. The closest options:
+
+1. `request_review(issue_description="...")` and accept the configured
+   reviewer. Keep the `session_id`.
+2. Get the verdict you want from the model you want with (a) step 4, then
+   file it on that session:
+   `use_tool(tool_name="dialectic", arguments={"action": "consult",
+   "session_id": "<id>", "reasoning": "<the verdict>",
+   "reviewer_provenance": {"reviewer_kind": "external_consult", "backend":
+   "<host_id>"}})`. Any bound agent may do this. It is on the record but has
+   no authority: it never advances the review or counts as its verdict.
+3. Ask the operator to reassign the reviewer
+   (`dialectic(action="reassign")` needs an operator credential or the
+   current reviewer) or to configure the reviewer backend.
