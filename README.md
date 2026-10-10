@@ -34,9 +34,9 @@ context, process, and time. Agent work remains attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
 Vendor platforms keep agent identity, memory, and review inside their own cloud
-or harness. UNITARES keeps one attributed record across them on infrastructure
-you control: Claude Code, Codex, Hermes Agent, and any MCP-capable agent record
-findings, advice, and review verdicts that stay bound to the work across handoffs.
+or tool. UNITARES keeps one attributed record across them on infrastructure you
+control: Claude Code, Codex, Hermes Agent, and any MCP-capable agent record
+findings, advice, and review decisions that stay bound to the work across handoffs.
 
 ## What UNITARES gives you
 
