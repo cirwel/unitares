@@ -1,40 +1,27 @@
 # Roadmap
 
-**Last reviewed:** 2026-09-25
+**Last reviewed:** 2026-10-10
 
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
 
-## Now — make the evidence path independently interpretable
+## Now — independent evidence for the core
 
-- Run a validation cohort of **independent draws** with a preregistered protocol,
-  reporting effective independent clusters rather than nominal agent count, and
-  publish negative or inconclusive results
-  ([#1607](https://github.com/cirwel/unitares/issues/1607)).
+- **A second, independent operator.** Someone other than the maintainer runs
+  UNITARES on infrastructure they control, connects agents from different
+  vendors, keeps attributed findings and review decisions, and reconstructs work
+  after a handoff or restart. Every point where they needed the maintainer's
+  help is recorded as a defect in the product, not in the operator
+  ([`docs/proposals/active/independent-operator-cohort-enrollments.md`](proposals/active/independent-operator-cohort-enrollments.md)).
 
-  An operator other than the maintainer is **one route to independence, not a
-  precondition**. The 2026-07-30 individuality read failed at effective n=4
-  against a nominal n=7 because three of the eligible "agents" were one
-  replicated Raspberry Pi (E r=0.952, I r=0.932, S r=0.998, byte-identical rows
-  at matched timestamps). That is an independence-accounting problem, and
-  recruiting a stranger does not fix it while the accounting stays wrong.
-  Heterogeneous model families and machine-checked task corpora under this
-  operator supply independent draws; synthetic traffic still does not.
-
-  This item gates **efficacy** claims under "Later". It does not gate the
-  instrument-frame work — reliability, faithfulness under intervention, and
-  calibration — which needs neither external labels nor another operator
-  (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
-  A fitted or outcome-learned estimator (fitted blend weights, a learned
-  readout) is efficacy work, not instrument-frame work: it is gated like other
-  efficacy work and waits on the 2026-12-01 outcome read. That fitting it to
-  the same label channel would not by itself reopen the outcome question if
-  the 2026-12-01 read FAILs was decided 2026-09-25 under the operator's
-  recorded delegation, and is
-  ratified on merge, as a pre-read clarification in the registered stop rule
-  (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`,
-  "Pre-read clarification — drafted 2026-09-25"); the contract's "Fitted and
-  learned estimators" section places the work and points there.
+- **A pre-registered cross-vendor review study.** Cold same-family and cold
+  cross-family review compared on matched artifacts, with equal context and
+  review budgets, blinded defect adjudication, false-positive reporting, and
+  fixed stopping rules, separating the review effect from what UNITARES adds
+  (routing, attribution, preserved decisions). It needs no second operator and
+  starts now. On 2026-10-10, cross-family reviews routed through UNITARES found
+  defects that same-family rounds had missed on three artifacts; that motivates
+  the study and is not its result.
 
 - **Two exports, for legibility rather than capability:** an audit-trail export
   in the shape of the IETF Agent Audit Trail draft, and standard trace emission
@@ -43,6 +30,41 @@ by releases and canonical documentation, not by this file.
   neither adds a mechanism or an efficacy claim. Recorded as gaps by the
   2026-09 claims audit
   ([`docs/ontology/competitive-analysis-2026-09.md`](ontology/competitive-analysis-2026-09.md)).
+
+- **EISV as module research.** EISV is moving out of the core to an optional
+  module subscribed to check-ins (operator decision 2026-10-10; plan:
+  [`docs/proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
+  Its efficacy work continues as research on that module; its results do not
+  gate core work. The registered stop rules are unchanged.
+
+  - Run a validation cohort of **independent draws** with a preregistered protocol,
+    reporting effective independent clusters rather than nominal agent count, and
+    publish negative or inconclusive results
+    ([#1607](https://github.com/cirwel/unitares/issues/1607)).
+
+    An operator other than the maintainer is **one route to independence, not a
+    precondition**. The 2026-07-30 individuality read failed at effective n=4
+    against a nominal n=7 because three of the eligible "agents" were one
+    replicated Raspberry Pi (E r=0.952, I r=0.932, S r=0.998, byte-identical rows
+    at matched timestamps). That is an independence-accounting problem, and
+    recruiting a stranger does not fix it while the accounting stays wrong.
+    Heterogeneous model families and machine-checked task corpora under this
+    operator supply independent draws; synthetic traffic still does not.
+
+    This item gates **efficacy** claims under "Later". It does not gate the
+    instrument-frame work — reliability, faithfulness under intervention, and
+    calibration — which needs neither external labels nor another operator
+    (see `docs/ontology/eisv-proprioception-contract.md`, "Sensory class split").
+    A fitted or outcome-learned estimator (fitted blend weights, a learned
+    readout) is efficacy work, not instrument-frame work: it is gated like other
+    efficacy work and waits on the 2026-12-01 outcome read. That fitting it to
+    the same label channel would not by itself reopen the outcome question if
+    the 2026-12-01 read FAILs was decided 2026-09-25 under the operator's
+    recorded delegation, and is
+    ratified on merge, as a pre-read clarification in the registered stop rule
+    (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`,
+    "Pre-read clarification — drafted 2026-09-25"); the contract's "Fitted and
+    learned estimators" section places the work and points there.
 
 ## Next — reduce maintenance and integration friction
 

@@ -33,6 +33,11 @@ UNITARES preserves accountability across discontinuities in agent identity,
 context, process, and time. Agent work remains attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
+Vendor platforms keep agent identity, memory, and review inside their own cloud
+or harness. UNITARES keeps one attributed record across them on infrastructure
+you control: Claude Code, Codex, Hermes Agent, and any MCP-capable agent record
+findings, advice, and review verdicts that stay bound to the work across handoffs.
+
 ## What UNITARES gives you
 
 - **Identity and lineage** — know which process acted and where inherited work
@@ -42,6 +47,9 @@ recoverable even when the process that started it is gone.
   provenance outside any one context window.
 - **Governed review** — preserve disagreement, conditions, and resolution as
   part of the work record.
+- **Cross-vendor second opinions** — ask a model from another vendor (Claude,
+  Codex, Antigravity, local Ollama) for advice, or the configured reviewer for
+  on-record review, and keep the request with the work.
 - **Outcome grounding** — connect predictions and check-ins to what later
   happened.
 - **Runtime policy** — return an action, reason, and next step at meaningful
@@ -49,8 +57,7 @@ recoverable even when the process that started it is gone.
 - **Reconstruction** — give a successor the records needed to understand and
   continue earlier work.
 
-The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) gives the evidence status of
-each measured result.
+The [claim ledger](docs/EVIDENCE_AND_LIMITS.md) gives the evidence status of each measured result.
 
 Together, these form an operator-owned accountability layer across coding
 agents, research agents, background agents, and custom runtimes. What it adds
@@ -60,7 +67,8 @@ outcomes bound to the process that made the claim.
 ## Install
 
 With Git, curl, and Docker Compose installed, one command starts the latest
-verified release of the local operator stack:
+verified release of the local operator stack (the server, PostgreSQL with AGE
+and pgvector, Redis, and the coordination plane):
 
 ```bash
 v=$(curl -fsSL https://raw.githubusercontent.com/cirwel/unitares/master/PUBLISHED_VERSION) && git clone --branch "v$v" --depth 1 https://github.com/cirwel/unitares.git && cd unitares && docker compose up -d --wait
@@ -73,9 +81,6 @@ Connect MCP clients at `http://localhost:8767/mcp/` or open the dashboard at
 An agent starts with `start_session(force_new=true)` and passes the returned
 `client_session_id` on every later call, which ties its writes to its own
 process; see [Integrating agents](docs/manual/04-integrating-agents.md).
-
-This provisions the server, PostgreSQL with AGE and pgvector, Redis, and the
-coordination plane.
 
 Data lives in Docker named volumes keyed to the Compose project name, which is
 the checkout directory name (`unitares`). Re-running the one-liner therefore
@@ -103,11 +108,9 @@ processes.
 The server runs alongside evals, sandboxes, and guardrails. It provides the
 continuity and accountability layer that connects their outputs over time.
 Core storage is self-hosted and runs on its own; the operator chooses which
-inference providers and integrations to connect.
-
-Its EISV state model is runtime [proprioception](docs/ontology/eisv-proprioception-contract.md):
-a way to make changes in an agent process visible so operators can diagnose and
-act on them with evidence.
+inference providers and integrations to connect. Each check-in returns a policy
+action derived from an EISV state estimate ([proprioception](docs/ontology/eisv-proprioception-contract.md));
+that estimator is moving out of the core to an optional module.
 
 ## Where it is going
 
@@ -129,9 +132,7 @@ grow.
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
 | Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
 | Contribute | [Contributing](.github/CONTRIBUTING.md) · [Development guide](AGENTS.md) |
-
-The [documentation index](docs/README.md) covers deployment profiles,
-operations, security, compatibility, research, and the full tool surface.
+| Everything else | [Documentation index](docs/README.md): deployment profiles, operations, security, compatibility, research, and the full tool surface |
 
 ## Ecosystem
 
@@ -140,8 +141,7 @@ UNITARES works with the
 Codex and Claude Code, the
 [host adapter](https://github.com/cirwel/unitares-host-adapter) for Hermes Agent
 and OpenAI-compatible clients, the public [Python SDK](agents/sdk/README.md), and
-the [resident agent runtime](https://github.com/cirwel/unitares-resident). These
-are separate userlands connected by the same operator-owned record.
+the [resident agent runtime](https://github.com/cirwel/unitares-resident).
 
 ## Citation and license
 

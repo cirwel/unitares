@@ -10,6 +10,13 @@ work should remain attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
+Vendor platforms keep agent identity, memory, and review inside their own cloud
+or harness. UNITARES keeps one attributed record across them, on infrastructure
+you control: Claude Code, Codex, Hermes Agent, and any MCP-capable agent record
+findings, advice, and review verdicts that stay bound to the work across
+handoffs, and a question can be routed to another vendor's model for a second
+opinion.
+
 **Current public releases:** [server v3.3.0](https://github.com/cirwel/unitares/releases/tag/v3.3.0)
 · [Python SDK 0.4.0](https://pypi.org/project/unitares-sdk/0.4.0/)
 · [multi-architecture container](https://github.com/cirwel/unitares/pkgs/container/unitares)
@@ -34,6 +41,7 @@ response it returned.
 |---|---|
 | Accountable identity | Bind writes to a process instance and retain lineage across explicit handoffs. |
 | Claims and evidence | Retain check-in claims beside tests, exit codes, tool results, review labels, and recorded outcomes. |
+| Cross-vendor second opinions | Ask another vendor's model for advice, or the configured reviewer for on-record review, and keep the request with the work. |
 | Policy and recovery | Return a proceed or pause action with a named reason and next step; support governed recovery and review paths. |
 | Operator visibility | Inspect lifecycle, state, evidence, and decision history through MCP, HTTP, and a self-hosted dashboard. |
 
