@@ -92,6 +92,10 @@ ACTIVE_DOC_CHECKS = {
     "docs/UNIFIED_ARCHITECTURE.md": [
         "- `complexity` — self-reported cognitive load [0, 1]",
     ],
+    # The always-loaded agent bootstraps introduced UNITARES as an EISV framework
+    # until 2026-10-10, so every session started from the retired framing.
+    "CLAUDE.md": ["A behavioral governance framework for AI agents"],
+    "AGENTS.md": ["A behavioral governance framework for AI agents"],
 }
 
 REQUIRED_STATUS_PREFIX = {
@@ -259,6 +263,14 @@ PUBLIC_POSITIONING_CHECKS: dict[str, list[tuple[str, tuple[str, ...]]]] = {
     "CITATION.cff": [CANONICAL_TAGLINE],
     # The generated Pages landing is the evaluator's other front door.
     "docs/public-site/index.md": [CANONICAL_TAGLINE],
+    # Agent-facing surfaces. Agents are the primary users, and these are what a
+    # session reads before anything public: the bootstraps load on every turn and
+    # the skills introduce the product. Unpinned until 2026-10-10, they still led
+    # with a retired EISV-first framing while every public surface had moved on.
+    "CLAUDE.md": [CANONICAL_TAGLINE, PRODUCT_CATEGORY, SINGLE_OPERATOR_SCOPE],
+    "AGENTS.md": [CANONICAL_TAGLINE, PRODUCT_CATEGORY, SINGLE_OPERATOR_SCOPE],
+    "skills/unitares-governance/SKILL.md": [CANONICAL_TAGLINE, PRODUCT_CATEGORY],
+    "skills/governance-fundamentals/SKILL.md": [CANONICAL_TAGLINE, PRODUCT_CATEGORY],
 }
 
 
