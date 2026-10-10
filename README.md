@@ -109,7 +109,7 @@ The server runs alongside evals, sandboxes, and guardrails. It provides the
 continuity and accountability layer that connects their outputs over time.
 Core storage is self-hosted and runs on its own; the operator chooses which
 inference providers and integrations to connect. Each check-in returns a policy
-action derived from an EISV state estimate ([proprioception](docs/ontology/eisv-proprioception-contract.md));
+action derived from an EISV state estimate, a form of runtime [proprioception](docs/ontology/eisv-proprioception-contract.md);
 that estimator is moving out of the core to an optional module.
 
 ## Where it is going
