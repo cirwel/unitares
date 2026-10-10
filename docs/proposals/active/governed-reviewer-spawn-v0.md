@@ -1,15 +1,16 @@
 # Governed reviewer spawn — the standing agent_spawn producer (v0)
 
-Status: built, inert (flag off). Activation is an operator step (§Activation).
+Status: default-off in code, **live on the maintainer deployment** (re-read
+2026-09-23, proposals audit). The governance-mcp plist sets
+`UNITARES_DIALECTIC_GOVERNED_SPAWN=1` and
+`UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN=1` (the binding flag is recorded
+as live since 2026-08-27 in `scripts/ops/deploy-mcp.sh`), and `audit.events`
+holds committed `governed_effect.execute` agent_spawn rows through 2026-09-23.
+The §Activation steps are therefore done on that deployment; they remain the
+path for any other install.
 
-> **Status re-read 2026-09-23 (proposals audit):** default-off in code, **live on
-> the maintainer deployment.** The governance-mcp plist sets
-> `UNITARES_DIALECTIC_GOVERNED_SPAWN=1` and
-> `UNITARES_GOVERNED_EFFECT_BINDING_AGENT_SPAWN=1` (the binding flag is recorded
-> as live since 2026-08-27 in `scripts/ops/deploy-mcp.sh`), and `audit.events`
-> holds committed `governed_effect.execute` agent_spawn rows through 2026-09-23.
-> The §Activation steps are therefore done on that deployment; they remain the
-> path for any other install.
+Earlier status (as first written): built, inert (flag off), activation an
+operator step; superseded by the 2026-09-23 re-read.
 Issue lineage: #1075 (effect-binding residuals), #1252 (producer discovery:
 agent_spawn had no standing producer).
 

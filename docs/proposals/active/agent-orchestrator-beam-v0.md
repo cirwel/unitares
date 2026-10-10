@@ -1,12 +1,12 @@
 # Agent Orchestrator on BEAM — v0 (thin slice)
 
 **Created:** June 3, 2026
-**Status re-read 2026-09-23 (proposals audit):** running as a service. The
+**Status:** running as a service (re-read 2026-09-23, proposals audit). The
 `com.unitares.agent-orchestrator` LaunchAgent is loaded and listens on
 `127.0.0.1:8789`; its plist template is in `scripts/ops/` and CI runs its suite
-(`elixir-tests.yml`). The v0 status below, including "not a service", records
-the thin slice as first written; later PRs (#799, #1021, #1953) took it further.
-**Status:** v0 — thin vertical slice, council-reviewed, lifecycle bugs fixed,
+(`elixir-tests.yml`). Later PRs (#799, #1021, #1953) took the thin slice further.
+**Earlier status (2026-06-03, as first written; superseded by the 2026-09-23 re-read):**
+v0 — thin vertical slice, council-reviewed, lifecycle bugs fixed,
 12 tests + live-verified. NOT merged to any running surface; it is a library +
 smoke, not a service. Scope decision (which layer) made with the operator this
 session: **Layer A — BEAM as orchestrator/supervisor of ephemeral agents**, pulled

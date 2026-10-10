@@ -39,7 +39,7 @@ Around the entries: [Codex review recommendations](#codex-review-recommendations
 [Council review](#council-review--recorded-2026-09-12),
 [Why this packet exists](#why-this-packet-exists), [The order, and why](#the-order-and-why),
 [Reading the entries](#reading-the-entries), and after entry 7,
-[Evidence gaps and review observations](#evidence-gaps-and-review-observations).
+[Evidence gaps and review observations](#evidence-gaps-and-review-observations). Other pending operator decisions (collected 2026-10-10) are in [`open-decisions-other-2026-10-10.md`](open-decisions-other-2026-10-10.md); this packet is at its length baseline.
 
 ---
 
