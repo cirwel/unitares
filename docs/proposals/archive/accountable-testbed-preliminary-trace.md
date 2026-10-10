@@ -48,8 +48,11 @@ check.
 
 ## Captured results
 
+One row per registered check in the capture's `checks` object (ten in all).
+
 | Case | Origin authentic? | Evidence consistent? | Decision |
 |---|---:|---:|---|
+| Distinct governor processes and keys | not applicable | not applicable | verified in-run: separate PIDs and Ed25519 key IDs (table above) |
 | Valid cross-governor voucher | yes | yes | accepted |
 | Replayed voucher | yes | not re-evaluated | rejected: `replay` |
 | Payload changed without re-signing | no | not evaluated | rejected: `invalid_signature` |
@@ -66,6 +69,10 @@ recipient rejects the voucher only because the signed evidence digest disagrees
 with recipient-observed evidence. Future metrics must therefore report at least
 two quantities: forged-origin acceptance and authentic-but-evidence-inconsistent
 acceptance. Calling both "attestation forgery" would hide the difference.
+
+*Editorial note, 2026-10-10:* the first row was added after capture so the
+table enumerates all ten registered checks; the check, its result, and the
+capture file are unchanged.
 
 The copied-token row is similarly precise. The exact authorization token issued
 to the legitimate holder is supplied by the attacker, but the holder private
