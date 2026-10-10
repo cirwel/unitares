@@ -1,11 +1,12 @@
 # PC-ALM as a lens for primal-dual governance
 
-Status: proposed research design, 2026-09-15
+Status: research design with its unwired replay primitive merged and dormant
+(re-read 2026-09-23, proposals audit). The primitive
+(`src/constraint_pressure.py`) merged in #2250 on 2026-09-16 and is registered
+KEEP-DORMANT in `docs/operations/dormant-capability-registry.md` (Theme 7). The
+research design is otherwise unchanged: no live wiring, no policy authority.
 
-> **Status re-read 2026-09-23 (proposals audit):** the unwired replay primitive
-> (`src/constraint_pressure.py`) merged in #2250 on 2026-09-16 and is registered
-> KEEP-DORMANT in `docs/operations/dormant-capability-registry.md` (Theme 7). The
-> research design is otherwise unchanged: no live wiring, no policy authority.
+Earlier status (2026-09-15): proposed research design; superseded by the 2026-09-23 re-read.
 Scope: a non-authoritative, replay-first test of persistent constraint pressure
 in UNITARES. This document authorizes no live policy or EISV change.
 
