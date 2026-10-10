@@ -1,0 +1,29 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "unitares-governance",
+  "verified_at": "2026-10-10T10:42:33Z",
+  "verified_date": "2026-10-10",
+  "verifier": "claude-cloud-grant-review (Claude Opus 5.5), 2026-10-10: re-checked the one claim citing governance-fundamentals (line 154: it covers EISV, basins, coherence and verdicts). Still true; that change only added a product-definition opening (#2722). The new 'What UNITARES is' paragraph matches README/CANONICAL_SOURCES verbatim.",
+  "source_digests": {
+    "unitares/skills/dialectic-reasoning/SKILL.md": "086516b9f9636671",
+    "unitares/skills/governance-fundamentals/SKILL.md": "2965764179df5978",
+    "unitares/skills/governance-lifecycle/SKILL.md": "9678afacb6a1a7b5",
+    "unitares/skills/knowledge-graph/SKILL.md": "0fafb35f5e5d4191",
+    "unitares/skills/unitares-dashboard/SKILL.md": "a122c25c69491f1e",
+    "unitares/src/coherence_provenance.py": "f41f8d84e58fa321",
+    "unitares/src/identity/lineage_semantics.py": "a6613f2493f6b97c",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/identity/handlers.py": "9afd74351b757304",
+    "unitares/src/mcp_handlers/identity/session.py": "d0dbe31210d5e932",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "cbee09747cd6f0c7",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/schemas/identity.py": "fdefa058d2d3516d",
+    "unitares/src/mcp_handlers/tool_stability.py": "59d527f77fa1c58b",
+    "unitares/src/monitor_metrics.py": "ea5e54b19fa1d903",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_modes.py": "2a604180b001fd9d"
+  },
+  "skill_digest": "0f8ec50ed70bf3e6"
+}
