@@ -1122,6 +1122,45 @@ class PromptTruncated(RuntimeError):
     """
 
 
+# The scan envelope as a JSON schema, for the constrained retry below.
+#
+# `saw_start` is a plain string and `pattern` is a plain string on purpose.
+# Pinning `saw_start` to the canary would have the grammar write the delivery
+# receipt for a model that never saw line 1, and an enum on `pattern` would
+# turn an invented id into a wrong library id; both failures have to stay
+# visible to parse_findings.
+SCAN_REPLY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "saw_start": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "pattern": {"type": "string"},
+                    "line": {"type": "integer"},
+                    "hint": {"type": "string"},
+                    "evidence": {"type": "string"},
+                },
+                "required": ["pattern", "line", "hint", "evidence"],
+            },
+        },
+    },
+    "required": ["saw_start", "findings"],
+}
+
+# One more call for a region whose reply could not be read, with thinking off
+# and the reply held to SCAN_REPLY_SCHEMA. WATCHER_CONSTRAINED_RETRY=0 turns it
+# off; see _retry_scan_constrained for what it costs and what it changes.
+CONSTRAINED_RETRY = os.environ.get("WATCHER_CONSTRAINED_RETRY", "1").strip().lower() not in {
+    "0", "false", "off", "no",
+}
+# Appended to model_used on findings that came from the retry, so the two
+# modes stay distinguishable in findings.jsonl.
+CONSTRAINED_MODE_SUFFIX = "+constrained"
+
+
 # How close to the requested window a prompt may come before we call it
 # truncated. A prompt sized by _max_snippet_chars() lands well under the
 # window, so anything within a hair of the ceiling got there by being cut.
@@ -1152,7 +1191,12 @@ def _is_openai_compat_url(url: str) -> bool:
     return path.endswith("/completions")
 
 
-def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
+def call_ollama(
+    prompt: str,
+    model: str,
+    timeout: int,
+    reply_schema: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Call Ollama and return the raw completion, or raise if it was truncated.
 
     Configuration via OLLAMA_URL / DEFAULT_MODEL / DEFAULT_TIMEOUT at module load
@@ -1183,6 +1227,16 @@ def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
     real scan the model spent it on preamble and was cut off mid-object with
     finish_reason "length" (measured, 2026-09-08). temperature=0.0 keeps the
     detector deterministic.
+
+    ``reply_schema`` asks ollama to hold the reply to a JSON schema, and turns
+    thinking off with it, because the schema alone is not enough. Measured
+    2026-10-11 on ollama 0.32.14 with gemma4:latest at scan size: `format`
+    set to a schema, to a different schema, and to "json" each returned a
+    reply byte-identical to the unconstrained one, malformed JSON included;
+    with `think: false` the same schema bound. Thinking off is also a
+    different detector (see _retry_scan_constrained), which is why this is an
+    argument and not the default. Native endpoint only: the compat endpoint
+    was not measured.
     """
     native = not _is_openai_compat_url(OLLAMA_URL)
 
@@ -1198,6 +1252,9 @@ def call_ollama(prompt: str, model: str, timeout: int) -> dict[str, Any]:
                 "num_predict": MODEL_REPLY_TOKEN_BUDGET,
             },
         }
+        if reply_schema is not None:
+            payload["format"] = reply_schema
+            payload["think"] = False
     else:
         payload = {
             "model": model,
@@ -1333,14 +1390,21 @@ def model_slot(wait_s: int = MODEL_LOCK_WAIT):
         handle.close()
 
 
-def call_model(prompt: str, model: str = DEFAULT_MODEL, timeout: int = DEFAULT_TIMEOUT) -> dict[str, Any]:
+def call_model(
+    prompt: str,
+    model: str = DEFAULT_MODEL,
+    timeout: int = DEFAULT_TIMEOUT,
+    reply_schema: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Entry point used by scan_file; thin wrapper over call_ollama.
 
     ``timeout`` covers the call itself, which only begins once this process
     owns the model slot — see model_slot().
     """
     with model_slot():
-        return call_ollama(prompt, model, timeout)
+        if reply_schema is None:
+            return call_ollama(prompt, model, timeout)
+        return call_ollama(prompt, model, timeout, reply_schema=reply_schema)
 
 
 # ---------------------------------------------------------------------------
@@ -1419,7 +1483,9 @@ def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list
     """Scan every region, then settle the failure counter for the whole file."""
     global _chunk_pass
     outer = _chunk_pass
-    _chunk_pass = {"detector": detector, "failed": 0, "succeeded": 0, "busy": 0}
+    _chunk_pass = {
+        "detector": detector, "failed": 0, "succeeded": 0, "busy": 0, "recovered": 0,
+    }
     found: list = []
     try:
         for r in regions:
@@ -1435,6 +1501,14 @@ def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list
         )
     elif state["succeeded"]:
         _clear_model_failures(detector)
+    # A recovered region was scanned, so it does not count as a failure, but
+    # it was scanned by the other mode and the file's findings are a mix.
+    if state["recovered"]:
+        log(
+            f"{detector} {file_path}: {state['recovered']} of {len(regions)} regions "
+            "needed the constrained retry; their findings come from that mode",
+            "warning",
+        )
     # Contention is not a detector failure (see ModelBusy), so it never moves
     # the counter, but a region skipped for it was still not scanned.
     if state["busy"]:
@@ -1449,6 +1523,11 @@ def _run_chunked(detector: str, file_path: str, regions: list[str], one) -> list
 def _note_busy_region(detector: str) -> None:
     if _chunk_pass is not None and _chunk_pass["detector"] == detector:
         _chunk_pass["busy"] += 1
+
+
+def _note_recovered_region(detector: str) -> None:
+    if _chunk_pass is not None and _chunk_pass["detector"] == detector:
+        _chunk_pass["recovered"] += 1
 
 
 def _record_model_failure(exc: Exception, detector: str = "scan") -> None:
@@ -3507,6 +3586,59 @@ def _verify_finding_against_source(
     return True
 
 
+def _retry_scan_constrained(
+    prompt: str, file_path: str, region_start: int
+) -> tuple[list[tuple[Finding, str]], dict[str, Any]] | None:
+    """Second attempt at a region whose reply could not be read.
+
+    Returns the parsed findings and the model result, or None when the retry
+    is off, cannot apply, or did not produce a usable reply either. None sends
+    the caller down the failure path it was already on.
+
+    Why a retry at all: at temperature 0 the same request returns the same
+    unusable reply, so the only retry worth making is a different request.
+    Measured 2026-10-11 on the reference host (gemma4:latest, ollama 0.32.14),
+    781 region scans over two weeks: 55 unusable, 48 of them malformed JSON,
+    mostly a quote or newline copied unescaped into `evidence`. Each one left
+    its region unscanned.
+
+    Why not make this the first request: thinking off is a different
+    detector. On four regions that parsed both ways, the kept findings matched
+    on none; one lost a high P003 the normal mode reports. So the normal mode
+    stays the detector, and this mode only fills a region the normal mode
+    returned nothing readable for. Findings from here carry
+    CONSTRAINED_MODE_SUFFIX in model_used.
+
+    A chosen standard, stated because it decides what escalates: a recovered
+    region counts as scanned. A detector whose normal mode failed on every
+    region but always recovered here would not raise detector-down; it would
+    show as a warning per region and per file, and in model_used.
+
+    Costs one more model call, only for a region that already failed. The
+    prompt is the same, so ollama reuses its evaluation.
+    """
+    if not CONSTRAINED_RETRY or _is_openai_compat_url(OLLAMA_URL):
+        return None
+    try:
+        result = call_model(prompt, reply_schema=SCAN_REPLY_SCHEMA)
+        parsed = parse_findings(
+            result["text"],
+            file_path,
+            f"{result.get('model_used', DEFAULT_MODEL)}{CONSTRAINED_MODE_SUFFIX}",
+            region_start,
+        )
+    except Exception as retry_exc:  # noqa: BLE001 — any retry failure is the original failure
+        log(f"constrained retry did not recover the region: {retry_exc}", "error")
+        return None
+    log(
+        "constrained retry recovered the region (thinking off, reply held to "
+        "the envelope schema); its findings come from that mode",
+        "warning",
+    )
+    _note_recovered_region("scan")
+    return parsed, result
+
+
 def scan_file(
     file_path: str,
     region: str | None = None,
@@ -3596,8 +3728,11 @@ def scan_file(
         # function did until 2026-09-08 — is what let 18 days of unparseable
         # responses read as 18 days of clean scans.
         log(f"model output unusable: {e}", "error")
-        _record_model_failure(e)
-        return []
+        recovered = _retry_scan_constrained(prompt, file_path, region_start)
+        if recovered is None:
+            _record_model_failure(e)
+            return []
+        parsed, result = recovered
     _clear_model_failures()
     findings: list[Finding] = []
     for f, raw_evidence in parsed:
