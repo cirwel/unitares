@@ -225,3 +225,42 @@ async def test_run_eval_step_nested_within_threshold_no_regression(tmp_path, mon
 
     assert result["regression"] is False
     assert "nDCG@10" in result["delta"]
+
+
+@pytest.mark.asyncio
+async def test_run_eval_step_corpus_mismatch_is_incomparable(tmp_path, monkeypatch):
+    """Different pair_count: big nDCG drop is reported incomparable, not a regression."""
+    from agents.vigil.agent import VigilAgent
+
+    _hybrid_env(monkeypatch)
+    base = _nested_eval(0.80)
+    base["corpus"] = {"pair_count": 20, "scored_pair_count": 20, "schema_version": 1}
+    cur = _nested_eval(0.60)
+    cur["corpus"] = {"pair_count": 22, "scored_pair_count": 22, "schema_version": 1}
+    (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(json.dumps(base))
+    vigil = VigilAgent(with_eval=True)
+    with patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path), \
+         patch("agents.vigil.agent._run_eval_subprocess", return_value=cur):
+        result = await vigil._run_eval_step()
+
+    assert result["regression"] is False
+    assert "pair_count" in result["incomparable"]
+    assert result["delta"]["nDCG@10"] == pytest.approx(-0.20, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_run_eval_step_matching_corpus_still_flags_regression(tmp_path, monkeypatch):
+    from agents.vigil.agent import VigilAgent
+
+    _hybrid_env(monkeypatch)
+    corpus = {"pair_count": 20, "scored_pair_count": 20, "schema_version": 1}
+    base = {**_nested_eval(0.80), "corpus": corpus}
+    cur = {**_nested_eval(0.60), "corpus": dict(corpus)}
+    (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(json.dumps(base))
+    vigil = VigilAgent(with_eval=True)
+    with patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path), \
+         patch("agents.vigil.agent._run_eval_subprocess", return_value=cur):
+        result = await vigil._run_eval_step()
+
+    assert result["regression"] is True
+    assert "incomparable" not in result

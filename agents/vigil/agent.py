@@ -418,6 +418,26 @@ def _normalize_eval_metrics(doc: Any) -> Dict[str, float]:
     return out
 
 
+def _eval_corpus_mismatch(current: Any, baseline: Any) -> Optional[str]:
+    """Describe how two eval results' corpora differ, or None if comparable.
+
+    A mean over a different label set measures the labels, not the ranker, so
+    a delta across differing corpora must not be read as a regression. Only
+    fields present on both sides are compared; the flat legacy shape carries
+    no corpus block and is treated as comparable.
+    """
+    cur = current.get("corpus") if isinstance(current, dict) else None
+    base = baseline.get("corpus") if isinstance(baseline, dict) else None
+    if not isinstance(cur, dict) or not isinstance(base, dict):
+        return None
+    diffs = [
+        f"{k}: current={cur[k]!r} baseline={base[k]!r}"
+        for k in ("pair_count", "scored_pair_count", "schema_version")
+        if k in cur and k in base and cur[k] != base[k]
+    ]
+    return "; ".join(diffs) or None
+
+
 def _run_eval_subprocess() -> Dict[str, Any]:
     """Invoke the eval harness as a subprocess; return parsed JSON metrics.
 
@@ -1007,7 +1027,18 @@ class VigilAgent(GovernanceAgent):
                 if key in cur_metrics and key in base_metrics:
                     result["delta"][key] = cur_metrics[key] - base_metrics[key]
             ndcg_delta = result["delta"].get("nDCG@10", 0.0)
-            if ndcg_delta < -NDCG_REGRESSION_THRESHOLD:
+            mismatch = _eval_corpus_mismatch(
+                metrics, baseline.get("metrics", baseline))
+            if mismatch is None:
+                mismatch = _eval_corpus_mismatch(metrics, baseline)
+            if mismatch:
+                # Different label set: delta is informational, never a regression.
+                result["incomparable"] = (
+                    f"corpus differs from baseline ({mismatch}); "
+                    f"nDCG@10 delta {ndcg_delta:+.3f} not treated as regression"
+                )
+                log(result["incomparable"])
+            elif ndcg_delta < -NDCG_REGRESSION_THRESHOLD:
                 result["regression"] = True
         except Exception as e:
             log(f"baseline diff failed: {e}")
