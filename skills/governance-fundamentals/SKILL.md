@@ -41,7 +41,7 @@ self-hosted, single-operator federation kernel for agent identity, claims and
 evidence, review, outcomes, and reconstruction. This skill covers one instrument
 inside it, the check-in's state estimate.
 
-That instrument provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists. The dynamical-systems (ODE) model remains useful as a research lens and telemetry; do not present it as cold-start authority or live verdict authority.
+That instrument provides digital proprioception for AI agents — awareness of your own state, your relationship to the system, and whether you are drifting. The live path is behavioral state estimation: observable work signals become EISV readings, smoothed over time and compared with the agent's own trajectory once a baseline exists.
 
 ## EISV State Vector
 
@@ -56,8 +56,8 @@ Every agent has four dimensions, updated through check-ins:
 
 ### How the Live Path Reads Them
 
-- **E (Energy)** currently blends decision success, complexity calibration, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` ODE control feedback. That last input is compatibility debt, not behavioral health evidence. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
-- **I (Integrity)** currently blends calibration/outcome consistency with the trend of that same legacy controller scalar. Read it as a deployed heuristic, not a pure claims-match-results measurement.
+- **E (Energy)** currently blends decision success, complexity calibration, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` (see *Coherence*). The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
+- **I (Integrity)** blends calibration/outcome consistency with the trend of that same legacy controller scalar (see *Coherence*).
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
 - **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
 
@@ -71,15 +71,9 @@ agent's Welford baseline (the stage boundaries derive from
 `(update_count - 5) / 25`). Absolute safety floors and basin-health gates
 remain in force throughout.
 
-Roadmap target semantics for richer cold-start grounding are:
-
-```text
-measurement_t = EISV_t
-reference_t   = blend(agent_baseline_t, class_anchor; w(grounding))
-residual_t    = measurement_t - reference_t
-```
-
-Do not present the class-anchor blend as deployed unless live code exposes it.
+The roadmap target for richer cold-start grounding (a class-anchor reference
+blend) is in `docs/ontology/eisv-proprioception-contract.md`, *Core
+mathematical posture*; it is not the live path.
 Deviation is information first, not a guilty verdict. Policy can map persistent or
 high-margin residuals to `guide`, `pause`, or `reject`, but EISV itself is
 measurement/diagnosis, not prosecution.
@@ -125,9 +119,8 @@ Separately, `metrics.verdict` may carry an internal UNITARES verdict such as
 moral judgment. In the current default posture, the behavioral assessment owns
 the main risk/verdict path after the two-check-in prior window. The configured
 coherence pause, CIRS, basin, and adaptive-governor compatibility backstops still
-actuate inside the check-in policy while their replacement is shadow-calibrated;
-their presence does not turn the legacy ODE scalar into behavioral health
-evidence.
+actuate inside the check-in policy while their replacement is shadow-calibrated
+(see *Coherence*).
 
 On read-only metrics, headline `risk_score` and `status` use the risk that
 actually produced the last verdict when available. Inspect `risk_score_source`:
@@ -169,7 +162,12 @@ The plain-English `mirror` array in your check-in response already summarizes an
 ## Coherence
 
 `coherence` is an overloaded compatibility field, not one universal instrument.
-Interpret it only with the accompanying `coherence_source` and `coherence_role`:
+Interpret it only with the accompanying `coherence_source` and `coherence_role`.
+The deployed `legacy_tanh_v` value is ODE control feedback: it feeds E, I, the
+omitted-confidence estimator and the compatibility backstops, and it is not behavioral health evidence. The
+dynamical-systems (ODE) model remains useful as a research lens and telemetry;
+it is not cold-start or live verdict authority. For live interpretation read
+the behavioral assessment and policy provenance.
 
 | Source | Role | Valid interpretation |
 |--------|------|----------------------|
@@ -187,7 +185,6 @@ Interpret it only with the accompanying `coherence_source` and `coherence_role`:
   treat legacy `C(V)` as authority.
 - New dialectic conditions should not target legacy coherence. Stored
   unprovenanced `coherence_target` conditions retire without escalating policy.
-- Prefer the behavioral assessment and policy provenance for live interpretation; use legacy ODE values as telemetry/research context.
 
 ## Calibration
 

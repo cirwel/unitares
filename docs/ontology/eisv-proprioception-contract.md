@@ -44,9 +44,8 @@ them:
 4. **Hypothetical / analogy** — a useful comparison that is not itself evidence.
 
 Do not promote a claim upward across those levels without new evidence. In
-particular, "EISV enables autonomic agents" is not an established claim. The
-defensible current statement is: **EISV is designed as a runtime state estimator
-for autonomic regulation.**
+particular, "EISV enables autonomic agents" is not an established claim; the
+architectural-role statement above is the one to use.
 
 ## Contract
 
@@ -72,7 +71,7 @@ or scheduling any EISV validation work.
 ### What the word does NOT claim — added 2026-08-18, operator-identified
 
 The term is retained deliberately: it earns its place as the anti-verdict claim
-above, and the published papers use it. Two things it must never be read as
+above, and the published papers use it. Three things it must never be read as
 asserting.
 
 **1. No interiority.** "Proprioception" names a *self-state estimate*. It is not
