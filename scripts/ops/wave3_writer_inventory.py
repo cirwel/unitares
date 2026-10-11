@@ -76,7 +76,8 @@ SQL_WRITERS: Dict[Tuple[str, str], Dict[str, object]] = {
         "columns": ("awaiting_facilitation", "updated_at"),
         "wrapped_by": "update_session_awaiting_facilitation_async"},
     (DIALECTIC_DB, "DialecticDB.resolve_session"): {
-        "columns": ("status", "phase", "updated_at"), "wrapped_by": "resolve_session_async"},
+        "columns": ("status", "phase", "updated_at", "awaiting_facilitation"),
+        "wrapped_by": "resolve_session_async"},
     (DIALECTIC_DB, "DialecticDB.add_message"): {
         "columns": SWEEP_ELIGIBILITY_COLUMNS, "wrapped_by": "add_message_async"},
     (SAGA_EX, "create_session"): {
@@ -106,6 +107,14 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
                   "update_session_reviewer_async", "mark_awaiting_facilitation_async",
                   "update_session_awaiting_facilitation_async"),
         "writer": "sweeper (via=sweeper; plus its own dialectic_guarded_write per guarded write)",
+    },
+    (AUTO_RESOLVE, "_close_standing_rejections"): {
+        "calls": ("resolve_session_async",),
+        "writer": (
+            "sweeper facilitation exit: terminal failed with a rejection_stands "
+            "resolution and the flag cleared in one compare-and-set statement "
+            "(via=sweeper; a reap_failed guarded write)"
+        ),
     },
     (HANDLERS, "_apply_reviewer_reassignment"): {
         "calls": ("add_message_async", "reopen_session_async", "beam_update_reviewer",

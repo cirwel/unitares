@@ -1310,6 +1310,18 @@ def _public_listener_port() -> "int | None":
     return port
 
 
+_MCP_PROBE_BODY = json.dumps({
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "initialize",
+    "params": {
+        "protocolVersion": "2025-03-26",
+        "capabilities": {},
+        "clientInfo": {"name": "unitares-doctor", "version": "0"},
+    },
+})
+
+
 def check_mcp_route_gate() -> CheckResult:
     """Which gate, if any, is closed on /mcp/ for a client arriving externally.
 
@@ -1335,8 +1347,8 @@ def check_mcp_route_gate() -> CheckResult:
     are the ones that can only answer 401 to an anonymous probe.
 
     Statuses are whitelisted, not blacklisted. 400 is the healthy answer here
-    (the session layer rejecting a GET with no session id), which means the Host
-    was accepted; 404 and 5xx are failures, not "some other status".
+    (a request the session layer refused), 200 is an accepted initialize, and
+    either way the Host was accepted; 404 and 5xx are failures, not "some other status".
 
     **Not in conflict with the health watchdog, which counts 401 as alive.**
     `scripts/ops/health_watchdog.sh` probes bearer-gated surfaces and treats a
@@ -1360,6 +1372,7 @@ def check_mcp_route_gate() -> CheckResult:
     headers = {
         "Host": external_host,
         "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
         "User-Agent": "unitares-doctor",
     }
     if token:
@@ -1372,13 +1385,17 @@ def check_mcp_route_gate() -> CheckResult:
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
         try:
-            conn.request("GET", MCP_ROUTE_PATH, headers=headers)
+            # POST initialize, not GET: a GET on a healthy /mcp/ opens the SSE
+            # stream and never completes, so the probe timed out into a WARN.
+            # An initialize answers with a bounded response and, like the GET,
+            # is only reachable once the Host has been accepted.
+            conn.request("POST", MCP_ROUTE_PATH, body=_MCP_PROBE_BODY, headers=headers)
             resp = conn.getresponse()
             status = resp.status
-            # Bounded: a 503 from the closed-gate path names itself in the body,
-            # and a 503 from session exhaustion does not. Without this they are
-            # the same number and the operator gets the wrong remedy.
-            body = resp.read(512).decode("utf-8", "replace")
+            # Bounded, and only for error statuses: a 503 from the closed-gate
+            # path names itself in the body, and a 503 from session exhaustion
+            # does not. A 2xx body is never read (it may be an open stream).
+            body = resp.read(512).decode("utf-8", "replace") if status >= 500 else ""
         finally:
             conn.close()
     except socket.timeout:
@@ -1430,8 +1447,8 @@ def check_mcp_route_gate() -> CheckResult:
                    "is no token to borrow and the hand check is the only route.",
         )
     if status in (200, 400):
-        # Past Host validation: 400 is the session layer refusing a GET with no
-        # session id, which is what a healthy gated route answers.
+        # Past Host validation: 200 is the initialize being served; 400 is the
+        # session layer refusing the request, which also means the Host passed.
         if token:
             return CheckResult(
                 name, mode, Status.PASS,

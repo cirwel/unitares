@@ -9,6 +9,7 @@ extended inactivity (4+ hours total).
 """
 
 import asyncio
+import json
 import uuid
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timedelta, timezone
@@ -45,6 +46,7 @@ from src.dialectic_db import (
     add_message_async,
     get_session_async,
     has_inflight_saga_async,
+    resolve_session_async,
     probe_saga_since_async,
 )
 
@@ -476,6 +478,155 @@ async def _synthesis_reviewer_owes_reply(
         return False
 
 
+def _decoded_messages(messages: Any) -> List[Dict[str, Any]]:
+    """Message rows with ``observed_metrics`` as a dict when stored as JSON text."""
+    out: List[Dict[str, Any]] = []
+    for message in messages or []:
+        row = dict(message)
+        metrics = row.get("observed_metrics")
+        if isinstance(metrics, str):
+            try:
+                row["observed_metrics"] = json.loads(metrics)
+            except (TypeError, ValueError):
+                row["observed_metrics"] = None
+        out.append(row)
+    return out
+
+
+async def _close_standing_rejections(
+    counts: _CycleCounts,
+    details: List[Dict[str, Any]],
+    active_sessions: List[Dict[str, Any]],
+    *,
+    decision_read_ts: Optional[datetime],
+) -> set:
+    """Close facilitation-awaiting sessions whose reviewer rejection stands.
+
+    The facilitation exit (operator decision 2026-10-11;
+    ``rejection_stands.py``), and its only writer. It runs every cycle over
+    every facilitation-awaiting SYNTHESIS row, not just the stuck ones, so a
+    session closes within one sweep of the reviewer's last word: the reviewer
+    reconsidered a reply and still rejects, the paused agent answered after
+    the reviewer's window ended, the window ended with no reply, or a timely
+    reply was never answered (a restart killed the reviewer, or its
+    reconsideration formed no judgment and it kept the rejection unfiled).
+
+    Accounted as a ``reap_failed`` guarded write: it ends the session
+    ``failed``, which is what that write name means to the collision report,
+    and the reason lives in ``resolution_json``. Written directly to
+    PostgreSQL, as the existing reap is, not through the BEAM saga: the
+    overlap probe after every sweeper write would otherwise find the
+    sweeper's own saga and report it as a collision.
+
+    Returns the ids it closed so the stuck-session pass skips them. Never
+    raises for one session; that session is retried next cycle.
+    """
+    closed: set = set()
+    candidates = [
+        s for s in active_sessions
+        if s.get("session_id")
+        and bool(s.get("awaiting_facilitation"))
+        and str(s.get("phase") or "").lower() == "synthesis"
+        and s.get("reviewer_agent_id")
+        and s.get("paused_agent_id")
+        and s.get("reviewer_agent_id") != s.get("paused_agent_id")
+    ]
+    if not candidates:
+        return closed
+
+    from .rejection_stands import (
+        REJECTION_STANDS,
+        assess_rejection_stands,
+        continuation_window_s,
+    )
+    wait_s, total_s = continuation_window_s()
+
+    for session in candidates:
+        session_id = session["session_id"]
+        paused_agent_id = session.get("paused_agent_id")
+        reviewer_agent_id = session.get("reviewer_agent_id")
+        try:
+            early_check_ts = datetime.now(timezone.utc)
+            if await has_inflight_saga_async(session_id):
+                continue  # BEAM owns this transition right now
+            # Function-local, as in `_synthesis_reviewer_owes_reply`: handlers
+            # is heavy and imports this module.
+            from .handlers import _has_orchestrated_reviewer_budget
+            row = dict(await get_session_async(session_id) or {})
+            messages = _decoded_messages(row.get("messages"))
+            row["messages"] = messages
+            payload = assess_rejection_stands(
+                messages,
+                paused_agent_id=paused_agent_id,
+                reviewer_agent_id=reviewer_agent_id,
+                # From the re-read row, not the candidate list: a clear that
+                # landed between the two reads must stop the close.
+                awaiting_facilitation=bool(row.get("awaiting_facilitation")),
+                now=datetime.now(timezone.utc),
+                is_orchestrated=lambda rid: _has_orchestrated_reviewer_budget(row, rid),
+                wait_s=wait_s,
+                total_s=total_s,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Could not assess rejection_stands for {session_id[:16]}: {exc}"
+            )
+            continue
+        if payload is None:
+            continue
+        if "phase" not in row or "updated_at" not in row:
+            continue  # no row state to compare-and-set against
+        payload["closed_by"] = "python_sweeper"
+
+        try:
+            written = await _attempt_guarded_write(
+                counts,
+                details,
+                attempted=ATTEMPT_REAP_FAILED,
+                session=session,
+                # Compare-and-set against the row the assessment read: a
+                # message (an approval among them), phase move or reassignment
+                # since then refuses the close, and the next cycle re-reads.
+                write=lambda winner: resolve_session_async(
+                    session_id, payload, "failed", winner=winner,
+                    expected_phase=row.get("phase"),
+                    expected_updated_at=row.get("updated_at"),
+                    expected_reviewer=reviewer_agent_id,
+                    # Answering the request and ending the session are one
+                    # statement, so the terminal row cannot keep asking for a
+                    # human.
+                    clear_facilitation=True,
+                ),
+                decision_read_ts=decision_read_ts,
+                early_check_ts=early_check_ts,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"Could not close {session_id[:16]} as rejection_stands: {exc}"
+            )
+            continue
+        if not written:
+            continue  # another writer finished it; the refusal is recorded
+
+        _sync_cached_session(session_id, phase="failed", awaiting_facilitation=False)
+        counts.resolved_count += 1
+        details.append({
+            "session_id": session_id,
+            "paused_agent_id": paused_agent_id,
+            "phase": session.get("phase"),
+            "action": "failed",
+            "reason": REJECTION_STANDS,
+            "last_word_basis": payload.get("last_word_basis"),
+            "verdict_acceptance": payload.get("verdict_acceptance"),
+        })
+        logger.info(
+            f"Closed {session_id[:16]} as rejection_stands "
+            f"({payload.get('last_word_basis')}, {payload.get('verdict_acceptance')})"
+        )
+        closed.add(session_id)
+    return closed
+
+
 async def _auto_resolve_stuck_sessions(
     counts: Optional[_CycleCounts] = None,
 ) -> Dict[str, Any]:
@@ -527,16 +678,29 @@ async def _auto_resolve_stuck_sessions(
         if not active_sessions:
             return c.as_result([], "No active sessions found")
 
+        # Facilitation exit first, and regardless of idle time: a session
+        # whose reviewer has had its last word over a standing rejection is
+        # closed when its window ends, not two or four hours later.
+        closed_ids = await _close_standing_rejections(
+            c, details, active_sessions, decision_read_ts=decision_read_ts
+        )
+
         # Filter to stuck sessions (inactive for >2 hours)
         stuck_sessions = []
         for session in active_sessions:
+            if session.get("session_id") in closed_ids:
+                continue
             check_time = _parse_timestamp(session.get("updated_at") or session.get("created_at"))
             if check_time and check_time < threshold_time:
                 stuck_sessions.append(session)
         c.stuck_session_count = len(stuck_sessions)
 
         if not stuck_sessions:
-            return c.as_result([], "No stuck sessions found")
+            return c.as_result(
+                details,
+                "No stuck sessions found"
+                + (f" ({len(closed_ids)} closed as rejection_stands)" if closed_ids else ""),
+            )
 
         for session in stuck_sessions:
             session_id = session.get("session_id")

@@ -8,7 +8,6 @@ Skip all if database is unavailable.
 
 import asyncio
 import json
-import os
 import sys
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -109,11 +108,11 @@ class TestInitAndHealth:
             assert val == 42
 
     @pytest.mark.asyncio
-    async def test_close_and_reinit(self):
+    async def test_close_and_reinit(self, monkeypatch):
         """Backend can be closed and reinitialized."""
-        os.environ["DB_POSTGRES_URL"] = TEST_DB_URL
-        os.environ["DB_POSTGRES_MIN_CONN"] = "1"
-        os.environ["DB_POSTGRES_MAX_CONN"] = "2"
+        monkeypatch.setenv("DB_POSTGRES_URL", TEST_DB_URL)
+        monkeypatch.setenv("DB_POSTGRES_MIN_CONN", "1")
+        monkeypatch.setenv("DB_POSTGRES_MAX_CONN", "2")
 
         from src.db.postgres_backend import PostgresBackend
 
@@ -1252,8 +1251,11 @@ class TestGraphOperations:
 
 class TestCypherSanitization:
 
+    @pytest.fixture(autouse=True)
+    def _db_env(self, monkeypatch):
+        monkeypatch.setenv("DB_POSTGRES_URL", TEST_DB_URL)
+
     def _backend(self):
-        os.environ["DB_POSTGRES_URL"] = TEST_DB_URL
         from src.db.postgres_backend import PostgresBackend
         return PostgresBackend()
 

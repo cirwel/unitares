@@ -1,0 +1,22 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "dialectic-reasoning",
+  "verified_at": "2026-10-11T11:47:43Z",
+  "verified_date": "2026-10-11",
+  "verifier": "claude-kg-fix-scope (re-checked the rejection_stands paragraph against 15151613f: answered basis now requires the same reviewer, flag read from the re-read row; tightened 'an earlier verdict' to 'its own earlier verdict')",
+  "source_digests": {
+    "unitares/src/dialectic_protocol.py": "1f53d7379f30fb0e",
+    "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
+    "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "c7e65b4e229d815d",
+    "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "1c0c4f7246426b8d",
+    "unitares/src/mcp_handlers/dialectic/responses.py": "b9ccb7d0e1ed8ba3",
+    "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
+    "unitares/src/mcp_handlers/dialectic/session.py": "5075f9468a7a640d",
+    "unitares/src/mcp_handlers/identity/operator.py": "cc2698ddc37a4091",
+    "unitares/src/mcp_handlers/lifecycle/query.py": "b712f54d034d1493",
+    "unitares/src/mcp_handlers/schemas/dialectic.py": "c2e3ee6733917d94",
+    "unitares/src/mcp_handlers/tool_stability.py": "59d527f77fa1c58b"
+  },
+  "skill_digest": "34dfaad00aaacd22"
+}

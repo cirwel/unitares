@@ -391,6 +391,53 @@ def _pick_eval_baseline(baseline_dir: Path, config_tag: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
+def _normalize_eval_metrics(doc: Any) -> Dict[str, float]:
+    """Flatten a retrieval_eval result/baseline into the keys Vigil diffs.
+
+    ``scripts/eval/retrieval_eval.py`` (and the committed baselines) nest the
+    numbers as ``aggregate -> ndcg@10 -> mean``; the legacy flat shape used
+    top-level ``nDCG@10`` etc. Accept both, preferring the nested form.
+    """
+    if not isinstance(doc, dict):
+        return {}
+    out: Dict[str, float] = {}
+    agg = doc.get("aggregate")
+    if isinstance(agg, dict):
+        for flat, nested in (("nDCG@10", "ndcg@10"), ("Recall@20", "recall@20"), ("MRR", "mrr")):
+            entry = agg.get(nested)
+            if isinstance(entry, dict) and isinstance(entry.get("mean"), (int, float)):
+                out[flat] = entry["mean"]
+        lat = agg.get("latency_ms")
+        if isinstance(lat, dict):
+            for flat, nested in (("latency_p50", "p50"), ("latency_p95", "p95")):
+                if isinstance(lat.get(nested), (int, float)):
+                    out[flat] = lat[nested]
+    for key in ("nDCG@10", "Recall@20", "MRR", "latency_p50", "latency_p95"):
+        if key not in out and isinstance(doc.get(key), (int, float)):
+            out[key] = doc[key]
+    return out
+
+
+def _eval_corpus_mismatch(current: Any, baseline: Any) -> Optional[str]:
+    """Describe how two eval results' corpora differ, or None if comparable.
+
+    A mean over a different label set measures the labels, not the ranker, so
+    a delta across differing corpora must not be read as a regression. Only
+    fields present on both sides are compared; the flat legacy shape carries
+    no corpus block and is treated as comparable.
+    """
+    cur = current.get("corpus") if isinstance(current, dict) else None
+    base = baseline.get("corpus") if isinstance(baseline, dict) else None
+    if not isinstance(cur, dict) or not isinstance(base, dict):
+        return None
+    diffs = [
+        f"{k}: current={cur[k]!r} baseline={base[k]!r}"
+        for k in ("pair_count", "scored_pair_count", "schema_version")
+        if k in cur and k in base and cur[k] != base[k]
+    ]
+    return "; ".join(diffs) or None
+
+
 def _run_eval_subprocess() -> Dict[str, Any]:
     """Invoke the eval harness as a subprocess; return parsed JSON metrics.
 
@@ -958,6 +1005,9 @@ class VigilAgent(GovernanceAgent):
         result: Dict[str, Any] = {
             "ran": True,
             "metrics": metrics,
+            # Flat view (nDCG@10, latency_p95, ...) for consumers; the raw
+            # harness output nests these under ``aggregate``.
+            "flat_metrics": _normalize_eval_metrics(metrics),
             "config_tag": config_tag,
             "baseline": baseline_path.name if baseline_path else None,
             "delta": {},
@@ -974,12 +1024,24 @@ class VigilAgent(GovernanceAgent):
 
         try:
             baseline = json.loads(baseline_path.read_text())
-            base_metrics = baseline.get("metrics", baseline)  # tolerate flat or nested
+            base_metrics = _normalize_eval_metrics(baseline.get("metrics", baseline))
+            cur_metrics = _normalize_eval_metrics(metrics)
             for key in ("nDCG@10", "Recall@20", "MRR", "latency_p50", "latency_p95"):
-                if key in metrics and key in base_metrics:
-                    result["delta"][key] = metrics[key] - base_metrics[key]
+                if key in cur_metrics and key in base_metrics:
+                    result["delta"][key] = cur_metrics[key] - base_metrics[key]
             ndcg_delta = result["delta"].get("nDCG@10", 0.0)
-            if ndcg_delta < -NDCG_REGRESSION_THRESHOLD:
+            mismatch = _eval_corpus_mismatch(
+                metrics, baseline.get("metrics", baseline))
+            if mismatch is None:
+                mismatch = _eval_corpus_mismatch(metrics, baseline)
+            if mismatch:
+                # Different label set: delta is informational, never a regression.
+                result["incomparable"] = (
+                    f"corpus differs from baseline ({mismatch}); "
+                    f"nDCG@10 delta {ndcg_delta:+.3f} not treated as regression"
+                )
+                log(result["incomparable"])
+            elif ndcg_delta < -NDCG_REGRESSION_THRESHOLD:
                 result["regression"] = True
         except Exception as e:
             log(f"baseline diff failed: {e}")
@@ -1183,7 +1245,8 @@ class VigilAgent(GovernanceAgent):
         # --- 4.7. KG hygiene v1: retrieval-eval step (optional) ---
         eval_result = await self._run_eval_step()
         if eval_result.get("ran"):
-            metrics = eval_result["metrics"]
+            metrics = eval_result.get("flat_metrics") or _normalize_eval_metrics(
+                eval_result["metrics"])
             delta = eval_result.get("delta", {})
             baseline_name = eval_result.get("baseline") or "no-baseline"
             ndcg = metrics.get("nDCG@10", 0.0)
@@ -1197,6 +1260,8 @@ class VigilAgent(GovernanceAgent):
             if eval_result.get("regression"):
                 findings.append("⚠ eval regression: nDCG@10 dropped beyond threshold")
                 issues += 1
+            elif eval_result.get("incomparable"):
+                findings.append(f"eval not compared: {eval_result['incomparable']}")
 
         # --- 5. Compute complexity/confidence from actual signals ---
         complexity = 0.15
@@ -1255,7 +1320,7 @@ class VigilAgent(GovernanceAgent):
             "hygiene_stale_opens": len(stale_opens),
             **stale_state,
             "archive_digest_sent_at": archive_digest_sent_at,
-            "eval_ndcg10": eval_result.get("metrics", {}).get("nDCG@10"),
+            "eval_ndcg10": eval_result.get("flat_metrics", {}).get("nDCG@10"),
             "eval_baseline": eval_result.get("baseline"),
             "eval_regression": eval_result.get("regression", False),
             "total_cycles": total_cycles,
