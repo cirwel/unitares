@@ -212,6 +212,40 @@ class TestHandleObserveAgent:
         server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_resolves_the_handle_the_listing_prints(self):
+        """The id agent(action='list') shows a non-operator caller must observe.
+
+        The listing redacts the UUID and prints the disambiguated handle
+        ({public_agent_id}_{uuid8}). Two agents minted the same day share the
+        stored bucket public_agent_id, so the handle is the only public id
+        that tells them apart, and each must resolve to its own row.
+        """
+        from src.mcp_handlers.lifecycle.query import _public_agent_identifier
+
+        first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        second = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+        metadata = {}
+        for uuid in (first, second):
+            meta = _make_metadata(uuid)
+            meta.public_agent_id = "mcp_20260416"
+            metadata[uuid] = meta
+        server = _build_mock_server(
+            monitors_dict={uuid: _make_monitor(uuid) for uuid in metadata},
+            metadata_dict=metadata,
+        )
+        listed = _public_agent_identifier(second, metadata[second])
+        assert listed == "mcp_20260416_bbbbbbbb"
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": listed})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent_id"] == second
+
+    @pytest.mark.asyncio
     async def test_decision_distribution_overridden_from_postgres(self):
         """Regression: a paused agent whose live updates land in another process
         must not report decision_distribution.pause=0.

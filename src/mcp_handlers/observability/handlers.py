@@ -8,6 +8,7 @@ from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
+from ..support.naming_helpers import disambiguate_public_handle
 from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -36,6 +37,20 @@ def _resolve_agent_from_memory(target: str) -> str | None:
             getattr(meta, "structured_id", None),
             getattr(meta, "public_agent_id", None),
         ):
+            return uuid_key
+    # agent(action="list") shows a non-operator caller the disambiguated
+    # handle ({public_agent_id}_{uuid8}) in place of the UUID, and the observe
+    # schema sends readers to that listing to find a target. The stored
+    # public_agent_id carries no suffix, so the pass above never matches the
+    # id the listing printed. Second pass, so an exact label or stored-id match
+    # keeps precedence and this only runs on a miss.
+    for uuid_key, meta in mcp_server.agent_metadata.items():
+        handle = disambiguate_public_handle(
+            getattr(meta, "public_agent_id", None),
+            getattr(meta, "structured_id", None),
+            getattr(meta, "agent_uuid", None) or uuid_key,
+        )
+        if handle and target == handle:
             return uuid_key
     return None
 
