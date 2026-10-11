@@ -49,44 +49,38 @@ source_files:
 
 ## Don't Panic: six rules
 
-This is the Mostly Harmless Guide to the normal agent path. It was verified
-against interface contract `1.31.0` on 2026-10-11; use
-`list_tools(lite=true)` to read the deployed server's contract version.
+Mostly Harmless Guide to the normal agent path, verified against interface
+contract `1.31.0` on 2026-10-11.
 
-1. **Keep process identity honest.** A new process calls
-   `start_session(force_new=true)` once and passes its `client_session_id` on
-   later calls. A same-live-owner recovery may proof-rebind; a restarted
-   process mints fresh. Declare lineage only for a real dispatch or a handoff
-   from an exited predecessor.
+1. **Keep process identity honest.** Call `start_session(force_new=true)` once
+   per process; reuse its `client_session_id` only within that process. Restarts
+   mint fresh, and proof-rebind is for the same live owner. Declare lineage only
+   for a real dispatch or handoff from an exited predecessor.
 2. **Branch on control flow, not `success` alone.** Read
-   `action_summary.action` and any `sub_action`: `proceed` continues, `guide`
-   continues with its guidance, and `pause` stops ordinary governed writes for
-   the named recovery path. A typed identity refusal is success-shaped; detect
-   `refused`, `status`, or `rollout_flag`, then follow `next_step` and
-   `safe_options` instead of retrying it unchanged. EISV and verdict fields
-   describe state; they are not outcome truth.
+   `action_summary.action` and `sub_action`; check `refused`, `status`, and
+   `rollout_flag` even when `success` is true. `proceed` and `guide` continue;
+   `pause` stops ordinary governed writes for its named recovery. Follow
+   `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
+   describe state, not outcomes.
 3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
-   not after every tool call. A check-in is an agent report, `record_result`
-   records an outcome that actually occurred, and `store_finding` /
-   `update_finding` maintain durable shared knowledge.
-4. **Search before durable writes.** Search before `store_finding`; update or
-   supersede an existing finding instead of duplicating it only when authorized.
-   Operator-authored architectural decisions remain operator-owned. Never store
-   secrets, and label uncertain claims as uncertain rather than presenting them
-   as facts.
+   not after every tool call. Use `store_finding` / `update_finding` for durable
+   knowledge and `record_result` only for an outcome that actually occurred.
+4. **Reuse durable knowledge safely.** Search before `store_finding`. If
+   authorized, update or supersede an existing finding rather than duplicate
+   it; otherwise leave it untouched. Operator-authored architectural decisions
+   stay operator-owned. Never store secrets, and label uncertainty.
 5. **Make confidence mean something.** Supply `confidence` only for a genuine
-   forecast; every supplied value can mint a scored prediction. Preserve any
-   returned `prediction_id` and pair it with the real outcome when one arrives.
-   Do not report `task_completed` merely because a turn or local edit ended.
-6. **Discover conditionally.** Use tools and schemas already advertised by the
-   client. When a needed capability or schema is absent or unclear, call
-   `list_tools`, then `describe_tool`; use `use_tool` only when the target is
-   omitted from the initial tool listing.
+   forecast; each value can mint a scored prediction. Keep its `prediction_id`
+   and pair it with the observed outcome. Do not report
+   `task_completed` for a turn or local edit.
+6. **Discover conditionally.** Use advertised tools and schemas directly. Only
+   when one is absent or unclear, call `list_tools` (which also reports the
+   contract version), then `describe_tool`; use `use_tool` only when the target
+   is omitted from the initial listing.
 
-The source repository's
-[captured two-process walkthrough](https://github.com/cirwel/unitares/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md)
-shows the longer path, including clean exit and handoff. The sections below
-explain the exceptions and recovery paths behind this card.
+See the
+[two-process walkthrough](https://github.com/cirwel/unitares/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md)
+for clean exit and handoff; exceptions and recovery follow.
 
 ## Primary Workflow Names
 

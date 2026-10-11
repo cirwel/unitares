@@ -1,0 +1,1 @@
+- Trim redundant wording from the six-rule agent lifecycle card without changing its identity, control-flow, memory, calibration, or discovery guidance.
