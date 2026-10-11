@@ -160,8 +160,9 @@ finding), and the operator vetoes after the fact if needed.
 | Choosing a review provider; disposing of non-security review findings with reasons | Auth, identity-enforcement and `governance-sensitive` paths |
 | Closing findings with a `closure_class` and its evidence | Spending: metered APIs, subscriptions, paid compute |
 | Telemetry thresholds and noise floors that carry no removal or enforcement authority | New commitments outside this repo: grant text, opening PRs on other projects, public site copy, papers |
-| Interface additions that name the need they serve in [`docs/integration/INTENT_MAP.md`](docs/integration/INTENT_MAP.md) | Dismissing a security finding |
-| Keeping an existing outside commitment accurate: an open PR's description, a rebase, a citation's link | Changing this table |
+| Moving durable facts out of harness memory into the graph, and pointing harness memory at the graph entry | Dismissing a security finding |
+| Keeping an existing outside commitment accurate: an open PR's description, a rebase, a citation's link | New tools, aliases, actions or model channels: propose them against [`docs/integration/INTENT_MAP.md`](docs/integration/INTENT_MAP.md) as a draft PR |
+| | Changing this table |
 
 The reserved column wins any overlap. If a change might touch a reserved item,
 open it as a draft PR, say which item, and leave it for the operator. If a case
