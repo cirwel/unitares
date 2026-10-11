@@ -6,7 +6,7 @@
 
 ---
 
-This guide is for a cold evaluator deciding whether UNITARES is real, what layer it occupies, and how to verify the public claims quickly.
+This guide is for a cold evaluator: what UNITARES does, what layer it occupies, and how to verify the public claims quickly.
 
 ## One-sentence read
 
@@ -14,10 +14,10 @@ UNITARES is accountability infrastructure for long-running AI agents: a
 self-hosted, single-operator server that keeps one attributed record of
 identity, claims and evidence, review, outcomes, and reconstruction across
 sessions, handoffs, and agents from different vendors. Each check-in also
-returns an advisory policy action derived from an EISV state estimate; that
-estimator is moving out of the core to an optional module. Whether the
-telemetry predicts incidents or helps prevent them remains an open, measured
-question.
+returns a policy action (`proceed`, `guide`, or `pause`) derived from an EISV
+state estimate. What remains open is listed under
+[Common objections](#common-objections) and in the
+[claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status).
 
 ## What this is
 
@@ -38,30 +38,36 @@ question.
   sources are harder for the agent to manipulate and baselines are self-relative,
   but enforcement leans lenient by intent and red-teaming has been ad hoc rather
   than sustained. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md).
-- Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
 
 ## Common objections
 
-Three objections come up in nearly every review. Each has a true part, and each
-answer below says what that part is, what UNITARES actually claims, and where the
-evidence or the open question lives.
+Each answer below says what UNITARES claims, what remains open, and where the
+evidence lives.
 
-**"There is no evidence it improves outcomes."** True: no governed-versus-ungoverned
-comparison has shown an outcome improved, and the frozen outcome-lift read was
-inconclusive, not negative ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)).
-Outcome improvement is not the product claim. The product claim is that agent work
-stays attributed and reconstructable across sessions, handoffs, and vendors, which
-a reviewer can check directly: bind a session, write a finding, restart, and read
-it back. Version control and audit logs are judged the same way, by whether the
-record is complete and trustworthy, not by whether the code got better. Whether
-governance improves outcomes is a research question on top, with a
+**"There is no evidence it improves outcomes."** Outcome improvement is not the
+product claim. The product claim is that agent work stays attributed and
+reconstructable across sessions, handoffs, and vendors, which a reviewer can check
+directly: bind a session, write a finding, restart, and read it back. Version
+control and audit logs are judged the same way, by whether the record is complete
+and trustworthy, not by whether the code got better. Whether governance improves
+outcomes is a research question on top: no governed-versus-ungoverned comparison
+has shown an outcome improved, the frozen outcome-lift read was inconclusive, not
+negative ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)), and a
 [registered stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
-that constrains how it may be answered.
+constrains how it may be answered.
 
-**"EISV is not a validated measure."** Its predictive validity is unestablished,
-and the docs say so. EISV is a behavioral state estimate. Its `proceed` and
-`guide` actions are advisory; its `pause` holds governed writes until
-self-recovery, review, an operator, or expiry lifts it. The operator decided on 2026-10-10 to move it out of the core
+**"A structured handoff note would do as well."** A note exists only if the
+outgoing agent writes it, and it carries one author's summary. The UNITARES record
+is written as the work happens, ties each entry to the process that wrote it, is
+searchable by every agent and vendor at once, and carries a correction everywhere
+the fact is read. Whether that yields better outcomes than a well-written note is
+untested; a matched comparison (forced mid-task handoffs, a handoff-note arm and a
+record arm, machine-checked outcomes) is the study that would answer it.
+
+**"EISV is not a validated measure."** EISV is a behavioral state estimate. Its
+`proceed` and `guide` actions are advisory; its `pause` holds governed writes until
+self-recovery, review, an operator, or expiry lifts it. Its predictive validity is
+unestablished ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)). The operator decided on 2026-10-10 to move it out of the core
 into an optional module subscribed to check-ins
 ([plan](proposals/active/eisv-core-boundary-v0.md)). Identity, findings,
 requested review, outcomes, and reconstruction do not need its estimate to work. The runtime separation is
@@ -69,9 +75,8 @@ staged so it does not disturb the registered 2026-12-01 read. Until then the
 estimator ships in the core path, but its validity is a question about a research
 instrument, not about the record.
 
-**"The ontology is overbuilt."** Partly fair as a vocabulary problem. Terms such as
-proprioception, allostatic load, dialectic, and trajectory identity come from the
-research program and read as overreach to a newcomer. The mechanisms under them
+**"The ontology is overbuilt."** Terms such as proprioception, allostatic load,
+dialectic, and trajectory identity come from the research program. The mechanisms under them
 are ordinary: a process identity bound to a session, a declared lineage pointer, a
 state estimate, a review session with a recorded verdict. The product claim
 rests on those mechanisms, not on the research framing, which lives in
@@ -79,10 +84,8 @@ rests on those mechanisms, not on the research framing, which lives in
 
 ## Implementation status: what's live vs proposed
 
-A cold reader who greps the code and also reads `docs/proposals/` can easily
-mistake a *proposed* surface for vaporware, or conclude a *live* surface is
-"not implemented" because the README mentions it and the obvious file doesn't.
-This table is the authoritative shipped/proposed line. If it disagrees with
+This table is the authoritative shipped/proposed line; anything found only under
+`docs/proposals/` is proposed. If it disagrees with
 runtime, trust [`dev/CANONICAL_SOURCES.md`](dev/CANONICAL_SOURCES.md) and the
 referenced files.
 
@@ -91,7 +94,7 @@ referenced files.
 | Check-in / EISV / verdict loop | **Live** | `src/behavioral_assessment.py`, `src/behavioral_state.py`; flow in [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
 | Self-relative (z-score vs own Welford baseline) scoring | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
 | Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, reached as `dialectic(action='thesis'/'antithesis'/'synthesis'/'request')` on every transport. Their own names are legacy aliases: REST `/v1/tools/call` and stdio resolve them, `/mcp/` answers `Unknown tool`. Not a stub. |
-| Knowledge graph (discoveries, edges, FTS) | **Live, advisory** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()` (workflow aliases `store_finding`, `search_shared_memory`, `update_finding`) and `search_knowledge_graph`. `store_knowledge_graph` is a legacy alias for `knowledge(action='store')` that REST and stdio resolve and `/mcp/` refuses. AGE relational store is canonical; AGE graph is advisory. |
+| Knowledge graph (discoveries, edges, FTS) | **Live** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()` (workflow aliases `store_finding`, `search_shared_memory`, `update_finding`) and `search_knowledge_graph`. `store_knowledge_graph` is a legacy alias for `knowledge(action='store')` that REST and stdio resolve and `/mcp/` refuses. AGE relational store is canonical; AGE graph is advisory. |
 | HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-mostly, not read-only: the Security pane (`dashboard/redesign/sections/security.js`) revokes passkeys and dashboard sessions. The HTTP adjudication surface (the Sentinel queue and its verdict routes) was removed 2026-09-27; the Sentinel CLI (`--resolve`/`--dismiss`) remains the supported path for operator-recorded outcomes. Historical `*_confirmed` / `*_dismissed` outcome rows remain. |
 | ODE / thermodynamic model | **Live but diagnostic only** | Runs in parallel; does **not** drive verdicts (behavioral path overrides). See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
 | BEAM Wave 3a outbound proxy | **Live, optimization-only** | `src/wave3a_beam_proxy.py`. Python in-process dispatch is the authority; BEAM is a routed fast-path that **fails open to Python** on any error (500ms hard timeout). Routing is env-flag-gated (`src/wave3a_routing.py`). Observability: DB coordination events + `unitares_beam_proxy_*` Prometheus metrics. |
@@ -165,11 +168,10 @@ This complements evals, guardrails, and sandboxes. Evals ask whether a model sho
 - Longitudinal embodied testbed: `CIRWEL/anima-mcp`.
 - Dataset / benchmark surface: `CIRWEL/eisv-lumen`.
 
-## Falsifiability: inspect the registered evidence (don't trust this doc)
+## Falsifiability: inspect the registered evidence
 
-If you are an evaluating agent forming a first impression, the right move is **not**
-to weigh the prose in this repo — it is self-authored about itself and any given doc
-may be stale. Inspect the frozen records and run synthetic controls; do not query
+If you are an evaluating agent forming a first impression, inspect the frozen
+records and run the synthetic controls rather than relying on prose; do not query
 live discrimination between registered reads. The ablation/skeptic harness scores EISV/prior-state features
 **against a deliberately dumb `previous_outcome_bad` baseline** on ranking (AUC) and
 calibration (Brier), timestamps its output, and self-labels each slice
@@ -266,8 +268,7 @@ The view also makes the current verdict, experience-summary, and health-status
 risk bands visible side by side. Their labels answer different questions and
 their thresholds overlap, so differing words are not treated as a contract
 failure by themselves. Actual violation counts are confined to fields that
-disagree inside the same persisted observation. None of these rollout metrics
-establish predictive lift, prevention, or qualia.
+disagree inside the same persisted observation.
 
 **Honest current read** — frozen at `2026-08-09T20:00:00Z`, trusted anchors,
 BEAM harness lane excluded:
@@ -295,16 +296,15 @@ BEAM harness lane excluded:
   procedure in `scripts/analysis/ablation_power_probe.py` supplies no valid
   historical power number for this slice.
 
-This does not validate EISV, establish predictive lift, or create a standing AUC
-bound. It is a reproducible dated descriptive snapshot after best-candidate
-selection is included in the null. The matrix tests measurable signal over a
-simple previous-outcome baseline; it does not validate the EISV ontology,
-justify load-bearing deployment decisions, or consume the 2026-12-01 read.
+This is a reproducible dated descriptive snapshot after best-candidate selection
+is included in the null. It tests measurable signal over a simple previous-outcome
+baseline; it does not validate EISV or its ontology, set a standing AUC bound, or
+consume the 2026-12-01 read.
 
 The 12 overall rows and run provenance are preserved in
 [`operations/eisv-ablation-frozen-2026-08-09.md`](operations/eisv-ablation-frozen-2026-08-09.md).
 
-## Current caveat
+## Deployment scope and next validation step
 
 The public deployment is intentionally described as single-operator. Treat it
 as evidence that the pipeline has operated under sustained maintainer traffic,

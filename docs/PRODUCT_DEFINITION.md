@@ -29,14 +29,13 @@ five questions:
 | Question | Deployed mechanism | Boundary |
 |---|---|---|
 | **Who said it?** | Fresh process identity and explicit lineage. | Lineage links work; it does not confer authority or make two processes one identity. A process identity is an attribution record, not a credential; workload-identity systems remain the credential layer. |
-| **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. This wording introduces no new object schema or automatic evidence verification. |
+| **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. |
 | **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
 | **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
 | **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
 
-What the word does not claim: UNITARES does not own execution, nothing in it
-replicates state across independent servers, and it has not proved better
-outcomes than a structured handoff.
+What the word does not claim: UNITARES does not own execution, and nothing in it
+replicates state across independent servers.
 
 See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
 tool names and service prerequisites. Behavioral state estimation, policy,
@@ -65,8 +64,7 @@ checkpoints without requiring them to become one kind of agent.
 ## Core and Resident are different products
 
 This repository ships UNITARES Core and several specialized reference
-residents. The separate UNITARES Resident repository ships an early runtime
-skeleton, not yet a usable general-purpose conversational agent.
+residents. UNITARES Resident is a separate repository.
 
 | Product surface | Owns | Boundary |
 |---|---|---|
@@ -107,12 +105,9 @@ to a new process. The record connects the parts of that task:
 Meaningful `sync_state` check-ins also return an EISV behavioral state estimate
 and a policy action: proceed, guide, or pause. A pause holds governed writes
 until recovery, review, an operator, or expiry lifts it; it does not stop the
-agent's execution loop. EISV currently ships in the core path. Moving it to an
-optional module is the adopted direction, with implementation governed by the
-[staged plan](proposals/active/eisv-core-boundary-v0.md). The estimator's
-predictive validity and whether pausing improves outcomes remain research
-questions; the [computation reference](EISV_COMPUTATION.md) describes the
-current instrument.
+agent's execution loop. The [computation reference](EISV_COMPUTATION.md)
+describes the instrument; its move to an optional module follows the
+[staged plan](proposals/active/eisv-core-boundary-v0.md).
 
 ## Who it is for, and what "done" looks like
 
@@ -124,8 +119,7 @@ operator chooses their runtimes and infrastructure.
 The operational goal is an attributable record of claims, reported outcomes,
 reviews, and policy decisions that a later process or operator can inspect.
 Configured identity gates enforce accountable writes, and policy can interrupt
-governed operations. Detecting a confidently failing agent before damage, or
-improving outcomes by pausing it, has not been established.
+governed operations.
 
 UNITARES runs alongside **evals**, **guardrails**, and **sandboxes**, preserving
 attribution, evidence, review, and reported outcomes across the work they
@@ -159,11 +153,8 @@ concealment by a motivated agent is a documented structural blind spot. The
 pause gate demonstrably actuates; protection remains untested. Producing a pause
 and delivering it are separate events: at the 2026-08-06 audit a cadence
 window suppressed 195 of 218 recorded pauses (89.4%) before they reached the
-agent, and while delivery is live (a governed pause landed 2026-08-09), the rate
-has not been re-measured since (as of 2026-10-11 the 89.4% figure is the
-2026-08-06 reading, not a current rate, and has not been re-read against the live
-database). The contract ledger records the protection claim
-as untested. The precise boundary is
+agent. Delivery is live (a governed pause landed 2026-08-09); the rate has not
+been re-measured since that audit. The precise boundary is
 the [scope and threat model](SCOPE_AND_THREAT_MODEL.md); the evidence status
 is the [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) and the
 [Reviewer Guide](REVIEWER_GUIDE.md).

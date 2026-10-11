@@ -4,8 +4,6 @@ UNITARES is a self-hosted, single-operator federation kernel: many independent
 agent runtimes and harnesses share one operator-controlled server and authority
 domain. The core workflow is identity, claims and evidence, review, outcomes,
 and reconstruction.
-This guide organizes existing capabilities; it does not add a schema, change a
-default, or narrow discovery.
 
 ## Start with the core workflow
 
@@ -17,15 +15,11 @@ default, or narrow discovery.
 | Record outcomes | `record_result` | Record the observed outcome and provenance; use the returned prediction ID to grade the intended prediction. |
 | Reconstruct work | `search_shared_memory`, `knowledge` reads, `dialectic` reads, `export`, operator-gated `observe(action="outcome_evidence")` | Retrieve relevant records and distinguish current claims, superseded claims, disagreement, and missing evidence. These reads have different authorization and retention boundaries. |
 
-These are existing records and operations, not a unified Claim/Evidence object
-API. Reconstruction is a client workflow over them, not a single RPC or a
-promise that all prior context is recoverable. The original `sync_state` report
+Reconstruction is a client workflow over these records and operations. The original `sync_state` report
 text is not part of the persisted state history, and exported governance history
 does not include shared knowledge. Preserve source IDs and gaps when summarizing.
 Comparative reconstruction fidelity and correction propagation remain
-evaluation questions. The rehearsal that exists scores both arms against the
-same declared facts, which is a harness check rather than a comparison: a
-handoff written in advance necessarily contains what its author put in it.
+evaluation questions.
 
 Use `describe_tool(tool_name=..., action=...)` for the full schema of the action
 you need. Primary workflow names and canonical implementations are both public;
@@ -55,7 +49,7 @@ not target authorization.
 
 | Profile | Supplied services | What remains external or unproven |
 |---|---|---|
-| Local single-operator Compose | PostgreSQL with AGE/pgvector, Redis, lease plane, HTTP/MCP server | Client integration, inference providers, and participating reviewers. Use the verified release in the [quickstart](../README.md#quickstart). |
+| Local single-operator Compose | PostgreSQL with AGE/pgvector, Redis, lease plane, HTTP/MCP server | Client integration, inference providers, and participating reviewers. Use the verified release in the [quickstart](../README.md#install). |
 | Private provider-hosted Glama bundle | Private PostgreSQL with AGE/pgvector, Redis, lease plane and HTTP runtime behind stdio; persistent `/data` | Glama runs the compute and stores the volume; the operator controls account configuration and credentials. Persistence, resource limits, and deployment validation must be verified. No model, automated reviewer fleet, or resident fleet is bundled. See [Glama installation](deployment/glama.md). |
 | Client connected to an existing server | MCP/HTTP access to the operator's deployment | Server provisioning, available integrations, access policy, and lifecycle hooks are the operator's responsibility. |
 | Bare process / incomplete dependencies | May initialize MCP and advertise tools | Not a supported durable core installation. Discovery success does not make storage-backed calls usable. |
