@@ -36,7 +36,18 @@ import tool_edge_index as tei  # noqa: E402
 
 @pytest.fixture(scope="module")
 def collected():
-    return tei.collect()
+    # ``collect()`` sets UNITARES_DISABLE_PLUGINS=1 in-process (by design, so
+    # the generator is reproducible). Restore the prior value on teardown so
+    # it does not leak into later session-scoped fixtures that copy os.environ.
+    missing = object()
+    prior = os.environ.pop("UNITARES_DISABLE_PLUGINS", missing)
+    try:
+        yield tei.collect()
+    finally:
+        if prior is missing:
+            os.environ.pop("UNITARES_DISABLE_PLUGINS", None)
+        else:
+            os.environ["UNITARES_DISABLE_PLUGINS"] = prior
 
 
 @pytest.fixture(scope="module")
