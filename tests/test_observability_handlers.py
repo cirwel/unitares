@@ -339,31 +339,31 @@ class TestHandleObserveAgent:
             assert _resolves_back(server, identifier) == uuid
 
     @pytest.mark.asyncio
-    async def test_label_set_to_another_agents_listed_id_is_refused_not_routed(self):
-        """A label is set by the agent that wears it. One agent labelling
-        itself with another's listed identifier must not take that agent's
-        lookups: the caller would read the wrong agent's state unawares."""
+    async def test_label_set_to_another_agents_handle_neither_takes_nor_blocks_it(self):
+        """A label is chosen by the agent that wears it; a handle is composed
+        by the server. An agent that labels itself with another agent's handle
+        must not receive that agent's lookups, and must not be able to make
+        the handle unusable either. The handle keeps naming its own agent,
+        whichever row the registry happens to iterate first."""
         victim = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         squatter = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
-        metadata = {
-            squatter: _make_metadata(squatter, label="mcp_20260416_aaaaaaaa"),
-            victim: _make_metadata(victim),
-        }
-        metadata[victim].public_agent_id = "mcp_20260416"
-        server = _build_mock_server(
-            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
-        )
+        for order in ((squatter, victim), (victim, squatter)):
+            metadata = {u: _make_metadata(u) for u in order}
+            metadata[squatter].label = metadata[squatter].display_name = "mcp_20260416_aaaaaaaa"
+            metadata[victim].public_agent_id = "mcp_20260416"
+            server = _build_mock_server(
+                monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+            )
 
-        with patch(_PATCH_SERVER, server), \
-             patch(_PATCH_CTX, return_value="other-caller-uuid"):
-            from src.mcp_handlers.observability.handlers import handle_observe_agent
-            result = await handle_observe_agent({"target_agent_id": "mcp_20260416_aaaaaaaa"})
+            with patch(_PATCH_SERVER, server), \
+                 patch(_PATCH_CTX, return_value="other-caller-uuid"):
+                from src.mcp_handlers.observability.handlers import handle_observe_agent
+                result = await handle_observe_agent({"target_agent_id": "mcp_20260416_aaaaaaaa"})
 
-        data = parse_result(result)
-        assert data["success"] is False
-        assert data["error_code"] == "AMBIGUOUS_TARGET"
-        body = json.dumps(data)
-        assert victim not in body and squatter not in body
+            data = parse_result(result)
+            assert data["success"] is True
+            assert data["agent_id"] == "mcp_20260416_aaaaaaaa"
+            assert _resolves_back(server, "mcp_20260416_aaaaaaaa") == victim
 
     @pytest.mark.asyncio
     async def test_two_agents_sharing_a_listed_id_are_refused(self):
@@ -385,27 +385,76 @@ class TestHandleObserveAgent:
         data = parse_result(result)
         assert data["success"] is False
         assert data["error_code"] == "AMBIGUOUS_TARGET"
+        body = json.dumps(data)
+        assert first not in body and second not in body
+        # The caller is sent to an identifier it can obtain, not to a UUID the
+        # listing withholds from it.
+        assert "agent(action='list')" in data["recovery"]["action"]
 
-    @pytest.mark.asyncio
-    async def test_two_agents_sharing_a_plain_label_still_resolve_as_before(self):
-        """Pins what this change does NOT do. Two identities under one label
-        (a fork keeps its predecessor's label) resolved to the first match
-        before, and still do: refusing them would break label lookups on a
-        deployment that has forks. Whether a shared label should be an error
-        is a contract question this change leaves open."""
+    @staticmethod
+    def _labelled(statuses, label="Quill", public_agent_id="mcp_20260416"):
+        """A registry of agents sharing one label, in the given status order."""
+        uuids = [f"{chr(ord('a') + i) * 8}-bbbb-cccc-dddd-eeeeeeeeeeee" for i in range(len(statuses))]
+        metadata = {}
+        for uuid, status in zip(uuids, statuses):
+            meta = _make_metadata(uuid, status=status, label=label)
+            meta.public_agent_id = public_agent_id
+            metadata[uuid] = meta
+        server = _build_mock_server(
+            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+        )
+        return server, uuids
+
+    @pytest.mark.parametrize("statuses,winner", [
+        (("archived", "active"), 1),
+        (("active", "archived"), 0),
+        (("deleted", "archived", "paused"), 2),
+        (("archived",), 0),
+    ])
+    def test_a_label_names_its_one_live_holder(self, statuses, winner):
+        """An archived predecessor and its live successor share a label by
+        design. The label names the live one whatever order the registry
+        holds them in; with no live holder, a lone retired one still
+        resolves. Holds with or without a handle on the rows."""
+        for public_agent_id in ("mcp_20260416", None):
+            server, uuids = self._labelled(statuses, public_agent_id=public_agent_id)
+            assert _resolves_back(server, "Quill") == uuids[winner]
+
+    @pytest.mark.parametrize("statuses", [
+        ("active", "active"),
+        ("active", "paused", "archived"),
+        ("archived", "archived"),
+    ])
+    def test_a_label_with_no_single_holder_is_refused(self, statuses):
+        """Two live holders, or only retired ones and more than one of them:
+        nothing in the label says which is meant, so no row is chosen."""
+        from src.mcp_handlers.observability.handlers import AmbiguousAgentTarget
+
+        for public_agent_id in ("mcp_20260416", None):
+            server, _ = self._labelled(statuses, public_agent_id=public_agent_id)
+            with pytest.raises(AmbiguousAgentTarget) as refused:
+                _resolves_back(server, "Quill")
+            assert refused.value.count == 2
+
+    def test_the_bare_bucket_id_shared_by_two_agents_is_refused(self):
+        """public_agent_id is a {model}_{date} bucket. Every agent minted in
+        it stores the same value, so the bare bucket names all of them; the
+        suffixed handle the listing prints is what names one."""
+        from src.mcp_handlers.observability.handlers import AmbiguousAgentTarget
+
         first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
         second = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
-        # With a handle the listing prints the handle; without one it prints
-        # the label itself. The shared label resolves either way.
-        for public_agent_id in ("mcp_20260416", None):
-            metadata = {u: _make_metadata(u, label="Quill") for u in (first, second)}
-            for meta in metadata.values():
-                meta.public_agent_id = public_agent_id
-            server = _build_mock_server(
-                monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
-            )
+        metadata = {u: _make_metadata(u) for u in (first, second)}
+        for meta in metadata.values():
+            meta.public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+        )
 
-            assert _resolves_back(server, "Quill") == first
+        with pytest.raises(AmbiguousAgentTarget):
+            _resolves_back(server, "mcp_20260416")
+        assert _resolves_back(server, "mcp_20260416_aaaaaaaa") == first
+        assert _resolves_back(server, "mcp_20260416_bbbbbbbb") == second
 
     @pytest.mark.asyncio
     async def test_decision_distribution_overridden_from_postgres(self):

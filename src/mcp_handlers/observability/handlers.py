@@ -40,61 +40,85 @@ class AmbiguousAgentTarget(LookupError):
         self.count = count
 
 
-def _resolve_agent_from_memory(target: str) -> str | None:
-    """Resolve a UUID, a label, or an id the listing printed, to a registry key.
+# Statuses whose agents no longer act. A label or other alias held by one of
+# these yields to a live holder of the same alias.
+_RETIRED_STATUSES = ("archived", "deleted")
 
-    Raises AmbiguousAgentTarget when the target is a listed identifier that
-    cannot be routed to exactly one agent.
+
+def _resolve_agent_from_memory(target: str) -> str | None:
+    """Resolve a UUID, an id the listing printed, or an alias, to a registry key.
+
+    Three tiers, strongest claim first. A later tier is consulted only when
+    the earlier ones matched nothing:
+
+    1. The registry UUID.
+    2. A server-issued listed identifier: what agent(action="list") prints in
+       place of a withheld UUID, when the server composed it (the
+       {public_agent_id}_{uuid8} handle, or the agent-redacted digest).
+    3. An alias: label, display name, structured id, or the bare bucket
+       public_agent_id. One live holder wins; with no live holder, a single
+       retired one does.
+
+    Raises AmbiguousAgentTarget when a tier matches more than one agent it
+    cannot choose between. Returns None when nothing matches.
     """
     if target in mcp_server.agent_metadata:
         return target
-    alias_match = None
-    for uuid_key, meta in mcp_server.agent_metadata.items():
-        if target in (
-            getattr(meta, "label", None),
-            getattr(meta, "display_name", None),
-            getattr(meta, "structured_id", None),
-            getattr(meta, "public_agent_id", None),
-        ):
-            alias_match = uuid_key
-            break
-    # agent(action="list") shows a non-operator caller a public identifier in
-    # place of the UUID ({public_agent_id}_{uuid8}, falling back to a label or
-    # an agent-redacted digest), and the observe schema sends readers to that
-    # listing to find a target. The stored public_agent_id carries no suffix,
-    # so the pass above never matches the id the listing printed. This pass
-    # compares against exactly what the listing prints.
-    #
-    # It also runs when the alias pass matched, because a label is set by the
-    # agent that wears it. Without this, an agent that labelled itself with
-    # another agent's listed identifier would take that agent's lookups, and
-    # the caller would read the wrong agent's state with nothing to show it.
-    # Two agents can share a listed identifier outright as well: uuid8 is the
-    # first block of the UUID, not a uniqueness guarantee. Either way the
-    # target does not name one agent, and guessing would be silent.
-    #
+
     # Lazy: the lifecycle package imports widely, and this module is loaded
     # by the consolidated router before most handlers.
     from ..lifecycle.disclosure import listed_agent_identifier
 
-    # An agent whose listed identifier is only its own label or display name is
-    # already covered by the alias pass, with that pass's first-match rule.
-    # Counting it here would turn two identities under one plain label (a fork
-    # keeps its predecessor's) from "first match" into a refusal.
-    listed = [
+    # The listing shows a non-operator caller a public identifier in place of
+    # the UUID, and the observe schema sends readers to that listing to find a
+    # target. The stored public_agent_id carries no suffix, so comparing the
+    # stored fields never matches the id the listing printed; this compares
+    # against exactly what the listing prints.
+    #
+    # It outranks aliases because the server composes it and a label is chosen
+    # by the agent that wears it. Ranked the other way, an agent that labelled
+    # itself with another agent's handle would take that agent's lookups; and
+    # treating the pair as ambiguous instead would let it switch them off.
+    # A row whose listed identifier is only its own label or display name is
+    # self-chosen, so it belongs to the alias tier.
+    issued = [
         uuid_key
         for uuid_key, meta in mcp_server.agent_metadata.items()
         if listed_agent_identifier(uuid_key, meta) == target
         and target not in (getattr(meta, "label", None), getattr(meta, "display_name", None))
     ]
-    candidates = set(listed)
-    if alias_match is not None:
-        candidates.add(alias_match)
-    if listed and len(candidates) > 1:
-        raise AmbiguousAgentTarget(target, len(candidates))
-    if alias_match is not None:
-        return alias_match
-    return listed[0] if listed else None
+    if len(issued) == 1:
+        return issued[0]
+    if issued:
+        # uuid8 is the first block of the UUID, not a uniqueness guarantee.
+        raise AmbiguousAgentTarget(target, len(issued))
+
+    aliased = [
+        uuid_key
+        for uuid_key, meta in mcp_server.agent_metadata.items()
+        if target in (
+            getattr(meta, "label", None),
+            getattr(meta, "display_name", None),
+            getattr(meta, "structured_id", None),
+            getattr(meta, "public_agent_id", None),
+        )
+    ]
+    if not aliased:
+        return None
+    # The registry snapshot keeps archived rows and is loaded newest first, so
+    # "first match" answered with whichever row the snapshot held first, live
+    # or not. An archived predecessor and its live successor share a label by
+    # design (a colliding label is only renamed while the incumbent is
+    # active); the live one is the agent the label now names.
+    live = [
+        uuid_key
+        for uuid_key in aliased
+        if getattr(mcp_server.agent_metadata[uuid_key], "status", None) not in _RETIRED_STATUSES
+    ]
+    pool = live or aliased
+    if len(pool) == 1:
+        return pool[0]
+    raise AmbiguousAgentTarget(target, len(pool))
 
 
 def _get_observable_monitor(agent_id: str):
@@ -178,9 +202,10 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
             error_code="AMBIGUOUS_TARGET",
             recovery={
                 "action": (
-                    "Pass a UUID if you hold one. Otherwise the identifier is "
-                    "shared or has been taken as a label by another agent; an "
-                    "operator can see which with agent(action='list')."
+                    "Use the identifier agent(action='list') prints for the "
+                    "agent you mean. If the listing prints this same "
+                    "identifier for more than one row, only a UUID tells them "
+                    "apart, and the operator and each agent itself can see it."
                 ),
                 "related_tools": ["agent"],
             },
