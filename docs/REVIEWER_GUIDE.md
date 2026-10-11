@@ -1,7 +1,7 @@
 # UNITARES Reviewer Guide
 
 **Created:** May 23, 2026  
-**Last Updated:** September 16, 2026
+**Last Updated:** October 11, 2026
 **Status:** Active
 
 ---
@@ -10,12 +10,14 @@ This guide is for a cold evaluator deciding whether UNITARES is real, what layer
 
 ## One-sentence read
 
-UNITARES is accountability infrastructure for long-running AI agents: agents check
-in after units of work, the server estimates drift and calibration through
-staged cold-start, fixed-threshold, and self-relative scoring, and policy or
-review layers can consume that state mid-run.
-Whether the telemetry predicts incidents or helps prevent them remains an open,
-measured question.
+UNITARES is accountability infrastructure for long-running AI agents: a
+self-hosted, single-operator server that keeps one attributed record of
+identity, claims and evidence, review, outcomes, and reconstruction across
+sessions, handoffs, and agents from different vendors. Each check-in also
+returns an advisory policy action derived from an EISV state estimate; that
+estimator is moving out of the core to an optional module. Whether the
+telemetry predicts incidents or helps prevent them remains an open, measured
+question.
 
 ## What this is
 
@@ -37,6 +39,43 @@ measured question.
   but enforcement leans lenient by intent and red-teaming has been ad hoc rather
   than sustained. See the [scope and threat model](SCOPE_AND_THREAT_MODEL.md).
 - Not a claim of broad external adoption yet; the public deployment metrics describe a single-operator stress test.
+
+## Common objections
+
+Three objections come up in nearly every review. Each has a true part, and each
+answer below says what that part is, what UNITARES actually claims, and where the
+evidence or the open question lives.
+
+**"There is no evidence it improves outcomes."** True: no governed-versus-ungoverned
+comparison has shown an outcome improved, and the frozen outcome-lift read was
+inconclusive, not negative ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)).
+Outcome improvement is not the product claim. The product claim is that agent work
+stays attributed and reconstructable across sessions, handoffs, and vendors, which
+a reviewer can check directly: bind a session, write a finding, restart, and read
+it back. Version control and audit logs are judged the same way, by whether the
+record is complete and trustworthy, not by whether the code got better. Whether
+governance improves outcomes is a research question on top, with a
+[registered stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
+that constrains how it may be answered.
+
+**"EISV is not a validated measure."** Its predictive validity is unestablished,
+and the docs say so. EISV is a behavioral state estimate. Its `proceed` and
+`guide` actions are advisory; its `pause` holds governed writes until
+self-recovery, review, an operator, or expiry lifts it. The operator decided on 2026-10-10 to move it out of the core
+into an optional module subscribed to check-ins
+([plan](proposals/active/eisv-core-boundary-v0.md)). Identity, findings,
+requested review, outcomes, and reconstruction do not need its estimate to work. The runtime separation is
+staged so it does not disturb the registered 2026-12-01 read. Until then the
+estimator ships in the core path, but its validity is a question about a research
+instrument, not about the record.
+
+**"The ontology is overbuilt."** Partly fair as a vocabulary problem. Terms such as
+proprioception, allostatic load, dialectic, and trajectory identity come from the
+research program and read as overreach to a newcomer. The mechanisms under them
+are ordinary: a process identity bound to a session, a declared lineage pointer, a
+state estimate, a review session with a recorded verdict. The product claim
+rests on those mechanisms, not on the research framing, which lives in
+`docs/ontology/` and the papers, where its claims carry evidence classes.
 
 ## Implementation status: what's live vs proposed
 
