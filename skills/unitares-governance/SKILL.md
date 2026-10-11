@@ -1,9 +1,9 @@
 ---
 name: unitares-governance
 description: >
-  Compatibility umbrella skill for the UNITARES governance framework. Use this
-  as the entrypoint when you need the overall model and route into the split
-  governance skills.
+  Compatibility umbrella skill for UNITARES, accountability infrastructure for
+  long-running AI agents. Use this as the entrypoint when you need the overall
+  model and route into the split governance skills.
 last_verified: "2026-09-24"
 freshness_days: 35
 source_files:
@@ -38,11 +38,19 @@ source_files:
 # UNITARES Governance
 
 This umbrella skill exists for backward compatibility and as a stable top-level
-entrypoint into the UNITARES framework.
+entrypoint into UNITARES.
+
+## What UNITARES is
+
+Accountability infrastructure for long-running AI agents: a self-hosted,
+single-operator federation kernel for agent identity, claims and evidence,
+review, outcomes, and reconstruction. Identity, shared memory, review and
+outcome records are the core; the EISV state model below is one instrument in
+the check-in path.
 
 ## Core Model
 
-UNITARES evaluates agent state with the **EISV** model:
+Each check-in evaluates agent state with the **EISV** model:
 
 - `E`: effective energy / execution drive
 - `I`: information integrity / calibration

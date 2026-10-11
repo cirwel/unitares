@@ -169,7 +169,9 @@ boundary is the shipped artifact, not the repo.
 
 ## Project
 
-UNITARES governance MCP server. A behavioral governance framework for AI agents (EISV state vectors, coherence tracking, dialectic resolution, knowledge graph). The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path — which is behavioral state estimation.
+Accountability infrastructure for long-running AI agents. UNITARES is a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction, served over MCP and REST. Describe it that way: the wording is owned by `README.md` and pinned by `scripts/diagnostics/check_doc_drift.py`.
+
+EISV is one instrument inside it, not its definition: each check-in returns a behavioral state estimate and a policy action. The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path. Whether EISV moves out of the core is an open proposal (`docs/proposals/active/eisv-core-boundary-v0.md`), not settled.
 
 ## Stack
 
