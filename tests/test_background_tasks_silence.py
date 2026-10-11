@@ -25,6 +25,7 @@ def isolated_silence_state(monkeypatch):
     background_tasks._silence_alerted.clear()
     background_tasks._silence_critical_alerted.clear()
     background_tasks._silence_duplicate_warned.clear()
+    background_tasks._silence_close_checked.clear()
     # Pretend the server started 48h ago so pre-existing staleness cap
     # doesn't mask genuinely stale agents in tests.
     background_tasks._silence_server_start = datetime.now(timezone.utc) - timedelta(hours=48)
@@ -60,6 +61,7 @@ def isolated_silence_state(monkeypatch):
     background_tasks._silence_alerted.clear()
     background_tasks._silence_critical_alerted.clear()
     background_tasks._silence_duplicate_warned.clear()
+    background_tasks._silence_close_checked.clear()
     background_tasks._silence_server_start = None
 
 
@@ -458,3 +460,157 @@ async def test_non_critical_silence_does_not_file_kg_finding(isolated_silence_st
     await background_tasks._silence_check_iteration()
 
     kg.add_discovery.assert_not_awaited()
+
+
+# --- closing the auto-filed row once the resident is healthy again ----------
+
+def _silence_row(agent_id, tags=("resident-silence", "auto-filed", "lumen"), rid="row-1"):
+    from src.knowledge_graph import DiscoveryNode
+
+    return DiscoveryNode(
+        id=rid, agent_id=agent_id, type="bug_found", summary="Lumen silent",
+        details="auto-filed", tags=list(tags), severity="critical", status="open",
+    )
+
+
+def _kg_with(monkeypatch, rows):
+    import src.knowledge_graph as kg_module
+
+    kg = AsyncMock()
+    kg.query = AsyncMock(return_value=rows)
+    kg.update_discovery = AsyncMock(return_value=True)
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+    return kg
+
+
+@pytest.mark.asyncio
+async def test_healthy_resident_closes_its_auto_filed_silence_row(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [
+        _silence_row("lumen-uuid"),
+        _silence_row("lumen-uuid", tags=("resident-silence",), rid="human-filed"),
+        _silence_row("lumen-uuid", tags=("auto-filed",), rid="other-auto"),
+        _silence_row("someone-else", rid="other-agent"),
+    ])
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.update_discovery.assert_awaited_once()
+    did, updates = kg.update_discovery.await_args.args
+    assert did == "row-1"
+    assert updates["status"] == "resolved"
+    assert updates["closure_class"] == "unobserved"
+    assert set(updates["closure_evidence"]) >= {"window", "instrument_check"}
+    assert fresh.isoformat() in updates["details"]
+    assert "Resolution notes" in updates["details"]
+
+
+@pytest.mark.asyncio
+async def test_silence_row_close_is_bounded_and_idempotent(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [])
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    await background_tasks._silence_check_iteration()
+
+    # One lookup for the process, not one per iteration; nothing to write.
+    assert kg.query.await_count == 1
+    kg.update_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recovery_after_critical_rechecks_even_if_already_checked(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
+    background_tasks._silence_close_checked.add("lumen-uuid")
+    background_tasks._silence_critical_alerted.add("lumen-uuid")
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.update_discovery.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_still_silent_resident_keeps_its_row(isolated_silence_state, monkeypatch):
+    """Stale since before a restart looks 'recovered' on the start-capped clock."""
+    kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
+    background_tasks._silence_server_start = datetime.now(timezone.utc)
+    stale = datetime.now(timezone.utc) - timedelta(hours=6)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", stale.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.update_discovery.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kg_failure_on_close_is_swallowed_and_retried(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
+    kg.update_discovery.side_effect = RuntimeError("db down")
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" not in background_tasks._silence_close_checked
+
+    kg.update_discovery.side_effect = None
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" in background_tasks._silence_close_checked
+
+
+@pytest.mark.asyncio
+async def test_rejected_update_is_not_marked_checked_and_is_retried(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
+    kg.update_discovery.return_value = False
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" not in background_tasks._silence_close_checked
+
+    kg.update_discovery.return_value = True
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" in background_tasks._silence_close_checked
+    assert kg.update_discovery.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_old_silence_row_behind_many_open_rows_is_still_closed(
+    isolated_silence_state, monkeypatch
+):
+    """The lookup filters by tag, so >50 newer unrelated open rows cannot hide it."""
+    import src.knowledge_graph as kg_module
+
+    noise = [_silence_row("lumen-uuid", tags=("note",), rid=f"n{i}") for i in range(60)]
+    target = _silence_row("lumen-uuid", rid="old-silence")
+
+    async def fake_query(**kw):
+        rows = noise + [target]  # newest first: the silence row is oldest
+        if kw.get("tags"):
+            rows = [r for r in rows if set(r.tags) & set(kw["tags"])]
+        return rows[: kw.get("limit", 100)]
+
+    kg = AsyncMock()
+    kg.query = fake_query
+    kg.update_discovery = AsyncMock(return_value=True)
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.update_discovery.assert_awaited_once()
+    assert kg.update_discovery.await_args.args[0] == "old-silence"
