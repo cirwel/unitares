@@ -316,7 +316,7 @@ the move stays on the 4h hold after the move passes back.
 
 A request raised over a standing reviewer rejection does not wait on a human
 indefinitely. Once the reviewer has had its last word (it answered the paused
-agent's reply to an earlier verdict and still rejects, or the orchestrated
+agent's reply to its own earlier verdict and still rejects, or the orchestrated
 reviewer's continuation window has ended), the dialectic sweep closes the session
 `failed` within one sweep, with `resolution_json.reason` = `rejection_stands`
 and the request cleared. That is neither a reviewer approval nor an inactivity
