@@ -71,6 +71,15 @@ REVIEWER_NAME = "DialecticReviewer"
 # to answer, stranding the response without the reviewer identity that alone can
 # reconsider it.
 DEFAULT_CONTINUATION_WAIT_S = 3600.0
+# The wait above restarts each time the reviewer files a synthesis, because the
+# protocol's one-hour window is per synthesis response. Session 8973efacebb17e11
+# (2026-10-08): the paused agent answered the second objection 67 minutes after
+# the first, the reviewer's single one-hour budget had run out 7 minutes
+# earlier, and the concession sat unread until the 4h liveness reap marked the
+# session failed. Restarting is bounded: the whole continuation may not outlast
+# this many waits, and the orchestrator's lifetime cap is sized from the same
+# factor (orchestrator_dispatch.CONTINUATION_TOTAL_WAIT_FACTOR).
+CONTINUATION_TOTAL_WAIT_FACTOR = 3
 # A synthesis response is human/agent-paced, so sub-second visibility buys
 # nothing. Fifteen seconds bounds response pickup while avoiding 1,800 reads per
 # reviewer during an otherwise idle one-hour window.
@@ -1174,7 +1183,9 @@ async def continue_after_disagreement(
         DEFAULT_CONTINUATION_POLL_S,
         minimum=0.01,
     )
-    deadline = time.monotonic() + wait_s
+    started = time.monotonic()
+    deadline = started + wait_s
+    hard_deadline = started + wait_s * CONTINUATION_TOTAL_WAIT_FACTOR
     current_verdict = initial_verdict
     read_failures = 0
     # A formed verdict whose filing was cut off, with the paused response it
@@ -1184,9 +1195,14 @@ async def continue_after_disagreement(
     unfiled: Optional[tuple[dict[str, Any], Verdict, dict[str, Any]]] = None
 
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        now = time.monotonic()
+        if now >= hard_deadline:
             return current_verdict
+        # Check once after the response window closes: an answer may have
+        # arrived during the last sleep or while a prior read was in flight.
+        # Uncertain filings continue reconciling within the total budget.
+        final_poll = unfiled is None and now >= deadline
+        poll_deadline = hard_deadline if unfiled is not None else deadline
 
         try:
             session_data = await client.call_tool(
@@ -1196,7 +1212,9 @@ async def continue_after_disagreement(
             read_failures += 1
             log = logger.warning if read_failures == 1 else logger.debug
             log("Dialectic continuation read failed: %r", exc)
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            if final_poll:
+                return current_verdict
+            await asyncio.sleep(min(poll_s, max(0.0, poll_deadline - time.monotonic())))
             continue
 
         if not isinstance(session_data, dict):
@@ -1214,6 +1232,9 @@ async def continue_after_disagreement(
             current_verdict, unfiled = unfiled[1], None
             if current_verdict.agrees:
                 return current_verdict
+            # Confirming a cut-off objection opens the same response window
+            # as a normally returned filing, without re-filing or re-judging.
+            deadline = min(time.monotonic() + wait_s, hard_deadline)
         phase = str(session_data.get("phase") or "").lower()
         if phase in _TERMINAL_PHASES:
             return current_verdict
@@ -1234,10 +1255,17 @@ async def continue_after_disagreement(
             return current_verdict
 
         if paused_response is None:
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if final_poll:
+                    return current_verdict
+                continue  # the prior read crossed the window; take its final poll
+            await asyncio.sleep(min(poll_s, remaining))
             continue
 
-        remaining = deadline - time.monotonic()
+        # The reply was found by the window's final poll. Read latency must
+        # not take away the remaining lifetime available for its review.
+        remaining = hard_deadline - time.monotonic()
         if remaining <= 0:
             return current_verdict
         if unfiled is not None:
@@ -1248,9 +1276,16 @@ async def continue_after_disagreement(
             )
             try:
                 model_text = await asyncio.wait_for(
-                    obtain_reviewer_text(prompt, pinned=pinned_host), timeout=remaining
+                    # The response was timely; its model work may use the
+                    # remaining total budget rather than the response window.
+                    obtain_reviewer_text(prompt, pinned=pinned_host),
+                    timeout=max(0.0, hard_deadline - time.monotonic()),
                 )
             except asyncio.TimeoutError:
+                logger.warning(
+                    "Dialectic continuation model exhausted the hard lifetime budget; "
+                    "preserving the standing rejection"
+                )
                 return current_verdict
             except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
                 logger.warning("Dialectic continuation model failed: %r", exc)
@@ -1311,7 +1346,7 @@ async def continue_after_disagreement(
             # files twice or judges twice.
             logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
             unfiled = (paused_response, next_verdict, next_provenance)
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            await asyncio.sleep(min(poll_s, max(0.0, hard_deadline - time.monotonic())))
             continue
         unfiled = None
         if isinstance(result, dict) and result.get("success") is False:
@@ -1320,6 +1355,8 @@ async def continue_after_disagreement(
         current_verdict = next_verdict
         if next_verdict.agrees:
             return current_verdict
+        # A filed objection opens a fresh response window for the paused agent.
+        deadline = min(time.monotonic() + wait_s, hard_deadline)
 
 
 async def run(thesis: Thesis, governance_url: str, parent_agent_id: Optional[str]) -> Verdict:
