@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import os
 import socket
 import stat
@@ -324,6 +325,12 @@ async def test_uds_socket_created_mode_0600() -> None:
                 pass
 
 
+async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+    if scope["type"] == "http":
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+
 # --- #2662: a failed start must not claim (or unlink) another server's socket ---
 import socket as _socket
 import shutil as _shutil
@@ -355,6 +362,88 @@ async def test_failed_start_does_not_claim_or_unlink_live_socket(monkeypatch):
         live.close()
         if os.path.exists(path):
             os.unlink(path)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_lifetime_lock_prevents_a_misleading_stale_probe(monkeypatch):
+    """A lock-aware live listener is never probed or unlinked (#2683).
+
+    macOS can report ECONNREFUSED for a live AF_UNIX listener whose accept
+    queue is full.  Model that misleading probe result, then prove the second
+    start refuses on the lifetime lock before it creates a probe socket.
+    """
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    first_task = await uds_listener.start_uds_listener(
+        _ok_app, path, log_level="error"
+    )
+    original_node = uds_listener._node_id(path)
+    probe_attempts = []
+    real_socket = uds_listener.socket.socket
+
+    class _MisleadingProbe:
+        def __init__(self, *args, **kwargs):
+            probe_attempts.append((args, kwargs))
+
+        def settimeout(self, _timeout):
+            pass
+
+        def connect(self, _path):
+            raise ConnectionRefusedError(errno.ECONNREFUSED, "queue appears stale")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(uds_listener.socket, "socket", _MisleadingProbe)
+    try:
+        with pytest.raises(OSError) as exc:
+            await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        assert exc.value.errno == errno.EADDRINUSE
+        assert probe_attempts == []
+        assert uds_listener._node_id(path) == original_node
+
+        # The refused start did not disturb the first server.
+        monkeypatch.setattr(uds_listener.socket, "socket", real_socket)
+        reader, writer = await asyncio.open_unix_connection(path)
+        try:
+            writer.write(
+                b"GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"
+            )
+            await writer.drain()
+            assert (await reader.read()).startswith(b"HTTP/1.1 200")
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+    finally:
+        monkeypatch.setattr(uds_listener.socket, "socket", real_socket)
+        first_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await first_task
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_stale_pre_rollout_socket_is_still_replaced():
+    """A socket left by a process without the new lock remains recoverable."""
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    legacy = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    legacy.bind(path)
+    legacy.close()
+    task = None
+    try:
+        task = await uds_listener.start_uds_listener(
+            _ok_app, path, log_level="error"
+        )
+        assert os.path.exists(path)
+        assert path in uds_listener._bound_ownerships
+    finally:
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         _shutil.rmtree(d, ignore_errors=True)
 
 
@@ -511,9 +600,12 @@ async def test_node_appearing_during_bind_is_not_displaced(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_cleanup_lock_still_closes_socket_and_keeps_original_error(monkeypatch):
-    """If the path lock cannot be opened during the failure cleanup (EMFILE,
-    say), the socket is still closed and the original error still surfaces."""
+async def test_failed_cleanup_uses_held_lock_and_keeps_original_error(monkeypatch):
+    """Failure cleanup uses the lifetime fd rather than opening another lock.
+
+    Even if the legacy fallback lock is unavailable, the listening socket is
+    closed, its node is removed, and the original startup error still surfaces.
+    """
     import errno as _errno
     from contextlib import contextmanager
     from src import uds_listener
@@ -543,6 +635,7 @@ async def test_failed_cleanup_lock_still_closes_socket_and_keeps_original_error(
         with pytest.raises(RuntimeError):
             await uds_listener.start_uds_listener(object(), path)
         assert made and made[-1].fileno() == -1  # the listening socket was closed
+        assert not os.path.exists(path)
     finally:
         monkeypatch.undo()
         for s in made:
@@ -550,12 +643,6 @@ async def test_failed_cleanup_lock_still_closes_socket_and_keeps_original_error(
         if os.path.exists(path):
             os.unlink(path)
         _shutil.rmtree(d, ignore_errors=True)
-
-
-async def _ok_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
-    if scope["type"] == "http":
-        await send({"type": "http.response.start", "status": 200, "headers": []})
-        await send({"type": "http.response.body", "body": b""})
 
 
 @pytest.mark.asyncio
@@ -615,14 +702,15 @@ async def test_stop_survives_inode_reuse_by_a_replacement(monkeypatch):
     replacement = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     try:
         sock_path, task = await _start_uds_listener(_ok_app)
-        dev, _ino, ctime_ns = uds_listener._bound_nodes[path]
+        ownership = uds_listener._bound_ownerships[path]
+        dev, _ino, ctime_ns = ownership.node
         os.unlink(path)
         replacement.bind(path)
         replacement.listen(8)
         # Pretend the filesystem handed the replacement our inode number.
         st = os.stat(path)
         assert st.st_ctime_ns != ctime_ns
-        uds_listener._bound_nodes[path] = (dev, st.st_ino, ctime_ns)
+        ownership.node = (dev, st.st_ino, ctime_ns)
         await _stop_uds_listener(sock_path, task)
         assert os.path.exists(path)
     finally:
@@ -660,21 +748,12 @@ def test_path_lock_excludes_a_second_holder():
         _shutil.rmtree(d, ignore_errors=True)
 
 
-# --- The path lock must not block the event loop; the bind must not touch the umask ---
+# --- The lifetime lock must not block the event loop; bind must not touch umask ---
 import fcntl as _fcntl
 import threading as _threading
 import time as _time
 
-_LOCK_HELD_FOR = 0.6
 _MAX_LOOP_GAP = 0.3
-
-
-def _hold_path_lock_for(path: str, seconds: float) -> None:
-    """Take the path lock on a separate open file (as another process would)
-    and release it from a timer thread, independent of the event loop."""
-    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
-    _fcntl.flock(fd, _fcntl.LOCK_EX)
-    _threading.Timer(seconds, os.close, args=(fd,)).start()
 
 
 async def _run_with_loop_gap(coro):
@@ -698,54 +777,61 @@ async def _run_with_loop_gap(coro):
 
 
 @pytest.mark.asyncio
-async def test_start_waits_for_a_held_path_lock_without_blocking_the_loop():
+async def test_start_refuses_a_held_lifetime_lock_without_blocking_the_loop():
     d = _tempfile.mkdtemp(prefix="uds")
     path = os.path.join(d, "g.sock")
-    task = None
+    fd = os.open(path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
-        _hold_path_lock_for(path, _LOCK_HELD_FOR)
+        _fcntl.flock(fd, _fcntl.LOCK_EX)
         started = _time.monotonic()
-        task, gap = await _run_with_loop_gap(
-            uds_listener.start_uds_listener(_ok_app, path, log_level="error")
-        )
-        assert _time.monotonic() - started >= _LOCK_HELD_FOR * 0.8  # it did wait
-        assert gap < _MAX_LOOP_GAP, f"event loop stalled {gap:.2f}s on the path lock"
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+        with pytest.raises(OSError) as exc:
+            await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
+        assert exc.value.errno == errno.EADDRINUSE
+        assert _time.monotonic() - started < 0.5
+        assert not os.path.exists(path)
     finally:
-        if task is not None:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await task
+        os.close(fd)
         _shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.mark.asyncio
-async def test_stop_waits_for_a_held_path_lock_without_blocking_the_loop(monkeypatch):
+async def test_listener_holds_lifetime_lock_until_stop(monkeypatch):
     from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
 
     d = _tempfile.mkdtemp(prefix="uds")
     path = os.path.join(d, "g.sock")
     monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    contender_fd = None
     try:
         sock_path, task = await _start_uds_listener(_ok_app)
         assert sock_path == path
-        _hold_path_lock_for(path, _LOCK_HELD_FOR)
+        contender_fd = os.open(path + ".lock", os.O_RDWR)
+        with pytest.raises(OSError) as exc:
+            _fcntl.flock(contender_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        assert exc.value.errno in (errno.EAGAIN, errno.EWOULDBLOCK)
+
         _, gap = await _run_with_loop_gap(_stop_uds_listener(sock_path, task))
         assert gap < _MAX_LOOP_GAP, f"event loop stalled {gap:.2f}s on the path lock"
         assert not os.path.exists(path)
+        _fcntl.flock(contender_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
     finally:
+        if contender_fd is not None:
+            os.close(contender_fd)
         _shutil.rmtree(d, ignore_errors=True)
 
 
 @pytest.mark.asyncio
 async def test_cancelled_start_releases_the_socket_it_goes_on_to_bind(monkeypatch):
-    """Cancelled while waiting on the lock, the start's worker still binds once
-    the lock frees; that socket must be released, not left answering probes."""
+    """Cancellation while the worker owns the lock cannot orphan that claim."""
+    entered_bind = _threading.Event()
+    continue_bind = _threading.Event()
     bound = _threading.Event()
     real_bind_into_place = uds_listener._bind_into_place
 
     def _bind_and_signal(p):
         try:
+            entered_bind.set()
+            assert continue_bind.wait(5)
             return real_bind_into_place(p)
         finally:
             bound.set()
@@ -754,22 +840,23 @@ async def test_cancelled_start_releases_the_socket_it_goes_on_to_bind(monkeypatc
     d = _tempfile.mkdtemp(prefix="uds")
     path = os.path.join(d, "g.sock")
     try:
-        _hold_path_lock_for(path, 0.3)
         task = asyncio.create_task(
             uds_listener.start_uds_listener(_ok_app, path, log_level="error")
         )
-        await asyncio.sleep(0.05)
+        assert await asyncio.to_thread(entered_bind.wait, 5)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
-        assert not bound.is_set()  # cancelled while the worker waited on the lock
-        assert await asyncio.to_thread(bound.wait, 5)  # ...which then bound anyway
+        assert not bound.is_set()
+        continue_bind.set()
+        assert await asyncio.to_thread(bound.wait, 5)
         for _ in range(100):
             await asyncio.sleep(0.02)
             if sorted(os.listdir(d)) == ["g.sock.lock"]:
                 break
         assert sorted(os.listdir(d)) == ["g.sock.lock"]
     finally:
+        continue_bind.set()
         _shutil.rmtree(d, ignore_errors=True)
 
 
@@ -852,7 +939,7 @@ async def test_a_socket_path_near_the_length_limit_still_binds():
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
-        assert os.path.exists(path)
+        assert not os.path.exists(path)
     finally:
         _shutil.rmtree(root, ignore_errors=True)
 
@@ -910,7 +997,7 @@ async def test_node_replaced_right_after_link_is_not_claimed(monkeypatch):
             await uds_listener.start_uds_listener(_ok_app, path, log_level="error")
         assert exc.value.errno == _errno.EADDRINUSE
         assert made[-1].fileno() == -1  # our socket was closed
-        assert path not in uds_listener._bound_nodes
+        assert path not in uds_listener._bound_ownerships
         monkeypatch.undo()
         c = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
         c.connect(path)  # the replacement is untouched
