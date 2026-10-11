@@ -1,10 +1,25 @@
 # How EISV Is Actually Computed
 
-**The formulas the running code computes, beside the information-theoretic semantics the paper targets.**
+**EISV computes a compact, time-smoothed record of runtime observations and controller history.** The behavioral path blends supplied features into E, I and S, smooths them, and derives V from the E/I observation gap. Assessment compares that state with thresholds and, after warmup, an adaptive baseline. Policy uses the assessment alongside other decision inputs.
 
-UNITARES is described with thermodynamic and information-theoretic language (energy, entropy, valence, coherence; in [Paper v6](https://github.com/cirwel/unitares-paper-v6), `S` as response-distribution entropy, `I` as mutual information, `E` as negative variational free energy). That vocabulary is the **target semantics** — the model the project is working toward and tests honestly. It is **not** what the running code computes today.
+## What the signals record
 
-What the deployed system actually computes is the honest, defensible claim: **EISV is a set of auditable heuristic blends over observable agent behavior, EMA-smoothed, with verdicts from a transparent weighted-threshold model.** No entropy, mutual information, or free energy is computed on the primary path. Provenance travels with every check-in so a heuristic is never laundered as a measurement — at the vector level: `primary_eisv_source` in the metrics (`behavioral` vs `ode_fallback`), `measurement_source` in the telemetry envelope, and an unconditional `coherence_source`/`coherence_role` stamp naming the legacy ODE producer. Per-coordinate `e_source`/`i_source`/`s_source` tags exist but are attached only when the opt-in grounding stage runs (`UNITARES_GROUNDING_SHADOW`/`_APPLY`, both default off — `src/mcp_handlers/updates/enrichments.py`, `run_grounding_stage`). Think of this path as online proprioception: the useful signal is how the agent's current state differs from a grounded reference for its own trajectory, not whether EISV has handed down an outcome verdict. This document gives the exact formulas with source references, so you can judge — or reproduce — them.
+These are operational definitions of the current behavioral path. The formulas below specify the weights, defaults and optional inputs.
+
+| Output | What contributes to it | What a change records |
+|---|---|---|
+| **E** | Prior governance decisions, legacy controller coherence level, complexity divergence, and available outcome, continuity and tool features | A change in this weighted history of observations and judgments |
+| **I** | Calibration error, legacy controller coherence trend, and available outcome-score consistency, continuity and tool-variety features | A change in this calibration/consistency blend; the deployed calibration input is fleet-scoped |
+| **S** | Drift, regime transitions, complexity divergence, and available continuity and tool features | A change in the blend of deviations and activity features |
+| **V** | A separately smoothed difference between raw E and I observations | The direction and persistence of the gap between those two indices |
+
+The observations, their derived summaries, and the resulting policy actions are distinct records. A controller-derived input is still information about the running system: for example, E records changes in the system's own decision history. It must retain that provenance when used to explain a later reading. A derived or correlated signal need not be a new independent observation to be retained and inspected.
+
+This resolves the descriptive question: **the instrument records specified features and their evolution.** Which changes diagnose a particular problem, whether this compression helps a consumer, and which actions should follow are separate evaluation questions. An inconclusive outcome-prediction study does not erase the recorded signal; a responsive signal does not settle those other questions. The [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) holds the evidence for benefit claims.
+
+The historical names describe intended interpretations: productive capacity (E), information integrity (I), entropy (S), and valence (V). The current formulas define weighted indices, not physical energy, mutual information or response-distribution entropy. Those information-theoretic quantities remain research targets in [Paper v6](https://github.com/cirwel/unitares-paper-v6). Reading the implemented indices does not depend on establishing that interpretation.
+
+Provenance identifies the producer: `primary_eisv_source` in the metrics (`behavioral` vs `ode_fallback`), `measurement_source` in the telemetry envelope, and an unconditional `coherence_source`/`coherence_role` stamp naming the legacy ODE producer. Per-coordinate `e_source`/`i_source`/`s_source` tags are attached when the opt-in grounding stage runs (`UNITARES_GROUNDING_SHADOW`/`_APPLY`, both default off — `src/mcp_handlers/updates/enrichments.py`, `run_grounding_stage`). The definitions here describe the behavioral path; inspect those source fields before interpreting a particular reading.
 
 ## Pipeline (primary, verdict-driving path)
 
@@ -17,7 +32,8 @@ observables ──► observation blend ──► EMA state ──► residual /
 
 The dynamical-systems / thermodynamic model (`governance_core/`, the ODE) is
 **not the direct verdict owner** by default: behavioral assessment owns the
-post-warmup verdict. It is not fully parallel, however. The behavioral sensor
+post-warmup assessment. The final decision also uses ODE state for structural
+basin, void and coherence checks (`src/monitor_decision.py`). The behavioral sensor
 still gives the legacy ODE `C(V)` scalar 25–30% of E and 30–40% of I, and also
 uses ODE-derived regime/history inputs. The old “does NOT drive verdicts” comment
 therefore describes authority, not causal independence. This residual coupling
@@ -28,7 +44,7 @@ changes the E/I distribution and every downstream baseline.
 
 For non-embodied agents (the common case), three observations are computed from governance observables. On the MCP check-in path the sensor actually runs in the handler (`src/mcp_handlers/updates/phases.py`), which injects the result as `sensor_eisv` with `sensor_eisv_source="behavioral"`; the monitor recomputes it internally only as a fallback. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py`, the `sensor_eisv` intake path).
 
-**E_obs** — productive capacity (`_compute_E`):
+**E_obs** — decision, controller-level and complexity blend (`_compute_E`):
 ```
 decision_e = exp-weighted (α=0.3) mean of verdict scores over last 10 decisions
              {proceed/approve: 1.0, guide: 0.7, revise/reflect: 0.5, pause/reject
@@ -42,7 +58,7 @@ E_obs      = 0.40·decision_e + 0.30·coh_e + 0.30·cal_e         # no outcomes
 ```
 (What lands in `decision_history` is the sub-action when one exists, so the live vocabulary is the `monitor_decision.py` sub-action set, not just the coarse names.)
 
-**I_obs** — claims-match-results (`_compute_I`):
+**I_obs** — calibration, controller-trend and consistency blend (`_compute_I`):
 ```
 cal_I         = clamp(1 − calibration_error, 0, 1)
 coh_I         = split-half trend of legacy_tanh_v ODE control feedback: second-half mean
@@ -51,9 +67,11 @@ consistency_I = max(0.3, 1 − 4·var(outcome scores))
 I_obs         = 0.6·cal_I + 0.4·coh_I                                   # no outcomes
               = 0.50·cal_I + 0.30·coh_I + 0.20·consistency_I            # with ≥3 finite outcome scores
 ```
-`calibration_error` is a claimed-vs-observed deviation, not literally |confidence − success| of the current claim — and it has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only. Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
+`calibration_error` has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). These are lifetime **fleet** bins; the agent-scoped candidate is collected separately as measurement-only (`src/mcp_handlers/updates/context.py`). This is not an error measurement for the current claim. The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only. Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
 
-**S_obs** — drift from own normal behavior (`_compute_S`):
+The outcome-consistency term records variance: constant success scores and constant failure scores both have zero variance. The derivation marks this term `health_evidence=false`; outcome success enters E separately. Read consistency and success as separate properties.
+
+**S_obs** — drift, regime-transition and complexity blend (`_compute_S`):
 ```
 drift_s  = min(1, drift_norm · 1.5)
 regime_s = regime transitions / (window − 1) over last 10   (instability)
@@ -63,14 +81,14 @@ S_obs    = clamp(0.40·drift_s + 0.35·regime_s + 0.25·cd_s, 0.05, 1)
 
 Missing inputs fall back to fixed neutral defaults rather than dropping the term (`cal_I` 0.75, `drift_norm` 0.2, complexity divergence 0.15 in E / 0.1 in S, both `coh` terms 0.6), so a signal outage reads as "unremarkable", not as zero.
 
-Optional small blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set, not derived — that is the honest status of the current estimator.
+Optional blends (when those signals exist): continuity-log inputs (≤20%), tool error-rate (≤15%), tool velocity / unique-tools ratio (≤10%). The weights are hand-set engineering parameters.
 
 `coh_e` and `coh_I` are especially important to interpret honestly. They were
 introduced to reduce E saturation and differentiate agents while `coherence`
 still meant `C(V_ODE)`. The later behavioral-EISV migration promoted E/I/S/V
 but left the coherence producer behind, so these terms now carry a demoted ODE
-controller signal into the allegedly behavioral vector. The current patch tags
-that input; it does not silently reweight the live estimator.
+controller signal into the behavioral vector. The derivation tags that input;
+the live weights remain as specified above.
 
 There is a second compatibility dependency in `src/confidence.py`: when callers
 omit confidence, 55% of the fallback estimate's base is the same legacy
@@ -87,16 +105,16 @@ State is an EMA of the observations. The per-dimension α values are E 0.12, I 0
 E = (1−α)·E + α·E_obs        I = (1−α)·I + α·I_obs        S = (1−α)·S + α·S_obs
 ```
 
-**V is not an independent dimension.** It is the EMA-smoothed E−I imbalance (`behavioral_state.py`, `_raw_valence()` fed into the `BehavioralEISV.update()` EMA). Since `V_FORMULA_VERSION = 2` the input is the gap of the **raw observations**, so V is smoothed exactly once:
+**V is derived from E/I observation history.** It is the EMA-smoothed E−I observation gap (`behavioral_state.py`, `_raw_valence()` fed into the `BehavioralEISV.update()` EMA). Since `V_FORMULA_VERSION = 2` the input is the gap of the **raw observations**, so V is smoothed exactly once:
 ```
 raw_v = E_obs − I_obs
 V     = (1−α_V)·V + α_V·raw_v
 ```
 (v1 took `E − I` of the already-EMA'd state — double smoothing, more lag. The v2 flip was gated on a trace replay against real check-in traces, 2026-06-19: zero verdict flips; stale converged baselines are re-seeded on load. See `scripts/dev/validate_valence_formula.py` and `_reseed_v_baseline`.)
 
-So "four-dimensional state vector" is really three observed axes (E, I, S) plus a derived imbalance readout (V). V is surfaced separately because its **sign** is operationally actionable — positive = running hot (energetic but claims outrun results), negative = running careful (coherent but low progress) — not because it carries independent information.
+There are four output coordinates built from three blended observation streams. V adds a distinct temporal summary, not another external observation: its smoothing rate differs from those of E and I, so it is not generally recoverable by subtracting their current smoothed values. Positive V records a smoothed E_obs-above-I_obs gap; negative V records the reverse. "Running hot" and "running careful" are interpretations of that gap, not additional measured facts.
 
-(If you grep the codebase you will find a second `_compute_V` — a slope-plus-level formula — in `behavioral_sensor.py`. It is **unused on the verdict path**: `governance_monitor.py` passes only E/I/S observations to `self._behavioral_state.update()`, which recomputes V as the EMA of E_obs−I_obs above. The sensor's V does still reach the diagnostic ODE's spring coupling when the source is coupling-allowed; the verdict-driving V is the one described here.)
+(There is a second `_compute_V` — a slope-plus-level formula — in `behavioral_sensor.py`. It does **not directly supply behavioral V**: `governance_monitor.py` passes only E/I/S observations to `self._behavioral_state.update()`, which recomputes V as the EMA of E_obs−I_obs above. The sensor's V reaches the ODE's spring coupling when the source is coupling-allowed. That ODE state can affect later behavioral inputs and the final decision's structural checks; the two V producers have different roles in the coupled system.)
 
 ## Step 3 — Residuals: proprioception, not prosecution
 
