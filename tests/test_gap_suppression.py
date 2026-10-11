@@ -296,3 +296,105 @@ class TestConfig:
 
     def test_arm_seconds_is_positive(self):
         assert GovernanceConfig.GAP_RECOVERY_ARM_SECONDS > 0
+
+
+class TestGapSuppressedAuditRecordsSubAction:
+    """The audit event records WHAT was suppressed as structured fields.
+
+    Operator-delegated council decision 2026-10-11: change no enforcement, but
+    make the pause-suppression rate measurable. Before this, the event carried
+    only ``original_reason`` text, so the share of suppressed pauses that were
+    risk_pause (vs cirs_block or structural) could not be read from the audit
+    trail. These tests pin the new fields AND that the returned decision is
+    byte-identical to the pre-change output.
+    """
+
+    @staticmethod
+    def _pre_change_expected(decision: dict, cycles_remaining_after: int) -> dict:
+        # The exact dict _maybe_gap_suppress returned before the telemetry
+        # fields were added; the audit change must not alter it.
+        expected = dict(decision)
+        expected['original_action'] = 'pause'
+        if decision.get('sub_action'):
+            expected['original_sub_action'] = decision['sub_action']
+        expected['gap_suppressed'] = True
+        expected['action'] = 'proceed'
+        expected['reason'] = (
+            f"gap-suppressed (was: {decision.get('reason', 'pause')}); "
+            f"cycles_remaining={cycles_remaining_after}"
+        )
+        return expected
+
+    @pytest.mark.parametrize(
+        "sub_action, expected_class",
+        [
+            ('risk_pause', 'risk_pause'),
+            ('cirs_block', 'cirs_block'),
+            ('void_pause', 'other'),
+            ('coherence_pause', 'other'),
+            ('basin_pause', 'other'),
+            (None, 'other'),
+        ],
+    )
+    def test_decision_unchanged_and_audit_carries_sub_action(self, sub_action, expected_class):
+        import json
+
+        from src.audit_log import gap_suppressed_sub_action_class
+
+        monitor = _make_monitor(f"gap-subaction-{sub_action}")
+        monitor._gap_recovery_cycles_remaining = 2
+        decision = {'action': 'pause', 'reason': 'high-risk verdict (risk=0.81)'}
+        if sub_action is not None:
+            decision['sub_action'] = sub_action
+        expected = self._pre_change_expected(decision, cycles_remaining_after=1)
+
+        with patch('src.governance_monitor.audit_logger.log_attest_gap_suppressed') as logged:
+            result = monitor._maybe_gap_suppress(dict(decision), elapsed_seconds=900.0, risk_score=0.81)
+
+        assert json.dumps(result, sort_keys=True) == json.dumps(expected, sort_keys=True)
+        assert monitor._gap_recovery_cycles_remaining == 1
+        kwargs = logged.call_args.kwargs
+        assert kwargs['original_action'] == 'pause'
+        assert kwargs['original_sub_action'] == sub_action
+        assert gap_suppressed_sub_action_class(kwargs['original_sub_action']) == expected_class
+
+    def test_audit_event_persists_structured_fields(self, tmp_path):
+        import json
+
+        from src.audit_log import AuditLogger
+
+        logger = AuditLogger(log_file=tmp_path / "audit_log.jsonl")
+        logger.log_attest_gap_suppressed(
+            agent_id="a", elapsed_seconds=900.04, risk_score=0.81,
+            original_reason="high-risk verdict", cycles_remaining=1,
+            original_action="pause", original_sub_action="risk_pause",
+        )
+        logger.log_attest_gap_suppressed(
+            agent_id="a", elapsed_seconds=900.0, risk_score=0.5,
+            original_reason="void", cycles_remaining=0,
+            original_action="pause", original_sub_action="void_pause",
+        )
+        rows = [json.loads(line) for line in (tmp_path / "audit_log.jsonl").read_text().splitlines()]
+        assert [r["event_type"] for r in rows] == ["attest_gap_suppressed"] * 2
+        first, second = rows[0]["details"], rows[1]["details"]
+        assert first["original_action"] == "pause"
+        assert first["original_sub_action"] == "risk_pause"
+        assert first["sub_action_class"] == "risk_pause"
+        assert second["original_sub_action"] == "void_pause"
+        assert second["sub_action_class"] == "other"
+        # Existing fields are unchanged.
+        assert first["original_reason"] == "high-risk verdict"
+        assert first["elapsed_seconds"] == 900.0
+        assert first["cycles_remaining"] == 1
+
+    def test_legacy_positional_call_still_writes(self, tmp_path):
+        import json
+
+        from src.audit_log import AuditLogger
+
+        logger = AuditLogger(log_file=tmp_path / "audit_log.jsonl")
+        logger.log_attest_gap_suppressed("a", 5.0, 0.1, "low_risk", 2)
+        details = json.loads((tmp_path / "audit_log.jsonl").read_text())["details"]
+        assert details["original_action"] is None
+        assert details["original_sub_action"] is None
+        assert details["sub_action_class"] == "other"
