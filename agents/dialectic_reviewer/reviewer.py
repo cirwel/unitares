@@ -1225,6 +1225,9 @@ async def continue_after_disagreement(
             current_verdict, unfiled = unfiled[1], None
             if current_verdict.agrees:
                 return current_verdict
+            # Confirming a cut-off objection opens the same response window
+            # as a normally returned filing, without re-filing or re-judging.
+            deadline = min(time.monotonic() + wait_s, hard_deadline)
         phase = str(session_data.get("phase") or "").lower()
         if phase in _TERMINAL_PHASES:
             return current_verdict

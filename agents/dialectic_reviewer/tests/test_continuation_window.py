@@ -30,11 +30,13 @@ def _msg(agent, agrees):
 class _World:
     """A virtual clock plus a session whose paused agent answers on a schedule."""
 
-    def __init__(self, answers_at):
+    def __init__(self, answers_at, *, lose_synthesis_replies=False):
         self.now = 0.0
         self.answers_at = list(answers_at)  # clock times of paused-agent answers
+        self.lose_synthesis_replies = lose_synthesis_replies
         self.transcript = [_msg(REVIEWER, False)]  # the first rejection, at t=0
         self.filings = 0
+        self.model_calls = 0
 
     def tick(self):
         while self.answers_at and self.now >= self.answers_at[0]:
@@ -50,6 +52,8 @@ class _World:
         assert args["action"] == "synthesis"
         self.filings += 1
         self.transcript.append(_msg(REVIEWER, args["agrees"]))
+        if self.lose_synthesis_replies:
+            raise ConnectionError("synthesis landed but its reply was lost")
         return {"success": True}
 
 
@@ -66,6 +70,7 @@ def _run(monkeypatch, world, total_wait_factor=None):
     monkeypatch.setattr(r.asyncio, "sleep", fake_sleep)
 
     async def fake_obtain(prompt, pinned=None):
+        world.model_calls += 1
         return r.ReviewerText(
             '{"agrees": false, "root_cause": "x", "proposed_conditions": ["c"], "reasoning": "still no"}',
             {"backend": "codex", "host_id": "codex:host-adapter", "models_used": [],
@@ -80,22 +85,28 @@ def _run(monkeypatch, world, total_wait_factor=None):
         world, thesis, initial, paused_agent_id=PAUSED, reviewer_agent_id=REVIEWER))
 
 
-def test_an_answer_after_the_first_budget_is_still_reconsidered(monkeypatch):
+@pytest.mark.parametrize("lose_synthesis_replies", [False, True])
+def test_an_answer_after_the_first_budget_is_still_reconsidered(monkeypatch, lose_synthesis_replies):
     # Answers at 60s and 150s: the second is past the original 100s budget but
     # within 100s of the reviewer's reply to the first.
-    world = _World(answers_at=[60.0, 150.0])
+    world = _World(answers_at=[60.0, 150.0], lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world)
     assert world.filings == 2
+    assert world.model_calls == 2  # reconciliation neither re-files nor re-judges
 
 
-def test_the_reviewer_still_exits_one_window_after_its_last_filing(monkeypatch):
-    world = _World(answers_at=[60.0, 500.0])
+@pytest.mark.parametrize("lose_synthesis_replies", [False, True])
+def test_the_reviewer_still_exits_one_window_after_its_last_filing(monkeypatch, lose_synthesis_replies):
+    world = _World(answers_at=[60.0, 500.0], lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world)
     assert world.filings == 1  # the 500s answer is nobody's to read
+    assert world.now >= 60.0 + WAIT_S
 
 
-def test_restarting_the_wait_is_bounded_by_the_total_factor(monkeypatch):
+@pytest.mark.parametrize("lose_synthesis_replies", [False, True])
+def test_restarting_the_wait_is_bounded_by_the_total_factor(monkeypatch, lose_synthesis_replies):
     # The paused agent answers every 90s forever; the loop must still end.
-    world = _World(answers_at=[90.0 * i for i in range(1, 40)])
+    world = _World(answers_at=[90.0 * i for i in range(1, 40)],
+                   lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world, total_wait_factor=3)
     assert world.now <= WAIT_S * 3 + POLL_S + 1
