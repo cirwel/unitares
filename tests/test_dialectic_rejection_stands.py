@@ -213,6 +213,13 @@ class TestAssessment:
 
         assert _assess(transcript) is None
 
+    def test_a_replaced_reviewers_rejection_is_not_the_last_word(self):
+        """After an operator reassign the new reviewer has not spoken yet and
+        still holds authority to revise; the old rejection must not close it."""
+        transcript = _base(90) + [_msg("synthesis", PAUSED, 0, agrees=True)]
+
+        assert _assess(transcript, reviewer="agent-replacement") is None
+
     def test_unreadable_clock_stays_open(self):
         transcript = _base(90) + [_msg("synthesis", PAUSED, 0, agrees=True)]
         transcript[2] = DialecticMessage(
@@ -350,7 +357,8 @@ def _live_session(rejected_minutes_ago, *, awaiting=False, extra=()):
     return s
 
 
-async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=True):
+async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=True,
+                  add_message_error=False):
     from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
     pg_resolve = AsyncMock(return_value=resolve_ok)
@@ -361,7 +369,8 @@ async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=Tru
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock,
+               side_effect=RuntimeError("pg down") if add_message_error else None), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
@@ -452,17 +461,38 @@ class TestSynthesisHandler:
         m.pg_resolve.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_a_row_that_resolved_first_is_left_alone(self):
-        """BEAM answers already_terminal with the row's own status."""
+    @pytest.mark.parametrize("status", ["resolved", "failed"])
+    async def test_a_row_another_writer_finished_is_not_claimed(self, status):
+        """BEAM answers already_terminal with the row's own status and wrote
+        nothing: the row says something else, so no rejection_stands claim."""
         session = _live_session(90)
 
         data, m = await _submit(
             session, PAUSED, True,
-            beam_result={"ok": True, "status": "resolved", "origin": "already_terminal"},
+            beam_result={"ok": True, "status": status, "origin": "already_terminal"},
         )
 
         assert "session_closed" not in data
         assert session.phase == DialecticPhase.SYNTHESIS
+
+    @pytest.mark.asyncio
+    async def test_the_python_fallback_asks_for_the_strict_answer(self):
+        session = _live_session(90)
+
+        data, m = await _submit(session, PAUSED, True)
+
+        assert "winner" in m.pg_resolve.await_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_no_close_when_the_synthesis_was_not_persisted(self):
+        """The close cites the transcript, so the deciding message must be in it."""
+        session = _live_session(90)
+
+        data, m = await _submit(session, PAUSED, True, add_message_error=True)
+
+        assert "session_closed" not in data
+        m.pg_resolve.assert_not_awaited()
+        m.beam.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_refused_write_falls_back_to_the_existing_path(self):

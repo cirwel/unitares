@@ -154,6 +154,7 @@ from .calibration import (
 )
 from .resolution import agent_pause_is_live, execute_resolution
 from .beam_resolve_client import (
+    ALREADY_TERMINAL_ORIGIN,
     beam_resolve,
     beam_create_session,
     beam_update_phase,
@@ -319,25 +320,32 @@ async def _close_if_rejection_stands(
             status="failed",
         )
         if beam_result is not None:
-            # An already-terminal row answers with ITS status. Only `failed`
-            # means the session is closed the way this path intends; a row
-            # that resolved first is left alone.
-            terminal = beam_result.get("status") or "failed"
+            # An already-terminal answer means another writer finished the
+            # row first (a liveness reap, a resolution) and this payload was
+            # NOT written. Claiming rejection_stands there would describe a
+            # row that says something else.
+            written = beam_result.get("origin") != ALREADY_TERMINAL_ORIGIN
         else:
             with session_write_via("python_fallback", site="rejection_stands"):
+                # `winner` selects the strict answer: True only when THIS call
+                # wrote the row, not for a row some other writer already failed.
                 written = await pg_resolve_session(
-                    session_id=session_id, resolution=payload, status="failed"
+                    session_id=session_id, resolution=payload, status="failed",
+                    winner={},
                 )
-            terminal = "failed" if written else None
     except Exception as e:
         logger.warning(f"Could not close {session_id[:16]} as rejection_stands: {e}")
         return False
-    if terminal != "failed":
+    if not written:
         return False
 
     session.phase = DialecticPhase.FAILED
     session.awaiting_facilitation = False
     try:
+        # A second statement, not part of the terminal write: BEAM's row write
+        # is fixed SQL. If it fails, the row keeps the flag on a failed row,
+        # the state every liveness-reaped session carries today, and an
+        # operator reassign can still revive it.
         await pg_update_awaiting_facilitation(session_id, False)
     except Exception as e:
         logger.warning(
@@ -3775,6 +3783,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     arguments=arguments,
                 )]
 
+            synthesis_persisted = False
             if result.get("success"):
                 # Persist synthesis message to PostgreSQL
                 # NOTE: Defer phase update for converged sessions until after finalize_resolution
@@ -3796,6 +3805,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         agrees=agrees,
                         observed_metrics=synth_observed_metrics or None,
                     )
+                    synthesis_persisted = True
                     _blocked = result.get("blocked") == "reviewer_objection_stands"
                     # Skip the phase write when blocked: the phase has not changed (it
                     # stays SYNTHESIS) and `update_session_phase` sets
@@ -3837,7 +3847,13 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
             # the reviewer reconsidered a reply and still rejects. Close it now
             # as `rejection_stands` instead of holding it four hours for an
             # operator who never changed one of these outcomes. Never resolves.
-            if result.get("success") and not result.get("converged"):
+            # Only once the deciding synthesis is durably recorded: the close
+            # cites the transcript, so the transcript must hold what it cites.
+            if (
+                result.get("success")
+                and not result.get("converged")
+                and synthesis_persisted
+            ):
                 await _close_if_rejection_stands(session, result)
 
             # If converged, finalize resolution

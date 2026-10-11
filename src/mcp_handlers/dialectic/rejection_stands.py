@@ -192,6 +192,11 @@ def assess_rejection_stands(
     last = verdicts[-1]
     if last.agrees is not False:
         return None  # the reviewer's latest verdict is not a rejection
+    if last.agent_id != reviewer_agent_id:
+        # The standing rejection belongs to a reviewer since replaced (an
+        # operator reassign). The current reviewer has not yet spoken and
+        # still holds authority to revise it, so nobody has had a last word.
+        return None
 
     paused = [m for m in syntheses if m.agent_id == paused_agent_id]
     replies_after = [m for m in paused if m.index > last.index]
@@ -208,7 +213,7 @@ def assess_rejection_stands(
         basis = BASIS_REVIEWER_ANSWERED
     else:
         reviewer = last.agent_id
-        if not reviewer or not is_orchestrated(reviewer):
+        if not is_orchestrated(reviewer):
             # Only the orchestrated reviewer declares a bounded window. A human
             # or unmanaged reviewer has no deadline to have passed.
             return None
