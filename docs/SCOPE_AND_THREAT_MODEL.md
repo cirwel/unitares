@@ -55,14 +55,16 @@ server from its own state and the drift vector, whose complexity-divergence
 component depends on the complexity the agent reports and whose calibration
 component can depend on the confidence it reports (until the server-wide
 confidence-against-outcome record has enough graded samples), with the
-behavioral signal telemetry-only. On MCP check-ins a
-self-reported `ethical_drift` does not currently enter the drift vector, Φ, or the
-verdict in any phase: the handler passes the vector as an array that the capped
-30% blend's type check rejects (found 2026-09-23). Direct callers of the Python
-API (`UNITARESMonitor.process_update()`) who pass a list or tuple with a norm
-above 0.01 do get the blend (a `[0, 0, 0]` or near-zero report is skipped), and there it can affect the cold-start verdict and, once blended, later
-behavioral inputs. Whether self-reports should affect the decision at all is an
-open policy question, so the MCP path has deliberately not been repaired. Described-behavior semantics don't fully register
+behavioral signal telemetry-only. A
+self-reported `ethical_drift` does not enter the drift vector, Φ, or the verdict
+in any phase, on any path: it is recorded as telemetry only. This is a stated
+rule. Until 2026-10 a capped 30% blend existed for Python callers passing a list
+or tuple, but the MCP handler passes an array the blend's type check rejected, so
+it never ran on live check-ins (found 2026-09-23); it was also not escalate-only,
+so a caller could have lowered its own computed deviation. The blend was removed
+rather than repaired (operator-delegated decision, 2026-10-11). Whether
+self-reports should ever affect the decision remains an open policy question
+(#2372). Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
 
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral

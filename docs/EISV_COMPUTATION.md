@@ -51,7 +51,7 @@ consistency_I = max(0.3, 1 − 4·var(outcome scores))
 I_obs         = 0.6·cal_I + 0.4·coh_I                                   # no outcomes
               = 0.50·cal_I + 0.30·coh_I + 0.20·consistency_I            # with ≥3 finite outcome scores
 ```
-`calibration_error` is a claimed-vs-observed deviation, not literally |confidence − success| of the current claim — and it has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only, blended 70/30 with agent-reported drift when the agent sends any.
+`calibration_error` is a claimed-vs-observed deviation, not literally |confidence − success| of the current claim — and it has two producers. On the live handler path it is the mean per-bin |declared confidence − observed trajectory health| from the strategic calibration tracker (`get_mean_calibration_error` → `src/calibration.py`, bins with ≥5 samples). The monitor-internal fallback instead passes the drift vector's `calibration_deviation` (`monitor_drift.py`): worst populated tactical bin's *overconfidence* only. Agent-reported `ethical_drift` is telemetry and is never blended into the vector.
 
 **S_obs** — drift from own normal behavior (`_compute_S`):
 ```

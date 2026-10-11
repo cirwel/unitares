@@ -171,8 +171,6 @@ def _build_risk_attribution(
     baseline_status: Dict = None,
     *,
     behavioral_confidence=None,
-    self_report_blended: bool = False,
-    self_report_ever_blended: bool = False,
 ) -> Dict:
     """Decompose the risk/verdict by signal provenance.
 
@@ -227,16 +225,10 @@ def _build_risk_attribution(
             "alone) once that record has enough samples; until then it "
             "compares the confidence this agent reports (a fixed 0.6 when it "
             "reports none) with its own running baseline. "
-            + (
-                "The agent's self-reported ethical_drift was blended in at a "
-                "capped 30% on this check-in. "
-                if self_report_blended
-                else "The agent's self-reported ethical_drift did not enter "
-                "this vector on this check-in; on the MCP check-in path it "
-                "currently never does, so a [1,1,1] report and a [0,0,0] "
-                "report are scored the same. "
-            )
-            + "Φ is telemetry by default, so this drives the live verdict only "
+            "The agent's self-reported ethical_drift is not blended into this "
+            "vector: it is recorded as telemetry only, so a [1,1,1] report and "
+            "a [0,0,0] report are scored the same. "
+            "Φ is telemetry by default, so this drives the live verdict only "
             "pre-warmup (the cold-start prior)."
         ),
         "ethical_drift_norm": (
@@ -292,26 +284,11 @@ def _build_risk_attribution(
             "verification and policy maturity records."
         )
     elif primary_driver == "behavioral_assessment":
-        # This check-in's own blend counts too, so a simulate_update() preview
-        # (which does not set the sticky flag) is described correctly.
-        if self_report_ever_blended or self_report_blended:
-            # Direct callers passing a list get the blend. The blended vector
-            # then reaches the behavioral assessment through several inputs
-            # (behavioral S, ODE-derived auxiliaries) and persists in its EMA,
-            # so the assessment is not independent of the report from then on.
-            note = (
-                "This verdict is the behavioral assessment (EMA residuals vs this "
-                "agent's own baseline + absolute floors). Your self-reported "
-                "ethical_drift has been blended into the drift vector on this "
-                "monitor, and the blended vector feeds inputs to this assessment, "
-                "so on this path the assessment is not independent of your report."
-            )
-        else:
-            note = (
-                "This verdict is the independent behavioral assessment (EMA "
-                "residuals vs this agent's own baseline + absolute floors). Φ and "
-                "your reported ethical_drift are telemetry here, not the driver."
-            )
+        note = (
+            "This verdict is the independent behavioral assessment (EMA "
+            "residuals vs this agent's own baseline + absolute floors). Φ and "
+            "your reported ethical_drift are telemetry here, not the driver."
+        )
     elif primary_driver == "phi_floor":
         note = (
             "Behavioral is warm but Φ-telemetry is disabled (non-default): the "
@@ -326,12 +303,8 @@ def _build_risk_attribution(
             "component depends on the complexity you report and whose "
             "calibration component can depend on the confidence you report "
             "(see phi_drift for the defaults used when you omit either). "
-            + (
-                "Your self-reported ethical_drift was blended in at a capped 30%; "
-                if self_report_blended
-                else "Your self-reported ethical_drift did not enter it; "
-            )
-            + "the behavioral signal is not yet weighted."
+            "Your self-reported ethical_drift does not enter it (telemetry "
+            "only); the behavioral signal is not yet weighted."
         )
 
     attribution = {
@@ -483,10 +456,6 @@ def build_result(
         behavioral_assessment,
         baseline_status=_baseline_status,
         behavioral_confidence=getattr(_beh, 'confidence', None),
-        self_report_blended=bool(getattr(monitor, '_last_self_report_blended', False)),
-        self_report_ever_blended=bool(
-            getattr(monitor, '_self_report_ever_blended', False)
-        ),
     )
 
     if task_type_adjustment:
