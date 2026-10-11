@@ -561,6 +561,9 @@ class DialecticDB:
         resolution: Dict[str, Any],
         status: str = "resolved",
         *,
+        expected_phase: Any = _UNSET,
+        expected_updated_at: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Mark session as resolved or failed with resolution data.
@@ -582,17 +585,35 @@ class DialecticDB:
         mutated the row) and, when it did not, the ``existing_status``: an
         idempotent True wrote nothing, and an instrument must not record it as
         a write. The return value is unchanged.
+
+        Compare-and-set, as on `mark_awaiting_facilitation`: when
+        ``expected_phase``, ``expected_updated_at`` and/or ``expected_reviewer``
+        are passed (the values a caller decided on), the write lands only if
+        the live row still matches them. A message, phase move or reassignment
+        since that read then refuses the write (False) instead of terminating
+        the session on stale state. Omitted arguments add no predicate.
         """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
         phase = "resolved" if status == "resolved" else status
+        args: List[Any] = [status, phase, json.dumps(resolution), session_id]
+        cas = ""
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_updated_at is not _UNSET:
+            args.append(expected_updated_at)
+            cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
-                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed')
+                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}
                 RETURNING session_id, {self._EFFECT_TS}
-            """, status, phase, json.dumps(resolution), session_id)
+            """, *args)
             if row is not None:
                 logger.info(f"Resolved session {session_id[:16]}... with status {status}")
                 self._record_effect(detail, row)
@@ -614,6 +635,12 @@ class DialecticDB:
                     "(idempotent no-op, overwrite prevented)"
                 )
                 return True
+            if existing["status"] not in ("resolved", "failed"):
+                logger.info(
+                    f"resolve_session: {session_id[:16]}... moved since the caller "
+                    "read it (compare-and-set refused); not terminated"
+                )
+                return False
             logger.warning(
                 f"resolve_session: {session_id[:16]}... already terminal as "
                 f"{existing['status']!r}; refused overwrite to {status!r}"
@@ -1350,8 +1377,12 @@ async def resolve_session_async(
     status: str = "resolved",
     *,
     winner: Optional[Dict[str, Any]] = None,
+    **expected: Any,
 ) -> bool:
     """Guarded terminal write (`DialecticDB.resolve_session`), recorded.
+
+    ``expected`` passes the compare-and-set predicates through
+    (``expected_phase``, ``expected_updated_at``, ``expected_reviewer``).
 
     ``winner`` selects the sweeper's answer, as on the sweeper's other guarded
     writes: when it is passed, the return is True only when THIS call wrote the
@@ -1365,7 +1396,8 @@ async def resolve_session_async(
     ) as rec:
         db = await get_dialectic_db()
         detail: Dict[str, Any] = {}
-        result = await db.resolve_session(session_id, resolution, status, detail=detail)
+        result = await db.resolve_session(session_id, resolution, status, detail=detail,
+                                          **expected)
         # An idempotent True (already in the requested state) wrote nothing.
         if detail.get("written") is False:
             outcome = "no_op" if result else "not_written"

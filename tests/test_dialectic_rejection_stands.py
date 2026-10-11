@@ -541,6 +541,15 @@ def _messages(reply_minutes_after_rejection=30, rejected_minutes_ago=300):
     ]
 
 
+ROW_STAMP = datetime(2026, 10, 11, 9, 0, tzinfo=timezone.utc)
+
+
+def _session_row(messages):
+    """What get_session_async returns: the row's columns plus its messages."""
+    return {"session_id": "s" * 16, "phase": "synthesis", "updated_at": ROW_STAMP,
+            "reviewer_agent_id": REVIEWER, "messages": messages}
+
+
 @pytest.fixture
 def _sweeper_io():
     with patch(f"{AUTO_RESOLVE}.has_inflight_saga_async",
@@ -565,13 +574,17 @@ class TestSweeper:
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
-                   return_value={"messages": _messages()}), \
+                   return_value=_session_row(_messages())), \
              patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
              patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", clear), \
              patch(f"{AUTO_RESOLVE}.update_session_status_async", reap):
             result = await _auto_resolve_stuck_sessions()
 
         write.assert_awaited_once()
+        # Compare-and-set against the row the assessment read.
+        assert write.await_args.kwargs["expected_phase"] == "synthesis"
+        assert write.await_args.kwargs["expected_updated_at"] == ROW_STAMP
+        assert write.await_args.kwargs["expected_reviewer"] == REVIEWER
         payload = write.await_args.args[1]
         assert payload["reason"] == REJECTION_STANDS
         assert payload["closed_by"] == "python_sweeper"
@@ -590,7 +603,7 @@ class TestSweeper:
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
-                   return_value={"messages": _messages(rejected_minutes_ago=60)}), \
+                   return_value=_session_row(_messages(rejected_minutes_ago=60))), \
              patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
             result = await _auto_resolve_stuck_sessions()
 
@@ -601,7 +614,7 @@ class TestSweeper:
     async def test_rows_not_awaiting_facilitation_are_not_read(self, _sweeper_io):
         from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
 
-        read = AsyncMock(return_value={"messages": _messages()})
+        read = AsyncMock(return_value=_session_row(_messages()))
         write = AsyncMock(return_value=True)
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row(awaiting=False)]), \
@@ -616,7 +629,7 @@ class TestSweeper:
     async def test_a_refused_close_is_not_counted(self, _sweeper_io):
         from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
 
-        async def refused(session_id, payload, status, *, winner):
+        async def refused(session_id, payload, status, *, winner, **expected):
             winner.update(winner_status="failed", winner_reason=None, row_missing=False)
             return False
 
@@ -624,7 +637,7 @@ class TestSweeper:
         with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
                    new_callable=AsyncMock, return_value=[_row()]), \
              patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
-                   return_value={"messages": _messages()}), \
+                   return_value=_session_row(_messages())), \
              patch(f"{AUTO_RESOLVE}.resolve_session_async", refused), \
              patch(f"{AUTO_RESOLVE}.emit_write_refused", new_callable=AsyncMock), \
              patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async", clear):

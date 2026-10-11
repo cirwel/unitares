@@ -956,6 +956,39 @@ class TestResolveSession:
         assert call_args[2] == "failed"   # phase matches status (no longer hardcoded 'resolved')
 
     @pytest.mark.asyncio
+    async def test_compare_and_set_predicates_are_added_only_when_passed(self, db):
+        """The facilitation exit closes on the row it assessed, nothing newer."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
+        stamp = datetime(2026, 10, 11, tzinfo=timezone.utc)
+
+        assert await instance.resolve_session(
+            "sess-001", {"x": 1}, status="failed", expected_phase="synthesis",
+            expected_updated_at=stamp, expected_reviewer="rev",
+        ) is True
+        sql, *args = conn.fetchrow.call_args_list[0][0]
+        assert "phase IS NOT DISTINCT FROM $5" in sql
+        assert "updated_at IS NOT DISTINCT FROM $6" in sql
+        assert "reviewer_agent_id IS NOT DISTINCT FROM $7" in sql
+        assert args[4:] == ["synthesis", stamp, "rev"]
+
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
+        await instance.resolve_session("sess-001", {"x": 1})
+        assert "IS NOT DISTINCT FROM" not in conn.fetchrow.call_args_list[0][0][0]
+
+    @pytest.mark.asyncio
+    async def test_a_moved_live_row_refuses_the_compare_and_set(self, db):
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[None, {"status": "active"}])
+        detail = {}
+
+        assert await instance.resolve_session(
+            "sess-001", {"x": 1}, status="failed", expected_phase="synthesis",
+            detail=detail,
+        ) is False
+        assert detail == {"written": False, "existing_status": "active"}
+
+    @pytest.mark.asyncio
     async def test_resolve_session_not_found(self, db):
         """resolve_session returns False when session missing.
 

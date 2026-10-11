@@ -571,6 +571,8 @@ async def _close_standing_rejections(
             continue
         if payload is None:
             continue
+        if "phase" not in row or "updated_at" not in row:
+            continue  # no row state to compare-and-set against
         payload["closed_by"] = "python_sweeper"
 
         try:
@@ -579,8 +581,14 @@ async def _close_standing_rejections(
                 details,
                 attempted=ATTEMPT_REAP_FAILED,
                 session=session,
+                # Compare-and-set against the row the assessment read: a
+                # message (an approval among them), phase move or reassignment
+                # since then refuses the close, and the next cycle re-reads.
                 write=lambda winner: resolve_session_async(
-                    session_id, payload, "failed", winner=winner
+                    session_id, payload, "failed", winner=winner,
+                    expected_phase=row.get("phase"),
+                    expected_updated_at=row.get("updated_at"),
+                    expected_reviewer=reviewer_agent_id,
                 ),
                 decision_read_ts=decision_read_ts,
                 early_check_ts=early_check_ts,
