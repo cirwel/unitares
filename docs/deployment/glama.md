@@ -9,8 +9,8 @@ operator's production service credentials.
 
 Suggested directory description:
 
-> UNITARES is a self-hostable, single-operator federation kernel for AI-agent
-> identity, claims and evidence, review, outcomes, and reconstruction. Agents
+> Accountability infrastructure for long-running AI agents. UNITARES is a
+> self-hostable, single-operator federation kernel for AI-agent identity, claims and evidence, review, outcomes, and reconstruction. Agents
 > keep their own runtimes while sharing an attributed record through MCP. Fresh
 > processes receive fresh identities; explicit lineage links inherited work. The
 > private bundle supplies durable storage and coordination services. Advisory
