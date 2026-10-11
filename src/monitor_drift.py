@@ -72,9 +72,10 @@ def compute_drift_vector(
     """Compute concrete ethical drift vector from measurable signals.
 
     The vector is governance-computed only. A caller's self-reported
-    ``agent_state['ethical_drift']`` is telemetry: it is measured (its norm is
-    returned) but never blended into the vector, whatever its type. Mutates
-    grounded_agent_state['ethical_drift'] with the final drift list.
+    ``agent_state['ethical_drift']`` is never an input to it, whatever its
+    type; its norm is returned, but process_update() does not persist it
+    (MCP check-ins record the raw report separately, in the agent profile).
+    Mutates grounded_agent_state['ethical_drift'] with the final drift list.
 
     Sets monitor._last_drift_vector.
 
@@ -117,13 +118,13 @@ def compute_drift_vector(
         task_context=task_type,
     )
 
-    # Self-reported ethical_drift is telemetry only: it is never blended into
-    # the governance-computed vector. This is a stated rule, not a type check.
+    # Self-reported ethical_drift is never blended into the
+    # governance-computed vector. This is a stated rule, not a type check.
     # An earlier capped 30% blend ran only for a list/tuple, so on the MCP
     # check-in path (which passes an ndarray) it never ran; it was also not
     # escalate-only, so a caller could have lowered its own computed
     # deviation. Operator-delegated council decision 2026-10-11: keep the
-    # report as telemetry and remove the blend (parked policy question #2372).
+    # report out of the vector and remove the blend (parked policy question #2372).
     agent_drift_norm = _self_report_norm(agent_state.get('ethical_drift'))
 
     # Store for later access and time-series logging

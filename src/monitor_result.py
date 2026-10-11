@@ -226,8 +226,8 @@ def _build_risk_attribution(
             "compares the confidence this agent reports (a fixed 0.6 when it "
             "reports none) with its own running baseline. "
             "The agent's self-reported ethical_drift is not blended into this "
-            "vector: it is recorded as telemetry only, so a [1,1,1] report and "
-            "a [0,0,0] report are scored the same. "
+            "vector and is never an input to it, so a [1,1,1] report and a "
+            "[0,0,0] report are scored the same. "
             "Φ is telemetry by default, so this drives the live verdict only "
             "pre-warmup (the cold-start prior)."
         ),
@@ -303,8 +303,8 @@ def _build_risk_attribution(
             "component depends on the complexity you report and whose "
             "calibration component can depend on the confidence you report "
             "(see phi_drift for the defaults used when you omit either). "
-            "Your self-reported ethical_drift does not enter it (telemetry "
-            "only); the behavioral signal is not yet weighted."
+            "Your self-reported ethical_drift does not enter it; the "
+            "behavioral signal is not yet weighted."
         )
 
     attribution = {

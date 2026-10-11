@@ -1229,7 +1229,7 @@ ethical_drift block reports 0.2 as if measured — a uniform +0.04 in ‖ΔEta�
 constant −0.02 Phi offset (telemetry-only post-warmup, verdict-driving pre-warmup),
 and a 0.2 head start toward the 0.7 auto-dialectic threshold. Exact for the
 governance-computed component, which is now the whole vector: a self-reported
-drift is telemetry only. (This entry earlier said self-reports blend 30% over it;
+drift is never an input to it. (This entry earlier said self-reports blend 30% over it;
 that blend never ran on the MCP path, which passes an array the blend's
 list/tuple check rejected, and it was removed in 2026-10.)
 

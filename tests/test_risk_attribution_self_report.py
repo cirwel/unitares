@@ -109,7 +109,8 @@ def test_report_is_described_as_not_blended_for_list_and_ndarray():
     for report in ([1.0, 1.0, 1.0], np.array([1.0, 1.0, 1.0]), [0.0, 0.0, 0.0]):
         text = _texts(_attribution(report))
         assert "is not blended into this vector" in text
-        assert "does not enter it (telemetry only)" in text
+        assert "does not enter it" in text
+        assert "recorded as telemetry" not in text
         assert "was blended" not in text
         assert "capped 30%" not in text
 
@@ -158,7 +159,9 @@ def test_threat_model_states_the_exclusion_as_a_rule():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "SCOPE_AND_THREAT_MODEL.md").read_text()
     flat = " ".join(doc.split())
     assert "do get the blend" not in flat
-    assert "in any phase, on any path: it is recorded as telemetry only" in flat
+    assert "in any phase, on any path: it is never an input" in flat
+    # The telemetry claim is scoped to the path that actually records it.
+    assert "a direct Python call to `process_update()` does not record it" in flat
 
 
 def test_omitted_confidence_and_complexity_defaults_are_disclosed():
