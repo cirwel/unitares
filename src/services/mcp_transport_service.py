@@ -849,17 +849,14 @@ async def _stop_uds_listener(
     socket_path: str | None,
     task: asyncio.Task[None] | None,
 ) -> None:
+    # Socket ownership is task-scoped: the task's ``finally`` closes its
+    # socket, identity-checks/unlinks its node, and only then releases the
+    # lifetime lock.  A second path-based cleanup here could race a listener
+    # that starts after the old task exits and accidentally target its claim.
+    _ = socket_path
     if task is not None:
         task.cancel()
         try:
             await task
         except (asyncio.CancelledError, Exception):
             pass
-    if socket_path:
-        # Only the node this process bound: a replacement server may already
-        # have bound a fresh socket at the same path (#2662). It waits on the
-        # path lock, which another process's start may hold through a probe,
-        # so it runs off the event loop.
-        from src.uds_listener import unlink_own_socket
-
-        await asyncio.to_thread(unlink_own_socket, socket_path)
