@@ -149,7 +149,7 @@ boundary is the shipped artifact, not the repo.
 
 Accountability infrastructure for long-running AI agents. UNITARES is a self-hosted, single-operator federation kernel for agent identity, claims and evidence, review, outcomes, and reconstruction, served over MCP and REST. Describe it that way: the wording is owned by `README.md` and pinned by `scripts/diagnostics/check_doc_drift.py`.
 
-EISV is one instrument inside it, not its definition: each check-in returns a behavioral state estimate and a policy action. The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path. Whether EISV moves out of the core is an open proposal (`docs/proposals/active/eisv-core-boundary-v0.md`), not settled.
+EISV is one instrument inside it, not its definition: each check-in returns a behavioral state estimate and a policy action. The information-theoretic / free-energy formulation is the research target in Paper v6, not the live decision path. The operator adopted moving EISV out of the core to an optional module on 2026-10-10 (`docs/proposals/active/eisv-core-boundary-v0.md`). The direction is settled; the proposal's staged authorization and standing governed-review conditions still govern implementation.
 
 ## Stack
 

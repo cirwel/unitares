@@ -35,6 +35,26 @@ def _warnings(tmp_path: Path, monkeypatch, doc_health, content: str) -> list[str
     return doc_health.check_contested_claims([doc])
 
 
+@pytest.mark.parametrize("path", ["AGENTS.md", "CLAUDE.md", "docs/reader.md"])
+def test_flags_the_superseded_eisv_direction(tmp_path, monkeypatch, doc_health, path):
+    doc = tmp_path / path
+    doc.parent.mkdir(parents=True, exist_ok=True)
+    doc.write_text("Whether EISV moves out of the core is an open proposal, not settled.\n")
+    monkeypatch.setattr(doc_health, "REPO_ROOT", tmp_path)
+    warnings = doc_health.check_contested_claims([doc])
+    assert any("direction was adopted on 2026-10-10" in warning for warning in warnings)
+
+
+def test_allows_adopted_direction_with_implementation_gates(tmp_path, monkeypatch, doc_health):
+    warnings = _warnings(
+        tmp_path, monkeypatch, doc_health,
+        "The operator adopted moving EISV out of the core to an optional module "
+        "on 2026-10-10. The direction is settled; staged authorization and "
+        "standing governed-review conditions still govern implementation.",
+    )
+    assert warnings == []
+
+
 def test_flags_cold_start_claim_applied_to_all_warmup(
     tmp_path, monkeypatch, doc_health
 ):
