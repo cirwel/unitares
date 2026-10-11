@@ -86,18 +86,9 @@ def _observed_agent_identifier(target: str, agent_id: str, meta: Any) -> tuple[s
         return agent_id, False
     # Lazy: the lifecycle package imports widely, and this module is loaded
     # by the consolidated router before most handlers.
-    from ..lifecycle.query import (
-        _context_agent_id,
-        _is_operator_request,
-        _visible_agent_identifier,
-    )
+    from ..lifecycle.query import visible_agent_identifier_for_caller
 
-    return _visible_agent_identifier(
-        agent_id,
-        meta,
-        caller_uuid=_context_agent_id(),
-        operator_caller=_is_operator_request(),
-    )
+    return visible_agent_identifier_for_caller(agent_id, meta)
 
 
 @mcp_tool("observe_agent", timeout=15.0, register=False)

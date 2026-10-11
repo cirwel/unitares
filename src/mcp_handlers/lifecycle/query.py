@@ -287,6 +287,23 @@ def _is_operator_request() -> bool:
         return False
 
 
+def visible_agent_identifier_for_caller(agent_id: str, meta: Any) -> tuple[str, bool]:
+    """The id the current caller may be shown for ``agent_id``, and whether the
+    UUID was withheld.
+
+    The listing's disclosure rule as one call, for handlers outside this
+    package that return an agent id: the operator and the agent itself get the
+    UUID, anyone else gets the public handle the listing prints. Keeping the
+    rule here means a second surface cannot drift from the listing's.
+    """
+    return _visible_agent_identifier(
+        agent_id,
+        meta,
+        caller_uuid=_context_agent_id(),
+        operator_caller=_is_operator_request(),
+    )
+
+
 def _principal_rollup(agents_list: Sequence[dict], meta_lookup=None) -> dict:
     """Roll the listed identities up into PRINCIPALS (logical workers) — the
     octopus to the per-process-instance tentacle.
