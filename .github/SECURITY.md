@@ -8,9 +8,13 @@ Do **not** open a public issue or PR for a security bug.
 
 If GitHub PVR is unavailable to you (e.g., you don't have an account), open a public issue stating only *"contact requested — security"* without details, and I'll reach out for a private channel.
 
+## Published advisories
+
+Fixed vulnerabilities are published as [GitHub security advisories](https://github.com/cirwel/unitares/security/advisories), with finders credited. Two were published on 2026-10-05, both fixed in 3.2.0; one came from an outside report.
+
 ## What's in scope
 
-UNITARES is a runtime governance MCP server for AI-agent fleets. In-scope vulnerabilities include:
+UNITARES is accountability infrastructure for long-running AI agents: a self-hosted, single-operator MCP server. In-scope vulnerabilities include:
 
 - Authentication / identity bypasses in the MCP handlers, the gateway (port 8768), the lease plane (port 8788), or the dashboard
 - Bearer-token handling, session-cache leakage, or cross-agent identity confusion (see [`docs/ontology/identity.md`](../docs/ontology/identity.md) for the identity model)
