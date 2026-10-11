@@ -494,11 +494,12 @@ class TestSweeper:
         assert write.await_args.kwargs["expected_phase"] == "synthesis"
         assert write.await_args.kwargs["expected_updated_at"] == ROW_STAMP
         assert write.await_args.kwargs["expected_reviewer"] == REVIEWER
+        assert write.await_args.kwargs["clear_facilitation"] is True
         payload = write.await_args.args[1]
         assert payload["reason"] == REJECTION_STANDS
         assert payload["closed_by"] == "python_sweeper"
         assert payload["verdict_acceptance"] == ACCEPTED
-        clear.assert_awaited_once_with("s" * 16, False)
+        clear.assert_not_awaited()  # cleared inside the terminal statement
         reap.assert_not_awaited()
         assert result["resolved_count"] == 1
         assert result["write_attempt_count"] == result["write_succeeded_count"] == 1

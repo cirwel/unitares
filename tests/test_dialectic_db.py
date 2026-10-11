@@ -974,7 +974,19 @@ class TestResolveSession:
 
         conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
         await instance.resolve_session("sess-001", {"x": 1})
-        assert "IS NOT DISTINCT FROM" not in conn.fetchrow.call_args_list[0][0][0]
+        sql = conn.fetchrow.call_args_list[0][0][0]
+        assert "IS NOT DISTINCT FROM" not in sql
+        assert "awaiting_facilitation" not in sql
+
+    @pytest.mark.asyncio
+    async def test_clear_facilitation_is_part_of_the_terminal_statement(self, db):
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
+
+        await instance.resolve_session("sess-001", {"x": 1}, status="failed",
+                                       clear_facilitation=True)
+
+        assert "awaiting_facilitation = false" in conn.fetchrow.call_args_list[0][0][0]
 
     @pytest.mark.asyncio
     async def test_a_moved_live_row_refuses_the_compare_and_set(self, db):

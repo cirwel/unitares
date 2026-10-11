@@ -590,6 +590,10 @@ async def _close_standing_rejections(
                     expected_phase=row.get("phase"),
                     expected_updated_at=row.get("updated_at"),
                     expected_reviewer=reviewer_agent_id,
+                    # Answering the request and ending the session are one
+                    # statement, so the terminal row cannot keep asking for a
+                    # human.
+                    clear_facilitation=True,
                 ),
                 decision_read_ts=decision_read_ts,
                 early_check_ts=early_check_ts,
@@ -602,12 +606,6 @@ async def _close_standing_rejections(
         if not written:
             continue  # another writer finished it; the refusal is recorded
 
-        try:
-            await update_session_awaiting_facilitation_async(session_id, False)
-        except Exception as exc:
-            logger.warning(
-                f"Could not clear awaiting_facilitation for {session_id[:16]}: {exc}"
-            )
         _sync_cached_session(session_id, phase="failed", awaiting_facilitation=False)
         counts.resolved_count += 1
         details.append({

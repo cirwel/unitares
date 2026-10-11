@@ -564,6 +564,7 @@ class DialecticDB:
         expected_phase: Any = _UNSET,
         expected_updated_at: Any = _UNSET,
         expected_reviewer: Any = _UNSET,
+        clear_facilitation: bool = False,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Mark session as resolved or failed with resolution data.
@@ -592,6 +593,10 @@ class DialecticDB:
         the live row still matches them. A message, phase move or reassignment
         since that read then refuses the write (False) instead of terminating
         the session on stale state. Omitted arguments add no predicate.
+
+        ``clear_facilitation`` also sets ``awaiting_facilitation = false`` in
+        the same statement, so a close that answers a facilitation request
+        cannot leave the request standing on the terminal row.
         """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
@@ -607,10 +612,11 @@ class DialecticDB:
         if expected_reviewer is not _UNSET:
             args.append(expected_reviewer)
             cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        clear = ", awaiting_facilitation = false" if clear_facilitation else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
-                SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
+                SET status = $1, phase = $2, resolution_json = $3, updated_at = now(){clear}
                 WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}
                 RETURNING session_id, {self._EFFECT_TS}
             """, *args)
@@ -1381,8 +1387,8 @@ async def resolve_session_async(
 ) -> bool:
     """Guarded terminal write (`DialecticDB.resolve_session`), recorded.
 
-    ``expected`` passes the compare-and-set predicates through
-    (``expected_phase``, ``expected_updated_at``, ``expected_reviewer``).
+    ``expected`` passes the compare-and-set predicates and
+    ``clear_facilitation`` through (see `DialecticDB.resolve_session`).
 
     ``winner`` selects the sweeper's answer, as on the sweeper's other guarded
     writes: when it is passed, the return is True only when THIS call wrote the
