@@ -127,6 +127,13 @@ def classify_outcome(
 
     Hence the fix belongs here, in the reader, with the transcript-derived
     predicate supplied by the caller.
+
+    A session closed by the facilitation exit (``resolution_json`` reason
+    ``rejection_stands``, `mcp_handlers/dialectic/rejection_stands.py`) is
+    ``failed`` with its flag cleared and the reviewer's rejection as its last
+    reviewer synthesis, so it lands in UNRESOLVED_AWAITING_FACILITATION through
+    ``standing_rejection``: a standing disagreement, excluded from both terms
+    of `resolution_rate`, and never RESOLVED.
     """
     if is_canary_label(paused_agent_label):
         return CANARY
