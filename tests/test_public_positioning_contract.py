@@ -107,6 +107,19 @@ def test_non_markdown_reader_surfaces_are_pinned() -> None:
         assert check_doc_drift.CANONICAL_TAGLINE in checks[surface], surface
 
 
+def test_agent_facing_surfaces_are_pinned() -> None:
+    """Agents read the bootstraps and skills before any public surface."""
+    checks = check_doc_drift.PUBLIC_POSITIONING_CHECKS
+    for surface in (
+        "CLAUDE.md",
+        "AGENTS.md",
+        "skills/unitares-governance/SKILL.md",
+        "skills/governance-fundamentals/SKILL.md",
+    ):
+        assert check_doc_drift.CANONICAL_TAGLINE in checks[surface], surface
+        assert check_doc_drift.PRODUCT_CATEGORY in checks[surface], surface
+
+
 def test_citation_software_title_carries_the_tagline() -> None:
     citation = (PROJECT_ROOT / "CITATION.cff").read_text(encoding="utf-8")
     title_line = next(

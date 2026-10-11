@@ -1,10 +1,10 @@
 # Consult advisory facade v1
 
-Status: implementation candidate
+Status: implemented (re-read 2026-09-23, proposals audit). PR #1887
+(merged 2026-08-24) added `src/mcp_handlers/support/consultation.py`, and
+`consult` is one of the advertised tools. This document remains its contract.
 
-> **Status re-read 2026-09-23 (proposals audit):** implemented. PR #1887
-> (merged 2026-08-24) added `src/mcp_handlers/support/consultation.py`, and
-> `consult` is one of the advertised tools. This document remains its contract.
+Earlier status (2026-08-24): implementation candidate; superseded by the 2026-09-23 re-read.
 Date: 2026-08-24
 
 ## Decision

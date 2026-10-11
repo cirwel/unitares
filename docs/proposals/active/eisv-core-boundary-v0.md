@@ -21,6 +21,12 @@ the incident #2168 capture-stage comparison
 and the outcome-grounding stop rule
 ([`eisv-outcome-grounding-stop-rule-v0.md`](../registered/eisv-outcome-grounding-stop-rule-v0.md), #1425).
 
+**Operator decision, 2026-10-10:** the direction is adopted. EISV becomes an
+optional module subscribed to check-ins, not core. This settles *whether*; the
+staged authorization in [Authorization](#13-authorization) and the conditions of
+the standing governed review still govern *how* it is built. Recorded as an
+`architectural_decision` in the knowledge graph.
+
 ---
 
 ## 1. Problem
