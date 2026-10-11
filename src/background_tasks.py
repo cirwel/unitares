@@ -1186,6 +1186,10 @@ from config.governance_config import LABEL_CHECKIN_INTERVALS as _PERSISTENT_AGEN
 _silence_alerted: set[str] = set()
 _silence_critical_alerted: set[str] = set()
 _silence_duplicate_warned: set[str] = set()
+# Agents whose open auto-filed resident-silence rows have been looked for since
+# this process started (see _close_resident_silence_findings). Bounds the KG
+# reads to one per agent per outage/restart rather than one per iteration.
+_silence_close_checked: set[str] = set()
 _silence_server_start: datetime | None = None  # set on first iteration
 
 # Resident-pause escalation. The silence detector above only inspects
@@ -1395,6 +1399,67 @@ async def _log_resident_silence_finding(
         logger.debug(f"[SILENCE] KG finding write failed: {e}")
 
 
+async def _close_resident_silence_findings(agent_id: str, reconnected_at: datetime) -> bool:
+    """Resolve this agent's open auto-filed resident-silence rows after it is healthy again.
+
+    Closes the loop ``_log_resident_silence_finding`` promises. Touches only
+    rows that are open, belong to ``agent_id`` and carry BOTH the
+    ``resident-silence`` and ``auto-filed`` tags; anything a human or another
+    agent filed is left alone. Idempotent: a resolved row no longer matches the
+    open-only query, so a second pass finds nothing.
+
+    closure_class is ``unobserved``, not ``fix_verified`` (nothing was fixed or
+    deployed) and not ``not_reproducible`` (the condition was real, it ended):
+    the standard is "the symptom stopped appearing, cause unknown". Its contract
+    wants ``window`` and ``instrument_check``; both are supplied from what the
+    probe actually saw. The check-in recorder is the very field that raised the
+    alarm, so it is known to be live.
+
+    Returns True when the lookup completed (including "nothing to close"),
+    False on a KG error so the caller retries on a later iteration.
+    """
+    try:
+        from src.knowledge_graph import get_knowledge_graph
+
+        graph = await get_knowledge_graph()
+        existing = await graph.query(status="open", agent_id=agent_id, limit=50)
+        rows = [
+            d for d in existing
+            if {"resident-silence", "auto-filed"} <= set(d.tags or [])
+            and getattr(d, "agent_id", agent_id) == agent_id
+        ]
+        if not rows:
+            return True
+        now = datetime.now(timezone.utc)
+        reconnect_iso = reconnected_at.isoformat()
+        for d in rows:
+            note = (
+                f"Resolution notes ({now.isoformat()}):\n"
+                f"Resident observed healthy again by the silence probe: last check-in "
+                f"{reconnect_iso}. Closed automatically; no fix was deployed and the "
+                "cause of the silence is not established."
+            )
+            base = (d.details or "").rstrip()
+            await graph.update_discovery(d.id, {
+                "status": "resolved",
+                "resolved_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "details": f"{base}\n\n{note}" if base else note,
+                "closure_class": "unobserved",
+                "closure_evidence": {
+                    "window": f"{reconnect_iso} to {now.isoformat()}",
+                    "instrument_check": (
+                        "the silence probe reads this agent's last_update, the same "
+                        "field that raised the alarm, and it is advancing again"
+                    ),
+                },
+            })
+        return True
+    except Exception as e:
+        logger.debug(f"[SILENCE] KG finding close failed: {e}")
+        return False
+
+
 async def _silence_check_iteration() -> None:
     """Single pass of silence detection. Extracted for testability."""
     global _silence_server_start
@@ -1471,6 +1536,7 @@ async def _silence_check_iteration() -> None:
                     )
             else:
                 _silence_critical_alerted.add(agent_id)
+                _silence_close_checked.discard(agent_id)
                 _silence_alerted.add(agent_id)  # prevent downgrade WARNING after CRITICAL
                 logger.error(
                     f"[SILENCE] CRITICAL: {meta.label or agent_id[:12]} silent for {silence_minutes:.0f}m "
@@ -1514,13 +1580,25 @@ async def _silence_check_iteration() -> None:
         elif silence_seconds < interval * 2:
             # Agent recovered — clear alert state
             _silence_alerted.discard(agent_id)
+            was_critical = agent_id in _silence_critical_alerted
             _silence_critical_alerted.discard(agent_id)
+            # Close any auto-filed silence row: after a CRITICAL, or once per
+            # process for an agent not yet checked (a restart empties the
+            # in-memory alert sets while the KG row stays open).
+            # Judge health on the real last_update, not the server-start-capped
+            # one: an agent stale since before a restart looks recovered to the
+            # capped clock and must not have its row closed.
+            really_fresh = (now - last).total_seconds() < interval * 2
+            if really_fresh and (was_critical or agent_id not in _silence_close_checked):
+                if await _close_resident_silence_findings(agent_id, last):
+                    _silence_close_checked.add(agent_id)
 
     # Prune alert sets — remove agents no longer active
     active_ids = {aid for aid, m in agent_metadata.items() if m.status == "active"}
     _silence_alerted.intersection_update(active_ids)
     _silence_critical_alerted.intersection_update(active_ids)
     _silence_duplicate_warned.intersection_update(active_ids)
+    _silence_close_checked.intersection_update(active_ids)
 
 
 async def _resident_pause_check_iteration() -> None:
