@@ -15,8 +15,10 @@ Identifiers will differ on every install.
 
 The rules behind each step are in
 [Integrating agents](../manual/04-integrating-agents.md) and the
-[identity ontology](../ontology/identity.md). Exact schemas come from
-`list_tools()` and `describe_tool()`.
+[identity ontology](../ontology/identity.md). Start with the lifecycle skill's
+[six-rule field guide](../../skills/governance-lifecycle/SKILL.md#dont-panic-six-rules)
+when you need the compact version. Exact schemas come from `list_tools()` and
+`describe_tool()`.
 
 ## Process A
 

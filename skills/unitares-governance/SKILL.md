@@ -40,6 +40,10 @@ source_files:
 This umbrella skill exists for backward compatibility and as a stable top-level
 entrypoint into UNITARES.
 
+For the normal first-session path, read the
+`skills/governance-lifecycle/SKILL.md` section *Don't Panic: six rules* first.
+Return here when you need the broader model or routing among the split skills.
+
 ## What UNITARES is
 
 Accountability infrastructure for long-running AI agents: a self-hosted,
