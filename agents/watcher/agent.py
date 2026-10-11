@@ -88,6 +88,7 @@ from agents.watcher._util import (
 from agents.common.log import trim_log as _common_trim_log
 from agents.common.findings import post_finding
 from agents.watcher import findings as _findings_mod
+from agents.watcher.calibration import CONSTRAINED_MODE_SUFFIX
 from agents.watcher.findings import (
     DEDUP_FILE,
     FINDINGS_FILE,
@@ -1156,9 +1157,9 @@ SCAN_REPLY_SCHEMA: dict[str, Any] = {
 CONSTRAINED_RETRY = os.environ.get("WATCHER_CONSTRAINED_RETRY", "1").strip().lower() not in {
     "0", "false", "off", "no",
 }
-# Appended to model_used on findings that came from the retry, so the two
-# modes stay distinguishable in findings.jsonl.
-CONSTRAINED_MODE_SUFFIX = "+constrained"
+# CONSTRAINED_MODE_SUFFIX (imported from calibration, which excludes such rows
+# from pattern precision) is appended to model_used on findings that came from
+# the retry, so the two modes stay distinguishable in findings.jsonl.
 
 
 # How close to the requested window a prompt may come before we call it
@@ -3607,7 +3608,8 @@ def _retry_scan_constrained(
     on none; one lost a high P003 the normal mode reports. So the normal mode
     stays the detector, and this mode only fills a region the normal mode
     returned nothing readable for. Findings from here carry
-    CONSTRAINED_MODE_SUFFIX in model_used.
+    CONSTRAINED_MODE_SUFFIX in model_used, and calibration leaves them out
+    of pattern precision, so adjudicating one never moves a pattern's floor.
 
     A chosen standard, stated because it decides what escalates: a recovered
     region counts as scanned. A detector whose normal mode failed on every
