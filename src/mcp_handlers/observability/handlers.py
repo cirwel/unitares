@@ -86,7 +86,7 @@ def _observed_agent_identifier(target: str, agent_id: str, meta: Any) -> tuple[s
         return agent_id, False
     # Lazy: the lifecycle package imports widely, and this module is loaded
     # by the consolidated router before most handlers.
-    from ..lifecycle.query import visible_agent_identifier_for_caller
+    from ..lifecycle.disclosure import visible_agent_identifier_for_caller
 
     return visible_agent_identifier_for_caller(agent_id, meta)
 
