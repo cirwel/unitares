@@ -915,7 +915,9 @@ class DialecticSession:
                     "state. The reviewer may revise its verdict with a later "
                     "synthesis; otherwise an operator can assign a facilitator or "
                     "replacement reviewer with dialectic(action='reassign'). The "
-                    "session remains awaiting facilitation until one of those occurs."
+                    "session remains awaiting facilitation until one of those occurs, "
+                    "or until the reviewer has had its last word with the rejection "
+                    "standing, when it closes as rejection_stands (never an approval)."
                 ),
             }
 

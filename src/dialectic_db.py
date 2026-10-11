@@ -1344,7 +1344,22 @@ async def update_session_awaiting_facilitation_async(session_id: str, awaiting: 
             session_id, awaiting, detail=d))
 
 
-async def resolve_session_async(session_id: str, resolution: Dict[str, Any], status: str = "resolved") -> bool:
+async def resolve_session_async(
+    session_id: str,
+    resolution: Dict[str, Any],
+    status: str = "resolved",
+    *,
+    winner: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """Guarded terminal write (`DialecticDB.resolve_session`), recorded.
+
+    ``winner`` selects the sweeper's answer, as on the sweeper's other guarded
+    writes: when it is passed, the return is True only when THIS call wrote the
+    row, and a refusal fills it with the status found. Without it the return is
+    `resolve_session`'s, which is also True for a row already in the requested
+    state (an idempotent replay); for the sweeper that would count another
+    writer's reap as its own.
+    """
     async with record_session_write(
         kind=KIND_RESOLVE, session_id=session_id, requested=status,
     ) as rec:
@@ -1356,10 +1371,19 @@ async def resolve_session_async(session_id: str, resolution: Dict[str, Any], sta
             outcome = "no_op" if result else "not_written"
         else:
             outcome = written_outcome(result)
+        if winner is not None:
+            written = detail.get("written") is True
+            winner["effect_ts"] = detail.get("effect_ts")
+            if not written:
+                existing = detail.get("existing_status")
+                winner.update(winner_status=existing, winner_reason=None,
+                              row_missing=existing is None)
+            result = written
         rec.respond(outcome=outcome, existing_status=detail.get("existing_status"),
                     effect_ts=detail.get("effect_ts"),
                     reason=(resolution or {}).get("reason")
-                    if isinstance(resolution, dict) else None)
+                    if isinstance(resolution, dict) else None,
+                    **(_winner_fields(winner) if winner is not None and not result else {}))
         return result
 
 
