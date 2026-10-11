@@ -92,6 +92,8 @@ def test_self_report_norm_tolerates_missing_or_malformed_reports():
     assert _self_report_norm("abc") == 0.0
     assert _self_report_norm([float("nan"), 1.0]) == 0.0
     assert _self_report_norm(np.array([3.0, 4.0])) == 5.0
+    # An object-dtype array holding a huge int overflows float(); still 0.0.
+    assert _self_report_norm(np.array([10**400], dtype=object)) == 0.0
 
 
 def test_agent_profile_still_records_the_self_report_magnitude():

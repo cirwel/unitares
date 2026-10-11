@@ -64,8 +64,8 @@ or tuple, but the MCP handler passes an array the blend's type check rejected, s
 it never ran on live check-ins (found 2026-09-23); it was also not escalate-only,
 so a caller could have lowered its own computed deviation. The blend was removed
 rather than repaired (operator-delegated decision, 2026-10-11). Whether
-self-reports should ever affect the decision remains an open policy question
-(#2372). Described-behavior semantics don't fully register
+self-reports should ever affect the decision remains an open policy question,
+parked when PR #2372 was closed. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
 
 State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral

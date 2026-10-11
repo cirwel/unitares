@@ -55,7 +55,7 @@ def _self_report_norm(raw) -> float:
         return 0.0
     try:
         values = [float(d) for d in raw]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     norm = sum(d * d for d in values) ** 0.5
     return norm if norm == norm and norm != float("inf") else 0.0
@@ -124,7 +124,8 @@ def compute_drift_vector(
     # check-in path (which passes an ndarray) it never ran; it was also not
     # escalate-only, so a caller could have lowered its own computed
     # deviation. Operator-delegated council decision 2026-10-11: keep the
-    # report out of the vector and remove the blend (parked policy question #2372).
+    # report out of the vector and remove the blend. Whether a self-report
+    # should ever move the decision is parked (closed PR #2372).
     agent_drift_norm = _self_report_norm(agent_state.get('ethical_drift'))
 
     # Store for later access and time-series logging
