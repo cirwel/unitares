@@ -95,6 +95,21 @@ class AuditEntry:
     session_id: Optional[str] = None
 
 
+# Pause sub_actions that get their own bucket in the attest_gap_suppressed
+# audit event. risk_pause is the high-risk verdict pause; cirs_block is the
+# CIRS oscillation block. Everything else (structural void/coherence/basin
+# pauses, phase-aware pauses without a sub_action) is "other"; the raw value
+# is kept alongside in original_sub_action.
+_GAP_SUPPRESSED_SUB_ACTION_CLASSES = frozenset({"risk_pause", "cirs_block"})
+
+
+def gap_suppressed_sub_action_class(sub_action: Optional[str]) -> str:
+    """Bucket a suppressed pause's sub_action: risk_pause, cirs_block or other."""
+    if sub_action in _GAP_SUPPRESSED_SUB_ACTION_CLASSES:
+        return sub_action
+    return "other"
+
+
 # Module-level so the test suite can redirect it (tests/conftest.py); the
 # env var does the same for subprocess-spawned servers.
 DEFAULT_LOG_FILE = Path(os.environ.get("UNITARES_AUDIT_LOG") or Path(__file__).parent.parent / "data" / "audit_log.jsonl")
@@ -287,7 +302,9 @@ class AuditLogger:
     def log_attest_gap_suppressed(self, agent_id: str, elapsed_seconds: float,
                                    risk_score: float, original_reason: str,
                                    cycles_remaining: int,
-                                   confidence: float = None):
+                                   confidence: float = None,
+                                   original_action: Optional[str] = None,
+                                   original_sub_action: Optional[str] = None):
         """Log a 'pause' decision suppressed by the gap-recovery window.
 
         Emitted when an attestation runs in the N cycles immediately after
@@ -295,6 +312,13 @@ class AuditLogger:
         downgraded to 'proceed' on the assumption that the inputs reflect a
         sleep-wake transient rather than real drift. Cycle counter decrements
         until the recovery window closes and normal pause semantics resume.
+
+        ``original_action`` / ``original_sub_action`` record what was
+        suppressed as structured fields, and ``sub_action_class`` buckets it
+        (``risk_pause`` / ``cirs_block`` / ``other``), so the rate at which
+        gap suppression downgrades each kind of pause can be read from the
+        audit trail without parsing ``original_reason`` text. Telemetry only:
+        nothing reads these fields to make a decision.
         """
         entry = AuditEntry(
             timestamp=datetime.now().isoformat(),
@@ -306,6 +330,9 @@ class AuditLogger:
                 "risk_score": risk_score,
                 "original_reason": original_reason,
                 "cycles_remaining": cycles_remaining,
+                "original_action": original_action,
+                "original_sub_action": original_sub_action,
+                "sub_action_class": gap_suppressed_sub_action_class(original_sub_action),
             }
         )
         self._write_entry(entry)

@@ -45,6 +45,22 @@ def compute_calibration_error(checker) -> Optional[float]:
     return max(0.0, min(1.0, worst_overconfidence))
 
 
+def _self_report_norm(raw) -> float:
+    """Euclidean norm of a self-reported drift vector, as telemetry.
+
+    Accepts any numeric sequence (list, tuple, ndarray). Anything absent or
+    malformed reads as 0.0; the value never feeds the drift vector.
+    """
+    if raw is None:
+        return 0.0
+    try:
+        values = [float(d) for d in raw]
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    norm = sum(d * d for d in values) ** 0.5
+    return norm if norm == norm and norm != float("inf") else 0.0
+
+
 def compute_drift_vector(
     monitor,
     grounded_agent_state: Dict,
@@ -55,12 +71,16 @@ def compute_drift_vector(
 ) -> Tuple[EthicalDriftVector, float]:
     """Compute concrete ethical drift vector from measurable signals.
 
-    Blends governance-computed drift with agent-reported drift. Mutates
-    grounded_agent_state['ethical_drift'] with the final drift list.
+    The vector is governance-computed only. A caller's self-reported
+    ``agent_state['ethical_drift']`` is never an input to it, whatever its
+    type; its norm is returned, but process_update() does not persist it
+    (MCP check-ins record the raw report separately, in the agent profile).
+    Mutates grounded_agent_state['ethical_drift'] with the final drift list.
 
     Sets monitor._last_drift_vector.
 
-    Returns (drift_vector, agent_drift_norm).
+    Returns (drift_vector, agent_drift_norm), where agent_drift_norm is the
+    norm of the self-report as telemetry, not an input to the vector.
     """
     # A simulation clone carries a private baseline copy so it never touches
     # the shared LRU cache (see UNITARESMonitor.simulate_update).
@@ -98,37 +118,15 @@ def compute_drift_vector(
         task_context=task_type,
     )
 
-    # Blend agent-sent drift with governance-computed drift.
-    agent_drift_raw = agent_state.get('ethical_drift', [0.0, 0.0, 0.0])
-    if isinstance(agent_drift_raw, (list, tuple)) and len(agent_drift_raw) >= 1:
-        agent_drift_norm = sum(d * d for d in agent_drift_raw) ** 0.5
-    else:
-        agent_drift_norm = 0.0
-
-    # Whether the self-report actually entered the vector on THIS check-in, so
-    # risk_attribution can say what happened rather than what was intended.
-    # On the MCP check-in path the value arrives as an ndarray, which the
-    # list/tuple test above rejects, so this is False there (see #2372).
-    monitor._last_self_report_blended = agent_drift_norm > 0.01
-    # Sticky for this monitor: once blended, the vector reaches the behavioral
-    # assessment through several inputs (behavioral S, ODE-derived auxiliaries)
-    # and persists in its EMA, so attribution stops calling it independent.
-    # In-process only; unreachable from the MCP path, which never blends.
-    # Not during simulate_update(), which promises not to change monitor state.
-    if monitor._last_self_report_blended and not getattr(monitor, '_simulation_active', False):
-        monitor._self_report_ever_blended = True
-    if agent_drift_norm > 0.01:
-        ad = list(agent_drift_raw) + [0.0] * max(0, 3 - len(agent_drift_raw))
-        blend = 0.3
-        drift_vector.calibration_deviation = (
-            (1 - blend) * drift_vector.calibration_deviation + blend * min(1.0, abs(ad[0]))
-        )
-        drift_vector.coherence_deviation = (
-            (1 - blend) * drift_vector.coherence_deviation + blend * min(1.0, abs(ad[1]))
-        )
-        drift_vector.stability_deviation = (
-            (1 - blend) * drift_vector.stability_deviation + blend * min(1.0, abs(ad[2]))
-        )
+    # Self-reported ethical_drift is never blended into the
+    # governance-computed vector. This is a stated rule, not a type check.
+    # An earlier capped 30% blend ran only for a list/tuple, so on the MCP
+    # check-in path (which passes an ndarray) it never ran; it was also not
+    # escalate-only, so a caller could have lowered its own computed
+    # deviation. Operator-delegated council decision 2026-10-11: keep the
+    # report out of the vector and remove the blend. Whether a self-report
+    # should ever move the decision is parked (closed PR #2372).
+    agent_drift_norm = _self_report_norm(agent_state.get('ethical_drift'))
 
     # Store for later access and time-series logging
     monitor._last_drift_vector = drift_vector
@@ -153,7 +151,6 @@ def compute_drift_vector(
             f"cpx={drift_vector.complexity_divergence:.3f}, "
             f"coh={drift_vector.coherence_deviation:.3f}, "
             f"stab={drift_vector.stability_deviation:.3f}]"
-            f"{' (blended with agent signal)' if agent_drift_norm > 0.01 else ''}"
         )
 
     return drift_vector, agent_drift_norm
