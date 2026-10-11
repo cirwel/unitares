@@ -243,7 +243,60 @@ class TestHandleObserveAgent:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == second
+        # The handle that comes back is built from the row that resolved, so
+        # the first agent's would end in its own uuid8.
+        assert data["agent_id"] == listed
+        assert data["uuid_redacted"] is True
+        assert second not in json.dumps(data)
+
+    @pytest.mark.asyncio
+    async def test_label_lookup_does_not_hand_a_stranger_the_uuid(self):
+        """agent(action='list') withholds the UUID from a non-operator caller.
+
+        Observe must not give it back to the same caller for the price of one
+        more read: resolving a label or a handle returns the public handle.
+        """
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        meta = _make_metadata(uuid, label="Lumen")
+        meta.public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={uuid: _make_monitor(uuid)}, metadata_dict={uuid: meta},
+        )
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": "Lumen"})
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["agent_id"] == "mcp_20260416_aaaaaaaa"
+        assert data["uuid_redacted"] is True
+        assert uuid not in json.dumps(data)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("who", ["operator", "self"])
+    async def test_label_lookup_gives_the_uuid_to_whoever_the_listing_would(self, who):
+        """Same rule as the listing: the operator and the agent itself see it."""
+        uuid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        meta = _make_metadata(uuid, label="Lumen")
+        meta.public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={uuid: _make_monitor(uuid)}, metadata_dict={uuid: meta},
+        )
+        caller = uuid if who == "self" else "other-caller-uuid"
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value=caller), \
+             patch("src.mcp_handlers.lifecycle.query._context_agent_id", return_value=caller), \
+             patch("src.mcp_handlers.lifecycle.query._is_operator_request",
+                   return_value=(who == "operator")):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": "Lumen"})
+
+        data = parse_result(result)
+        assert data["agent_id"] == uuid
+        assert "uuid_redacted" not in data
 
     @pytest.mark.asyncio
     async def test_decision_distribution_overridden_from_postgres(self):
@@ -471,7 +524,10 @@ class TestHandleObserveAgent:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == uuid
+        # Resolved, and returned under the public name: this caller is neither
+        # the operator nor the agent, so the UUID stays withheld.
+        assert data["agent_id"] == "Lumen"
+        assert data["uuid_redacted"] is True
         server.load_metadata_async.assert_not_awaited()
 
     @pytest.mark.asyncio
@@ -496,7 +552,8 @@ class TestHandleObserveAgent:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == uuid
+        assert data["agent_id"] == "Lumen"
+        assert data["uuid_redacted"] is True
         mock_find.assert_not_awaited()
         server.load_metadata_async.assert_not_awaited()
 

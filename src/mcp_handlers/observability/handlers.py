@@ -71,6 +71,35 @@ def _agent_display_name(agent_id: str) -> str | None:
     return None
 
 
+def _observed_agent_identifier(target: str, agent_id: str, meta: Any) -> tuple[str, bool]:
+    """The id to hand back for an observed agent, and whether it was redacted.
+
+    A caller who presented the UUID already holds it, so echoing it discloses
+    nothing. A caller who presented a label or a public handle does not, and
+    agent(action="list") withholds the UUID from exactly that caller, so
+    returning it here would undo the listing's redaction with one more read.
+    The listing's own check decides: the operator and the agent itself get the
+    UUID, everyone else gets the handle the listing prints, which resolves
+    back to the same agent.
+    """
+    if target == agent_id:
+        return agent_id, False
+    # Lazy: the lifecycle package imports widely, and this module is loaded
+    # by the consolidated router before most handlers.
+    from ..lifecycle.query import (
+        _context_agent_id,
+        _is_operator_request,
+        _visible_agent_identifier,
+    )
+
+    return _visible_agent_identifier(
+        agent_id,
+        meta,
+        caller_uuid=_context_agent_id(),
+        operator_caller=_is_operator_request(),
+    )
+
+
 @mcp_tool("observe_agent", timeout=15.0, register=False)
 async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """Observe another agent's governance state with pattern analysis"""
@@ -249,11 +278,14 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         pass
 
     # Add EISV labels for API documentation
+    visible_agent_id, uuid_redacted = _observed_agent_identifier(target, agent_id, meta)
     response_data = {
-        "agent_id": agent_id,
+        "agent_id": visible_agent_id,
         "observation": observation,
         "eisv_labels": get_eisv_glossary(),
     }
+    if uuid_redacted:
+        response_data["uuid_redacted"] = True
     if profile_data:
         response_data["profile"] = profile_data
 
