@@ -425,6 +425,39 @@ async def test_lifetime_lock_prevents_a_misleading_stale_probe(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stale_node_cleanup_cannot_release_a_newer_listener_lock():
+    """A cleanup token for an old node cannot evict the current owner."""
+    import fcntl as _fcntl
+
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    task = await uds_listener.start_uds_listener(
+        _ok_app, path, log_level="error"
+    )
+    ownership = uds_listener._bound_ownerships[path]
+    dev, ino, ctime_ns = ownership.node
+    stale_node = (dev, ino, ctime_ns - 1)
+    contender_fd = None
+    try:
+        assert not uds_listener.unlink_own_socket(path, stale_node)
+        assert uds_listener._bound_ownerships[path] is ownership
+        assert ownership.lock_fd is not None
+        assert uds_listener._node_id(path) == ownership.node
+
+        contender_fd = os.open(path + ".lock", os.O_RDWR)
+        with pytest.raises(OSError) as exc:
+            _fcntl.flock(contender_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        assert exc.value.errno in (errno.EAGAIN, errno.EWOULDBLOCK)
+    finally:
+        if contender_fd is not None:
+            os.close(contender_fd)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_stale_pre_rollout_socket_is_still_replaced():
     """A socket left by a process without the new lock remains recoverable."""
     d = _tempfile.mkdtemp(prefix="uds")
