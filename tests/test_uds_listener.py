@@ -854,6 +854,62 @@ async def test_listener_holds_lifetime_lock_until_stop(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_cancelled_stop_waits_for_release_before_restart(monkeypatch):
+    """A second cancellation cannot detach cleanup from the owner task."""
+    from src.services.mcp_transport_service import _start_uds_listener, _stop_uds_listener
+
+    release_started = _threading.Event()
+    release_allowed = _threading.Event()
+    real_release = uds_listener._release
+
+    def _delayed_release(*args):
+        release_started.set()
+        assert release_allowed.wait(5)
+        real_release(*args)
+
+    monkeypatch.setattr(uds_listener, "_release", _delayed_release)
+    d = _tempfile.mkdtemp(prefix="uds")
+    path = os.path.join(d, "g.sock")
+    monkeypatch.setenv("UNITARES_UDS_SOCKET", path)
+    listener_task = None
+    stop_task = None
+    replacement_task = None
+    try:
+        sock_path, listener_task = await _start_uds_listener(_ok_app)
+        assert sock_path == path and listener_task is not None
+        stop_task = asyncio.create_task(
+            _stop_uds_listener(sock_path, listener_task)
+        )
+        assert await asyncio.to_thread(release_started.wait, 5)
+
+        # Cancel the stop while it is awaiting the already-cancelled listener.
+        # That sends another cancellation into the listener's cleanup path.
+        stop_task.cancel()
+        await asyncio.sleep(0)
+        assert not stop_task.done()
+
+        release_allowed.set()
+        await asyncio.wait_for(stop_task, 5)
+        assert not os.path.exists(path)
+
+        # The awaited stop is a synchronization boundary: an immediate restart
+        # must acquire the same lifetime lock without retrying.
+        monkeypatch.setattr(uds_listener, "_release", real_release)
+        replacement_path, replacement_task = await _start_uds_listener(_ok_app)
+        assert replacement_path == path and replacement_task is not None
+    finally:
+        release_allowed.set()
+        if stop_task is not None and not stop_task.done():
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await stop_task
+        if replacement_task is not None:
+            await _stop_uds_listener(path, replacement_task)
+        elif listener_task is not None and not listener_task.done():
+            await _stop_uds_listener(path, listener_task)
+        _shutil.rmtree(d, ignore_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_start_releases_the_socket_it_goes_on_to_bind(monkeypatch):
     """Cancellation while the worker owns the lock cannot orphan that claim."""
     entered_bind = _threading.Event()

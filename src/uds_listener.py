@@ -437,6 +437,35 @@ def _release_off_loop(
         return done
 
 
+async def _wait_for_release(
+    loop: asyncio.AbstractEventLoop,
+    uds_path: str,
+    sock: socket.socket,
+    ownership: _PathOwnership,
+) -> None:
+    """Finish off-loop cleanup before the owner task can complete.
+
+    ``shield`` prevents cancellation from cancelling the executor future, but
+    it does not make the caller wait for that future.  A second cancellation
+    while the listener is already unwinding would otherwise detach cleanup and
+    let the task finish while the lifetime lock was still held.  Keep joining
+    the same future, then restore cancellation after ownership is released.
+    """
+    release = _release_off_loop(loop, uds_path, sock, ownership)
+    cancellation: asyncio.CancelledError | None = None
+    while not release.done():
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+
+    # Retrieve a worker exception before restoring cancellation.  A failed
+    # release must not be silently converted into an ordinary cancelled task.
+    release.result()
+    if cancellation is not None:
+        raise cancellation
+
+
 async def start_uds_listener(
     app, uds_path: str, *, log_level: str = "info"
 ) -> "asyncio.Task[None]":
@@ -524,7 +553,7 @@ async def start_uds_listener(
         # The caller claims no path on failure (#2662), so nothing else will
         # unlink this one: remove the node we bound and close the socket. The
         # release completes even if this wait is cancelled.
-        await asyncio.shield(_release_off_loop(loop, uds_path, sock, ownership))
+        await _wait_for_release(loop, uds_path, sock, ownership)
         raise
 
     with _bound_ownerships_guard:
@@ -542,9 +571,7 @@ async def start_uds_listener(
             with _bound_ownerships_guard:
                 if _bound_ownerships.get(uds_path) is ownership:
                     _bound_ownerships.pop(uds_path, None)
-            await asyncio.shield(
-                _release_off_loop(loop, uds_path, sock, ownership)
-            )
+            await _wait_for_release(loop, uds_path, sock, ownership)
 
     # The task owns cleanup on normal exit, crash, and cancellation.  The
     # transport service must not run a later path-based cleanup: a replacement
@@ -557,7 +584,7 @@ async def start_uds_listener(
         with _bound_ownerships_guard:
             if _bound_ownerships.get(uds_path) is ownership:
                 _bound_ownerships.pop(uds_path, None)
-        await asyncio.shield(_release_off_loop(loop, uds_path, sock, ownership))
+        await _wait_for_release(loop, uds_path, sock, ownership)
         raise
     try:
         await started.wait()
@@ -570,8 +597,6 @@ async def start_uds_listener(
             with _bound_ownerships_guard:
                 if _bound_ownerships.get(uds_path) is ownership:
                     _bound_ownerships.pop(uds_path, None)
-            await asyncio.shield(
-                _release_off_loop(loop, uds_path, sock, ownership)
-            )
+            await _wait_for_release(loop, uds_path, sock, ownership)
         raise
     return owned_task
