@@ -17,6 +17,12 @@ across sessions and vendors. A successor can search earlier work before acting;
 the human working with it can inspect what was established and what still needs
 review.
 
+A Markdown handoff may be all a task needs. An agent can also reference that
+document in a UNITARES finding alongside code, logs, and test results. The
+document gives a successor a concise starting point; the shared record keeps
+attribution, corrections, review decisions, and reported outcomes available
+around it. Git, handoff documents, and UNITARES can support the same workflow.
+
 Here federation means many independent runtimes and harnesses sharing one
 operator-controlled server and authority domain; that is what single-operator
 means. The sense with several operators or authority domains is
@@ -32,11 +38,10 @@ five questions:
 | **What supports it?** | Derived check-in state, durable attributed findings, corrections, and provenance. | The original `sync_state` report text is transient; durable claims require a finding. This wording introduces no new object schema or automatic evidence verification. |
 | **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
 | **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
-| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
+| **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and reduced operator effort remain unmeasured. |
 
-What the word does not claim: UNITARES does not own execution, nothing in it
-replicates state across independent servers, and it has not proved better
-outcomes than a structured handoff.
+What the word does not claim: UNITARES does not own execution, and nothing in it
+replicates state across independent servers.
 
 See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
 tool names and service prerequisites. Behavioral state estimation, policy,
@@ -145,8 +150,8 @@ failure looks like, is the [trust contract](trust-contract.md).
 The deployed product provides an attributed record of findings, review, and
 reported outcomes. Its usefulness depends on agents and integrations capturing
 the relevant evidence; it does not verify every claim automatically or establish
-complete reconstruction. Better outcomes than a structured handoff, agent
-preference, and reduced operator effort have not been established.
+complete reconstruction. Its effect on coordination effort and task outcomes
+has not yet been measured, and agent preference has not been established.
 
 The policy instrument has separate limits. Apart from the pause gate on
 governed write surfaces, enforcement is advisory: the server returns an action
