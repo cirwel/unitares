@@ -175,3 +175,53 @@ async def test_run_eval_step_subprocess_failure_returns_not_ran(tmp_path):
         result = await vigil._run_eval_step()
 
     assert result["ran"] is False
+
+
+def _nested_eval(ndcg: float) -> dict:
+    """Shape written by scripts/eval/retrieval_eval.py and the baselines."""
+    return {"aggregate": {
+        "ndcg@10": {"mean": ndcg, "median": 1.0, "min": 0.0, "max": 1.0},
+        "recall@20": {"mean": 0.9},
+        "mrr": {"mean": 0.8},
+        "latency_ms": {"p50": 20.0, "p95": 100.0, "max": 200.0},
+    }}
+
+
+def _hybrid_env(monkeypatch):
+    monkeypatch.setenv("UNITARES_EMBEDDING_MODEL", "bge-m3")
+    monkeypatch.setenv("UNITARES_ENABLE_HYBRID", "1")
+    monkeypatch.delenv("UNITARES_ENABLE_GRAPH_EXPANSION", raising=False)
+    monkeypatch.delenv("UNITARES_ENABLE_RERANKER", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_run_eval_step_regression_alert_real_nested_shape(tmp_path, monkeypatch):
+    """Real harness/baseline shape (aggregate -> ndcg@10 -> mean) can flag."""
+    from agents.vigil.agent import VigilAgent
+
+    _hybrid_env(monkeypatch)
+    (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(
+        json.dumps(_nested_eval(0.80)))
+    vigil = VigilAgent(with_eval=True)
+    with patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path), \
+         patch("agents.vigil.agent._run_eval_subprocess", return_value=_nested_eval(0.70)):
+        result = await vigil._run_eval_step()
+
+    assert result["regression"] is True
+    assert result["delta"]["nDCG@10"] == pytest.approx(-0.10, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_run_eval_step_nested_within_threshold_no_regression(tmp_path, monkeypatch):
+    from agents.vigil.agent import VigilAgent
+
+    _hybrid_env(monkeypatch)
+    (tmp_path / "baseline_2026-04-20_hybrid_rrf.json").write_text(
+        json.dumps(_nested_eval(0.80)))
+    vigil = VigilAgent(with_eval=True)
+    with patch("agents.vigil.agent.RETRIEVAL_EVAL_DIR", tmp_path), \
+         patch("agents.vigil.agent._run_eval_subprocess", return_value=_nested_eval(0.78)):
+        result = await vigil._run_eval_step()
+
+    assert result["regression"] is False
+    assert "nDCG@10" in result["delta"]

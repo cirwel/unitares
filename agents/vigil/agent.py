@@ -391,6 +391,33 @@ def _pick_eval_baseline(baseline_dir: Path, config_tag: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
+def _normalize_eval_metrics(doc: Any) -> Dict[str, float]:
+    """Flatten a retrieval_eval result/baseline into the keys Vigil diffs.
+
+    ``scripts/eval/retrieval_eval.py`` (and the committed baselines) nest the
+    numbers as ``aggregate -> ndcg@10 -> mean``; the legacy flat shape used
+    top-level ``nDCG@10`` etc. Accept both, preferring the nested form.
+    """
+    if not isinstance(doc, dict):
+        return {}
+    out: Dict[str, float] = {}
+    agg = doc.get("aggregate")
+    if isinstance(agg, dict):
+        for flat, nested in (("nDCG@10", "ndcg@10"), ("Recall@20", "recall@20"), ("MRR", "mrr")):
+            entry = agg.get(nested)
+            if isinstance(entry, dict) and isinstance(entry.get("mean"), (int, float)):
+                out[flat] = entry["mean"]
+        lat = agg.get("latency_ms")
+        if isinstance(lat, dict):
+            for flat, nested in (("latency_p50", "p50"), ("latency_p95", "p95")):
+                if isinstance(lat.get(nested), (int, float)):
+                    out[flat] = lat[nested]
+    for key in ("nDCG@10", "Recall@20", "MRR", "latency_p50", "latency_p95"):
+        if key not in out and isinstance(doc.get(key), (int, float)):
+            out[key] = doc[key]
+    return out
+
+
 def _run_eval_subprocess() -> Dict[str, Any]:
     """Invoke the eval harness as a subprocess; return parsed JSON metrics.
 
@@ -974,10 +1001,11 @@ class VigilAgent(GovernanceAgent):
 
         try:
             baseline = json.loads(baseline_path.read_text())
-            base_metrics = baseline.get("metrics", baseline)  # tolerate flat or nested
+            base_metrics = _normalize_eval_metrics(baseline.get("metrics", baseline))
+            cur_metrics = _normalize_eval_metrics(metrics)
             for key in ("nDCG@10", "Recall@20", "MRR", "latency_p50", "latency_p95"):
-                if key in metrics and key in base_metrics:
-                    result["delta"][key] = metrics[key] - base_metrics[key]
+                if key in cur_metrics and key in base_metrics:
+                    result["delta"][key] = cur_metrics[key] - base_metrics[key]
             ndcg_delta = result["delta"].get("nDCG@10", 0.0)
             if ndcg_delta < -NDCG_REGRESSION_THRESHOLD:
                 result["regression"] = True
