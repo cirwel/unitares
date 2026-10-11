@@ -38,6 +38,7 @@ class _World:
         self.transcript = [_msg(REVIEWER, False)]  # the first rejection, at t=0
         self.filings = 0
         self.model_calls = 0
+        self.model_latency = 0.0
 
     def tick(self):
         while self.answers_at and self.now >= self.answers_at[0]:
@@ -81,6 +82,15 @@ def _run(monkeypatch, world, total_wait_factor=None):
             "codex",
         )
 
+    async def fake_wait_for(awaitable, timeout):
+        if world.model_latency > timeout:
+            awaitable.close()
+            world.now += timeout
+            raise asyncio.TimeoutError
+        world.now += world.model_latency
+        return await awaitable
+
+    monkeypatch.setattr(r.asyncio, "wait_for", fake_wait_for)
     monkeypatch.setattr(r, "obtain_reviewer_text", fake_obtain)
     thesis = Thesis(session_id="s", root_cause="", proposed_conditions=[], reasoning="")
     initial = Verdict(agrees=False, root_cause="x", proposed_conditions=["c"], reasoning="no")
@@ -124,3 +134,21 @@ def test_reconciliation_read_outage_stops_at_the_hard_deadline(monkeypatch):
     _run(monkeypatch, world, total_wait_factor=3)
     assert world.now == WAIT_S * 3
     assert world.filings == world.model_calls == 1
+
+
+def test_a_timely_answer_can_be_reviewed_after_its_response_window(monkeypatch):
+    world = _World(answers_at=[90.0])
+    world.model_latency = 20.0
+    _run(monkeypatch, world, total_wait_factor=3)
+    assert world.filings == world.model_calls == 1
+    assert world.now <= WAIT_S * 3
+
+
+def test_model_work_cannot_overrun_the_hard_deadline(monkeypatch, caplog):
+    world = _World(answers_at=[90.0])
+    world.model_latency = 250.0
+    verdict = _run(monkeypatch, world, total_wait_factor=3)
+    assert world.now == WAIT_S * 3
+    assert world.filings == 0
+    assert verdict.agrees is False
+    assert "continuation model exhausted" in caplog.text

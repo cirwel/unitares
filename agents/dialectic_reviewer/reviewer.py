@@ -1266,9 +1266,16 @@ async def continue_after_disagreement(
             )
             try:
                 model_text = await asyncio.wait_for(
-                    obtain_reviewer_text(prompt, pinned=pinned_host), timeout=remaining
+                    # The response was timely; its model work may use the
+                    # remaining total budget rather than the response window.
+                    obtain_reviewer_text(prompt, pinned=pinned_host),
+                    timeout=max(0.0, hard_deadline - time.monotonic()),
                 )
             except asyncio.TimeoutError:
+                logger.warning(
+                    "Dialectic continuation model exhausted the hard lifetime budget; "
+                    "preserving the standing rejection"
+                )
                 return current_verdict
             except Exception as exc:  # noqa: BLE001 — preserve the standing rejection
                 logger.warning("Dialectic continuation model failed: %r", exc)
