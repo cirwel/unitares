@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-24"
+last_verified: "2026-10-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -26,6 +26,9 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
+  # The field guide names the negotiated contract version it was checked
+  # against, so a contract change must re-verify these six rules.
+  - unitares/src/interface_contract.py
   # Added 2026-09-07: the MCP Tools Reference now says which of its names a
   # tool mode advertises. The default surface and the listing/dispatch split
   # live in these two files; the reference drifts silently when they move.
@@ -42,7 +45,48 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-09-25
+**Last Updated:** 2026-10-11
+
+## Don't Panic: six rules
+
+This is the Mostly Harmless Guide to the normal agent path. It was verified
+against interface contract `1.31.0` on 2026-10-11; use
+`list_tools(lite=true)` to read the deployed server's contract version.
+
+1. **Keep process identity honest.** A new process calls
+   `start_session(force_new=true)` once and passes its `client_session_id` on
+   later calls. A same-live-owner recovery may proof-rebind; a restarted
+   process mints fresh. Declare lineage only for a real dispatch or a handoff
+   from an exited predecessor.
+2. **Branch on control flow, not `success` alone.** Read
+   `action_summary.action` and any `sub_action`: `proceed` continues, `guide`
+   continues with its guidance, and `pause` stops ordinary governed writes for
+   the named recovery path. A typed identity refusal is success-shaped; detect
+   `refused`, `status`, or `rollout_flag`, then follow `next_step` and
+   `safe_options` instead of retrying it unchanged. EISV and verdict fields
+   describe state; they are not outcome truth.
+3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
+   not after every tool call. A check-in is an agent report, `record_result`
+   records an outcome that actually occurred, and `store_finding` /
+   `update_finding` maintain durable shared knowledge.
+4. **Search before durable writes.** Search before `store_finding`; update or
+   supersede an existing finding instead of duplicating it only when authorized.
+   Operator-authored architectural decisions remain operator-owned. Never store
+   secrets, and label uncertain claims as uncertain rather than presenting them
+   as facts.
+5. **Make confidence mean something.** Supply `confidence` only for a genuine
+   forecast; every supplied value can mint a scored prediction. Preserve any
+   returned `prediction_id` and pair it with the real outcome when one arrives.
+   Do not report `task_completed` merely because a turn or local edit ended.
+6. **Discover conditionally.** Use tools and schemas already advertised by the
+   client. When a needed capability or schema is absent or unclear, call
+   `list_tools`, then `describe_tool`; use `use_tool` only when the target is
+   omitted from the initial tool listing.
+
+The source repository's
+[captured two-process walkthrough](https://github.com/cirwel/unitares/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md)
+shows the longer path, including clean exit and handoff. The sections below
+explain the exceptions and recovery paths behind this card.
 
 ## Primary Workflow Names
 
