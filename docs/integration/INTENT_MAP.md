@@ -20,31 +20,6 @@ tool outside that set: find it with `list_tools`, read its schema with
 The server would dispatch it directly, but most MCP clients will not call a
 name they were never given a schema for.
 
-> **What this surface does not guarantee**
->
-> - **You cannot choose an on-record reviewer.** `request_review` has no
->   reviewer field. The default reviewer is the server's local model; the
->   orchestrated reviewer and its backend are operator configuration.
->   Reassigning a reviewer needs an operator credential or the current
->   reviewer.
-> - **Family exclusion in `consult` is inferred; you cannot set it, only check it afterwards.** The
->   server guesses your family from transport signals (reported model,
->   harness, client hint, user agent) and skips it. If it cannot tell, a
->   Claude host is tried first. The compact response does not name the host;
->   `response_mode="full"` adds `diagnostics` with `host_id`, `provider_kind`
->   and `model_used`, and a `failover` list appears whenever the call
->   failed over to another peer. Check it if the family matters; to choose a family, use
->   `delegate_inference` (recipe a).
-> - **"Strong model" has no stated criterion.** `effort="thorough"` means the
->   operator-authorized subscription-CLI lane (Claude, Codex, Antigravity),
->   not a measured capability tier.
-> - **Behavior depends on configuration.** The agent-orchestrator extension
->   behind `consult(effort="thorough")` and `delegate_inference` is off on a
->   default install. Without it, thorough `consult` fails with a recovery
->   hint unless `allow_degraded=true`, which returns a standard local answer
->   marked `status: "degraded"` instead. `delegate_inference` has no
->   fallback. `list_inference_hosts` shows what this deployment has.
-
 ## By need
 
 | Need | Start here | Alternatives, and when |
@@ -78,6 +53,30 @@ record**. Privacy narrows the first.
 | A raw completion on a local or Hugging Face host | `call_model` *(hidden)* | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
 | Which hosts exist and are ready | `list_inference_hosts`, `describe_inference_host` *(hidden)* | readable before `start_session`; calling any inference tool needs an identity |
 | A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
+
+**Routing facts.**
+
+- **The on-record reviewer is not caller-selectable.** `request_review` has no
+  reviewer field. The default reviewer is the server's local model; the
+  orchestrated reviewer and its backend are operator configuration.
+  Reassigning a reviewer needs an operator credential or the current
+  reviewer.
+- **`consult` infers which family to exclude.** The server reads your family
+  from transport signals (reported model, harness, client hint, user agent)
+  and skips it; if it cannot tell, a Claude host is tried first. The compact
+  response does not name the host; `response_mode="full"` adds `diagnostics`
+  with `host_id`, `provider_kind` and `model_used`, and a `failover` list
+  appears whenever the call failed over to another peer. To choose a family,
+  use `delegate_inference` (recipe a).
+- **`effort="thorough"` routes to the operator-authorized subscription-CLI
+  lane** (Claude, Codex, Antigravity); it names a lane, not a measured
+  capability tier.
+- **The orchestrator lane is configuration.** The agent-orchestrator extension
+  behind `consult(effort="thorough")` and `delegate_inference` is off on a
+  default install. Without it, thorough `consult` fails with a recovery hint
+  unless `allow_degraded=true`, which returns a standard local answer marked
+  `status: "degraded"` instead. `delegate_inference` has no fallback.
+  `list_inference_hosts` shows what this deployment has.
 
 ## Recipes
 
