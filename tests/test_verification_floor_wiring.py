@@ -130,7 +130,9 @@ class TestEndToEndWiring:
         assert result["verification_floor"]["score"] == 0.0
 
     def test_flag_on_does_not_lower_a_genuine_pause(self, monkeypatch):
-        # Interior safety: a high self-attested drift pauses with the flag OFF;
+        # Interior safety: a high-complexity, low-confidence check-in pauses with
+        # the flag OFF (the self-reported ethical_drift is not an input to the
+        # drift vector, so the pause comes from complexity and confidence);
         # turning the flag ON with benign text must NOT downgrade that pause.
         _set_flag(monkeypatch, False)
         high_drift = {
