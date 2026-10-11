@@ -12,6 +12,11 @@ identity, claims and evidence, review, outcomes, and reconstruction.** Different
 harnesses retain their own execution loops while sharing an attributed record
 through MCP/HTTP.
 
+Agents use that record to carry findings, corrections, and review decisions
+across sessions and vendors. A successor can search earlier work before acting;
+the human working with it can inspect what was established and what still needs
+review.
+
 Here federation means many independent runtimes and harnesses sharing one
 operator-controlled server and authority domain; that is what single-operator
 means. The sense with several operators or authority domains is
@@ -73,42 +78,48 @@ privately controls. UNITARES Resident may become the easiest way to run a
 governed agent, but it must remain ordinary userland: no direct database access,
 no imports from Core internals, and no privileged measurement or policy path.
 
-## One governed incident, end to end
+## One task across agents
 
-The chain below illustrates the deployed checkpoint and recovery workflow.
-It is one use of the shared record, not a requirement to invoke every capability.
+A coding agent investigates a failed test, asks for review, and hands the work
+to a new process. The record connects the parts of that task:
 
-1. **An agent onboards** and receives a process identity. From here on, every
-   write it makes is attributable to that specific process, not to a display
-   name (`src/mcp_handlers/identity/`).
-2. **It checks in after each meaningful unit of work** — what it did and how
-   confident it is (`sync_state`, canonically `process_agent_update`).
-   External outcomes such as test results and exit codes arrive via
-   `record_result` and are compared against the confidence the agent claimed.
-   That gap is the calibration signal.
-3. **The server scores the check-in** into the four EISV coordinates,
-   smoothed over time; after enough check-ins the agent is graded against its
-   own history rather than a universal threshold
-   ([computation reference](EISV_COMPUTATION.md)).
-4. **A decision ladder returns one action** — proceed, guide, or pause —
-   always with a named reason and a next step (`src/monitor_decision.py`).
-5. **A paused agent is actually stopped at the governed surface:** further
-   check-ins are refused with `AGENT_PAUSED`. To resume it must submit a real
-   reflection through `self_recovery`, which is quality-checked, and may be
-   routed into a dialectic review by another healthy agent. A review
-   resolution can impose conditions — complexity limits, monitoring windows —
-   enforced on the agent's subsequent check-ins
-   (`src/mcp_handlers/dialectic/enforcement.py`).
-6. **The finding lands in the shared knowledge graph** with writer
-   attribution, where the next agent searches before acting. The whole chain
-   is replayable from the audit trail.
+1. **Bind the process.** The agent calls `start_session(force_new=true)` and
+   passes the returned `client_session_id` on later writes, so each is
+   attributable to that process.
+2. **Search earlier findings.** Before changing the code, it searches shared
+   memory and reads relevant findings, including corrections and their sources.
+3. **Keep the finding and its evidence.** It stores the diagnosis with references
+   to the code and test results. Important claims need an explicit durable
+   finding; a `sync_state` report alone does not preserve its original text.
+4. **Ask for review and join the result.** A participating reviewer records an
+   objection or a resolution. The agent addresses the objection, and the review
+   preserves the disagreement and any conditions rather than treating the
+   request itself as approval.
+5. **Record what happened.** The agent reports the bounded test outcome through
+   `record_result`. If it previously made a prediction, the outcome can bind to
+   that prediction for calibration; confidence is optional.
+6. **Hand off the work.** The successor starts with its own process identity and
+   declares lineage for a real handoff from an exited predecessor. It searches
+   the stored findings and reads the review and available outcome evidence.
+   The operator can inspect those same records. Recovery depends on what was
+   captured and what the caller is authorized to read.
+
+Meaningful `sync_state` check-ins also return an EISV behavioral state estimate
+and a policy action: proceed, guide, or pause. A pause holds governed writes
+until recovery, review, an operator, or expiry lifts it; it does not stop the
+agent's execution loop. EISV currently ships in the core path. Moving it to an
+optional module is the adopted direction, with implementation governed by the
+[staged plan](proposals/active/eisv-core-boundary-v0.md). The estimator's
+predictive validity and whether pausing improves outcomes remain research
+questions; the [computation reference](EISV_COMPUTATION.md) describes the
+current instrument.
 
 ## Who it is for, and what "done" looks like
 
-The customer is **one operator running several long-lived autonomous agents**
-— tool-using, multi-step, working over hours or days — on infrastructure that
-operator controls. It is a self-hosted, MCP-native operating layer, not an
-agent framework and not a hosted platform.
+Agents are direct users of the shared record. **One operator running several
+long-lived agents** controls the deployment and its authority boundary. The
+agents use tools and work through multi-step tasks over hours or days; the
+operator chooses their runtimes and infrastructure.
 
 The operational goal is an attributable record of claims, reported outcomes,
 reviews, and policy decisions that a later process or operator can inspect.
@@ -116,10 +127,10 @@ Configured identity gates enforce accountable writes, and policy can interrupt
 governed operations. Detecting a confidently failing agent before damage, or
 improving outcomes by pausing it, has not been established.
 
-It occupies the gap the other layers leave open: **evals** judge the model
-before deployment, **guardrails and sandboxes** judge each action as it
-happens, **UNITARES** judges the running process over time. It replaces none
-of them.
+UNITARES runs alongside **evals**, **guardrails**, and **sandboxes**, preserving
+attribution, evidence, review, and reported outcomes across the work they
+assess. Its shared record lets agents and operators inspect those outputs
+together over time.
 
 ## The distinctive guarantee
 
@@ -129,19 +140,24 @@ Every value the system emits carries a provenance label — `measured`,
 pretend to be a measurement. The full guarantee, including what honest
 failure looks like, is the [trust contract](trust-contract.md).
 
-## Limits, in one paragraph
+## Evidence and limits
 
-Apart from the pause gate on governed write surfaces, enforcement is advisory:
-the server returns an action and the client decides whether to honor it. The
-frozen 2026-08-09 outcome-lift evaluation detected no predictive lift and
-demonstrates no prevention — a non-detection whose preserved record cannot
-establish read-specific power
+The deployed product provides an attributed record of findings, review, and
+reported outcomes. Its usefulness depends on agents and integrations capturing
+the relevant evidence; it does not verify every claim automatically or establish
+complete reconstruction. Better outcomes than a structured handoff, agent
+preference, and reduced operator effort have not been established.
+
+The policy instrument has separate limits. Apart from the pause gate on
+governed write surfaces, enforcement is advisory: the server returns an action
+and the client decides whether to honor it. The frozen 2026-08-09 outcome-lift
+evaluation detected no predictive lift and demonstrates no prevention — a
+non-detection whose preserved record cannot establish read-specific power
 ([power audit](operations/falsifiability-power-audit-2026-08-23.md)), so weak
 predictive lift is unresolved rather than ruled out — and calibrated
 concealment by a motivated agent is a documented structural blind spot. The
-defensible claim today is therefore **an accountability instrument whose circuit
-breaker demonstrably actuates** — not one shown to protect anything. Producing a
-pause and delivering it are separate events: at the 2026-08-06 audit a cadence
+pause gate demonstrably actuates; protection remains untested. Producing a pause
+and delivering it are separate events: at the 2026-08-06 audit a cadence
 window suppressed 195 of 218 recorded pauses (89.4%) before they reached the
 agent, and while delivery is live (a governed pause landed 2026-08-09), the rate
 has not been re-measured since (as of 2026-10-11 the 89.4% figure is the
