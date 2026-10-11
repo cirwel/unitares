@@ -48,6 +48,11 @@ def test_classes_survive_without_the_legacy_aliases(monkeypatch):
     assert not changed, changed
 
 
-@pytest.mark.parametrize("router,action", [("agent", "list"), ("knowledge", "details")])
+@pytest.mark.parametrize("router,action", [("agent", "list"), ("knowledge", "details"), ("dialectic", "list"), ("dialectic", "get")])
 def test_declared_reads_are_retry_safe(router, action):
     assert resolve_call_operation(router, {"action": action}).retry_safe
+
+
+@pytest.mark.parametrize("action", ["quick", "request", "thesis", "antithesis", "synthesis", "reassign"])
+def test_dialectic_mutating_actions_stay_write(action):
+    assert resolve_call_operation("dialectic", {"action": action}).operation == "write"

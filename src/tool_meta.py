@@ -323,6 +323,8 @@ ACTION_OPERATIONS: Dict[Tuple[str, str], str] = {
     ("agent", "get"): "read",
     ("agent", "list"): "read",
     ("calibration", "check"): "read",
+    ("dialectic", "get"): "read",
+    ("dialectic", "list"): "read",
     ("export", "history"): "read",
     ("knowledge", "details"): "read",
     ("knowledge", "get"): "read",
