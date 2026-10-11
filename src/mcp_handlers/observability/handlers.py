@@ -8,7 +8,6 @@ from typing import Dict, Any, Sequence
 from mcp.types import TextContent
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
-from ..support.naming_helpers import disambiguate_public_handle
 from src.governance_glossary import get_eisv_glossary
 from src.logging_utils import get_logger
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -27,9 +26,29 @@ def _coerce_float_metric(value: Any, default: float) -> float:
     return coerced if math.isfinite(coerced) else default
 
 
+class AmbiguousAgentTarget(LookupError):
+    """A public identifier that names more than one agent.
+
+    Carries how many agents matched. Their identities are not listed: the
+    caller presented a public string, and which registry rows share it is not
+    something that string entitles it to.
+    """
+
+    def __init__(self, target: str, count: int):
+        super().__init__(f"'{target}' names {count} agents")
+        self.target = target
+        self.count = count
+
+
 def _resolve_agent_from_memory(target: str) -> str | None:
+    """Resolve a UUID, a label, or an id the listing printed, to a registry key.
+
+    Raises AmbiguousAgentTarget when the target is a listed identifier that
+    cannot be routed to exactly one agent.
+    """
     if target in mcp_server.agent_metadata:
         return target
+    alias_match = None
     for uuid_key, meta in mcp_server.agent_metadata.items():
         if target in (
             getattr(meta, "label", None),
@@ -37,22 +56,45 @@ def _resolve_agent_from_memory(target: str) -> str | None:
             getattr(meta, "structured_id", None),
             getattr(meta, "public_agent_id", None),
         ):
-            return uuid_key
-    # agent(action="list") shows a non-operator caller the disambiguated
-    # handle ({public_agent_id}_{uuid8}) in place of the UUID, and the observe
-    # schema sends readers to that listing to find a target. The stored
-    # public_agent_id carries no suffix, so the pass above never matches the
-    # id the listing printed. Second pass, so an exact label or stored-id match
-    # keeps precedence and this only runs on a miss.
-    for uuid_key, meta in mcp_server.agent_metadata.items():
-        handle = disambiguate_public_handle(
-            getattr(meta, "public_agent_id", None),
-            getattr(meta, "structured_id", None),
-            getattr(meta, "agent_uuid", None) or uuid_key,
-        )
-        if handle and target == handle:
-            return uuid_key
-    return None
+            alias_match = uuid_key
+            break
+    # agent(action="list") shows a non-operator caller a public identifier in
+    # place of the UUID ({public_agent_id}_{uuid8}, falling back to a label or
+    # an agent-redacted digest), and the observe schema sends readers to that
+    # listing to find a target. The stored public_agent_id carries no suffix,
+    # so the pass above never matches the id the listing printed. This pass
+    # compares against exactly what the listing prints.
+    #
+    # It also runs when the alias pass matched, because a label is set by the
+    # agent that wears it. Without this, an agent that labelled itself with
+    # another agent's listed identifier would take that agent's lookups, and
+    # the caller would read the wrong agent's state with nothing to show it.
+    # Two agents can share a listed identifier outright as well: uuid8 is the
+    # first block of the UUID, not a uniqueness guarantee. Either way the
+    # target does not name one agent, and guessing would be silent.
+    #
+    # Lazy: the lifecycle package imports widely, and this module is loaded
+    # by the consolidated router before most handlers.
+    from ..lifecycle.disclosure import listed_agent_identifier
+
+    # An agent whose listed identifier is only its own label or display name is
+    # already covered by the alias pass, with that pass's first-match rule.
+    # Counting it here would turn two identities under one plain label (a fork
+    # keeps its predecessor's) from "first match" into a refusal.
+    listed = [
+        uuid_key
+        for uuid_key, meta in mcp_server.agent_metadata.items()
+        if listed_agent_identifier(uuid_key, meta) == target
+        and target not in (getattr(meta, "label", None), getattr(meta, "display_name", None))
+    ]
+    candidates = set(listed)
+    if alias_match is not None:
+        candidates.add(alias_match)
+    if listed and len(candidates) > 1:
+        raise AmbiguousAgentTarget(target, len(candidates))
+    if alias_match is not None:
+        return alias_match
+    return listed[0] if listed else None
 
 
 def _get_observable_monitor(agent_id: str):
@@ -71,21 +113,19 @@ def _agent_display_name(agent_id: str) -> str | None:
     return None
 
 
-def _observed_agent_identifier(target: str, agent_id: str, meta: Any) -> tuple[str, bool]:
+def _observed_agent_identifier(agent_id: str, meta: Any) -> tuple[str, bool]:
     """The id to hand back for an observed agent, and whether it was redacted.
 
-    A caller who presented the UUID already holds it, so echoing it discloses
-    nothing. A caller who presented a label or a public handle does not, and
-    agent(action="list") withholds the UUID from exactly that caller, so
-    returning it here would undo the listing's redaction with one more read.
-    The listing's own check decides: the operator and the agent itself get the
-    UUID, everyone else gets the handle the listing prints, which resolves
-    back to the same agent.
+    agent(action="list") withholds the UUID from a caller who is neither the
+    operator nor the agent itself, so returning it here would undo the
+    listing's redaction with one more read. The listing's own rule decides,
+    with no exception of observe's own: the operator and the agent itself get
+    the UUID, everyone else gets the identifier the listing prints, which
+    resolves back to the same agent. That includes a caller who passed the
+    UUID. It already holds the value, so nothing is kept from it, and one rule
+    with no carve-out is the one a second surface cannot get subtly wrong.
     """
-    if target == agent_id:
-        return agent_id, False
-    # Lazy: the lifecycle package imports widely, and this module is loaded
-    # by the consolidated router before most handlers.
+    # Lazy, for the same reason as in _resolve_agent_from_memory.
     from ..lifecycle.disclosure import visible_agent_identifier_for_caller
 
     return visible_agent_identifier_for_caller(agent_id, meta)
@@ -129,7 +169,22 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     # Resolve label/UUID from the in-memory metadata snapshot only. Avoid
     # async DB lookups here: MCP/anyio request handlers can deadlock when they
     # await asyncpg/Redis work. Background loaders keep this snapshot fresh.
-    agent_id = _resolve_agent_from_memory(target)
+    try:
+        agent_id = _resolve_agent_from_memory(target)
+    except AmbiguousAgentTarget as ambiguous:
+        return [error_response(
+            f"'{target}' names {ambiguous.count} agents, so it cannot be observed "
+            "by that identifier.",
+            error_code="AMBIGUOUS_TARGET",
+            recovery={
+                "action": (
+                    "Pass a UUID if you hold one. Otherwise the identifier is "
+                    "shared or has been taken as a label by another agent; an "
+                    "operator can see which with agent(action='list')."
+                ),
+                "related_tools": ["agent"],
+            },
+        )]
     if not agent_id:
         return [error_response(
             f"Agent '{target}' not found in active metadata. They may need to check in first.",
@@ -269,7 +324,7 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         pass
 
     # Add EISV labels for API documentation
-    visible_agent_id, uuid_redacted = _observed_agent_identifier(target, agent_id, meta)
+    visible_agent_id, uuid_redacted = _observed_agent_identifier(agent_id, meta)
     response_data = {
         "agent_id": visible_agent_id,
         "observation": observation,

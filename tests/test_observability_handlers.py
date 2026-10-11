@@ -190,6 +190,13 @@ _PATCH_GET_MCP_SERVER = "src.mcp_handlers.shared.get_mcp_server"
 # handle_observe_agent
 # ---------------------------------------------------------------------------
 
+def _resolves_back(server, identifier):
+    """Resolve an identifier observe returned, the way a caller's next call would."""
+    with patch(_PATCH_SERVER, server):
+        from src.mcp_handlers.observability.handlers import _resolve_agent_from_memory
+        return _resolve_agent_from_memory(identifier)
+
+
 class TestHandleObserveAgent:
     """Tests for handle_observe_agent."""
 
@@ -206,7 +213,11 @@ class TestHandleObserveAgent:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == uuid
+        # An unrelated caller who passes the UUID is answered under the public
+        # identifier like any other: one disclosure rule, no carve-out.
+        assert data["uuid_redacted"] is True
+        assert data["agent_id"] != uuid
+        assert _resolves_back(server, data["agent_id"]) == uuid
         assert "observation" in data
         assert data["eisv_labels"]["V"]["label"] == "Valence"
         server.load_metadata_async.assert_not_awaited()
@@ -297,6 +308,104 @@ class TestHandleObserveAgent:
         data = parse_result(result)
         assert data["agent_id"] == uuid
         assert "uuid_redacted" not in data
+
+    @pytest.mark.asyncio
+    async def test_every_identifier_the_listing_prints_resolves_to_its_agent(self):
+        """Handle, label fallback and the agent-redacted digest all round-trip.
+
+        The resolver compares against what the listing prints, so the digest
+        fallback (an agent with no handle, label or display name) resolves too.
+        """
+        from src.mcp_handlers.lifecycle.disclosure import listed_agent_identifier
+
+        with_handle = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        label_only = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+        bare = "cccccccc-bbbb-cccc-dddd-eeeeeeeeeeee"
+        metadata = {
+            with_handle: _make_metadata(with_handle),
+            label_only: _make_metadata(label_only, label="Quill"),
+            bare: _make_metadata(bare),
+        }
+        metadata[with_handle].public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+        )
+
+        printed = {u: listed_agent_identifier(u, m) for u, m in metadata.items()}
+        assert printed[with_handle] == "mcp_20260416_aaaaaaaa"
+        assert printed[label_only] == "Quill"
+        assert printed[bare].startswith("agent-redacted-")
+        for uuid, identifier in printed.items():
+            assert _resolves_back(server, identifier) == uuid
+
+    @pytest.mark.asyncio
+    async def test_label_set_to_another_agents_listed_id_is_refused_not_routed(self):
+        """A label is set by the agent that wears it. One agent labelling
+        itself with another's listed identifier must not take that agent's
+        lookups: the caller would read the wrong agent's state unawares."""
+        victim = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        squatter = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+        metadata = {
+            squatter: _make_metadata(squatter, label="mcp_20260416_aaaaaaaa"),
+            victim: _make_metadata(victim),
+        }
+        metadata[victim].public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+        )
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": "mcp_20260416_aaaaaaaa"})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AMBIGUOUS_TARGET"
+        body = json.dumps(data)
+        assert victim not in body and squatter not in body
+
+    @pytest.mark.asyncio
+    async def test_two_agents_sharing_a_listed_id_are_refused(self):
+        """uuid8 is the first block of the UUID, not a uniqueness guarantee."""
+        first = "aaaaaaaa-1111-cccc-dddd-eeeeeeeeeeee"
+        second = "aaaaaaaa-2222-cccc-dddd-eeeeeeeeeeee"
+        metadata = {u: _make_metadata(u) for u in (first, second)}
+        for meta in metadata.values():
+            meta.public_agent_id = "mcp_20260416"
+        server = _build_mock_server(
+            monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+        )
+
+        with patch(_PATCH_SERVER, server), \
+             patch(_PATCH_CTX, return_value="other-caller-uuid"):
+            from src.mcp_handlers.observability.handlers import handle_observe_agent
+            result = await handle_observe_agent({"target_agent_id": "mcp_20260416_aaaaaaaa"})
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "AMBIGUOUS_TARGET"
+
+    @pytest.mark.asyncio
+    async def test_two_agents_sharing_a_plain_label_still_resolve_as_before(self):
+        """Pins what this change does NOT do. Two identities under one label
+        (a fork keeps its predecessor's label) resolved to the first match
+        before, and still do: refusing them would break label lookups on a
+        deployment that has forks. Whether a shared label should be an error
+        is a contract question this change leaves open."""
+        first = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        second = "bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee"
+        # With a handle the listing prints the handle; without one it prints
+        # the label itself. The shared label resolves either way.
+        for public_agent_id in ("mcp_20260416", None):
+            metadata = {u: _make_metadata(u, label="Quill") for u in (first, second)}
+            for meta in metadata.values():
+                meta.public_agent_id = public_agent_id
+            server = _build_mock_server(
+                monitors_dict={u: _make_monitor(u) for u in metadata}, metadata_dict=metadata,
+            )
+
+            assert _resolves_back(server, "Quill") == first
 
     @pytest.mark.asyncio
     async def test_decision_distribution_overridden_from_postgres(self):
@@ -475,7 +584,7 @@ class TestHandleObserveAgent:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == uuid
+        assert _resolves_back(server, data["agent_id"]) == uuid
 
     @pytest.mark.asyncio
     async def test_agent_id_same_as_caller_returns_error(self):
@@ -1998,7 +2107,7 @@ class TestHandleObserveRouter:
 
         data = parse_result(result)
         assert data["success"] is True
-        assert data["agent_id"] == uuid
+        assert _resolves_back(server, data["agent_id"]) == uuid
 
     @pytest.mark.asyncio
     async def test_aggregate_action_delegates(self):
