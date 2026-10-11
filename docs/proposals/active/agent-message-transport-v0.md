@@ -1,15 +1,15 @@
 # Agent message transport v0
 
-**Status: implemented, not yet deployed.** Migration 069 is unapplied on the
-live `governance` database (max version 67), and the running lease plane
-predates this branch, so `/v1/msg/*` 404s there today. This document is the
-contract for those routes. It is deliberately *not* an amendment to
-`surface-lease-plane-v0.md`: leases and messages share a node, not a contract.
+**Status: deployed** (re-read 2026-09-23, proposals audit). The live
+`governance` database is at migration 70 and `lease_plane.topic_messages`
+exists; the lease plane (`:8788`) serves `/v1/msg/*` behind its bearer gate.
+This document is the contract for those routes. It is deliberately *not* an
+amendment to `surface-lease-plane-v0.md`: leases and messages share a node, not
+a contract.
 
-> **Status re-read 2026-09-23 (proposals audit):** deployed. The live
-> `governance` database is at migration 70 and `lease_plane.topic_messages`
-> exists; the lease plane (`:8788`) serves `/v1/msg/*` behind its bearer gate.
-> The paragraph above records the state when this contract was written.
+Earlier status (as first written): implemented, not yet deployed — migration 069
+unapplied on the live `governance` database (max version 67) and `/v1/msg/*`
+404ing on the then-running lease plane; superseded by the 2026-09-23 re-read.
 
 ## 1. Why this exists
 
