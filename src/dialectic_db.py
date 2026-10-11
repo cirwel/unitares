@@ -561,6 +561,10 @@ class DialecticDB:
         resolution: Dict[str, Any],
         status: str = "resolved",
         *,
+        expected_phase: Any = _UNSET,
+        expected_updated_at: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
+        clear_facilitation: bool = False,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """Mark session as resolved or failed with resolution data.
@@ -582,17 +586,40 @@ class DialecticDB:
         mutated the row) and, when it did not, the ``existing_status``: an
         idempotent True wrote nothing, and an instrument must not record it as
         a write. The return value is unchanged.
+
+        Compare-and-set, as on `mark_awaiting_facilitation`: when
+        ``expected_phase``, ``expected_updated_at`` and/or ``expected_reviewer``
+        are passed (the values a caller decided on), the write lands only if
+        the live row still matches them. A message, phase move or reassignment
+        since that read then refuses the write (False) instead of terminating
+        the session on stale state. Omitted arguments add no predicate.
+
+        ``clear_facilitation`` also sets ``awaiting_facilitation = false`` in
+        the same statement, so a close that answers a facilitation request
+        cannot leave the request standing on the terminal row.
         """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
         phase = "resolved" if status == "resolved" else status
+        args: List[Any] = [status, phase, json.dumps(resolution), session_id]
+        cas = ""
+        if expected_phase is not _UNSET:
+            args.append(expected_phase)
+            cas += f" AND phase IS NOT DISTINCT FROM ${len(args)}"
+        if expected_updated_at is not _UNSET:
+            args.append(expected_updated_at)
+            cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        clear = ", awaiting_facilitation = false" if clear_facilitation else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
-                SET status = $1, phase = $2, resolution_json = $3, updated_at = now()
-                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed')
+                SET status = $1, phase = $2, resolution_json = $3, updated_at = now(){clear}
+                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}
                 RETURNING session_id, {self._EFFECT_TS}
-            """, status, phase, json.dumps(resolution), session_id)
+            """, *args)
             if row is not None:
                 logger.info(f"Resolved session {session_id[:16]}... with status {status}")
                 self._record_effect(detail, row)
@@ -614,6 +641,12 @@ class DialecticDB:
                     "(idempotent no-op, overwrite prevented)"
                 )
                 return True
+            if existing["status"] not in ("resolved", "failed"):
+                logger.info(
+                    f"resolve_session: {session_id[:16]}... moved since the caller "
+                    "read it (compare-and-set refused); not terminated"
+                )
+                return False
             logger.warning(
                 f"resolve_session: {session_id[:16]}... already terminal as "
                 f"{existing['status']!r}; refused overwrite to {status!r}"
@@ -1344,22 +1377,51 @@ async def update_session_awaiting_facilitation_async(session_id: str, awaiting: 
             session_id, awaiting, detail=d))
 
 
-async def resolve_session_async(session_id: str, resolution: Dict[str, Any], status: str = "resolved") -> bool:
+async def resolve_session_async(
+    session_id: str,
+    resolution: Dict[str, Any],
+    status: str = "resolved",
+    *,
+    winner: Optional[Dict[str, Any]] = None,
+    **expected: Any,
+) -> bool:
+    """Guarded terminal write (`DialecticDB.resolve_session`), recorded.
+
+    ``expected`` passes the compare-and-set predicates and
+    ``clear_facilitation`` through (see `DialecticDB.resolve_session`).
+
+    ``winner`` selects the sweeper's answer, as on the sweeper's other guarded
+    writes: when it is passed, the return is True only when THIS call wrote the
+    row, and a refusal fills it with the status found. Without it the return is
+    `resolve_session`'s, which is also True for a row already in the requested
+    state (an idempotent replay); for the sweeper that would count another
+    writer's reap as its own.
+    """
     async with record_session_write(
         kind=KIND_RESOLVE, session_id=session_id, requested=status,
     ) as rec:
         db = await get_dialectic_db()
         detail: Dict[str, Any] = {}
-        result = await db.resolve_session(session_id, resolution, status, detail=detail)
+        result = await db.resolve_session(session_id, resolution, status, detail=detail,
+                                          **expected)
         # An idempotent True (already in the requested state) wrote nothing.
         if detail.get("written") is False:
             outcome = "no_op" if result else "not_written"
         else:
             outcome = written_outcome(result)
+        if winner is not None:
+            written = detail.get("written") is True
+            winner["effect_ts"] = detail.get("effect_ts")
+            if not written:
+                existing = detail.get("existing_status")
+                winner.update(winner_status=existing, winner_reason=None,
+                              row_missing=existing is None)
+            result = written
         rec.respond(outcome=outcome, existing_status=detail.get("existing_status"),
                     effect_ts=detail.get("effect_ts"),
                     reason=(resolution or {}).get("reason")
-                    if isinstance(resolution, dict) else None)
+                    if isinstance(resolution, dict) else None,
+                    **(_winner_fields(winner) if winner is not None and not result else {}))
         return result
 
 
