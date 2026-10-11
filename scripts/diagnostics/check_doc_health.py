@@ -799,6 +799,15 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
         re.compile(
+            r"Whether EISV moves out of the core is an open proposal",
+            re.IGNORECASE,
+        ),
+        "corrected: the EISV/core direction was adopted on 2026-10-10; "
+        "staged authorization and governed-review conditions still govern "
+        "implementation — see eisv-core-boundary-v0.md and the registry",
+    ),
+    (
+        re.compile(
             r"Runtime governance for (?:heterogeneous|long-lived) AI[- ]agent"
             r"|Infrastructure for long-lived AI[- ]agent"
             r"|runtime state telemetry for long-lived AI[- ]agent",
