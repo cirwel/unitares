@@ -70,9 +70,10 @@ against interface contract `1.31.0` on 2026-10-11; use
    records an outcome that actually occurred, and `store_finding` /
    `update_finding` maintain durable shared knowledge.
 4. **Search before durable writes.** Search before `store_finding`; update or
-   supersede an existing finding instead of duplicating it. Never store
-   secrets, and label uncertain claims as uncertain rather than presenting
-   them as facts.
+   supersede an existing finding instead of duplicating it only when authorized.
+   Operator-authored architectural decisions remain operator-owned. Never store
+   secrets, and label uncertain claims as uncertain rather than presenting them
+   as facts.
 5. **Make confidence mean something.** Supply `confidence` only for a genuine
    forecast; every supplied value can mint a scored prediction. Preserve any
    returned `prediction_id` and pair it with the real outcome when one arrives.
