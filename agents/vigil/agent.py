@@ -1005,6 +1005,9 @@ class VigilAgent(GovernanceAgent):
         result: Dict[str, Any] = {
             "ran": True,
             "metrics": metrics,
+            # Flat view (nDCG@10, latency_p95, ...) for consumers; the raw
+            # harness output nests these under ``aggregate``.
+            "flat_metrics": _normalize_eval_metrics(metrics),
             "config_tag": config_tag,
             "baseline": baseline_path.name if baseline_path else None,
             "delta": {},
@@ -1242,7 +1245,8 @@ class VigilAgent(GovernanceAgent):
         # --- 4.7. KG hygiene v1: retrieval-eval step (optional) ---
         eval_result = await self._run_eval_step()
         if eval_result.get("ran"):
-            metrics = eval_result["metrics"]
+            metrics = eval_result.get("flat_metrics") or _normalize_eval_metrics(
+                eval_result["metrics"])
             delta = eval_result.get("delta", {})
             baseline_name = eval_result.get("baseline") or "no-baseline"
             ndcg = metrics.get("nDCG@10", 0.0)
@@ -1256,6 +1260,8 @@ class VigilAgent(GovernanceAgent):
             if eval_result.get("regression"):
                 findings.append("⚠ eval regression: nDCG@10 dropped beyond threshold")
                 issues += 1
+            elif eval_result.get("incomparable"):
+                findings.append(f"eval not compared: {eval_result['incomparable']}")
 
         # --- 5. Compute complexity/confidence from actual signals ---
         complexity = 0.15
@@ -1314,7 +1320,7 @@ class VigilAgent(GovernanceAgent):
             "hygiene_stale_opens": len(stale_opens),
             **stale_state,
             "archive_digest_sent_at": archive_digest_sent_at,
-            "eval_ndcg10": eval_result.get("metrics", {}).get("nDCG@10"),
+            "eval_ndcg10": eval_result.get("flat_metrics", {}).get("nDCG@10"),
             "eval_baseline": eval_result.get("baseline"),
             "eval_regression": eval_result.get("regression", False),
             "total_cycles": total_cycles,

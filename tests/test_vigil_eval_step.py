@@ -209,6 +209,9 @@ async def test_run_eval_step_regression_alert_real_nested_shape(tmp_path, monkey
 
     assert result["regression"] is True
     assert result["delta"]["nDCG@10"] == pytest.approx(-0.10, abs=1e-6)
+    # The cycle's finding text and persisted eval_ndcg10 read the flat view.
+    assert result["flat_metrics"]["nDCG@10"] == pytest.approx(0.70, abs=1e-6)
+    assert "nDCG@10" not in result["metrics"]
 
 
 @pytest.mark.asyncio
