@@ -567,3 +567,50 @@ async def test_kg_failure_on_close_is_swallowed_and_retried(
     kg.update_discovery.side_effect = None
     await background_tasks._silence_check_iteration()
     assert "lumen-uuid" in background_tasks._silence_close_checked
+
+
+@pytest.mark.asyncio
+async def test_rejected_update_is_not_marked_checked_and_is_retried(
+    isolated_silence_state, monkeypatch
+):
+    kg = _kg_with(monkeypatch, [_silence_row("lumen-uuid")])
+    kg.update_discovery.return_value = False
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" not in background_tasks._silence_close_checked
+
+    kg.update_discovery.return_value = True
+    await background_tasks._silence_check_iteration()
+    assert "lumen-uuid" in background_tasks._silence_close_checked
+    assert kg.update_discovery.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_old_silence_row_behind_many_open_rows_is_still_closed(
+    isolated_silence_state, monkeypatch
+):
+    """The lookup filters by tag, so >50 newer unrelated open rows cannot hide it."""
+    import src.knowledge_graph as kg_module
+
+    noise = [_silence_row("lumen-uuid", tags=("note",), rid=f"n{i}") for i in range(60)]
+    target = _silence_row("lumen-uuid", rid="old-silence")
+
+    async def fake_query(**kw):
+        rows = noise + [target]  # newest first: the silence row is oldest
+        if kw.get("tags"):
+            rows = [r for r in rows if set(r.tags) & set(kw["tags"])]
+        return rows[: kw.get("limit", 100)]
+
+    kg = AsyncMock()
+    kg.query = fake_query
+    kg.update_discovery = AsyncMock(return_value=True)
+    monkeypatch.setattr(kg_module, "get_knowledge_graph", AsyncMock(return_value=kg))
+    fresh = datetime.now(timezone.utc) - timedelta(seconds=30)
+    agent_metadata["lumen-uuid"] = _make_meta("lumen-uuid", "Lumen", fresh.isoformat())
+
+    await background_tasks._silence_check_iteration()
+
+    kg.update_discovery.assert_awaited_once()
+    assert kg.update_discovery.await_args.args[0] == "old-silence"

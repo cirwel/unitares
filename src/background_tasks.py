@@ -1415,14 +1415,20 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
     probe actually saw. The check-in recorder is the very field that raised the
     alarm, so it is known to be live.
 
-    Returns True when the lookup completed (including "nothing to close"),
-    False on a KG error so the caller retries on a later iteration.
+    Returns True when the lookup completed and every close landed (including
+    "nothing to close"), False on a KG error or a rejected update so the caller
+    retries on a later iteration.
     """
     try:
         from src.knowledge_graph import get_knowledge_graph
 
         graph = await get_knowledge_graph()
-        existing = await graph.query(status="open", agent_id=agent_id, limit=50)
+        # Filter by tag in the query: a plain newest-50 open-rows read could miss
+        # an older silence row behind many unrelated open findings. Tags match
+        # any-of, so the both-tags check is still applied below.
+        existing = await graph.query(
+            status="open", agent_id=agent_id, tags=["resident-silence"], limit=500
+        )
         rows = [
             d for d in existing
             if {"resident-silence", "auto-filed"} <= set(d.tags or [])
@@ -1432,6 +1438,7 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
             return True
         now = datetime.now(timezone.utc)
         reconnect_iso = reconnected_at.isoformat()
+        all_landed = True
         for d in rows:
             note = (
                 f"Resolution notes ({now.isoformat()}):\n"
@@ -1440,7 +1447,7 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
                 "cause of the silence is not established."
             )
             base = (d.details or "").rstrip()
-            await graph.update_discovery(d.id, {
+            landed = await graph.update_discovery(d.id, {
                 "status": "resolved",
                 "resolved_at": now.isoformat(),
                 "updated_at": now.isoformat(),
@@ -1454,7 +1461,9 @@ async def _close_resident_silence_findings(agent_id: str, reconnected_at: dateti
                     ),
                 },
             })
-        return True
+            if landed is False:
+                all_landed = False
+        return all_landed
     except Exception as e:
         logger.debug(f"[SILENCE] KG finding close failed: {e}")
         return False
