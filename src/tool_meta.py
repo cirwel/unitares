@@ -323,7 +323,9 @@ ACTION_OPERATIONS: Dict[Tuple[str, str], str] = {
     ("agent", "get"): "read",
     ("agent", "list"): "read",
     ("calibration", "check"): "read",
-    ("dialectic", "get"): "read",
+    # dialectic get is deliberately absent: with check_timeout=true it can
+    # reassign the reviewer, append a facilitation message and persist FAILED,
+    # and this table is keyed on (tool, action) only, so it stays write.
     ("dialectic", "list"): "read",
     ("export", "history"): "read",
     ("knowledge", "details"): "read",
