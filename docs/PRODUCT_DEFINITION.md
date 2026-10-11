@@ -16,9 +16,7 @@ Here federation means many independent runtimes and harnesses sharing one
 operator-controlled server and authority domain; that is what single-operator
 means. The sense with several operators or authority domains is
 cross-operator or multi-principal. “Kernel” describes that shared
-accountability boundary. It is not a claim that UNITARES owns execution,
-replicates state across independent servers, or has proved better outcomes than
-a structured handoff. Runtimes interoperate with each other over their own
+accountability boundary. Runtimes interoperate with each other over their own
 transports or an agent-to-agent protocol such as A2A; UNITARES is the record
 behind them, not the transport between them. Its current mechanisms map to
 five questions:
@@ -30,6 +28,10 @@ five questions:
 | **Who challenged it?** | Structured review records, disagreement, conditions, and resolution. | A reviewer must participate; requesting review is not completing review. |
 | **What happened?** | Typed outcome events and prediction binding. | Caller reports need independent evidence to establish correctness. |
 | **What can a successor recover?** | Shared-memory search, knowledge reads, review records, history export, and authorized outcome-evidence reads. | Reconstruction is assembled by clients across different retention and authorization boundaries; complete reconstruction and superiority over Git plus handoff remain unmeasured. |
+
+What the word does not claim: UNITARES does not own execution, nothing in it
+replicates state across independent servers, and it has not proved better
+outcomes than a structured handoff.
 
 See [capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md) for actual
 tool names and service prerequisites. Behavioral state estimation, policy,

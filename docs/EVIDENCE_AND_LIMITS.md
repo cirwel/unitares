@@ -8,7 +8,10 @@ explanation of what UNITARES offers.
 ## Scope in brief
 
 The public operational record comes from one long-running maintainer
-deployment. External adoption remains unvalidated. The frozen outcome-lift read
+deployment. External adoption remains unvalidated. Outside parties have
+examined and accepted parts of the work, which is recorded under
+[Outside review and acceptance](#outside-review-and-acceptance); that is not
+adoption. The frozen outcome-lift read
 did not establish predictive lift, and its preserved record lacks the cluster
 geometry needed to reconstruct read-specific power; the result is therefore
 inconclusive, not a demonstrated negative. UNITARES does not claim to prove
@@ -92,6 +95,20 @@ The maintainer deployment is **single-operator and co-development dogfood**: mos
 agents governed by the system are also building the system. Read
 [`DEPLOYMENT_DATA_CAVEAT.md`](operations/DEPLOYMENT_DATA_CAVEAT.md) before citing
 a fleet number.
+
+## Outside review and acceptance
+
+Every number in the previous section comes from one operator. Separately, the
+public record shows outside parties examining, accepting or installing the
+work. Each row is checkable at its link. None of it is adoption, and none of it
+bears on whether governance improves outcomes.
+
+| Contact | What happened | Record |
+|---|---|---|
+| Outside security report | EQSTLab (credited finders EQSTLab and 2REBCat) privately reported an arbitrary file write through path traversal in export filenames. It was fixed in 3.2.0 and published as a high-severity advisory on 2026-10-05 after coordinated disclosure. | [GHSA-fgfh-wj4j-4xgj](https://github.com/cirwel/unitares/security/advisories/GHSA-fgfh-wj4j-4xgj) |
+| Maintainer-disclosed vulnerability | The trusted-network REST/WebSocket bypass was reachable from any browser page through CSRF or DNS rebinding. The maintainer found it, fixed it in 3.2.0 and published a high-severity advisory the same day. | [GHSA-mph4-qq2r-pc5v](https://github.com/cirwel/unitares/security/advisories/GHSA-mph4-qq2r-pc5v) |
+| Upstream acceptance | Hermes Agent merged the UNITARES lifecycle plugin into its plugin catalog on 2026-09-26, and later version bumps through 0.3.3 on 2026-10-06. An unrelated Telegram fix from the maintainer was merged there on 2026-05-03. | [catalog entry](https://github.com/NousResearch/hermes-agent/commit/5c72a58543), [0.3.3 bump](https://github.com/NousResearch/hermes-agent/commit/8d4e867b54), [Telegram fix](https://github.com/NousResearch/hermes-agent/commit/222767e5e8) |
+| Public package | `unitares-sdk`, the agent-side contract, is published on PyPI from CI by trusted publisher. | [PyPI](https://pypi.org/project/unitares-sdk/) |
 
 ## What is built
 
