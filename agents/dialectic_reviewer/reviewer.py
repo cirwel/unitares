@@ -1195,12 +1195,14 @@ async def continue_after_disagreement(
     unfiled: Optional[tuple[dict[str, Any], Verdict, dict[str, Any]]] = None
 
     while True:
-        # An uncertain filing must be reconciled even at the old response
-        # boundary. Its retries remain bounded by the total lifetime cap.
-        poll_deadline = hard_deadline if unfiled is not None else deadline
-        remaining = poll_deadline - time.monotonic()
-        if remaining <= 0:
+        now = time.monotonic()
+        if now >= hard_deadline:
             return current_verdict
+        # Check once after the response window closes: an answer may have
+        # arrived during the last sleep or while a prior read was in flight.
+        # Uncertain filings continue reconciling within the total budget.
+        final_poll = unfiled is None and now >= deadline
+        poll_deadline = hard_deadline if unfiled is not None else deadline
 
         try:
             session_data = await client.call_tool(
@@ -1210,6 +1212,8 @@ async def continue_after_disagreement(
             read_failures += 1
             log = logger.warning if read_failures == 1 else logger.debug
             log("Dialectic continuation read failed: %r", exc)
+            if final_poll:
+                return current_verdict
             await asyncio.sleep(min(poll_s, max(0.0, poll_deadline - time.monotonic())))
             continue
 
@@ -1251,11 +1255,17 @@ async def continue_after_disagreement(
             return current_verdict
 
         if paused_response is None:
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if final_poll:
+                    return current_verdict
+                continue  # the prior read crossed the window; take its final poll
+            await asyncio.sleep(min(poll_s, remaining))
             continue
 
-        filing_deadline = hard_deadline if unfiled is not None else deadline
-        remaining = filing_deadline - time.monotonic()
+        # The reply was found by the window's final poll. Read latency must
+        # not take away the remaining lifetime available for its review.
+        remaining = hard_deadline - time.monotonic()
         if remaining <= 0:
             return current_verdict
         if unfiled is not None:

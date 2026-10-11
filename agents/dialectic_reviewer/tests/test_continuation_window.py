@@ -39,6 +39,10 @@ class _World:
         self.filings = 0
         self.model_calls = 0
         self.model_latency = 0.0
+        self.get_latency = 0.0
+        self.response_read_latency = 0.0
+        self.sleep_overshoot = 0.0
+        self.filing_times = []
 
     def tick(self):
         while self.answers_at and self.now >= self.answers_at[0]:
@@ -50,11 +54,15 @@ class _World:
         if args["action"] == "get":
             if self.filings and self.reconciliation_reads_fail:
                 raise ConnectionError("server unavailable during reconciliation")
+            self.now += self.get_latency
+            if self.transcript[-1]["agent_id"] == PAUSED:
+                self.now += self.response_read_latency
             return {"paused_agent_id": PAUSED, "reviewer_agent_id": REVIEWER,
                     "phase": "synthesis", "synthesis_round": len(self.transcript),
                     "max_synthesis_rounds": 50, "transcript": list(self.transcript)}
         assert args["action"] == "synthesis"
         self.filings += 1
+        self.filing_times.append(self.now)
         self.transcript.append(_msg(REVIEWER, args["agrees"]))
         if self.lose_synthesis_replies:
             raise ConnectionError("synthesis landed but its reply was lost")
@@ -69,7 +77,7 @@ def _run(monkeypatch, world, total_wait_factor=None):
     monkeypatch.setattr(r.time, "monotonic", lambda: world.now)
 
     async def fake_sleep(seconds):
-        world.now += seconds
+        world.now += seconds + world.sleep_overshoot
 
     monkeypatch.setattr(r.asyncio, "sleep", fake_sleep)
 
@@ -99,7 +107,7 @@ def _run(monkeypatch, world, total_wait_factor=None):
 
 
 @pytest.mark.parametrize("lose_synthesis_replies", [False, True])
-@pytest.mark.parametrize("first_answer", [60.0, 90.0])
+@pytest.mark.parametrize("first_answer", [60.0, 90.0, 99.0])
 def test_an_answer_after_the_first_budget_is_still_reconsidered(
     monkeypatch, lose_synthesis_replies, first_answer
 ):
@@ -116,7 +124,7 @@ def test_the_reviewer_still_exits_one_window_after_its_last_filing(monkeypatch, 
     world = _World(answers_at=[60.0, 500.0], lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world)
     assert world.filings == 1  # the 500s answer is nobody's to read
-    assert world.now >= 60.0 + WAIT_S
+    assert 60.0 + WAIT_S <= world.now <= 60.0 + WAIT_S + POLL_S
 
 
 @pytest.mark.parametrize("lose_synthesis_replies", [False, True])
@@ -128,11 +136,13 @@ def test_restarting_the_wait_is_bounded_by_the_total_factor(monkeypatch, lose_sy
     assert world.now <= WAIT_S * 3 + POLL_S + 1
 
 
-def test_reconciliation_read_outage_stops_at_the_hard_deadline(monkeypatch):
-    world = _World(answers_at=[90.0], lose_synthesis_replies=True,
+@pytest.mark.parametrize("lose_synthesis_replies", [False, True])
+def test_read_outage_stops_at_the_applicable_deadline(monkeypatch, lose_synthesis_replies):
+    world = _World(answers_at=[90.0], lose_synthesis_replies=lose_synthesis_replies,
                    reconciliation_reads_fail=True)
     _run(monkeypatch, world, total_wait_factor=3)
-    assert world.now == WAIT_S * 3
+    expected_end = WAIT_S * 3 if lose_synthesis_replies else 90.0 + WAIT_S
+    assert world.now == expected_end
     assert world.filings == world.model_calls == 1
 
 
@@ -141,7 +151,7 @@ def test_a_timely_answer_can_be_reviewed_after_its_response_window(monkeypatch):
     world.model_latency = 20.0
     _run(monkeypatch, world, total_wait_factor=3)
     assert world.filings == world.model_calls == 1
-    assert world.now <= WAIT_S * 3
+    assert world.filing_times == [110.0]
 
 
 def test_model_work_cannot_overrun_the_hard_deadline(monkeypatch, caplog):
@@ -152,3 +162,27 @@ def test_model_work_cannot_overrun_the_hard_deadline(monkeypatch, caplog):
     assert world.filings == 0
     assert verdict.agrees is False
     assert "continuation model exhausted" in caplog.text
+
+
+def test_a_reply_during_the_last_sleep_survives_scheduler_overshoot(monkeypatch):
+    world = _World(answers_at=[99.5])
+    world.sleep_overshoot = 1.0
+    _run(monkeypatch, world, total_wait_factor=3)
+    assert world.filings == world.model_calls == 1
+    assert world.filing_times == [101.0]
+
+
+def test_a_read_crossing_the_response_deadline_keeps_the_retrieved_reply(monkeypatch):
+    world = _World(answers_at=[90.0])
+    world.response_read_latency = 20.0
+    _run(monkeypatch, world, total_wait_factor=3)
+    assert world.filings == world.model_calls == 1
+    assert world.filing_times == [110.0]
+
+
+def test_an_empty_read_crossing_the_deadline_gets_a_final_poll(monkeypatch):
+    world = _World(answers_at=[99.0])
+    world.get_latency = 13.0
+    _run(monkeypatch, world, total_wait_factor=3)
+    assert world.filings == world.model_calls == 1
+    assert world.filing_times == [118.0]
