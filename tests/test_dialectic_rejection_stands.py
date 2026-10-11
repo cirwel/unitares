@@ -9,7 +9,7 @@ never changed an outcome.
 What these tests pin:
 
 * (a) the paused agent answers after the reviewer's window closed: terminal
-  ``rejection_stands``, not awaiting facilitation;
+  ``rejection_stands``, not awaiting facilitation (closed by the sweeper);
 * (b) the window is still open: nothing changes;
 * (c) the exit never resolves in the paused agent's favour;
 * (d) the closed row classifies as a standing disagreement, never RESOLVED.
@@ -357,8 +357,7 @@ def _live_session(rejected_minutes_ago, *, awaiting=False, extra=()):
     return s
 
 
-async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=True,
-                  add_message_error=False):
+async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=True):
     from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
     pg_resolve = AsyncMock(return_value=resolve_ok)
@@ -369,8 +368,7 @@ async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=Tru
     with patch(f"{DIALECTIC}.mcp_server", server), \
          patch("src.mcp_handlers.shared.get_mcp_server", return_value=server), \
          patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
-         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock,
-               side_effect=RuntimeError("pg down") if add_message_error else None), \
+         patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
          patch(f"{DIALECTIC}.beam_update_phase", new_callable=AsyncMock, return_value=None), \
          patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
@@ -395,114 +393,25 @@ async def _submit(session, agent_id, agrees, *, beam_result=None, resolve_ok=Tru
 
 class TestSynthesisHandler:
     @pytest.mark.asyncio
-    async def test_a_late_concession_closes_the_session(self):
+    async def test_the_handler_routes_to_facilitation_and_writes_no_terminal(self):
+        """The exit is the sweeper's: it compare-and-sets the row it assessed.
+
+        The handler's terminal path goes through BEAM, whose resolve has no
+        compare-and-set predicates and answers `origin="new"` even when its
+        guarded row write found the row already terminal. So even a late
+        concession, past the reviewer's window, is answered as before; the
+        sweeper closes it within one cycle.
+        """
         session = _live_session(90)
 
         data, m = await _submit(session, PAUSED, True)
 
-        assert data["success"] is False
         assert data["error_code"] == "SELF_CLEAR_REFUSED"
-        assert data["session_closed"] is True
-        assert data["terminal_outcome"] == REJECTION_STANDS
-        assert data["awaiting_facilitation"] is False
-        assert "operator_next_call" not in data["recovery"]
-        assert session.phase == DialecticPhase.FAILED
-        assert session.awaiting_facilitation is False
-        # (c) the only terminal write is `failed`, carrying the record.
-        m.pg_resolve.assert_awaited_once()
-        kwargs = m.pg_resolve.await_args.kwargs
-        assert kwargs["status"] == "failed"
-        assert kwargs["resolution"]["reason"] == REJECTION_STANDS
-        assert kwargs["resolution"]["verdict_acceptance"] == ACCEPTED
-        assert kwargs["resolution"]["closed_by"] == "synthesis_handler"
+        assert session.phase == DialecticPhase.SYNTHESIS
+        assert session.awaiting_facilitation is True
+        m.pg_resolve.assert_not_awaited()
+        m.beam.assert_not_awaited()
         m.execute.assert_not_awaited()
-        m.flag.assert_any_await(session.session_id, False)
-
-    @pytest.mark.asyncio
-    async def test_b_inside_the_window_keeps_awaiting_facilitation(self):
-        session = _live_session(10)
-
-        data, m = await _submit(session, PAUSED, True)
-
-        assert data["error_code"] == "SELF_CLEAR_REFUSED"
-        assert "session_closed" not in data
-        assert "action='reassign'" in data["recovery"]["operator_next_call"]
-        assert session.phase == DialecticPhase.SYNTHESIS
-        assert session.awaiting_facilitation is True
-        m.pg_resolve.assert_not_awaited()
-        m.beam.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_reviewer_still_rejecting_a_reply_closes_the_session(self):
-        session = _live_session(30, awaiting=True,
-                                extra=[("synthesis", PAUSED, 20, True)])
-
-        data, m = await _submit(session, REVIEWER, False)
-
-        assert data["success"] is True
-        assert data["terminal_outcome"] == REJECTION_STANDS
-        assert data["phase"] == "failed"
-        assert data["resolution"]["last_word_basis"] == BASIS_REVIEWER_ANSWERED
-        assert session.phase == DialecticPhase.FAILED
-        assert m.pg_resolve.await_args.kwargs["status"] == "failed"
-
-    @pytest.mark.asyncio
-    async def test_beam_owns_the_write_when_it_answers(self):
-        session = _live_session(90)
-
-        data, m = await _submit(
-            session, PAUSED, True,
-            beam_result={"ok": True, "status": "failed", "origin": "new"},
-        )
-
-        assert data["terminal_outcome"] == REJECTION_STANDS
-        assert m.beam.await_args.kwargs["status"] == "failed"
-        assert m.beam.await_args.kwargs["resolution"]["reason"] == REJECTION_STANDS
-        m.pg_resolve.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    @pytest.mark.parametrize("status", ["resolved", "failed"])
-    async def test_a_row_another_writer_finished_is_not_claimed(self, status):
-        """BEAM answers already_terminal with the row's own status and wrote
-        nothing: the row says something else, so no rejection_stands claim."""
-        session = _live_session(90)
-
-        data, m = await _submit(
-            session, PAUSED, True,
-            beam_result={"ok": True, "status": status, "origin": "already_terminal"},
-        )
-
-        assert "session_closed" not in data
-        assert session.phase == DialecticPhase.SYNTHESIS
-
-    @pytest.mark.asyncio
-    async def test_the_python_fallback_asks_for_the_strict_answer(self):
-        session = _live_session(90)
-
-        data, m = await _submit(session, PAUSED, True)
-
-        assert "winner" in m.pg_resolve.await_args.kwargs
-
-    @pytest.mark.asyncio
-    async def test_no_close_when_the_synthesis_was_not_persisted(self):
-        """The close cites the transcript, so the deciding message must be in it."""
-        session = _live_session(90)
-
-        data, m = await _submit(session, PAUSED, True, add_message_error=True)
-
-        assert "session_closed" not in data
-        m.pg_resolve.assert_not_awaited()
-        m.beam.assert_not_awaited()
-
-    @pytest.mark.asyncio
-    async def test_a_refused_write_falls_back_to_the_existing_path(self):
-        session = _live_session(90)
-
-        data, m = await _submit(session, PAUSED, True, resolve_ok=False)
-
-        assert "session_closed" not in data
-        assert session.phase == DialecticPhase.SYNTHESIS
-        assert session.awaiting_facilitation is True
 
 
 # ---------------------------------------------------------------------------
@@ -594,6 +503,47 @@ class TestSweeper:
         assert result["resolved_count"] == 1
         assert result["write_attempt_count"] == result["write_succeeded_count"] == 1
         assert any(d.get("reason") == REJECTION_STANDS for d in result["details"])
+
+    @pytest.mark.asyncio
+    async def test_a_late_concession_closes_within_one_sweep(self, _sweeper_io):
+        """(a) through the writer: the reply came after the reviewer stopped
+        listening, and the row was touched minutes ago (no 2h idle needed)."""
+        from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
+
+        write = AsyncMock(return_value=True)
+        late = _messages(reply_minutes_after_rejection=90, rejected_minutes_ago=100)
+        with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+                   new_callable=AsyncMock, return_value=[_row()]), \
+             patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
+                   return_value=_session_row(late)), \
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
+             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
+                   new_callable=AsyncMock):
+            result = await _auto_resolve_stuck_sessions()
+
+        assert write.await_args.args[2] == "failed"
+        assert write.await_args.args[1]["verdict_acceptance"] == ACCEPTED
+        assert result["resolved_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_reviewer_still_rejecting_a_reply_closes(self, _sweeper_io):
+        from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
+
+        now = datetime.now(timezone.utc)
+        msgs = _messages(reply_minutes_after_rejection=5, rejected_minutes_ago=20)
+        msgs.append({"message_type": "synthesis", "agent_id": REVIEWER, "agrees": False,
+                     "timestamp": now - timedelta(minutes=2), "observed_metrics": None})
+        write = AsyncMock(return_value=True)
+        with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+                   new_callable=AsyncMock, return_value=[_row()]), \
+             patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
+                   return_value=_session_row(msgs)), \
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
+             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
+                   new_callable=AsyncMock):
+            await _auto_resolve_stuck_sessions()
+
+        assert write.await_args.args[1]["last_word_basis"] == BASIS_REVIEWER_ANSWERED
 
     @pytest.mark.asyncio
     async def test_reviewer_still_inside_its_lifetime_is_left_open(self, _sweeper_io):

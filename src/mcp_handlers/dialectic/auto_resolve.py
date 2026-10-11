@@ -502,13 +502,14 @@ async def _close_standing_rejections(
 ) -> set:
     """Close facilitation-awaiting sessions whose reviewer rejection stands.
 
-    The sweeper half of the facilitation exit (operator decision 2026-10-11;
-    ``rejection_stands.py``). The synthesis handler closes a session at the
-    moment a submission settles it; this covers the sessions no submission
-    will settle: the reviewer's continuation window ended with the rejection
-    standing and either no reply from the paused agent, or a timely reply the
-    reviewer never answered (a restart killed it, or its reconsideration formed
-    no judgment and it kept the rejection without filing).
+    The facilitation exit (operator decision 2026-10-11;
+    ``rejection_stands.py``), and its only writer. It runs every cycle over
+    every facilitation-awaiting SYNTHESIS row, not just the stuck ones, so a
+    session closes within one sweep of the reviewer's last word: the reviewer
+    reconsidered a reply and still rejects, the paused agent answered after
+    the reviewer's window ended, the window ended with no reply, or a timely
+    reply was never answered (a restart killed the reviewer, or its
+    reconsideration formed no judgment and it kept the rejection unfiled).
 
     Accounted as a ``reap_failed`` guarded write: it ends the session
     ``failed``, which is what that write name means to the collision report,

@@ -917,7 +917,8 @@ class DialecticSession:
                     "replacement reviewer with dialectic(action='reassign'). The "
                     "session remains awaiting facilitation until one of those occurs, "
                     "or until the reviewer has had its last word with the rejection "
-                    "standing, when it closes as rejection_stands (never an approval)."
+                    "standing, when the dialectic sweep closes it as rejection_stands "
+                    "(never an approval)."
                 ),
             }
 

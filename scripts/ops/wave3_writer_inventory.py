@@ -114,14 +114,6 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
             "resolution, flag clear (via=sweeper; a reap_failed guarded write)"
         ),
     },
-    (HANDLERS, "_close_if_rejection_stands"): {
-        "calls": ("beam_resolve", "resolve_session_async",
-                  "update_session_awaiting_facilitation_async"),
-        "writer": (
-            "synthesis facilitation exit: terminal failed with a rejection_stands "
-            "resolution (BEAM, Python fallback), flag clear"
-        ),
-    },
     (HANDLERS, "_apply_reviewer_reassignment"): {
         "calls": ("add_message_async", "reopen_session_async", "beam_update_reviewer",
                   "update_session_reviewer_async",

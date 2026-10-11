@@ -47,9 +47,15 @@ WHAT IT NEVER DOES
   verdict at all) or a non-orchestrated reviewer's window, which has no declared
   bound to end. Those keep the existing facilitation path.
 
-The assessment here is pure: callers pass the transcript, the clock, and the
-reviewer-kind test. The writes live with the callers (the synthesis handler and
-the stuck-session sweeper) because each already owns a terminal-write path.
+The assessment here is pure: the caller passes the transcript, the clock, and
+the reviewer-kind test. The one caller that writes is the stuck-session sweeper
+(`auto_resolve._close_standing_rejections`), every cycle, regardless of idle
+time, so a session closes within one sweep of its reviewer's last word. The
+sweeper's write is a compare-and-set against the row it assessed. The synthesis
+handler deliberately does not write this exit: its terminal path is BEAM's
+resolve, which has no compare-and-set predicates and reports ``origin="new"``
+even when its guarded row write found the row already terminal, so a close
+from there could land on, or claim, a row that had moved on.
 """
 
 from __future__ import annotations

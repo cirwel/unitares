@@ -15,11 +15,6 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from .wait_assessment import assess_wait, suggests_facilitation
-from .rejection_stands import (
-    REJECTION_STANDS,
-    assess_rejection_stands,
-    continuation_window_s,
-)
 
 # Import type definitions
 
@@ -154,7 +149,6 @@ from .calibration import (
 )
 from .resolution import agent_pause_is_live, execute_resolution
 from .beam_resolve_client import (
-    ALREADY_TERMINAL_ORIGIN,
     beam_resolve,
     beam_create_session,
     beam_update_phase,
@@ -268,152 +262,6 @@ async def _set_awaiting_facilitation(
         await _emit_dialectic_event(
             "dialectic_facilitation_needed", session, reason=reason
         )
-
-
-async def _close_if_rejection_stands(
-    session: DialecticSession, result: Dict[str, Any]
-) -> bool:
-    """Close a facilitation-awaiting session whose reviewer rejection stands.
-
-    The facilitation exit (operator decision 2026-10-11; see
-    ``rejection_stands.py``). Runs after a synthesis was recorded. When the
-    session is awaiting facilitation, the reviewer's rejection stands, and the
-    reviewer has had its last word, the session is committed ``failed`` with a
-    ``rejection_stands`` resolution and its facilitation flag is cleared, so it
-    no longer waits on an operator. Otherwise nothing changes.
-
-    Uses the handler's existing terminal-write path: BEAM owns the write when
-    ``UNITARES_DIALECTIC_BEAM_RESOLUTION`` is on (``POST /v1/dialectic/resolve``
-    already accepts ``status="failed"`` with any resolution map), with the
-    guarded Python write as the fallback. Never resolves: the only status it
-    writes is ``failed``. Returns True when the session is now closed; the
-    caller's ``result`` then carries the outcome.
-    """
-    if session.phase != DialecticPhase.SYNTHESIS:
-        return False
-    if not bool(getattr(session, "awaiting_facilitation", False)):
-        return False
-
-    wait_s, total_s = continuation_window_s()
-    snapshot = {"transcript": session.transcript}
-    payload = assess_rejection_stands(
-        session.transcript,
-        paused_agent_id=session.paused_agent_id,
-        reviewer_agent_id=session.reviewer_agent_id,
-        awaiting_facilitation=True,
-        now=datetime.now(timezone.utc),
-        is_orchestrated=lambda rid: _has_orchestrated_reviewer_budget(snapshot, rid),
-        wait_s=wait_s,
-        total_s=total_s,
-    )
-    if payload is None:
-        return False
-    payload["closed_by"] = "synthesis_handler"
-
-    session_id = session.session_id
-    try:
-        beam_result = await beam_resolve(
-            session_id=session_id,
-            paused_agent_id=session.paused_agent_id,
-            reviewer_agent_id=session.reviewer_agent_id,
-            resolution=payload,
-            status="failed",
-        )
-        if beam_result is not None:
-            # An already-terminal answer means another writer finished the
-            # row first (a liveness reap, a resolution) and this payload was
-            # NOT written. Claiming rejection_stands there would describe a
-            # row that says something else.
-            written = beam_result.get("origin") != ALREADY_TERMINAL_ORIGIN
-        else:
-            with session_write_via("python_fallback", site="rejection_stands"):
-                # `winner` selects the strict answer: True only when THIS call
-                # wrote the row, not for a row some other writer already failed.
-                written = await pg_resolve_session(
-                    session_id=session_id, resolution=payload, status="failed",
-                    winner={},
-                )
-    except Exception as e:
-        logger.warning(f"Could not close {session_id[:16]} as rejection_stands: {e}")
-        return False
-    if not written:
-        return False
-
-    session.phase = DialecticPhase.FAILED
-    session.awaiting_facilitation = False
-    try:
-        # A second statement, not part of the terminal write: BEAM's row write
-        # is fixed SQL. If it fails, the row keeps the flag on a failed row,
-        # the state every liveness-reaped session carries today, and an
-        # operator reassign can still revive it.
-        await pg_update_awaiting_facilitation(session_id, False)
-    except Exception as e:
-        logger.warning(
-            f"Could not clear awaiting_facilitation after rejection_stands close: {e}"
-        )
-    try:
-        # The terminal row is written above; the snapshot must not write again.
-        await save_session(session, defer_terminal=True)
-    except Exception as e:
-        logger.warning(f"Could not save session after rejection_stands close: {e}")
-    await _emit_dialectic_event(
-        "dialectic_resolved",
-        session,
-        action=REJECTION_STANDS,
-        last_word_basis=payload.get("last_word_basis"),
-        verdict_acceptance=payload.get("verdict_acceptance"),
-    )
-    result.update(
-        phase=DialecticPhase.FAILED.value,
-        awaiting_facilitation=False,
-        session_closed=True,
-        terminal_outcome=REJECTION_STANDS,
-        resolution=payload,
-    )
-    return True
-
-
-_REJECTION_STANDS_CLOSED_MESSAGE = (
-    "The reviewer's standing verdict on this session is a rejection, and the "
-    "reviewer has had its last word, so no one remains who can revise it. The "
-    "session is now closed with the rejection standing (rejection_stands). "
-    "This is not an approval."
-)
-
-
-def _rejection_stands_details(session_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "session_id": session_id,
-        "session_closed": True,
-        "terminal_outcome": REJECTION_STANDS,
-        "phase": result.get("phase"),
-        "awaiting_facilitation": False,
-        "resolution": result.get("resolution"),
-    }
-
-
-def _rejection_stands_recovery() -> Dict[str, Any]:
-    return {
-        "action": (
-            "Your response WAS recorded in the transcript. The session is now "
-            "closed: the reviewer's rejection stands and its response window has "
-            "ended, so there is no reviewer left to answer and no operator step "
-            "pending. Do not retry: the session is terminal."
-        ),
-        "what_was_recorded": (
-            "This synthesis is in the transcript under your agent_id. The "
-            "resolution records whether you replied and how (verdict_acceptance), "
-            "as a description only; the session was closed because the reviewer "
-            "had its last word, not because of your reply."
-        ),
-        "what_you_can_do": [
-            (
-                "Paused agent: read the reviewer's final synthesis for the "
-                "conditions it set; the rejection stands."
-            ),
-        ],
-        "related_tools": ["dialectic"],
-    }
 
 
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
@@ -3783,7 +3631,6 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     arguments=arguments,
                 )]
 
-            synthesis_persisted = False
             if result.get("success"):
                 # Persist synthesis message to PostgreSQL
                 # NOTE: Defer phase update for converged sessions until after finalize_resolution
@@ -3805,7 +3652,6 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         agrees=agrees,
                         observed_metrics=synth_observed_metrics or None,
                     )
-                    synthesis_persisted = True
                     _blocked = result.get("blocked") == "reviewer_objection_stands"
                     # Skip the phase write when blocked: the phase has not changed (it
                     # stays SYNTHESIS) and `update_session_phase` sets
@@ -3839,22 +3685,6 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     await save_session(session, defer_terminal=bool(result.get("converged")))
                 except Exception as e:
                     logger.warning(f"Could not save session after synthesis: {e}")
-
-            # Facilitation exit (operator decision 2026-10-11). A recorded,
-            # non-converging synthesis may leave a facilitation-awaiting session
-            # whose reviewer has had its last word over a standing rejection:
-            # the paused agent answered after the reviewer's window ended, or
-            # the reviewer reconsidered a reply and still rejects. Close it now
-            # as `rejection_stands` instead of holding it four hours for an
-            # operator who never changed one of these outcomes. Never resolves.
-            # Only once the deciding synthesis is durably recorded: the close
-            # cites the transcript, so the transcript must hold what it cites.
-            if (
-                result.get("success")
-                and not result.get("converged")
-                and synthesis_persisted
-            ):
-                await _close_if_rejection_stands(session, result)
 
             # If converged, finalize resolution
             if result.get("success") and result.get("converged"):
@@ -4164,19 +3994,12 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # answered it point by point. An error envelope that understates
                 # what happened is the same defect class as a success envelope
                 # that overstates it.
-                #
-                # When the facilitation exit closed the session just above, the
-                # refusal still stands but there is no reviewer left to answer
-                # and no operator step pending: say that instead.
-                closed = result.get("terminal_outcome") == REJECTION_STANDS
                 return [error_response(
-                    (_REJECTION_STANDS_CLOSED_MESSAGE if closed else None)
-                    or result.get("reason") or result.get("error")
+                    result.get("reason") or result.get("error")
                     or "Refused: the reviewer's standing verdict is a rejection.",
                     error_code="SELF_CLEAR_REFUSED",
                     error_category="governance_refusal",
-                    details=_rejection_stands_details(session_id, result) if closed else None,
-                    recovery=_rejection_stands_recovery() if closed else {
+                    recovery={
                         "action": (
                             "Your response WAS recorded in the transcript and the "
                             "reviewer can answer it. What is refused is resolving "
