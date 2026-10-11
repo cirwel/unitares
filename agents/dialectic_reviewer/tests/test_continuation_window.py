@@ -30,10 +30,11 @@ def _msg(agent, agrees):
 class _World:
     """A virtual clock plus a session whose paused agent answers on a schedule."""
 
-    def __init__(self, answers_at, *, lose_synthesis_replies=False):
+    def __init__(self, answers_at, *, lose_synthesis_replies=False, reconciliation_reads_fail=False):
         self.now = 0.0
         self.answers_at = list(answers_at)  # clock times of paused-agent answers
         self.lose_synthesis_replies = lose_synthesis_replies
+        self.reconciliation_reads_fail = reconciliation_reads_fail
         self.transcript = [_msg(REVIEWER, False)]  # the first rejection, at t=0
         self.filings = 0
         self.model_calls = 0
@@ -46,6 +47,8 @@ class _World:
     async def call_tool(self, name, args, **kw):
         self.tick()
         if args["action"] == "get":
+            if self.filings and self.reconciliation_reads_fail:
+                raise ConnectionError("server unavailable during reconciliation")
             return {"paused_agent_id": PAUSED, "reviewer_agent_id": REVIEWER,
                     "phase": "synthesis", "synthesis_round": len(self.transcript),
                     "max_synthesis_rounds": 50, "transcript": list(self.transcript)}
@@ -86,10 +89,13 @@ def _run(monkeypatch, world, total_wait_factor=None):
 
 
 @pytest.mark.parametrize("lose_synthesis_replies", [False, True])
-def test_an_answer_after_the_first_budget_is_still_reconsidered(monkeypatch, lose_synthesis_replies):
-    # Answers at 60s and 150s: the second is past the original 100s budget but
-    # within 100s of the reviewer's reply to the first.
-    world = _World(answers_at=[60.0, 150.0], lose_synthesis_replies=lose_synthesis_replies)
+@pytest.mark.parametrize("first_answer", [60.0, 90.0])
+def test_an_answer_after_the_first_budget_is_still_reconsidered(
+    monkeypatch, lose_synthesis_replies, first_answer
+):
+    # The 150s answer is past the original budget but inside the next window.
+    # A first answer at 90s makes a lost reply reach the old deadline exactly.
+    world = _World(answers_at=[first_answer, 150.0], lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world)
     assert world.filings == 2
     assert world.model_calls == 2  # reconciliation neither re-files nor re-judges
@@ -110,3 +116,11 @@ def test_restarting_the_wait_is_bounded_by_the_total_factor(monkeypatch, lose_sy
                    lose_synthesis_replies=lose_synthesis_replies)
     _run(monkeypatch, world, total_wait_factor=3)
     assert world.now <= WAIT_S * 3 + POLL_S + 1
+
+
+def test_reconciliation_read_outage_stops_at_the_hard_deadline(monkeypatch):
+    world = _World(answers_at=[90.0], lose_synthesis_replies=True,
+                   reconciliation_reads_fail=True)
+    _run(monkeypatch, world, total_wait_factor=3)
+    assert world.now == WAIT_S * 3
+    assert world.filings == world.model_calls == 1

@@ -1195,7 +1195,10 @@ async def continue_after_disagreement(
     unfiled: Optional[tuple[dict[str, Any], Verdict, dict[str, Any]]] = None
 
     while True:
-        remaining = deadline - time.monotonic()
+        # An uncertain filing must be reconciled even at the old response
+        # boundary. Its retries remain bounded by the total lifetime cap.
+        poll_deadline = hard_deadline if unfiled is not None else deadline
+        remaining = poll_deadline - time.monotonic()
         if remaining <= 0:
             return current_verdict
 
@@ -1207,7 +1210,7 @@ async def continue_after_disagreement(
             read_failures += 1
             log = logger.warning if read_failures == 1 else logger.debug
             log("Dialectic continuation read failed: %r", exc)
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            await asyncio.sleep(min(poll_s, max(0.0, poll_deadline - time.monotonic())))
             continue
 
         if not isinstance(session_data, dict):
@@ -1251,7 +1254,8 @@ async def continue_after_disagreement(
             await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
             continue
 
-        remaining = deadline - time.monotonic()
+        filing_deadline = hard_deadline if unfiled is not None else deadline
+        remaining = filing_deadline - time.monotonic()
         if remaining <= 0:
             return current_verdict
         if unfiled is not None:
@@ -1325,7 +1329,7 @@ async def continue_after_disagreement(
             # files twice or judges twice.
             logger.warning("Dialectic continuation synthesis did not complete: %r", exc)
             unfiled = (paused_response, next_verdict, next_provenance)
-            await asyncio.sleep(min(poll_s, max(0.0, deadline - time.monotonic())))
+            await asyncio.sleep(min(poll_s, max(0.0, hard_deadline - time.monotonic())))
             continue
         unfiled = None
         if isinstance(result, dict) and result.get("success") is False:
