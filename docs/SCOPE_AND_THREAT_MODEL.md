@@ -26,8 +26,8 @@ units of work — over an hour or a week — crosses it; one that does three and
 exits never does. That's the real line for "is my session long enough to
 benefit," not a duration.
 
-**Probably not worth it yet for** short-lived chatbot turns, where per-turn
-overhead outweighs the benefit, or for teams that can't instrument their agent
+**Not designed for** short-lived chatbot turns, which end before self-relative
+scoring starts at check-in 25, or for teams that can't instrument their agent
 loop.
 
 ## What grounds confidence — and where that boundary fails

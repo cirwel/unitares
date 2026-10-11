@@ -201,7 +201,7 @@ for the schema, privacy bounds, export surfaces, and legacy-row behavior.
 
 Whether these numbers add useful signal beyond simple baselines is an **open,
 measured** question — not an assumption. The [Reviewer Guide's falsifiability
-harness](REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence-dont-trust-this-doc)
+harness](REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence)
 scores EISV/prior-state features against `previous_outcome_bad` on ranking (AUC)
 and calibration (Brier), then compares the selected best candidate with a
 best-of-candidates permutation null. In the frozen 2026-08-09 trusted-anchor
