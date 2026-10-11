@@ -69,10 +69,11 @@ class _FakeConn:
         self._body = body
         self.sent: dict | None = None
 
-    def request(self, method, path, headers=None):
+    def request(self, method, path, body=None, headers=None):
         if self._exc is not None:
             raise self._exc
-        self.sent = {"method": method, "path": path, "headers": headers or {}}
+        self.sent = {"method": method, "path": path, "body": body,
+                     "headers": headers or {}}
 
     def getresponse(self):
         return SimpleNamespace(status=self._status, read=lambda n=None: self._body)
@@ -146,6 +147,36 @@ def test_probe_carries_the_external_host_to_the_local_listener(doctor, monkeypat
     assert conn.sent["path"] == doctor.MCP_ROUTE_PATH
     # Connecting to the external host would make this a tunnel test.
     assert ctor.call_args.args[:2] == ("127.0.0.1", doctor.MCP_PORT)
+
+
+def test_probe_posts_a_jsonrpc_initialize_not_a_get(doctor, monkeypatch):
+    """A GET on a healthy /mcp/ opens an SSE stream and hangs to the timeout."""
+    import json as _json
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
+    _, conn, _ = _run(doctor, status=200)
+    assert conn.sent["method"] == "POST"
+    payload = _json.loads(conn.sent["body"])
+    assert payload["jsonrpc"] == "2.0"
+    assert payload["method"] == "initialize"
+    accept = _headers(conn)["Accept"]
+    assert "application/json" in accept and "text/event-stream" in accept
+    assert _headers(conn)["Content-Type"] == "application/json"
+
+
+def test_2xx_body_is_never_read(doctor, monkeypatch):
+    """A 200 may be an open stream; reading it would reintroduce the hang."""
+    monkeypatch.setenv("UNITARES_DOCTOR_PUBLIC_URL", "gov.example.org")
+    monkeypatch.setenv("UNITARES_MCP_BEARER_TOKENS", "tok")
+
+    def boom(n=None):
+        raise AssertionError("body read on a 2xx")
+
+    conn = _FakeConn(status=200)
+    conn.getresponse = lambda: SimpleNamespace(status=200, read=boom)
+    with patch("http.client.HTTPConnection") as ctor:
+        ctor.return_value = conn
+        result = doctor.check_mcp_route_gate()
+    assert result.status is doctor.Status.PASS
 
 
 def test_probe_sends_a_visible_bearer_token(doctor, monkeypatch):
