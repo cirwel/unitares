@@ -546,8 +546,9 @@ async def start_uds_listener(
                 _release_off_loop(loop, uds_path, sock, ownership)
             )
 
-    # The task owns cleanup on normal exit, crash, and cancellation; the
-    # transport service's explicit unlink becomes a harmless fallback.
+    # The task owns cleanup on normal exit, crash, and cancellation.  The
+    # transport service must not run a later path-based cleanup: a replacement
+    # listener may already own the same path by then.
     try:
         owned_task = asyncio.create_task(
             _serve_with_ownership(), name="unitares-uds-listener"
