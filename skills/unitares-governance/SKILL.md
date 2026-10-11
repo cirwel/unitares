@@ -57,15 +57,14 @@ Each check-in evaluates agent state with the **EISV** model:
 - `S`: entropy / drift / instability
 - `V`: valence (signed E-I imbalance)
 
-EISV is proprioceptive state estimation, not an outcome oracle. The public
-`coherence` field is producer-dependent; the deployed `legacy_tanh_v` value is
-ODE control feedback. It still participates in configured check-in
-compatibility backstops, but it is not behavioral health evidence and no longer
-authorizes recovery.
+EISV estimates runtime state; `record_result` grades a check-in against a real
+outcome.
+How to read `coherence` and its producer tags is in
+`skills/governance-fundamentals/SKILL.md` (*Coherence*).
 
-Agents typically call `start_session(force_new=true)` once for a fresh process
-identity, then continue that same running process with `sync_state()` as their
-main check-in loop. A new user message is not a reason to call
+Call `start_session(force_new=true)` once per process for a fresh process
+identity, then use `sync_state()` as the check-in loop for that same running
+process. A new user message is not a reason to call
 `start_session(force_new=true)` again; that mints another process identity.
 These are the primary workflow tools; raw implementation tools such as
 `onboard(...)` and
@@ -79,7 +78,11 @@ omitted from the initial listing through its normal middleware. Operators can
 set `UNITARES_TOOL_ADVERTISEMENT=full` to advertise every schema up front; old
 `GOVERNANCE_TOOL_MODE` settings are ignored. Older servers may still advertise
 a restricted profile; inspect their actual catalog (see governance-lifecycle,
-*MCP Tools Reference*). The full raw
+*MCP Tools Reference*).
+
+### Response shapes
+
+The full raw
 payload remains available under `raw_governance`; the read aliases
 `check_working_state` and `search_shared_memory`, bounded `sync_state` modes,
 a plain fresh `start_session`, and the write aliases `store_finding`,
@@ -102,9 +105,8 @@ declare that with `parent_agent_id=<prior uuid>` and
 Use raw `onboard(...)` instead for older servers or raw response shape.
 
 Use `identity(agent_uuid=..., continuity_token=..., resume=true)` only when
-rebinding the same live owner to an existing UUID. The `continuity_token` is
-short-lived ownership proof for anti-hijack gates, not indefinite
-cross-process continuity. A bare `identity(agent_uuid=..., resume=true)` is an
+rebinding the same live owner to an existing UUID (the token's scope and TTL
+are in governance-lifecycle, *Creation, lineage, and resume*). A bare `identity(agent_uuid=..., resume=true)` is an
 unsigned UUID claim (hijack-shaped, rejected under strict identity mode). An
 argument-less `onboard()` is refused under strict identity, the default, with
 `lineage_declaration_required`: call `start_session(force_new=true)`. An
@@ -118,8 +120,8 @@ session or token, attested over UDS, or minted.
 In-process tool calls thread the response's `client_session_id` through
 subsequent invocations to maintain transport continuity within a single
 process. Use that for ordinary `sync_state()` / `check_working_state()` calls.
-`client_session_id` is in-session continuity only — weak across processes, not
-identity proof on its own. Do not pass `continuity_token` on every call; reserve
+`client_session_id` is the proof string for this running process; do not treat
+it as cross-process selfhood. Do not pass `continuity_token` on every call; reserve
 it for explicit same-live-owner `identity(..., resume=true)` rebinds.
 
 Use `sync_state()` after meaningful work to record progress and complexity, then
