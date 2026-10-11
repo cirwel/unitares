@@ -1228,8 +1228,10 @@ exactly 0.8 with empty `recent_decisions` (407 post-warmup). Every agent's
 ethical_drift block reports 0.2 as if measured — a uniform +0.04 in ‖ΔEta‖², a
 constant −0.02 Phi offset (telemetry-only post-warmup, verdict-driving pre-warmup),
 and a 0.2 head start toward the 0.7 auto-dialectic threshold. Exact for the
-governance-computed component; agents self-reporting drift blend 30% over it
-(`phases.py:792`; `monitor_drift.py:111-113`).
+governance-computed component, which is now the whole vector: a self-reported
+drift is never an input to it. (This entry earlier said self-reports blend 30% over it;
+that blend never ran on the MCP path, which passes an array the blend's
+list/tuple check rejected, and it was removed in 2026-10.)
 
 **22. "auto_ground_truth grades against exogenous signals"** → **PROVENANCE
 MISMATCH.** The gate (`auto_ground_truth.py:207-240`) checks only that

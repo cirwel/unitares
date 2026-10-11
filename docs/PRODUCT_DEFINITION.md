@@ -144,7 +144,9 @@ breaker demonstrably actuates** — not one shown to protect anything. Producing
 pause and delivering it are separate events: at the 2026-08-06 audit a cadence
 window suppressed 195 of 218 recorded pauses (89.4%) before they reached the
 agent, and while delivery is live (a governed pause landed 2026-08-09), the rate
-has not been re-measured since. The contract ledger records the protection claim
+has not been re-measured since (as of 2026-10-11 the 89.4% figure is the
+2026-08-06 reading, not a current rate, and has not been re-read against the live
+database). The contract ledger records the protection claim
 as untested. The precise boundary is
 the [scope and threat model](SCOPE_AND_THREAT_MODEL.md); the evidence status
 is the [claim ledger](EVIDENCE_AND_LIMITS.md#claim-ledger) and the
