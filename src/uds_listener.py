@@ -115,6 +115,7 @@ def _node_id(path: str) -> NodeId:
 # claim; the node id prevents cleanup from deleting a path another process
 # replaced without respecting that advisory lock.
 _bound_ownerships: dict[str, _PathOwnership] = {}
+_bound_ownerships_guard = threading.Lock()
 
 
 def _unlink_and_release_ownership(
@@ -157,7 +158,15 @@ def unlink_own_socket(uds_path: str, node: Optional[NodeId] = None) -> bool:
     alone (#2662).  Never raises: an unavailable fallback lock or a failed
     identity check leaves the node in place rather than breaking shutdown.
     """
-    ownership = _bound_ownerships.pop(uds_path, None)
+    with _bound_ownerships_guard:
+        ownership = _bound_ownerships.get(uds_path)
+        if ownership is not None:
+            # An explicit node identifies the listener the caller intends to
+            # clean up.  It must never evict a newer listener's ownership just
+            # because both listeners used the same path.
+            if node is not None and ownership.node != node:
+                return False
+            _bound_ownerships.pop(uds_path, None)
     if ownership is not None:
         return _unlink_and_release_ownership(
             uds_path,
@@ -516,7 +525,8 @@ async def start_uds_listener(
         await asyncio.shield(_release_off_loop(loop, uds_path, sock, ownership))
         raise
 
-    _bound_ownerships[uds_path] = ownership
+    with _bound_ownerships_guard:
+        _bound_ownerships[uds_path] = ownership
     started = asyncio.Event()
 
     async def _serve_with_ownership() -> None:
@@ -527,8 +537,9 @@ async def start_uds_listener(
             started.set()
             await server.serve(sockets=[sock])
         finally:
-            if _bound_ownerships.get(uds_path) is ownership:
-                _bound_ownerships.pop(uds_path, None)
+            with _bound_ownerships_guard:
+                if _bound_ownerships.get(uds_path) is ownership:
+                    _bound_ownerships.pop(uds_path, None)
             await asyncio.shield(
                 _release_off_loop(loop, uds_path, sock, ownership)
             )
@@ -540,7 +551,9 @@ async def start_uds_listener(
             _serve_with_ownership(), name="unitares-uds-listener"
         )
     except BaseException:
-        _bound_ownerships.pop(uds_path, None)
+        with _bound_ownerships_guard:
+            if _bound_ownerships.get(uds_path) is ownership:
+                _bound_ownerships.pop(uds_path, None)
         await asyncio.shield(_release_off_loop(loop, uds_path, sock, ownership))
         raise
     try:
@@ -551,7 +564,9 @@ async def start_uds_listener(
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await owned_task
         if not entered_wrapper:
-            _bound_ownerships.pop(uds_path, None)
+            with _bound_ownerships_guard:
+                if _bound_ownerships.get(uds_path) is ownership:
+                    _bound_ownerships.pop(uds_path, None)
             await asyncio.shield(
                 _release_off_loop(loop, uds_path, sock, ownership)
             )
