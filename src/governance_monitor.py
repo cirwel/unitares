@@ -1967,6 +1967,10 @@ class UNITARESMonitor:
                 confidence=confidence if confidence is not None else getattr(self, 'current_confidence', None),
                 original_reason=original_reason,
                 cycles_remaining=self._gap_recovery_cycles_remaining - 1,
+                # Structured record of what was suppressed, so the per-kind
+                # suppression rate is measurable. Telemetry only.
+                original_action='pause',
+                original_sub_action=decision.get('sub_action'),
             )
         self._gap_recovery_cycles_remaining -= 1
         return decision
