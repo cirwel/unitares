@@ -220,6 +220,24 @@ class TestAssessment:
 
         assert _assess(transcript, reviewer="agent-replacement") is None
 
+    def test_reply_to_a_replaced_reviewer_is_not_answered_by_the_new_one(self):
+        """Reviewer A rejects, the agent replies to A, the operator reassigns to
+        B, and B's FIRST verdict rejects. B did not reconsider a reply to itself,
+        so the answered basis must not fire; B's own window governs."""
+        new = "agent-replacement"
+        transcript = _base(30) + [
+            _msg("synthesis", PAUSED, 20, agrees=True),
+            _msg("synthesis", new, 5, agrees=False),
+        ]
+
+        # Inside B's window: stays open.
+        assert _assess(transcript, reviewer=new) is None
+        # Past B's window: closes on the window basis, never the answered basis.
+        later = NOW + timedelta(seconds=WAIT_S + LAST_WORD_GRACE_S + 60)
+        payload = _assess(transcript, reviewer=new, now=later)
+        assert payload is not None
+        assert payload["last_word_basis"] == BASIS_WINDOW_ENDED
+
     def test_unreadable_clock_stays_open(self):
         transcript = _base(90) + [_msg("synthesis", PAUSED, 0, agrees=True)]
         transcript[2] = DialecticMessage(
@@ -453,10 +471,11 @@ def _messages(reply_minutes_after_rejection=30, rejected_minutes_ago=300):
 ROW_STAMP = datetime(2026, 10, 11, 9, 0, tzinfo=timezone.utc)
 
 
-def _session_row(messages):
+def _session_row(messages, awaiting=True):
     """What get_session_async returns: the row's columns plus its messages."""
     return {"session_id": "s" * 16, "phase": "synthesis", "updated_at": ROW_STAMP,
-            "reviewer_agent_id": REVIEWER, "messages": messages}
+            "reviewer_agent_id": REVIEWER, "awaiting_facilitation": awaiting,
+            "messages": messages}
 
 
 @pytest.fixture
@@ -504,6 +523,28 @@ class TestSweeper:
         assert result["resolved_count"] == 1
         assert result["write_attempt_count"] == result["write_succeeded_count"] == 1
         assert any(d.get("reason") == REJECTION_STANDS for d in result["details"])
+
+    @pytest.mark.asyncio
+    async def test_flag_cleared_between_reads_stops_the_close(self, _sweeper_io):
+        """The candidate list said awaiting, but the re-read row no longer is:
+        someone acted in between, so the sweep must not close it."""
+        from src.mcp_handlers.dialectic.auto_resolve import _auto_resolve_stuck_sessions
+
+        write = AsyncMock(return_value=True)
+        with patch(f"{AUTO_RESOLVE}.get_active_sessions_async",
+                   new_callable=AsyncMock, return_value=[_row()]), \
+             patch(f"{AUTO_RESOLVE}.get_session_async", new_callable=AsyncMock,
+                   return_value=_session_row(_messages(), awaiting=False)), \
+             patch(f"{AUTO_RESOLVE}.resolve_session_async", write), \
+             patch(f"{AUTO_RESOLVE}.update_session_awaiting_facilitation_async",
+                   new_callable=AsyncMock), \
+             patch(f"{AUTO_RESOLVE}.update_session_status_async", new_callable=AsyncMock):
+            await _auto_resolve_stuck_sessions()
+
+        assert not any(
+            c.args[1].get("reason") == REJECTION_STANDS
+            for c in write.await_args_list if len(c.args) > 1
+        )
 
     @pytest.mark.asyncio
     async def test_a_late_concession_closes_within_one_sweep(self, _sweeper_io):

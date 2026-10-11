@@ -207,6 +207,11 @@ def assess_rejection_stands(
     paused = [m for m in syntheses if m.agent_id == paused_agent_id]
     replies_after = [m for m in paused if m.index > last.index]
     previous = verdicts[-2] if len(verdicts) > 1 else None
+    # Only a reply to THIS reviewer's earlier verdict counts as answered. After
+    # a reassign, a reply addressed to the replaced reviewer is not one the
+    # current reviewer reconsidered, so its window still governs.
+    if previous is not None and previous.agent_id != last.agent_id:
+        previous = None
     answered = [
         m for m in paused
         if previous is not None and previous.index < m.index < last.index

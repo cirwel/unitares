@@ -559,7 +559,9 @@ async def _close_standing_rejections(
                 messages,
                 paused_agent_id=paused_agent_id,
                 reviewer_agent_id=reviewer_agent_id,
-                awaiting_facilitation=True,
+                # From the re-read row, not the candidate list: a clear that
+                # landed between the two reads must stop the close.
+                awaiting_facilitation=bool(row.get("awaiting_facilitation")),
                 now=datetime.now(timezone.utc),
                 is_orchestrated=lambda rid: _has_orchestrated_reviewer_budget(row, rid),
                 wait_s=wait_s,
