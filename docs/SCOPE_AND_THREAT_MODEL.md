@@ -59,7 +59,7 @@ behavioral signal telemetry-only. A
 self-reported `ethical_drift` does not enter the drift vector, Φ, or the verdict
 in any phase, on any path: it is never an input. This is a stated rule. MCP
 check-ins still record the report as telemetry (the per-agent profile and the
-response echo); a direct Python call to `process_update()` does not record it. Until 2026-10 a capped 30% blend existed for Python callers passing a list
+response echo); a direct Python call to `UNITARESMonitor.process_update()` does not record it. Until 2026-10 a capped 30% blend existed for Python callers passing a list
 or tuple, but the MCP handler passes an array the blend's type check rejected, so
 it never ran on live check-ins (found 2026-09-23); it was also not escalate-only,
 so a caller could have lowered its own computed deviation. The blend was removed

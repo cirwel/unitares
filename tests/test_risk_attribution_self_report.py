@@ -161,7 +161,7 @@ def test_threat_model_states_the_exclusion_as_a_rule():
     assert "do get the blend" not in flat
     assert "in any phase, on any path: it is never an input" in flat
     # The telemetry claim is scoped to the path that actually records it.
-    assert "a direct Python call to `process_update()` does not record it" in flat
+    assert "a direct Python call to `UNITARESMonitor.process_update()` does not record it" in flat
 
 
 def test_omitted_confidence_and_complexity_defaults_are_disclosed():
