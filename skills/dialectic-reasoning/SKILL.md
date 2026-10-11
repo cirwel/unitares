@@ -231,7 +231,9 @@ For an independent review, the reviewer owes the first synthesis verdict before
 the paused agent can answer it. Convergence happens only when the required sides
 agree on conditions. A reviewer rejection remains in force: the paused agent
 cannot clear it by repeatedly submitting `agrees=true`. The reviewer must revise
-after new evidence, or an authorized facilitator must reassign the reviewer.
+after new evidence, or an authorized facilitator must reassign the reviewer. Once
+the reviewer has had its last word with the rejection standing, the session
+closes as `rejection_stands` (see Facilitation and Reviewer Recovery).
 
 ## Whose Move Is It?
 
@@ -312,6 +314,19 @@ no request and is failed at the stuck threshold. A request is not withdrawn
 when the reviewer later answers, so a session flagged while the reviewer owed
 the move stays on the 4h hold after the move passes back.
 
+A request raised over a standing reviewer rejection does not wait on a human
+indefinitely. Once the reviewer has had its last word (it answered the paused
+agent's reply to an earlier verdict and still rejects, or the orchestrated
+reviewer's continuation window has ended), the dialectic sweep closes the session
+`failed` within one sweep, with `resolution_json.reason` = `rejection_stands`
+and the request cleared. That is neither a reviewer approval nor an inactivity
+reap. `verdict_acceptance` (accepted, contested, no_reply) records whether the
+paused agent replied and how, as description only: the session is not closed on
+it, and `no_reply` is not assent. The exit never resolves in the paused agent's
+favour and never reassigns. While the reviewer's window is open nothing changes,
+and a human or unmanaged reviewer (no declared window) closes the session this
+way only by answering a reply and still rejecting.
+
 Reviewer reassignment is privileged:
 
 ```
@@ -326,7 +341,9 @@ dialectic(
 Only an authenticated operator or the currently assigned independent reviewer
 handing off their own slot may do this. A merely bound agent identity is not
 operator authority. Reassignment can revive an `awaiting_facilitation` session,
-including one a timeout sweep already marked failed for lack of facilitation.
+including one a timeout sweep already marked failed for lack of facilitation. A
+session closed as `rejection_stands` has had its request answered and is closed
+like any ordinary failed session.
 
 ## Resolution Outcomes
 
@@ -335,6 +352,7 @@ including one a timeout sweep already marked failed for lack of facilitation.
 | **resume** | Converged; the agent continues with the agreed conditions |
 | **block** | The agreed resolution violated a hard safety limit; the session is marked `failed` |
 | **facilitation_required** / `awaiting_facilitation` | Standing reviewer rejection, self-review, or no eligible reviewer; an operator or replacement reviewer must act |
+| **rejection_stands** | The reviewer's rejection stands and the reviewer has had its last word; the sweep marks the session `failed`. Not an approval |
 
 `escalate` and `cooldown` exist in the `ResolutionAction` enum but no live path
 produces them; they survive only as recommendation labels in the model-assisted
