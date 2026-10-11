@@ -7,6 +7,11 @@ belongs in [`MCP_CLIENTS.md`](../integration/MCP_CLIENTS.md), and exact runtime
 schemas belong to `list_tools()` / `describe_tool()` and
 [`src/tool_schemas.py`](../../src/tool_schemas.py).
 
+For the 15-second bootstrap before the details below, read the
+[six-rule field guide](../../skills/governance-lifecycle/SKILL.md#dont-panic-six-rules).
+It is part of the server-authored lifecycle skill, so agents and human
+integrators read the same operational rules.
+
 ## 4.1 The default workflow
 
 1. **Fresh process:** `start_session(force_new=true)`; save `agent_uuid` and
