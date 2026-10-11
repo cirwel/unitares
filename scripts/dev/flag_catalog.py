@@ -151,6 +151,10 @@ INDIRECT_FLAGS = (
 # Settings whose first reader's docstring describes that reader, not the
 # setting. These outrank every inferred purpose.
 PURPOSES = {
+    "UNITARES_DIALECTIC_CONTINUATION_WAIT_S": (
+        "Per-synthesis response window; hard continuation cap is three windows "
+        "(spawn cap adds setup/model grace)"
+    ),
     "UNITARES_DIALECTIC_REVIEWER_HOSTS": (
         "Reviewer hosts in the order they are tried, comma-separated, at most "
         "three (codex, claude, antigravity, external)"
