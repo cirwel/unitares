@@ -6,7 +6,7 @@ UNITARES is self-hosted accountability infrastructure for operators running
 multiple AI agents. Its single-operator federation kernel connects independent
 runtimes to one operator-controlled server over MCP or HTTP, where they share a
 durable record while keeping their own models, tools, and runtimes. Agent
-work should remain attributable, reviewable, and recoverable even when the
+work remains attributable, reviewable, and recoverable even when the
 process that started it is gone. It runs beside evals, guardrails, and
 sandboxes and replaces none of them.
 
@@ -49,7 +49,14 @@ Tool-boundary enforcement, trace emission, and agent-to-agent transport are not
 this server's job: runtime middleware (NeMo Relay has a shipped integration),
 OpenTelemetry, and A2A own those. UNITARES keeps the record beside them.
 
-The deployed policy path uses auditable behavioral state estimation.
+EISV, the state-estimation instrument in the check-in path, summarizes runtime
+observations and controller history over time. Its readings let you inspect
+changes in those inputs and their relation to policy responses. The
+[computation reference](https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md#what-the-signals-record)
+defines each signal and its provenance; the
+[reading guide](https://github.com/cirwel/unitares/blob/master/docs/manual/05-reading-the-signals.md)
+explains how to interpret a reading. The instrument is moving to an optional
+module within UNITARES.
 
 ## Try the released surfaces
 

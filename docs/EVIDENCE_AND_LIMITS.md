@@ -7,6 +7,10 @@ explanation of what UNITARES offers.
 
 ## Scope in brief
 
+UNITARES makes process identity, telemetry, evidence, and policy history
+inspectable, so claims of correctness, ethics, safety, or incident prevention can
+be tested rather than assumed; it does not itself prove them.
+
 The public operational record comes from one long-running maintainer
 deployment. External adoption remains unvalidated. Outside parties have
 examined and accepted parts of the work, which is recorded under
@@ -14,10 +18,7 @@ examined and accepted parts of the work, which is recorded under
 adoption. The frozen outcome-lift read
 did not establish predictive lift, and its preserved record lacks the cluster
 geometry needed to reconstruct read-specific power; the result is therefore
-inconclusive, not a demonstrated negative. UNITARES does not claim to prove
-correctness, ethics, safety, or incident prevention. It makes process identity,
-telemetry, evidence, and policy history inspectable so those claims can be
-tested rather than assumed.
+inconclusive, not a demonstrated negative.
 
 The deployed policy path uses auditable behavioral state estimation. The
 mathematical formulation in the companion paper remains a research target and

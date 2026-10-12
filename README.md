@@ -33,10 +33,10 @@ UNITARES preserves accountability across discontinuities in agent identity,
 context, process, and time. Agent work remains attributable, reviewable, and
 recoverable even when the process that started it is gone.
 
-Vendor platforms keep agent identity, memory, and review inside their own cloud
-or tool. UNITARES keeps one attributed record across them on infrastructure you
-control: Claude Code, Codex, Hermes Agent, and any MCP-capable agent record
-findings, advice, and review decisions that stay bound to the work across handoffs.
+UNITARES keeps one attributed record across Claude Code, Codex, Hermes Agent,
+and other MCP-capable runtimes on infrastructure you control. Agents can retrieve
+findings, corrections, and review decisions across sessions; the next agent and
+the human working with it can recover what was established and still needs review.
 
 ## What UNITARES gives you
 
@@ -128,7 +128,7 @@ grow.
 | Goal | Guide |
 |---|---|
 | Operate a deployment | [Operator manual](docs/manual/README.md) |
-| Connect an agent or application | [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
+| Connect an agent or application | [Captured two-process walkthrough](docs/guides/AGENT_SESSION_WALKTHROUGH.md) · [MCP integration](docs/integration/MCP_CLIENTS.md) · [Python SDK](agents/sdk/README.md) |
 | Understand the product and architecture | [Product definition](docs/PRODUCT_DEFINITION.md) · [Architecture](docs/UNIFIED_ARCHITECTURE.md) |
 | Evaluate the claims | [Evidence and limits](docs/EVIDENCE_AND_LIMITS.md) · [Reviewer Guide](docs/REVIEWER_GUIDE.md) · [Public dataset](https://huggingface.co/datasets/hikewa/unitares-eisv-trajectories) |
 | Contribute | [Contributing](.github/CONTRIBUTING.md) · [Development guide](AGENTS.md) |

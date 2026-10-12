@@ -41,8 +41,9 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
         "label": "Energy",
         "range": "[0, 1]",
         "description": (
-            "Heuristic productive-capacity estimate; the deployed blend still "
-            "contains a legacy ODE control-feedback level term."
+            "Productive-capacity estimate blended from decision success, "
+            "complexity calibration, recent outcomes and a legacy controller "
+            "level term."
         ),
         "user_friendly": (
             "An estimate of capacity for useful work, with mixed behavioral and "
@@ -53,8 +54,8 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
         "label": "Information Integrity",
         "range": "[0, 1]",
         "description": (
-            "Heuristic calibration/integrity estimate; the deployed blend still "
-            "contains a legacy ODE control-feedback trend term."
+            "Calibration/integrity estimate blended from calibration accuracy, "
+            "outcome consistency and a legacy controller trend term."
         ),
         "user_friendly": (
             "An estimate of calibration and claim integrity, not a pure verified "
@@ -89,8 +90,8 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
 }
 
 EISV_INLINE_SUMMARY = (
-    "EISV fields: E=Energy [0,1] (mixed-provenance capacity estimate); "
-    "I=Information Integrity [0,1] (mixed-provenance calibration estimate); "
+    "EISV fields: E=Energy [0,1] (capacity for useful work); "
+    "I=Information Integrity [0,1] (calibration of claims against results); "
     "S=Entropy [0,1] (drift from the agent's own normal); "
     "V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns "
     "integrity, negative=integrity outruns motion)."

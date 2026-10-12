@@ -4,7 +4,7 @@ description: >
   Use when an agent is interacting with UNITARES governance for the first time, needs to
   onboard, check in, or recover from a pause/reject verdict. Covers the full agent lifecycle
   from session start through check-ins to recovery.
-last_verified: "2026-09-24"
+last_verified: "2026-10-11"
 freshness_days: 14
 source_files:
   - unitares/src/mcp_handlers/core.py
@@ -26,6 +26,9 @@ source_files:
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
+  # The field guide names the negotiated contract version it was checked
+  # against, so a contract change must re-verify these six rules.
+  - unitares/src/interface_contract.py
   # Added 2026-09-07: the MCP Tools Reference now says which of its names a
   # tool mode advertises. The default surface and the listing/dispatch split
   # live in these two files; the reference drifts silently when they move.
@@ -42,11 +45,46 @@ source_files:
 
 # Agent Lifecycle
 
-**Last Updated:** 2026-09-25
+**Last Updated:** 2026-10-11
+
+## Don't Panic: six rules
+
+Mostly Harmless Guide to the normal agent path, verified against interface
+contract `1.31.0` on 2026-10-11.
+
+1. **Keep process identity honest.** Call `start_session(force_new=true)` once
+   per process; reuse its `client_session_id` only within that process. Restarts
+   mint fresh, and proof-rebind is for the same live owner. Declare lineage only
+   for a real dispatch or handoff from an exited predecessor.
+2. **Branch on control flow, not `success` alone.** Read
+   `action_summary.action` and `sub_action`; check `refused`, `status`, and
+   `rollout_flag` even when `success` is true. `proceed` and `guide` continue;
+   `pause` stops ordinary governed writes for its named recovery. Follow
+   `next_step` and `safe_options` rather than repeat a refusal. EISV and verdicts
+   describe state, not outcomes.
+3. **Use each record for its job.** Call `sync_state` at meaningful milestones,
+   not after every tool call. Use `store_finding` / `update_finding` for durable
+   knowledge and `record_result` only for an outcome that actually occurred.
+4. **Reuse durable knowledge safely.** Search before `store_finding`. If
+   authorized, update or supersede an existing finding rather than duplicate
+   it; otherwise leave it untouched. Operator-authored architectural decisions
+   stay operator-owned. Never store secrets, and label uncertainty.
+5. **Make confidence mean something.** Supply `confidence` only for a genuine
+   forecast; each value can mint a scored prediction. Keep its `prediction_id`
+   and pair it with the observed outcome. Do not report
+   `task_completed` for a turn or local edit.
+6. **Discover conditionally.** Use advertised tools and schemas directly. Only
+   when one is absent or unclear, call `list_tools` (which also reports the
+   contract version), then `describe_tool`; use `use_tool` only when the target
+   is omitted from the initial listing.
+
+See the
+[two-process walkthrough](https://github.com/cirwel/unitares/blob/master/docs/guides/AGENT_SESSION_WALKTHROUGH.md)
+for clean exit and handoff; exceptions and recovery follow.
 
 ## Primary Workflow Names
 
-The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`). Read aliases, bounded `sync_state` modes, and the write aliases `store_finding`, `update_finding` and `record_result` omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere, except as below for the finding writes); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. Those three write acknowledgements keep the ids you need next (`discovery_id`, `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and `written_as` (the writer's `agent_id`, `display_name` and assurance tier), so check it when you bound without an explicit `client_session_id`; `record_result` names its writer only when its binding was not server-inferred, so pass `client_session_id` if you need to see it. Their `raw_governance_hint` names what is still reachable. `record_result` has no read by outcome id: for an outcome recorded with a `prediction_id`, repeating the identical call under the same identity (pass `client_session_id`) with `response_mode="full"` returns the stored outcome in full (`idempotent_replay: true`) and records no second outcome while the binding is retained (a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`); without a `prediction_id` a repeat records a second outcome, so the hint names `response_mode="full"` on a later `record_result`. For `store_finding` and `update_finding` it is a `knowledge(action="details", discovery_id=...)` read, which returns the stored record rather than the ack's payload. No read returns the omitted payload, so these acks do not set `raw_governance_available`. Write-time warnings and a bounded `related_discoveries` snapshot are kept in the ack itself because that read does not return the warnings or the snapshot's summary previews; the snapshot's ids are the stored record's `related_to`, so a `store_finding` ack carrying the snapshot does not repeat them as `state_summary.related_to`. Do not repeat a write just to see its payload: `store_finding` mints a new finding on every call. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
+The core lifecycle should use primary task-verb tools. Each is implemented by a raw tool with the same identity rules and returns a **normalized envelope** with the operationally useful fields first (`next_action`, `state_summary`, `risk_summary`, `memory_suggestions`, `recovery_hint`).
 
 | Task | Primary workflow tool | Raw implementation tool |
 |------|---------------|----------------|
@@ -60,6 +98,10 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
 Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
+
+### Response shapes
+
+Read aliases, bounded `sync_state` modes, and the write aliases `store_finding`, `update_finding` and `record_result` omit the repeated canonical payload and explain how to request it explicitly (`verbosity="full"` on `check_working_state`, `response_mode="full"` elsewhere, except as below for the finding writes); a plain fresh `start_session` omits it too (`response_shape: "routine"`, pass `response_mode="full"` on the mint to keep it); other state-changing aliases preserve it under `raw_governance`. Those three write acknowledgements keep the ids you need next (`discovery_id`, `state_summary.outcome_id`). The finding writes also carry `agent_uuid` and `written_as` (the writer's `agent_id`, `display_name` and assurance tier), so check it when you bound without an explicit `client_session_id`; `record_result` names its writer only when its binding was not server-inferred, so pass `client_session_id` if you need to see it. Their `raw_governance_hint` names what is still reachable. `record_result` has no read by outcome id: for an outcome recorded with a `prediction_id`, repeating the identical call under the same identity (pass `client_session_id`) with `response_mode="full"` returns the stored outcome in full (`idempotent_replay: true`) and records no second outcome while the binding is retained (a changed outcome is refused with `PREDICTION_REUSE_CONFLICT`); without a `prediction_id` a repeat records a second outcome, so the hint names `response_mode="full"` on a later `record_result`. For `store_finding` and `update_finding` it is a `knowledge(action="details", discovery_id=...)` read, which returns the stored record rather than the ack's payload. No read returns the omitted payload, so these acks do not set `raw_governance_available`. Write-time warnings and a bounded `related_discoveries` snapshot are kept in the ack itself because that read does not return the warnings or the snapshot's summary previews; the snapshot's ids are the stored record's `related_to`, so a `store_finding` ack carrying the snapshot does not repeat them as `state_summary.related_to`. Do not repeat a write just to see its payload: `store_finding` mints a new finding on every call. `sync_state` does not retrieve shared memory unless `include_memory_suggestions=true` is explicit.
 
 ## Starting a Session
 
@@ -81,8 +123,8 @@ need the unwrapped raw response.
 
 Returns:
 - **agent_uuid / UUID**: The server identity anchor for this process instance
-- **client_session_id**: In-session transport continuity metadata
-- **continuity_token**: Short-lived ownership proof for PATH 0 anti-hijack, not indefinite cross-process continuity
+- **client_session_id**: The proof string for this running process; pass it on later calls, and do not treat it as cross-process selfhood
+- **continuity_token**: Short-lived ownership proof for PATH 0 anti-hijack rebinds (scope below)
 - **session diagnostics**: `session_resolution_source`, `identity_assurance`, and deprecation warnings when relevant
 
 ### Creation, lineage, and resume (updated 2026-04-25)
@@ -225,7 +267,7 @@ watched less, or from a busy one that you have already reported.
 |---------|-----------|
 | **proceed / approve** | Continue normally |
 | **proceed / guide** + guidance text | Read the guidance, adjust your approach, keep going |
-| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so self-recovery rarely applies; a dialectic review opened for the pause, an operator, or re-evaluation at expiry usually ends it (see Recovery) |
+| **pause / reject** | Check-ins and new shared-memory entries are refused (not queued); dialectic moves still work. Stop and read the `reason` and `guidance`. A paused agent's risk is frozen at the reading that paused it, so `self_recovery` lifts it only when that reading is already under its gates (`check` reports this); otherwise the dialectic review opened for the pause, an operator, or re-evaluation at expiry ends it (see Recovery) |
 | **margin: tight** | You are inside the band around a decision threshold — `nearest_edge` names which. This is a threshold distance, not a basin position. Be more careful with next steps |
 
 A `guide` verdict is an early warning. Ignoring it makes `pause` more likely.
@@ -297,7 +339,7 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 ### Essential (use in every session)
 
 - `start_session(force_new=true, parent_agent_id=...)` — Create a fresh process identity once, optionally declaring lineage
-- `sync_state()` — Check in with work summary and complexity. Pass `confidence` **only when you are actually stating a belief about your own work**: the server mints a tactical prediction from any value supplied and scores it into the fleet calibration curve, so a habitual or placeholder number becomes a forecast nobody made. Omitting it mints nothing and costs nothing.
+- `sync_state()` — Check in with work summary and complexity. Pass `confidence` only when you are stating a real belief about your own work (see *Check-ins*).
 - `check_working_state(client_session_id=...)` — Read your current EISV state. It reads your state only on proof sent with the call (your `client_session_id`, an `X-Session-ID` header, or a verified `continuity_token`); without it the read of your own state answers `unbound`, never a state the server inferred from the connection, and its `next_action` says how to recover
 - `identity(client_session_id=...)` — Confirm who the runtime thinks you are and how continuity was resolved; never call it with no arguments (see Identity above), and include `continuity_token` for proof-owned UUID rebinds
 - `health_check()` — Check operator-facing server health when behavior seems odd; discover its schema and invoke it through `use_tool` under progressive advertisement

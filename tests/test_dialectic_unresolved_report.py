@@ -26,6 +26,9 @@ SPEC = importlib.util.spec_from_file_location(
 report = importlib.util.module_from_spec(SPEC)
 sys.modules["dialectic_unresolved"] = report
 SPEC.loader.exec_module(report)
+# Captured before the autouse fixture stubs it, for the tests of the lookup itself.
+_REAL_GH = report._gh_pr_states
+_REAL_GH_ANSWERS = report._gh_answering_prs
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +36,17 @@ def _no_live_superseders(monkeypatch):
     """main() makes a second read for supersession; never let a test reach a
     real database through it. Tests that exercise supersession override this."""
     monkeypatch.setattr(report, "fetch_superseders", lambda dsn, window_days: [])
+
+
+@pytest.fixture(autouse=True)
+def _no_live_github_or_awaiting(monkeypatch, tmp_path):
+    """main() also asks GitHub for subject-PR states and reads the awaiting
+    list; neither may reach the network or a real database from a test."""
+    monkeypatch.setattr(report, "_gh_pr_states", lambda keys: {})
+    monkeypatch.setattr(report, "_gh_answering_prs", lambda sids: {})
+    monkeypatch.setattr(report, "fetch_awaiting_operator", lambda dsn: [])
+    monkeypatch.setenv(report.PR_STATE_CACHE_ENV, str(tmp_path / "pr-state.json"))
+    monkeypatch.setenv(report.ANSWER_CACHE_ENV, str(tmp_path / "answers.json"))
 
 
 def _row(**over):
@@ -832,3 +846,380 @@ class TestSupersederQueryShape:
 
     def test_the_acceptance_time_is_read(self):
         assert "v.timestamp AS accepted_at" in report.SUPERSEDER_QUERY
+
+
+# ── subject PR finished ─────────────────────────────────────────────────────
+
+
+def _merged(at, state="MERGED"):
+    key = "merged_at" if state == "MERGED" else "closed_at"
+    return {"state": state, key: at.isoformat() + "Z"}
+
+
+class TestFinishedSubjects:
+    def test_a_pr_merged_after_the_review_opened_hides_it(self):
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 17, 8),
+                     topic="Architecture review request: cirwel/unitares draft PR #2278")]
+        got = report.find_finished_subjects(
+            rows, {("cirwel/unitares", 2278): _merged(D(2026, 9, 17, 16))})
+        assert got["aaaa000011112222"]["signal"] == "merged_with_standing_objection"
+        assert got["aaaa000011112222"]["pr"] == "cirwel/unitares#2278"
+
+    def test_a_pr_that_finished_before_the_review_is_context_and_stays(self):
+        """'fermata PR #59' reads as this repo's #59, which merged in April,
+        months before the review: the time guard keeps it listed."""
+        rows = [_row(session_id="b361bf48f7b63e54", created_at=D(2026, 9, 9, 9),
+                     topic="fermata PR #59: declared custody landed")]
+        states = {("cirwel/unitares", 59): _merged(D(2026, 4, 20, 2))}
+        assert report.find_finished_subjects(rows, states) == {}
+
+    def test_a_closed_unmerged_pr_is_named_as_abandoned(self):
+        rows = [_row(created_at=D(2026, 9, 1), topic="Review PR #4000")]
+        got = report.find_finished_subjects(
+            rows, {("cirwel/unitares", 4000): _merged(D(2026, 9, 2), state="CLOSED")})
+        assert got["abc123"]["signal"] == "subject_closed_unmerged"
+
+    def test_an_open_or_unknown_pr_stays(self):
+        rows = [_row(created_at=D(2026, 9, 1), topic="Review PR #4001"),
+                _row(session_id="def456", created_at=D(2026, 9, 1), topic="Review PR #4002")]
+        states = {("cirwel/unitares", 4001): {"state": "OPEN"}}
+        assert report.find_finished_subjects(rows, states) == {}
+
+    def test_an_explicit_repo_is_used_as_written(self):
+        rows = [_row(created_at=D(2026, 9, 24, 10),
+                     topic="plugin PR cirwel/unitares-governance-plugin#146, finding ...")]
+        plugin = {("cirwel/unitares-governance-plugin", 146): _merged(D(2026, 9, 24, 12))}
+        assert set(report.find_finished_subjects(rows, plugin)) == {"abc123"}
+        same_number_here = {("cirwel/unitares", 146): _merged(D(2026, 9, 24, 12))}
+        assert report.find_finished_subjects(rows, same_number_here) == {}
+
+    def test_no_subject_pr_stays(self):
+        rows = [_row(topic="Design review: how to reduce the advertised tool surface")]
+        assert report.find_finished_subjects(rows, {}) == {}
+
+
+class TestPrStateCache:
+    def test_only_merged_states_are_cached_and_reused(self, monkeypatch):
+        calls = []
+
+        def gh(keys):
+            calls.append(list(keys))
+            return {("cirwel/unitares", 1): _merged(D(2026, 9, 2)),
+                    ("cirwel/unitares", 2): _merged(D(2026, 9, 2), state="CLOSED")}
+
+        monkeypatch.setattr(report, "_gh_pr_states", gh)
+        rows = [_row(topic="Review PR #1"), _row(session_id="x2", topic="Review PR #2")]
+        report.fetch_pr_states(rows)
+        report.fetch_pr_states(rows)
+        assert calls[0] == [("cirwel/unitares", 1), ("cirwel/unitares", 2)]
+        # MERGED is final and came from the cache; CLOSED can be reopened.
+        assert calls[1] == [("cirwel/unitares", 2)]
+
+    def test_an_unreadable_cache_costs_a_lookup_not_a_hidden_review(self, monkeypatch, tmp_path):
+        path = tmp_path / "pr-state.json"
+        path.write_text("{not json")
+        monkeypatch.setenv(report.PR_STATE_CACHE_ENV, str(path))
+        assert report._load_pr_cache(str(path)) == {}
+
+    def test_a_github_failure_returns_nothing(self, monkeypatch):
+        monkeypatch.setattr(report, "_gh_pr_states", lambda keys: {})
+        assert report.fetch_pr_states([_row(topic="Review PR #7")]) == {}
+
+
+class TestGhLookup:
+    """The real lookup, with subprocess faked (the autouse fixture stubs the
+    module attribute, so these call the function captured at import)."""
+
+    def test_a_partial_answer_keeps_what_resolved(self, monkeypatch):
+        payload = {"data": {"p0": {"pullRequest": {"state": "MERGED", "mergedAt": "2026-09-02T00:00:00Z",
+                                                   "closedAt": "2026-09-02T00:00:00Z"}},
+                            "p1": None},
+                   "errors": [{"message": "Could not resolve to a Repository"}]}
+        fake = types.SimpleNamespace(returncode=1, stdout=json.dumps(payload), stderr="")
+        monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: fake)
+        got = _REAL_GH([("cirwel/unitares", 1), ("nobody/nothing", 2)])
+        assert set(got) == {("cirwel/unitares", 1)}
+
+    def test_a_timeout_returns_nothing(self, monkeypatch):
+        def slow(*a, **k):
+            raise report.subprocess.TimeoutExpired(cmd="gh", timeout=report.GH_TIMEOUT_S)
+
+        monkeypatch.setattr(report.subprocess, "run", slow)
+        assert _REAL_GH([("cirwel/unitares", 1)]) == {}
+
+    def test_a_malformed_repo_is_never_put_in_the_query(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(report.subprocess, "run",
+                            lambda args, **k: seen.append(args) or types.SimpleNamespace(
+                                returncode=0, stdout='{"data": {}}', stderr=""))
+        assert _REAL_GH([('evil") { x } #/repo', 1)]) == {}
+        assert seen == []
+
+
+class TestFinishedInTheListing:
+    def _rows(self, monkeypatch):
+        rows = [
+            _row(session_id="9d6c0f476b3d92cc", created_at=D(2026, 9, 13, 9),
+                 topic="Structured review of draft PR #2188 (README clarity rewrite)"),
+            _row(session_id="a9523875b15f4e2e", created_at=D(2026, 8, 16, 19),
+                 topic="Design decision on the memory architecture"),
+        ]
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [dict(r) for r in rows])
+        monkeypatch.setattr(report, "_gh_pr_states", lambda keys: {
+            ("cirwel/unitares", 2188): _merged(D(2026, 9, 13, 6, 36) + dt.timedelta(days=1))})
+
+    def test_finished_reviews_leave_the_list_and_are_counted(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        assert report.main(["--json"]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert [r["session_id"] for r in out["reviews"]] == ["a9523875b15f4e2e"]
+        assert out["subject_pr_finished_hidden"] == 1
+
+    def test_the_text_listing_says_how_many_it_hid(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main([])
+        out = capsys.readouterr().out
+        assert "9d6c0f476b3d92cc" not in out
+        assert "1 review(s) hidden because the reviewed PR finished" in out
+
+    def test_all_shows_the_pr_and_how_it_finished(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--all"])
+        out = capsys.readouterr().out
+        assert "9d6c0f476b3d92cc" in out
+        assert "SUBJECT PR cirwel/unitares#2188 MERGED" in out
+
+    def test_a_failed_pr_check_hides_nothing(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+
+        def boom(rows):
+            raise RuntimeError("gh exploded")
+
+        monkeypatch.setattr(report, "fetch_pr_states", boom)
+        assert report.main(["--json"]) == 0
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["count"] == 2
+        assert "hiding nothing" in captured.err
+
+
+class TestAwaitingOperator:
+    def test_terminal_rows_are_never_awaiting(self):
+        """75 failed rows still carry the flag; status, not the flag, decides."""
+        q = report.AWAITING_QUERY
+        assert "s.awaiting_facilitation" in q
+        assert "s.status NOT IN ('resolved', 'failed')" in q
+        assert "(probe|canary)" in q and "^RP[0-9]" in q
+
+    def test_json_carries_the_list(self, ledger, monkeypatch, capsys):
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [])
+        monkeypatch.setattr(report, "fetch_awaiting_operator", lambda dsn: [
+            {"session_id": "f00d000011112222", "topic": "t", "reviewer": "r"}])
+        report.main(["--json"])
+        assert json.loads(capsys.readouterr().out)["awaiting_operator"][0]["session_id"] == "f00d000011112222"
+
+    def test_a_failed_read_is_null_not_empty(self, ledger, monkeypatch, capsys):
+        """A consumer must be able to tell 'none' from 'could not tell'."""
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [])
+
+        def boom(dsn):
+            raise RuntimeError("db went away")
+
+        monkeypatch.setattr(report, "fetch_awaiting_operator", boom)
+        report.main(["--json"])
+        assert json.loads(capsys.readouterr().out)["awaiting_operator"] is None
+
+
+def _answer(n, at):
+    return {"pr": f"cirwel/unitares#{n}", "merged_at": at.isoformat() + "Z"}
+
+
+class TestAnswerLine:
+    def test_the_explicit_line_matches(self):
+        line = report.answer_line("8973efacebb17e11")
+        assert line.search("Answers dialectic 8973efacebb17e11")
+        assert line.search("answers dialectic session `8973efacebb17e11`")
+
+    def test_a_bare_citation_is_not_an_answer(self):
+        """#2735 quotes 8973efacebb17e11 as an example; it answers nothing."""
+        body = "often a full concession, e.g. `8973efacebb17e11` where the agent withdrew"
+        assert not report.answer_line("8973efacebb17e11").search(body)
+
+    def test_a_longer_id_sharing_the_prefix_does_not_match(self):
+        assert not report.answer_line("8973efac").search("Answers dialectic 8973efacebb17e11")
+
+
+class TestFindAnswers:
+    def test_a_pr_merged_after_the_review_answers_it(self):
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 1))]
+        got = report.find_answers(rows, {"aaaa000011112222": [
+            _answer(12, D(2026, 9, 9)), _answer(11, D(2026, 9, 5))]})
+        assert got["aaaa000011112222"]["pr"] == "cirwel/unitares#11"
+        assert got["aaaa000011112222"]["signal"] == "answered_in_merged_pr"
+
+    def test_a_pr_merged_before_the_review_cannot_answer_it(self):
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 10))]
+        assert report.find_answers(rows, {"aaaa000011112222": [_answer(11, D(2026, 9, 5))]}) == {}
+
+    def test_no_answer_stays(self):
+        assert report.find_answers([_row()], {}) == {}
+
+
+class TestAnswerLookup:
+    def test_only_bodies_with_the_line_count(self, monkeypatch):
+        payload = {"data": {"s0": {"nodes": [
+            {"number": 2735, "mergedAt": "2026-10-11T00:00:00Z",
+             "body": "e.g. `8973efacebb17e11` where the agent withdrew"},
+            {"number": 2800, "mergedAt": "2026-10-20T00:00:00Z",
+             "body": "Answers dialectic 8973efacebb17e11: conditions 1-3 met"}]}}}
+        fake = types.SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+        monkeypatch.setattr(report.subprocess, "run", lambda *a, **k: fake)
+        got = _REAL_GH_ANSWERS(["8973efacebb17e11"])
+        assert got == {"8973efacebb17e11": [
+            {"pr": "cirwel/unitares#2800", "merged_at": "2026-10-20T00:00:00Z"}]}
+
+    def test_a_non_hex_id_is_never_put_in_the_query(self, monkeypatch):
+        seen = []
+        monkeypatch.setattr(report.subprocess, "run",
+                            lambda args, **k: seen.append(args) or types.SimpleNamespace(
+                                returncode=0, stdout='{"data": {}}', stderr=""))
+        assert _REAL_GH_ANSWERS(['x" } evil']) == {}
+        assert seen == []
+
+    def test_a_timeout_returns_nothing(self, monkeypatch):
+        def slow(*a, **k):
+            raise report.subprocess.TimeoutExpired(cmd="gh", timeout=report.GH_TIMEOUT_S)
+
+        monkeypatch.setattr(report.subprocess, "run", slow)
+        assert _REAL_GH_ANSWERS(["aaaa000011112222"]) == {}
+
+    def test_every_id_is_looked_up_past_the_chunk_size(self, monkeypatch):
+        """Misses are not cached, so a fixed cap would starve id 41+ forever
+        (review finding on #2753): every id must reach some query, every run."""
+        queries = []
+
+        def run(args, **k):
+            queries.append(args[-1])
+            return types.SimpleNamespace(returncode=0, stdout='{"data": {}}', stderr="")
+
+        monkeypatch.setattr(report.subprocess, "run", run)
+        sids = [f"{i:016x}" for i in range(2 * report.ANSWER_LOOKUP_CHUNK + 5)]
+        _REAL_GH_ANSWERS(sids)
+        assert len(queries) == 3
+        assert all(any(sid in q for q in queries) for sid in sids)
+
+    def test_one_failed_chunk_does_not_stop_the_others(self, monkeypatch):
+        calls = []
+
+        def run(args, **k):
+            calls.append(args)
+            if len(calls) == 1:
+                raise report.subprocess.TimeoutExpired(cmd="gh", timeout=report.GH_TIMEOUT_S)
+            sid = f"{report.ANSWER_LOOKUP_CHUNK:016x}"
+            return types.SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"data": {"s0": {
+                "nodes": [{"number": 9, "mergedAt": "2026-10-20T00:00:00Z",
+                           "body": f"Answers dialectic {sid}"}]}}}))
+
+        monkeypatch.setattr(report.subprocess, "run", run)
+        sids = [f"{i:016x}" for i in range(report.ANSWER_LOOKUP_CHUNK + 1)]
+        assert list(_REAL_GH_ANSWERS(sids)) == [f"{report.ANSWER_LOOKUP_CHUNK:016x}"]
+
+    def test_found_answers_are_cached_and_misses_are_not(self, monkeypatch):
+        calls = []
+
+        def gh(sids):
+            calls.append(list(sids))
+            return {"aaaa000011112222": [_answer(11, D(2026, 9, 5))]}
+
+        monkeypatch.setattr(report, "_gh_answering_prs", gh)
+        rows = [_row(session_id="aaaa000011112222"), _row(session_id="bbbb000011112222")]
+        report.fetch_answers(rows)
+        report.fetch_answers(rows)
+        assert calls == [["aaaa000011112222", "bbbb000011112222"], ["bbbb000011112222"]]
+
+
+class TestAnsweredInTheListing:
+    def _rows(self, monkeypatch):
+        rows = [_row(session_id="aaaa000011112222", created_at=D(2026, 9, 1), topic="Design review"),
+                _row(session_id="bbbb000011112222", created_at=D(2026, 9, 1), topic="Other design")]
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [dict(r) for r in rows])
+        monkeypatch.setattr(report, "_gh_answering_prs", lambda sids: {
+            "aaaa000011112222": [_answer(11, D(2026, 9, 5))]})
+
+    def test_answered_reviews_leave_the_list_and_are_counted(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--json"])
+        out = json.loads(capsys.readouterr().out)
+        assert [r["session_id"] for r in out["reviews"]] == ["bbbb000011112222"]
+        assert out["answered_hidden"] == 1
+
+    def test_all_shows_which_pr_answered(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--all"])
+        assert "ANSWERED by merged PR cirwel/unitares#11" in capsys.readouterr().out
+
+    def test_a_failed_lookup_hides_nothing(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+
+        def boom(rows):
+            raise RuntimeError("gh exploded")
+
+        monkeypatch.setattr(report, "fetch_answers", boom)
+        report.main(["--json"])
+        captured = capsys.readouterr()
+        assert json.loads(captured.out)["count"] == 2
+        assert "hiding nothing" in captured.err
+
+
+class TestSubjectPaths:
+    def test_paths_come_from_the_topic_and_conditions(self):
+        row = _row(topic="Design review. knowledge(action=search) in src/retrieval.py",
+                   conditions=["Add a test in tests/test_retrieval.py", "keep src/retrieval.py pure"],
+                   reviewer_reasoning="I also read src/unrelated.py")
+        assert report.subject_paths(row) == ["src/retrieval.py", "tests/test_retrieval.py"]
+
+    def test_urls_and_absolute_paths_are_not_subjects(self):
+        row = _row(topic="see https://github.com/cirwel/unitares/blob/master/src/a.py "
+                         "and /Users/x/projects/b.py and ~/scripts/c.sh",
+                   conditions=[])
+        assert report.subject_paths(row) == []
+
+    def test_dot_directories_count_and_a_leading_dot_slash_is_dropped(self):
+        """Review finding on #2753: .github/workflows/ci.yml was never routed."""
+        row = _row(topic="change .github/workflows/ci.yml and ./src/a.py", conditions=[])
+        assert report.subject_paths(row) == [".github/workflows/ci.yml", "src/a.py"]
+
+    def test_a_parent_relative_path_is_not_a_subject(self):
+        assert report.subject_paths(_row(topic="see ../other/x.py", conditions=[])) == []
+
+    def test_a_bare_filename_is_not_a_subject(self):
+        """Without a directory a name is too ambiguous to route on."""
+        assert report.subject_paths(_row(topic="update README.md", conditions=[])) == []
+
+
+class TestTouching:
+    def _rows(self, monkeypatch):
+        rows = [_row(session_id="17965f22c144bf18",
+                     topic="The synthesis phase replays the antithesis (agents/dialectic_reviewer/reviewer.py)"),
+                _row(session_id="a9523875b15f4e2e", topic="Design decision on the memory architecture")]
+        monkeypatch.setattr(report, "fetch", lambda dsn, window_days: [dict(r) for r in rows])
+
+    def test_only_reviews_naming_a_changed_file_come_back(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--json", "--touching", "./agents/dialectic_reviewer/reviewer.py",
+                     "--touching", "README.md"])
+        out = json.loads(capsys.readouterr().out)
+        assert [r["session_id"] for r in out["reviews"]] == ["17965f22c144bf18"]
+        assert out["reviews"][0]["matched_paths"] == ["agents/dialectic_reviewer/reviewer.py"]
+        assert out["touching"] == ["./agents/dialectic_reviewer/reviewer.py", "README.md"]
+
+    def test_no_match_is_an_empty_list(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--json", "--touching", "src/elsewhere.py"])
+        assert json.loads(capsys.readouterr().out)["reviews"] == []
+
+    def test_every_review_carries_its_subject_paths(self, ledger, monkeypatch, capsys):
+        self._rows(monkeypatch)
+        report.main(["--json"])
+        paths = {r["session_id"]: r["subject_paths"] for r in json.loads(capsys.readouterr().out)["reviews"]}
+        assert paths == {"17965f22c144bf18": ["agents/dialectic_reviewer/reviewer.py"],
+                         "a9523875b15f4e2e": []}

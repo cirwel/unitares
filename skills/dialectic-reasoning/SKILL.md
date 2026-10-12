@@ -45,12 +45,10 @@ with `start_session` or `identity`, then omit `agent_id`; the transport carries
 the bound UUID into the handler. Supplying an explicit `agent_id` is not
 delegation and cannot authorize acting as another participant.
 
-This is an equality gate, not an independent authentication protocol. Its
-proof strength is exactly the strength of the upstream binding source and the
-deployment's strict-identity policy. A server-inferred weak binding that the
-policy accepts remains weak; the dialectic check must not be described as
-proving strong identity or closing impersonation by itself. Inspect the
-identity-assurance fields when that distinction matters.
+The gate checks that the submitted UUID equals the bound caller, so it is as
+strong as that binding and the deployment's strict-identity policy: a
+server-inferred weak binding stays weak. Read `identity_assurance` when that
+matters.
 
 ## Phase 1: Thesis
 

@@ -555,3 +555,45 @@ async def test_post_update_persists_the_same_envelope_exposed_in_full_result():
     assert candidate["trajectory_identity"]["deployed"][
         "identity_confidence"
     ] == pytest.approx(0.375)
+
+
+def _minimal_envelope(**extra):
+    return build_eisv_telemetry_envelope(
+        metrics={"E": 0.6, "I": 0.8, "S": 0.2, "V": -0.2},
+        behavioral_snapshot=None,
+        submitted_sensor=None,
+        submitted_source=None,
+        derivation=None,
+        policy_evaluation=None,
+        enforcement=None,
+        **extra,
+    )
+
+
+def test_self_report_is_recorded_as_measurement_only():
+    envelope = _minimal_envelope(self_report={
+        "confidence_reported": 0.8, "confidence_effective": 0.55, "confidence_dampened": True})
+    assert envelope["self_report"] == {
+        "mode": "measurement_only", "policy_applied": False,
+        "confidence_reported": 0.8, "confidence_effective": 0.55, "confidence_dampened": True,
+    }
+
+
+def test_self_report_absent_is_null_not_empty():
+    """A consumer must be able to tell 'not recorded' from 'recorded, nothing stated'."""
+    assert _minimal_envelope()["self_report"] is None
+
+
+def test_self_report_record_keeps_reported_and_dampened_confidence_apart():
+    from types import SimpleNamespace
+
+    from src.mcp_handlers.updates.phases import _self_report_record
+
+    dampened = SimpleNamespace(arguments={"confidence": "0.8"}, confidence=0.55, confidence_dampened=True)
+    assert _self_report_record(dampened) == {
+        "confidence_reported": 0.8, "confidence_effective": 0.55, "confidence_dampened": True}
+    silent = SimpleNamespace(arguments={}, confidence=None, confidence_dampened=False)
+    assert _self_report_record(silent) == {
+        "confidence_reported": None, "confidence_effective": None, "confidence_dampened": False}
+    garbage = SimpleNamespace(arguments={"confidence": "high"}, confidence=None)
+    assert _self_report_record(garbage)["confidence_reported"] is None
