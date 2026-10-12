@@ -904,9 +904,11 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import (
+                    REGIME_SELF_LOOP_ABLATION_SCHEMA,
                     compute_behavioral_sensor_eisv,
                     compute_decision_self_loop_shadow,
                     compute_legacy_coherence_dependency_shadow,
+                    compute_regime_self_loop_shadow,
                 )
                 from src.coherence_provenance import (
                     LEGACY_COHERENCE_SOURCE,
@@ -1029,12 +1031,36 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                     **behavioral_sensor_inputs,
                     deployed_observation=behavioral_eisv,
                 )
+                # Third sibling, for S: detect_regime labels regimes from
+                # behavioral S's own change and _regime_instability counts the
+                # flips at 35% of S (ledger row 46). Guarded separately: this
+                # block also hands the deployed observation to the monitor, and
+                # a shadow must never be able to interrupt that.
+                try:
+                    regime_shadow = compute_regime_self_loop_shadow(
+                        **behavioral_sensor_inputs,
+                        deployed_observation=behavioral_eisv,
+                    )
+                except Exception as regime_exc:  # noqa: BLE001 -- measurement only
+                    regime_shadow = {
+                        "schema": REGIME_SELF_LOOP_ABLATION_SCHEMA,
+                        "mode": "measurement_only",
+                        "policy_applied": False,
+                        "eligible": False,
+                        "eligibility_reason": f"shadow_error:{type(regime_exc).__name__}",
+                        "deployed": None,
+                        "candidate": None,
+                        "candidate_minus_deployed": None,
+                    }
                 ctx.agent_state["_eisv_shadow_ablations"] = {
                     "legacy_coherence_neutralized": {
                         "behavioral_sensor": behavioral_shadow,
                     },
                     "decision_self_loop_neutralized": {
                         "behavioral_sensor": decision_shadow,
+                    },
+                    "regime_self_loop_neutralized": {
+                        "behavioral_sensor": regime_shadow,
                     },
                 }
                 ctx.agent_state["_eisv_derivation"] = build_behavioral_derivation(
