@@ -92,7 +92,7 @@ def test_tested_claim_headings_do_not_label_engineering_findings_refuted():
         ledger,
     )
 
-    assert len(entries) == 46  # row 46: S regime self-loop (2026-10-12)
+    assert len(entries) == 48  # rows 46-48: S regime loop, E and I referents (2026-10-12)
     for number, entry in entries:
         first_paragraph = entry.split("\n\n", 1)[0]
         match = re.search(r"[→—]\s*\*\*(.*?)\*\*", first_paragraph, re.S)
