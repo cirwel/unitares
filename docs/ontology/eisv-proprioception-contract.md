@@ -1,7 +1,7 @@
 # EISV Proprioception Contract
 
 **Created:** June 26, 2026
-**Last Updated:** September 22, 2026
+**Last Updated:** October 11, 2026
 **Status:** Active
 
 ---
@@ -18,10 +18,13 @@ system. The term does not imply subjective experience, biological equivalence,
 or independent volition.
 
 **EISV is the state-estimation layer.** It turns those observations into a
-structured estimate of runtime state. EISV is designed as a runtime state
-estimator for autonomic regulation. That is an architectural role, not evidence
-that EISV improves autonomic regulation relative to simpler state
-representations; comparative benefit remains an experimental question.
+structured estimate of runtime state for autonomic regulation. The
+[operational definitions](../EISV_COMPUTATION.md#what-the-signals-record)
+identify what each implemented coordinate contains, including controller
+history and derived signals. Recording those signals, interpreting them as a
+diagnosis, and choosing a policy response are separate questions. A narrow or
+derived signal remains inspectable information; comparative benefit is evaluated
+for a specified consumer and task in the [claim ledger](../EVIDENCE_AND_LIMITS.md#claim-ledger).
 
 **Autonomic governance is the regulation layer.** Policy, review, identity,
 authority, outcomes, and enforcement may consume EISV state estimates, but an
