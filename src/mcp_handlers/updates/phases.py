@@ -924,6 +924,8 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import (
+                    DECISION_SELF_LOOP_ABLATION_SCHEMA,
+                    LEGACY_COHERENCE_ABLATION_SCHEMA,
                     REGIME_SELF_LOOP_ABLATION_SCHEMA,
                     compute_behavioral_sensor_eisv,
                     compute_decision_self_loop_shadow,
@@ -1034,10 +1036,24 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 behavioral_eisv = compute_behavioral_sensor_eisv(
                     **behavioral_sensor_inputs
                 )
-                behavioral_shadow = compute_legacy_coherence_dependency_shadow(
-                    **behavioral_sensor_inputs,
-                    deployed_observation=behavioral_eisv,
-                )
+                # A failed shadow is unavailable evidence, never a reason to
+                # skip the live sensor handoff or the other measurements.
+                try:
+                    behavioral_shadow = compute_legacy_coherence_dependency_shadow(
+                        **behavioral_sensor_inputs,
+                        deployed_observation=behavioral_eisv,
+                    )
+                except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
+                    behavioral_shadow = {
+                        "schema": LEGACY_COHERENCE_ABLATION_SCHEMA,
+                        "mode": "measurement_only",
+                        "policy_applied": False,
+                        "eligible": False,
+                        "eligibility_reason": f"shadow_error:{type(shadow_exc).__name__}",
+                        "deployed": None,
+                        "candidate": None,
+                        "candidate_minus_deployed": None,
+                    }
                 # Sibling ablation: decision_e is the LARGEST term in E (0.35
                 # with outcomes, 0.40 without) and reads governance_monitor's
                 # own prior verdicts, so E -> basin -> guide -> decision_e -> E
@@ -1047,10 +1063,24 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # or a basin-boundary counterfactual (the payload says so under
                 # `cannot_measure`). Measurement-only, same contract as the
                 # sibling above.
-                decision_shadow = compute_decision_self_loop_shadow(
-                    **behavioral_sensor_inputs,
-                    deployed_observation=behavioral_eisv,
-                )
+                # A failed shadow is unavailable evidence, never a reason to
+                # skip the live sensor handoff or the other measurements.
+                try:
+                    decision_shadow = compute_decision_self_loop_shadow(
+                        **behavioral_sensor_inputs,
+                        deployed_observation=behavioral_eisv,
+                    )
+                except Exception as shadow_exc:  # noqa: BLE001 -- measurement only
+                    decision_shadow = {
+                        "schema": DECISION_SELF_LOOP_ABLATION_SCHEMA,
+                        "mode": "measurement_only",
+                        "policy_applied": False,
+                        "eligible": False,
+                        "eligibility_reason": f"shadow_error:{type(shadow_exc).__name__}",
+                        "deployed": None,
+                        "candidate": None,
+                        "candidate_minus_deployed": None,
+                    }
                 # Third sibling, for S: detect_regime labels regimes from
                 # behavioral S's own change and _regime_instability counts the
                 # flips at 35% of S (ledger row 46). Guarded separately: this
