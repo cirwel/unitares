@@ -163,10 +163,23 @@ summary also says the framework detects impersonation, while the main paper
 leaves discrimination open and distinguishes behavioral continuity from the
 credential-based write gate.
 
+**Implementation distinction, added after independent review:** the five-term
+model is the paper's specification. UNITARES's separate
+[`TrajectorySignature.similarity`](../../src/trajectory_identity.py) still adds
+`homeostatic_similarity` with nominal weight 0.15 when both Eta inputs are
+present, then normalizes over available terms. The paper's Appendix A describes
+an August correction in **Anima**, not this UNITARES implementation. A reader
+correction must keep those two implementations distinct; this audit changes
+neither. See the [contract's implementation-mismatch record](../ontology/eisv-proprioception-contract.md#trajectory-identity--same-discipline-different-instrument).
+
 **Replacements:**
 
-> The signature contains five scored components plus a derived homeostatic
-> summary, Eta. Eta is not an additional weighted term in similarity (§3.6–§4.1).
+> In the paper's model, the signature contains five scored components plus a
+> derived homeostatic summary, Eta. Eta is not an additional weighted term in
+> the paper's similarity function (§3.6–§4.1). The separate UNITARES
+> implementation still includes Eta with nominal weight 0.15 when present,
+> renormalized with the other available terms; the Anima implementation
+> correction described in Appendix A does not establish parity between them.
 
 > The framework proposes behavioral continuity and anomaly checks. The current
 > evidence does not establish individual recognition across harness changes or
