@@ -4979,6 +4979,245 @@ def test_scan_file_escalates_unusable_output_and_keeps_the_counter(
     )
 
 
+# --- Constrained retry: an unreadable reply gets one different request ------
+#
+# Measured on the reference host, 2026-10-11 (gemma4:latest, ollama 0.32.14):
+# 55 of 781 region scans came back unusable, 48 of them malformed JSON, and at
+# temperature 0 asking again returns the same reply. The retry therefore asks
+# differently: thinking off, reply held to the envelope schema.
+
+_RETRY_SOURCE = 'import asyncio\n\n\nasync def f(x):\n    asyncio.create_task(x.run("a"))\n'
+
+
+def _envelope(watcher_module, evidence_json: str) -> str:
+    return (
+        '{"saw_start":"' + watcher_module.PROMPT_CANARY + '","findings":[{"pattern":"P001",'
+        '"line":5,"hint":"fire-and-forget task","evidence":' + evidence_json + "}]}"
+    )
+
+
+def _unreadable(watcher_module) -> str:
+    """The live failure: code copied into `evidence` with its quotes unescaped."""
+    return _envelope(watcher_module, '"asyncio.create_task(x.run("a"))"')
+
+
+def _readable(watcher_module) -> str:
+    return _envelope(watcher_module, '"asyncio.create_task(x.run(\\"a\\"))"')
+
+
+def _scripted_model(replies: list[str], calls: list[dict]):
+    def model(prompt, *args, **kwargs):
+        calls.append(kwargs)
+        return {"text": replies[len(calls) - 1], "model_used": "m", "tokens_used": 1}
+
+    return model
+
+
+def _failure_spies(watcher_module, monkeypatch):
+    recorded: list[Exception] = []
+    cleared: list[bool] = []
+    monkeypatch.setattr(watcher_module, "_record_model_failure", lambda e: recorded.append(e))
+    monkeypatch.setattr(watcher_module, "_clear_model_failures", lambda: cleared.append(True))
+    return recorded, cleared
+
+
+def test_the_fixture_reply_really_is_unreadable(watcher_module):
+    """Guards the tests below against a fixture the parser quietly accepts."""
+    with pytest.raises(watcher_module.ModelOutputUnusable):
+        watcher_module.parse_findings(_unreadable(watcher_module), "f.py", "m", 1)
+    assert watcher_module.parse_findings(_readable(watcher_module), "f.py", "m", 1)
+
+
+def test_unreadable_reply_is_retried_constrained_and_the_region_is_scanned(
+    watcher_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    recorded, cleared = _failure_spies(watcher_module, monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module,
+        "call_model",
+        _scripted_model([_unreadable(watcher_module), _readable(watcher_module)], calls),
+    )
+
+    findings = watcher_module.scan_file(str(target), persist=False)
+
+    assert calls == [{}, {"reply_schema": watcher_module.SCAN_REPLY_SCHEMA}], (
+        "the first request must be the normal one and the second the constrained one"
+    )
+    assert [(f.pattern, f.line) for f in findings] == [("P001", 5)]
+    assert findings[0].model_used == "m" + watcher_module.CONSTRAINED_MODE_SUFFIX, (
+        "a finding from the retry must say which mode produced it"
+    )
+    assert recorded == [], "a recovered region is not a detector failure"
+    assert cleared == [True]
+
+
+def test_retry_that_is_also_unreadable_records_the_one_failure(
+    watcher_module, tmp_path, monkeypatch
+):
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    recorded, cleared = _failure_spies(watcher_module, monkeypatch)
+    calls: list[dict] = []
+    bad = _unreadable(watcher_module)
+    monkeypatch.setattr(watcher_module, "call_model", _scripted_model([bad, bad], calls))
+
+    assert watcher_module.scan_file(str(target), persist=False) == []
+    assert len(calls) == 2
+    assert len(recorded) == 1 and isinstance(recorded[0], watcher_module.ModelOutputUnusable)
+    assert cleared == [], "an unrecovered region must still count toward detector-down"
+
+
+def test_retry_that_raises_falls_back_to_the_original_failure(
+    watcher_module, tmp_path, monkeypatch
+):
+    """A busy slot, a timeout or an HTTP error on the retry is not a new kind
+    of failure: the region is unscanned for the reason it already was."""
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    recorded, cleared = _failure_spies(watcher_module, monkeypatch)
+    calls: list[dict] = []
+
+    def model(prompt, *args, **kwargs):
+        calls.append(kwargs)
+        if kwargs:
+            raise watcher_module.ModelBusy("slot held")
+        return {"text": _unreadable(watcher_module), "model_used": "m", "tokens_used": 1}
+
+    monkeypatch.setattr(watcher_module, "call_model", model)
+
+    assert watcher_module.scan_file(str(target), persist=False) == []
+    assert len(calls) == 2
+    assert len(recorded) == 1 and isinstance(recorded[0], watcher_module.ModelOutputUnusable)
+    assert cleared == []
+
+
+def test_readable_reply_is_never_retried(watcher_module, tmp_path, monkeypatch):
+    """The normal mode stays the detector: thinking off reports different
+    findings, so the constrained request is made only when there is nothing
+    else to read."""
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    _failure_spies(watcher_module, monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module, "call_model", _scripted_model([_readable(watcher_module)], calls)
+    )
+
+    findings = watcher_module.scan_file(str(target), persist=False)
+
+    assert calls == [{}]
+    assert findings[0].model_used == "m"
+
+
+@pytest.mark.parametrize("why", ["switched_off", "compat_endpoint"])
+def test_no_retry_when_it_is_off_or_cannot_apply(watcher_module, tmp_path, monkeypatch, why):
+    target = tmp_path / "sample.py"
+    target.write_text(_RETRY_SOURCE)
+    recorded, _cleared = _failure_spies(watcher_module, monkeypatch)
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module, "call_model", _scripted_model([_unreadable(watcher_module)], calls)
+    )
+    if why == "switched_off":
+        monkeypatch.setattr(watcher_module, "CONSTRAINED_RETRY", False)
+    else:
+        monkeypatch.setattr(
+            watcher_module, "OLLAMA_URL", "http://host:11434/v1/chat/completions"
+        )
+
+    assert watcher_module.scan_file(str(target), persist=False) == []
+    assert len(calls) == 1
+    assert len(recorded) == 1
+
+
+def test_recovered_region_leaves_no_failure_state_for_the_file(
+    watcher_module, tmp_path, monkeypatch
+):
+    """Chunked pass: region 1 unreadable then recovered, region 2 readable.
+    The file was fully scanned, so the counter must not carry a failure."""
+    target = tmp_path / "scan.py"
+    target.write_text("a = 1\nb = 2\nc = 3\nd = 4\n")
+    monkeypatch.setattr(watcher_module, "should_skip", lambda _p: (False, ""))
+    monkeypatch.setattr(watcher_module, "chunk_regions", lambda _p, *a, **k: ["1-2", "3-4"])
+    empty = '{"saw_start":"' + watcher_module.PROMPT_CANARY + '","findings":[]}'
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        watcher_module, "call_model", _scripted_model(["not json at all", empty, empty], calls)
+    )
+    logged: list[str] = []
+    real_log = watcher_module.log
+    monkeypatch.setattr(
+        watcher_module, "log", lambda msg, *a, **k: (logged.append(msg), real_log(msg, *a, **k))[1]
+    )
+
+    watcher_module.scan_file(str(target), persist=False)
+
+    assert len(calls) == 3
+    assert not watcher_module._model_failure_path("scan").exists()
+    assert any("1 of 2 regions needed the constrained retry" in m for m in logged), (
+        "a file scanned partly by the other mode must say so once"
+    )
+
+
+def test_reply_schema_goes_out_with_thinking_off(watcher_module, monkeypatch):
+    """The schema alone was measured not to bind at scan size; `think: false`
+    is what makes ollama apply it, so the two must travel together."""
+    captured: dict[str, Any] = {}
+    payload = {
+        "message": {"content": "{}"}, "model": "m",
+        "prompt_eval_count": 10, "eval_count": 2, "done_reason": "stop",
+    }
+    _stub_urlopen(monkeypatch, watcher_module, payload, captured)
+
+    watcher_module.call_ollama("p", "m", timeout=5, reply_schema=watcher_module.SCAN_REPLY_SCHEMA)
+
+    assert captured["body"]["format"] == watcher_module.SCAN_REPLY_SCHEMA
+    assert captured["body"]["think"] is False
+
+
+def test_normal_call_carries_neither_format_nor_think(watcher_module, monkeypatch):
+    """Pins the normal request: adding either key to it changes the detector."""
+    captured: dict[str, Any] = {}
+    payload = {
+        "message": {"content": "{}"}, "model": "m",
+        "prompt_eval_count": 10, "eval_count": 2, "done_reason": "stop",
+    }
+    _stub_urlopen(monkeypatch, watcher_module, payload, captured)
+
+    watcher_module.call_ollama("p", "m", timeout=5)
+
+    assert "format" not in captured["body"]
+    assert "think" not in captured["body"]
+
+
+def test_compat_endpoint_ignores_the_reply_schema(watcher_module, monkeypatch):
+    captured: dict[str, Any] = {}
+    payload = {
+        "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+        "model": "m", "usage": {"prompt_tokens": 10, "total_tokens": 12},
+    }
+    _stub_urlopen(monkeypatch, watcher_module, payload, captured)
+    monkeypatch.setattr(watcher_module, "OLLAMA_URL", "http://host:11434/v1/chat/completions")
+
+    watcher_module.call_ollama("p", "m", timeout=5, reply_schema=watcher_module.SCAN_REPLY_SCHEMA)
+
+    assert "format" not in captured["body"] and "think" not in captured["body"]
+    assert "response_format" not in captured["body"]
+
+
+def test_reply_schema_does_not_answer_for_the_model(watcher_module):
+    """The grammar must not write the canary or pick a library id: both are
+    checks on the model, and a schema that forced them would pass a model
+    that never saw the prompt or invented its pattern."""
+    schema = watcher_module.SCAN_REPLY_SCHEMA
+    item = schema["properties"]["findings"]["items"]["properties"]
+    for field in (schema["properties"]["saw_start"], item["pattern"]):
+        assert field == {"type": "string"}
+
+
 # --- Defect 3: the capability probe must exercise the capability -----------
 
 
