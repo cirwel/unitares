@@ -1092,6 +1092,37 @@ class TestAnswerLookup:
         monkeypatch.setattr(report.subprocess, "run", slow)
         assert _REAL_GH_ANSWERS(["aaaa000011112222"]) == {}
 
+    def test_every_id_is_looked_up_past_the_chunk_size(self, monkeypatch):
+        """Misses are not cached, so a fixed cap would starve id 41+ forever
+        (review finding on #2753): every id must reach some query, every run."""
+        queries = []
+
+        def run(args, **k):
+            queries.append(args[-1])
+            return types.SimpleNamespace(returncode=0, stdout='{"data": {}}', stderr="")
+
+        monkeypatch.setattr(report.subprocess, "run", run)
+        sids = [f"{i:016x}" for i in range(2 * report.ANSWER_LOOKUP_CHUNK + 5)]
+        _REAL_GH_ANSWERS(sids)
+        assert len(queries) == 3
+        assert all(any(sid in q for q in queries) for sid in sids)
+
+    def test_one_failed_chunk_does_not_stop_the_others(self, monkeypatch):
+        calls = []
+
+        def run(args, **k):
+            calls.append(args)
+            if len(calls) == 1:
+                raise report.subprocess.TimeoutExpired(cmd="gh", timeout=report.GH_TIMEOUT_S)
+            sid = f"{report.ANSWER_LOOKUP_CHUNK:016x}"
+            return types.SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({"data": {"s0": {
+                "nodes": [{"number": 9, "mergedAt": "2026-10-20T00:00:00Z",
+                           "body": f"Answers dialectic {sid}"}]}}}))
+
+        monkeypatch.setattr(report.subprocess, "run", run)
+        sids = [f"{i:016x}" for i in range(report.ANSWER_LOOKUP_CHUNK + 1)]
+        assert list(_REAL_GH_ANSWERS(sids)) == [f"{report.ANSWER_LOOKUP_CHUNK:016x}"]
+
     def test_found_answers_are_cached_and_misses_are_not(self, monkeypatch):
         calls = []
 
@@ -1151,6 +1182,14 @@ class TestSubjectPaths:
                          "and /Users/x/projects/b.py and ~/scripts/c.sh",
                    conditions=[])
         assert report.subject_paths(row) == []
+
+    def test_dot_directories_count_and_a_leading_dot_slash_is_dropped(self):
+        """Review finding on #2753: .github/workflows/ci.yml was never routed."""
+        row = _row(topic="change .github/workflows/ci.yml and ./src/a.py", conditions=[])
+        assert report.subject_paths(row) == [".github/workflows/ci.yml", "src/a.py"]
+
+    def test_a_parent_relative_path_is_not_a_subject(self):
+        assert report.subject_paths(_row(topic="see ../other/x.py", conditions=[])) == []
 
     def test_a_bare_filename_is_not_a_subject(self):
         """Without a directory a name is too ambiguous to route on."""

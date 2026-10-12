@@ -198,8 +198,9 @@ GH_TIMEOUT_S = 8
 PR_FINISHED_STATES = ("MERGED", "CLOSED")
 ANSWER_CACHE_ENV = "DIALECTIC_ANSWER_CACHE"
 DEFAULT_ANSWER_CACHE = "~/.unitares/dialectic-answers.json"
-# Bounds the one search query; rows past it are not checked and stay listed.
-MAX_ANSWER_LOOKUPS = 40
+# Ids per search query. Every id is looked up every run, one query per chunk:
+# misses are not cached, so a fixed cap would starve the ids past it forever.
+ANSWER_LOOKUP_CHUNK = 40
 
 # Prefixes shorter than this match by accident, not by intent. Session ids are
 # 16 hex characters; the triage notes cite 8.
@@ -621,13 +622,22 @@ def _save_answer_cache(path: str, cache: Dict[str, List[Dict[str, Any]]]) -> Non
 
 
 def _gh_answering_prs(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
-    """One batched GraphQL search: merged PRs in ``DEFAULT_PR_REPO`` whose body
-    carries each id's ``answer_line``. Empty on any failure."""
+    """Merged PRs in ``DEFAULT_PR_REPO`` whose body carries each id's
+    ``answer_line``: one GraphQL search per ``ANSWER_LOOKUP_CHUNK`` ids, so the
+    window (90 days, a few dozen rows) costs a query or two. A failed chunk
+    hides nothing for its ids and does not stop the others."""
+    valid = [sid for sid in session_ids if re.fullmatch(r"[0-9a-f]{8,64}", sid or "")]
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for start in range(0, len(valid), ANSWER_LOOKUP_CHUNK):
+        out.update(_gh_answer_chunk(valid[start:start + ANSWER_LOOKUP_CHUNK]))
+    return out
+
+
+def _gh_answer_chunk(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """One batched search for already-validated ids. Empty on any failure."""
     parts = []
     aliases = {}
-    for i, sid in enumerate(session_ids[:MAX_ANSWER_LOOKUPS]):
-        if not re.fullmatch(r"[0-9a-f]{8,64}", sid or ""):
-            continue
+    for i, sid in enumerate(session_ids):
         alias = f"s{i}"
         aliases[alias] = sid
         parts.append(f'{alias}: search(query: "repo:{DEFAULT_PR_REPO} is:pr is:merged in:body {sid}", '
@@ -674,11 +684,12 @@ def fetch_answers(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[Dict[str, An
 
 # ── routing by subject ──────────────────────────────────────────────────────
 
-# A repo-relative file path: at least one directory, a known extension, and not
-# the tail of a URL or an absolute/home path (the look-behind refuses a start
-# right after "/", "~" is not in the class, so neither is ever matched).
+# A repo-relative file path: at least one directory (dot-directories such as
+# .github/ included, a leading "./" dropped), a known extension, and not the
+# tail of a URL or an absolute/home path (the look-behind refuses a start right
+# after "/", "~" is not in the class, and "../" never starts a segment).
 _SUBJECT_PATH = re.compile(
-    r"(?<![\w/.~-])((?:[\w-][\w.-]*/)+[\w.-]+\.(?:py|sh|ex|exs|md|ts|js|sql|json|ya?ml|toml))\b"
+    r"(?<![\w/.~-])(?:\./)?((?:\.?[\w-][\w.-]*/)+[\w.-]+\.(?:py|sh|ex|exs|md|ts|js|sql|json|ya?ml|toml))\b"
 )
 
 
