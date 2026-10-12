@@ -1267,6 +1267,31 @@ as-declared, all six residents run at σ=0 now; their observed S rest (7-day mea
 invariant; the recentring the feature exists for is silently absent for exactly the
 agents the individuality design most values.
 
+**24. "S's regime-instability term measures how much the runtime is switching"**
+(contract *The split*, S row: "How much is the runtime moving and switching") →
+**IMPLEMENTATION MISMATCH.** At rest the term mostly measures S itself.
+`detect_regime` (`src/monitor_regime.py`) reads behavioral S once behavioral
+confidence reaches 0.3 and returns `DIVERGENCE` when S rose by more than
+`eps_S = 0.002` while |V| exceeds 0.05; `_regime_instability`
+(`src/behavioral_sensor.py`) then counts label changes over the last ten entries,
+at 35% of raw S. Resting behavioral V sits near -0.095, so the V condition always
+holds, and S's own step-to-step variation (SD about 0.028) keeps flipping the
+label. In a synthetic offline run of the live build (2026-10-12,
+[`../evaluations/eisv-s-faithfulness/result-v0.md`](../evaluations/eisv-s-faithfulness/result-v0.md)),
+holding the term at its low default cut resting S step SD from 0.0273 to 0.0016
+and left every intervention response essentially unchanged; the thrash response
+arrives through drift, not regime switching. Row 13 recorded the topology; this
+adds the magnitude and the direct path inside behavioral S.
+
+The same run is the first exercise of S's assigned validation regime. S moved
+with the predicted sign and dose for overclaimed complexity, confidence collapse
+and thrash, and did not move for a vocabulary-only change or an honestly reported
+shift to heavier work. That run was exploratory and not pre-registered, so it
+earns no status here; a pre-registered rerun with a declared standard is what
+would. **Do not change S before the 2026-12-01 read**: S feeds that read's models.
+The repair (drop the term, or compute regime changes from something other than S)
+belongs after it or behind a shadow reading.
+
 **Amendment to rows 9–10** (from the same wave): the `coherence_sim` in
 `min(coherence_sim, lineage_sim)` is the same `similarity()` instrument against the
 hot-path-refreshed `trajectory_current` (`trajectory_identity.py:1010-1016,577,600`),
