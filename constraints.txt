@@ -48,7 +48,7 @@
 # mismatch with production surfaces only in whatever seam that release
 # changed. On an existing environment, pin explicitly:
 #
-#   pip install "mcp==2.2.0" -r requirements-full.txt -c constraints.txt
+#   pip install "mcp==2.3.0" -r requirements-full.txt -c constraints.txt
 #
 # or rebuild the venv. `pip check` will not catch it: the newer version
 # satisfies every declared range, which is exactly why this file exists.
@@ -71,4 +71,4 @@
 # The pin moves only together with the production interpreter, as an operator
 # decision made with a deploy, not a merge: bumping it here changes what
 # production installs.
-mcp==2.2.0
+mcp==2.3.0
