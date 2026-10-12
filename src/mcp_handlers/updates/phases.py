@@ -829,6 +829,30 @@ def _self_report_record(ctx) -> dict:
         "confidence_dampened": bool(getattr(ctx, "confidence_dampened", False)),
     }
 
+
+def _measured_shadow(compute, schema: str, inputs: dict, deployed: dict) -> dict:
+    """Run one behavioral-sensor shadow ablation without letting it raise.
+
+    The shadows run inside the block that hands the deployed observation to the
+    monitor. If one raised through it, the monitor would fall back to its own
+    divergent sensor path and the deployed reading would change, so a failing
+    shadow records why it is missing instead.
+    """
+    try:
+        return compute(**inputs, deployed_observation=deployed)
+    except Exception as exc:  # noqa: BLE001 -- measurement only
+        return {
+            "schema": schema,
+            "mode": "measurement_only",
+            "policy_applied": False,
+            "eligible": False,
+            "eligibility_reason": f"shadow_error:{type(exc).__name__}",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+
+
 async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
     """Build agent_state inputs and policy warnings *before* the agent lock.
 
@@ -924,6 +948,8 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
             monitor = mcp_server.monitors.get(ctx.agent_id)
             if monitor and len(getattr(monitor.state, 'decision_history', [])) >= 3:
                 from src.behavioral_sensor import (
+                    DECISION_SELF_LOOP_ABLATION_SCHEMA,
+                    LEGACY_COHERENCE_ABLATION_SCHEMA,
                     REGIME_SELF_LOOP_ABLATION_SCHEMA,
                     compute_behavioral_sensor_eisv,
                     compute_decision_self_loop_shadow,
@@ -1034,9 +1060,14 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 behavioral_eisv = compute_behavioral_sensor_eisv(
                     **behavioral_sensor_inputs
                 )
-                behavioral_shadow = compute_legacy_coherence_dependency_shadow(
-                    **behavioral_sensor_inputs,
-                    deployed_observation=behavioral_eisv,
+                # Each shadow is guarded by _measured_shadow: this block also
+                # hands the deployed observation to the monitor, and a shadow
+                # must never be able to interrupt that.
+                behavioral_shadow = _measured_shadow(
+                    compute_legacy_coherence_dependency_shadow,
+                    LEGACY_COHERENCE_ABLATION_SCHEMA,
+                    behavioral_sensor_inputs,
+                    behavioral_eisv,
                 )
                 # Sibling ablation: decision_e is the LARGEST term in E (0.35
                 # with outcomes, 0.40 without) and reads governance_monitor's
@@ -1047,31 +1078,21 @@ async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
                 # or a basin-boundary counterfactual (the payload says so under
                 # `cannot_measure`). Measurement-only, same contract as the
                 # sibling above.
-                decision_shadow = compute_decision_self_loop_shadow(
-                    **behavioral_sensor_inputs,
-                    deployed_observation=behavioral_eisv,
+                decision_shadow = _measured_shadow(
+                    compute_decision_self_loop_shadow,
+                    DECISION_SELF_LOOP_ABLATION_SCHEMA,
+                    behavioral_sensor_inputs,
+                    behavioral_eisv,
                 )
                 # Third sibling, for S: detect_regime labels regimes from
                 # behavioral S's own change and _regime_instability counts the
-                # flips at 35% of S (ledger row 46). Guarded separately: this
-                # block also hands the deployed observation to the monitor, and
-                # a shadow must never be able to interrupt that.
-                try:
-                    regime_shadow = compute_regime_self_loop_shadow(
-                        **behavioral_sensor_inputs,
-                        deployed_observation=behavioral_eisv,
-                    )
-                except Exception as regime_exc:  # noqa: BLE001 -- measurement only
-                    regime_shadow = {
-                        "schema": REGIME_SELF_LOOP_ABLATION_SCHEMA,
-                        "mode": "measurement_only",
-                        "policy_applied": False,
-                        "eligible": False,
-                        "eligibility_reason": f"shadow_error:{type(regime_exc).__name__}",
-                        "deployed": None,
-                        "candidate": None,
-                        "candidate_minus_deployed": None,
-                    }
+                # flips at 35% of S (ledger row 46).
+                regime_shadow = _measured_shadow(
+                    compute_regime_self_loop_shadow,
+                    REGIME_SELF_LOOP_ABLATION_SCHEMA,
+                    behavioral_sensor_inputs,
+                    behavioral_eisv,
+                )
                 ctx.agent_state["_eisv_shadow_ablations"] = {
                     "legacy_coherence_neutralized": {
                         "behavioral_sensor": behavioral_shadow,

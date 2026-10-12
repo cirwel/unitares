@@ -704,8 +704,18 @@ class TestPrepareUnlockedInputsContract:
         assert not str(regime.get("eligibility_reason") or "").startswith("shadow_error")
 
     @pytest.mark.asyncio
-    async def test_a_failing_regime_shadow_cannot_interrupt_the_deployed_handoff(self):
-        """This block also hands the deployed observation to the monitor; if the
+    @pytest.mark.parametrize("compute_name, candidate, schema", [
+        ("compute_legacy_coherence_dependency_shadow", "legacy_coherence_neutralized",
+         "legacy_coherence_dependency_ablation.v1"),
+        ("compute_decision_self_loop_shadow", "decision_self_loop_neutralized",
+         "decision_self_loop_ablation.v1"),
+        ("compute_regime_self_loop_shadow", "regime_self_loop_neutralized",
+         "regime_self_loop_ablation.v1"),
+    ])
+    async def test_a_failing_shadow_cannot_interrupt_the_deployed_handoff(
+        self, compute_name, candidate, schema
+    ):
+        """This block also hands the deployed observation to the monitor; if a
         shadow could raise through it, the monitor would fall back to its own
         divergent sensor path and the deployed reading would change."""
         from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
@@ -714,15 +724,19 @@ class TestPrepareUnlockedInputsContract:
         with patch("src.db.get_db", return_value=None), \
              patch("src.tool_usage_tracker.get_tool_usage_tracker",
                    return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))), \
-             patch("src.behavioral_sensor.compute_regime_self_loop_shadow",
+             patch(f"src.behavioral_sensor.{compute_name}",
                    side_effect=RuntimeError("boom")):
             await prepare_unlocked_inputs(ctx)
         assert "sensor_eisv" in ctx.agent_state
-        regime = ctx.agent_state["_eisv_shadow_ablations"][
-            "regime_self_loop_neutralized"
-        ]["behavioral_sensor"]
-        assert regime["eligible"] is False
-        assert regime["eligibility_reason"] == "shadow_error:RuntimeError"
+        shadows = ctx.agent_state["_eisv_shadow_ablations"]
+        failed = shadows[candidate]["behavioral_sensor"]
+        assert failed["schema"] == schema
+        assert failed["eligible"] is False
+        assert failed["eligibility_reason"] == "shadow_error:RuntimeError"
+        for name, entry in shadows.items():
+            if name != candidate:
+                reason = str(entry["behavioral_sensor"].get("eligibility_reason") or "")
+                assert not reason.startswith("shadow_error"), name
 
     @pytest.mark.asyncio
     async def test_explicit_sensor_data_routed_unlocked(self):
