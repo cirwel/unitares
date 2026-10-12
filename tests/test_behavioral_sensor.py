@@ -692,6 +692,37 @@ class TestPrepareUnlockedInputsContract:
         ]["behavioral_sensor"]
         assert shadow["eligible"] is True
         assert shadow["policy_applied"] is False
+        regime = ctx.agent_state["_eisv_shadow_ablations"][
+            "regime_self_loop_neutralized"
+        ]["behavioral_sensor"]
+        # This fixture's monitor is a MagicMock, so the numbers are mock objects;
+        # the shadow's arithmetic is pinned by TestRegimeSelfLoopShadow.
+        assert regime["mode"] == "measurement_only"
+        assert regime["policy_applied"] is False
+        # The fallback dict also satisfies the two lines above; this one fails
+        # if the shadow raised.
+        assert not str(regime.get("eligibility_reason") or "").startswith("shadow_error")
+
+    @pytest.mark.asyncio
+    async def test_a_failing_regime_shadow_cannot_interrupt_the_deployed_handoff(self):
+        """This block also hands the deployed observation to the monitor; if the
+        shadow could raise through it, the monitor would fall back to its own
+        divergent sensor path and the deployed reading would change."""
+        from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
+        monitor = self._make_mock_monitor(n=10)
+        ctx = self._make_ctx(monitor=monitor)
+        with patch("src.db.get_db", return_value=None), \
+             patch("src.tool_usage_tracker.get_tool_usage_tracker",
+                   return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))), \
+             patch("src.behavioral_sensor.compute_regime_self_loop_shadow",
+                   side_effect=RuntimeError("boom")):
+            await prepare_unlocked_inputs(ctx)
+        assert "sensor_eisv" in ctx.agent_state
+        regime = ctx.agent_state["_eisv_shadow_ablations"][
+            "regime_self_loop_neutralized"
+        ]["behavioral_sensor"]
+        assert regime["eligible"] is False
+        assert regime["eligibility_reason"] == "shadow_error:RuntimeError"
 
     @pytest.mark.asyncio
     async def test_explicit_sensor_data_routed_unlocked(self):
@@ -948,3 +979,84 @@ class TestDecisionSelfLoopShadow:
         assert _DECISION_NEUTRAL_KEY.startswith("__")
         real = {k for k in _DECISION_SCORES if not k.startswith("__")}
         assert _DECISION_NEUTRAL_KEY not in real
+
+
+def _regime_inputs(regimes):
+    return dict(
+        decision_history=["guide"] * 10,
+        coherence_history=[0.5] * 10,
+        regime_history=regimes,
+        E_history=[0.6] * 10,
+        I_history=[0.6] * 10,
+        S_history=[0.3] * 10,
+        V_history=[0.0] * 10,
+        drift_norm=0.2,
+        complexity_divergence=0.1,
+    )
+
+
+_FLAPPING = ["DIVERGENCE", "CONVERGENCE"] * 5
+
+
+class TestRegimeSelfLoopShadow:
+    def test_measurement_only_and_never_applied(self):
+        from src.behavioral_sensor import compute_regime_self_loop_shadow
+        r = compute_regime_self_loop_shadow(**_regime_inputs(_FLAPPING))
+        assert r["mode"] == "measurement_only"
+        assert r["policy_applied"] is False
+
+    def test_does_not_mutate_or_change_the_deployed_observation(self):
+        from src.behavioral_sensor import (
+            compute_behavioral_sensor_eisv, compute_regime_self_loop_shadow,
+        )
+        inputs = _regime_inputs(_FLAPPING)
+        deployed = compute_behavioral_sensor_eisv(**inputs)
+        before = dict(deployed)
+        r = compute_regime_self_loop_shadow(**inputs, deployed_observation=deployed)
+        assert deployed == before
+        assert r["deployed"]["S"] == before["S"]
+
+    def test_override_none_is_the_deployed_path(self):
+        """The override is keyword-only and defaults to None; passing None must
+        give identical output to not passing it."""
+        from src.behavioral_sensor import compute_behavioral_sensor_components
+        inputs = _regime_inputs(_FLAPPING)
+        assert (compute_behavioral_sensor_components(**inputs)
+                == compute_behavioral_sensor_components(**inputs, regime_instability_override=None))
+
+    def test_flapping_labels_lower_S_when_neutralized(self):
+        """Every adjacent label differs, so the deployed term is 1.0; the fleet
+        stand-in is 0.12, so S drops by 0.35 * 0.88 (no clipping at these inputs)."""
+        from src.behavioral_sensor import REGIME_NEUTRAL_INSTABILITY, compute_regime_self_loop_shadow
+        r = compute_regime_self_loop_shadow(**_regime_inputs(_FLAPPING))
+        assert r["deployed_regime_instability"] == 1.0
+        assert r["candidate_minus_deployed"]["S"] == pytest.approx(
+            -0.35 * (1.0 - REGIME_NEUTRAL_INSTABILITY))
+
+    def test_touches_S_only(self):
+        from src.behavioral_sensor import REGIME_NEUTRAL_INSTABILITY, compute_behavioral_sensor_eisv
+        inputs = _regime_inputs(_FLAPPING)
+        deployed = compute_behavioral_sensor_eisv(**inputs)
+        candidate = compute_behavioral_sensor_eisv(
+            **inputs, regime_instability_override=REGIME_NEUTRAL_INSTABILITY)
+        assert {k: deployed[k] for k in ("E", "I", "V")} == {k: candidate[k] for k in ("E", "I", "V")}
+
+    def test_override_is_marked_in_the_components(self):
+        """A reader of the component record must not mistake the stand-in for
+        an observed value."""
+        from src.behavioral_sensor import compute_behavioral_sensor_components
+        comps = compute_behavioral_sensor_components(
+            **_regime_inputs(_FLAPPING), regime_instability_override=0.12)
+        regime = next(c for c in comps["dimensions"]["S"]["components"]
+                      if c["name"] == "regime_instability")
+        assert regime["observed"] is False
+        assert regime["default_reason"] == "ablation_override"
+
+    def test_short_history_is_ineligible_not_zero(self):
+        from src.behavioral_sensor import compute_regime_self_loop_shadow
+        inputs = _regime_inputs(_FLAPPING)
+        inputs["decision_history"] = ["guide"]
+        r = compute_regime_self_loop_shadow(**inputs)
+        assert r["eligible"] is False
+        assert r["candidate_minus_deployed"] is None
+        assert "regime_label_counterfactual" in r["not_modeled"]

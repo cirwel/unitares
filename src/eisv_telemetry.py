@@ -383,8 +383,18 @@ def build_eisv_telemetry_envelope(
     shadow_ablations: Mapping[str, Any] | None = None,
     observed_at: str | None = None,
     measurement_id: str | None = None,
+    self_report: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Assemble the full append-only EISV telemetry record."""
+    """Assemble the full append-only EISV telemetry record.
+
+    ``self_report`` records what the agent itself stated on this check-in
+    (currently its confidence, as reported and as used after any dampening).
+    It is measurement-only: nothing on the estimator or policy path reads it.
+    It exists so a later, separately reviewed calibration referent can pair an
+    agent's stated confidence with outcomes something else verified. Until it
+    was recorded, confidence survived only on self-reported outcome rows, too
+    sparse to pair (docs/evaluations/eisv-ei-referent/result-v0.md).
+    """
     behavior = behavioral_snapshot if isinstance(behavioral_snapshot, Mapping) else None
     raw_obs = list(behavior.get("raw_obs") or ()) if behavior else []
     behavioral = None
@@ -457,6 +467,11 @@ def build_eisv_telemetry_envelope(
         },
         "policy_evaluation": _json_safe(policy_evaluation or {}),
         "enforcement": _json_safe(enforcement or {}),
+        "self_report": (
+            {"mode": "measurement_only", "policy_applied": False, **_json_safe(dict(self_report))}
+            if isinstance(self_report, Mapping)
+            else None
+        ),
         "semantics": {
             "measurement": "Proprioceptive state estimate; not an outcome judgment or actuator.",
             "policy": "Interpretation that consumes measurements and requests guidance/action.",

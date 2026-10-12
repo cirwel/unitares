@@ -203,6 +203,37 @@ external referent the contract proposes exists for about a third of identities,
 mostly in small numbers, and joining it to I needs the agent's confidence at the
 time of the verified outcome.
 
+## Offline shadow of the I repair
+
+[`scripts/analysis/eisv_i_calibration_shadow_read.py`](../../../scripts/analysis/eisv_i_calibration_shadow_read.py)
+tries the repair on the frozen data: pair each verified task or test outcome
+(graded `externally_verified` or `tool_observed`) with the same identity's most
+recent stated confidence in the 24 hours before it, compute the per-agent error
+with the deployed estimator's arithmetic (five confidence bins, at least five
+pairs in a bin, newest pair within seven days), and substitute it causally into
+each persisted I observation.
+
+| Frozen input | Rows | sha256 |
+|---|---|---|
+| `verified_outcomes.jsonl` (all time to the window end) | 7,061 | `414bd3fa060278d23411256428bd90ad492983e722e13b5808ca42784e6a3c32` |
+| `confidence_obs.jsonl` (all time; outcome `detail.confidence` plus check-in `self_report`) | 8,449 | `9995dd7834adfb11cc0aff467173a49dc159ef708581d69e2d09c42a5c0c72b4` |
+
+Both exports have no lower time bound because the deployed candidate's bins are
+lifetime: only its seven-day freshness check uses the newest pair. At the
+window end every confidence observation came from outcome rows; the check-in
+`self_report` source starts with the capture below.
+
+Result: 662 of 7,061 verified outcomes could be paired, across 113 identities
+(p50 4 pairs each), and no identity reached the estimator's eligibility at any
+check-in in the window, so the substituted term could not be computed once. Stated confidence
+survives only on self-reported outcome rows, which are sparse and come mostly
+from other identities than the verified outcomes.
+
+The precondition is capture, not arithmetic. From this change the telemetry
+envelope records each check-in's stated confidence (`self_report`, measurement
+only), so the same read can pair verified outcomes with the latest check-in
+confidence once that record has accumulated.
+
 ## Limits
 
 - One 30-day window, dominated by scheduled residents (contract, sampling-frame

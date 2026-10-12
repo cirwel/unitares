@@ -156,7 +156,10 @@ No change to S before the registered 2026-12-01 read. S is an input to that
 read's models, and changing it now would contaminate the registered series (the
 same reason the contract parks other EISV rescoring). A repair, dropping the term
 or computing regime changes from something other than S itself, belongs after
-that read or behind a shadow reading.
+that read or behind a shadow reading. That shadow now runs on every check-in where the
+server computes the behavioral sensor
+(`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`), holding the
+term at its observed fleet level, 0.12, rather than the 0.1 default used here.
 
 ## Reproduce
 
