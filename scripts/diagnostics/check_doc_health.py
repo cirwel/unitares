@@ -799,6 +799,17 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
     (
         re.compile(
+            r"\bODE\s*\(diagnostic only\)"
+            r"|parallel ODE model is diagnostic by default"
+            r"|Each score is self-relative after warmup",
+            re.IGNORECASE,
+        ),
+        "corrected EISV semantics: raw coordinates are weighted indices; "
+        "risk assessment adds baseline comparisons, and ODE state still feeds "
+        "structural policy checks — see EISV_COMPUTATION.md and the registry",
+    ),
+    (
+        re.compile(
             r"Whether EISV moves out of the core is an open proposal",
             re.IGNORECASE,
         ),

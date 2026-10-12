@@ -394,3 +394,19 @@ def test_shipped_extra_surfaces_still_cover_the_known_drifters(doc_health):
         "src/tool_modes.py",
         "scripts/dev/brand/render_social_preview.py",
     }
+
+
+@pytest.mark.parametrize("claim", [
+    "**Secondary system: ODE (diagnostic only)** runs in parallel.",
+    "The parallel ODE model is diagnostic by default.",
+    "Each score is self-relative after warmup.",
+])
+def test_flags_stale_eisv_architecture_claims(tmp_path, monkeypatch, doc_health, claim):
+    assert any("corrected EISV semantics" in warning
+               for warning in _warnings(tmp_path, monkeypatch, doc_health, claim))
+
+
+def test_allows_coupled_eisv_authority_and_relative_assessment(tmp_path, monkeypatch, doc_health):
+    assert _warnings(tmp_path, monkeypatch, doc_health,
+        "Raw coordinates are weighted indices. Risk assessment becomes "
+        "self-relative after warmup. ODE state supplies structural policy checks.") == []
