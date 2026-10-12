@@ -52,6 +52,9 @@ A cohesive, multi-chapter front door for operators and integrators. Thin chapter
 
 Operating guidance for individual subsystems lives next to the code as Skills, not in `docs/` (this keeps the guide in sync with its `source_files:` and carries its own freshness budget). The map to those lives here:
 
+- **Agent lifecycle** — six-rule bootstrap card, identity, check-ins, response
+  control flow, and recovery →
+  [`skills/governance-lifecycle/SKILL.md`](../skills/governance-lifecycle/SKILL.md)
 - **Knowledge graph (KG)** — agent-facing operating manual: search-before-write discipline, the `knowledge()` actions, discovery types/statuses, tagging, and closing the loop → [`skills/knowledge-graph/SKILL.md`](../skills/knowledge-graph/SKILL.md)
 
 ### `guides/` — getting started
