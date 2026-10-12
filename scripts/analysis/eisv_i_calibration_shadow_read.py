@@ -43,24 +43,37 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 EXPORT_SQL = """\
--- read-only. :window_end as for eisv_ei_referent_read.py; the extra days before
--- the 30-day state window give the 7-day staleness rule and the 24-hour
--- confidence pairing their history.
+-- read-only. No lower time bound: the deployed per-agent candidate bins are
+-- lifetime (only the freshness check uses the newest pair), so every causally
+-- prior pair must be available.
 SET default_transaction_read_only = on;
 COPY (SELECT jsonb_build_object('id', i.identity_id::text, 'ts', o.ts, 'type', o.outcome_type,
                                 'score', o.outcome_score, 'bad', o.is_bad,
                                 'grade', o.detail->>'corroboration_grade')
       FROM audit.outcome_events o JOIN core.identities i ON i.agent_id = o.agent_id
-      WHERE o.ts > :window_end - interval '38 days' AND o.ts <= :window_end
+      WHERE o.ts <= :window_end
         AND o.detail->>'corroboration_grade' IN ('externally_verified', 'tool_observed')
         AND o.outcome_type IN ('task_completed', 'task_failed', 'test_passed', 'test_failed')
       ORDER BY i.identity_id, o.ts) TO STDOUT;   -- verified_outcomes.jsonl
-COPY (SELECT jsonb_build_object('id', i.identity_id::text, 'ts', o.ts,
-                                'confidence', (o.detail->>'confidence')::float)
-      FROM audit.outcome_events o JOIN core.identities i ON i.agent_id = o.agent_id
-      WHERE o.ts > :window_end - interval '39 days' AND o.ts <= :window_end
-        AND o.detail->>'confidence' IS NOT NULL AND o.detail->>'confidence' <> 'null'
-      ORDER BY i.identity_id, o.ts) TO STDOUT;   -- confidence_obs.jsonl
+-- Stated confidence from both places it is recorded: self-reported outcome rows
+-- (detail.confidence) and, from the check-in confidence capture onward, every
+-- check-in's telemetry envelope (eisv_telemetry.self_report).
+COPY (SELECT row FROM (
+        SELECT jsonb_build_object('id', i.identity_id::text, 'ts', o.ts,
+                                  'confidence', (o.detail->>'confidence')::float,
+                                  'src', 'outcome_detail') AS row, i.identity_id, o.ts
+        FROM audit.outcome_events o JOIN core.identities i ON i.agent_id = o.agent_id
+        WHERE o.ts <= :window_end
+          AND o.detail->>'confidence' IS NOT NULL AND o.detail->>'confidence' <> 'null'
+        UNION ALL
+        SELECT jsonb_build_object('id', a.identity_id::text, 'ts', a.recorded_at,
+                                  'confidence', (a.state_json->'eisv_telemetry'->'self_report'
+                                                 ->>'confidence_reported')::float,
+                                  'src', 'checkin_self_report'), a.identity_id, a.recorded_at
+        FROM core.agent_state a
+        WHERE a.recorded_at <= :window_end
+          AND a.state_json->'eisv_telemetry'->'self_report'->>'confidence_reported' IS NOT NULL
+      ) u ORDER BY identity_id, ts) TO STDOUT;   -- confidence_obs.jsonl
 """
 
 BINS = ((0.0, 0.5), (0.5, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0))
@@ -128,8 +141,11 @@ def main() -> int:
         print(f"{name}: {len(rows)} rows, sha256 {hashlib.sha256(raw).hexdigest()}")
 
     conf_by_id = defaultdict(list)
+    sources = defaultdict(int)
     for c in inputs["confidence"]:
         conf_by_id[c["id"]].append((_ts(c["ts"]), float(c["confidence"])))
+        sources[c.get("src", "outcome_detail")] += 1
+    print(f"confidence observations by source: {dict(sources)}")
     for v in conf_by_id.values():
         v.sort()
 

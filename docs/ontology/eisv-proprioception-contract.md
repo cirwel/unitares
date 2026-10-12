@@ -1533,8 +1533,9 @@ external referent the repair calls for exists for 124 of 359 identities (median
 9 `external_signal` outcomes each, 35 with at least 20). Recorded, not repaired:
 swapping I's calibration source is a predictor change for the 2026-12-01 read. An offline
 shadow of the repair on the same frozen data (pairing each verified outcome with
-the identity's last stated confidence within 24 hours) paired 115 of 3,634
-verified outcomes and reached the estimator's eligibility for no identity; the
+the identity's last stated confidence within 24 hours, over lifetime data) paired
+662 of 7,061 verified outcomes across 113 identities and reached the
+estimator's eligibility for no identity at any check-in in the window; the
 telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
 

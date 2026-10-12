@@ -215,12 +215,17 @@ each persisted I observation.
 
 | Frozen input | Rows | sha256 |
 |---|---|---|
-| `verified_outcomes.jsonl` (38 days to the window end) | 3,634 | `159cd4981a712a2ad07093c6bf1292be0220caf0505a29451ed16ad96f1941db` |
-| `confidence_obs.jsonl` (outcome rows storing `detail.confidence`, 39 days) | 3,572 | `0c5b3cda452c21442091e1b8c8de89786bb198ac33cc962fb62630d6e209854a` |
+| `verified_outcomes.jsonl` (all time to the window end) | 7,061 | `414bd3fa060278d23411256428bd90ad492983e722e13b5808ca42784e6a3c32` |
+| `confidence_obs.jsonl` (all time; outcome `detail.confidence` plus check-in `self_report`) | 8,449 | `9995dd7834adfb11cc0aff467173a49dc159ef708581d69e2d09c42a5c0c72b4` |
 
-Result: 115 of 3,634 verified outcomes could be paired, across 19 identities
-(p50 3 pairs each), and no identity reached the estimator's eligibility at any
-check-in, so the substituted term could not be computed once. Stated confidence
+Both exports have no lower time bound because the deployed candidate's bins are
+lifetime: only its seven-day freshness check uses the newest pair. At the
+window end every confidence observation came from outcome rows; the check-in
+`self_report` source starts with the capture below.
+
+Result: 662 of 7,061 verified outcomes could be paired, across 113 identities
+(p50 4 pairs each), and no identity reached the estimator's eligibility at any
+check-in in the window, so the substituted term could not be computed once. Stated confidence
 survives only on self-reported outcome rows, which are sparse and come mostly
 from other identities than the verified outcomes.
 
