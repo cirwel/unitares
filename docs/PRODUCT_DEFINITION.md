@@ -132,13 +132,17 @@ attribution, evidence, review, and reported outcomes across the work they
 assess. Its shared record lets agents and operators inspect those outputs
 together over time.
 
-## The distinctive guarantee
+## Provenance and honest failure
 
-Every value the system emits carries a provenance label — `measured`,
-`derived`, `prior`, or `unknown` — and that labeling is lint-enforced in CI
-(`src/trust_contract_lint.py`). A number can be wrong; it cannot silently
-pretend to be a measurement. The full guarantee, including what honest
-failure looks like, is the [trust contract](trust-contract.md).
+The [trust contract](trust-contract.md) requires the system to distinguish
+measured observations, derived values, priors, and unknowns. CI enforces parts
+of that requirement on the governance-metrics read surface: registered fields
+must retain their provenance labels, uninitialized assessments must report
+ignorance, and specified fleet-calibration blocks must identify their scope.
+The current lint covers selected fields (`src/trust_contract_lint.py`); it is
+not a universal validator for every emitted value. The contract's
+[enforcement status](trust-contract.md#7-enforcement) names the implemented
+coverage and remaining work.
 
 ## Evidence and limits
 
