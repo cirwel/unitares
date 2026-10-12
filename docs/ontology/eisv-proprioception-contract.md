@@ -1487,7 +1487,9 @@ exploratory and not pre-registered, so it earns no status here; a pre-registered
 rerun with a declared standard is what would. **Do not change S before the
 2026-12-01 read**: S feeds that read's models. The repair (drop the term, or
 compute regime changes from something other than S) belongs after it or behind a
-shadow reading.
+shadow reading. The shadow now runs on every behavioral check-in:
+`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`, S with the term
+held at its observed fleet level (0.12), measurement only.
 
 **47. "E is externally referenced: decision outcomes, tool errors and outcome
 success are world facts"** (contract *The split*, E row) → **IMPLEMENTATION
@@ -1529,7 +1531,12 @@ moved the I observation within an identity was `continuity_I_input`, one minus
 the self-report-versus-text complexity divergence (median 87% of its variation). The
 external referent the repair calls for exists for 124 of 359 identities (median
 9 `external_signal` outcomes each, 35 with at least 20). Recorded, not repaired:
-swapping I's calibration source is a predictor change for the 2026-12-01 read.
+swapping I's calibration source is a predictor change for the 2026-12-01 read. An offline
+shadow of the repair on the same frozen data (pairing each verified outcome with
+the identity's last stated confidence within 24 hours) paired 115 of 3,634
+verified outcomes and reached the estimator's eligibility for no identity; the
+telemetry envelope now records each check-in's stated confidence
+(`self_report`, measurement only) so the pairing has a dense source.
 
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 

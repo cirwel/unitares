@@ -203,6 +203,32 @@ external referent the contract proposes exists for about a third of identities,
 mostly in small numbers, and joining it to I needs the agent's confidence at the
 time of the verified outcome.
 
+## Offline shadow of the I repair
+
+[`scripts/analysis/eisv_i_calibration_shadow_read.py`](../../../scripts/analysis/eisv_i_calibration_shadow_read.py)
+tries the repair on the frozen data: pair each verified task or test outcome
+(graded `externally_verified` or `tool_observed`) with the same identity's most
+recent stated confidence in the 24 hours before it, compute the per-agent error
+with the deployed estimator's arithmetic (five confidence bins, at least five
+pairs in a bin, newest pair within seven days), and substitute it causally into
+each persisted I observation.
+
+| Frozen input | Rows | sha256 |
+|---|---|---|
+| `verified_outcomes.jsonl` (38 days to the window end) | 3,634 | `159cd4981a712a2ad07093c6bf1292be0220caf0505a29451ed16ad96f1941db` |
+| `confidence_obs.jsonl` (outcome rows storing `detail.confidence`, 39 days) | 3,572 | `0c5b3cda452c21442091e1b8c8de89786bb198ac33cc962fb62630d6e209854a` |
+
+Result: 115 of 3,634 verified outcomes could be paired, across 19 identities
+(p50 3 pairs each), and no identity reached the estimator's eligibility at any
+check-in, so the substituted term could not be computed once. Stated confidence
+survives only on self-reported outcome rows, which are sparse and come mostly
+from other identities than the verified outcomes.
+
+The precondition is capture, not arithmetic. From this change the telemetry
+envelope records each check-in's stated confidence (`self_report`, measurement
+only), so the same read can pair verified outcomes with the latest check-in
+confidence once that record has accumulated.
+
 ## Limits
 
 - One 30-day window, dominated by scheduled residents (contract, sampling-frame
