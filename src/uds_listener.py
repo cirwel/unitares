@@ -34,19 +34,38 @@ import secrets
 import socket
 import stat
 import string
+import threading
+from dataclasses import dataclass, field
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+NodeId = tuple[int, int, int]
+
+
+@dataclass
+class _PathOwnership:
+    """One listener's lifetime claim on a UDS path.
+
+    ``lock_fd`` stays open from before the stale-node probe until the listener
+    task has stopped and its node has been removed.  ``release_guard`` makes
+    cleanup idempotent if an explicit unlink races the task's ``finally``.
+    """
+
+    node: NodeId
+    lock_fd: Optional[int]
+    release_guard: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
 
 @contextlib.contextmanager
 def _path_lock(uds_path: str):
-    """Hold an exclusive flock on ``<uds_path>.lock`` for the with-body.
+    """Hold a blocking exclusive flock for legacy/fallback cleanup.
 
-    The lock file is left in place (removing it would reopen the race). The
-    flock blocks while another process holds it, for up to a full stale-socket
-    probe, so callers on an event loop run the locked section in a worker
-    thread rather than on the loop.
+    New listeners use ``_acquire_path_ownership`` instead: its non-blocking
+    flock remains held for the listener's whole lifetime.  This context manager
+    is retained for a cleanup caller that has only an old node id and no live
+    ownership object.  The lock file is left in place; removing it would reopen
+    the inode race.
     """
     fd = os.open(uds_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
@@ -56,7 +75,28 @@ def _path_lock(uds_path: str):
         os.close(fd)  # closing the fd releases the flock
 
 
-NodeId = tuple[int, int, int]
+def _acquire_path_ownership(uds_path: str) -> int:
+    """Acquire this listener's lifetime path lock without waiting.
+
+    A held lock is proof that a lock-aware listener owns the path, even when a
+    saturated AF_UNIX accept queue makes a connect probe report
+    ``ECONNREFUSED`` on macOS (#2683).  Refuse with ``EADDRINUSE`` before
+    looking at the socket node.  A process from before the lifetime-lock
+    rollout holds no lock, so the existing connect probe remains the rollout
+    compatibility check for that case.
+    """
+    fd = os.open(uds_path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+            raise OSError(
+                errno.EADDRINUSE,
+                f"lifetime owner already holds {uds_path}.lock",
+            ) from exc
+        raise
+    return fd
 
 
 def _node_id(path: str) -> NodeId:
@@ -71,25 +111,70 @@ def _node_id(path: str) -> NodeId:
     return (st.st_dev, st.st_ino, st.st_ctime_ns)
 
 
-# Identity of the socket node this process bound at each path, set when a
-# start succeeds. Shutdown unlinks a path only while it still holds that node.
-_bound_nodes: dict[str, NodeId] = {}
+# Ownership of each socket path this process bound.  The fd is the lifetime
+# claim; the node id prevents cleanup from deleting a path another process
+# replaced without respecting that advisory lock.
+_bound_ownerships: dict[str, _PathOwnership] = {}
+_bound_ownerships_guard = threading.Lock()
+
+
+def _unlink_and_release_ownership(
+    uds_path: str,
+    ownership: _PathOwnership,
+    *,
+    expected_node: Optional[NodeId] = None,
+) -> bool:
+    """Remove our node and release one lifetime lock, exactly once."""
+    with ownership.release_guard:
+        lock_fd = ownership.lock_fd
+        if lock_fd is None:
+            return False
+        ownership.lock_fd = None
+        removed = False
+        try:
+            node = ownership.node if expected_node is None else expected_node
+            try:
+                if _node_id(uds_path) != node:
+                    return False
+                os.unlink(uds_path)
+                removed = True
+            except OSError:
+                return False
+            return removed
+        finally:
+            # Closing releases the flock.  Suppress a double-close-shaped
+            # platform error so cleanup never replaces the original failure.
+            with contextlib.suppress(OSError):
+                os.close(lock_fd)
 
 
 def unlink_own_socket(uds_path: str, node: Optional[NodeId] = None) -> bool:
     """Unlink ``uds_path`` only if it is still the node this process bound.
 
-    ``node`` defaults to the identity recorded by a successful start. Once our
-    listener stops accepting, a replacement server can probe the path as stale
-    and bind its own socket there (#2662); a blind unlink at our shutdown would
-    then delete its live socket. The check runs under the path lock, so no
-    start can replace the node between the stat and the unlink. Never raises:
-    a lock file that cannot be opened (EMFILE, a permission change) leaves the
-    node in place rather than failing a cleanup path. It blocks on that lock,
-    so an async caller runs it with ``asyncio.to_thread``.
+    A successful current listener already owns the lifetime lock recorded in
+    ``_bound_ownerships``; cleanup uses and releases that fd.  ``node`` remains
+    available for legacy/fallback callers, which take the blocking path lock
+    around their identity check.  An explicit node that does not match the
+    current in-process owner returns without touching that owner's fd.  In all
+    cases, a replacement socket is left alone (#2662).  Never raises: an
+    unavailable fallback lock or a failed identity check leaves the node in
+    place rather than breaking shutdown.
     """
-    if node is None:
-        node = _bound_nodes.pop(uds_path, None)
+    with _bound_ownerships_guard:
+        ownership = _bound_ownerships.get(uds_path)
+        if ownership is not None:
+            # An explicit node identifies the listener the caller intends to
+            # clean up.  It must never evict a newer listener's ownership just
+            # because both listeners used the same path.
+            if node is not None and ownership.node != node:
+                return False
+            _bound_ownerships.pop(uds_path, None)
+    if ownership is not None:
+        return _unlink_and_release_ownership(
+            uds_path,
+            ownership,
+            expected_node=node,
+        )
     if node is None:
         return False
     try:
@@ -267,29 +352,30 @@ def _bind_into_place(uds_path: str) -> tuple[socket.socket, NodeId]:
     return sock, bound_node
 
 
-def _claim_and_bind(uds_path: str) -> tuple[socket.socket, NodeId]:
-    """Probe, clear a stale node and bind, under the path lock.
+def _claim_and_bind(uds_path: str) -> tuple[socket.socket, _PathOwnership]:
+    """Take lifetime ownership, clear a legacy stale node, and bind.
 
-    Blocking (the flock and the up-to-1s probe), so start_uds_listener runs it
-    in a worker thread.
+    Lock acquisition is non-blocking.  The legacy connect probe can take up to
+    one second, so ``start_uds_listener`` still runs this in a worker thread.
     """
     sock_dir = os.path.dirname(uds_path)
     if sock_dir:
         os.makedirs(sock_dir, mode=0o700, exist_ok=True)
-    # Serialize probe/unlink/bind across processes: two starts that both see
-    # the same stale path must not unlink each other's fresh bind (#2662).
-    with _path_lock(uds_path):
+    lock_fd = _acquire_path_ownership(uds_path)
+    try:
         if os.path.exists(uds_path):
-            # Refuse to displace a live listener (#2662): only a stale socket
-            # file (nobody accepting) is safe to remove.
+            # No lock-aware listener owns the path.  It may still belong to a
+            # live pre-rollout process, so retain the connect probe as a
+            # compatibility aid.  A lock-aware live process was refused above,
+            # before a misleading ECONNREFUSED could displace it (#2683).
             probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 probe.settimeout(1.0)
                 probe.connect(uds_path)
             except OSError as exc:
-                # Only these mean nobody is accepting. Anything else (EACCES from
-                # another UID's 0600 socket, EAGAIN/ETIMEDOUT from a saturated
-                # listener) may be a live owner, so refuse rather than displace it.
+                # For a pre-rollout owner, only these mean nobody is accepting.
+                # Anything else (EACCES from another UID's 0600 socket,
+                # EAGAIN/ETIMEDOUT from a saturated listener) may be live.
                 if exc.errno not in (errno.ECONNREFUSED, errno.ENOENT, errno.ENOTSOCK):
                     raise OSError(
                         errno.EADDRINUSE,
@@ -305,38 +391,79 @@ def _claim_and_bind(uds_path: str) -> tuple[socket.socket, NodeId]:
                 os.unlink(uds_path)
             except OSError as exc:
                 logger.warning("[UDS] could not unlink stale socket %s: %s", uds_path, exc)
-        return _bind_into_place(uds_path)
+        sock, node = _bind_into_place(uds_path)
+        return sock, _PathOwnership(node=node, lock_fd=lock_fd)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.close(lock_fd)
+        raise
 
 
-def _release(uds_path: str, sock: socket.socket, node: NodeId) -> None:
-    """Remove our node (identity-checked, under the lock), then close the socket.
+def _release(
+    uds_path: str,
+    sock: socket.socket,
+    ownership: _PathOwnership,
+) -> None:
+    """Close the socket, remove our node, then release lifetime ownership.
 
-    Unlinking first means a concurrent start still probes a live listener
-    rather than a stale path, and the identity check leaves alone any node
-    that is no longer ours.
+    The ownership fd remains locked through the socket close, identity check,
+    and unlink.  Only after all three are complete may another start claim the
+    path.
     """
     try:
-        unlink_own_socket(uds_path, node)
-    finally:
         sock.close()
+    finally:
+        _unlink_and_release_ownership(uds_path, ownership)
 
 
 def _release_off_loop(
-    loop: asyncio.AbstractEventLoop, uds_path: str, sock: socket.socket, node: NodeId
+    loop: asyncio.AbstractEventLoop,
+    uds_path: str,
+    sock: socket.socket,
+    ownership: _PathOwnership,
 ) -> "asyncio.Future[None]":
-    """Run ``_release`` in a worker thread, so the lock wait never blocks the loop.
+    """Run filesystem cleanup in a worker thread.
 
     The release runs to completion even if whoever awaits it is cancelled.
     """
     try:
-        return loop.run_in_executor(None, _release, uds_path, sock, node)
+        return loop.run_in_executor(None, _release, uds_path, sock, ownership)
     except RuntimeError:
-        # The executor is already shut down. Closing never blocks, and a closed
-        # socket's node is stale, which the next start's probe removes.
-        sock.close()
+        # The executor is already shut down.  We own the non-blocking lifetime
+        # lock, so synchronous cleanup cannot wait on another process.
+        _release(uds_path, sock, ownership)
         done = loop.create_future()
         done.set_result(None)
         return done
+
+
+async def _wait_for_release(
+    loop: asyncio.AbstractEventLoop,
+    uds_path: str,
+    sock: socket.socket,
+    ownership: _PathOwnership,
+) -> None:
+    """Finish off-loop cleanup before the owner task can complete.
+
+    ``shield`` prevents cancellation from cancelling the executor future, but
+    it does not make the caller wait for that future.  A second cancellation
+    while the listener is already unwinding would otherwise detach cleanup and
+    let the task finish while the lifetime lock was still held.  Keep joining
+    the same future, then restore cancellation after ownership is released.
+    """
+    release = _release_off_loop(loop, uds_path, sock, ownership)
+    cancellation: asyncio.CancelledError | None = None
+    while not release.done():
+        try:
+            await asyncio.shield(release)
+        except asyncio.CancelledError as exc:
+            cancellation = exc
+
+    # Retrieve a worker exception before restoring cancellation.  A failed
+    # release must not be silently converted into an ordinary cancelled task.
+    release.result()
+    if cancellation is not None:
+        raise cancellation
 
 
 async def start_uds_listener(
@@ -366,24 +493,29 @@ async def start_uds_listener(
     protocol class from ``make_peer_cred_protocol_class()`` still injects
     ``scope["unitares_peer_pid"]`` per request.
 
-    The locked probe/unlink/bind section runs in a worker thread: its flock
-    waits while another process holds the path, and that wait must not stall
-    the event loop.
+    A non-blocking flock on ``<uds_path>.lock`` is held from before the stale
+    probe through listener shutdown.  It is the primary live-owner test; the
+    connect probe exists only for compatibility with pre-rollout processes.
+    The probe/unlink/bind section runs in a worker thread so its one-second
+    legacy probe cannot stall the event loop.
     """
     import uvicorn
 
     loop = asyncio.get_running_loop()
     claim = loop.run_in_executor(None, _claim_and_bind, uds_path)
     try:
-        sock, bound_node = await asyncio.shield(claim)
+        sock, ownership = await asyncio.shield(claim)
     except asyncio.CancelledError:
-        # The worker keeps running and may still bind. Release whatever it
-        # binds, or the node would answer probes with nobody serving it.
-        def _release_abandoned(fut: "asyncio.Future[tuple[socket.socket, NodeId]]") -> None:
+        # The worker may already have acquired ownership and may still bind.
+        # Release whatever it returns, or the path would stay claimed with no
+        # listener task serving it.
+        def _release_abandoned(
+            fut: "asyncio.Future[tuple[socket.socket, _PathOwnership]]",
+        ) -> None:
             if fut.cancelled() or fut.exception() is not None:
                 return
-            abandoned_sock, abandoned_node = fut.result()
-            _release_off_loop(loop, uds_path, abandoned_sock, abandoned_node)
+            abandoned_sock, abandoned_ownership = fut.result()
+            _release_off_loop(loop, uds_path, abandoned_sock, abandoned_ownership)
 
         claim.add_done_callback(_release_abandoned)
         raise
@@ -417,14 +549,54 @@ async def start_uds_listener(
             backlog=_UDS_BACKLOG,
         )
         server = uvicorn.Server(config)
-        task = asyncio.create_task(
-            server.serve(sockets=[sock]), name="unitares-uds-listener"
-        )
     except BaseException:
         # The caller claims no path on failure (#2662), so nothing else will
         # unlink this one: remove the node we bound and close the socket. The
         # release completes even if this wait is cancelled.
-        await asyncio.shield(_release_off_loop(loop, uds_path, sock, bound_node))
+        await _wait_for_release(loop, uds_path, sock, ownership)
         raise
-    _bound_nodes[uds_path] = bound_node
-    return task
+
+    with _bound_ownerships_guard:
+        _bound_ownerships[uds_path] = ownership
+    started = asyncio.Event()
+
+    async def _serve_with_ownership() -> None:
+        try:
+            # ``start_uds_listener`` waits for this before returning the task,
+            # so even an immediate caller cancellation enters this ``try``
+            # and therefore runs the ownership cleanup below.
+            started.set()
+            await server.serve(sockets=[sock])
+        finally:
+            with _bound_ownerships_guard:
+                if _bound_ownerships.get(uds_path) is ownership:
+                    _bound_ownerships.pop(uds_path, None)
+            await _wait_for_release(loop, uds_path, sock, ownership)
+
+    # The task owns cleanup on normal exit, crash, and cancellation.  The
+    # transport service must not run a later path-based cleanup: a replacement
+    # listener may already own the same path by then.
+    try:
+        owned_task = asyncio.create_task(
+            _serve_with_ownership(), name="unitares-uds-listener"
+        )
+    except BaseException:
+        with _bound_ownerships_guard:
+            if _bound_ownerships.get(uds_path) is ownership:
+                _bound_ownerships.pop(uds_path, None)
+        await _wait_for_release(loop, uds_path, sock, ownership)
+        raise
+    try:
+        await started.wait()
+    except BaseException:
+        entered_wrapper = started.is_set()
+        owned_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await owned_task
+        if not entered_wrapper:
+            with _bound_ownerships_guard:
+                if _bound_ownerships.get(uds_path) is ownership:
+                    _bound_ownerships.pop(uds_path, None)
+            await _wait_for_release(loop, uds_path, sock, ownership)
+        raise
+    return owned_task

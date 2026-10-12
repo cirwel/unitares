@@ -346,15 +346,3 @@ so a rollup does not establish that the whole topic has been covered.
 Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
 write** — a per-write LLM pass across a multi-agent fleet is exactly the
 high-frequency-noise anti-pattern this graph avoids.
-
-## Deferred: bi-temporal fact validity (documented idea, not built)
-
-A first-class notion of *when a fact became true/false* (valid-from / valid-to
-plus observation time, per the Graphiti/Zep bi-temporal model) was considered and
-**deliberately deferred**. It is a substrate-level change — migration, AGE query
-rewrites, and every read path having to reason about time — for a payoff
-(point-in-time reconstruction, automatic invalidation) that is speculative for
-current usage. The existing `superseded` status + `created_at` is an ~80%
-substitute. The signal to build it is a concrete failure: an agent acting on a
-stale fact in a way that actually bites. Until then this stays a documented idea,
-not a roadmap item.
