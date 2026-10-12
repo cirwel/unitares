@@ -29,7 +29,8 @@ label and makes no outcome claim.
   from a single fleet value, 0.1474, identical for every identity on every
   check-in for the whole window, from a lifetime sample count that stayed at 282.
   The per-agent candidate reported `no_data` for all 318 identities with a
-  derivation.
+  derivation. Its recorders are wired, but every candidate sample in the window
+  was gated out (see *Why the calibration bins did not move*).
 - **I moves with report-text agreement, not calibration.** A median 87% of I's
   within-identity variation comes from `continuity_I_input`, one minus the
   divergence between self-reported and text-derived complexity.
@@ -67,7 +68,9 @@ source. Outcome events key on `core.identities.agent_id` and state rows on
 `identity_id`, so the export joins through `core.identities`. Each persisted
 outcome entry of type `t` is credited as external with that identity's window
 share of external `t` rows. That approximates the producer's rolling 24-hour,
-20-row window.
+20-row window. I's outcome term reads only rows with a finite `outcome_score`, so
+its external share is computed over that subset; in this window every persisted
+outcome row carried a finite score, so the two shares coincide.
 
 Variance shares are cov(class contribution, value) / var(value) within each
 identity with at least 20 rows. They sum to 1 per identity. A class can take a
@@ -138,6 +141,34 @@ on or off.
 - Fleet calibration: one distinct value across 668 hours with check-ins; no hour
   showed two values; sample count 282 on every row.
 
+### Why the calibration bins did not move
+
+A zero can mean the producer never ran, was unreachable, recorded somewhere
+else, or ran and admitted nothing. Checked against source and the live state:
+
+- **Wired and reachable.** `calibration_checker.record_prediction` is called on
+  the live check-in path (`src/mcp_handlers/updates/phases.py`) and in the
+  outcome-event handler (`src/mcp_handlers/observability/outcome_events.py`),
+  both passing `agent_id`, which is what fills the per-agent bins (#2194).
+- **Recorded where the reader looks.** The persisted live state (`core.calibration`)
+  holds strategic bins totalling 282 samples, the same count every check-in
+  reported, and zero entries in `bins_by_agent` and `tactical_bins_by_agent`.
+- **Ran and admitted nothing.** The check-in path records only outcomes whose
+  corroboration weight reaches `TOOL_OBSERVED` (0.65). The outcomes it
+  auto-emits are keyword-inferred from the agent's own report; fleet-wide in the
+  window, 5,944 task and test outcomes were graded `claim_only` (weight 0.10)
+  and 43 `self_report_with_refs` (0.35), none at or above 0.65. The outcome-event
+  path also requires a confidence, resolved from a prediction binding, the call's
+  confidence argument, or the agent's in-memory monitor. Fleet-wide, 3,331
+  outcomes in the window were graded `externally_verified` or `tool_observed`
+  (3,209 of them task or test outcomes) and clear the weight gate, but none
+  stores a confidence in its detail, and the bins did not grow. The in-memory fallback cannot be ruled out from the database
+  alone; the unchanging count on every check-in shows that it added nothing.
+
+So the per-agent repair is not starved of producers but of admissible samples:
+the outcomes that carry an agent confidence are self-reports, and the outcomes
+that are verified carry no confidence.
+
 ## Interpretation
 
 E is classed as externally referenced, but in this window its external terms
@@ -153,9 +184,11 @@ and the fallback formula raises `decision_history` from 0.35 to 0.40 of E's base
 `decision_history`, not the outcome filter.
 
 I's calibration term carries no current information about anyone: it is the same
-frozen number for every agent. The per-agent repair (#2194) has no supply. The
+frozen number for every agent. The per-agent repair (#2194) is wired but admitted
+no sample: confidence and verification never arrive on the same outcome. The
 external referent the contract proposes exists for about a third of identities,
-mostly in small numbers.
+mostly in small numbers, and joining it to I needs the agent's confidence at the
+time of the verified outcome.
 
 ## Limits
 

@@ -52,6 +52,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import statistics as st
 import sys
 from collections import Counter, defaultdict
@@ -169,6 +170,10 @@ def main() -> int:
         return 0
     if not args.snapshot:
         ap.error("snapshot path required")
+    if not args.outcome_provenance:
+        # Without it every external share would print as a measured zero: the
+        # persisted envelopes carry no provenance (see module docstring).
+        ap.error("--outcome-provenance is required; the envelopes carry no outcome provenance")
 
     raw = open(args.snapshot, "rb").read()
     rows = [json.loads(line) for line in raw.decode().splitlines() if line.strip()]
@@ -185,26 +190,25 @@ def main() -> int:
     prov_total = Counter()
     prov_ext = Counter()
     prov_src = Counter()
-    if args.outcome_provenance:
-        praw = open(args.outcome_provenance, "rb").read()
-        print(f"outcome provenance sha256 {hashlib.sha256(praw).hexdigest()}")
-        for line in praw.decode().splitlines():
-            if not line.strip():
-                continue
-            p = json.loads(line)
-            if p["agent_id"] not in by_id:
-                continue
-            key = (p["agent_id"], p["outcome_type"])
-            prov_total[key] += p["n"]
-            prov_src[p["verification_source"]] += p["n"]
-            if p["verification_source"] == "external_signal":
-                prov_ext[key] += p["n"]
-        tot = sum(prov_src.values())
-        print("\n== audit.outcome_events for these identities, by verification_source (window)")
-        for src, n in prov_src.most_common():
-            print(f"  {n:8d} ({n / tot:6.1%})  {src}")
-        ext_agents = {a for (a, _t) in prov_ext}
-        print(f"  identities with any external_signal outcome in the window: {len(ext_agents)}/{len(by_id)}")
+    praw = open(args.outcome_provenance, "rb").read()
+    print(f"outcome provenance sha256 {hashlib.sha256(praw).hexdigest()}")
+    for line in praw.decode().splitlines():
+        if not line.strip():
+            continue
+        p = json.loads(line)
+        if p["agent_id"] not in by_id:
+            continue
+        key = (p["agent_id"], p["outcome_type"])
+        prov_total[key] += p["n"]
+        prov_src[p["verification_source"]] += p["n"]
+        if p["verification_source"] == "external_signal":
+            prov_ext[key] += p["n"]
+    tot = sum(prov_src.values())
+    print("\n== audit.outcome_events for these identities, by verification_source (window)")
+    for src, n in prov_src.most_common():
+        print(f"  {n:8d} ({n / tot:6.1%})  {src}")
+    ext_agents = {a for (a, _t) in prov_ext}
+    print(f"  identities with any external_signal outcome in the window: {len(ext_agents)}/{len(by_id)}")
 
     otype = Counter()
     with_outcomes = 0
@@ -213,15 +217,23 @@ def main() -> int:
         outs = r.get("outcomes") or []
         if outs:
             with_outcomes += 1
-        exp_ext = 0.0
+        def expected_external(entries):
+            share = 0.0
+            for o in entries:
+                key = (r["id"], o.get("t"))
+                if prov_total[key]:
+                    share += prov_ext[key] / prov_total[key]
+            return (share / len(entries)) if entries else None
+
         for o in outs:
             otype[o.get("t")] += 1
             if o.get("v") is not None:
                 envelope_has_provenance = True
-            key = (r["id"], o.get("t"))
-            if prov_total[key]:
-                exp_ext += prov_ext[key] / prov_total[key]
-        r["_ext_frac"] = (exp_ext / len(outs)) if outs else None
+        # E's outcome_success reads every outcome row; I's
+        # outcome_score_consistency reads only rows with a finite outcome_score.
+        r["_ext_frac"] = expected_external(outs)
+        scored = [o for o in outs if isinstance(o.get("s"), (int, float)) and math.isfinite(o["s"])]
+        r["_ext_frac_I"] = expected_external(scored)
     print("\n== Outcome entries persisted in the E/I derivations (all check-ins)")
     total = sum(otype.values())
     for t, n in otype.most_common(10):
@@ -250,7 +262,7 @@ def main() -> int:
             if not dim or not dim.get("components"):
                 skipped += 1
                 continue
-            w, _ = shares(dim, r["_ext_frac"])
+            w, _ = shares(dim, r["_ext_frac" if dim_name == "E" else "_ext_frac_I"])
             for cls in CLASSES:
                 row_w[cls].append(w[cls])
                 id_w[cls][r["id"]].append(w[cls])
@@ -273,7 +285,7 @@ def main() -> int:
             for r in rs:
                 dim = r.get(dim_name)
                 if dim and dim.get("components"):
-                    _, c = shares(dim, r["_ext_frac"])
+                    _, c = shares(dim, r["_ext_frac" if dim_name == "E" else "_ext_frac_I"])
                     pts.append((float(dim["value"]), c))
             if len(pts) < 20:
                 continue

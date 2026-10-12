@@ -1515,7 +1515,13 @@ MISMATCH.** Row 2 established that every agent receives the same fleet scalar on
 a given tick. In the same window the scalar did not move at all: one value,
 0.1474, on every one of the 18,021 rows across 668 hours, from a lifetime sample
 count that stayed at 282. The `agent_candidate` measurement (#2194) reported
-`no_data` for all 318 identities. At an effective weight of 0.360 per row, about
+`no_data` for all 318 identities. Its recorders are wired and reachable, and the
+live state shows zero per-agent bins: every candidate sample was gated out. The
+check-in path admits only outcomes at corroboration weight 0.65 or above, and its
+keyword-inferred auto-emitted outcomes grade below that (fleet-wide, 5,944 task
+and test outcomes graded `claim_only`); the 3,331 outcomes graded
+`externally_verified` or `tool_observed` clear the gate but store no agent
+confidence, which the outcome-event path requires. At an effective weight of 0.360 per row, about
 a third of I was a constant carrying no current information about anyone. What
 moved I within an identity was `continuity_I_input`, one minus the
 self-report-versus-text complexity divergence (median 87% of I's variation). The
