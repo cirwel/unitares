@@ -1454,6 +1454,37 @@ counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
 verdict→`decision_e` feedback paths and both want one deliberate decision rather
 than two patches.
 
+**46. "S's regime-instability term measures how much the runtime is switching"**
+(contract *The split*, S row: "How much is the runtime moving and switching") →
+**IMPLEMENTATION MISMATCH.** At rest the term mostly measures S itself.
+`detect_regime` (`src/monitor_regime.py`) reads behavioral S once behavioral
+confidence reaches 0.3 and returns `DIVERGENCE` when S rose by more than
+`eps_S = 0.002` while |V| exceeds 0.05; `_regime_instability`
+(`src/behavioral_sensor.py`) then counts label changes over the last ten entries,
+at 35% of raw S. Resting behavioral V sits near -0.095, so the V condition always
+holds, and S's own step-to-step variation (SD about 0.028) keeps flipping the
+label. In a synthetic offline run of the live build (2026-10-12,
+[`../evaluations/eisv-s-faithfulness/result-v0.md`](../evaluations/eisv-s-faithfulness/result-v0.md)),
+holding the term at its low default cut resting S step SD from 0.0273 to 0.0016.
+Paired by seed on identical inputs, the live-minus-held response differences were
++0.029 (se 0.013) for thrash, +0.001 to +0.021 (se 0.012 to 0.021) for the other
+positive controls, and -0.037 (se 0.015) for a vocabulary-only sham, whose live
+shift disappears with the term held. These are exploratory estimates; no deciding
+standard was declared. Row 13 recorded the topology; this adds the magnitude and
+the direct path inside behavioral S.
+
+The same run is the first exercise of S's assigned validation regime. Identical
+inputs replayed from an identical initial state gave identical readings. S moved
+with the predicted sign and dose for overclaimed complexity, confidence collapse
+and thrash (+0.04 to +0.31 against control). An honestly reported shift to
+heavier work moved it +0.007 (se 0.020); the vocabulary-only change moved it
+-0.038 (se 0.016) in live code, a shift the regime term accounts for. The run was
+exploratory and not pre-registered, so it earns no status here; a pre-registered
+rerun with a declared standard is what would. **Do not change S before the
+2026-12-01 read**: S feeds that read's models. The repair (drop the term, or
+compute regime changes from something other than S) belongs after it or behind a
+shadow reading.
+
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 
 Added 2026-09-25 after an adversarial design review of a critique that the
