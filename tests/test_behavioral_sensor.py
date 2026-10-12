@@ -699,6 +699,9 @@ class TestPrepareUnlockedInputsContract:
         # the shadow's arithmetic is pinned by TestRegimeSelfLoopShadow.
         assert regime["mode"] == "measurement_only"
         assert regime["policy_applied"] is False
+        # The fallback dict also satisfies the two lines above; this one fails
+        # if the shadow raised.
+        assert not str(regime.get("eligibility_reason") or "").startswith("shadow_error")
 
     @pytest.mark.asyncio
     async def test_a_failing_regime_shadow_cannot_interrupt_the_deployed_handoff(self):

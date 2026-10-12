@@ -193,6 +193,9 @@ def main() -> int:
         by_id_cf[r["id"]].append(cf)
 
     print(f"\n== Substituting the per-agent error into persisted I observations (causal, as of each check-in)")
+    if not rows:
+        print("  no non-synthetic I observations with components in the snapshot")
+        return 0
     print(f"  I observations: {len(rows)}; with an eligible per-agent error: {covered} "
           f"({covered / len(rows):.1%}); identities covered: "
           f"{sum(1 for i in by_id_obs if any(o != c for o, c in zip(by_id_obs[i], by_id_cf[i])))}")

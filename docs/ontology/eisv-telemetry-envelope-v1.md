@@ -114,8 +114,9 @@ excluded.
 behavioral observation, each with its intervention, what it does not model, and
 its candidate-minus-deployed delta: legacy coherence neutralized, the decision
 self-loop neutralized (E's `decision_history`), and the regime self-loop
-neutralized (S's regime-instability term, contract ledger row 46). No policy
-reads them.
+neutralized (S's regime-instability term, contract ledger row 46). They are
+present only when the server computed the behavioral sensor on that check-in.
+No policy reads them.
 
 `self_report` records what the agent stated on the check-in: its confidence as
 reported and as used after identity-assurance dampening. It is measurement-only.

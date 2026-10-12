@@ -1487,7 +1487,9 @@ exploratory and not pre-registered, so it earns no status here; a pre-registered
 rerun with a declared standard is what would. **Do not change S before the
 2026-12-01 read**: S feeds that read's models. The repair (drop the term, or
 compute regime changes from something other than S) belongs after it or behind a
-shadow reading. The shadow now runs on every behavioral check-in:
+shadow reading. The shadow now runs on every check-in where the server computes
+the behavioral sensor (no caller-supplied sensor reading, at least three
+decisions of history):
 `eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`, S with the term
 held at its observed fleet level (0.12), measurement only.
 
