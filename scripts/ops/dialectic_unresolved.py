@@ -86,6 +86,44 @@ Like an acknowledgement, supersession changes nothing in the database: the
 objection still stands in its own session, and nothing here says the later
 review met its conditions. It is counted, never dropped silently, and ``--all``
 shows each superseded review with the session that superseded it.
+
+Subject PR finished (automatic)
+-------------------------------
+A review is also left off the default listing when its subject PR (the same
+``subject_pr`` reading as above) was MERGED or CLOSED after the review was
+opened. The change under review has moved on: either it landed, and the standing
+objection is audit evidence about a merged change (``merged_with_standing_objection``),
+or it was abandoned (``subject_closed_unmerged``). Neither is work for an operator.
+Operator decision 2026-10-11 ("things should just work"), with an independent
+Codex recommendation agreeing. Measured that day over every row in the 90-day
+window: all 11 reviews whose subject PR finished after the review opened had
+already been acknowledged by hand (5, all ``stale``) or superseded (6); none was
+kept on the list.
+
+* The PR must have finished AFTER the review was created. A PR that merged
+  before it is cited context, or a post-merge review, and stays listed: that is
+  also what stops a repo-less "fermata PR #59" being read as this repo's #59,
+  which merged in April, months before the review.
+* A repo-less reference is read as ``DEFAULT_PR_REPO``; an explicit repo (URL or
+  ``owner/repo``) is used as written.
+* The state comes from GitHub (``gh``), one batched query, bounded by a
+  timeout. Any failure (no ``gh``, offline, unauthenticated, a timeout, a
+  reference GitHub cannot resolve) hides nothing for that review. MERGED is
+  final, so merged states are cached locally (``DIALECTIC_PR_STATE_CACHE``) and
+  later runs make no network call for them; a CLOSED PR can be reopened, so it
+  is looked up again every run.
+
+Like supersession, this writes nothing to the database, is counted rather than
+dropped silently, and ``--all`` shows the PR and how it finished.
+
+Awaiting the operator
+---------------------
+``--json`` also carries ``awaiting_operator``: sessions that are not terminal
+and still ask for facilitation. Since #2735 a facilitation request whose
+reviewer has had its last word closes on its own, so what remains here is the
+narrow set nothing automated can answer (no reviewer verdict at all, a
+self-review, a reviewer with no declared window). That list, not the standing
+objections, is what an operator surface should interrupt for.
 """
 
 from __future__ import annotations
@@ -96,6 +134,7 @@ import getpass
 import json
 import os
 import re
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import dataclass
@@ -123,6 +162,15 @@ DEFAULT_LEDGER = "~/.unitares/dialectic-acks.jsonl"
 #   stale      -- no longer actionable (the subject moved on, empty topic, ...)
 #   test       -- a smoke test or probe the label filter did not catch
 DISPOSITIONS = ("superseded", "stale", "test")
+
+# Subject-PR lookups. A repo-less "PR #N" is read as this repo's.
+DEFAULT_PR_REPO = "cirwel/unitares"
+PR_STATE_CACHE_ENV = "DIALECTIC_PR_STATE_CACHE"
+DEFAULT_PR_STATE_CACHE = "~/.unitares/dialectic-pr-state.json"
+# One batched GraphQL call. The SessionStart hook waits on this, so it is
+# bounded here; a timeout hides nothing.
+GH_TIMEOUT_S = 8
+PR_FINISHED_STATES = ("MERGED", "CLOSED")
 
 # Prefixes shorter than this match by accident, not by intent. Session ids are
 # 16 hex characters; the triage notes cite 8.
@@ -239,6 +287,25 @@ WHERE s.reviewer_agent_id IS DISTINCT FROM s.paused_agent_id
   AND s.created_at >= now() - interval '1 day' * %(window_days)s
 """
 
+# Sessions still asking a human to facilitate. ⛔Terminal rows are excluded on
+# `status`: 75 `failed` rows still carry awaiting_facilitation=true from before
+# the close cleared the flag (measured 2026-10-11), and listing them would put
+# the whole history back in front of the operator.
+AWAITING_QUERY = """
+SELECT s.session_id,
+       COALESCE(NULLIF(s.topic, ''), s.reason, '') AS topic,
+       COALESCE(ra.label, s.reviewer_agent_id, '') AS reviewer,
+       s.status, s.phase, s.created_at, s.updated_at
+FROM core.dialectic_sessions s
+LEFT JOIN core.agents pa ON pa.id = s.paused_agent_id
+LEFT JOIN core.agents ra ON ra.id = s.reviewer_agent_id
+WHERE s.awaiting_facilitation
+  AND s.status NOT IN ('resolved', 'failed')
+  AND COALESCE(pa.label, '') !~* '(probe|canary)'
+  AND COALESCE(pa.label, '') !~ '^RP[0-9]'
+ORDER BY s.created_at DESC
+"""
+
 # A PR reference, most specific form first:
 #   github.com/<owner>/<repo>/pull/<n>
 #   <owner>/<repo>#<n>, <owner>/<repo> PR #<n>
@@ -333,6 +400,133 @@ def find_supersessions(
     return out
 
 
+# ── subject PR finished ─────────────────────────────────────────────────────
+
+
+def _pr_key(pr: PrRef) -> tuple:
+    return ((pr.repo or DEFAULT_PR_REPO).lower(), pr.number)
+
+
+def find_finished_subjects(
+    rows: Sequence[Dict[str, Any]], states: Dict[tuple, Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
+    """Map each review whose subject PR finished after it opened to how. Pure.
+
+    ``states`` maps ``(owner/repo, number)`` to ``{"state", "merged_at",
+    "closed_at"}`` as GitHub reports them. A review with no subject PR, no
+    known state, an open PR, or a PR that finished before the review opened is
+    left out, so it stays listed.
+    """
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        pr = subject_pr(r.get("topic") or "")
+        created = _as_utc(r.get("created_at"))
+        if pr is None or created is None:
+            continue
+        st = states.get(_pr_key(pr))
+        if not st or st.get("state") not in PR_FINISHED_STATES:
+            continue
+        merged = st.get("state") == "MERGED"
+        finished = _as_utc(st.get("merged_at") if merged else st.get("closed_at"))
+        if finished is None or finished <= created:
+            continue
+        out[r["session_id"]] = {
+            "pr": f"{_pr_key(pr)[0]}#{pr.number}",
+            "state": st["state"],
+            "finished_at": finished.isoformat(),
+            "signal": "merged_with_standing_objection" if merged else "subject_closed_unmerged",
+        }
+    return out
+
+
+def pr_state_cache_path() -> str:
+    return os.path.expanduser(os.environ.get(PR_STATE_CACHE_ENV) or DEFAULT_PR_STATE_CACHE)
+
+
+def _load_pr_cache(path: str) -> Dict[tuple, Dict[str, Any]]:
+    """Cached MERGED states. Any problem reading it means an empty cache: the
+    cost is a network lookup, never a hidden review."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    out: Dict[tuple, Dict[str, Any]] = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, st in raw.items():
+        repo, _, num = str(key).rpartition("#")
+        if repo and num.isdigit() and isinstance(st, dict) and st.get("state") == "MERGED":
+            out[(repo.lower(), int(num))] = st
+    return out
+
+
+def _save_pr_cache(path: str, cache: Dict[tuple, Dict[str, Any]]) -> None:
+    merged = {f"{repo}#{n}": st for (repo, n), st in sorted(cache.items())
+              if st.get("state") == "MERGED"}
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(merged, fh, sort_keys=True, indent=1)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a cache that cannot be written only costs a lookup next run
+
+
+def _gh_pr_states(keys: Sequence[tuple]) -> Dict[tuple, Dict[str, Any]]:
+    """One batched GraphQL query for every key. Empty on any failure."""
+    if not keys:
+        return {}
+    parts = []
+    aliases = {}
+    for i, (repo, n) in enumerate(keys):
+        owner, _, name = repo.partition("/")
+        if not owner or not name or not re.fullmatch(r"[\w.-]+", owner + name):
+            continue
+        alias = f"p{i}"
+        aliases[alias] = (repo, n)
+        parts.append(f'{alias}: repository(owner: "{owner}", name: "{name}") '
+                     f'{{ pullRequest(number: {int(n)}) {{ state mergedAt closedAt }} }}')
+    if not parts:
+        return {}
+    query = "query { " + " ".join(parts) + " }"
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "graphql", "-f", f"query={query}"],
+            capture_output=True, text=True, timeout=GH_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    # A partial answer (one repo GitHub cannot resolve) still exits non-zero
+    # but carries data for the rest; use what resolved.
+    try:
+        data = (json.loads(proc.stdout or "{}") or {}).get("data") or {}
+    except ValueError:
+        return {}
+    out: Dict[tuple, Dict[str, Any]] = {}
+    for alias, key in aliases.items():
+        pr = ((data.get(alias) or {}).get("pullRequest")) or None
+        if isinstance(pr, dict) and pr.get("state"):
+            out[key] = {"state": pr["state"], "merged_at": pr.get("mergedAt"),
+                        "closed_at": pr.get("closedAt")}
+    return out
+
+
+def fetch_pr_states(rows: Sequence[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any]]:
+    """GitHub state of every subject PR the rows name, cache first."""
+    path = pr_state_cache_path()
+    cache = _load_pr_cache(path)
+    wanted = {_pr_key(pr) for pr in (subject_pr(r.get("topic") or "") for r in rows) if pr}
+    missing = sorted(k for k in wanted if k not in cache)
+    fresh = _gh_pr_states(missing)
+    if any(st.get("state") == "MERGED" for st in fresh.values()):
+        _save_pr_cache(path, {**cache, **fresh})
+    return {k: v for k, v in {**cache, **fresh}.items() if k in wanted}
+
+
 def _run_read_only(dsn: str, sql: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     import psycopg2
     import psycopg2.extras
@@ -363,6 +557,10 @@ def fetch(dsn: str, window_days: int) -> List[Dict[str, Any]]:
 
 def fetch_superseders(dsn: str, window_days: int) -> List[Dict[str, Any]]:
     return _run_read_only(dsn, SUPERSEDER_QUERY, {"window_days": window_days})
+
+
+def fetch_awaiting_operator(dsn: str) -> List[Dict[str, Any]]:
+    return _run_read_only(dsn, AWAITING_QUERY, {})
 
 
 def fetch_matching_session_ids(dsn: str, prefixes: Sequence[str]) -> Dict[str, List[str]]:
@@ -595,6 +793,32 @@ def superseded_summary(superseded: List[Dict[str, Any]]) -> str:
             f"review; --all shows them.")
 
 
+def split_finished(
+    rows: List[Dict[str, Any]], finished: Dict[str, Dict[str, Any]]
+) -> tuple:
+    """Split into (open, finished). Finished rows carry ``subject_pr_finished``."""
+    open_rows, done = [], []
+    for r in rows:
+        how = finished.get(r["session_id"])
+        if how:
+            done.append({**r, "subject_pr_finished": how})
+        else:
+            open_rows.append(r)
+    return open_rows, done
+
+
+def finished_summary(done: List[Dict[str, Any]]) -> str:
+    """The one line that stops finished-subject reviews vanishing silently."""
+    if not done:
+        return ""
+    merged = sum(1 for r in done if r["subject_pr_finished"]["state"] == "MERGED")
+    closed = len(done) - merged
+    parts = ", ".join(p for p in (f"merged {merged}" if merged else "",
+                                  f"closed {closed}" if closed else "") if p)
+    return (f"{len(done)} review(s) hidden because the reviewed PR finished after the "
+            f"review opened ({parts}); --all shows them.")
+
+
 def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
     """One block per review. Conditions are the point, so they are never elided
     silently -- a truncated list says how many it dropped."""
@@ -618,6 +842,10 @@ def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
             how = (f"same subject PR {by['pr']}" if by.get("signal") == "same_subject_pr"
                    else "it cites this session")
             out.append(f"    SUPERSEDED by accepted review {by['session_id']} ({how})")
+        done = r.get("subject_pr_finished")
+        if done:
+            out.append(f"    SUBJECT PR {done['pr']} {done['state']} at {done['finished_at']} "
+                       f"({done['signal']})")
         ack = r.get("acknowledgement")
         if ack:
             why = " ".join(str(ack.get("reason") or "").split())
@@ -828,6 +1056,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         supersessions = {}
     acks = load_acks()
     open_rows, superseded = split_superseded(rows, supersessions)
+    try:
+        finished = find_finished_subjects(open_rows, fetch_pr_states(open_rows))
+    except Exception as exc:  # noqa: BLE001 -- fail toward showing, never hide on error
+        print(f"dialectic_unresolved: subject-PR check failed, hiding nothing for it: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        finished = {}
+    open_rows, done = split_finished(open_rows, finished)
     visible, hidden = partition(open_rows, acks)
     if args.show_all:
         # Acknowledgements are read for EVERY row, superseded or not: an
@@ -836,9 +1071,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         acked = {r["session_id"]: r["acknowledgement"] for r in partition(rows, acks)[1]}
         by = {r["session_id"]: r["superseded_by"] for r in superseded}
         shown = [{**r, "acknowledgement": acked.get(r["session_id"]),
-                  "superseded_by": by.get(r["session_id"])} for r in rows]
+                  "superseded_by": by.get(r["session_id"]),
+                  "subject_pr_finished": finished.get(r["session_id"])} for r in rows]
     else:
         shown = visible
+
+    try:
+        awaiting = fetch_awaiting_operator(args.dsn)
+    except Exception as exc:  # noqa: BLE001
+        print(f"dialectic_unresolved: awaiting-operator read failed: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        awaiting = None
 
     if args.json:
         print(json.dumps(
@@ -854,6 +1097,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # Superseded reviews are left out of `reviews` before the
                 # acknowledgement ledger is consulted, so the two never overlap.
                 "superseded_hidden": 0 if args.show_all else len(superseded),
+                # Reviews whose subject PR merged or closed after they opened.
+                # Taken out after supersession and before the ledger, so the
+                # three hidden counts never overlap.
+                "subject_pr_finished_hidden": 0 if args.show_all else len(done),
+                # Non-terminal sessions still asking for facilitation: the only
+                # thing here that is waiting on a person. null when the read
+                # failed, so a consumer can tell "none" from "could not tell".
+                "awaiting_operator": awaiting,
                 "acknowledged_by_disposition": {} if args.show_all else dict(
                     Counter(r["acknowledgement"]["disposition"] for r in hidden)),
                 "ledger_path": ledger_path(),
@@ -863,12 +1114,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     text = render(shown, args.max_conditions)
-    summaries = [] if args.show_all else [superseded_summary(superseded), hidden_summary(hidden)]
+    summaries = [] if args.show_all else [superseded_summary(superseded), finished_summary(done),
+                                          hidden_summary(hidden)]
     if text:
         print(text)
     for summary in summaries:
         if summary:
             print(summary)
+    if awaiting:
+        print(f"{len(awaiting)} session(s) still asking for facilitation (nothing automated "
+              f"can answer these):")
+        for a in awaiting:
+            topic = " ".join(str(a.get("topic") or "(no topic)").split())
+            print(f"  {a['session_id']}  reviewer={a.get('reviewer') or '-'}  "
+                  f"{topic if len(topic) <= 100 else topic[:97] + '...'}")
     return 0
 
 
