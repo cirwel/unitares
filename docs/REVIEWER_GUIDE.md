@@ -23,7 +23,7 @@ state estimate. What remains open is listed under
 
 - A governance MCP + HTTP server for agent runtime state.
 - A continuous check-in loop: `start_session` -> `sync_state` -> `record_result` -> `check_working_state`. These are the agent-facing workflow names; the implementation tools they route to are `onboard`, `process_agent_update`, `outcome_event`, and `get_governance_metrics` (mapping in [`integration/MCP_CLIENTS.md`](integration/MCP_CLIENTS.md)).
-- A proprioceptive signal layer for agent strain/coherence/overload, documented in [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md).
+- A signal layer that blends and smooths runtime observations and controller history into EISV indices; its proprioceptive interpretation is documented in [`docs/ontology/eisv-proprioception-contract.md`](ontology/eisv-proprioception-contract.md).
 - A calibration layer that combines self-reported confidence with exogenous outcomes such as tests, exit codes, and tool results.
 - A continuity and audit layer for long-running and repeated agent process-instances.
 - A research implementation backed by a public paper, DOI, reproducibility kit, and deployment-derived datasets.
@@ -32,8 +32,8 @@ state estimate. What remains open is listed under
 
 - Not an output filter or guardrail classifier.
 - Not a sandbox or permission system.
-- Not an outcome oracle or grand jury. EISV can report strain; external outcome evidence and policy/review layers decide task-negative, contract, authority/harm, or synthetic labels.
-- Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict, and Integrity is anchored to outcomes rather than to the agent's own history.
+- Not an outcome oracle or grand jury. EISV reports changes in its specified inputs and history; external outcome evidence and policy/review layers decide task-negative, contract, authority/harm, or synthetic labels.
+- Not a universal ethics oracle. "No ethics classifier" means no hand-labeled ethics model — not that the system is value-free; drift is a salience flag, not a verdict. I blends calibration and controller history with optional outcome-consistency and other features; it is not a truth score.
 - Not hardened against a motivated adversary gaming the EISV proxy. Some outcome
   sources are harder for the agent to manipulate and baselines are self-relative,
   but enforcement leans lenient by intent and red-teaming has been ad hoc rather
@@ -64,10 +64,14 @@ the fact is read. Whether that yields better outcomes than a well-written note i
 untested; a matched comparison (forced mid-task handoffs, a handoff-note arm and a
 record arm, machine-checked outcomes) is the study that would answer it.
 
-**"EISV is not a validated measure."** EISV is a behavioral state estimate. Its
+**"EISV is not a validated measure."** EISV computes specified weighted indices
+and their evolution from runtime observations and controller history. The
+[computation reference](EISV_COMPUTATION.md) defines those signals and their
+provenance. A narrow or derived signal is still inspectable information;
+validation of a particular diagnosis or use is a separate question. Its
 `proceed` and `guide` actions are advisory; its `pause` holds governed writes until
-self-recovery, review, an operator, or expiry lifts it. Its predictive validity is
-unestablished ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)). The operator decided on 2026-10-10 to move it out of the core
+self-recovery, review, an operator, or expiry lifts it. Added outcome-prediction
+value is unestablished ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)). The operator decided on 2026-10-10 to move it out of the core
 into an optional module subscribed to check-ins
 ([plan](proposals/active/eisv-core-boundary-v0.md)). Identity, findings,
 requested review, outcomes, and reconstruction do not need its estimate to work. The runtime separation is
@@ -92,11 +96,11 @@ referenced files.
 | Surface | Status | Where to verify it's real |
 |---|---|---|
 | Check-in / EISV / verdict loop | **Live** | `src/behavioral_assessment.py`, `src/behavioral_state.py`; flow in [`UNIFIED_ARCHITECTURE.md`](UNIFIED_ARCHITECTURE.md) |
-| Self-relative (z-score vs own Welford baseline) scoring | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
+| Self-relative risk scoring (z-score vs own Welford baseline after warmup, alongside absolute thresholds; coordinates remain weighted indices) | **Live** | `behavioral_assessment.py` module docstring + `SIGMA_*` constants (provenance documented inline) |
 | Dialectic review (thesis / antithesis / synthesis, reviewer selection) | **Live** | `src/mcp_handlers/dialectic/handlers.py` — `submit_thesis` / `submit_antithesis` / `submit_synthesis` / `request_dialectic_review`, reached as `dialectic(action='thesis'/'antithesis'/'synthesis'/'request')` on every transport. Their own names are legacy aliases: REST `/v1/tools/call` and stdio resolve them, `/mcp/` answers `Unknown tool`. Not a stub. |
 | Knowledge graph (discoveries, edges, FTS) | **Live** | Committed schema `db/postgres/knowledge_schema.sql` + migration `002_knowledge_schema.sql`; tools `knowledge()` (workflow aliases `store_finding`, `search_shared_memory`, `update_finding`) and `search_knowledge_graph`. `store_knowledge_graph` is a legacy alias for `knowledge(action='store')` that REST and stdio resolve and `/mcp/` refuses. AGE relational store is canonical; AGE graph is advisory. |
 | HTTP write/decision endpoints | **Live** | `src/http_api.py` — `POST /v1/effect-veto`, `POST /v1/tools/call`, `POST /api/findings`, `POST /v1/substrate/observe`. The **dashboard UI** is read-mostly, not read-only: the Security pane (`dashboard/redesign/sections/security.js`) revokes passkeys and dashboard sessions. The HTTP adjudication surface (the Sentinel queue and its verdict routes) was removed 2026-09-27; the Sentinel CLI (`--resolve`/`--dismiss`) remains the supported path for operator-recorded outcomes. Historical `*_confirmed` / `*_dismissed` outcome rows remain. |
-| ODE / thermodynamic model | **Live but diagnostic only** | Runs in parallel; does **not** drive verdicts (behavioral path overrides). See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
+| ODE / thermodynamic model | **Live, coupled to assessment and policy** | Behavioral assessment owns the post-cold-start assessment; ODE state supplies structural basin/void/coherence checks and feeds later behavioral observations through controller history. See [`EISV_COMPUTATION.md`](EISV_COMPUTATION.md). |
 | BEAM Wave 3a outbound proxy | **Live, optimization-only** | `src/wave3a_beam_proxy.py`. Python in-process dispatch is the authority; BEAM is a routed fast-path that **fails open to Python** on any error (500ms hard timeout). Routing is env-flag-gated (`src/wave3a_routing.py`). Observability: DB coordination events + `unitares_beam_proxy_*` Prometheus metrics. |
 
 If a capability is **not** in this table and only appears under `docs/proposals/`,
@@ -160,7 +164,7 @@ This complements evals, guardrails, and sandboxes. Evals ask whether a model sho
 
 ## Evidence to check
 
-- Deployed EISV formulas, with provenance tags and the deployed-vs-target-semantics table: [`docs/EISV_COMPUTATION.md`](EISV_COMPUTATION.md). Read this if the thermodynamic vocabulary makes you suspect hand-waving — it states exactly what the running code computes (auditable heuristic blends, EMA-smoothed) versus what the paper targets.
+- Deployed EISV formulas, producer fields, conditional per-coordinate provenance tags, and the deployed-vs-target-semantics table: [`docs/EISV_COMPUTATION.md`](EISV_COMPUTATION.md). It specifies each blend and smoothing step, including prior decisions in E and V's separate smoothing of the raw E/I observation gap. Signal definition, diagnostic interpretation, usefulness and policy are separate questions.
 - Public CI: tests, documentation validation, and CodeQL on the default branch.
 - Public release history: latest `v2.x` release in this repository.
 - Paper DOI: `10.5281/zenodo.19647159`.

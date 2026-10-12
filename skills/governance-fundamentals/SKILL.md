@@ -16,6 +16,8 @@ source_files:
   - unitares/src/governance_glossary.py
   - unitares/src/behavioral_state.py
   - unitares/src/behavioral_sensor.py
+  - unitares/src/mcp_handlers/updates/context.py
+  - unitares/docs/EISV_COMPUTATION.md
   - unitares/src/behavioral_assessment.py
   - unitares/src/cold_start_risk_confirmation.py
   - unitares/src/monitor_decision.py
@@ -45,21 +47,30 @@ That instrument provides digital proprioception for AI agents — awareness of y
 
 ## EISV State Vector
 
-Every agent has four dimensions, updated through check-ins:
+The behavioral path produces four coordinates from three blended observation
+streams, updated through check-ins:
 
-| Dimension | Range | Meaning |
+| Dimension | Range | What the current computation records |
 |-----------|-------|---------|
-| **E** (Energy) | [0, 1] | Productive capacity |
-| **I** (Information Integrity) | [0, 1] | Claims matching results / calibration |
-| **S** (Entropy) | [0, 1] | Drift / instability from normal (lower is usually steadier) |
-| **V** (Valence) | [-1, 1] | EMA-smoothed E-I imbalance |
+| **E** (Energy) | [0, 1] | Weighted observations and controller history: prior decisions, coherence level, complexity divergence, and available outcome, continuity and tool features |
+| **I** (Information Integrity) | [0, 1] | Calibration error, coherence trend, and available outcome-score consistency, continuity and tool-variety features |
+| **S** (Entropy) | [0, 1] | Drift, regime transitions, complexity divergence, and available continuity and tool features |
+| **V** (Valence) | [-1, 1] | Separately EMA-smoothed gap between raw E and I observations |
+
+These are weighted indices with historical names. Productive capacity,
+information integrity and entropy are intended interpretations, not additional
+quantities directly measured by these formulas. A narrow, derived or correlated
+signal is still information that can be retained and inspected. Its definition,
+diagnostic interpretation, usefulness and policy role are separate questions.
+For the formulas and producer distinctions, see the repository's
+`docs/EISV_COMPUTATION.md`.
 
 ### How the Live Path Reads Them
 
-- **E (Energy)** currently blends decision success, complexity calibration, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` (see *Coherence*). The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
-- **I (Integrity)** blends calibration/outcome consistency with the trend of that same legacy controller scalar (see *Coherence*).
+- **E (Energy)** blends scores assigned to prior governance decisions, complexity divergence, recent recorded outcomes, and a legacy coherence-level term sourced from `legacy_tanh_v` (see *Coherence*), with optional continuity and tool-success inputs. Because prior decisions enter E, a policy response can change later E even when task and tool features stay fixed. That reflects controller feedback; it does not independently confirm the condition that prompted the decision. The outcome term applies once three or more outcomes are recorded in the last 24h. It counts them as recorded, of any provenance, without attribution to whether your change caused them, and an adverse one means rework, not fault. When an adverse outcome counts, the check-in carries `outcomes_in_e` saying which outcomes counted, the term's share of the observation, and what one more adverse outcome would cost.
+- **I (Integrity)** blends calibration error and outcome-score consistency with the trend of that same legacy controller scalar, plus optional continuity and tool-variety inputs. Outcome consistency measures variance: constant success and constant failure scores both have zero variance. Outcome success enters E separately. The live handler's calibration input comes from lifetime fleet strategic bins, not an error measurement for the current claim; an agent-scoped candidate is measurement-only. The monitor fallback uses tactical overconfidence instead.
 - **S (Entropy / drift)** rises with drift norm, regime instability, and complexity divergence.
-- **V (Valence)** is derived from the E-I imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns progress).
+- **V (Valence)** smooths `E_obs - I_obs` once, with its own EMA rate. Positive records a positive smoothed `E_obs - I_obs` gap; negative records the reverse. Its different smoothing rate means V is not generally the difference of the current smoothed E and I values. It adds a temporal summary, not another external observation. "Running hot" and "running careful" are interpretations of the gap.
 
 The headline math is proprioceptive residuals. The live authority stages are
 explicit: check-ins 1–2 use the mostly server-derived Φ cold-start prior;
@@ -165,9 +176,11 @@ The plain-English `mirror` array in your check-in response already summarizes an
 Interpret it only with the accompanying `coherence_source` and `coherence_role`.
 The deployed `legacy_tanh_v` value is ODE control feedback: it feeds E, I, the
 omitted-confidence estimator and the compatibility backstops, and it is not behavioral health evidence. The
-dynamical-systems (ODE) model remains useful as a research lens and telemetry;
-it is not cold-start or live verdict authority. For live interpretation read
-the behavioral assessment and policy provenance.
+dynamical-systems (ODE) model feeds later behavioral observations and final
+structural checks. Behavioral assessment owns the main risk/verdict path after
+the two-check-in prior window; this does not remove the ODE's influence on the
+final action. For live interpretation read the behavioral assessment and policy
+provenance.
 
 | Source | Role | Valid interpretation |
 |--------|------|----------------------|
