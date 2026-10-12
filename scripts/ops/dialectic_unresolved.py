@@ -116,6 +116,31 @@ kept on the list.
 Like supersession, this writes nothing to the database, is counted rather than
 dropped silently, and ``--all`` shows the PR and how it finished.
 
+Routing to whoever touches the subject (``--touching``)
+--------------------------------------------------------
+What is left after the above is mostly design reviews with no PR and reviews of
+a PR that had already merged. The operator cannot answer those any better than
+the next agent changing the same code, so they go to that agent instead of to a
+person (operator, 2026-10-11). ``--touching PATH`` (repeatable) keeps only the
+reviews whose topic or conditions name one of the given repo-relative files;
+a pre-PR gate passes the branch's changed files and prints what it gets back.
+Every emitted review carries ``subject_paths``, and a filtered one also carries
+``matched_paths``.
+
+Answered in a merged PR (automatic)
+-----------------------------------
+The agent that picks one up closes it by putting ``Answers dialectic <id>``
+(full session id) in its PR body, the way ``Closes #N`` closes an issue. Once
+that PR has merged, after the review opened, the review leaves the default
+listing (``answered_in_merged_pr``). The line is required, not just the id: a PR
+body that quotes a session id is usually citing it as an example (#2735 quotes
+8973efacebb17e11 as a concession it measured and answers none of its
+conditions). The lookup is one batched, time-bounded ``gh`` search; found
+answers are cached (``DIALECTIC_ANSWER_CACHE``) because a merged PR stays
+merged, and any failure hides nothing. As elsewhere, nothing is written to the
+database and nothing here says the PR met the conditions: the PR body is the
+answer, on the record where anyone can read it.
+
 Awaiting the operator
 ---------------------
 ``--json`` also carries ``awaiting_operator``: sessions that are not terminal
@@ -171,6 +196,10 @@ DEFAULT_PR_STATE_CACHE = "~/.unitares/dialectic-pr-state.json"
 # bounded here; a timeout hides nothing.
 GH_TIMEOUT_S = 8
 PR_FINISHED_STATES = ("MERGED", "CLOSED")
+ANSWER_CACHE_ENV = "DIALECTIC_ANSWER_CACHE"
+DEFAULT_ANSWER_CACHE = "~/.unitares/dialectic-answers.json"
+# Bounds the one search query; rows past it are not checked and stay listed.
+MAX_ANSWER_LOOKUPS = 40
 
 # Prefixes shorter than this match by accident, not by intent. Session ids are
 # 16 hex characters; the triage notes cite 8.
@@ -527,6 +556,157 @@ def fetch_pr_states(rows: Sequence[Dict[str, Any]]) -> Dict[tuple, Dict[str, Any
     return {k: v for k, v in {**cache, **fresh}.items() if k in wanted}
 
 
+# ── answered in a merged PR ─────────────────────────────────────────────────
+
+
+def answer_line(session_id: str) -> re.Pattern:
+    """The line a PR body carries to say it answers a review. Explicit, like
+    ``Closes #N``: a bare id is how a PR cites a session as an EXAMPLE (#2735
+    quotes 8973efacebb17e11 as a concession it measured, and answers none of
+    that review's conditions)."""
+    return re.compile(r"\banswers\s+dialectic\s+(?:session\s+)?`?" + re.escape(session_id)
+                      + r"\b", re.IGNORECASE)
+
+
+def find_answers(
+    rows: Sequence[Dict[str, Any]], answers: Dict[str, List[Dict[str, Any]]]
+) -> Dict[str, Dict[str, Any]]:
+    """Map each review answered by a PR merged after it opened to the earliest
+    such PR. Pure. ``answers`` maps a session id to the merged PRs whose body
+    carries its ``answer_line``, as ``{"pr", "merged_at"}``."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        created = _as_utc(r.get("created_at"))
+        if created is None:
+            continue
+        later = [(m, a) for a in answers.get(r["session_id"]) or []
+                 if (m := _as_utc(a.get("merged_at"))) is not None and m > created]
+        if later:
+            m, a = min(later, key=lambda pair: pair[0])
+            out[r["session_id"]] = {"pr": a["pr"], "merged_at": m.isoformat(),
+                                    "signal": "answered_in_merged_pr"}
+    return out
+
+
+def answer_cache_path() -> str:
+    return os.path.expanduser(os.environ.get(ANSWER_CACHE_ENV) or DEFAULT_ANSWER_CACHE)
+
+
+def _load_answer_cache(path: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Cached answers. A merged PR stays merged, so a found answer is final; a
+    review with none is looked up again next run. Unreadable means empty."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {sid: [a for a in found if isinstance(a, dict) and a.get("pr") and a.get("merged_at")]
+            for sid, found in raw.items() if isinstance(found, list)}
+
+
+def _save_answer_cache(path: str, cache: Dict[str, List[Dict[str, Any]]]) -> None:
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({sid: found for sid, found in sorted(cache.items()) if found},
+                      fh, sort_keys=True, indent=1)
+        os.replace(tmp, path)
+    except OSError:
+        pass  # a cache that cannot be written only costs a lookup next run
+
+
+def _gh_answering_prs(session_ids: Sequence[str]) -> Dict[str, List[Dict[str, Any]]]:
+    """One batched GraphQL search: merged PRs in ``DEFAULT_PR_REPO`` whose body
+    carries each id's ``answer_line``. Empty on any failure."""
+    parts = []
+    aliases = {}
+    for i, sid in enumerate(session_ids[:MAX_ANSWER_LOOKUPS]):
+        if not re.fullmatch(r"[0-9a-f]{8,64}", sid or ""):
+            continue
+        alias = f"s{i}"
+        aliases[alias] = sid
+        parts.append(f'{alias}: search(query: "repo:{DEFAULT_PR_REPO} is:pr is:merged in:body {sid}", '
+                     f'type: ISSUE, first: 5) {{ nodes {{ ... on PullRequest '
+                     f'{{ number mergedAt body }} }} }}')
+    if not parts:
+        return {}
+    query = "query { " + " ".join(parts) + " }"
+    try:
+        proc = subprocess.run(
+            ["gh", "api", "graphql", "-f", f"query={query}"],
+            capture_output=True, text=True, timeout=GH_TIMEOUT_S,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    try:
+        data = (json.loads(proc.stdout or "{}") or {}).get("data") or {}
+    except ValueError:
+        return {}
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for alias, sid in aliases.items():
+        nodes = ((data.get(alias) or {}).get("nodes")) or []
+        line = answer_line(sid)
+        found = [{"pr": f"{DEFAULT_PR_REPO}#{n['number']}", "merged_at": n["mergedAt"]}
+                 for n in nodes
+                 if isinstance(n, dict) and n.get("number") and n.get("mergedAt")
+                 and line.search(n.get("body") or "")]
+        if found:
+            out[sid] = found
+    return out
+
+
+def fetch_answers(rows: Sequence[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Merged PRs answering each row, cache first."""
+    path = answer_cache_path()
+    cache = _load_answer_cache(path)
+    wanted = [r["session_id"] for r in rows]
+    fresh = _gh_answering_prs([sid for sid in wanted if sid not in cache])
+    if fresh:
+        _save_answer_cache(path, {**cache, **fresh})
+    merged = {**cache, **fresh}
+    return {sid: merged[sid] for sid in wanted if sid in merged}
+
+
+# ── routing by subject ──────────────────────────────────────────────────────
+
+# A repo-relative file path: at least one directory, a known extension, and not
+# the tail of a URL or an absolute/home path (the look-behind refuses a start
+# right after "/", "~" is not in the class, so neither is ever matched).
+_SUBJECT_PATH = re.compile(
+    r"(?<![\w/.~-])((?:[\w-][\w.-]*/)+[\w.-]+\.(?:py|sh|ex|exs|md|ts|js|sql|json|ya?ml|toml))\b"
+)
+
+
+def subject_paths(row: Dict[str, Any]) -> List[str]:
+    """Files a review names in its topic or conditions, in order, unique. The
+    reviewer's reasoning is left out: it cites whatever it read along the way,
+    and routing on that would interrupt agents for files the objection is not
+    about."""
+    text = " ".join([str(row.get("topic") or "")]
+                    + [str(c) for c in (row.get("conditions") or [])])
+    seen: List[str] = []
+    for p in _SUBJECT_PATH.findall(text):
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
+def touching(rows: Sequence[Dict[str, Any]], paths: Sequence[str]) -> List[Dict[str, Any]]:
+    """Rows that name at least one of ``paths``, with ``matched_paths``."""
+    wanted = {p[2:] if p.startswith("./") else p for p in paths}
+    out = []
+    for r in rows:
+        hit = [p for p in r.get("subject_paths") or subject_paths(r) if p in wanted]
+        if hit:
+            out.append({**r, "matched_paths": hit})
+    return out
+
+
 def _run_read_only(dsn: str, sql: str, params: Dict[str, Any]) -> List[Dict[str, Any]]:
     import psycopg2
     import psycopg2.extras
@@ -819,6 +999,28 @@ def finished_summary(done: List[Dict[str, Any]]) -> str:
             f"review opened ({parts}); --all shows them.")
 
 
+def split_answered(
+    rows: List[Dict[str, Any]], answered: Dict[str, Dict[str, Any]]
+) -> tuple:
+    """Split into (open, answered). Answered rows carry ``answered_in_pr``."""
+    open_rows, done = [], []
+    for r in rows:
+        how = answered.get(r["session_id"])
+        if how:
+            done.append({**r, "answered_in_pr": how})
+        else:
+            open_rows.append(r)
+    return open_rows, done
+
+
+def answered_summary(done: List[Dict[str, Any]]) -> str:
+    """The one line that stops answered reviews vanishing silently."""
+    if not done:
+        return ""
+    return (f"{len(done)} review(s) hidden as answered by a merged PR "
+            f"(\"Answers dialectic <id>\" in its body); --all shows them.")
+
+
 def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
     """One block per review. Conditions are the point, so they are never elided
     silently -- a truncated list says how many it dropped."""
@@ -846,6 +1048,11 @@ def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
         if done:
             out.append(f"    SUBJECT PR {done['pr']} {done['state']} at {done['finished_at']} "
                        f"({done['signal']})")
+        answer = r.get("answered_in_pr")
+        if answer:
+            out.append(f"    ANSWERED by merged PR {answer['pr']} at {answer['merged_at']}")
+        if r.get("matched_paths"):
+            out.append(f"    NAMES {', '.join(r['matched_paths'])}")
         ack = r.get("acknowledgement")
         if ack:
             why = " ".join(str(ack.get("reason") or "").split())
@@ -861,6 +1068,8 @@ def render(rows: List[Dict[str, Any]], max_conditions: int) -> str:
         if not conds:
             out.append("      (reviewer objected but proposed no conditions)")
         out.append("")
+    out.append("Answer one in your PR body with the line: Answers dialectic SESSION_ID "
+               "(it leaves this list once that PR merges)")
     out.append("Reopen one with: dialectic(action='reassign', session_id=..., new_reviewer_id=...)")
     out.append("Take one off this list (local ledger, no DB write): dialectic_unresolved.py ack "
                "SESSION_ID --disposition {%s} --reason TEXT" % "|".join(DISPOSITIONS))
@@ -1028,6 +1237,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--session-id",
                     help="Render just this session as a paste-ready PR comment. "
                          "Renders only -- this tool never posts anywhere.")
+    ap.add_argument("--touching", action="append", metavar="PATH",
+                    help="Only reviews naming this repo-relative file in their topic or "
+                         "conditions (repeatable). For a pre-PR gate: pass the branch's "
+                         "changed files.")
     args = ap.parse_args(argv)
 
     try:
@@ -1063,6 +1276,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
               f"{type(exc).__name__}: {exc}", file=sys.stderr)
         finished = {}
     open_rows, done = split_finished(open_rows, finished)
+    try:
+        answered = find_answers(open_rows, fetch_answers(open_rows))
+    except Exception as exc:  # noqa: BLE001 -- fail toward showing, never hide on error
+        print(f"dialectic_unresolved: answering-PR check failed, hiding nothing for it: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        answered = {}
+    open_rows, replied = split_answered(open_rows, answered)
     visible, hidden = partition(open_rows, acks)
     if args.show_all:
         # Acknowledgements are read for EVERY row, superseded or not: an
@@ -1072,9 +1292,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         by = {r["session_id"]: r["superseded_by"] for r in superseded}
         shown = [{**r, "acknowledgement": acked.get(r["session_id"]),
                   "superseded_by": by.get(r["session_id"]),
-                  "subject_pr_finished": finished.get(r["session_id"])} for r in rows]
+                  "subject_pr_finished": finished.get(r["session_id"]),
+                  "answered_in_pr": answered.get(r["session_id"])} for r in rows]
     else:
         shown = visible
+    shown = [{**r, "subject_paths": subject_paths(r)} for r in shown]
+    if args.touching:
+        shown = touching(shown, args.touching)
 
     try:
         awaiting = fetch_awaiting_operator(args.dsn)
@@ -1101,6 +1325,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 # Taken out after supersession and before the ledger, so the
                 # three hidden counts never overlap.
                 "subject_pr_finished_hidden": 0 if args.show_all else len(done),
+                # Reviews a merged PR declared it answers ("Answers dialectic
+                # <id>"). Taken out after the finished check, before the ledger.
+                "answered_hidden": 0 if args.show_all else len(replied),
+                # The --touching filter, when given: `reviews` is then only the
+                # rows naming one of these files, each with `matched_paths`.
+                "touching": args.touching or None,
                 # Non-terminal sessions still asking for facilitation: the only
                 # thing here that is waiting on a person. null when the read
                 # failed, so a consumer can tell "none" from "could not tell".
@@ -1114,8 +1344,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     text = render(shown, args.max_conditions)
-    summaries = [] if args.show_all else [superseded_summary(superseded), finished_summary(done),
-                                          hidden_summary(hidden)]
+    summaries = [] if args.show_all or args.touching else [
+        superseded_summary(superseded), finished_summary(done), answered_summary(replied),
+        hidden_summary(hidden)]
     if text:
         print(text)
     for summary in summaries:
