@@ -15,15 +15,16 @@ sign). No outcome labels are used and no outcome claim follows.
   instability, scales with the size of an overclaim, rises within about two
   check-ins and returns most of the way within ten to fifteen after the
   intervention ends (the 0.45 overclaim still sits 0.03 above baseline at the end).
-- S does not move for a vocabulary-only change or for an honestly reported shift
-  to heavier work. It separates "the work changed and the agent said so" from
-  miscalibration.
+- An honestly reported shift to heavier work moved S by +0.007 (se 0.020), so S
+  separates "the work changed and the agent said so" from miscalibration. A
+  vocabulary-only change moved it by -0.038 (se 0.016) in live code; that shift
+  disappears with the regime term held constant (below).
 - Most of S's resting step-to-step variation comes from a feedback loop inside S.
   `detect_regime` labels the regime from behavioral S's own last change, and 35% of
   raw S counts how often that label flipped. Holding that term constant cut the
-  resting step SD by 94% (0.0273 to 0.0016). It carried about 18% of the thrash
-  response (paired difference +0.029, se 0.013) and no detectable share of the
-  other responses.
+  resting step SD by 94% (0.0273 to 0.0016). Paired response differences are
+  small next to the responses themselves (+0.029, se 0.013, for thrash, whose
+  response is +0.157); all are exploratory estimates.
 - Identical inputs replayed from an identical initial state give identical
   readings at every step.
 
@@ -61,7 +62,7 @@ coupling act on the diagnostic ODE, not on behavioral S.
 | Overclaim by 0.10 / 0.20 / 0.30 | rise with dose | +0.040 / +0.087 / +0.115 (0.013 to 0.020) | -0.061 / +0.010 / +0.004 |
 | Confidence collapse (0.75 to 0.3) with claimed complexity 0.9 | rise | +0.308 (0.015) | -0.023 |
 | Thrash: alternating terse/confident and heavy/unsure | rise | +0.157 (0.013) | -0.047 |
-| Sham: same reports, different vocabulary | none | -0.038 (0.016) | -0.073 |
+| Sham: same reports, different vocabulary | none | -0.038 (0.016), see the regime self-loop | -0.073 |
 | Honest shift to heavier work, reported accurately | none | +0.007 (0.020) | -0.022 |
 
 Recovery values are relative to each stream's own baseline. S is still settling
@@ -124,16 +125,18 @@ seeds, so the live-minus-held difference is paired exactly (`--paired-ablation`)
 | Sham | -0.038 | -0.0003 | -0.037 (0.015) |
 | Honest shift | +0.007 | -0.0004 | +0.007 (0.019) |
 
-The term carries a real share of the thrash response, about 18%, which fits:
-thrash does switch regimes. Most of that response still arrives through the drift
-component. For the other positive controls the paired difference is within 1.4
-standard errors of zero, so no share is detectable at 8 seeds; small shares in
-the low-dose overclaims are not ruled out. The sham's apparent drift is entirely
-the loop. In these streams the term contributes about 94% of S's resting step SD
-and a minor part of the measured responses.
+No deciding standard was declared for these differences, so they are reported
+as exploratory estimates rather than sorted into effects and non-effects. The
+largest share is thrash's (+0.029 of +0.157, about 18%), which fits a condition
+that does switch regimes; most of that response still arrives through the drift
+component. The sham's live shift (-0.038) is matched by its paired difference
+(-0.037): with the term held, the vocabulary-only change moves S by -0.0003. In
+these streams the term contributes about 94% of S's resting step SD and a small
+part of the measured responses.
 
 The topology was already recorded (ledger row 13; the v7 observer self-loop
-note). This run adds the magnitude and the direct path inside behavioral S.
+note). This run adds the magnitude and the direct path inside behavioral S, and
+is recorded as ledger row 46.
 
 ## Limits
 
