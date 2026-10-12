@@ -34,6 +34,7 @@ where:
 
 from __future__ import annotations
 from dataclasses import dataclass
+import math
 from typing import List, Optional
 
 from .parameters import DynamicsParams, Theta
@@ -289,6 +290,69 @@ def _integrate_rk4(
     return State(E=E_new, I=I_new, S=S_new, V=V_new)
 
 
+def _integration_substeps(
+    params: DynamicsParams, theta: Theta, dt: float, sensor_coupled: bool,
+) -> int:
+    """Resolve the fastest frozen-input slope over the entire state box.
+
+    L bounds the absolute Jacobian row sums (the infinity norm). Using
+    n=ceil(dt*L) keeps h*L <= 1, resolving stiff cubic barriers even when
+    the starting point is outside their active margin. This is a numerical
+    stiffness safeguard, not a nonlinear contraction certificate.
+    """
+    from .parameters import get_i_dynamics_mode
+
+    if not math.isfinite(dt) or dt < 0:
+        raise ValueError("dt must be finite and nonnegative")
+    bounds = (
+        (params.E_min, params.E_max), (params.I_min, params.I_max),
+        (params.S_min, params.S_max), (params.V_min, params.V_max),
+    )
+    if any(not math.isfinite(v) for pair in bounds for v in pair):
+        raise ValueError("state bounds must be finite")
+    widths = [hi - lo for lo, hi in bounds]
+    if any(width <= 0 or not math.isfinite(width) for width in widths):
+        raise ValueError("state bounds must have positive finite widths")
+    margin = params.barrier_margin
+    if not math.isfinite(margin) or margin < 0:
+        raise ValueError("barrier_margin must be finite and nonnegative")
+
+    # Each active cubic has |b'| <= 3*|strength|/margin in the box.
+    # If the two margins overlap, sum both bounds conservatively.
+    margins = (margin, margin, margin * widths[2], margin * widths[3])
+    barriers = [
+        (3 * abs(params.barrier_strength) / m * (2 if 2*m > width else 1))
+        if m > 0 else 0.0
+        for m, width in zip(margins, widths)
+    ]
+    e_abs = max(abs(params.E_min), abs(params.E_max))
+    s_abs = max(abs(params.S_min), abs(params.S_max))
+    i_slope = abs(params.gamma_I)
+    if get_i_dynamics_mode() != "linear":
+        i_slope *= max(abs(1 - 2*params.I_min), abs(1 - 2*params.I_max))
+    q = abs(params.Cmax * theta.C1) / 2
+    rows = [
+        2*abs(params.alpha) + abs(params.beta_E)*(s_abs + e_abs),
+        i_slope + abs(params.k) + abs(params.beta_I)*q,
+        abs(params.mu) + abs(lambda2(theta, params))*q,
+        2*abs(params.kappa) + abs(params.delta),
+    ]
+    # Match _derivatives: the I spring uses the E width, too.
+    spring_widths = (widths[0], widths[0], widths[2], widths[3])
+    rows = [
+        row + b + (abs(params.k_anchor)/width if sensor_coupled else 0.0)
+        for row, b, width in zip(rows, barriers, spring_widths)
+    ]
+    if any(not math.isfinite(row) for row in rows):
+        raise ValueError("dynamics slope bound must be finite")
+    work = dt * max(rows)
+    # Do not silently cap n: that would discard the h*L bound. Refuse
+    # pathological configurations instead of running an unbounded loop.
+    if not math.isfinite(work) or work > 10000:
+        raise ValueError("dynamics update requires more than 10000 substeps")
+    return max(1, math.ceil(work))
+
+
 def compute_dynamics(
     state: State,
     delta_eta: List[float],
@@ -308,8 +372,14 @@ def compute_dynamics(
     function for state evolution.
 
     Supports two integration methods:
-    - RK4 (default): 4th-order Runge-Kutta, O(dt^4) error
-    - Euler: Forward Euler, O(dt) error (legacy, for backward compat)
+    - RK4 (default): classical 4th-order Runge-Kutta
+    - Euler: Forward Euler (legacy)
+
+    Both subdivide dt using a global frozen-input Jacobian bound to resolve
+    stiff barriers. The full elapsed dt and forcing are preserved. Initial
+    and intermediate states are projected onto the configured box; the
+    complexity entropy floor is applied only after the complete update.
+    The usual smooth-ODE orders need not hold where projection activates.
 
     Set via UNITARES_INTEGRATOR env var ('rk4' or 'euler').
 
@@ -318,7 +388,7 @@ def compute_dynamics(
         delta_eta: Ethical drift vector (list of floats)
         theta: Control parameters (C1, eta1)
         params: Dynamics parameters (alpha, beta, etc.)
-        dt: Time step for integration
+        dt: Finite nonnegative elapsed time for integration
         noise_S: Optional noise term for S dynamics
         complexity: Task complexity [0, 1] - increases entropy S (default: 0.5)
         sensor_eisv: Optional sensor-derived EISV state (from a physical sensor, or
@@ -330,6 +400,9 @@ def compute_dynamics(
 
     Returns:
         New state after dt time evolution
+
+    Raises:
+        ValueError: Invalid timestep/bounds or an excessive substep budget.
     """
     # SECURITY: Clip complexity to valid range [0,1] as defense-in-depth
     complexity = max(0.0, min(1.0, complexity))
@@ -349,13 +422,20 @@ def compute_dynamics(
     # Select integrator
     integrator = get_integrator_mode()
 
-    if integrator == "euler":
-        new_state = _integrate_euler(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
-        )
-    else:
-        new_state = _integrate_rk4(
-            state, d_eta_sq, theta, params, dt, noise_S, complexity, coupling_sensor, s_setpoint,
+    steps = _integration_substeps(params, theta, dt, coupling_sensor is not None)
+    step_dt = dt / steps
+    # Apply the same box at the first derivative evaluation as at later
+    # stages, so the global slope bound also covers out-of-range inputs.
+    new_state = State(
+        E=clip(state.E, params.E_min, params.E_max),
+        I=clip(state.I, params.I_min, params.I_max),
+        S=clip(state.S, params.S_min, params.S_max),
+        V=clip(state.V, params.V_min, params.V_max),
+    )
+    integrate = _integrate_euler if integrator == "euler" else _integrate_rk4
+    for _ in range(steps):
+        new_state = integrate(
+            new_state, d_eta_sq, theta, params, step_dt, noise_S, complexity, coupling_sensor, s_setpoint,
         )
 
     # Post-integration: complexity-proportional entropy floor
