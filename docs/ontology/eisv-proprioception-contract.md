@@ -1278,12 +1278,14 @@ at 35% of raw S. Resting behavioral V sits near -0.095, so the V condition alway
 holds, and S's own step-to-step variation (SD about 0.028) keeps flipping the
 label. In a synthetic offline run of the live build (2026-10-12,
 [`../evaluations/eisv-s-faithfulness/result-v0.md`](../evaluations/eisv-s-faithfulness/result-v0.md)),
-holding the term at its low default cut resting S step SD from 0.0273 to 0.0016
-and left every intervention response essentially unchanged; the thrash response
-arrives through drift, not regime switching. Row 13 recorded the topology; this
-adds the magnitude and the direct path inside behavioral S.
+holding the term at its low default cut resting S step SD from 0.0273 to 0.0016.
+Paired by seed on identical inputs, the term carried about 18% of the thrash
+response (+0.029, se 0.013) and no detectable share of the other responses. Row 13
+recorded the topology; this adds the magnitude and the direct path inside
+behavioral S.
 
-The same run is the first exercise of S's assigned validation regime. S moved
+The same run is the first exercise of S's assigned validation regime. Identical
+inputs replayed from an identical initial state gave identical readings. S moved
 with the predicted sign and dose for overclaimed complexity, confidence collapse
 and thrash, and did not move for a vocabulary-only change or an honestly reported
 shift to heavier work. That run was exploratory and not pre-registered, so it

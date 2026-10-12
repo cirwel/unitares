@@ -4,7 +4,8 @@
 The contract (``docs/ontology/eisv-proprioception-contract.md``, *The split*)
 assigns S a label-free validation regime: test-retest reliability (same state,
 same reading) and faithfulness under intervention (inject a known change; does
-S respond with the predicted sign). This script runs both against the real
+S respond with the predicted sign). This script runs both, plus robustness to
+ordinary variation within a working style, against the real
 estimator path, ``UNITARESMonitor.process_update``, through synthetic check-in
 streams, and measures ``metrics["S"]``: the value an agent is shown.
 
@@ -31,6 +32,7 @@ step-to-step change and S then counts the label flips.
 Usage:
     python3 scripts/analysis/eisv_s_faithfulness.py
     python3 scripts/analysis/eisv_s_faithfulness.py --ablate-regime
+    python3 scripts/analysis/eisv_s_faithfulness.py --paired-ablation
     python3 scripts/analysis/eisv_s_faithfulness.py --no-deployed-flags --out /tmp/s.json
 
 Result record: ``docs/evaluations/eisv-s-faithfulness/result-v0.md``.
@@ -187,6 +189,10 @@ def _worker(out_path: str, seeds: int, ablate_regime: bool) -> None:
             results["steady"][name] = [run_stream(f"steady-{name}", gen, s) for s in range(seeds)]
         for name, gen in interventions.items():
             results["intervention"][name] = [run_stream(f"int-{name}", gen, s) for s in range(seeds)]
+        # Strict test-retest: the identical input sequence replayed from an identical
+        # initial state must give identical readings at every step.
+        retest = run_stream("int-control", interventions["control"], 0)
+        results["retest_identical"] = retest == results["intervention"]["control"][0]
     Path(out_path).write_text(json.dumps(results))
 
 
@@ -202,10 +208,13 @@ def _sd(xs):
 
 def analyze(results: dict) -> str:
     out = []
-    sources = sorted({run[-1]["obs_source"] for g in results.values() for runs in g.values() for run in runs})
+    sources = sorted({run[-1]["obs_source"] for key in ("steady", "intervention")
+                      for runs in results[key].values() for run in runs})
     out.append(f"observation source at the last step of every stream: {sources}")
     out.append("")
-    out.append("Test-retest: steady-state mean over steps 30-69, per regime (mean ± SD across seeds)")
+    out.append(f"strict test-retest (identical inputs replayed, every field equal): {results.get('retest_identical')}")
+    out.append("Within-style robustness: steady-state mean over steps 30-69, per working style "
+               "(mean ± SD across seeds; inputs vary within each style)")
     for ax in ("S", "E", "I", "V"):
         per = {k: [_m([r[ax] for r in run[30:]]) for run in runs] for k, runs in results["steady"].items()}
         k = len(next(iter(per.values())))
@@ -248,6 +257,22 @@ def analyze(results: dict) -> str:
     return "\n".join(out)
 
 
+def paired_ablation(live: dict, ablated: dict) -> str:
+    """Per-seed live-minus-ablated ΔS. Both arms replay identical inputs, so the
+    pairing is exact; the difference is the response share the regime term carries."""
+    def resp(run):
+        return _m([r["S"] for r in run[32:45]]) - _m([r["S"] for r in run[20:30]])
+
+    out = ["Paired ablation: ΔS vs control, live vs regime term held constant (same seeds, same inputs)"]
+    for name in live["intervention"]:
+        lc = [resp(r) - resp(c) for r, c in zip(live["intervention"][name], live["intervention"]["control"])]
+        ac = [resp(r) - resp(c) for r, c in zip(ablated["intervention"][name], ablated["intervention"]["control"])]
+        diff = [x - y for x, y in zip(lc, ac)]
+        se = _sd(diff) / math.sqrt(len(diff))
+        out.append(f"  {name:22s} live {_m(lc):+.4f}  held {_m(ac):+.4f}  paired diff {_m(diff):+.4f} (se {se:.4f})")
+    return "\n".join(out)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--seeds", type=int, default=8)
@@ -255,6 +280,8 @@ def main() -> int:
                     help="Counterfactual: hold the regime-instability term at its low default")
     ap.add_argument("--no-deployed-flags", action="store_true",
                     help="Run with code defaults instead of the deployed estimator flags")
+    ap.add_argument("--paired-ablation", action="store_true",
+                    help="Run live and regime-held arms and report per-seed paired differences")
     ap.add_argument("--out", help="Also write the raw per-step streams as JSON")
     ap.add_argument("--worker", nargs=3, metavar=("OUT", "SEEDS", "ABLATE"), help=argparse.SUPPRESS)
     args = ap.parse_args()
@@ -271,17 +298,22 @@ def main() -> int:
         env.update({k: os.path.expanduser(v) for k, v in DEPLOYED_FLAGS.items()})
     env["PYTHONPATH"] = str(REPO)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    with tempfile.TemporaryDirectory() as tmp:
-        raw = args.out or str(Path(tmp) / "streams.json")
+    def run(raw: str, ablate: bool) -> dict:
         proc = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()), "--worker", raw, str(args.seeds),
-             "1" if args.ablate_regime else "0"],
+             "1" if ablate else "0"],
             env=env, cwd=str(REPO), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         if proc.returncode != 0:
-            print(f"worker failed with exit {proc.returncode}", file=sys.stderr)
-            return proc.returncode
-        print(analyze(json.loads(Path(raw).read_text())))
+            raise SystemExit(f"worker failed with exit {proc.returncode}")
+        return json.loads(Path(raw).read_text())
+
+    with tempfile.TemporaryDirectory() as tmp:
+        if args.paired_ablation:
+            print(paired_ablation(run(str(Path(tmp) / "live.json"), False),
+                                  run(str(Path(tmp) / "held.json"), True)))
+            return 0
+        print(analyze(run(args.out or str(Path(tmp) / "streams.json"), args.ablate_regime)))
     return 0
 
 

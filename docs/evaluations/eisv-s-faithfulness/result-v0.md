@@ -21,8 +21,11 @@ sign). No outcome labels are used and no outcome claim follows.
 - Most of S's resting step-to-step variation comes from a feedback loop inside S.
   `detect_regime` labels the regime from behavioral S's own last change, and 35% of
   raw S counts how often that label flipped. Holding that term constant cut the
-  resting step SD by 94% (0.0273 to 0.0016) and left every intervention response
-  essentially unchanged.
+  resting step SD by 94% (0.0273 to 0.0016). It carried about 18% of the thrash
+  response (paired difference +0.029, se 0.013) and no detectable share of the
+  other responses.
+- Identical inputs replayed from an identical initial state give identical
+  readings at every step.
 
 ## Method
 
@@ -74,15 +77,26 @@ Every check-in inside an intervention window (9 conditions × 8 seeds × 15
 steps) returned `safe/proceed`. Risk rose by 0.07 to 0.10 under the large positive controls and
 by 0.016 under the honest shift.
 
-### Test-retest reliability
+### Test-retest
 
-Steady-state S (mean of steps 30 to 69, 8 seeds per working style): moderate
-0.178 ± 0.040, terse 0.200 ± 0.026, heavy 0.179 ± 0.018; ICC(1) 0.05; mean
-within-stream step SD 0.028. The low ICC is the intended invariance: S is
-self-relative, and three steady, accurately reported working styles should read
-alike. Reliability is the replicate spread against the response size: the
-largest seed spread (0.040) is a fifth of the overclaim response and an eighth of
-the confidence-collapse response.
+Strict test-retest, same state and same reading: the control stream for seed 0,
+replayed with identical inputs from an identical initial state, matches the
+first run in every field at every step. Under the harness's injected clock this
+is what a deterministic estimator should give; it confirms that no hidden state
+outside the monitor (the driver's documented process-global caches are reset per
+stream) leaks between runs.
+
+### Robustness under within-style variation
+
+This is not test-retest: the inputs differ within each style (new report text,
+complexity and confidence jitter of 0.03, randomized intervals). Steady-state S
+(mean of steps 30 to 69, 8 seeds per working style): moderate 0.178 ± 0.040, terse
+0.200 ± 0.026, heavy 0.179 ± 0.018; ICC(1) 0.05; mean within-stream step SD 0.028.
+The low ICC is the intended invariance: S is self-relative, and three steady,
+accurately reported working styles should read alike. The useful comparison is
+the replicate spread against the response size: the largest seed spread (0.040)
+is a fifth of the overclaim response and an eighth of the confidence-collapse
+response.
 
 ### The regime self-loop
 
@@ -96,19 +110,27 @@ sits near -0.095, so the V condition always holds, and S's step-to-step variatio
 39 resting check-ins in the control. Each flip feeds back into S.
 
 Counterfactual run (`--ablate-regime`, `_regime_instability` held at its
-documented low default of 0.1):
+documented low default of 0.1). Both arms replay identical inputs on the same
+seeds, so the live-minus-held difference is paired exactly (`--paired-ablation`):
 
-| | Live code | Regime term held at 0.1 |
-|---|---|---|
-| Resting within-stream S step SD | 0.0273 | 0.0016 |
-| Resting seed spread (moderate) | 0.040 | 0.0012 |
-| Overclaim 0.45 / confidence collapse / thrash | +0.195 / +0.308 / +0.157 | +0.192 / +0.294 / +0.128 |
-| Overclaim 0.10 / 0.20 / 0.30 | +0.040 / +0.087 / +0.115 | +0.024 / +0.066 / +0.114 |
-| Sham / honest shift | -0.038 / +0.007 | -0.0003 / -0.0004 |
+| | Live code | Regime term held at 0.1 | Paired difference (se) |
+|---|---|---|---|
+| Resting within-stream S step SD | 0.0273 | 0.0016 | |
+| Resting seed spread (moderate) | 0.040 | 0.0012 | |
+| Overclaim 0.45 | +0.195 | +0.192 | +0.003 (0.012) |
+| Confidence collapse | +0.308 | +0.294 | +0.014 (0.015) |
+| Thrash | +0.157 | +0.128 | +0.029 (0.013) |
+| Overclaim 0.10 / 0.20 / 0.30 | +0.040 / +0.087 / +0.115 | +0.024 / +0.066 / +0.114 | +0.016 (0.012) / +0.021 (0.020) / +0.001 (0.021) |
+| Sham | -0.038 | -0.0003 | -0.037 (0.015) |
+| Honest shift | +0.007 | -0.0004 | +0.007 (0.019) |
 
-The thrash response survives without the term because it arrives through the
-drift component, not through regime switching. In these streams the regime term
-contributes almost all of S's resting variation and none of the measured response.
+The term carries a real share of the thrash response, about 18%, which fits:
+thrash does switch regimes. Most of that response still arrives through the drift
+component. For the other positive controls the paired difference is within 1.4
+standard errors of zero, so no share is detectable at 8 seeds; small shares in
+the low-dose overclaims are not ruled out. The sham's apparent drift is entirely
+the loop. In these streams the term contributes about 94% of S's resting step SD
+and a minor part of the measured responses.
 
 The topology was already recorded (ledger row 13; the v7 observer self-loop
 note). This run adds the magnitude and the direct path inside behavioral S.
@@ -139,6 +161,7 @@ that read or behind a shadow reading.
 python3 scripts/analysis/eisv_s_faithfulness.py                      # deployed flags
 python3 scripts/analysis/eisv_s_faithfulness.py --no-deployed-flags  # code defaults (identical)
 python3 scripts/analysis/eisv_s_faithfulness.py --ablate-regime      # counterfactual
+python3 scripts/analysis/eisv_s_faithfulness.py --paired-ablation    # live vs held, paired by seed
 ```
 
 Deterministic: seeds are fixed and every clock read is injected.
