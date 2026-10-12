@@ -11,6 +11,13 @@ fact at all. Every behavioral check-in persists the full derivation
 (``state_json.eisv_telemetry.derivation``: components, weights, adjustments,
 outcome rows, calibration signal), so this is answerable by arithmetic.
 
+What is decomposed is the behavioral sensor's OBSERVATION of E and I on each
+check-in, the value persisted in the derivation. The deployed axes are that
+observation passed through ``BehavioralEISV.update``'s EMA, with per-agent and
+bootstrap-dependent rates (``measurement.behavioral.smoothed`` in the envelope).
+Smoothing is linear, so it cannot add a source the observation lacks, but it can
+change the variance shares when sources differ in autocorrelation.
+
 This script reads ONLY a frozen JSONL snapshot. It never opens a database
 connection: ``core.agent_state`` is pruned by retention, so a re-query is not a
 reproduction. ``--print-export-sql`` prints the read-only query that produced
@@ -58,7 +65,7 @@ import sys
 from collections import Counter, defaultdict
 
 PROVENANCE_SQL = """\
--- read-only; same window as the state snapshot
+-- read-only; the state window plus the producer's 24-hour lookback
 SET default_transaction_read_only = on;
 COPY (
   -- outcome_events.agent_id is core.identities.agent_id; key on identity_id,
@@ -66,7 +73,8 @@ COPY (
   SELECT jsonb_build_object('agent_id', i.identity_id::text, 'outcome_type', o.outcome_type,
                             'verification_source', o.verification_source, 'n', count(*))
   FROM audit.outcome_events o JOIN core.identities i ON i.agent_id = o.agent_id
-  WHERE o.ts > :window_end - interval '30 days' AND o.ts <= :window_end
+  -- 24 hours earlier than the state window: the producer's outcome lookback
+  WHERE o.ts > :window_end - interval '30 days' - interval '24 hours' AND o.ts <= :window_end
   GROUP BY i.identity_id, o.outcome_type, o.verification_source
   ORDER BY 1
 ) TO STDOUT;
@@ -213,17 +221,20 @@ def main() -> int:
     otype = Counter()
     with_outcomes = 0
     envelope_has_provenance = False
+    unknown_entries = [0]
     for r in rows:
         outs = r.get("outcomes") or []
         if outs:
             with_outcomes += 1
         def expected_external(entries):
-            share = 0.0
-            for o in entries:
-                key = (r["id"], o.get("t"))
-                if prov_total[key]:
-                    share += prov_ext[key] / prov_total[key]
-            return (share / len(entries)) if entries else None
+            # An entry whose (identity, type) has no provenance row is unknown,
+            # not internal: it is left out of both numerator and denominator.
+            known = [o for o in entries if prov_total[(r["id"], o.get("t"))]]
+            unknown_entries[0] += len(entries) - len(known)
+            if not known:
+                return None
+            return sum(prov_ext[(r["id"], o.get("t"))] / prov_total[(r["id"], o.get("t"))]
+                       for o in known) / len(known)
 
         for o in outs:
             otype[o.get("t")] += 1
@@ -241,6 +252,10 @@ def main() -> int:
     print(f"  check-ins with any outcome history: {with_outcomes}/{len(rows)} ({with_outcomes / len(rows):.1%})")
     print(f"  envelope carries verification_source: {envelope_has_provenance} "
           f"(expected False while the provenance filter is off)")
+    print(f"  outcome entries with no provenance row (left out as unknown): {unknown_entries[0]} "
+          f"(E and I subsets counted separately)")
+    unknown_rows = sum(1 for r in rows if (r.get("outcomes") or []) and r["_ext_frac"] is None)
+    print(f"  check-ins whose outcome provenance is entirely unknown: {unknown_rows}")
     fr = [r["_ext_frac"] for r in rows if r["_ext_frac"] is not None]
     print(f"  expected external share of a check-in's outcome history: {_q(fr)}")
     print(f"  check-ins whose expected external share exceeds 1%: {sum(1 for x in fr if x > 0.01)}")
@@ -252,7 +267,7 @@ def main() -> int:
 
     # ── effective weight shares ─────────────────────────────────────────────
     for dim_name in ("E", "I"):
-        print(f"\n== {dim_name}: effective weight by source class "
+        print(f"\n== {dim_name} observation: effective weight by source class "
               f"(row-level; then identity-level = per-identity mean, summarised across identities)")
         row_w = defaultdict(list)
         id_w = defaultdict(lambda: defaultdict(list))
@@ -276,7 +291,7 @@ def main() -> int:
 
     # ── within-identity variance attribution ────────────────────────────────
     for dim_name in ("E", "I"):
-        print(f"\n== {dim_name}: share of within-identity variance by source class "
+        print(f"\n== {dim_name} observation: share of within-identity variance by source class "
               f"(cov(contribution, {dim_name}) / var({dim_name}); identities with >= 20 rows and var > 1e-8)")
         per_cls = defaultdict(list)
         n_ids = 0

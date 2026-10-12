@@ -621,8 +621,8 @@ tool-failure population and the EISV-bearing population are **disjoint**. The
 referent exists; the two are not joined. That is plumbing. *Update
 2026-10-12 (ledger row 47):* the tool term is joined on 99% of check-ins but is
 almost always zero, externally verified outcomes reach a median 0% of E's
-outcome history, and a median 75% of E's within-identity variation comes from
-the agent's own prior verdicts.
+outcome history, and a median 75% of the within-identity variation in E's sensor
+observation comes from the agent's own prior verdicts.
 
 **I — the calibration referent is currently circular.** I's dominant term is
 `1.0 - calibration_error`, which is precisely Garfinkel's third dimension. The
@@ -1498,15 +1498,17 @@ prior verdict actions, not a world fact. Decomposing the persisted derivation of
 ([`../evaluations/eisv-ei-referent/result-v0.md`](../evaluations/eisv-ei-referent/result-v0.md)):
 external terms carry about 16% of E's effective weight (tool audit 0.150;
 externally verified outcomes p50 0.000, mean 0.008), and within an identity a
-median 75% of E's variation comes from `decision_history` (72 identities with at
-least 20 rows; p10 47%, p90 98%), against a median 0% from tool audit and from
-externally verified outcomes. `tool_error_rate` is joined on 99% of check-ins
+median 75% of the variation in the sensor's E observation (before the deployed
+EMA) comes from `decision_history` (72 identities with at least 20 rows; p10 47%,
+p90 98%), against a median 0% from tool audit and from externally verified
+outcomes. `tool_error_rate` is joined on 99% of check-ins
 but was nonzero on 168 of 19,346; outcome history is 80% system-graded
 `trajectory_validated`. The persisted envelopes carry no outcome provenance while
 `UNITARES_OUTCOME_PROVENANCE_FILTER` is off (`get_recent_outcomes` does not
 select `verification_source`), so the external share was measured from
 `audit.outcome_events`. This is the verdict-to-`decision_e` loop of row 45 and the
-"pause-scores-0.5" do-not, measured as the largest source of E's movement. The
+"pause-scores-0.5" do-not, measured as the largest source of variation in E's
+observation. The
 existing wake for `decision_e` applies; nothing changes before the 2026-12-01
 read.
 
@@ -1523,8 +1525,8 @@ and test outcomes graded `claim_only`); the 3,331 outcomes graded
 `externally_verified` or `tool_observed` clear the gate but store no agent
 confidence, which the outcome-event path requires. At an effective weight of 0.360 per row, about
 a third of I was a constant carrying no current information about anyone. What
-moved I within an identity was `continuity_I_input`, one minus the
-self-report-versus-text complexity divergence (median 87% of I's variation). The
+moved the I observation within an identity was `continuity_I_input`, one minus
+the self-report-versus-text complexity divergence (median 87% of its variation). The
 external referent the repair calls for exists for 124 of 359 identities (median
 9 `external_signal` outcomes each, 35 with at least 20). Recorded, not repaired:
 swapping I's calibration source is a predictor change for the 2026-12-01 read.

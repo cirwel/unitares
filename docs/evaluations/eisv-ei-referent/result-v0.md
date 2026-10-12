@@ -16,8 +16,9 @@ label and makes no outcome claim.
 
 ## Summary
 
-- **E moves with the agent's own verdicts.** Within an identity, a median 75% of
-  E's variation comes from `decision_history`, the agent's own prior verdict
+- **E's observation moves with the agent's own verdicts.** Within an identity, a
+  median 75% of the variation in the sensor's E observation comes from
+  `decision_history`, the agent's own prior verdict
   actions (72 identities with at least 20 rows; p10 47%, p90 98%). Tool audit and
   externally verified outcomes account for a median of 0%.
 - **E's external terms are present but carry almost nothing.** The tool term is
@@ -31,14 +32,23 @@ label and makes no outcome claim.
   The per-agent candidate reported `no_data` for all 318 identities with a
   derivation. Its recorders are wired, but every candidate sample in the window
   was gated out (see *Why the calibration bins did not move*).
-- **I moves with report-text agreement, not calibration.** A median 87% of I's
-  within-identity variation comes from `continuity_I_input`, one minus the
+- **I's observation moves with report-text agreement, not calibration.** A median
+  87% of the within-identity variation in the I observation comes from
+  `continuity_I_input`, one minus the
   divergence between self-reported and text-derived complexity.
 - **The external supply for a repointed referent is thin but real.** 124 of 359
   identities had any `external_signal` outcome in the window (median 9 each; 35
   had at least 20).
 
 ## Method
+
+What is decomposed is the behavioral sensor's observation of E and I on each
+check-in, as persisted in the derivation. The deployed axes are that observation
+passed through `BehavioralEISV.update`'s EMA, with per-agent and
+bootstrap-dependent rates. The EMA is linear, so it cannot add a source the
+observation lacks, but the variance shares of the smoothed axes can differ from
+those reported here when sources differ in autocorrelation. Effective weights are
+unaffected by that caveat; variance shares are about the observation.
 
 Every behavioral check-in persists its full derivation in
 `state_json.eisv_telemetry.derivation`: each component's value, weight and
@@ -68,7 +78,10 @@ source. Outcome events key on `core.identities.agent_id` and state rows on
 `identity_id`, so the export joins through `core.identities`. Each persisted
 outcome entry of type `t` is credited as external with that identity's window
 share of external `t` rows. That approximates the producer's rolling 24-hour,
-20-row window. I's outcome term reads only rows with a finite `outcome_score`, so
+20-row window. The provenance export starts 24 hours before the state window so
+that early check-ins' lookback is covered; an entry with no provenance row would
+be treated as unknown and excluded, not counted as internal. In this snapshot
+there were none. I's outcome term reads only rows with a finite `outcome_score`, so
 its external share is computed over that subset; in this window every persisted
 outcome row carried a finite score, so the two shares coincide.
 
@@ -83,7 +96,7 @@ SQL is in the script, `--print-export-sql`):
 | File | Rows | sha256 |
 |---|---|---|
 | `snapshot.jsonl` (behavioral `core.agent_state` derivations) | 19,535 | `7c8d219746a284814cbf54f77bb7b3e4156c708208bff5a9f2d89944a612bbb9` |
-| `outcome_provenance.jsonl` (per-identity outcome counts) | 1,491 | `32dedb67c08a08c557c18eaa84e990facc87994c2eabd979705977c198d9f315` |
+| `outcome_provenance.jsonl` (per-identity outcome counts, window plus 24-hour lookback) | 1,542 | `b7b9584dd8091ccfb3e9cae187130f49408fef6e0931d6c1e0329da18f1687d0` |
 
 ## Results
 
@@ -115,7 +128,7 @@ components, leaving 18,021 rows from 318 identities.
 
 ### What moves each axis within an identity (72 identities, p50 [p10, p90])
 
-| Class | Share of E variation | Share of I variation |
+| Class | Share of E observation variation | Share of I observation variation |
 |---|---|---|
 | own verdicts | 0.751 [0.469, 0.983] | |
 | legacy ODE | 0.161 [0.024, 0.271] | -0.069 [-0.404, 0.057] |
@@ -132,8 +145,8 @@ on or off.
 
 ### Supply
 
-- `audit.outcome_events` for these identities in the window: 68.3%
-  `server_observation`, 20.5% `agent_reported_tool_result`, 11.2%
+- `audit.outcome_events` for these identities in the window plus lookback: 68.7%
+  `server_observation`, 20.3% `agent_reported_tool_result`, 11.0%
   `external_signal` (3,031 rows).
 - Outcome entries persisted in the derivations: 80.3% `trajectory_validated`,
   13.2% `task_completed`, 5.1% `test_passed`, under 1% each for the failure
@@ -172,10 +185,10 @@ that are verified carry no confidence.
 ## Interpretation
 
 E is classed as externally referenced, but in this window its external terms
-carry about 16% of its weight and almost none of its movement. What moves it is
-the agent's own verdict history. The verdict path reads E, so this is the
+carry about 16% of its weight and almost none of the movement in its sensor
+observation. What moves that observation is the agent's own verdict history. The verdict path reads E, so this is the
 verdict-to-`decision_e` loop the contract already names (the "pause-scores-0.5"
-do-not and row 45), measured here as the largest source of E's variation.
+do-not and row 45), measured here as the largest source of variation in E's observation.
 
 The documented reason the outcome provenance filter stays off still holds, and
 these numbers reinforce it. Filtering would remove the internal outcome terms,
