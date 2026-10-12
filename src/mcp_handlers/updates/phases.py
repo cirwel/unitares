@@ -809,6 +809,26 @@ def _restamp_fork_after_thread_identity_update(ctx: UpdateContext) -> None:
         pc["identity_lineage_fork"] = lineage_fork
 
 
+
+def _self_report_record(ctx) -> dict:
+    """What the agent stated on this check-in, for the telemetry envelope.
+
+    Measurement-only: recorded so a calibration referent can later pair stated
+    confidence with independently verified outcomes. ``reported`` is the
+    caller's value as coerced, ``effective`` the value after identity-assurance
+    dampening; nothing on the estimator or policy path reads either from here.
+    """
+    raw = (ctx.arguments or {}).get("confidence")
+    try:
+        reported = float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        reported = None
+    return {
+        "confidence_reported": reported,
+        "confidence_effective": ctx.confidence,
+        "confidence_dampened": bool(getattr(ctx, "confidence_dampened", False)),
+    }
+
 async def prepare_unlocked_inputs(ctx: UpdateContext) -> None:
     """Build agent_state inputs and policy warnings *before* the agent lock.
 
@@ -1975,6 +1995,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             enforcement=ctx.result.get("enforcement"),
             shadow_ablations=shadow_ablations,
             observed_at=ctx.result.get("timestamp"),
+            self_report=_self_report_record(ctx),
         )
         # Full response mode can expose the same record that was persisted;
         # compact/mirror modes continue to omit it through response_formatter.

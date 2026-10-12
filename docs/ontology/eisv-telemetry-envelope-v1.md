@@ -78,16 +78,51 @@ not inferred.
     "missing_inputs": [],
     "computed_observation": {}
   },
+  "shadow_ablations": {
+    "schema": "eisv.shadow_ablations.v1",
+    "mode": "measurement_only",
+    "policy_applied": false,
+    "candidates": {
+      "legacy_coherence_neutralized": {"behavioral_sensor": {}, "trajectory_identity": {}, "derived_confidence": {}},
+      "decision_self_loop_neutralized": {"behavioral_sensor": {}},
+      "regime_self_loop_neutralized": {"behavioral_sensor": {}}
+    }
+  },
   "policy_evaluation": {},
-  "enforcement": {}
+  "enforcement": {},
+  "self_report": {
+    "mode": "measurement_only",
+    "policy_applied": false,
+    "confidence_reported": 0,
+    "confidence_effective": 0,
+    "confidence_dampened": false
+  }
 }
 ```
 
 The behavioral derivation retains only the last ten history values because the
 live formula reads only that suffix. Outcome history is capped at twenty and
 reduced to the fields used by the formula: outcome type, bad/good flag, numeric
-score, and verification source. Free-form outcome detail, response text,
-credentials, prompts, and tool payloads are excluded.
+score, and verification source. The verification source is null whenever
+`UNITARES_OUTCOME_PROVENANCE_FILTER` is off (the default), because the outcome
+loader does not select it; read provenance from `audit.outcome_events`, never
+from the envelope (`docs/evaluations/eisv-ei-referent/result-v0.md`). Free-form
+outcome detail, response text, credentials, prompts, and tool payloads are
+excluded.
+
+`shadow_ablations` holds one-step, measurement-only counterfactuals of the
+behavioral observation, each with its intervention, what it does not model, and
+its candidate-minus-deployed delta: legacy coherence neutralized, the decision
+self-loop neutralized (E's `decision_history`), and the regime self-loop
+neutralized (S's regime-instability term, contract ledger row 46). No policy
+reads them.
+
+`self_report` records what the agent stated on the check-in: its confidence as
+reported and as used after identity-assurance dampening. It is measurement-only.
+It exists so a calibration referent can pair stated confidence with outcomes
+something else verified; before it, confidence survived only on self-reported
+outcome rows, too sparse to pair (contract ledger row 48). `null` means the
+record was not written, distinct from a check-in that stated no confidence.
 
 For behavioral observations, `derivation.components` records the exact weighted
 terms and ordered post-blend adjustments in the submitted behavioral sensor.
