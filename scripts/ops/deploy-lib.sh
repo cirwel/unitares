@@ -176,12 +176,27 @@ deploy_lib_verify_expected_revision() {
 # numbered files. Check that whole SQL tree, both before advancing an existing
 # checkout and again when verifying HEAD immediately before migration apply.
 deploy_lib_verify_migration_sources() {
-  local tag="$1" repo="$2" expected dirty
+  local tag="$1" repo="$2" expected dirty ignored
   expected="$(deploy_lib_expected_revision_for "$tag" "$repo")" || return 1
   [[ -z "$expected" ]] && return 0
   dirty="$(git -C "$repo" status --porcelain --untracked-files=all -- db/postgres scripts/dev)" || return 1
-  if [[ -n "$dirty" ]]; then
+  # Ignoring a SQL/Python source file does not stop the planner/importer from
+  # executing it. Do not mistake an ignored extra migration for reviewed code.
+  ignored="$(git -C "$repo" ls-files --others --ignored --exclude-standard -- ':(glob)db/postgres/**/*.sql' ':(glob)scripts/dev/**/*.py')" || return 1
+  if [[ -n "$dirty$ignored" ]]; then
     echo "[$tag] REFUSING: migration sources/planner have local changes outside the inspected commit." >&2
+    return 1
+  fi
+}
+
+# Recovery for a revision refusal must preserve local edits. --keep aborts
+# rather than overwriting a conflicting edit or untracked file. Never restart
+# after a refusal, including when safe automatic recovery is impossible.
+deploy_lib_restore_reviewed_worktree() {
+  local tag="$1" repo="$2" previous="$3"
+  echo "[$tag] restoring pre-deploy revision ${previous:0:8}, preserving local edits" >&2
+  if ! git -C "$repo" reset --keep "$previous"; then
+    echo "[$tag] RECOVERY REQUIRED: automatic rollback would overwrite local changes. They were preserved; reconcile $repo before restarting any service." >&2
     return 1
   fi
 }
@@ -273,12 +288,15 @@ deploy_lib_ff_worktree() {
     DEPLOY_LIB_FRESH=1
   fi
 
-  DEPLOY_LIB_PREV="$(git -C "$deploy" rev-parse HEAD)"
+  DEPLOY_LIB_PREV="$(git -C "$deploy" rev-parse HEAD)" || return 1
   echo "[$tag] fast-forwarding $deploy to origin/$branch (ff-only; was ${DEPLOY_LIB_PREV:0:8})"
   # Merge the resolved object, not a remote-tracking ref another fetch can move
   # after verification. All callers hold the deployment checkout's lock.
   git -C "$deploy" merge --ff-only "$target" || return 1
-  deploy_lib_verify_expected_revision "$tag" "$deploy" HEAD
+  if ! deploy_lib_verify_expected_revision "$tag" "$deploy" HEAD; then
+    deploy_lib_restore_reviewed_worktree "$tag" "$deploy" "$DEPLOY_LIB_PREV" || :
+    return 1
+  fi
 }
 
 # ── #1277 fix 1: restart the lease plane at disturbance time ─────────────────

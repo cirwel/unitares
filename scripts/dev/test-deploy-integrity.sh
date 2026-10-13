@@ -47,9 +47,45 @@ if out=$(bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "
 [ "$(git -C "$DEP" rev-parse HEAD)" = "$OLD" ] || fail 'untracked migration moved checkout'
 rm "$DEP/db/postgres/migrations/999_unreviewed.sql"
 ok 'dirty planner, included SQL, and untracked migrations refuse before checkout moves'
+printf '%s\n' '999_unreviewed.sql' >> "$REPO/.git/info/exclude"
+printf 'DELETE FROM records;\n' > "$DEP/db/postgres/migrations/999_unreviewed.sql"
+git -C "$DEP" check-ignore -q db/postgres/migrations/999_unreviewed.sql || fail 'ignored SQL fixture is not ignored'
+if out=$(bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP" 2>&1); then fail 'ignored migration bypassed source check'; fi
+[ "$(git -C "$DEP" rev-parse HEAD)" = "$OLD" ] || fail 'ignored migration moved checkout'
+rm "$DEP/db/postgres/migrations/999_unreviewed.sql"
+ok 'ignored SQL still blocks deployment before checkout moves'
+# An edit arriving during fast-forward must be retained during safe rollback.
+export TEST_DEPLOY="$DEP"
+set +e
+(
+  git() {
+    command git "$@"; status=$?
+    if [[ "${3:-}" == merge && "$status" = 0 ]]; then
+      printf '# concurrent edit\n' >> "$TEST_DEPLOY/scripts/dev/apply_migrations.py"
+    fi
+    return "$status"
+  }
+  export -f git
+  bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP"
+) > "$SB/ff-output" 2>&1
+rc=$?
+set -e
+out=$(cat "$SB/ff-output")
+[ "$rc" != 0 ] || fail 'edit arriving during merge accepted'
+[ "$(git -C "$DEP" rev-parse HEAD)" = "$OLD" ] || fail 'post-merge refusal left disk advanced'
+grep -q 'concurrent edit' "$DEP/scripts/dev/apply_migrations.py" || fail 'rollback lost concurrent edit'
+git -C "$DEP" restore scripts/dev/apply_migrations.py
+ok 'post-merge refusal restores previous revision and preserves concurrent edits'
 bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP" >/dev/null
 [ "$(git -C "$DEP" rev-parse HEAD)" = "$NEW" ] || fail 'matching revision did not advance'
 ok 'matching reviewed revision deploys'
+printf 'conflicting local edit\n' >> "$DEP/change"
+if out=$(bash -c '. "$1"; deploy_lib_restore_reviewed_worktree t "$2" "$3"' _ "$LIB" "$DEP" "$OLD" 2>&1); then fail 'rollback overwrote a conflicting local edit'; fi
+[ "$(git -C "$DEP" rev-parse HEAD)" = "$NEW" ] || fail 'conflicting rollback moved HEAD'
+grep -q 'conflicting local edit' "$DEP/change" || fail 'conflicting edit was lost'
+[[ "$out" == *'RECOVERY REQUIRED'* ]] || fail 'conflicting rollback did not explain recovery'
+git -C "$DEP" restore change
+ok 'conflicting recovery preserves edits and explicitly requires manual reconciliation'
 printf '# modified\n' >> "$DEP/scripts/dev/apply_migrations.py"
 if bash -c '. "$1"; deploy_lib_verify_expected_revision t "$2" HEAD' _ "$LIB" "$DEP" 2>/dev/null; then fail 'modified migration planner accepted'; fi
 git -C "$DEP" restore scripts/dev/apply_migrations.py
@@ -86,14 +122,21 @@ mkdir -p "$SB/mcp"
 # Substitute only the host-specific plist path; execute the real deploy flow.
 sed 's|^PLIST=.*|PLIST="$TEST_PLIST"|' "$ROOT/scripts/ops/deploy-mcp.sh" > "$SB/mcp/deploy-mcp.sh"
 cp "$LIB" "$SB/mcp/deploy-lib.sh"
+for scenario in '0 0' '0 1' '1 0' '1 1'; do
+read -r apply_status check_status <<< "$scenario"
+export TEST_CHECK_STATUS="$check_status"
+: > "$TEST_TRACE"
 set +e
 (
   export UNITARES_REPO="$REPO" UNITARES_MCP_DEPLOY="$DEP"
-  export UNITARES_DEPLOY_APPLY_MIGRATIONS=1
+  export UNITARES_DEPLOY_APPLY_MIGRATIONS="$apply_status"
   python3() {
     printf 'python3 %s\n' "$*" >> "$TEST_TRACE"
     case " $* " in
-      *' --check '*) git -C "$TEST_DEPLOY" merge --ff-only -q "$TEST_NEW_SHA"; return 1 ;;
+      *' --check '*)
+        git -C "$TEST_DEPLOY" merge --ff-only -q "$TEST_NEW_SHA"
+        printf 'preserve me\n' > "$TEST_DEPLOY/concurrent-note"
+        return "$TEST_CHECK_STATUS" ;;
       *' --apply '*) return 0 ;;
       *) return 1 ;;
     esac
@@ -109,7 +152,11 @@ out=$(cat "$SB/mcp-output")
 [ "$rc" != 0 ] || fail 'moved HEAD accepted before applying migration'
 if grep -qE -- '--apply|unexpected launchctl|unexpected curl' "$TEST_TRACE"; then fail 'migration/restart ran after HEAD changed'; fi
 [[ "$out" == *'revision changed since migration review'* ]] || fail 'pre-apply drift not explained'
-ok 'HEAD change during schema check blocks migration application and restart'
+[ "$(git -C "$DEP" rev-parse HEAD)" = "$NEW" ] || fail 'schema-check refusal left unreviewed revision on disk'
+[ "$(cat "$DEP/concurrent-note")" = 'preserve me' ] || fail 'schema-check rollback lost local edits'
+rm "$DEP/concurrent-note"
+ok "HEAD drift during schema check (exit $check_status, apply $apply_status) restores previous code without applying or restarting"
+done
 unset UNITARES_DEPLOY_EXPECTED_REPO UNITARES_DEPLOY_EXPECTED_REVISION
 AP="$SB/apply"; mkdir -p "$AP"
 cp "$ROOT/scripts/ops/deploy-apply.sh" "$AP/"
