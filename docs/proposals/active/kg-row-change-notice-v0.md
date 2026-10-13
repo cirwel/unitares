@@ -1,7 +1,8 @@
 # Let active sessions learn that relevant knowledge changed
 
-**Status:** Draft capability proposal, 2026-10-13. Operator decision required;
-no runtime, notification, wake, message, identity or permission change.
+**Status:** Bounded active-session notices authorized by Kenny on 2026-10-13
+(“proceed” after the recommendations). Implementation is in PR #2776; pending
+validation, merge and migration/deploy. No automatic wake or actor authority.
 
 ## Observed gap
 
@@ -79,5 +80,42 @@ unauthorized reads. Count created, delivered, acknowledged and opened notices
 separately; a zero cannot show disinterest until surfacing, reachability and
 recording are checked. Telemetry grants no removal authority.
 
-**Operator question:** Authorize a bounded, replayable change notice for already
-active sessions, with explicit UUID recipients and no automatic wake?
+## Implemented first slice
+
+Migration 074 uses the canonical discoveries table's transaction to maintain a
+coalesced recipient/row pointer. It retains the latest revision, not every
+intermediate event. UUID revision receipts replace a global increasing cursor:
+a transaction committing late cannot fall behind a reader's high-water mark.
+An old receipt acknowledges only its exact revision. Two simultaneous reads
+see the same pending pointers; neither claims them. A crashed response replays.
+
+Delivery occurs on the next successful, caller-proven tool interaction. It adds
+at most three pointers within 2 KiB; `knowledge(action="notices")` reads,
+acknowledges or mutes the caller's own inbox. Exact `notify-agent:<UUID>` tags
+address a row; ordinary text never does. Removing a mention revokes its pointer.
+Fresh successor identities do not inherit predecessor inboxes. Self-authored
+updates may also produce owner pointers: the trigger does not invent writer
+attribution for mutation paths that lack a proved actor.
+
+Implementation bounds, chosen explicitly for this first rollout: 100 pending
+rows per process, seven-day retention, lazy maintenance on write/read, and no
+polling timer. Trimming affects only delivery hints, never the KG or historical
+audit record. A stable gap token requires a rescan before explicit acknowledgement.
+Mute affects display while the bounded backlog remains. The queue stores no
+summary, details or model output. SQL reads have a 250 ms statement timeout;
+a failed optional delivery preserves the successful primary response and pending
+pointer. No adapter background loop, paid model or agent spawn is introduced.
+
+Both AGE and Postgres write the canonical SQL table and therefore hit the same
+trigger. The current KG is shared/readable without identity; notices additionally
+require a proved recipient and current row membership. A future row ACL must
+extend that delivery check; this patch does not claim an ACL system exists.
+No preexisting writes are backfilled. This is a change pointer, not a complete
+mutation audit or a reliable attribution of the actor; those remain in existing
+row/evidence records. These limits replace the journal/actor aspirations above
+for the authorized first slice.
+
+Acceptance tests exercise transactional rollback, replay, old-receipt races,
+simultaneous readers, cross-recipient receipts, mention removal, no inheritance,
+coalescing, bounds, mute, expiry, overflow, delivery failure and identity refusal.
+The implementation and contract are reviewable before any production migration.

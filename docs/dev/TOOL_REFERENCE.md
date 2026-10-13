@@ -1060,7 +1060,7 @@ DEPENDENCIES:
 - **Workflow alias:** `update_finding` (action `update`)
 - **Related:** `search_knowledge_graph`, `leave_note`
 
-Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update sets each field you pass (a supplied details replaces the stored details; resolution_notes is the one field appended to details). To keep earlier details, resend them with your addition or put the addition in resolution_notes. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
+Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update sets each field you pass (a supplied details replaces the stored details; resolution_notes is the one field appended to details). To keep earlier details, resend them with your addition or put the addition in resolution_notes. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. notices reads your proved-process change inbox; acknowledge exact receipts or mute delivery. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
 
 promote is router-only and adds no top-level tool.
 
@@ -1087,6 +1087,8 @@ NOTES:
 
 EXAMPLE: knowledge(action="search", query="authentication bugs")
 
+notices reads a caller-proven process inbox, acknowledges exact received revisions, and mutes/unmutes automatic active-call delivery. It never wakes a session. Use acknowledge, acknowledge_gap and muted only with action=notices.
+
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `audit` | required | 60s | — |
@@ -1095,6 +1097,7 @@ EXAMPLE: knowledge(action="search", query="authentication bugs")
 | `get` | pre_onboard | 15s | — |
 | `list` | pre_onboard | 10s | — |
 | `note` | required | 120s | — |
+| `notices` | required | 120s | — |
 | `promote` | required | 20s | — |
 | `search` | pre_onboard | 15s | — |
 | `stats` | pre_onboard | 30s | — |

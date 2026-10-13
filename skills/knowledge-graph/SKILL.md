@@ -6,6 +6,8 @@ description: >
 last_verified: "2026-10-13"
 freshness_days: 21
 source_files:
+  - unitares/src/knowledge_notices.py
+  - unitares/db/postgres/migrations/074_knowledge_change_notices.sql
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
@@ -366,3 +368,20 @@ The imported digest's `imported_memory` marker says `trust="unreviewed"` and
 gives `age_days` since the KG row was created (`age_basis="created_at"`), or null
 if unknown. This is not source age or proof of review; a routine sync does not
 rejuvenate it. Markers share the existing digest budgets, so fewer rows may fit.
+
+## Active-session change notices
+
+Successful tool responses may include `knowledge_changes`, with up to three
+coalesced row/revision pointers. Read the current details before acting; a notice
+is not authority. Acknowledge only received revisions with
+`knowledge(action="notices", acknowledge=["<revision UUID>"])`. Reading alone
+replays the pointer. An old receipt cannot erase a newer revision.
+
+The inbox belongs to the proved process UUID. Exact `notify-agent:<UUID>` tags
+address a row; prose/display names and predecessor identities do not. Use
+`knowledge(action="notices", muted=true)` to suppress automatic display, or
+`muted=false` to restore it. The queue keeps at most 100 row pointers for seven
+days. A `gap_token` means rescan relevant rows, then acknowledge that exact token
+with `acknowledge_gap`. No wake, background model call, automatic check-in or KG
+status change occurs. Writer identity is not guessed; these pointers omit actor
+attribution. Migration 074 must be deployed before the capability is available.

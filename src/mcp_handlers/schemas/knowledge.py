@@ -448,6 +448,7 @@ class KnowledgeParams(AgentIdentityMixin):
                 "decision_standard", "task_label", "task_outcome",
                 "memory_context",
         ),
+        "notices": ("acknowledge", "acknowledge_gap", "muted"),
         "audit": (
                 "scope", "top_n", "use_model", "comparison_key",
         ),
@@ -469,7 +470,14 @@ class KnowledgeParams(AgentIdentityMixin):
                 "verification_basis", "decision_standard",
         ),
     }
-    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "promote", "audit"] = Field(..., description="Operation to perform")
+    action: Literal["store", "search", "get", "list", "update", "details", "note", "cleanup", "synthesize", "stats", "supersede", "promote", "audit", "notices"] = Field(..., description="Operation to perform")
+    acknowledge: Optional[List[str]] = Field(
+        None, max_length=3,
+        description="For notices: exact revision UUIDs actually received, at most 3. Read never acknowledges; stale receipts cannot consume a newer revision.")
+    acknowledge_gap: Optional[str] = Field(
+        None, description="For notices: acknowledge this exact gap token only after rescanning relevant rows.")
+    muted: Optional[bool] = Field(
+        None, description="For notices: mute/unmute automatic delivery to your proved process UUID. Backlog remains bounded; no wake or identity inheritance.")
     response_mode: Literal["full", "compact", "lean"] = Field(
         default="full",
         description=(

@@ -1,0 +1,1 @@
+- Interface contract 1.35.0: Add bounded replayable knowledge notices for proven active sessions

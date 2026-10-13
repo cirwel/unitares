@@ -294,7 +294,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # which is outside every input digest, so no digest moves: the version
 # records the output change.
 # 1.34.0 (2026-10-13): Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
-INTERFACE_CONTRACT_VERSION = "1.34.0"
+# 1.35.0 (2026-10-13): Add bounded replayable knowledge notices for proven active sessions
+INTERFACE_CONTRACT_VERSION = "1.35.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
