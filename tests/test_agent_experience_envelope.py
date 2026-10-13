@@ -2458,3 +2458,75 @@ def test_validated_routes_refuse_an_off_list_verbosity():
     for value in ("Standard", "bogus"):
         with pytest.raises(pydantic.ValidationError):
             GetGovernanceMetricsParams.model_validate({"verbosity": value})
+
+
+def _many_search_results(n, summary="a finding about the digest budget"):
+    return {
+        "success": True,
+        "results": [
+            {
+                "id": f"2026-10-13T00:00:{i:02d}.000000+00:00",
+                "summary": f"{summary} {i}",
+                "type": "observation",
+                "status": "open",
+                "tags": ["response-ux"],
+                "by": "writer",
+                "_agent_id": "11111111-2222-3333-4444-555555555555",
+            }
+            for i in range(n)
+        ],
+        "total_count": n,
+    }
+
+
+def test_search_without_limit_is_unchanged_by_more_results():
+    payload = _many_search_results(12)
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload)
+    assert "more_results" not in env
+    assert "more_results_shown" not in env["state_summary"]
+    assert env["state_summary"]["results_shown_in_digest"] == 3
+    assert env == build_experience_envelope(
+        "search_shared_memory", "knowledge", _many_search_results(12), {"limit": 3}
+    )
+
+
+def test_search_explicit_limit_lists_further_results_one_line_each():
+    payload = _many_search_results(12)
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"limit": 10}
+    )
+    assert len(env["memory_suggestions"]) == 3
+    rows = env["more_results"]
+    assert [row["discovery_id"] for row in rows] == [
+        item["id"] for item in payload["results"][3:10]
+    ]
+    assert set(rows[0]) == {"discovery_id", "type", "status", "summary"}
+    assert env["state_summary"]["more_results_shown"] == 7
+    assert env["state_summary"]["result_set_truncated"] is True
+
+
+def test_search_more_results_hold_their_own_budget():
+    payload = _many_search_results(60, summary="word " * 80)
+    env = build_experience_envelope(
+        "search_shared_memory", "knowledge", payload, {"limit": 60}
+    )
+    rows = env["more_results"]
+    assert 0 < len(rows) <= 17
+    assert all(len(row["summary"]) <= 100 for row in rows)
+    assert len(json.dumps(rows, ensure_ascii=False).encode("utf-8")) <= 2_000 + 2
+    without = dict(env)
+    without.pop("more_results")
+    without["state_summary"] = {
+        k: v for k, v in env["state_summary"].items() if k != "more_results_shown"
+    }
+    assert len(json.dumps(without, ensure_ascii=False).encode("utf-8")) <= 3_000
+
+
+def test_search_full_tier_carries_no_more_results():
+    env = build_experience_envelope(
+        "search_shared_memory",
+        "knowledge",
+        _many_search_results(12),
+        {"limit": 10, "response_mode": "full"},
+    )
+    assert "more_results" not in env

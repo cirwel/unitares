@@ -261,7 +261,9 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         "limit": {
             "description": (
                 "Max results (for action=search: min 1, values above 100 are "
-                "capped, 0 or negative is rejected)"
+                "capped, 0 or negative is rejected). search_shared_memory's "
+                "bounded tiers show three digests; pass limit above 3 and they "
+                "list up to 17 further results as one-line more_results rows"
             ),
             "brief": "Max results, 1-100 (more is capped).",
         },
