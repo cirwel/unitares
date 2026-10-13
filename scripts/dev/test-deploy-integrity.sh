@@ -56,7 +56,10 @@ for bad in 'short-sha' ''; do
   if UNITARES_DEPLOY_EXPECTED_REVISION="$bad" bash -c '. "$1"; deploy_lib_verify_expected_revision t "$2" HEAD' _ "$LIB" "$REPO" 2>/dev/null; then fail 'invalid pin accepted'; fi
 done
 if UNITARES_DEPLOY_EXPECTED_REPO="$SB/absent" bash -c '. "$1"; deploy_lib_verify_expected_revision t "$2" HEAD' _ "$LIB" "$REPO" 2>/dev/null; then fail 'unreadable scope accepted'; fi
-ok 'malformed and unreadable pins fail closed'
+mkdir -p "$SB/not-a-repo"
+if UNITARES_DEPLOY_EXPECTED_REPO="$SB/not-a-repo" bash -c '. "$1"; deploy_lib_verify_expected_revision t "$2" HEAD' _ "$LIB" "$REPO" 2>/dev/null; then fail 'non-Git scope silently disabled pin'; fi
+if bash -c '. "$1"; deploy_lib_verify_expected_revision t "$2" HEAD' _ "$LIB" "$SB/not-a-repo" 2>/dev/null; then fail 'non-Git target silently disabled pin'; fi
+ok 'malformed, unreadable, and non-Git pins fail closed'
 # Real deploy-mcp path: the schema check changes HEAD between ff and --apply.
 # Its exported command fakes also prevent accidental host control on failure.
 printf 'unreviewed\n' >> "$REPO/change"

@@ -143,14 +143,18 @@ deploy_lib_require_plist_target() {
 # pair fails closed. Never infer that an unreadable repo is an unrelated repo.
 deploy_lib_expected_revision_for() {
   local tag="$1" repo="$2" expected="${UNITARES_DEPLOY_EXPECTED_REVISION:-}"
-  local pinned_repo="${UNITARES_DEPLOY_EXPECTED_REPO:-}" common pinned_common
+  local pinned_repo="${UNITARES_DEPLOY_EXPECTED_REPO:-}" common pinned_common common_path pinned_path
   [[ -z "$expected" && -z "$pinned_repo" ]] && return 0
   if [[ -z "$pinned_repo" || ! "$expected" =~ ^[0-9a-f]{40}$ && ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
     echo "[$tag] REFUSING: expected revision requires a full commit SHA and UNITARES_DEPLOY_EXPECTED_REPO." >&2
     return 1
   fi
-  common="$(cd "$repo" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
-  pinned_common="$(cd "$pinned_repo" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || return 1
+  # Check each Git lookup separately: a failed substitution inside cd can
+  # become cd "", which succeeds on Bash and would misclassify invalid scope.
+  common_path="$(git -C "$repo" rev-parse --git-common-dir)" || return 1
+  pinned_path="$(git -C "$pinned_repo" rev-parse --git-common-dir)" || return 1
+  common="$(cd "$repo" && cd "$common_path" && pwd -P)" || return 1
+  pinned_common="$(cd "$pinned_repo" && cd "$pinned_path" && pwd -P)" || return 1
   [[ "$common" != "$pinned_common" ]] || printf '%s\n' "$expected"
 }
 
