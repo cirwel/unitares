@@ -94,7 +94,8 @@ EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
             "negative = negative smoothed gap"
         ),
         "user_friendly": (
-            "Direction and persistence of the behavioral E/I observation gap. "
+            "Direction and persistence of the behavioral E/I observation gap: "
+            "positive above zero, negative below zero. "
             "This is a temporal summary of those observations."
         ),
     },

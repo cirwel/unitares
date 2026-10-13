@@ -140,6 +140,8 @@ question, tracked in the [claim ledger](../EVIDENCE_AND_LIMITS.md#current-claim-
 For outcome prediction, inspect the
 [frozen 2026-08-09 matrix](../operations/eisv-ablation-frozen-2026-08-09.md)
 and its [power audit](../operations/falsifiability-power-audit-2026-08-23.md).
+That frozen matrix records `NON_DETECTION` under its tested support and design;
+it does not establish that the instrument has no signal or cannot be improved.
 The [reviewer guide](../REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence)
 provides synthetic controls that run on a fresh clone. Deployment outcome
 discrimination remains reserved for the registered execution under the
