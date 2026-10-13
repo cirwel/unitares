@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.32.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.33.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -352,7 +352,16 @@ The two identifiers serve different jobs:
   one live holder ahead of archived or deleted ones, and a target naming more
   than one agent is refused with `AMBIGUOUS_TARGET` where the first matching
   registry row used to be returned. Only the long description of `target_agent_id`
-  changes, which is outside every input digest, so no digest moves).
+  changes, which is outside every input digest, so no digest moves;
+  1.33.0, 2026-10-13: `search_shared_memory`, output only. A `lean` or
+  `compact` search called with `limit` above 3 lists the results after the
+  three digests under `more_results`, one row each (`discovery_id`, `type`,
+  `status`, a summary bounded at 100 characters), up to 17 rows inside a
+  2,000-byte budget of their own, and reports their number as
+  `state_summary.more_results_shown`. A search with no `limit`, or a `limit`
+  of 3 or less, returns what it did before, and the `full` tier is
+  unchanged. Only the long description of `limit` changes, which is outside
+  every input digest, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
