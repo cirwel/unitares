@@ -98,9 +98,13 @@ MIGRATE_DBURL=()
 # (the default /bin/bash) "${empty_array[@]}" trips `set -u` ("unbound variable")
 # and aborts the deploy when no UNITARES_DEPLOY_DB_URL is set (the common case).
 if [[ -f "$MIGRATE" ]]; then
+  deploy_lib_verify_expected_revision "$TAG" "$DEPLOY" HEAD
   echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
   if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
     if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
+      # Still under the shared checkout lock. A failed schema check must not
+      # authorize SQL from a checkout that moved after the caller's review.
+      deploy_lib_verify_expected_revision "$TAG" "$DEPLOY" HEAD
       echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
       if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
          || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
