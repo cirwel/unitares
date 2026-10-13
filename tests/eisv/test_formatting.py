@@ -196,10 +196,11 @@ class TestFormatEISVDetailed:
         m = EISVMetrics(E=0.80, I=1.00, S=0.03, V=-0.07)
         result = format_eisv_detailed(m, include_user_friendly=True)
         # Each dimension uses the canonical client-visible field contract.
-        assert "capacity" in result.lower()  # E: productive capacity
-        assert "claims" in result.lower()  # I: claims matching results
-        assert "drifting" in result.lower()  # S: drift from the agent's normal
-        assert "imbalance" in result.lower()  # V: E-I imbalance
+        assert "observations and prior judgments" in result.lower()  # E inputs
+        assert "calibration and consistency" in result.lower()  # I inputs
+        assert "deviations and activity" in result.lower()  # S inputs
+        assert "observation gap" in result.lower()  # V temporal summary
+        assert "positive" in result.lower() and "negative" in result.lower()
 
     def test_multiline(self):
         m = EISVMetrics(E=0.5, I=0.5, S=0.5, V=0.0)

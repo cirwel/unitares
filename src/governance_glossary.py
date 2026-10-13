@@ -36,65 +36,79 @@ from typing import Any, Dict, Optional
 # EISV DIMENSIONS — the client-visible state-vector contract
 # -----------------------------------------------------------------------------
 
+# These definitions describe the behavioral producer. Other producers (including
+# physical sensors and ODE fallback) share the field names; read source tags.
+# Formulas and provenance: docs/EISV_COMPUTATION.md.
 EISV_DIMENSIONS: Dict[str, Dict[str, str]] = {
     "E": {
         "label": "Energy",
         "range": "[0, 1]",
         "description": (
-            "Productive-capacity estimate blended from decision success, "
-            "complexity calibration, recent outcomes and a legacy controller "
-            "level term."
+            "With behavioral-sensor inputs: smoothed blend of prior decision scores, controller "
+            "coherence level, complexity divergence, and available outcome, "
+            "continuity and tool features."
         ),
         "user_friendly": (
-            "An estimate of capacity for useful work, with mixed behavioral and "
-            "legacy-controller provenance."
+            "Weighted observations and prior judgments over time on the behavioral "
+            "sensor path. Read the source tag for other producers."
         ),
     },
     "I": {
         "label": "Information Integrity",
         "range": "[0, 1]",
         "description": (
-            "Calibration/integrity estimate blended from calibration accuracy, "
-            "outcome consistency and a legacy controller trend term."
+            "With behavioral-sensor inputs: smoothed calibration-error and controller-coherence "
+            "trend blend, with available outcome-score consistency, continuity "
+            "and tool-variety features. The handler's calibration input is "
+            "lifetime fleet strategic error."
         ),
         "user_friendly": (
-            "An estimate of calibration and claim integrity, not a pure verified "
-            "claims-match-results measurement."
+            "Calibration and consistency features over time on the behavioral "
+            "sensor path. Outcome-score consistency measures variation, not success."
         ),
     },
     "S": {
         "label": "Entropy",
         "range": "[0, 1]",
         "description": (
-            "Drift or instability relative to this agent's own normal; "
-            "lower usually means steadier."
+            "With behavioral-sensor inputs: smoothed drift, regime-transition and complexity "
+            "divergence blend, with available continuity and tool features. "
+            "Assessment compares this index with thresholds and a learned baseline."
         ),
-        "user_friendly": "How far the work is drifting from this agent's usual pattern.",
+        "user_friendly": (
+            "Deviations and activity features over time with behavioral-sensor inputs. "
+            "The raw index and its deviation from your baseline are distinct."
+        ),
     },
     "V": {
         "label": "Valence",
         "range": "[-1, 1]",
         "description": (
-            "EMA-smoothed Energy minus Information Integrity imbalance. "
-            "Positive means running hot (motion outruns integrity); negative means "
-            "running careful (integrity outruns motion)."
+            "With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. "
+            "Positive records a positive smoothed gap; negative records the "
+            "reverse. Its smoothing rate differs from E and I, so it is not "
+            "generally their current smoothed values subtracted."
         ),
         "sign_convention": (
-            "positive = motion outruns integrity; negative = integrity outruns motion"
+            "behavioral state: positive = positive smoothed E_obs - I_obs gap; "
+            "negative = negative smoothed gap"
         ),
         "user_friendly": (
-            "Which side of the energy-integrity imbalance is leading: positive is "
-            "running hot, negative is running careful."
+            "Direction and persistence of the behavioral E/I observation gap: "
+            "positive above zero, negative below zero. "
+            "This is a temporal summary of those observations."
         ),
     },
 }
 
 EISV_INLINE_SUMMARY = (
-    "EISV fields: E=Energy [0,1] (capacity for useful work); "
-    "I=Information Integrity [0,1] (calibration of claims against results); "
-    "S=Entropy [0,1] (drift from the agent's own normal); "
-    "V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns "
-    "integrity, negative=integrity outruns motion)."
+    "With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); "
+    "I=Information Integrity [0,1] (calibration and consistency features); "
+    "S=Entropy [0,1] (deviations and activity features); "
+    "V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; "
+    "positive=positive smoothed gap, negative=negative smoothed gap). "
+    "Read primary_eisv_source / measurement_source for the producer; "
+    "other producers share these field names."
 )
 
 
@@ -104,11 +118,11 @@ EISV_INLINE_SUMMARY = (
 
 VERDICTS: Dict[str, Dict[str, str]] = {
     "proceed": {
-        "meaning": "State is healthy.",
+        "meaning": "Policy permits continuation.",
         "next_action": "Continue working normally.",
     },
     "guide": {
-        "meaning": "Something is slightly off.",
+        "meaning": "Policy permits continuation with guidance.",
         "next_action": "Read the guidance text and adjust approach.",
     },
     "pause": {
