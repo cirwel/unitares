@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -223,10 +226,103 @@ def test_shard_legs_stay_distinguishable_and_the_floor_keeps_its_leg(checker):
     assert "sleep 5" in api_script
 
 
+_SUCCESSFUL_SHARDS = "".join(
+    f"success\ttest shard (3.14, {shard})\n"
+    for shard in ("tests-a-e", "tests-f-m", "tests-n-t", "tests-u-z-and-agents")
+)
+_MISSING_SHARD = _SUCCESSFUL_SHARDS.rsplit("success", 1)[0]
+_FAILED_SHARD = _SUCCESSFUL_SHARDS.replace("success", "failure", 1)
+
+
+@pytest.mark.parametrize(
+    ("responses", "passes", "attempts"),
+    [
+        pytest.param([(0, _SUCCESSFUL_SHARDS)], True, 1, id="all-pass"),
+        pytest.param([(1, ""), (0, _SUCCESSFUL_SHARDS)], True, 2, id="api-recovers"),
+        pytest.param(
+            [(0, _MISSING_SHARD), (1, ""), (0, _SUCCESSFUL_SHARDS)],
+            True,
+            3,
+            id="incomplete-then-api-error-then-recovery",
+        ),
+        # A paginated command can emit matching rows before a later page fails.
+        # Even four successful rows cannot authorize passing on a failed read.
+        pytest.param(
+            [(1, _SUCCESSFUL_SHARDS)], False, 12, id="failed-read-with-output"
+        ),
+        pytest.param([(0, _FAILED_SHARD)], False, 12, id="failed-shard"),
+        pytest.param([(0, _MISSING_SHARD)], False, 12, id="missing-shard"),
+        pytest.param(
+            [(0, _MISSING_SHARD), (1, "")], False, 12, id="shared-retry-budget"
+        ),
+    ],
+)
+def test_shard_gate_retries_without_accepting_failed_reads(
+    tmp_path, responses, passes, attempts
+):
+    workflow = yaml.safe_load(WORKFLOW_PATH.read_text())
+    step = next(
+        step
+        for step in workflow["jobs"]["test"]["steps"]
+        if step["name"] == "Require every shard leg of this run to pass"
+    )
+    script = step["run"].replace("${{ github.repository }}", "test/repo")
+    script = script.replace("${{ github.run_id }}", "123")
+    responses_file = tmp_path / "responses.json"
+    responses_file.write_text(json.dumps(responses))
+    attempts_file = tmp_path / "attempts"
+    sleeps_file = tmp_path / "sleeps"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text("""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+counter = Path(os.environ["GATE_TEST_ATTEMPTS"])
+attempt = int(counter.read_text()) if counter.exists() else 0
+responses = json.loads(Path(os.environ["GATE_TEST_RESPONSES"]).read_text())
+status, output = responses[min(attempt, len(responses) - 1)]
+counter.write_text(str(attempt + 1))
+sys.stdout.write(output)
+if status:
+    print("gh: Server Error (HTTP 502)", file=sys.stderr)
+sys.exit(status)
+""")
+    gh.chmod(0o755)
+    sleep = bin_dir / "sleep"
+    sleep.write_text('#!/bin/sh\nprintf "%s\\n" "$1" >> "$GATE_TEST_SLEEPS"\n')
+    sleep.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+        "EXPECTED_SHARD_LEGS": "4",
+        "GATE_TEST_RESPONSES": str(responses_file),
+        "GATE_TEST_ATTEMPTS": str(attempts_file),
+        "GATE_TEST_SLEEPS": str(sleeps_file),
+    }
+    # Match Actions' fail-fast shell; omitting -e would hide the original bug.
+    result = subprocess.run(
+        ["bash", "-e", "-c", script],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert (result.returncode == 0) is passes, result.stdout + result.stderr
+    assert int(attempts_file.read_text()) == attempts
+    sleeps = sleeps_file.read_text().splitlines() if sleeps_file.exists() else []
+    assert sleeps == ["5"] * (attempts - 1)
+
+
 def test_checker_accepts_an_annotated_marker(checker, tmp_path, monkeypatch):
     production = _render(checker._read_production_python())
     annotated = _with_replacement(
-        tmp_path, checker.CONSTRAINTS_PATH,
+        tmp_path,
+        checker.CONSTRAINTS_PATH,
         f"# production-python: {production}\n",
         f"# production-python: {production}  # bumped with the 2026-09-02 deploy\n",
     )

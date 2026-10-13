@@ -376,21 +376,28 @@ jobs:
         max_attempts=12
         attempt=1
         while true; do
-          gh api --paginate \
+          # Guard the command itself: Actions uses bash -e, and pagination
+          # can emit partial rows before a later request fails.
+          if gh api --paginate \
             "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs?filter=latest&per_page=100" \
             --jq '.jobs[] | select(.name | startswith("test shard (")) | "\(.conclusion)\t\(.name)"' \
-            > shard-legs.tsv
-          cat shard-legs.tsv
-          legs=$(wc -l < shard-legs.tsv | tr -d ' ')
-          bad=$(grep -vc '^success' shard-legs.tsv || true)
-          if [ "$legs" = "$EXPECTED_SHARD_LEGS" ] && [ "$bad" = "0" ]; then
-            break
+            > shard-legs.tsv; then
+            cat shard-legs.tsv
+            legs=$(wc -l < shard-legs.tsv | tr -d ' ')
+            bad=$(grep -vc '^success' shard-legs.tsv || true)
+            if [ "$legs" = "$EXPECTED_SHARD_LEGS" ] && [ "$bad" = "0" ]; then
+              break
+            fi
+            failure_reason="Actions job list is not complete yet ($legs/$EXPECTED_SHARD_LEGS, $bad not successful)"
+          else
+            api_status=$?
+            failure_reason="Actions job list request failed (exit $api_status)"
           fi
           if [ "$attempt" -ge "$max_attempts" ]; then
-            echo "expected $EXPECTED_SHARD_LEGS successful shard legs after $attempt API reads, saw $legs with $bad not successful" >&2
+            echo "failed to verify $EXPECTED_SHARD_LEGS successful shard legs after $attempt API reads: $failure_reason" >&2
             exit 1
           fi
-          echo "Actions job list is not complete yet ($legs/$EXPECTED_SHARD_LEGS, $bad not successful); retrying" >&2
+          echo "$failure_reason; retrying ($attempt/$max_attempts)" >&2
           attempt=$((attempt + 1))
           sleep 5
         done
