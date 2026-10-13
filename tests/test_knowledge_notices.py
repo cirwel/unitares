@@ -127,6 +127,25 @@ def test_identity_is_context_not_argument(monkeypatch, origin, agent, expected):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("through_router", [False, True])
+async def test_success_is_flat_textcontent_json(monkeypatch, through_router):
+    monkeypatch.setattr(notices, "proven_recipient", lambda: uid())
+    monkeypatch.setattr(notices, "read_notices", AsyncMock(return_value={
+        "notices": [], "muted": False, "has_more": False,
+        "ack_action": "knowledge(action='notices')",
+    }))
+    if through_router:
+        from src.mcp_handlers.consolidated import handle_knowledge
+        result = await handle_knowledge.__wrapped__({"action": "notices"})
+    else:
+        result = await notices.handle_knowledge_notices({})
+    assert len(result) == 1 and isinstance(result[0], TextContent)
+    payload = json.loads(result[0].text)
+    assert payload["success"] is True and payload["notices"] == []
+    assert "result" not in payload  # no stringified nested TextContent fallback
+
+
+@pytest.mark.asyncio
 async def test_spoofed_recipient_refused_without_proof(monkeypatch):
     monkeypatch.setattr(notices, "proven_recipient", lambda: None)
     read = AsyncMock()

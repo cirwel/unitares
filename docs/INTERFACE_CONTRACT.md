@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.35.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.35.1`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -484,3 +484,14 @@ not consistently carry a proven writer. The current shared KG permits unbound
 row reads; delivery still joins the current row and checks current recipient
 membership. A future row-ACL feature must extend both details and notice checks.
 No credentials, permission checks or scientific instruments are changed.
+
+## 1.35.1 (2026-10-13)
+
+`knowledge(action="notices")` now returns one MCP text-content item containing
+the JSON notice response. Previously its success path nested the content list,
+causing the gateway to stringify the Python representation into `result` instead
+of exposing `notices`, `muted`, `has_more`, and acknowledgement guidance.
+
+This corrects the 1.35.0 output contract without changing inputs, permissions,
+or notice delivery. Schema digests do not move. Clients can read the documented
+JSON fields directly after the server upgrade; no request changes are needed.
