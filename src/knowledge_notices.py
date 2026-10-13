@@ -74,7 +74,7 @@ async def handle_knowledge_notices(arguments):
     except ValueError as exc:
         return [error_response(str(exc))]
     data["next_action"] = "Read current details before acting; acknowledge only revisions you received with knowledge(action='notices', acknowledge=[...])."
-    return [success_response(data)]
+    return success_response(data)
 
 
 async def attach_notices(name, arguments, ctx, result):
