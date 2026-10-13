@@ -351,6 +351,12 @@ design. Declare a parent only when a causal relationship actually exists:
   `spawn_reason="explicit"` — the successor inherits a predecessor that has
   finished.
 
+Onboarding helpers do not promote cached UUIDs to parent declarations. A
+caller that knows the causal relationship supplies it explicitly through
+`start_session`/`onboard`. When `spawn_reason` is omitted, the server uses the
+descriptive `new_session` default, even if a parent was declared: the client
+name and existing thread nodes do not establish compaction or dispatch.
+
 Liveness gates the declaration: declaring a **currently-live** agent as parent
 is rejected at onboard (`lineage_coincidental_rejected`) for a succession
 claim, because a live agent is then a concurrent sibling, not a predecessor.

@@ -3,16 +3,17 @@
 
 Owns the flow:
 
-1. Read existing ``.unitares/session.json`` cache (if any).
-2. Call ``onboard(force_new=true)``. When the cache has a UUID, pass it as
-   ``parent_agent_id`` with ``spawn_reason="new_session"``.
+1. Select fresh onboarding or explicitly orchestrated anchor resume.
+2. Call ``onboard(force_new=true)`` without inferring a parent from a cache.
+   Deliberate lineage belongs in an explicit ``start_session``/``onboard``
+   call with ``parent_agent_id`` and ``spawn_reason``.
 3. If the server reports ``trajectory_required`` (identity exists but lacks
    a verifiable signal), return status=``trajectory_required`` with the
    server's recovery hint. We do NOT auto-retry with ``force_new=true``;
    that is an explicit operator decision, not an automatic one (see commit
    718ccd3 and the identity "never silently substitute" invariant).
-4. ``force_new=true`` is always sent on startup. ``--force-new`` only means
-   "ignore cached lineage".
+4. ``force_new=true`` is sent on fresh startup. ``--force-new`` also overrides
+   orchestrated anchor resume.
 5. Only write the cache when onboard succeeded and produced a usable uuid.
 
 Emits a JSON line on stdout with the resolved fields for the shell hook to
@@ -340,20 +341,16 @@ def run_onboard(
     orchestrator spawned; the spawner provisions ``UNITARES_ORCHESTRATED=1``
     alongside the anchor). Absent that signal, the anchor is ignored and the
     helper mints exactly as today — a leaked anchor on an interactive session
-    is a no-op, never a siphon. When unset, behavior is byte-identical to
-    before (force_new + cached-lineage declaration). An explicit ``force_new``
+    is a no-op, never a siphon. When unset, the helper takes
+    the fresh-mint path without inferred lineage. An explicit ``force_new``
     still wins — it is a deliberate clean break.
 
     ``with_bootstrap`` (default True) attaches an initial_state payload so
-    the server writes a bootstrap check-in row at t=0 per
- §3.5. Idempotent on resume
+    the server writes a bootstrap check-in row at t=0. Idempotent on resume
     (server returns the existing bootstrap row's state_id).
     """
     url = f"{server_url.rstrip('/')}/v1/tools/call"
-    cache = read_cache(workspace, slot)
-
     anchor = (client_session_id or "").strip()
-    parent_agent_id = ""
 
     arguments: dict[str, Any] = {
         "name": agent_name,
@@ -369,15 +366,10 @@ def run_onboard(
         arguments["client_session_id"] = anchor
     else:
         # Default posture (identity.md v2): fresh process = fresh agent. Mint
-        # with force_new and declare cached lineage via parent_agent_id. A bare
+        # with force_new, without treating cached identity as ancestry. A bare
         # anchor without the orchestration signal lands here — it mints, it does
         # NOT resume-share.
         arguments["force_new"] = True
-        if not force_new:
-            parent_agent_id = (cache.get("uuid") or cache.get("agent_uuid") or "").strip()
-        if parent_agent_id:
-            arguments["parent_agent_id"] = parent_agent_id
-            arguments["spawn_reason"] = "new_session"
 
     if with_bootstrap:
         arguments["initial_state"] = _build_bootstrap_initial_state()
@@ -415,9 +407,6 @@ def run_onboard(
         "display_name": parsed.get("display_name", ""),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
-    if parent_agent_id:
-        new_cache["parent_agent_id"] = parent_agent_id
-        new_cache["spawn_reason"] = "new_session"
     write_cache(workspace, new_cache, slot)
 
     return {
@@ -441,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-type", default="claude-code")
     parser.add_argument("--workspace", default=os.getcwd())
     parser.add_argument("--force-new", action="store_true",
-                        help="Create a fresh identity without declaring cached lineage")
+                        help="Create a fresh identity even with an orchestrated resume anchor")
     parser.add_argument(
         "--no-bootstrap",
         dest="with_bootstrap",
