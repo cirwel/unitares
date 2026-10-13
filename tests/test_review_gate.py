@@ -4299,3 +4299,14 @@ def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_follow
     history = comments + [original, _comment(disposed, text='1. rebutted: documented caller')]
     rec = rg.latest_matching(history, fix.key)
     assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
+
+
+def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict = 'full-required', 'FAILED'
+    comments.append(_comment(fix))
+    (repo / 'README.md').write_text('Another correction after scope refusal.\n')
+    _git(repo, 'commit', '-qam', 'push after refusal')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(fix.base, head)
+    assert rg.followup_candidate(fix.base, head, key, comments) is None

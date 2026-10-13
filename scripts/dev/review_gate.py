@@ -533,6 +533,9 @@ def followup_sources(rec: Record, comments: list[dict], native: list[Record] = (
     eligible = []
     anchored = False
     for source, body, actual_native in sources:
+        if (source and source.scope == "full-required" and source.head != rec.from_head
+                and _is_ancestor(rec.from_head, source.head) and _is_ancestor(source.head, rec.head)):
+            return []  # a push or disposition cannot erase a scope refusal
         if (source and source.scope == "fix" and source.from_head == rec.from_head
                 and source.from_key == rec.from_key and source.verdict == "FINDINGS"
                 and not source.disposed and source.head != rec.head
