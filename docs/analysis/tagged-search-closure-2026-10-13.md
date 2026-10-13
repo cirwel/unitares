@@ -3,7 +3,8 @@
 This report answers the measurement conditions in dialectic
 `06abb3f7a18cce6f`, for dogfood finding fingerprint `bdb18ee4e52ee7d6`.
 It preserves the failed historical transcript and does not claim approval by
-its original reviewer. Fresh governed review: `fb00d537fd9a3678` (pending).
+its original reviewer. Fresh governed review: `fb00d537fd9a3678`, resolved
+with agreement on 2026-10-13 at 18:54:41Z, conditional on publication and linkage.
 Classification: fix / documentation; no runtime or authorization change.
 
 ## What the original objection required
@@ -112,8 +113,24 @@ audit, `2026-10-13T06:48:37.234783+00:00`.
 
 The pre-rollout condition has a pre-merge evidence artifact, and the
 post-deployment correctness/latency condition now has recorded live probes.
-Fresh review must assess the remaining latency qualifications. This report
-requests an evidence disposition, not a new numerical standard or an
-authorization waiver. The existing surfacing mechanism recognizes an accepted
-new review naming the old session, or a merged PR explicitly declaring
-`Answers dialectic 06abb3f7a18cce6f`; the original transcript remains inspectable.
+Reviewer `250f4116-7d4b-4b4d-8c3c-b063b98f88c1` independently inspected #1810
+and the raw live samples and agreed that these answer the bounded measurement
+questions. The orchestrated backend was Codex, not degraded; the CLI did not
+report an exact model identifier. The reviewer could not retrieve the original
+transcript because its tool call required unavailable approval, so it assessed
+the supplied requirements against the PR and samples. That limitation stays on
+the record.
+
+The reviewer required publication of the report/data; a new attributable
+disposition linking the old session and audit events; and retention of the
+measurement boundaries and outliers. This report fulfills the publication and
+qualification requirements when pushed, and the owning session records the
+published link through a non-authoritative consult on the old transcript and
+on the original KG audit. The accepted review supplies the new judgment; the
+consult supplies provenance, not a second verdict.
+
+Disposition: the two measurement conditions are answered. No new numerical
+standard or authorization waiver is granted. The existing surfacing mechanism
+recognizes the accepted new review naming the old session; the evidence PR also
+declares `Answers dialectic 06abb3f7a18cce6f`. The original failed transcript
+remains inspectable.
