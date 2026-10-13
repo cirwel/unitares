@@ -4076,7 +4076,8 @@ def test_old_native_clean_rebound_to_new_changed_key_cannot_approve_ancestor(rep
     monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
     monkeypatch.setattr(rg,'_CARRY_BASES',{('o/r',1):_git(repo,'rev-parse','master')})
     snapshot=_REAL_READ_NATIVE('o/r',1,key,head,[_comment(receipt)])
-    assert not snapshot.records
+    # The real old review remains evidence for its original key, never the forged current one.
+    assert snapshot.records and all(r.key != key for r in snapshot.records)
     assert rg.passing_families([_comment(receipt)],key,snapshot.records) == set()
 
 
@@ -4310,3 +4311,119 @@ def test_scope_refusal_requires_full_review_even_after_another_push(repo, review
     head = _git(repo, 'rev-parse', 'HEAD')
     key = rg.diff_key(fix.base, head)
     assert rg.followup_candidate(fix.base, head, key, comments) is None
+
+
+def test_switching_full_anchors_cannot_skip_serious_followup(repo, reviewed_followup):
+    comments, first = reviewed_followup
+    comments.append(_comment(full_record(first.key, 'CLEAN', 0, False, 'claude',
+                                        head=first.head, base=first.base)))
+    (repo / 'README.md').write_text('First subsequent correction.\n')
+    _git(repo, 'commit', '-qam', 'C')
+    middle = _git(repo, 'rev-parse', 'HEAD')
+    finding = rg.Record(rg.diff_key(first.base, middle), 'FINDINGS', 1, False, 'codex',
+                        scope='fix', head=middle, base=first.base,
+                        from_head=first.from_head, from_key=first.from_key)
+    comments.append(_comment(finding, text='[P1] a.txt:1 unsafe behavior'))
+    (repo / 'README.md').write_text('Second subsequent correction.\n')
+    _git(repo, 'commit', '-qam', 'D')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.followup_candidate(first.base, head, rg.diff_key(first.base, head), comments) is None
+
+
+@pytest.mark.parametrize('rewrite', [False, True])
+def test_unjoined_intermediate_native_finding_blocks_followup(repo, reviewed_followup, monkeypatch, rewrite):
+    comments, fix = reviewed_followup
+    middle = fix.head
+    (repo / 'README.md').write_text('Correction after a native finding.\n')
+    _git(repo, 'commit', *(['--amend'] if rewrite else []), '-qam', 'C')
+    fix.head = _git(repo, 'rev-parse', 'HEAD')
+    fix.key = rg.diff_key(fix.base, fix.head)
+    review = {'id': 12, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': middle,
+              'state': 'COMMENTED', 'submitted_at': '2026-10-13T20:00:00Z', 'body': '', 'html_url': 'native-12'}
+    finding = {'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'pull_request_review_id': 12,
+               'path': 'a.txt', 'line': 1, 'body': '[P1] unsafe caller', 'html_url': 'finding-12'}
+    pages = {'reviews': [review], 'comments': [finding], 'events': []}
+    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): fix.base})
+    monkeypatch.setattr(rg, 'read_native', _REAL_READ_NATIVE)
+    snapshot = rg.read_native('o/r', 1, fix.key, fix.head, comments)
+    assert any(r.head == middle and r.verdict == 'FINDINGS' for r in snapshot.records)
+    assert rg.followup_candidate(fix.base, fix.head, fix.key, comments, snapshot.records) is None
+    assert not rg.targeted_coverage_valid('o/r', 1, fix, comments)
+    comments.append(_comment(fix))
+    assert rg.latest_matching(comments, fix.key, snapshot.records).verdict == 'FAILED'
+    assert rg.passing_families(comments, fix.key, snapshot.records) == set()
+
+
+def test_offline_fix_disposition_preserves_same_families_as_online(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    comments.append(_comment(fix, text='[P2] README.md:1 unclear input'))
+    offline = rg.Record(fix.key, 'FINDINGS', 1, True, fix.reviewer)
+    comments.append(_comment(offline, text='1. rebutted: this is the supported input'))
+    assert rg.latest_matching(comments, fix.key).status()[0] == 'success'
+    assert rg.passing_families(comments, fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('kind', ['full-required', 'fix', 'full'])
+def test_rewriting_followup_commits_does_not_erase_blockers(repo, reviewed_followup, kind):
+    comments, fix = reviewed_followup
+    fix.scope = kind
+    fix.verdict, fix.findings = ('FAILED', 0) if kind == 'full-required' else ('FINDINGS', 1)
+    comments.append(_comment(fix, text='[P1] a.txt:1 unsafe behavior'))
+    # Amend only the post-review work, retaining the full-review anchor.
+    (repo / 'README.md').write_text('Amended documentation.\n')
+    _git(repo, 'commit', '--amend', '-qam', 'rewritten follow-up')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert not rg._is_ancestor(fix.head, head)
+    assert rg.followup_candidate(fix.base, head, rg.diff_key(fix.base, head), comments) is None
+
+
+def test_declined_followup_under_cap_does_not_start_full_review(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict = 'full-required', 'FAILED'
+    comments.append(_comment(fix))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('automatic full review'))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')) == rg.UNREVIEWED
+
+
+def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # POST not yet visible
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    args = SimpleNamespace(base=fix.base, completed_followup=fix)
+    assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
+
+
+def test_disposed_serious_followup_still_requires_full_coverage(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P1] a.txt:1 unsafe behavior')
+    fix.disposed = True
+    comments += [original, _comment(fix, text='1. rebutted: the caller handles this')]
+    assert rg.latest_matching(comments, fix.key).verdict == 'FAILED'
+    assert rg.passing_families(comments, fix.key) == set()
+
+
+def test_missing_native_review_objects_are_fetched_or_reported_incomplete(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    missing = 'f' * 40
+    review = {'id': 99, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': missing,
+              'state': 'COMMENTED', 'submitted_at': '2026-10-13T20:00:00Z', 'body': '', 'html_url': 'native-99'}
+    pages = {'reviews': [review], 'comments': [], 'events': []}
+    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): fix.base})
+    real_git, fetches = rg.git, []
+    def git(*args, **kwargs):
+        if args[0] == 'fetch':
+            fetches.append(args)
+            return ''  # unavailable object; never contact a remote in this test
+        return real_git(*args, **kwargs)
+    monkeypatch.setattr(rg, 'git', git)
+    with pytest.raises(SystemExit, match='review history is incomplete'):
+        _REAL_READ_NATIVE('o/r', 1, fix.key, fix.head, comments)
+    assert fetches == [('fetch', '--quiet', '--no-tags', 'origin', missing)]

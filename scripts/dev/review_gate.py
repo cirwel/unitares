@@ -534,17 +534,21 @@ def followup_sources(rec: Record, comments: list[dict], native: list[Record] = (
     anchored = False
     for source, body, actual_native in sources:
         if (source and source.scope == "full-required" and source.head != rec.from_head
-                and _is_ancestor(rec.from_head, source.head) and _is_ancestor(source.head, rec.head)):
+                and (source.from_head == rec.from_head or _is_ancestor(rec.from_head, source.head))):
             return []  # a push or disposition cannot erase a scope refusal
-        if (source and source.scope == "fix" and source.from_head == rec.from_head
-                and source.from_key == rec.from_key and source.verdict == "FINDINGS"
-                and not source.disposed and source.head != rec.head
-                and _is_ancestor(source.head, rec.head)
+        if (source and source.scope == "fix" and source.verdict == "FINDINGS"
+                and not source.disposed and source.head != rec.from_head
+                and (source.from_head == rec.from_head or _is_ancestor(rec.from_head, source.head))
                 and (source.findings < 1 or len(SEVERITY_LABEL_RE.findall(body)) < source.findings
                      or SEVERE_BADGE_RE.search(body))):
             return []
         full = source and (source.full() or (actual_native and source.reviewer == "codex-native"
                                             and source.scope == "full" and source.head))
+        if (full and source.head != rec.from_head and source.verdict == "FINDINGS" and not source.disposed
+                and _is_ancestor(rec.from_head, source.head)
+                and (source.findings < 1 or len(SEVERITY_LABEL_RE.findall(body)) < source.findings
+                     or SEVERE_BADGE_RE.search(body))):
+            return []
         anchor = full and source.head == rec.from_head and source.key == rec.from_key
         # Another family may have fully reviewed a later revision within the
         # cumulative delta. Preserve that contribution too, without chaining
@@ -622,12 +626,10 @@ def followup_candidate(base: str, head: str, key: str, comments: list[dict],
 def targeted_coverage_valid(repo: str, pr: int, rec: Record, comments: list[dict]) -> bool:
     if not followup_objects_valid(rec):
         return False
-    if fix_coverage_valid(rec, comments):
-        return True
-    if not rec.from_key or not rec.from_head:
-        return False
+    # Native findings anywhere in the intervening history matter even when
+    # comment-only evidence would be sufficient to identify a source.
     return fix_coverage_valid(rec, comments,
-                              read_native(repo, pr, rec.from_key, rec.from_head, comments).records)
+                              read_native(repo, pr, rec.key, rec.head, comments).records)
 
 
 def proposal_advisory(paths: list[str] | None, base: str) -> bool:
@@ -659,7 +661,10 @@ def latest_matching(comments: list[dict], key: str,
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
             if (rec.scope == "fix" and rec.status()[0] == "success"
                     and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
-                rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
+                if rec.disposed:
+                    rec.scope = "full-required"  # answer the findings without approving the scope
+                else:
+                    rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
             rec.url = c.get("html_url", "")
@@ -669,6 +674,7 @@ def latest_matching(comments: list[dict], key: str,
     records.extend(rec for rec in native if rec.key == key)
     found, completed, open_findings = None, None, []
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
+        original = None
         found = rec
         if rec.verdict != "FAILED" and rec.scope != "full-required":
             completed = rec
@@ -692,13 +698,20 @@ def latest_matching(comments: list[dict], key: str,
                 # nothing else.
             elif open_findings and open_findings[-1].findings == rec.findings:
                 original = open_findings.pop()
-                if original.scope == "full-required":
+                if rec.scope == "legacy" and original.scope == "fix":
+                    for name in ("scope", "head", "base", "from_head", "from_key", "review_id"):
+                        setattr(rec, name, getattr(original, name))
+                    if not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native)):
+                        rec.scope = "full-required"
+                elif original.scope == "full-required":
                     rec.scope = original.scope
             else:
                 rec.disposed = False
                 open_findings.append(rec)
         if rec.scope == "full-required" and rec.disposed:
             rec.verdict = "FAILED"  # findings answered, coverage still missing
+            if completed is rec or completed is original:
+                completed = None
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
     return open_findings[-1] if open_findings else completed or found
@@ -1029,6 +1042,33 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
         actual = native_records(comments, reviews, inline, events, source_key, source_head, reactions)
         known = {(r.key, r.head, r.url) for r in snapshot.records}
         snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known)
+    # A native review needs no joined receipt to matter. Include intervening
+    # native heads so a later follow-up cannot omit an unrecorded P1 at B while
+    # carrying clean full reviews from A to C.
+    trusted_base = _CARRY_BASES.get((repo, pr))
+    prior_heads = {r.get("commit_id", "") for r in reviews if is_codex_bot(r)}
+    for c in comments:
+        if is_codex_bot(c):
+            match = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`", c.get("body", ""), re.M)
+            if match:
+                prior_heads.add(git("rev-parse", "--verify", f"{match[1]}^{{commit}}", check=False).strip())
+    if trusted_base:
+        for commit in prior_heads:
+            if not re.fullmatch(r"[0-9a-f]{40}", commit) or commit == head:
+                continue
+            # A force-push can make a reviewed commit unreachable from the
+            # current PR head. GitHub retains it; fetch the immutable object
+            # rather than silently dropping its findings in a fresh CI clone.
+            if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
+                git("fetch", "--quiet", "--no-tags", "origin", commit, check=False)
+                if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
+                    raise SystemExit(f"native reviewed commit {commit} is unavailable; review history is incomplete")
+            earlier_key = diff_key(trusted_base, commit)
+            actual = native_records(comments, reviews, inline, events, earlier_key, commit, reactions)
+            known = {(r.key, r.head, r.url) for r in snapshot.records}
+            ancestor = _is_ancestor(commit, head)
+            snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known
+                                    and (ancestor or r.verdict == "FINDINGS"))
     snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
     return snapshot
 
@@ -1271,7 +1311,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
     # (reviewer, findings) -> the original review's model (for agy records).
     originals = {(r.reviewer, r.findings): r for _, r in trusted
-                 if r and r.full() and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+                 if r and (r.full() or r.scope in {"fix", "full-required"})
+                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
     # A native Codex review is a GitHub review, not a comment: its disposition
     # cites the review by URL (as latest_matching matches it), with its count.
     native_findings = {r.url: r.findings for r in native
@@ -1280,7 +1321,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         if rec and rec.disposed and rec.scope == "legacy":
             original = originals.get((rec.reviewer, rec.findings))
             if original:
-                rec.scope, rec.head, rec.base = original.scope, original.head, original.base
+                for name in ("scope", "head", "base", "from_head", "from_key", "review_id"):
+                    setattr(rec, name, getattr(original, name))
         body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
@@ -2437,6 +2479,9 @@ def cmd_review(args) -> int:
                 followup_declined = (existing and existing.verdict == "FAILED"
                                      and (existing.scope == "full-required"
                                           or "full review required: follow-up scope not confirmed" in existing.text))
+                if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None):
+                    print("[review] UNREVIEWED: follow-up scope was declined; explicitly request --fresh for a full pass")
+                    return UNREVIEWED
                 if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None):
                     snapshot = read_native(repo, pr, key, head, comments)
                     source = followup_candidate(args.base, head, key, comments, snapshot.records)
@@ -2559,6 +2604,13 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
         return UNREVIEWED
     families = passing_families(comments, key, native)
+    completed = getattr(args, "completed_followup", None)
+    if (completed and completed.scope == "fix" and completed.verdict == "CLEAN"
+            and completed.key == key and completed.head == head and followup_objects_valid(completed)):
+        # This command just posted this receipt. Recheck its sources against
+        # freshly read history, but do not let API read lag restart full reviews.
+        families.update(record_family(source) for source in followup_sources(completed, comments, native))
+        families.discard(None)
     # The review that just passed may not be readable yet (API read lag after
     # its own post): count its family from what is already known. A fix-verify
     # receipt is targeted rather than full coverage (see passing_families).
@@ -2585,8 +2637,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     else:
         next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
                      "on this diff)")
-    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs passing full "
-          f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
+    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs review "
+          f"coverage from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
           "(e.g. gemini-…, gpt-…) with ./scripts/dev/review.sh record --independent.")
     return NEEDS_SECOND_FAMILY
@@ -2793,6 +2845,8 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
             # comment it just posted (GitHub reads can lag a fresh write).
             if not getattr(args, "followup", None):
                 args.completed_by = provider
+            else:
+                args.completed_followup = getattr(attempt, "completed_followup", None)
             return result
         print(f"[review] {provider} did not complete; no automatic provider cascade", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
@@ -2891,6 +2945,8 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
     post_record(pr, rec, heading, text)
+    if followup and rec.verdict == "CLEAN":
+        args.completed_followup = rec
     print(f"[review] full result: {out_dir / 'review.txt'}")
     if parsed is not None:
         print(text.strip())  # the working agent needs the findings, not just a count
@@ -2957,6 +3013,8 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
     if rec.status()[0] != "success":
         return 0  # findings recorded for later disposition: nothing passed yet
     args.branch = branch
+    if rec.scope == "fix" and rec.verdict == "CLEAN":
+        args.completed_followup = rec
     return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
                               passed_family=record_family(rec) if rec.full() else None)
 
@@ -3130,7 +3188,7 @@ def cmd_sweep(args) -> int:
             continue  # cannot decide which findings remain open from partial evidence
         # A sensitive diff with one family's pass is left to its author: the
         # review check says what is missing, and no review starts on its own.
-        if rec is not None and not (rec.verdict == "FAILED" and any(
+        if rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
