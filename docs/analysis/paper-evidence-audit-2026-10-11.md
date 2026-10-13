@@ -1,7 +1,8 @@
 # Paper evidence audit — 2026-10-11
 
 Status: completed source-and-evidence audit; correction text prepared below.
-Paper sources, PDFs, releases, runtime formulas, and registered gates are unchanged.
+This audit changes no paper source, PDF, release, runtime formula, or registered gate.
+Companion draft scope is recorded in the October 13 addendum below.
 
 ## Decision
 
@@ -42,7 +43,11 @@ proprioception source against copies of its two frozen CSVs. Both scripts exited
   `6.68e-4`.
 - Setting legacy coherence to 1 changes **6 / 13,292** basins (0.045%).
 - The legacy score still carries descriptive class information: pairwise folded
-  AUC reaches **0.877**, and correlation with behavioral V is **0.726**.
+  class-membership AUC ranges from approximately **0.54 to 0.88**, highest for
+  Lumen versus default (**0.877**); these are not outcome AUCs. The sample
+  Pearson correlation with behavioral V is **0.726** across **13,292 rows**.
+  Those rows include repeated dependent observations, not 13,292 independent
+  agents or trials.
 - The second frozen window gives **44.3%** flips; 12,177 stored-value tuples
   match between windows with multiplicity. These are overlapping windows, not
   independent replications.
@@ -74,7 +79,7 @@ not directly refute the other. Preserve that distinction.
 | Instrument / decision | What the record authorizes | What it does not authorize |
 |---|---|---|
 | [Outcome-grounding stop rule](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md) | Fixed December 1 decision; all four PASS conditions required. PASS keeps outcome-grounding open and allows Stage B to be reconsidered. FAIL closes the track for this premise, with reopening restricted. | Calling insufficient support scientific disproof; moving thresholds; treating a contaminated read as clean confirmatory evidence; automatic intervention authority on PASS |
-| [Individuality-v2 record](../ontology/eisv-proprioception-contract.md#tested-claims--ledger) | The July 30 FAIL and operational retirement are honored; no v3 on the same measurement premise. | General disproof of individuality: the contract documents identification failures in the test |
+| [Individuality-v2 record](../ontology/eisv-proprioception-contract.md#tested-claims--ledger) | The July 30 FAIL and operational retirement are honored; no v3 on the same measurement premise. | General disproof of individuality: the warmed deployed EMA remains untested as deployed; the cold-start reconstruction has identification failures |
 | [Legacy-coherence dependency ablation](../proposals/registered/legacy-coherence-dependency-ablation-v0.md) | Shadow the contribution of controller variation to behavioral E/I and confidence; require the specified safety and recursive-replay gates before promotion. Consult the catalog's v0/v0.1 distinction before any execution. | Interpreting a same-input shadow as the alternative agent history; making a live replacement from narrow coherence spread alone |
 | [Legacy-coherence identity ablation](../proposals/active/legacy-coherence-identity-ablation-v0.md) | Measurement-only shadow; the September 23 status says the shadow is built and aggregation is not done. | Treating the status note as a new live census or a completed efficacy result |
 | [Incremental-value protocol](../proposals/eisv-incremental-value-ablation-v1.md) | Draft comparisons for incremental prediction, compression and dimension contribution; explicitly no cohort enrolled or experiment scheduled in the reviewed text. | Calling draft thresholds registered/frozen, counting a design as a result, or inferring causal guidance benefit from Phase I |
@@ -98,7 +103,9 @@ also remain relevant after PASS.
 > operational continuation gate: outcome-grounding remains open and Stage B may
 > be reconsidered. Report the observed discrimination with the specified cohort,
 > dependence, power and interim-access disclosures. PASS does not itself
-> establish decision benefit. If the read fails, report the failed conditions
+> establish decision benefit. Any forecasting claim remains limited to rework
+> prediction with the label-class bound intact: every observed bad outcome so
+> far is task-negative. If the read fails, report the failed conditions
 > and honor closure for this measurement premise; insufficient support is not
 > scientific disproof.
 
@@ -127,8 +134,11 @@ cause of the observed void-coordinate location unisolated.
 > empirical property of its input trajectory; the transform alone does not
 > determine that center. Damping is part of the dynamics, but the evidence
 > presented here does not isolate its causal contribution to the observed
-> distribution. Assess this score's decision contribution against the deployed
-> thresholds, separately from information retained in its variation.
+> distribution. In the reported 13,292-row window, no legacy score falls below
+> the 0.40 threshold, and setting coherence to 1 changes only 6 basins. The
+> score nevertheless retains descriptive class information (pairwise folded
+> class-membership AUC approximately 0.54–0.88). Its limited contribution at
+> these thresholds and its retained information are separate findings.
 
 This is a local inference correction, not a finding that the ODE is invalid.
 The contraction certificate's complete assumptions and proof need a separate
@@ -150,8 +160,8 @@ the live deposit.
 **README insertion:**
 
 > This paper describes the dated deployment and migration studied in its
-> February–April 2026 evidence. Its information-theoretic definitions are
-> research targets. For the current implementation and decision path, consult
+> February–April 2026 evidence. Its entropy, mutual-information and free-energy
+> definitions are research targets. For the current implementation and decision path, consult
 > UNITARES's EISV computation contract; the paper is not the live specification.
 
 ### 4. Trajectory identity reader summary: preserve the derived-component boundary
@@ -221,3 +231,37 @@ surfaces with their source links. Keep historical results, cohort limitations,
 and stop-rule consequences explicit. Do not recast a pending test as missing
 validation infrastructure, or a narrow result as either universal proof or
 universal failure.
+
+
+## Companion draft scope — October 13 queue review
+
+The paper PRs now exceed the five replacements above. This inventory records
+that difference; it does not claim that this initial audit reviewed all of the
+expanded work or authorize publication:
+
+- [UNITARES v6 #5](https://github.com/cirwel/unitares-paper-v6/pull/5), at
+  `b63240a5b7f72b285664ba3350f0bc7714ee06b0`, also revises the abstract,
+  README, citation/deposit metadata, experiments and counterfactual discussion.
+  Subsequent contraction-proof work substantially expands the source, adds three
+  offline audit scripts and rebuilds the PDF. Its separate mathematical review
+  and validation receipts belong to that PR; the present audit is not their
+  substitute. The version remains an unpublished draft.
+- [Trajectory identity #7](https://github.com/cirwel/trajectory-identity-paper/pull/7)
+  changes the README's one-line summary and three structural-move descriptions
+  as well as the derived-Eta and recognition boundaries described above.
+- [Sonification #1](https://github.com/cirwel/tonal-sonification-paper/pull/1)
+  rewrites much of the teaching metaphor (82 additions / 111 deletions) and the
+  README (36 additions / 15 deletions), beyond the three local corrections
+  requested here. That broader framing requires review in its own PR.
+- [Digital proprioception #9](https://github.com/cirwel/digital-proprioception-paper/pull/9),
+  at `11faf117acf27982ea14faae3ce9a8fb5dc82b2e`, adds the registered reopening
+  condition and updates draft metadata, README, PDF, and appendix layout.
+  The label-class qualification in correction 1 remains part of the intended
+  claim boundary and must be retained when that paper revision is finalized.
+
+Queue review verified this inventory against the companion PR file lists and
+recorded scopes. No companion paper PR was merged, published, or treated as a
+new replication by this follow-up. The six October 12 review comments are
+addressed here by restoring the threshold and label-class bounds, naming the
+statistics and dependence, using concrete research definitions, explicitly
+limiting the individuality result, and recording the expanded companion scope.
