@@ -14,16 +14,16 @@ Status: canonical prose summary. If this file and runtime code disagree, trust [
   Report: what you did,      ------------------->
     complexity, confidence    process_agent_update   Behavioral EISV
                                                       +---------------------+
-                                                      | grounded signals    |
-                                                      |  (logs, tools,      |
-                                                      |   calibration)      |
-                                                      | -> EMA + z-score    |
-                                                      |    vs own baseline  |
+                                                      | observations +      |
+                                                      | controller history  |
+                                                      | -> blends + EMA     |
+                                                      | -> risk assessment  |
+                                                      | (baseline + floors) |
                                                       +----------+----------+
-                                                                 |       ODE / free-energy
-                                                            coherence    runs in parallel as a
-                                                            risk_score   diagnostic lens — it
-                                                            margin       does NOT drive verdicts
+                                                                 |       ODE state feeds
+                                                            policy <---- structural checks
+                                                                 |       and later observations
+                                                            action + margin
                                                                  |
                               <----------------------------------+
                               {"action": "proceed",
@@ -31,9 +31,10 @@ Status: canonical prose summary. If this file and runtime code disagree, trust [
                                "guidance": "..."}
 ```
 
-The engine is the **behavioral** path: observable work signals scored against
-the agent's own baseline. The ODE / free-energy formulation is a parallel
-research lens, not the verdict authority — see [§2](#2-eisv-evolution).
+The **behavioral** path blends observations and controller history into smoothed
+indices. Risk assessment uses fixed thresholds and, after warmup, the agent's
+own baseline. The ODE supplies additional structural decision inputs and feeds
+later behavioral observations — see [§2](#2-eisv-evolution).
 
 ## The Governance Pipeline
 
@@ -52,15 +53,27 @@ At runtime, the reflective fields above (`complexity`, `confidence`) are not tru
 
 ### 2. EISV Evolution
 
-**Primary system: Behavioral EISV** — EMA (exponential moving average)
-observations from grounded behavioral signals. These signals are assembled from
-operational log analysis, continuity metrics, tool usage, calibration history,
-and outcome history; self-reports are one input, not the whole substrate. With
+**Primary system: Behavioral EISV** — observations followed by EMA
+(exponential moving average) smoothing. With behavioral-sensor inputs, E blends
+prior decisions, controller coherence level and complexity divergence; I blends calibration error and
+controller coherence trend; S blends drift, regime transitions and complexity
+divergence. Available outcome, continuity and tool features also contribute.
+V separately smooths the raw `E_obs − I_obs` gap at its own rate, so it generally
+differs from current E minus current I. Physical sensor inputs can enter the same
+smoothing stage; `primary_eisv_source=behavioral` identifies that output path,
+not the origin of its inputs. Inspect input provenance separately. With
 the current constants, check-ins 1–2 use the Φ cold-start prior, check-ins 3–24
 use behavioral fixed thresholds, and check-in 25 enables per-agent Welford
-z-score scoring against a 30-update target.
+z-score risk scoring against a 30-update target. The coordinates themselves
+remain weighted indices, not z-scores.
 
-**Secondary system: ODE (diagnostic only)** — coupled differential equations run in parallel but do not drive verdicts. The ODE provides a dynamical-systems lens for analysis but behavioral verdicts override.
+**Coupled system: ODE** — differential equations evolve a second state.
+Behavioral assessment owns the post-cold-start assessment, while
+`src/monitor_decision.py` also uses ODE state for structural basin, void and
+coherence checks. ODE coherence and history feed later behavioral inputs.
+Prior policy decisions enter E as well: later readings include the controller's
+response, not just changes in task observations. See
+[EISV_COMPUTATION.md](EISV_COMPUTATION.md) for the full producer map.
 
 The grounding path lives in `src/dual_log/`, `src/behavioral_sensor.py`, `src/behavioral_state.py`, and `src/behavioral_assessment.py`. The ODE engine lives in `governance_core/` at the top level of this repo — pure Python, no separate install (it was a private compiled wheel, `unitares-core`, until it was folded back in 2026-04).
 
@@ -70,7 +83,7 @@ Four observable signals define a drift vector that feeds entropy:
 
 | Signal | What it measures |
 |--------|-----------------|
-| Calibration deviation | Stated confidence vs actual outcomes |
+| Calibration deviation | Worst populated tactical bin's overconfidence (expected minus observed accuracy, floored at zero) |
 | Complexity divergence | Self-reported complexity vs system estimate |
 | Coherence deviation | How far coherence has moved from baseline |
 | Stability deviation | Decision-pattern instability (`1 − decision_consistency`) |
@@ -83,13 +96,16 @@ The decision engine (`src/monitor_decision.py`) returns one of two actions, `pro
 
 | Policy action | Meaning | Agent action |
 |---------|---------|-------------|
-| `proceed` | State is healthy | Continue working |
+| `proceed` | Policy permits continuation | Continue working |
 | `guide` | `proceed` with guidance — slightly off track or at a basin boundary | Read guidance, adjust approach |
 | `pause` | A hard stop: check-ins and new shared-memory entries are refused, not queued | Stop, read the reason, `self_recovery(action="check")` for self-recovery eligibility |
 
 `reject` is no longer an action: it appears as a `sub_action` of `pause` on the risk-threshold path, and is accepted as a legacy input alias that normalizes to `pause`.
 
-Responses include `margin` indicating proximity to basin boundaries: `comfortable` / `tight`, `warning` (a threshold just crossed, < 0.1 past), `critical` (≥ 0.1 past), or `settling` (fewer than 3 check-ins of history). See `config/governance_config.py`.
+Responses include `margin` indicating proximity to decision thresholds (risk,
+void or coherence), distinct from basin membership: `comfortable` / `tight`,
+`warning` (a threshold just crossed, < 0.1 past), `critical` (≥ 0.1 past), or
+`settling` (fewer than 3 check-ins of history). See `config/governance_config.py`.
 
 #### Edge-regime postures: oscillation and assessment failure
 
@@ -101,7 +117,14 @@ Two behaviors at the edges of the verdict path are deliberate and easy to miss w
 
 ### 5. Calibration
 
-The system tracks whether stated confidence matches outcomes. Ground truth comes from objective signals — test pass/fail, command exit codes, lint results. Over time this builds a calibration curve. Persistent overconfidence penalizes Information Integrity through entropy coupling.
+The system records confidence and outcomes such as test results, command exit
+codes and review labels. Preserve who produced each outcome when assessing its
+independence. The calibration input to behavioral I on the handler path is the
+mean error across eligible lifetime fleet strategic bins, comparing confidence
+with trajectory health; it is not a current-claim accuracy check. An
+agent-scoped candidate is collected separately as measurement-only. I's optional
+outcome-consistency term measures score variance: constant success and constant
+failure are both consistent. Outcome success contributes separately to E.
 
 ## Transport Surfaces
 

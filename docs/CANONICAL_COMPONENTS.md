@@ -23,9 +23,9 @@ deployed Core component.
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ INTERFACES      MCP /mcp/ · REST /v1 · Dashboard · SDK · governance plugin      │  reach Core
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ EISV & GOVERNANCE   state vector → risk → verdict (proceed/guide/pause/reject)  │  "is this
-│ DIALECTIC ENGINE    independent review when state degrades or a verdict is      │   agent
-│                     contested — reasoning, not a rubber stamp                    │   healthy?"
+│ EISV & GOVERNANCE   state vector → risk → verdict (proceed/guide/pause/reject)  │  state +
+│ DIALECTIC ENGINE    independent review when state degrades or a verdict is      │  policy +
+│                     contested — reasoning, not a rubber stamp                    │  review
 ├──────────────────────────────────────────────────────────────────────────────┤
 │ KNOWLEDGE GRAPH     shared, provenance-tagged cross-agent memory                │  what the
 │                                                                                  │  fleet knows
@@ -83,18 +83,27 @@ resolution tracking) instead of a rubber stamp. The orchestrated independent rev
 
 ## 4. EISV & Governance — state model + verdicts
 
-The "is this agent still healthy?" loop. **EISV** is a 4-dimensional behavioral state vector —
-**E**nergy (is work advancing), **I**ntegrity (do claims match results), **E**ntropy/**S** (drifting
-from its own normal), **V**alence (energy-vs-integrity) — graded against the agent's *own* baseline.
-It coheres into a risk score, a **verdict** (`proceed`/`guide`/`pause`/`reject`), and a **basin**
-(healthy / boundary / degraded), with calibration against objective outcomes (test exit codes, tool
-results). The system runs **two loops**: the deployed behavioral verdict path (EMA + z-score + health
-gate) drives decisions; a parallel ODE / free-energy formulation runs as a research lens and **does
-not** drive verdicts.
+**EISV** records runtime observations and controller history as four smoothed
+indices. With behavioral-sensor inputs, E blends decision history, controller
+coherence level and complexity divergence; I blends calibration error and
+controller coherence trend; S blends
+drift, regime transitions and complexity divergence. Available outcome,
+continuity and tool features also contribute. V separately smooths the raw
+`E_obs − I_obs` gap; its distinct smoothing rate preserves temporal information
+beyond current E minus current I. Physical sensor inputs can enter the same
+smoothing stage; inspect input provenance as well as the output path named by
+`primary_eisv_source`.
 
-- **Modules:** `src/behavioral_state.py` + `src/behavioral_assessment.py` (verdict path); `governance_core/dynamics.py` (ODE); `src/grounding/free_energy.py` (tiered; FEP explicitly stubbed).
-- **Honest competence boundary:** EISV's Integrity is a **confidence-vs-outcome consistency detector** — it catches *naive overconfidence and drift* in cooperative agents, and is **not** a deliberate-concealment detector. When suppressed performance and reported confidence remain matched, the in-band trace is observationally equivalent to honest lower capability; independent cross-framing evaluation is required. The information-theoretic / free-energy framing is the research **target**, not the live path. See [`SCOPE_AND_THREAT_MODEL.md`](SCOPE_AND_THREAT_MODEL.md), [`EVALUATION_INDEX.md`](EVALUATION_INDEX.md), and the reproducible [`test_calibrated_capability_concealment.py`](../tests/test_calibrated_capability_concealment.py) boundary fixture.
-- **Maturity: DEPLOYED as calibration-observability with characterized limits.** Conceptually the heaviest layer — today it's *the part you have to learn* more than the clean headline; it could become the headline once the external validity gap closes.
+Behavioral risk assessment compares these indices with fixed thresholds and,
+after warmup, the agent's own baseline. Final policy also uses ODE state for
+structural basin, void and coherence checks. ODE history feeds later behavioral
+observations, and prior decisions feed E: the instrument includes the
+controller's response. The [computation reference](EISV_COMPUTATION.md) defines
+each producer and transformation.
+
+- **Modules:** `src/behavioral_sensor.py` + `src/behavioral_state.py` + `src/behavioral_assessment.py` (behavioral path); `src/monitor_decision.py` (policy); `governance_core/dynamics.py` (ODE); `src/grounding/free_energy.py` (tiered; FEP explicitly stubbed).
+- **Interpretation:** I's deployed calibration input is a lifetime fleet strategic aggregate, not a check of this agent's current claim. Its optional outcome-consistency term measures variance, so consistent failure and consistent success both score as consistent; outcome success enters E separately. Matching reported confidence to suppressed performance can still resemble honest lower capability in the monitored trace. See the [threat model](SCOPE_AND_THREAT_MODEL.md) and [concealment boundary fixture](../tests/test_calibrated_capability_concealment.py).
+- **Maturity: DEPLOYED.** The indices, assessment and policy paths are inspectable. Evidence for particular diagnostic or decision benefits is tracked separately in the [claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status).
 
 ## Supporting components
 
@@ -114,7 +123,7 @@ not** drive verdicts.
 | Identity & Ontology | **Mature** | Load-bearing; strict write gate live; anchors everything |
 | Knowledge Graph | **Live** | Strong provenance + cross-agent linking; serving-path eval fixed, current score not yet on record; AGE live-but-advisory |
 | Dialectic Engine | **In-flight** | Independent reviewer serving live; reviewer-quality is the open frontier |
-| EISV & Governance | **Deployed (bounded)** | Calibration-observability; catches naive overconfidence/drift, not deliberate concealment |
+| EISV & Governance | **Deployed** | Runtime observations and controller history → smoothed indices → assessment and policy |
 | Coordination (BEAM) | **Partial** | Advisory-first; Wave 3a read-only cutovers live; Wave 3 committed, not started |
 | Reference residents · Substrate · Interfaces | **Live / Mature** | Operational; UNITARES Resident has a separate early skeleton, not yet a usable agent product |
 

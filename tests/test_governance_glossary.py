@@ -50,9 +50,9 @@ class TestEisvDimensionContract:
         assert valence["range"] == "[-1, 1]"
         assert "EMA-smoothed" in valence["description"]
         assert "positive" in valence["description"].lower()
-        assert "motion outruns integrity" in valence["description"]
+        assert "raw E_obs - I_obs" in valence["description"]
         assert "negative" in valence["description"].lower()
-        assert "integrity outruns motion" in valence["description"]
+        assert "smoothing rate differs" in valence["description"]
         assert "void" not in valence["label"].lower()
 
     def test_helpers_return_copies_and_preserve_value(self):
