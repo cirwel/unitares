@@ -405,7 +405,23 @@ newest in-range version, which is 2.x as well. A client
 should negotiate the UNITARES contract above rather than infer compatibility
 from its locally installed MCP package version.
 
-Regenerate the artifact from the repository root with:
+For an output or description change, prepare the release files in one command
+from the repository root (choose the next version deliberately):
+
+```bash
+python3 scripts/dev/prepare_interface_release.py --version 1.34.0 \
+  --slug describe-output --summary "Describe the observable change."
+```
+
+Use `--dry-run` to preview destinations and skills citing affected files. The
+command bumps the source version with a dated note, regenerates the artifact,
+adds a release-entry stub here and writes a changelog fragment. It refuses an
+existing fragment or a nonadvancing version and restores the original files if
+generation fails. Finish the compatibility/digest/client-action prose, re-check
+the listed skills, then explicitly stamp them with a named verifier. It never
+certifies skills on your behalf. Commit all release files with the actual fix.
+
+To regenerate only the artifact from the repository root:
 
 ```bash
 python3 -m src.interface_contract > docs/interface-contract.v1.json
