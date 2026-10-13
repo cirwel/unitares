@@ -704,25 +704,42 @@ class TestPrepareUnlockedInputsContract:
         assert not str(regime.get("eligibility_reason") or "").startswith("shadow_error")
 
     @pytest.mark.asyncio
-    async def test_a_failing_regime_shadow_cannot_interrupt_the_deployed_handoff(self):
-        """This block also hands the deployed observation to the monitor; if the
-        shadow could raise through it, the monitor would fall back to its own
-        divergent sensor path and the deployed reading would change."""
+    @pytest.mark.parametrize("function,candidate,schema", [
+        ("compute_legacy_coherence_dependency_shadow", "legacy_coherence_neutralized",
+         "legacy_coherence_dependency_ablation.v1"),
+        ("compute_decision_self_loop_shadow", "decision_self_loop_neutralized",
+         "decision_self_loop_ablation.v1"),
+        ("compute_regime_self_loop_shadow", "regime_self_loop_neutralized",
+         "regime_self_loop_ablation.v1"),
+    ])
+    async def test_a_failing_shadow_cannot_interrupt_the_deployed_handoff(
+        self, function, candidate, schema
+    ):
+        """A failed measurement must preserve the exact observation and siblings."""
         from src.mcp_handlers.updates.phases import prepare_unlocked_inputs
         monitor = self._make_mock_monitor(n=10)
         ctx = self._make_ctx(monitor=monitor)
+        observation = {"E": 0.71, "I": 0.62, "S": 0.23, "V": 0.04}
         with patch("src.db.get_db", return_value=None), \
              patch("src.tool_usage_tracker.get_tool_usage_tracker",
                    return_value=MagicMock(get_usage_stats=MagicMock(return_value={"total_calls": 0}))), \
-             patch("src.behavioral_sensor.compute_regime_self_loop_shadow",
-                   side_effect=RuntimeError("boom")):
+             patch("src.behavioral_sensor.compute_behavioral_sensor_eisv",
+                   return_value=observation), \
+             patch(f"src.behavioral_sensor.{function}", side_effect=RuntimeError("boom")):
             await prepare_unlocked_inputs(ctx)
-        assert "sensor_eisv" in ctx.agent_state
-        regime = ctx.agent_state["_eisv_shadow_ablations"][
-            "regime_self_loop_neutralized"
-        ]["behavioral_sensor"]
-        assert regime["eligible"] is False
-        assert regime["eligibility_reason"] == "shadow_error:RuntimeError"
+        assert ctx.agent_state["sensor_eisv"] is observation
+        assert ctx.agent_state["sensor_eisv_source"] == "behavioral"
+        shadows = ctx.agent_state["_eisv_shadow_ablations"]
+        failure = shadows[candidate]["behavioral_sensor"]
+        assert failure == {
+            "schema": schema, "mode": "measurement_only", "policy_applied": False,
+            "eligible": False, "eligibility_reason": "shadow_error:RuntimeError",
+            "deployed": None, "candidate": None, "candidate_minus_deployed": None,
+        }
+        assert len(shadows) == 3
+        for name, sibling in shadows.items():
+            if name != candidate:
+                assert not str(sibling["behavioral_sensor"].get("eligibility_reason") or "").startswith("shadow_error")
 
     @pytest.mark.asyncio
     async def test_explicit_sensor_data_routed_unlocked(self):
