@@ -353,3 +353,16 @@ so a rollup does not establish that the whole topic has been covered.
 Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
 write** — a per-write LLM pass across a multi-agent fleet is exactly the
 high-frequency-noise anti-pattern this graph avoids.
+
+### Imported-memory previews
+
+Search and agent-scoped get cap imported inline details at 2 KiB UTF-8, even
+in full mode. A truncated row reports its original character/byte lengths and
+`details_retrieval` arguments; use `knowledge(action="details", discovery_id=...,
+offset=0, length=2000)` and the returned pagination to read the stored evidence.
+Native findings and governed promotions keep their existing behavior.
+
+The imported digest's `imported_memory` marker says `trust="unreviewed"` and
+gives `age_days` since the KG row was created (`age_basis="created_at"`), or null
+if unknown. This is not source age or proof of review; a routine sync does not
+rejuvenate it. Markers share the existing digest budgets, so fewer rows may fit.
