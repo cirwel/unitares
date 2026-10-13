@@ -104,8 +104,9 @@ class ObserveParams(AgentIdentityMixin):
         ),
     }
     action: Literal["agent", "compare", "similar", "anomalies", "aggregate", "telemetry", "audit_events", "outcome_evidence", "bridge"] = Field(..., description="Operation to perform")
-    # action=agent resolves a label through the agent metadata
-    # (_resolve_agent_from_memory); audit_events and outcome_evidence pass the
+    # action=agent resolves a UUID, an identifier the listing printed, or a
+    # label through the agent metadata (_resolve_agent_from_memory, which
+    # documents the order); audit_events and outcome_evidence pass the
     # value to their query as-is and match it against the stored agent_id.
     # That stored value is not always a UUID: audit writers such as the stuck
     # sweep (agent_id="system") record a name, so the text must not tell a
@@ -114,7 +115,11 @@ class ObserveParams(AgentIdentityMixin):
     target_agent_id: Optional[str] = Field(
         None,
         description=(
-            "Agent to observe or filter by. action=agent takes a UUID or label; "
+            "Agent to observe or filter by. action=agent takes a UUID, an "
+            "identifier agent(action='list') prints, or a label; a label or "
+            "identifier that names more than one agent is refused with "
+            "AMBIGUOUS_TARGET, and a label names its one live holder ahead of "
+            "archived ones. "
             "audit_events and outcome_evidence match it exactly against the "
             "stored agent_id and do not resolve labels. That is a UUID for most "
             "agents, but some audit writers record a name instead (the stuck "

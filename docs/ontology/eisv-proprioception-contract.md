@@ -618,7 +618,11 @@ external signal: `tool_error_rate` at 15% and outcome success at 20%. That makes
 E the one axis with a real external answer to be wrong about. The obstacle is
 neither epistemic nor the stop rule: `docs/EVALUATION_INDEX.md` records that the
 tool-failure population and the EISV-bearing population are **disjoint**. The
-referent exists; the two are not joined. That is plumbing.
+referent exists; the two are not joined. That is plumbing. *Update
+2026-10-12 (ledger row 47):* the tool term is joined on 99% of check-ins but is
+almost always zero, externally verified outcomes reach a median 0% of E's
+outcome history, and a median 75% of the within-identity variation in E's sensor
+observation comes from the agent's own prior verdicts.
 
 **I — the calibration referent is currently circular.** I's dominant term is
 `1.0 - calibration_error`, which is precisely Garfinkel's third dimension. The
@@ -1453,6 +1457,89 @@ rows from #1777's one-step shadow cannot identify closed-loop gain or basin
 counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
 verdict→`decision_e` feedback paths and both want one deliberate decision rather
 than two patches.
+
+**46. "S's regime-instability term measures how much the runtime is switching"**
+(contract *The split*, S row: "How much is the runtime moving and switching") →
+**IMPLEMENTATION MISMATCH.** At rest the term mostly measures S itself.
+`detect_regime` (`src/monitor_regime.py`) reads behavioral S once behavioral
+confidence reaches 0.3 and returns `DIVERGENCE` when S rose by more than
+`eps_S = 0.002` while |V| exceeds 0.05; `_regime_instability`
+(`src/behavioral_sensor.py`) then counts label changes over the last ten entries,
+at 35% of raw S. Resting behavioral V sits near -0.095, so the V condition always
+holds, and S's own step-to-step variation (SD about 0.028) keeps flipping the
+label. In a synthetic offline run of the live build (2026-10-12,
+[`../evaluations/eisv-s-faithfulness/result-v0.md`](../evaluations/eisv-s-faithfulness/result-v0.md)),
+holding the term at its low default cut resting S step SD from 0.0273 to 0.0016.
+Paired by seed on identical inputs, the live-minus-held response differences were
++0.029 (se 0.013) for thrash, +0.001 to +0.021 (se 0.012 to 0.021) for the other
+positive controls, and -0.037 (se 0.015) for a vocabulary-only sham, whose live
+shift disappears with the term held. These are exploratory estimates; no deciding
+standard was declared. Row 13 recorded the topology; this adds the magnitude and
+the direct path inside behavioral S.
+
+The same run is the first exercise of S's assigned validation regime. Identical
+inputs replayed from an identical initial state gave identical readings. S moved
+with the predicted sign and dose for overclaimed complexity, confidence collapse
+and thrash (+0.04 to +0.31 against control). An honestly reported shift to
+heavier work moved it +0.007 (se 0.020); the vocabulary-only change moved it
+-0.038 (se 0.016) in live code, a shift the regime term accounts for. The run was
+exploratory and not pre-registered, so it earns no status here; a pre-registered
+rerun with a declared standard is what would. **Do not change S before the
+2026-12-01 read**: S feeds that read's models. The repair (drop the term, or
+compute regime changes from something other than S) belongs after it or behind a
+shadow reading. The shadow now runs on every check-in where the server computes
+the behavioral sensor (no caller-supplied sensor reading, at least three
+decisions of history):
+`eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`, S with the term
+held at its observed fleet level (0.12), measurement only.
+
+**47. "E is externally referenced: decision outcomes, tool errors and outcome
+success are world facts"** (contract *The split*, E row) → **IMPLEMENTATION
+MISMATCH**, with a dated **DEPLOYMENT SNAPSHOT** of its size. `decision_history`
+(`_compute_E_components`, `src/behavioral_sensor.py`) scores the agent's own
+prior verdict actions, not a world fact. Decomposing the persisted derivation of
+18,021 behavioral check-ins from 318 identities over the 30 days to 2026-10-12
+([`../evaluations/eisv-ei-referent/result-v0.md`](../evaluations/eisv-ei-referent/result-v0.md)):
+external terms carry about 16% of E's effective weight (tool audit 0.150;
+externally verified outcomes p50 0.000, mean 0.008), and within an identity a
+median 75% of the variation in the sensor's E observation (before the deployed
+EMA) comes from `decision_history` (72 identities with at least 20 rows; p10 47%,
+p90 98%), against a median 0% from tool audit and from externally verified
+outcomes. `tool_error_rate` is joined on 99% of check-ins
+but was nonzero on 168 of 19,346; outcome history is 80% system-graded
+`trajectory_validated`. The persisted envelopes carry no outcome provenance while
+`UNITARES_OUTCOME_PROVENANCE_FILTER` is off (`get_recent_outcomes` does not
+select `verification_source`), so the external share was measured from
+`audit.outcome_events`. This is the verdict-to-`decision_e` loop of row 45 and the
+"pause-scores-0.5" do-not, measured as the largest source of variation in E's
+observation. The
+existing wake for `decision_e` applies; nothing changes before the 2026-12-01
+read.
+
+**48. "I's calibration term reflects current calibration"** → **IMPLEMENTATION
+MISMATCH.** Row 2 established that every agent receives the same fleet scalar on
+a given tick. In the same window the scalar did not move at all: one value,
+0.1474, on every one of the 18,021 rows across 668 hours, from a lifetime sample
+count that stayed at 282. The `agent_candidate` measurement (#2194) reported
+`no_data` for all 318 identities. Its recorders are wired and reachable, and the
+live state shows zero per-agent bins: every candidate sample was gated out. The
+check-in path admits only outcomes at corroboration weight 0.65 or above, and its
+keyword-inferred auto-emitted outcomes grade below that (fleet-wide, 5,944 task
+and test outcomes graded `claim_only`); the 3,331 outcomes graded
+`externally_verified` or `tool_observed` clear the gate but store no agent
+confidence, which the outcome-event path requires. At an effective weight of 0.360 per row, about
+a third of I was a constant carrying no current information about anyone. What
+moved the I observation within an identity was `continuity_I_input`, one minus
+the self-report-versus-text complexity divergence (median 87% of its variation). The
+external referent the repair calls for exists for 124 of 359 identities (median
+9 `external_signal` outcomes each, 35 with at least 20). Recorded, not repaired:
+swapping I's calibration source is a predictor change for the 2026-12-01 read. An offline
+shadow of the repair on the same frozen data (pairing each verified outcome with
+the identity's last stated confidence within 24 hours, over lifetime data) paired
+662 of 7,061 verified outcomes across 113 identities and reached the
+estimator's eligibility for no identity at any check-in in the window; the
+telemetry envelope now records each check-in's stated confidence
+(`self_report`, measurement only) so the pairing has a dense source.
 
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 
