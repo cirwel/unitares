@@ -461,8 +461,8 @@ class TestFormatResponse:
         result = format_response(data, {"response_mode": mode})
         contract = result["eisv_contract"]
         assert "V=Valence [-1,1]" in contract
-        assert "positive=motion outruns integrity" in contract
-        assert "negative=integrity outruns motion" in contract
+        assert "positive=positive smoothed gap" in contract
+        assert "negative=negative smoothed gap" in contract
 
     def test_lite_alias_for_compact(self):
         data = _sample_response()
