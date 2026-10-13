@@ -388,7 +388,7 @@ def _query_applied_checksums(db_url: str) -> dict[int, str | None]:
     all.
     """
     proc = subprocess.run(
-        ["psql", db_url, "-Atqc",
+        ["psql", db_url, "-X", "-Atqc",
          "SELECT version || '|' || COALESCE(checksum, '') "
          "FROM core.schema_migrations ORDER BY version"],
         capture_output=True, text=True, timeout=10,

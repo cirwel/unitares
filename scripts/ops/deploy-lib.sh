@@ -136,6 +136,71 @@ deploy_lib_require_plist_target() {
   exit 1
 }
 
+# A caller that reviewed migrations can bind this deployment to that exact
+# commit. Scope the pin by git-common-dir: all UNITARES worktrees share it,
+# while the same sweep's bridge/plugin/host-adapter repositories do not.
+# The pair is optional for direct deploy callers, but a partial or unreadable
+# pair fails closed. Never infer that an unreadable repo is an unrelated repo.
+deploy_lib_expected_revision_for() {
+  local tag="$1" repo="$2" expected="${UNITARES_DEPLOY_EXPECTED_REVISION:-}"
+  local pinned_repo="${UNITARES_DEPLOY_EXPECTED_REPO:-}" common pinned_common common_path pinned_path
+  [[ -z "$expected" && -z "$pinned_repo" ]] && return 0
+  if [[ -z "$pinned_repo" || ! "$expected" =~ ^[0-9a-f]{40}$ && ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[$tag] REFUSING: expected revision requires a full commit SHA and UNITARES_DEPLOY_EXPECTED_REPO." >&2
+    return 1
+  fi
+  # Check each Git lookup separately: a failed substitution inside cd can
+  # become cd "", which succeeds on Bash and would misclassify invalid scope.
+  common_path="$(git -C "$repo" rev-parse --git-common-dir)" || return 1
+  pinned_path="$(git -C "$pinned_repo" rev-parse --git-common-dir)" || return 1
+  common="$(cd "$repo" && cd "$common_path" && pwd -P)" || return 1
+  pinned_common="$(cd "$pinned_repo" && cd "$pinned_path" && pwd -P)" || return 1
+  [[ "$common" != "$pinned_common" ]] || printf '%s\n' "$expected"
+}
+
+deploy_lib_verify_expected_revision() {
+  local tag="$1" repo="$2" ref="${3:-HEAD}" expected actual
+  expected="$(deploy_lib_expected_revision_for "$tag" "$repo")" || return 1
+  [[ -z "$expected" ]] && return 0
+  actual="$(git -C "$repo" rev-parse --verify "$ref^{commit}")" || return 1
+  if [[ "$actual" != "$expected" ]]; then
+    echo "[$tag] REFUSING: revision changed since migration review (expected $expected, found $actual). Re-run the update to inspect the new target." >&2
+    return 1
+  fi
+  if [[ "$ref" == HEAD ]]; then
+    deploy_lib_verify_migration_sources "$tag" "$repo" || return 1
+  fi
+}
+
+# Includes such as migration 002's knowledge_schema.sql live beside the
+# numbered files. Check that whole SQL tree, both before advancing an existing
+# checkout and again when verifying HEAD immediately before migration apply.
+deploy_lib_verify_migration_sources() {
+  local tag="$1" repo="$2" expected dirty ignored
+  expected="$(deploy_lib_expected_revision_for "$tag" "$repo")" || return 1
+  [[ -z "$expected" ]] && return 0
+  dirty="$(git -C "$repo" status --porcelain --untracked-files=all -- db/postgres scripts/dev)" || return 1
+  # Ignoring a SQL/Python source file does not stop the planner/importer from
+  # executing it. Do not mistake an ignored extra migration for reviewed code.
+  ignored="$(git -C "$repo" ls-files --others --ignored --exclude-standard -- ':(glob)db/postgres/**/*.sql' ':(glob)scripts/dev/**/*.py')" || return 1
+  if [[ -n "$dirty$ignored" ]]; then
+    echo "[$tag] REFUSING: migration sources/planner have local changes outside the inspected commit." >&2
+    return 1
+  fi
+}
+
+# Recovery for a revision refusal must preserve local edits. --keep aborts
+# rather than overwriting a conflicting edit or untracked file. Never restart
+# after a refusal, including when safe automatic recovery is impossible.
+deploy_lib_restore_reviewed_worktree() {
+  local tag="$1" repo="$2" previous="$3"
+  echo "[$tag] restoring pre-deploy revision ${previous:0:8}, preserving local edits" >&2
+  if ! git -C "$repo" reset --keep "$previous"; then
+    echo "[$tag] RECOVERY REQUIRED: automatic rollback would overwrite local changes. They were preserved; reconcile $repo before restarting any service." >&2
+    return 1
+  fi
+}
+
 # ── Fetch + worktree-create-if-missing + ff-only ─────────────────────────────
 # Never a destructive reset: ff-only refuses if it would lose work. Publishes
 # DEPLOY_LIB_PREV (the rollback target) and DEPLOY_LIB_FRESH (worktree was just
@@ -188,7 +253,7 @@ _deploy_lib_worktree_exists() {
 # about the flow changes; this only chooses which ref is fetched, checked out on
 # create, and fast-forwarded to.
 deploy_lib_ff_worktree() {
-  local tag="$1" repo="$2" deploy="$3" detach=0 branch="master"
+  local tag="$1" repo="$2" deploy="$3" detach=0 branch="master" target
   shift 3
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -203,23 +268,35 @@ deploy_lib_ff_worktree() {
     shift
   done
   echo "[$tag] fetching origin/$branch"
-  git -C "$repo" fetch origin "$branch" --quiet
+  git -C "$repo" fetch origin "$branch" --quiet || return 1
+  target="$(git -C "$repo" rev-parse --verify "origin/$branch^{commit}")" || return 1
+  deploy_lib_verify_expected_revision "$tag" "$repo" "$target" || return 1
 
   DEPLOY_LIB_FRESH=0
-  if ! _deploy_lib_worktree_exists "$repo" "$deploy"; then
+  if _deploy_lib_worktree_exists "$repo" "$deploy"; then
+    # Refuse before the merge, so rejected local SQL/planner edits cannot leave
+    # on-disk service code ahead of the still-unmigrated database.
+    deploy_lib_verify_migration_sources "$tag" "$deploy" || return 1
+  else
     if [ "$detach" = 1 ]; then
       echo "[$tag] creating dedicated deploy worktree at $deploy (detached at origin/$branch)"
-      git -C "$repo" worktree add --detach "$deploy" "origin/$branch"
+      git -C "$repo" worktree add --detach "$deploy" "$target" || return 1
     else
       echo "[$tag] creating dedicated deploy worktree at $deploy (on $branch)"
-      git -C "$repo" worktree add "$deploy" "$branch"
+      git -C "$repo" worktree add "$deploy" "$branch" || return 1
     fi
     DEPLOY_LIB_FRESH=1
   fi
 
-  DEPLOY_LIB_PREV="$(git -C "$deploy" rev-parse HEAD)"
+  DEPLOY_LIB_PREV="$(git -C "$deploy" rev-parse HEAD)" || return 1
   echo "[$tag] fast-forwarding $deploy to origin/$branch (ff-only; was ${DEPLOY_LIB_PREV:0:8})"
-  git -C "$deploy" merge --ff-only "origin/$branch"
+  # Merge the resolved object, not a remote-tracking ref another fetch can move
+  # after verification. All callers hold the deployment checkout's lock.
+  git -C "$deploy" merge --ff-only "$target" || return 1
+  if ! deploy_lib_verify_expected_revision "$tag" "$deploy" HEAD; then
+    deploy_lib_restore_reviewed_worktree "$tag" "$deploy" "$DEPLOY_LIB_PREV" || :
+    return 1
+  fi
 }
 
 # ── #1277 fix 1: restart the lease plane at disturbance time ─────────────────
