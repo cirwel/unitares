@@ -353,9 +353,12 @@ design. Declare a parent only when a causal relationship actually exists:
 
 Onboarding helpers do not promote cached UUIDs to parent declarations. A
 caller that knows the causal relationship supplies it explicitly through
-`start_session`/`onboard`. When `spawn_reason` is omitted, the server uses the
-descriptive `new_session` default, even if a parent was declared: the client
-name and existing thread nodes do not establish compaction or dispatch.
+`start_session`/`onboard`. Thread assignment uses the descriptive `new_session`
+default when no reason has been supplied, even if a parent was declared.
+Onboarding recovery paths can supply their own descriptive reasons, such as
+`auto_onboard_no_session` or `orchestrated_thread_anchor`; thread assignment
+preserves them. Neither the client name nor existing thread nodes establish
+compaction or dispatch.
 
 Liveness gates the declaration: declaring a **currently-live** agent as parent
 is rejected at onboard (`lineage_coincidental_rejected`) for a succession
