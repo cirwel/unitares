@@ -1,8 +1,9 @@
 # Cross-agent knowledge archival: operator decision
 
-**Status:** Draft authorization question, reserved to the operator. This document
-does not change permissions or authorize implementation. **Evidence checked:**
-2026-10-13.
+**Status:** Operator decision recorded 2026-10-13: retain collaborative low/medium
+curation. Kenny approved the recommendation with “proceed” in the KG-audit
+follow-through. This records policy; it changes no runtime permissions.
+**Evidence checked:** 2026-10-13.
 
 ## Observed facts and boundary
 
@@ -42,20 +43,19 @@ reserved dismissal authority regardless of what the API accepts.
 | Owner or operator/delegated curator | Require an explicit authority for another author's archival; preserve a separate evidence-based closure policy | Clearer control, but needs a way to curate rows from exited authors |
 | Proposal then authorized disposition | Let another agent propose closure; owner/operator/curator makes the status change | Strong review boundary, extra queue and orphan-handling work |
 
-Recommendation for discussion: scope any restriction to destructive or
-visibility-changing edits such as archival and content replacement, and give
-explicitly delegated curators a documented route. Do not silently tighten
-archival while leaving content overwrite, supersession or severity changes
-as alternate routes. Do not quietly remove the existing high-severity
-cross-agent closure exception either: that is a separate authority decision.
+## Adopted decision — 2026-10-13
 
-Before implementation, the operator must decide which actions require which
-authority, how delegation is represented/revoked, what happens to orphaned
-rows, and whether historical closure evidence is preserved on reversal.
-A later patch needs the full owner/non-owner × severity × action test matrix,
-auth-path review gates and any required interface/skill updates. No production
-authorization change is part of this PR.
+Retain collaborative archival of low/medium findings. Each disposition needs
+an attributed reason and evidence, with a closure class when applicable. Age
+alone is never sufficient. Search and inspect the source before closing a row.
+Imported memory remains owned by its sync writer and is not manually archived.
 
-**Operator question:** Should low/medium cross-agent archival remain collaborative,
-require owner/operator or delegated-curator authority, or become a proposed
-disposition awaiting authorization?
+Preserve the existing high/critical checks and cross-agent terminal-closure
+exception. Security dismissals remain operator-reserved. This does not authorize
+content replacement or severity downgrades as a substitute for archival review.
+
+The decision avoids making exited authors the only people able to maintain
+their findings. The rejected alternatives above remain as design history.
+No authorization code or production data was changed to record this decision.
+The approval and delivery evidence are appended to original audit
+`2026-10-13T06:48:37.234783+00:00`.
