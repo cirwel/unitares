@@ -1210,7 +1210,7 @@ def _append_more_results(
         if discovery_id is None:
             continue
         row: Dict[str, Any] = {"discovery_id": discovery_id}
-        row.update(_lift(item, "type", "status"))
+        row.update(_lift(item, "type", "status", "imported_memory"))
         summary = item.get("summary") or item.get("title")
         if isinstance(summary, str):
             row["summary"], _ = _summary_preview(summary, _SEARCH_MORE_SUMMARY_CHARS)
@@ -1265,6 +1265,7 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 "type",
                 "status",
                 "last_activity_days",
+                "imported_memory",
                 "closure_class",
                 "closure_standard",
             )
@@ -2078,7 +2079,7 @@ def _effective_discovery_retrieval_options(
             result["note"] = (
                 "Digest-mode friendly search keeps the upstream result bounded, "
                 "even when include_details=true. Use response_mode='full' with "
-                "include_details=true for every result inline, or open one record "
+                "include_details=true for inline previews (imports capped at 2 KiB), or open one record "
                 "with knowledge(action='details', discovery_id='...')."
             )
         return result
@@ -2096,7 +2097,7 @@ def _effective_discovery_retrieval_options(
         result["note"] = (
             "The digest friendly response returns bounded previews even when "
             "include_details=true. Use response_mode='full' with "
-            "include_details=true for every result inline, or open one record "
+            "include_details=true for inline previews (imports capped at 2 KiB), or open one record "
             "with knowledge(action='details', discovery_id='...')."
         )
     return result
@@ -2405,6 +2406,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
                 "status",
                 "superseded_by",
                 "last_activity_days",
+                "imported_memory",
                 "closure_class",
                 "closure_standard",
             ):
