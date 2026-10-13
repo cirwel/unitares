@@ -14,7 +14,8 @@ fail() { printf 'FAIL: %s\n%s\n' "$1" "${out:-}"; exit 1; }
 REPO="$SB/source"; DEP="$SB/deploy"; OTHER="$SB/other"
 git init -q --bare "$SB/origin.git"
 git init -q -b master "$REPO"
-mkdir -p "$REPO/scripts/dev"
+mkdir -p "$REPO/scripts/dev" "$REPO/db/postgres"
+printf '%s\n' '-- included schema' > "$REPO/db/postgres/knowledge_schema.sql"
 printf '# fixture\n' > "$REPO/scripts/dev/apply_migrations.py"
 git -C "$REPO" add .; git -C "$REPO" -c commit.gpgsign=false commit -qm base
 OLD=$(git -C "$REPO" rev-parse HEAD)
@@ -33,6 +34,19 @@ fi
 [[ "$out" == *'revision changed since migration review'* ]] || fail 'mismatch not explained'
 ok 'new remote revision is refused before checkout moves'
 export UNITARES_DEPLOY_EXPECTED_REVISION="$NEW"
+# Dirty inputs must not move disk ahead of a database that has not migrated.
+for path in scripts/dev/apply_migrations.py db/postgres/knowledge_schema.sql; do
+  printf '\n-- modified\n' >> "$DEP/$path"
+  if out=$(bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP" 2>&1); then fail "dirty $path accepted before merge"; fi
+  [ "$(git -C "$DEP" rev-parse HEAD)" = "$OLD" ] || fail "dirty $path moved checkout"
+  git -C "$DEP" restore "$path"
+done
+mkdir -p "$DEP/db/postgres/migrations"
+printf 'DELETE FROM records;\n' > "$DEP/db/postgres/migrations/999_unreviewed.sql"
+if out=$(bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP" 2>&1); then fail 'untracked migration accepted before merge'; fi
+[ "$(git -C "$DEP" rev-parse HEAD)" = "$OLD" ] || fail 'untracked migration moved checkout'
+rm "$DEP/db/postgres/migrations/999_unreviewed.sql"
+ok 'dirty planner, included SQL, and untracked migrations refuse before checkout moves'
 bash -c '. "$1"; deploy_lib_ff_worktree t "$2" "$3"' _ "$LIB" "$REPO" "$DEP" >/dev/null
 [ "$(git -C "$DEP" rev-parse HEAD)" = "$NEW" ] || fail 'matching revision did not advance'
 ok 'matching reviewed revision deploys'

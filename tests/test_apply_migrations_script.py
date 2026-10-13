@@ -8,6 +8,7 @@ which decides what is pending vs. drifted — using fake registry dicts.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -231,3 +232,31 @@ class TestEveryMigrationRegistersItself:
             if declared and from_name not in declared:
                 mismatched.append(f"{p.name} registers {sorted(declared)}")
         assert not mismatched, "filename/registration mismatch: " + "; ".join(mismatched)
+
+
+def test_apply_file_resolves_includes_from_its_repository(mod, monkeypatch, tmp_path, capsys):
+    """A caller's other checkout must not supply the SQL behind a psql include."""
+    reviewed = tmp_path / "reviewed"
+    caller = tmp_path / "caller"
+    for root, marker in ((reviewed, "REVIEWED SQL"), (caller, "UNREVIEWED SQL")):
+        (root / "db/postgres").mkdir(parents=True)
+        (root / "db/postgres/knowledge_schema.sql").write_text(marker)
+    migration = reviewed / "002_knowledge_schema.sql"
+    migration.write_text("\\i db/postgres/knowledge_schema.sql\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    psql = fake_bin / "psql"
+    psql.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, sys\n"
+        "assert '-X' in sys.argv, 'startup SQL must be disabled'\n"
+        "source = pathlib.Path(sys.argv[sys.argv.index('-f') + 1]).read_text()\n"
+        "include = source.strip().split(maxsplit=1)[1]\n"
+        "print(pathlib.Path(include).read_text())\n"
+    )
+    psql.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setattr(mod, "REPO_ROOT", reviewed)
+    monkeypatch.chdir(caller)
+    assert mod.apply_file("postgresql://unused/test", migration)
+    assert capsys.readouterr().out.strip() == "REVIEWED SQL"

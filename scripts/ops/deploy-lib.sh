@@ -159,7 +159,7 @@ deploy_lib_expected_revision_for() {
 }
 
 deploy_lib_verify_expected_revision() {
-  local tag="$1" repo="$2" ref="${3:-HEAD}" expected actual dirty
+  local tag="$1" repo="$2" ref="${3:-HEAD}" expected actual
   expected="$(deploy_lib_expected_revision_for "$tag" "$repo")" || return 1
   [[ -z "$expected" ]] && return 0
   actual="$(git -C "$repo" rev-parse --verify "$ref^{commit}")" || return 1
@@ -168,11 +168,21 @@ deploy_lib_verify_expected_revision() {
     return 1
   fi
   if [[ "$ref" == HEAD ]]; then
-    dirty="$(git -C "$repo" status --porcelain --untracked-files=all -- db/postgres/migrations scripts/dev)" || return 1
-    if [[ -n "$dirty" ]]; then
-      echo "[$tag] REFUSING: migration sources/planner have local changes outside the inspected commit." >&2
-      return 1
-    fi
+    deploy_lib_verify_migration_sources "$tag" "$repo" || return 1
+  fi
+}
+
+# Includes such as migration 002's knowledge_schema.sql live beside the
+# numbered files. Check that whole SQL tree, both before advancing an existing
+# checkout and again when verifying HEAD immediately before migration apply.
+deploy_lib_verify_migration_sources() {
+  local tag="$1" repo="$2" expected dirty
+  expected="$(deploy_lib_expected_revision_for "$tag" "$repo")" || return 1
+  [[ -z "$expected" ]] && return 0
+  dirty="$(git -C "$repo" status --porcelain --untracked-files=all -- db/postgres scripts/dev)" || return 1
+  if [[ -n "$dirty" ]]; then
+    echo "[$tag] REFUSING: migration sources/planner have local changes outside the inspected commit." >&2
+    return 1
   fi
 }
 
@@ -248,7 +258,11 @@ deploy_lib_ff_worktree() {
   deploy_lib_verify_expected_revision "$tag" "$repo" "$target" || return 1
 
   DEPLOY_LIB_FRESH=0
-  if ! _deploy_lib_worktree_exists "$repo" "$deploy"; then
+  if _deploy_lib_worktree_exists "$repo" "$deploy"; then
+    # Refuse before the merge, so rejected local SQL/planner edits cannot leave
+    # on-disk service code ahead of the still-unmigrated database.
+    deploy_lib_verify_migration_sources "$tag" "$deploy" || return 1
+  else
     if [ "$detach" = 1 ]; then
       echo "[$tag] creating dedicated deploy worktree at $deploy (detached at origin/$branch)"
       git -C "$repo" worktree add --detach "$deploy" "$target" || return 1

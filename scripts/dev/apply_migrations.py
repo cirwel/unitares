@@ -104,11 +104,13 @@ def apply_file(db_url: str, path: Path) -> bool:
 
     Uses plain ``psql -f`` (no wrapping transaction) to match the documented
     manual path exactly — some migrations (e.g. CREATE INDEX CONCURRENTLY)
-    cannot run inside a single transaction.
+    cannot run inside a single transaction. Resolve psql's repo-relative
+    includes from this checkout, independent of the caller's working directory,
+    and disable startup files so they cannot redirect or inject migration SQL.
     """
     proc = subprocess.run(
-        ["psql", db_url, "-v", "ON_ERROR_STOP=1", "-q", "-f", str(path)],
-        capture_output=True, text=True,
+        ["psql", db_url, "-X", "-v", "ON_ERROR_STOP=1", "-q", "-f", str(path.resolve())],
+        capture_output=True, text=True, cwd=REPO_ROOT,
     )
     if proc.stdout.strip():
         print(proc.stdout.strip())
