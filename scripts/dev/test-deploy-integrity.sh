@@ -187,6 +187,50 @@ out=$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1); rc=$?
 set -e
 [ "$rc" = 3 ] && [[ "$out" != *'unexpected-deploy'* ]] || fail 'DOWN service was restarted'
 ok 'DOWN service stays stopped even with deployment automation'
+# A service earlier in the table must not wake a later DOWN lease plane.
+# Exercise the real shared nudge helper; fake all host control commands.
+cp "$LIB" "$ROOT/scripts/ops/nudge-lease-plane.sh" "$AP/"
+cat > "$AP/deploy-mcp.sh" <<'EOS'
+#!/usr/bin/env bash
+. "$(dirname "$0")/deploy-lib.sh"
+DEPLOY_LIB_FRESH=1
+deploy_lib_nudge_lease_plane t fixture /fixture/shared
+EOS
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"STALE(1)","checkout":"/fixture/shared"},{"name":"lease-plane","verdict":"DOWN","checkout":"/fixture/shared"}]'
+set +e
+out=$(
+  launchctl() { echo "launchctl $*" >> "$TEST_TRACE"; return 0; }
+  curl() { printf 200; }
+  sleep() { :; }
+  export -f launchctl curl sleep
+  bash "$AP/deploy-apply.sh" --no-fetch 2>&1
+); rc=$?
+set -e
+[ "$rc" = 3 ] && [[ "$out" == *'leaving it stopped'* ]] || fail 'sweep did not suppress indirect DOWN restart'
+if grep -q launchctl "$TEST_TRACE"; then fail 'indirect nudge reached launchctl for DOWN service'; fi
+ok 'DOWN snapshot prevents indirect lease-plane restarts regardless of table order'
+# The same nudge still repairs a running plane after a shared-tree change.
+export TEST_STATUS='[{"name":"governance-mcp","verdict":"STALE(1)","checkout":"/fixture/shared"},{"name":"lease-plane","verdict":"CURRENT","checkout":"/fixture/shared"}]'
+out=$(
+  launchctl() { echo "launchctl $*" >> "$TEST_TRACE"; return 0; }
+  curl() { printf 200; }
+  sleep() { :; }
+  export -f launchctl curl sleep
+  bash "$AP/deploy-apply.sh" --no-fetch 2>&1
+)
+grep -q 'launchctl kickstart' "$TEST_TRACE" || fail 'running plane no longer receives its recovery nudge'
+ok 'running lease plane still gets its shared-worktree recovery nudge'
+# Paired bot rows use one script that restarts both; hold that whole script
+# when either instance is DOWN instead of waking its stopped sibling.
+printf '#!/usr/bin/env bash\necho unexpected-paired-deploy\n' > "$AP/deploy-dispatch-beam.sh"
+chmod +x "$AP/deploy-dispatch-beam.sh"
+export TEST_STATUS='[{"name":"dispatch-beam","verdict":"STALE(1)","checkout":"/fixture/dispatch"},{"name":"dispatch-beam-codex","verdict":"DOWN","checkout":"/fixture/dispatch"}]'
+set +e
+out=$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1); rc=$?
+set -e
+[ "$rc" = 3 ] && [[ "$out" == *'also controls a DOWN service'* ]] || fail 'paired deploy was not held'
+[[ "$out" != *'unexpected-paired-deploy'* ]] || fail 'paired script ran despite DOWN sibling'
+ok 'a paired deploy cannot restart a DOWN sibling'
 export TEST_STATUS='[{"name":"governance-mcp","verdict":"CURRENT"}]'
 bash "$AP/deploy-apply.sh" --no-fetch >/dev/null
 ok 'fully current fleet still returns success'

@@ -132,6 +132,23 @@ if [ -z "$needs" ]; then
   exit 0
 fi
 
+# Record every DOWN service before dispatch: an earlier service can indirectly
+# restart one later in the table (shared lease-plane nudges, paired bots).
+UNITARES_DEPLOY_DOWN_SERVICES=""
+down_scripts=""
+while IFS=$'\t' read -r name verdict checkout pickup; do
+  case "$verdict" in
+    DOWN*)
+      UNITARES_DEPLOY_DOWN_SERVICES="$(printf '%s\n%s' "$UNITARES_DEPLOY_DOWN_SERVICES" "$name")"
+      script="$(deploy_script_for "$name")"
+      [ -z "$script" ] || down_scripts="$(printf '%s\n%s' "$down_scripts" "$script")"
+      ;;
+  esac
+done <<EOF
+$needs
+EOF
+export UNITARES_DEPLOY_DOWN_SERVICES
+
 deployed=""; skipped=""; failed=""; held=""; down=""
 # Checkouts a failed deploy has pinned. Newline-delimited and matched whole-line:
 # a substring test would let /a/b hold /a/b-two, which is a different tree.
@@ -151,6 +168,12 @@ while IFS=$'\t' read -r name verdict checkout pickup; do
       ;;
   esac
   script="$(deploy_script_for "$name")"
+
+  if [ -n "$script" ] && printf '%s\n' "$down_scripts" | grep -qxF "$script"; then
+    echo "[apply] SKIP  $name ($verdict) — its deploy script also controls a DOWN service" >&2
+    skipped="$skipped $name"
+    continue
+  fi
 
   # Ordering is not a fix here. Whichever service comes second inherits the
   # problem, so the hold is on the TREE, not on a position in the list.

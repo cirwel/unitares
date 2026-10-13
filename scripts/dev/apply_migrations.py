@@ -81,7 +81,7 @@ def compute_plan(
 def query_applied(db_url: str) -> dict[int, str]:
     """Return {version: name} currently recorded in core.schema_migrations."""
     proc = subprocess.run(
-        ["psql", db_url, "-Atqc",
+        ["psql", db_url, "-X", "-Atqc",
          "SELECT version || '|' || name FROM core.schema_migrations ORDER BY version"],
         capture_output=True, text=True, timeout=10,
     )
@@ -130,7 +130,7 @@ def record_checksum(db_url: str, version: int, path: Path) -> bool:
     keeps working against an older deployment.
     """
     proc = subprocess.run(
-        ["psql", db_url, "-v", "ON_ERROR_STOP=1", "-Atqc",
+        ["psql", db_url, "-X", "-v", "ON_ERROR_STOP=1", "-Atqc",
          "UPDATE core.schema_migrations SET checksum = %s "
          "WHERE version = %d AND checksum IS NULL" % (_sql_literal(_file_checksum(path)), version)],
         capture_output=True, text=True, timeout=10,

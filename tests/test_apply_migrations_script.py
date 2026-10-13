@@ -8,6 +8,7 @@ which decides what is pending vs. drifted — using fake registry dicts.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -260,3 +261,39 @@ def test_apply_file_resolves_includes_from_its_repository(mod, monkeypatch, tmp_
     monkeypatch.chdir(caller)
     assert mod.apply_file("postgresql://unused/test", migration)
     assert capsys.readouterr().out.strip() == "REVIEWED SQL"
+
+
+def test_migration_lifecycle_ignores_startup_database_redirect(mod, monkeypatch, tmp_path):
+    """Model a psqlrc reconnect: every read/write must use the explicit DSN."""
+    state = tmp_path / "databases.json"
+    state.write_text(json.dumps({"requested": {}, "redirected": {"99": "other"}}))
+    migration = tmp_path / "001_test.sql"
+    migration.write_text("-- fixture migration\n")
+    psql = tmp_path / "psql"
+    psql.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "state = pathlib.Path(os.environ['TEST_DATABASES'])\n"
+        "dbs = json.loads(state.read_text())\n"
+        "db = sys.argv[1] if '-X' in sys.argv else 'redirected'\n"
+        "rows = dbs[db]\n"
+        "if '-f' in sys.argv:\n"
+        "    rows['1'] = 'test'\n"
+        "elif sys.argv[-1].startswith('UPDATE'):\n"
+        "    dbs[db + '_checksum_written'] = True\n"
+        "elif 'COALESCE(checksum' in sys.argv[-1]:\n"
+        "    print(''.join(v + '|\\n' for v in rows), end='')\n"
+        "else:\n"
+        "    print(''.join(v + '|' + name + '\\n' for v, name in rows.items()), end='')\n"
+        "state.write_text(json.dumps(dbs))\n"
+    )
+    psql.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("TEST_DATABASES", str(state))
+    monkeypatch.setattr(mod, "MIGRATIONS_DIR", tmp_path)
+    monkeypatch.setattr(mod, "_source_schema_migrations", lambda _root: {1: "test"})
+    assert mod.main(["--apply", "--db-url", "requested"]) == 0
+    assert json.loads(state.read_text()) == {
+        "requested": {"1": "test"}, "redirected": {"99": "other"},
+        "requested_checksum_written": True,
+    }
