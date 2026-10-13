@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.31.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.32.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -340,7 +340,19 @@ The two identifiers serve different jobs:
   (`UNITARES_LEGACY_SESSION_IDS` = `refuse` | `log` | `accept`) with
   `stable_session_id_rejected`, and a verified continuity token naming the
   agent converts to the keyed id. No input schema changes, so no digest
-  moves).
+  moves;
+  1.32.0, 2026-10-11: `observe(action="agent")`, output and target
+  resolution. `target_agent_id` resolves the identifier
+  `agent(action="list")` prints for an agent whose UUID it withholds
+  (`{public_agent_id}_{uuid8}`, or the `agent-redacted` digest); those
+  answered not-found before. A caller that is neither the operator nor the
+  observed agent receives that identifier in `agent_id`, with
+  `uuid_redacted: true`, where it used to receive the UUID. Resolution order
+  is UUID, server-composed listed identifier, then alias; an alias names its
+  one live holder ahead of archived or deleted ones, and a target naming more
+  than one agent is refused with `AMBIGUOUS_TARGET` where the first matching
+  registry row used to be returned. Only the long description of `target_agent_id`
+  changes, which is outside every input digest, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed

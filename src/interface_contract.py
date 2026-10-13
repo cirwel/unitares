@@ -272,7 +272,19 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # = refuse | log | accept) with stable_session_id_rejected, and a verified
 # continuity token naming the agent converts to the keyed id. No input schema
 # changes, so no digest moves.
-INTERFACE_CONTRACT_VERSION = "1.31.0"
+# 1.32.0 (2026-10-11): observe(action=agent), output and target resolution.
+# target_agent_id resolves the identifier agent(action=list) prints for an
+# agent whose UUID it withholds ({public_agent_id}_{uuid8}, or the
+# agent-redacted digest); those answered not-found before. A caller that is
+# neither the operator nor the observed agent receives that identifier in
+# agent_id, with uuid_redacted true, where it used to receive the UUID.
+# Resolution order is UUID, server-composed listed identifier, then alias;
+# an alias names its one live holder ahead of archived or deleted ones, and
+# a target naming more than one agent is refused with AMBIGUOUS_TARGET where
+# the first matching registry row used to be returned. Only target_agent_id's long
+# description changes, which is outside every input digest, so no digest
+# moves: the version records the behavior change.
+INTERFACE_CONTRACT_VERSION = "1.32.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

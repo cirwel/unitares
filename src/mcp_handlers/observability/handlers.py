@@ -26,18 +26,99 @@ def _coerce_float_metric(value: Any, default: float) -> float:
     return coerced if math.isfinite(coerced) else default
 
 
+class AmbiguousAgentTarget(LookupError):
+    """A public identifier that names more than one agent.
+
+    Carries how many agents matched. Their identities are not listed: the
+    caller presented a public string, and which registry rows share it is not
+    something that string entitles it to.
+    """
+
+    def __init__(self, target: str, count: int):
+        super().__init__(f"'{target}' names {count} agents")
+        self.target = target
+        self.count = count
+
+
+# Statuses whose agents no longer act. A label or other alias held by one of
+# these yields to a live holder of the same alias.
+_RETIRED_STATUSES = ("archived", "deleted")
+
+
 def _resolve_agent_from_memory(target: str) -> str | None:
+    """Resolve a UUID, an id the listing printed, or an alias, to a registry key.
+
+    Three tiers, strongest claim first. A later tier is consulted only when
+    the earlier ones matched nothing:
+
+    1. The registry UUID.
+    2. A server-issued listed identifier: what agent(action="list") prints in
+       place of a withheld UUID, when the server composed it (the
+       {public_agent_id}_{uuid8} handle, or the agent-redacted digest).
+    3. An alias: label, display name, structured id, or the bare bucket
+       public_agent_id. One live holder wins; with no live holder, a single
+       retired one does.
+
+    Raises AmbiguousAgentTarget when a tier matches more than one agent it
+    cannot choose between. Returns None when nothing matches.
+    """
     if target in mcp_server.agent_metadata:
         return target
-    for uuid_key, meta in mcp_server.agent_metadata.items():
+
+    # Lazy: the lifecycle package imports widely, and this module is loaded
+    # by the consolidated router before most handlers.
+    from ..lifecycle.disclosure import listed_agent_identifier
+
+    # The listing shows a non-operator caller a public identifier in place of
+    # the UUID, and the observe schema sends readers to that listing to find a
+    # target. The stored public_agent_id carries no suffix, so comparing the
+    # stored fields never matches the id the listing printed; this compares
+    # against exactly what the listing prints.
+    #
+    # It outranks aliases because the server composes it and a label is chosen
+    # by the agent that wears it. Ranked the other way, an agent that labelled
+    # itself with another agent's handle would take that agent's lookups; and
+    # treating the pair as ambiguous instead would let it switch them off.
+    # A row whose listed identifier is only its own label or display name is
+    # self-chosen, so it belongs to the alias tier.
+    issued = [
+        uuid_key
+        for uuid_key, meta in mcp_server.agent_metadata.items()
+        if listed_agent_identifier(uuid_key, meta) == target
+        and target not in (getattr(meta, "label", None), getattr(meta, "display_name", None))
+    ]
+    if len(issued) == 1:
+        return issued[0]
+    if issued:
+        # uuid8 is the first block of the UUID, not a uniqueness guarantee.
+        raise AmbiguousAgentTarget(target, len(issued))
+
+    aliased = [
+        uuid_key
+        for uuid_key, meta in mcp_server.agent_metadata.items()
         if target in (
             getattr(meta, "label", None),
             getattr(meta, "display_name", None),
             getattr(meta, "structured_id", None),
             getattr(meta, "public_agent_id", None),
-        ):
-            return uuid_key
-    return None
+        )
+    ]
+    if not aliased:
+        return None
+    # The registry snapshot keeps archived rows and is loaded newest first, so
+    # "first match" answered with whichever row the snapshot held first, live
+    # or not. An archived predecessor and its live successor share a label by
+    # design (a colliding label is only renamed while the incumbent is
+    # active); the live one is the agent the label now names.
+    live = [
+        uuid_key
+        for uuid_key in aliased
+        if getattr(mcp_server.agent_metadata[uuid_key], "status", None) not in _RETIRED_STATUSES
+    ]
+    pool = live or aliased
+    if len(pool) == 1:
+        return pool[0]
+    raise AmbiguousAgentTarget(target, len(pool))
 
 
 def _get_observable_monitor(agent_id: str):
@@ -54,6 +135,24 @@ def _agent_display_name(agent_id: str) -> str | None:
         if value:
             return str(value)
     return None
+
+
+def _observed_agent_identifier(agent_id: str, meta: Any) -> tuple[str, bool]:
+    """The id to hand back for an observed agent, and whether it was redacted.
+
+    agent(action="list") withholds the UUID from a caller who is neither the
+    operator nor the agent itself, so returning it here would undo the
+    listing's redaction with one more read. The listing's own rule decides,
+    with no exception of observe's own: the operator and the agent itself get
+    the UUID, everyone else gets the identifier the listing prints, which
+    resolves back to the same agent. That includes a caller who passed the
+    UUID. It already holds the value, so nothing is kept from it, and one rule
+    with no carve-out is the one a second surface cannot get subtly wrong.
+    """
+    # Lazy, for the same reason as in _resolve_agent_from_memory.
+    from ..lifecycle.disclosure import visible_agent_identifier_for_caller
+
+    return visible_agent_identifier_for_caller(agent_id, meta)
 
 
 @mcp_tool("observe_agent", timeout=15.0, register=False)
@@ -94,7 +193,23 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
     # Resolve label/UUID from the in-memory metadata snapshot only. Avoid
     # async DB lookups here: MCP/anyio request handlers can deadlock when they
     # await asyncpg/Redis work. Background loaders keep this snapshot fresh.
-    agent_id = _resolve_agent_from_memory(target)
+    try:
+        agent_id = _resolve_agent_from_memory(target)
+    except AmbiguousAgentTarget as ambiguous:
+        return [error_response(
+            f"'{target}' names {ambiguous.count} agents, so it cannot be observed "
+            "by that identifier.",
+            error_code="AMBIGUOUS_TARGET",
+            recovery={
+                "action": (
+                    "Use the identifier agent(action='list') prints for the "
+                    "agent you mean. If the listing prints this same "
+                    "identifier for more than one row, only a UUID tells them "
+                    "apart, and the operator and each agent itself can see it."
+                ),
+                "related_tools": ["agent"],
+            },
+        )]
     if not agent_id:
         return [error_response(
             f"Agent '{target}' not found in active metadata. They may need to check in first.",
@@ -234,11 +349,14 @@ async def handle_observe_agent(arguments: Dict[str, Any]) -> Sequence[TextConten
         pass
 
     # Add EISV labels for API documentation
+    visible_agent_id, uuid_redacted = _observed_agent_identifier(agent_id, meta)
     response_data = {
-        "agent_id": agent_id,
+        "agent_id": visible_agent_id,
         "observation": observation,
         "eisv_labels": get_eisv_glossary(),
     }
+    if uuid_redacted:
+        response_data["uuid_redacted"] = True
     if profile_data:
         response_data["profile"] = profile_data
 

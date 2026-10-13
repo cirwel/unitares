@@ -306,6 +306,18 @@ PATTERN_RULE_VERSIONS: dict[str, int] = {
 }
 
 
+# Suffix on ``model_used`` for a finding produced by the scan detector's
+# constrained retry (thinking off, reply held to a schema; see
+# ``_retry_scan_constrained`` in agent.py). That request is a different
+# detector: on the regions measured when it was added, its kept findings
+# matched the normal request's on none. A resolution grades the detector that
+# produced the finding, so these rows stay out of the precision below for the
+# same reason a row from another rule revision does. Counting them would move
+# a pattern's floor on evidence about a request that pattern's normal scans
+# never make.
+CONSTRAINED_MODE_SUFFIX = "+constrained"
+
+
 @dataclass(frozen=True)
 class BucketStats:
     """Per-(pattern, file_class) precision summary.
@@ -346,6 +358,9 @@ def precision_by_pattern_and_class(
     ``PATTERN_RULE_VERSIONS``) counts only when its ``rule_version`` equals
     that pattern's entry.
 
+    A row whose ``model_used`` ends in ``CONSTRAINED_MODE_SUFFIX`` never
+    counts: the constrained retry is a different detector.
+
     Returns ``{(pattern, file_class): BucketStats}``. Buckets with
     ``weighted_n < min_weighted_n`` carry ``ci_lower=None`` so callers
     can distinguish 'unmeasured' from 'measured-as-zero'.
@@ -382,6 +397,10 @@ def precision_by_pattern_and_class(
                 continue
 
         if pattern in versions and row.get("rule_version") != versions[pattern]:
+            continue
+
+        model_used = row.get("model_used")
+        if isinstance(model_used, str) and model_used.endswith(CONSTRAINED_MODE_SUFFIX):
             continue
 
         file_class = classify_file(file_path)
