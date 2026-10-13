@@ -862,6 +862,92 @@ def test_untrusted_authors_cannot_post_a_record():
     assert rg.latest_matching(comments, k) is None
 
 
+def _app_comment(rec, **kwargs):
+    return {**_comment(rec, association="NONE", **kwargs),
+            "user": {"id": 342195540, "type": "Bot", "login": "unitares-agents[bot]"},
+            "performed_via_github_app": {"id": 5306351}}
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR"])
+def test_review_app_is_admitted_by_numeric_provenance(association):
+    c = _app_comment(full_record("a" * 64, "CLEAN", 0, False, "codex"))
+    c["author_association"] = association
+    assert rg.latest_matching([c], "a" * 64).status()[0] == "success"
+    assert rg.latest_matching([c], "b" * 64) is None
+    assert rg.passing_families([c], "a" * 64) == {"openai"}
+    c["user"]["login"] = "renamed-bot[bot]"
+    assert rg.trusted_review_comment(c)  # stable IDs, not a display name
+
+
+@pytest.mark.parametrize("field,value", [
+    ("performed_via_github_app", None), ("performed_via_github_app", "5306351"),
+    ("performed_via_github_app", {"id": 1}),
+    ("performed_via_github_app", {"id": "5306351"}),
+    ("user", None), ("user", []),
+    ("user", {"id": 1, "type": "Bot", "login": "unitares-agents[bot]"}),
+    ("user", {"id": 342195540, "type": "User"}),
+    ("user", {"id": "342195540", "type": "Bot"}),
+])
+def test_forged_or_incomplete_app_provenance_is_rejected(field, value):
+    c = _app_comment(full_record("a" * 64, "CLEAN", 0, False, "codex"))
+    c[field] = value
+    c["body"] += '\n{"performed_via_github_app":{"id":5306351},"user":{"id":342195540}}'
+    assert rg.latest_matching([c], "a" * 64) is None
+    assert rg.passing_families([c], "a" * 64) == set()
+
+
+def test_app_findings_dispositions_failures_and_round_budget_share_admission():
+    k = "a" * 64
+    finding = _app_comment(full_record(k, "FINDINGS", 1, False, "codex"),
+                           text="[P2] Check the input", url="finding")
+    clean = _app_comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.8-flash-high"))
+    assert rg.latest_matching([finding, clean], k).status()[0] == "pending"
+    disposition = _app_comment(full_record(k, "FINDINGS", 1, True, "codex"),
+                              text="1. fixed in abc", url="answer")
+    comments = [finding, clean, disposition]
+    assert rg.latest_matching(comments, k).status()[0] == "success"
+    assert rg.passing_families(comments, k) == {"openai", "google"}
+    assert rg.codex_rounds(comments, [], []).count == 2
+    failure = _app_comment(full_record(k, "FAILED", 0, False, "codex"))
+    assert rg.failed_runs([failure], k, "codex") == 1
+    assert rg.passing_families([failure], k) == set()
+
+
+def test_review_app_does_not_invent_a_family_or_full_review():
+    k = "a" * 64
+    for rec in [full_record(k, "CLEAN", 0, False, "council"),
+                full_record(k, "CLEAN", 0, False, "antigravity"),
+                rg.Record(k, "CLEAN", 0, False, "codex")]:
+        assert rg.passing_families([_app_comment(rec)], k) == set()
+
+
+@pytest.mark.parametrize("association", ["NONE", "CONTRIBUTOR", "COLLABORATOR", "OWNER"])
+def test_review_app_cannot_waive_a_second_family_even_with_write_association(association):
+    k = "a" * 64
+    c = _app_comment(full_record(k, "CLEAN", 0, False, "codex"))
+    c["body"] = _waiver(k)["body"]
+    c["author_association"] = association
+    assert rg.active_waiver([c], k, _POLICY) is None
+    assert rg.apply_waiver(_HELD, [c], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY) == _HELD
+
+
+@pytest.mark.parametrize("command", ["waiver", "extra-round"])
+@pytest.mark.parametrize("actor", [None, {"type": "Bot"}, {}])
+def test_operator_actions_refuse_bot_or_unreadable_identity_before_side_effects(monkeypatch, command, actor):
+    def identity(*args):
+        assert args == ("api", "user")
+        if actor is None:
+            raise SystemExit("HTTP 403: unavailable to installation tokens")
+        return actor
+    monkeypatch.setattr(rg, "gh_json", identity)
+    monkeypatch.setattr(rg, "_resolve", lambda *a: pytest.fail("resolved or ran an operator action"))
+    with pytest.raises(SystemExit, match="operator"):
+        if command == "waiver":
+            rg.cmd_waive(SimpleNamespace(reason="Operator-approved harmless help text edit", operator_approved=True))
+        else:
+            rg.cmd_review(SimpleNamespace(authorize_full_review="one additional full review"))
+
+
 @pytest.mark.parametrize("verdict,disposed,state", [
     ("CLEAN", False, "success"),
     ("FINDINGS", True, "success"),
@@ -2175,6 +2261,7 @@ def test_an_unusable_verifier_is_unreviewed_not_clean(repo, monkeypatch):
 
 
 def test_an_explicit_reviewer_spends_a_round_past_the_cap(repo, monkeypatch):
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"type": "User"})
     _capped(repo, monkeypatch)
     ran = []
     monkeypatch.setattr(rg, "review_with_fallback", lambda *args: ran.append(True) or 0)
@@ -3606,7 +3693,7 @@ _PATHS = ["src/agent_identity_auth.py"]
 
 
 def _waiver(key, reason="help string only; no auth decision changes", association="OWNER"):
-    return {"author_association": association,
+    return {"author_association": association, "user": {"type": "User"},
             "body": f"<!-- {rg.WAIVER_MARKER} key={key} -->\n### waived\n\nReason: {reason}\n"}
 
 
@@ -3727,6 +3814,7 @@ def test_the_workflow_wakes_on_a_waiver_comment():
 
 
 def test_a_multiline_reason_is_posted_as_one_line_that_ci_accepts(monkeypatch):
+    monkeypatch.setattr(rg, "gh_json", lambda *a: {"type": "User"})
     posted = []
     monkeypatch.setattr(rg, "_resolve", lambda a: (1, "o/r", "c" * 64, "b"))
     monkeypatch.setattr(rg, "git", lambda *a, **k: "HEAD" if "rev-parse" in a else "")
@@ -3741,7 +3829,7 @@ def test_a_multiline_reason_is_posted_as_one_line_that_ci_accepts(monkeypatch):
                            operator_approved=True, pr=None, base="origin/master")
     assert rg.cmd_waive(args) == 0
     assert len(rg.waiver_reason(posted[0])) >= rg.WAIVER_MIN_REASON
-    assert rg.active_waiver([{"author_association": "OWNER", "body": posted[0]}], "c" * 64,
+    assert rg.active_waiver([{"author_association": "OWNER", "user": {"type": "User"}, "body": posted[0]}], "c" * 64,
                             rg.waiver_policy())
 
 
