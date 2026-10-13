@@ -1,41 +1,32 @@
 # Roadmap
 
-**Last reviewed:** 2026-10-10
+**Last reviewed:** 2026-10-13
 
 This roadmap states priorities, not delivery dates. Deployed behavior is defined
 by releases and canonical documentation, not by this file.
 
-## Now — independent evidence for the core
+## Now — EISV instrument quality and independent core evidence
 
-- **A second, independent operator.** Someone other than the maintainer runs
-  UNITARES on infrastructure they control, connects agents from different
-  vendors, keeps attributed findings and review decisions, and reconstructs work
-  after a handoff or restart. Every point where they needed the maintainer's
-  help is recorded as a defect in the product, not in the operator
-  ([`docs/proposals/active/independent-operator-cohort-enrollments.md`](proposals/active/independent-operator-cohort-enrollments.md)).
+The operator prioritized EISV instrument repair and evaluation on 2026-10-13,
+while retaining the optional-module direction adopted on 2026-10-10. EISV stays
+a supported, visible instrument with an active research track. Its runtime
+dependency boundary, research priority, and intervention authority are separate
+decisions. The feature freeze through 2026-10-22 and the registered study's
+instrument-preservation requirements remain in force.
 
-- **A pre-registered cross-vendor review study.** Cold same-family and cold
-  cross-family review compared on matched artifacts, with equal context and
-  review budgets, blinded defect adjudication, false-positive reporting, and
-  fixed stopping rules, separating the review effect from what UNITARES adds
-  (routing, attribution, preserved decisions). It needs no second operator and
-  starts now. On 2026-10-10, cross-family reviews routed through UNITARES found
-  defects that same-family rounds had missed on three artifacts; that motivates
-  the study and is not its result.
+- **EISV instrument quality.** Start with the
+  [instrument quality plan](plans/eisv-instrument-quality-2026-10-13.md):
+  reproduce S's intervention responses, specify the follow-up validation before
+  collecting new results, and repair the evidence inputs and feedback loops in
+  E and I within the preservation constraints. Keep readings and their sources
+  accessible to agents; evaluate whether that guidance helps separately from
+  whether an intervention improves outcomes.
 
-- **Two exports, for legibility rather than capability:** an audit-trail export
-  in the shape of the IETF Agent Audit Trail draft, and standard trace emission
-  under the OpenTelemetry GenAI conventions (still in development upstream).
-  Both let an evaluator read the record without this server's own tooling;
-  neither adds a mechanism or an efficacy claim. Recorded as gaps by the
-  2026-09 claims audit
-  ([`docs/ontology/competitive-analysis-2026-09.md`](ontology/competitive-analysis-2026-09.md)).
-
-- **EISV as module research.** EISV is moving out of the core to an optional
-  module subscribed to check-ins (operator decision 2026-10-10; plan:
+  EISV is moving out of the core to an optional module subscribed to check-ins
+  (operator decision 2026-10-10; architecture plan:
   [`docs/proposals/active/eisv-core-boundary-v0.md`](proposals/active/eisv-core-boundary-v0.md)).
-  Its efficacy work continues as research on that module; its results do not
-  gate core work. The registered stop rules are unchanged.
+  The ownership move is pending and follows that plan's staged authorization.
+  EISV results do not gate core work. The registered stop rules are unchanged.
 
   - Run a validation cohort of **independent draws** with a preregistered protocol,
     reporting effective independent clusters rather than nominal agent count, and
@@ -65,6 +56,30 @@ by releases and canonical documentation, not by this file.
     (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`,
     "Pre-read clarification — drafted 2026-09-25"); the contract's "Fitted and
     learned estimators" section places the work and points there.
+
+- **A second, independent operator.** Someone other than the maintainer runs
+  UNITARES on infrastructure they control, connects agents from different
+  vendors, keeps attributed findings and review decisions, and reconstructs work
+  after a handoff or restart. Every point where they needed the maintainer's
+  help is recorded as a defect in the product, not in the operator
+  ([`docs/proposals/active/independent-operator-cohort-enrollments.md`](proposals/active/independent-operator-cohort-enrollments.md)).
+
+- **A pre-registered cross-vendor review study.** Cold same-family and cold
+  cross-family review compared on matched artifacts, with equal context and
+  review budgets, blinded defect adjudication, false-positive reporting, and
+  fixed stopping rules, separating the review effect from what UNITARES adds
+  (routing, attribution, preserved decisions). It needs no second operator and
+  remains a parallel priority. On 2026-10-10, cross-family reviews routed through
+  UNITARES found defects that same-family rounds had missed on three artifacts;
+  that motivates the study and is not its result.
+
+- **Two exports, for legibility rather than capability:** an audit-trail export
+  in the shape of the IETF Agent Audit Trail draft, and standard trace emission
+  under the OpenTelemetry GenAI conventions (still in development upstream).
+  Both let an evaluator read the record without this server's own tooling;
+  neither adds a mechanism or an efficacy claim. Recorded as gaps by the
+  2026-09 claims audit
+  ([`docs/ontology/competitive-analysis-2026-09.md`](ontology/competitive-analysis-2026-09.md)).
 
 ## Next — reduce maintenance and integration friction
 
