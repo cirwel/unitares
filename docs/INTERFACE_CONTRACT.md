@@ -453,7 +453,7 @@ row, revision, kind, changed fields and details arguments. If `_response_size`
 exists, its measurement includes this field. No background/model work is started.
 Typed refusals and errors pass through without notices.
 
-Recipients are the row owner (on updates) and exact `notify-agent:<UUID>` tags.
+Recipients are the row owner (on updates) and exact `notify-agent-<UUID>` tags.
 A removed mention revokes its pending pointer. Process identity, not a display
 name or predecessor, owns an inbox. The delivery backlog keeps at most 100
 rows for seven days; lazy trimming reports a stable `gap_token`. Intermediate

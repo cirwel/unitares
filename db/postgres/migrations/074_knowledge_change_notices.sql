@@ -58,12 +58,13 @@ BEGIN
     ELSE
         changed := ARRAY['created'];
     END IF;
+    -- Match normalize_tags() canonical form; punctuation folds to hyphens.
     -- Exact UUID tags only; prose and display names cannot address a session.
     SELECT array_agg(DISTINCT r ORDER BY r) INTO recipients FROM (
         SELECT NEW.agent_id AS r WHERE TG_OP='UPDATE'
         UNION ALL
         SELECT substring(t FROM 14) FROM unnest(NEW.tags) t
-        WHERE t ~ '^notify-agent:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        WHERE t ~ '^notify-agent-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     ) q WHERE r IS NOT NULL AND r <> '';
     -- Lock old and new recipients before deleting queue rows. The reader takes
     -- the same preference-before-queue order, so ack cannot deadlock this write.

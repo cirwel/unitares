@@ -377,7 +377,7 @@ is not authority. Acknowledge only received revisions with
 `knowledge(action="notices", acknowledge=["<revision UUID>"])`. Reading alone
 replays the pointer. An old receipt cannot erase a newer revision.
 
-The inbox belongs to the proved process UUID. Exact `notify-agent:<UUID>` tags
+The inbox belongs to the proved process UUID. Exact `notify-agent-<UUID>` tags
 address a row; prose/display names and predecessor identities do not. Use
 `knowledge(action="notices", muted=true)` to suppress automatic display, or
 `muted=false` to restore it. The queue keeps at most 100 row pointers for seven

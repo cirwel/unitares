@@ -91,7 +91,7 @@ see the same pending pointers; neither claims them. A crashed response replays.
 
 Delivery occurs on the next successful, caller-proven tool interaction. It adds
 at most three pointers within 2 KiB; `knowledge(action="notices")` reads,
-acknowledges or mutes the caller's own inbox. Exact `notify-agent:<UUID>` tags
+acknowledges or mutes the caller's own inbox. Exact `notify-agent-<UUID>` tags
 address a row; ordinary text never does. Removing a mention revokes its pointer.
 Fresh successor identities do not inherit predecessor inboxes. Self-authored
 updates may also produce owner pointers: the trigger does not invent writer

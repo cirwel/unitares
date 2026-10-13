@@ -74,7 +74,7 @@ class KnowledgeGraphMixin:
                 rows = [] if prefs["muted"] else await conn.fetch(
                     """SELECT n.discovery_id, n.revision, n.change_kind, n.changed_fields
                        FROM knowledge.change_notices n JOIN knowledge.discoveries d ON d.id=n.discovery_id
-                       WHERE n.recipient=$1 AND (d.agent_id=$1 OR ('notify-agent:' || $1)=ANY(d.tags))
+                       WHERE n.recipient=$1 AND (d.agent_id=$1 OR ('notify-agent-' || $1)=ANY(d.tags))
                        ORDER BY n.changed_at, n.discovery_id LIMIT 4""", recipient,
                 )
         return dict(prefs), [dict(row) for row in rows]

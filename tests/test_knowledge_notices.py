@@ -9,6 +9,7 @@ import pytest
 from mcp.types import TextContent
 
 from src import knowledge_notices as notices
+from src.knowledge_graph import DiscoveryNode
 
 
 def uid():
@@ -68,15 +69,21 @@ async def test_trigger_rollback_and_no_timestamp_only_noise(live_postgres_backen
 
 
 @pytest.mark.asyncio
-async def test_mentions_are_exact_and_removal_revokes_pointer(live_postgres_backend):
+@pytest.mark.parametrize("prefix", ["notify-agent-", "notify-agent:"])
+async def test_mentions_are_exact_and_removal_revokes_pointer(live_postgres_backend, prefix):
     db = live_postgres_backend
     owner, recipient = uid(), uid()
-    row = await create(db, owner, ["notify-agent:" + recipient, "notify-agent:display-name"])
+    row = uid()
+    discovery = DiscoveryNode(id=row, agent_id=owner, type="note", summary="first",
+                              tags=[prefix + recipient, prefix + "display-name"])
+    # The public writer normalizes punctuation before SQL receives the tags.
+    await db.kg_add_discovery(discovery)
+    assert discovery.tags == ["notify-agent-" + recipient, "notify-agent-display-name"]
     result = await notices.read_notices(recipient, db=db)
     assert result["notices"][0]["discovery_id"] == row
     assert not (await notices.read_notices("display-name", db=db))["notices"]
-    async with db.acquire() as conn:
-        await conn.execute("UPDATE knowledge.discoveries SET tags=ARRAY[]::text[] WHERE id=$1", row)
+    discovery.tags = []
+    await db.kg_add_discovery(discovery)
     assert not (await notices.read_notices(recipient, db=db))["notices"]
     assert (await notices.read_notices(owner, db=db))["notices"]
     assert not (await notices.read_notices(uid(), db=db))["notices"]  # no successor inheritance
