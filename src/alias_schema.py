@@ -24,6 +24,9 @@ from src.schema_brief import (
 # discovery map can lag the handler (search's provenance/type/severity did).
 ALIAS_SCHEMA_DROP = {
     "search_shared_memory": frozenset({
+        "acknowledge",
+        "acknowledge_gap",
+        "muted",
         "content",
         "summary",
         "details",

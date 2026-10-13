@@ -383,3 +383,12 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.
 - `use_tool(tool_name=..., arguments={...})` — Invoke a complete-catalog capability omitted from the initial progressive `tools/list`; target middleware and authorization still apply
+
+### Row-change pointers during active work
+
+A successful active call can also carry `knowledge_changes`, at most three
+coalesced row pointers in a separate 2 KiB budget. Read details before acting;
+acknowledge received revision UUIDs through `knowledge(action="notices")`.
+Delivery does not wake a session, perform a model call or create a check-in.
+See the knowledge-graph skill for mute, gaps and retention. A successor does
+not inherit the predecessor's inbox merely by sharing its workspace or lineage.

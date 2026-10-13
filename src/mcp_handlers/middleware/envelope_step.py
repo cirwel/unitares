@@ -3246,7 +3246,7 @@ def _refusal_with_friendly_tool(payload: dict, invoked: str, result):
     ]
 
 
-async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
+async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
     """POST_EXECUTION step. `name` is the canonical (post-alias) tool;
     the invoked name lives in ctx.original_name. Returns the (possibly
     reshaped) handler result; on ANY failure returns it untouched."""
@@ -3308,3 +3308,11 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
             exc_info=True,
         )
         return result
+
+
+async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
+    """Project the existing response, then deliver bounded active-session notices."""
+    from src.knowledge_notices import attach_notices
+
+    projected = await _apply_experience_envelope(name, arguments, ctx, result)
+    return await attach_notices(name, arguments, ctx, projected)

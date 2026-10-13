@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.34.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.35.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -450,3 +450,37 @@ The knowledge include_details description changes the knowledge schema digest;
 search_shared_memory retains its brief description and digest. Clients should
 follow `details_retrieval` to read long imported evidence instead of assuming
 inline content is complete. No arguments are removed or retyped.
+
+## 1.35.0 (2026-10-13)
+
+Add bounded replayable knowledge notices for proven active sessions
+
+`knowledge(action="notices")` adds optional `acknowledge` (at most three
+revision UUIDs), `acknowledge_gap` (one gap UUID) and `muted` (boolean).
+The knowledge schema digest changes; no existing argument is removed.
+The action requires a caller-proven process binding and never accepts another
+recipient from an argument. Reads replay; exact acknowledgements cannot erase
+newer revisions or another process's pending notice.
+
+Successful active tool responses may carry `knowledge_changes`: at most three
+coalesced row pointers under a separate 2,048-byte UTF-8 budget. Existing base
+response budgets still apply before this optional field. Each pointer names a
+row, revision, kind, changed fields and details arguments. If `_response_size`
+exists, its measurement includes this field. No background/model work is started.
+Typed refusals and errors pass through without notices.
+
+Recipients are the row owner (on updates) and exact `notify-agent-<UUID>` tags.
+A removed mention revokes its pending pointer. Process identity, not a display
+name or predecessor, owns an inbox. The delivery backlog keeps at most 100
+rows for seven days; lazy trimming reports a stable `gap_token`. Intermediate
+changes to one row deliberately coalesce. Read details before acting, acknowledge
+only received revisions, and rescan before acknowledging a gap. Muting suppresses
+automatic display without granting authority or changing KG status/content.
+
+Migration 074 couples pointers to canonical-table commits for both KG backends.
+No historical events are backfilled. Writer attribution is not inferred from
+ownership: this version exposes no actor field because system mutation paths do
+not consistently carry a proven writer. The current shared KG permits unbound
+row reads; delivery still joins the current row and checks current recipient
+membership. A future row-ACL feature must extend both details and notice checks.
+No credentials, permission checks or scientific instruments are changed.

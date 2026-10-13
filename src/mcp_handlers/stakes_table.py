@@ -142,6 +142,8 @@ _BASELINE: frozenset[tuple[str, Optional[str]]] = frozenset({
     ("knowledge", "synthesize"),
     ("knowledge", "stats"),
     ("knowledge", "audit"),
+    # Own delivery receipts/mute only; no KG or another agent's state changes.
+    ("knowledge", "notices"),
     # agent reads
     ("agent", "list"),
     ("agent", "get"),
