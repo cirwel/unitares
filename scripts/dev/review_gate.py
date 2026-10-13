@@ -1048,6 +1048,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     trusted_base = _CARRY_BASES.get((repo, pr))
     prior_heads = {r.get("commit_id", "") for r in reviews if is_codex_bot(r)}
     for c in comments:
+        rec = parse_record(c.get("body", ""))
+        if rec and c.get("author_association") in TRUSTED_ASSOCIATIONS and rec.head:
+            prior_heads.add(rec.head)
         if is_codex_bot(c):
             match = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`", c.get("body", ""), re.M)
             if match:
@@ -1062,7 +1065,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
                 git("fetch", "--quiet", "--no-tags", "origin", commit, check=False)
                 if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
-                    raise SystemExit(f"native reviewed commit {commit} is unavailable; review history is incomplete")
+                    raise SystemExit(f"reviewed commit {commit} is unavailable; review history is incomplete")
             earlier_key = diff_key(trusted_base, commit)
             actual = native_records(comments, reviews, inline, events, earlier_key, commit, reactions)
             known = {(r.key, r.head, r.url) for r in snapshot.records}

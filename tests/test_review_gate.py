@@ -3990,7 +3990,7 @@ def test_native_clean_receipt_after_unchanged_key_merge_uses_actual_source(carry
     head=_git(carry_repo,'rev-parse','HEAD');assert key == rg.diff_key('master','HEAD')
     monkeypatch.setattr(rg,'_CARRY_BASES',{('o/r',1):_git(carry_repo,'rev-parse','master')})
     receipt=rg.Record(key,'CLEAN',0,False,'codex-native',head=old,scope='full')
-    comments=[_comment(receipt),_comment(full_record(key,'CLEAN',0,False,'claude'))]
+    comments=[_comment(receipt),_comment(full_record(key,'CLEAN',0,False,'claude',head=head,base=_git(carry_repo,'rev-parse','master')))]
     review={'id':9,'user':{'login':rg.CODEX_BOT,'type':'Bot'},'commit_id':old,'state':'APPROVED',
             'submitted_at':'2026-09-30T20:00:00Z','body':'','html_url':'native-9'}
     pages={'reviews':[review],'comments':[],'events':[{'event':'base_ref_changed'}] if retarget else []}
@@ -4409,12 +4409,15 @@ def test_disposed_serious_followup_still_requires_full_coverage(reviewed_followu
     assert rg.passing_families(comments, fix.key) == set()
 
 
-def test_missing_native_review_objects_are_fetched_or_reported_incomplete(repo, reviewed_followup, monkeypatch):
+@pytest.mark.parametrize('source_kind', ['native', 'comment'])
+def test_missing_review_objects_are_fetched_or_reported_incomplete(repo, reviewed_followup, monkeypatch, source_kind):
     comments, fix = reviewed_followup
     missing = 'f' * 40
     review = {'id': 99, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': missing,
               'state': 'COMMENTED', 'submitted_at': '2026-10-13T20:00:00Z', 'body': '', 'html_url': 'native-99'}
-    pages = {'reviews': [review], 'comments': [], 'events': []}
+    pages = {'reviews': [review] if source_kind == 'native' else [], 'comments': [], 'events': []}
+    if source_kind == 'comment':
+        comments.append(_comment(rg.Record('old', 'FAILED', 0, False, 'codex', scope='full-required', head=missing, base=fix.base)))
     monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
     monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): fix.base})
     real_git, fetches = rg.git, []
