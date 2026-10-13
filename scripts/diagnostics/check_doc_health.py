@@ -73,9 +73,9 @@ _PATH_PATTERNS = [
 ]
 
 # Individual files where dead refs are expected. Keep these narrow: most
-# ontology docs are current contract docs, but plan.md is an intentionally
+# ontology docs are current contract docs, but the dated plan is an intentionally
 # preserved internal ledger after public master removed some private drafts.
-_DEAD_REF_SKIP_FILES = {"docs/ontology/plan.md"}
+_DEAD_REF_SKIP_FILES = {"docs/ontology/plan-2026-06-14.md"}
 
 # Directories where dead refs are expected: historical planning records, not
 # current documentation. Specs/handoffs/plans describe intent at a moment in
