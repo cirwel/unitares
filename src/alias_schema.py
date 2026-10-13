@@ -197,7 +197,7 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         },
         "include_details": {
             "description": (
-                "Expand every result inline only with response_mode='full'. "
+                "Inline details require response_mode='full'; imports are capped at 2 KiB. "
                 "Compact/lean search suppresses detail serialization upstream "
                 "and returns bounded previews; open one result with "
                 "knowledge(action='details', discovery_id='...')."
