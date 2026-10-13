@@ -4,9 +4,9 @@
 evaluation result, or evidence that the model is correct.
 
 UNITARES contains no musical vocabulary in its running code. The deployed
-decision path uses behavioral signals, heuristic EISV blends, warmup thresholds,
-and self-relative scoring. The thermodynamic and free-energy formulation is a
-parallel research model; it does not drive verdicts by default. Read
+decision path uses behavioral signals, EISV blends, warmup thresholds,
+and self-relative risk scoring. ODE state also supplies structural policy
+checks and feeds later behavioral observations. Read
 [`EISV_COMPUTATION.md`](../EISV_COMPUTATION.md) for the actual formulas and the
 deployed-versus-research boundary.
 
@@ -23,16 +23,17 @@ measurement, but it is not an equivalence between music theory and governance.
 | **Establishing a key** | Building an agent-specific behavioral baseline | With the current constants, self-relative scoring becomes available at 25 check-ins (`baseline_confidence >= 0.8`) against a 30-update warmup target. Absolute safety floors still apply. |
 | **Playing within a tonal context** | Remaining near the agent's established behavioral range | Near-baseline behavior is not automatically safe or correct; the reference frame describes what is typical for that agent. |
 | **Chromatic movement** | A change in the deployed `S` drift blend | `S` is not literal musical distance or Shannon entropy. A deviation may be exploration, noise, or instability; policy must interpret it with other evidence. |
-| **Intonation** | Integrity and calibration: whether confidence matches observed outcomes | The system needs external outcomes such as tests or tool results. Self-report alone does not establish calibration. |
+| **Intonation** | Calibration: comparing confidence with recorded evidence | I is a blend, not a claim-accuracy score. Its deployed calibration input is a lifetime fleet strategic aggregate; external outcomes have their own producer and scope. |
 | **Modulation** | A possible regime shift in the agent's behavior | Regime telemetry describes change. It does not prove that a new baseline is legitimate or beneficial. |
-| **Accumulated tension** | `V`, the EMA-smoothed `E - I` imbalance | This is descriptive state telemetry, not a harmonic actuator. `V` by itself does not cause a pause or dialectic review. |
+| **Accumulated tension** | `V`, a separate EMA of the raw `E_obs − I_obs` gap | V has its own smoothing rate and generally differs from current E minus I. Behavioral V contributes to assessment; ODE V is a separate state used by structural checks. Neither is musical tension. |
 
 The most useful distinction is between drift and calibration. A musician may
 choose notes outside an established key while remaining precisely in tune.
 Likewise, an agent can explore outside its recent behavioral range while still
 making well-calibrated claims. Conversely, an agent can behave routinely while
-being systematically overconfident. UNITARES represents those questions with
-different inputs rather than treating all deviation as one kind of failure.
+being systematically overconfident. UNITARES represents drift and calibration
+with different inputs. The analogy distinguishes those questions; whether a
+particular reading diagnoses either condition depends on its inputs and scope.
 
 ## Warmup is where the analogy is weakest
 
@@ -51,8 +52,8 @@ the comparison stops there.
 
 ## Where the metaphor stops
 
-- **It does not drive verdicts.** Behavioral assessment, policy, and enforcement
-  do. The parallel ODE model is diagnostic by default.
+- **The metaphor does not drive verdicts.** Behavioral assessment and ODE
+  structural checks feed policy; enforcement applies the resulting action.
 - **It is not predictive evidence.** A change in `S` or `V` does not establish
   that an incident will follow or that an intervention prevented one.
 - **It is not an adversarial-robustness claim.** A motivated actor may shape the
