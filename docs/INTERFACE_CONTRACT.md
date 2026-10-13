@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.33.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.34.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -428,3 +428,25 @@ python3 -m src.interface_contract > docs/interface-contract.v1.json
 ```
 
 Then run `tests/test_interface_contract.py` and the normal repository test gate.
+
+## 1.34.0 (2026-10-13)
+
+Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+
+Search and agent-scoped get retain full stored bodies but cap imported inline
+`details` at 2,048 UTF-8 bytes. Oversized rows report `details_truncated`, original
+`details_length` (characters), `details_bytes`, `has_more_details`, and a
+`details_retrieval` argument object for `knowledge(action="details")`. Its explicit
+paged read is unchanged. Native findings and governed promotions are unchanged.
+
+Imported rows carry `imported_memory` with `trust="unreviewed"`, `age_days`
+(or null for an unreadable timestamp) and `age_basis="created_at"`. This age is
+KG row age, not source-file age or time since verification. Routine sync/status
+updates do not reset it. Digest and additional-result rows retain the marker
+inside their existing byte budgets, so fewer rows may fit. No ranking or
+retention policy changes.
+
+The knowledge include_details description changes the knowledge schema digest;
+search_shared_memory retains its brief description and digest. Clients should
+follow `details_retrieval` to read long imported evidence instead of assuming
+inline content is complete. No arguments are removed or retyped.

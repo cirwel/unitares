@@ -593,7 +593,7 @@ class KnowledgeParams(AgentIdentityMixin):
         ),
     )
     limit: Optional[int] = Field(None, description="Max results (for action=search: min 1, values above 100 are capped, 0 or negative is rejected)")
-    include_details: Optional[bool] = Field(None, description="Include full details inline (for action=search or agent-scoped action=get)")
+    include_details: Optional[bool] = Field(None, description="Include details inline, capped at 2 KiB for imported memory; use action=details for full pages (for action=search or agent-scoped action=get)")
     include_provenance: Union[bool, str, None] = Field(None, description="Include provenance and lineage chain fields in search/details results")
     search_mode: Optional[Literal["auto", "fts", "semantic", "hybrid"]] = Field(
         None,
