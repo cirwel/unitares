@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.32.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.34.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -352,7 +352,16 @@ The two identifiers serve different jobs:
   one live holder ahead of archived or deleted ones, and a target naming more
   than one agent is refused with `AMBIGUOUS_TARGET` where the first matching
   registry row used to be returned. Only the long description of `target_agent_id`
-  changes, which is outside every input digest, so no digest moves).
+  changes, which is outside every input digest, so no digest moves;
+  1.33.0, 2026-10-13: `search_shared_memory`, output only. A `lean` or
+  `compact` search called with `limit` above 3 lists the results after the
+  three digests under `more_results`, one row each (`discovery_id`, `type`,
+  `status`, a summary bounded at 100 characters), up to 17 rows inside a
+  2,000-byte budget of their own, and reports their number as
+  `state_summary.more_results_shown`. A search with no `limit`, or a `limit`
+  of 3 or less, returns what it did before, and the `full` tier is
+  unchanged. Only the long description of `limit` changes, which is outside
+  every input digest, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
@@ -403,3 +412,25 @@ python3 -m src.interface_contract > docs/interface-contract.v1.json
 ```
 
 Then run `tests/test_interface_contract.py` and the normal repository test gate.
+
+## 1.34.0 (2026-10-13)
+
+Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+
+Search and agent-scoped get retain full stored bodies but cap imported inline
+`details` at 2,048 UTF-8 bytes. Oversized rows report `details_truncated`, original
+`details_length` (characters), `details_bytes`, `has_more_details`, and a
+`details_retrieval` argument object for `knowledge(action="details")`. Its explicit
+paged read is unchanged. Native findings and governed promotions are unchanged.
+
+Imported rows carry `imported_memory` with `trust="unreviewed"`, `age_days`
+(or null for an unreadable timestamp) and `age_basis="created_at"`. This age is
+KG row age, not source-file age or time since verification. Routine sync/status
+updates do not reset it. Digest and additional-result rows retain the marker
+inside their existing byte budgets, so fewer rows may fit. No ranking or
+retention policy changes.
+
+The knowledge include_details description changes the knowledge schema digest;
+search_shared_memory retains its brief description and digest. Clients should
+follow `details_retrieval` to read long imported evidence instead of assuming
+inline content is complete. No arguments are removed or retyped.

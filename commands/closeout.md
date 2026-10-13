@@ -5,6 +5,26 @@ description: "Close out a UNITARES workspace before final response"
 Use this before saying work is done, especially after edits, test runs, local
 servers, BEAM residents, or any cleanup request from the operator.
 
+Before the final response, if you created actionable KG findings this session,
+revisit at most three of your own still-open bugs, questions or improvements.
+Use the UUID returned by this process's `start_session` (not a display name,
+predecessor or harness account), and the existing read:
+
+~~~text
+knowledge(action="search", agent_id_filter="<this process UUID>",
+          status="open", limit=10, include_details=false, response_mode="lean")
+~~~
+
+Open details for candidates you can assess. If addressed, use the existing
+`update_finding` with a closure class and evidence; `fix_verified` needs both
+deployment and a positive observation, so a merged PR alone is insufficient.
+Otherwise keep it open with a brief unresolved condition or artifact pointer
+when that adds information. Permanent insights, decisions and ordinary notes
+may legitimately stay open. This is a bounded reminder, not a quota or an
+extra check-in. If you wrote no actionable findings, the graph is unavailable,
+or the remaining claims cannot be verified now, continue closeout; do not
+mint an identity just for this reminder or automatically archive anything.
+
 First run a non-mutating check:
 
 - `python3 scripts/dev/workspace_closeout.py`
