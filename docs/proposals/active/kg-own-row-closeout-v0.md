@@ -1,7 +1,8 @@
 # A bounded prompt to revisit a session's own findings
 
-**Status:** Draft feature proposal; implementation held through 2026-10-22
-unless the operator rules otherwise. **Evidence checked:** 2026-10-13.
+**Status:** Friction fix authorized by the 2026-10-13 addendum and KG decision
+`2026-10-13T09:17:42.808916+00:00`; implemented as instructions in the existing
+closeout command and lifecycle skill. **Evidence checked:** 2026-10-13.
 
 ## Problem and scope
 
@@ -17,11 +18,13 @@ and evidence (`AGENTS.md`, "Agents are the users"; `skills/knowledge-graph/SKILL
 dedicated prompt to revisit the caller's own open findings at session end.
 Hooks are substrate observations, not permission to speak for the agent.
 
-## Proposed behavior after the hold
+## Implemented prompt
 
-At an explicit closeout, show at most three open **actionable findings authored
-by the bound process**, with a count and a retrieval pointer. Ask the agent to
-resolve with evidence, supersede with a real successor, or keep with a reason.
+At explicit closeout, the existing `commands/closeout.md` and
+`skills/governance-lifecycle/SKILL.md` remind an agent that wrote actionable
+findings to search its exact process UUID (open, limit 10, lean) and review at
+most three actionable rows. The agent opens details and resolves with evidence,
+supersedes with a real successor, or keeps with a useful reason.
 Start as an optional closeout surface rather than querying the graph on every
 check-in. A later check-in integration would need an explicit budget and a
 once-per-session rule; that is not authorized here.
@@ -50,7 +53,12 @@ the preserved EISV estimator and registered trial paths.
 A later implementation touching outputs or schema descriptions needs the
 interface-contract release, regenerated artifact, changelog and skill re-checks.
 New actions or tool names also need operator review under the intent map.
-No runtime code or hook is added in this proposal.
+No runtime code, tool, action, hook, query scheduler or check-in behavior changes.
+The plugin receives the canonical lifecycle skill through the existing automated
+skill-mirror PR; it is not edited by hand.
 
-**Operator question:** After the freeze, should explicit session closeout offer
-an optional three-row prompt for the caller's own actionable findings?
+Validation is a documentation/skill consistency check for this instruction-only
+implementation, not a claim that a running host displayed the prompt. Server
+identity and closure validation are unchanged. The fixture scenarios above are
+requirements for any later automated implementation, not tests of new runtime
+code in this PR.

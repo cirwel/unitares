@@ -1,2 +1,1 @@
-- **Knowledge closeout:** draft a held, optional own-finding review prompt with
-  bounded output and no automatic closure, check-in or enforcement changes. [Draft proposal](/docs/proposals/active/kg-own-row-closeout-v0.md).
+- Add a bounded own-finding reminder to the existing closeout command and lifecycle skill; keep closure evidence explicit and unresolved knowledge open.
