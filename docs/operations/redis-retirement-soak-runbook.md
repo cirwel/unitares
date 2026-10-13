@@ -2,9 +2,26 @@
 
 **Audience:** operator. **Purpose:** drive the Phase 1 shadow soak that gates the read flip, and decide whether `core.session_bindings` earns its place. Companion to `docs/proposals/archive/redis-retirement-v0.md` (inventory) and `redis-retirement-phase-1-plan.md` (design, v1.1).
 
-This is operational, not aspirational: every step below maps to code already merged or in draft. Nothing here changes live behavior until you set `UNITARES_SESSION_MIRROR_SHADOW=1`, and that step is itself behavior-neutral (best-effort writes to inert tables).
+**Status correction, 2026-10-12.** The binding mirror is no longer entirely inert.
+`resolution._keyed_bind_fingerprint` reads `core.session_bindings` when Redis does
+not supply a matching keyed-session binding with a fingerprint, then passes that
+fingerprint to `_fingerprint_hijack_check`. This read is not gated by either mirror
+flag. A substrate-attested resume also schedules a fingerprint refresh on existing
+matching mirror bindings through `_refresh_bind_fingerprint_stores`, without
+consulting the mirror flags. Under the global `log` mode observed in the loaded service configuration,
+a mismatch produces suspected-hijack telemetry; under `strict` it can refuse a
+keyed resume. Existing tests cover the strict case. `core.onboard_pins` still has
+no production read caller found in this inspection. The general session-resolution
+read flip remains unwired, but "nothing reads the mirror" is no longer true.
 
-## The PR stack and merge order
+The June 28 topology decision in the parent proposal also changed the objective:
+retain Redis for ephemeral coordination and move appropriate durable bindings to
+PostgreSQL, **not remove Redis entirely**. Treat this historical runbook as migration
+context with the correction above. No activation, deactivation, restart or migration
+is authorized by this review. See the
+[follow-up review](../analysis/shadow-overhead-and-mirror-review-2026-10-12.md).
+
+## Historical PR stack and installation sequence
 
 | PR | What it lands | Status |
 |---|---|---|
@@ -16,7 +33,7 @@ This is operational, not aspirational: every step below maps to code already mer
 | #1135 | TTL/NX parity fix + reaper (Codex review #1, #4) | ✅ merged |
 | #1137 | Parity flip-gate (`--gate`) + api_key_hash note (Codex review #2, #3) | ✅ merged |
 
-**Merge order now:** the whole stack is merged. The TTL/NX guard fix is on `SessionMixin`'s NX-claim path (`src/db/mixins/session.py`, the `Codex review #1: TTL/NX parity` note), the reaper is in `core.cleanup_expired_sessions()` inside `db/postgres/migrations/051_session_mirror_tables.sql`, and the flip-gate flags (`--gate`, `--min-cohort`, `--min-ratio`) are in `scripts/ops/session_mirror_parity_check.py`. Nothing below waits on a merge; applying migration 051 to the live database is still the manual Step 1.
+**Merge order now:** the whole stack is merged. The TTL/NX guard fix is on `SessionMixin`'s NX-claim path (`src/db/mixins/session.py`, the `Codex review #1: TTL/NX parity` note), the reaper is in `core.cleanup_expired_sessions()` inside `db/postgres/migrations/051_session_mirror_tables.sql`, and the flip-gate flags (`--gate`, `--min-cohort`, `--min-ratio`) are in `scripts/ops/session_mirror_parity_check.py`. The installation steps below are historical instructions, not a finding that this deployment still needs migration 051. Verify deployment state before repeating them.
 
 ## Step 1 — apply migration 051 (manual)
 
@@ -46,7 +63,14 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.unitares.governance-
 
 **Precondition: #1135 merged and migration 051 (with the reaper) applied** — otherwise the expired-row guard bug skews the soak parity you're about to measure.
 
-What this does: `_cache_session` and `set_onboard_pin` now ALSO write to `core.session_bindings` / `core.onboard_pins` alongside Redis. **Redis stays authoritative for all reads.** The PG writes are best-effort (failures swallowed, latency-bounded) — if the mirror write fails or is slow, the live identity path is unaffected. Nothing reads the mirror yet.
+What this does: `_cache_session` and `set_onboard_pin` also write to
+`core.session_bindings` / `core.onboard_pins` alongside Redis. The binding mirror
+already supplies fallback fingerprint evidence as described above; it is not the
+general authoritative session resolver. Write failures are swallowed and waits are
+bounded, but the writes are awaited: `_cache_session` allows an additional 1.0 s
+mirror-write timeout and pin-setting allows 0.5 s. Those are configured timeout
+budgets, not measured latency or strict wall-clock ceilings (cancellation can take
+longer). Best-effort does not mean no latency or no downstream consumer.
 
 Confirm it's populating (after a few minutes of traffic):
 
@@ -84,16 +108,41 @@ Why birth-cohort and not a full snapshot: comparing all keys conflates real drop
 
 The parity checker answers **"is the mirror faithful enough to read from?"** (the APPLY-flip gate). It does **not** answer the separate **Phase 1B question: is `core.session_bindings` worth keeping at all, vs. a simpler pins-only design?**
 
-That question needs a different metric the council defined and which is **not yet built**: *how often would dropping the ephemeral binding mirror cause a cold-mint that neither `core.sessions` (PATH 2) nor a live onboard pin would have covered?* If that number is ~zero, the table should be dropped and the read flip is smaller (pins + persisted `core.sessions` only). Building that instrumentation is the next code task — flagged here so the soak isn't mistaken for answering it.
+The old proposed metric was *how often would dropping the ephemeral binding mirror
+cause a cold-mint that neither `core.sessions` (PATH 2) nor a live onboard pin would
+have covered?* That counter is not built, and the current keyed-id resolver also
+makes the old question incomplete: a valid keyed id can authenticate without a
+stored binding, while the mirror can still supply its binding-time fingerprint.
+
+Before proposing additional instrumentation, separate two questions: which legacy
+or transient binding populations need durable continuity, and which callers need
+the existing fallback fingerprint evidence? Evaluate a replacement design against
+both. A low count cannot authorize deleting an identity capability, and parity
+cannot settle either question. Retain the current behavior while an explicit
+identity design review resolves the migration; do not extend soak time as if it
+were progress toward a missing measurement.
 
 ## Step 5 — the read flip (future PR, gated on the above)
 
-Once parity is proven AND the keep/drop question is answered, a separate PR wires `UNITARES_SESSION_MIRROR_APPLY`: PATH 2 resolves from `core.session_bindings` (or, in the pins-only outcome, from `core.sessions` + `core.onboard_pins`), and calls the already-extracted `_fingerprint_hijack_check` (from merged #1132) so hijack detection survives the eventual Redis removal. That flip is LIVE-AFFECTING — it is not in any current PR by design.
+Any general read flip needs a separate identity design and implementation review,
+including parity, continuity coverage, fingerprint evidence and expiry behavior.
+`UNITARES_SESSION_MIRROR_APPLY` is not wired to a general resolver read path in the
+inspected source. Preserve the existing keyed-session fingerprint fallback when
+evaluating alternatives. Redis remains part of the intended multi-process system;
+this is a durable-binding migration, not eventual removal of Redis.
 
 ## Rollback
 
-At any point, to stop shadow writing: unset `UNITARES_SESSION_MIRROR_SHADOW` (or set to `0`) and bootout+bootstrap. No data migration to undo — the mirror tables are inert and self-expire. Redis was authoritative throughout, so there is nothing to recover.
+Setting `UNITARES_SESSION_MIRROR_SHADOW=0` stops the flag-controlled binding and
+pin dual-writes after the configuration is applied; it does **not** turn off the
+fingerprint reader or attested fingerprint refresh, nor remove existing rows. As rows expire, the reader may lose fallback
+evidence. This is therefore not a proven behavior-neutral rollback. Plan any flag
+change as an identity change with its existing review requirements; do not execute
+the historical disable procedure merely to reduce shadow count.
 
 ## Invariant
 
-Redis remains the system of record for sessions until the APPLY flip lands AND a subsequent Phase 2 removes the Redis read path. Until then this whole effort is observable, reversible, and off the live read path.
+Redis and the existing persistent identity/session paths retain their current
+roles. The binding mirror already contributes fallback fingerprint evidence;
+the generic APPLY migration is separate. This review changes documentation only,
+not identity resolution, either mirror flag, or data retention.
