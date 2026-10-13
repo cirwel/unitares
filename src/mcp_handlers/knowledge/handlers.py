@@ -80,6 +80,8 @@ from src.knowledge_graph import (
     CLOSURE_CLASS_ADMITTING_STATUSES, CLOSURE_CLASS_CLEARING_STATUSES,
     closure_evidence_to_json,
 )
+from src.mcp_handlers.knowledge.imported_preview import annotate_imported_read
+
 from src.knowledge_authority import (
     CHANNEL_MESSAGE,
     GOVERNED_CLAIM,
@@ -181,6 +183,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "staleness_warning",
     "last_activity_days",
     "authority",
+    "imported_memory",
     "closure_class",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
@@ -3255,6 +3258,7 @@ def _serialize_search_discoveries(
             item["provenance"] = redact_provenance(document.provenance)
             if document.provenance_chain:
                 item["provenance_chain"] = document.provenance_chain
+        annotate_imported_read(item, document)
         discoveries.append(item)
     return discoveries
 
@@ -3774,6 +3778,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
             if include_details and full_dict.get("details"):
                 d_dict["details"] = full_dict.get("details")
             d_dict["_agent_id"] = d.agent_id
+            annotate_imported_read(d_dict, d)
             discovery_list.append(d_dict)
 
         # Agent-facing trust flag (same as search): mark superseded rows.
@@ -3787,7 +3792,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
 
         # Visibility hints (v2.5.0+)
         if not include_details and len(discoveries) > 0:
-            response_data["_tip"] = "Add include_details=true to expand all results inline"
+            response_data["_tip"] = "Add include_details=true for inline details (imports capped at 2 KiB); use action=details for full pages"
         if limit and len(discoveries) == limit:
             response_data["_more_available"] = f"Results limited to {limit}. Use limit=N to get more."
 

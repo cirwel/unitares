@@ -284,7 +284,17 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # the first matching registry row used to be returned. Only target_agent_id's long
 # description changes, which is outside every input digest, so no digest
 # moves: the version records the behavior change.
-INTERFACE_CONTRACT_VERSION = "1.32.0"
+# 1.33.0 (2026-10-13): search_shared_memory, output only. A lean or compact
+# search called with limit above 3 lists the results after the three digests
+# under more_results, one row each (discovery_id, type, status, a summary
+# bounded at 100 characters), up to 17 rows inside a 2,000-byte budget of
+# their own, and reports their number as state_summary.more_results_shown.
+# A search with no limit, or limit of 3 or less, returns what it did before,
+# and the full tier is unchanged. Only limit's long description changes,
+# which is outside every input digest, so no digest moves: the version
+# records the output change.
+# 1.34.0 (2026-10-13): Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+INTERFACE_CONTRACT_VERSION = "1.34.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (
