@@ -1,0 +1,1 @@
+- Draft a single GitHub App identity for agents, explicitly leaving operator-only enforcement unresolved while cloud sessions share the operator's credentials.
