@@ -28,6 +28,14 @@ BEHAVIORAL_SENSOR_COMPONENTS_SCHEMA = "behavioral_sensor.components.v1"
 # not what happens if you move everyone's level.
 DECISION_NEUTRAL_SCORE = 0.84
 
+REGIME_SELF_LOOP_ABLATION_SCHEMA = "regime_self_loop_ablation.v1"
+# The neutral stand-in for the regime-instability term is its OBSERVED fleet
+# level, for the same reason as DECISION_NEUTRAL_SCORE: the shadow asks whether
+# the term carries information, not what happens if every agent's level moves.
+# Measured 2026-10-12 over 30 days of persisted S components (n=18,158 observed
+# rows): mean 0.120, p50 0.000, p90 0.346.
+REGIME_NEUTRAL_INSTABILITY = 0.12
+
 # outcome_success maps the non-adverse share of recent outcomes onto
 # [FLOOR, FLOOR + SPAN] = [0.3, 0.9]. Named so the agent-facing account in
 # src/outcomes_in_e.py states the same map instead of a copy of it.
@@ -53,6 +61,8 @@ def compute_behavioral_sensor_eisv(
     tool_error_rate: float | None = None,
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
+    *,
+    regime_instability_override: float | None = None,
 ) -> dict | None:
     """Compute the deployed mixed-provenance EISV observation.
 
@@ -76,6 +86,7 @@ def compute_behavioral_sensor_eisv(
         tool_error_rate=tool_error_rate,
         tool_call_velocity=tool_call_velocity,
         unique_tools_ratio=unique_tools_ratio,
+        regime_instability_override=regime_instability_override,
     )
     if components is None:
         return None
@@ -103,6 +114,8 @@ def compute_behavioral_sensor_components(
     tool_error_rate: float | None = None,
     tool_call_velocity: float | None = None,
     unique_tools_ratio: float | None = None,
+    *,
+    regime_instability_override: float | None = None,
 ) -> dict | None:
     """Explain the exact deployed behavioral observation without changing it.
 
@@ -131,6 +144,7 @@ def compute_behavioral_sensor_components(
             drift_norm,
             regime_history,
             complexity_divergence,
+            regime_instability_override=regime_instability_override,
         ),
         "V": _compute_V_components(E_history, I_history),
     }
@@ -474,6 +488,122 @@ def compute_decision_self_loop_shadow(
     }
 
 
+
+def compute_regime_self_loop_shadow(
+    decision_history: list,
+    coherence_history: list,
+    regime_history: list,
+    E_history: list,
+    I_history: list,
+    S_history: list,
+    V_history: list,
+    calibration_error: float | None = None,
+    drift_norm: float | None = None,
+    complexity_divergence: float | None = None,
+    continuity_E_input: float | None = None,
+    continuity_I_input: float | None = None,
+    continuity_S_input: float | None = None,
+    outcome_history: list | None = None,
+    tool_error_rate: float | None = None,
+    tool_call_velocity: float | None = None,
+    unique_tools_ratio: float | None = None,
+    deployed_observation: dict | None = None,
+) -> dict:
+    """Shadow the behavioral S reading with the regime-instability term neutralized.
+
+    ``detect_regime`` (``src/monitor_regime.py``) labels the regime from
+    behavioral S's own step-to-step change once behavioral confidence reaches
+    0.3, and ``_regime_instability`` counts those label changes at 35% of raw
+    S. So part of S reads S's own jitter. In synthetic streams of the live build
+    (``docs/evaluations/eisv-s-faithfulness/result-v0.md``, ledger row 46),
+    holding the term constant cut resting S step SD by 94%.
+
+    This replaces the term with ``REGIME_NEUTRAL_INSTABILITY``, its observed
+    fleet level, and reports the one-step S delta. Everything else, including
+    every deployed weight and adjustment, is identical. Measurement-only: the
+    live observation is never modified and no policy reads this. Like its
+    siblings it stops at the raw behavioral observation; replaying recursive S
+    history, the EMA, or the regime labels themselves (which ``detect_regime``
+    derives from S) needs a longitudinal simulator this is not.
+    """
+    base = {
+        "schema": REGIME_SELF_LOOP_ABLATION_SCHEMA,
+        "mode": "measurement_only",
+        "policy_applied": False,
+        "intervention": {
+            "field": "regime_history",
+            "source": "governance_monitor.regime_history",
+            "role": "labels_derived_from_behavioral_S",
+            "operation": "replace_term_with_observed_fleet_level",
+            "replacement_value": REGIME_NEUTRAL_INSTABILITY,
+            "deployed_weight": 0.35,
+        },
+        "not_modeled": [
+            "recursive_S_history_replay",
+            "behavioral_ema_replay",
+            "regime_label_counterfactual",
+            "policy_effect",
+            "future_outcomes",
+        ],
+        "interpretation": (
+            "one-step S delta. Spread of the delta across an agent's check-ins "
+            "is the jitter the term injects; its mean is a level offset against "
+            "the fleet stand-in"
+        ),
+    }
+    if len(decision_history) < 3 or len(coherence_history) < 3:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "insufficient_behavioral_history",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    inputs = dict(
+        decision_history=decision_history,
+        coherence_history=coherence_history,
+        regime_history=regime_history,
+        E_history=E_history,
+        I_history=I_history,
+        S_history=S_history,
+        V_history=V_history,
+        calibration_error=calibration_error,
+        drift_norm=drift_norm,
+        complexity_divergence=complexity_divergence,
+        continuity_E_input=continuity_E_input,
+        continuity_I_input=continuity_I_input,
+        continuity_S_input=continuity_S_input,
+        outcome_history=outcome_history,
+        tool_error_rate=tool_error_rate,
+        tool_call_velocity=tool_call_velocity,
+        unique_tools_ratio=unique_tools_ratio,
+    )
+    deployed = deployed_observation or compute_behavioral_sensor_eisv(**inputs)
+    candidate = compute_behavioral_sensor_eisv(
+        **inputs, regime_instability_override=REGIME_NEUTRAL_INSTABILITY
+    )
+    if deployed is None or candidate is None:
+        return {
+            **base,
+            "eligible": False,
+            "eligibility_reason": "behavioral_sensor_unavailable",
+            "deployed": None,
+            "candidate": None,
+            "candidate_minus_deployed": None,
+        }
+    deployed_s = float(deployed["S"])
+    candidate_s = float(candidate["S"])
+    return {
+        **base,
+        "eligible": True,
+        "eligibility_reason": None,
+        "deployed": {"S": deployed_s},
+        "candidate": {"S": candidate_s},
+        "candidate_minus_deployed": {"S": candidate_s - deployed_s},
+        "deployed_regime_instability": _regime_instability(regime_history),
+    }
+
 # --- E: Decision success rate, exponentially weighted ---
 
 # What actually lands in ``decision_history`` is the SUB-action when one exists:
@@ -813,13 +943,18 @@ def _compute_S_components(
     drift_norm: float | None,
     regime_history: list,
     complexity_divergence: float | None,
+    *,
+    regime_instability_override: float | None = None,
 ) -> dict:
     # Drift component (40%)
     dn = drift_norm if drift_norm is not None else 0.2
     drift_s = min(1.0, dn * 1.5)
 
-    # Regime instability (35%): count transitions / window
-    regime_s = _regime_instability(regime_history)
+    # Regime instability (35%): count transitions / window. The override exists
+    # only for compute_regime_self_loop_shadow; the deployed path never sets it.
+    regime_overridden = regime_instability_override is not None
+    regime_s = (float(regime_instability_override) if regime_overridden
+                else _regime_instability(regime_history))
 
     # Complexity divergence (25%)
     cd = complexity_divergence if complexity_divergence is not None else 0.1
@@ -833,9 +968,10 @@ def _compute_S_components(
         ),
         _component(
             "regime_instability", "regime_history", regime_s, 0.35,
-            observed=len(regime_history) >= 2,
+            observed=len(regime_history) >= 2 and not regime_overridden,
             default_reason=(
-                None if len(regime_history) >= 2
+                "ablation_override" if regime_overridden
+                else None if len(regime_history) >= 2
                 else "insufficient_regime_history"
             ),
         ),

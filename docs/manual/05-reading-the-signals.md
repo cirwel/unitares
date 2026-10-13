@@ -13,7 +13,7 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The **behavioral EISV** path (EMA observations from grounded signals) is primary and drives verdicts. The **ODE / thermodynamic model** (`governance_core/`) runs in parallel as a research lens and does **not** drive verdicts by default.
+The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE / thermodynamic model** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
 
 The current implementation has three stages: check-ins 1–2 use the Φ
 cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
@@ -24,18 +24,18 @@ are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ## 5.2 The four dimensions
 
-| Coord | What it reads | Deployed computation (heuristic) |
+| Coord | What it records | Deployed computation (heuristic) |
 |---|---|---|
-| **E** · Energy | Is work advancing? | weighted blend of recent decision-success, complexity-calibration, outcomes when present, and a legacy `legacy_tanh_v` controller-level term (known compatibility debt) |
-| **I** · Integrity | Do claims match results? | calibration accuracy + trend of that same legacy controller scalar (+ outcome consistency); not a pure integrity measurement |
-| **S** · Entropy | Drifting from own normal? | drift-norm + regime instability + complexity divergence |
-| **V** · Valence | Energy-vs-integrity imbalance | EMA-smoothed `E − I` (derived) |
+| **E** · Energy | Weighted observations and prior judgments | recent decision scores + legacy controller coherence level + complexity divergence; available outcome, continuity and tool features also contribute |
+| **I** · Integrity | Calibration and consistency features | calibration error + legacy controller coherence trend; available outcome-score consistency, continuity and tool-variety features also contribute |
+| **S** · Entropy | Deviations and activity features | drift-norm + regime transitions + complexity divergence; available continuity and tool features also contribute |
+| **V** · Valence | Direction and persistence of the E/I observation gap | separate EMA of raw `E_obs − I_obs` |
 
 Three things to internalize:
 
-1. **Each score is self-relative after warmup.** A "low" number is low *for this agent*, not against a global scale. An ultra-stable agent and a noisy one are graded against different baselines.
-2. **V is a readout, not a fifth fact.** It's `E − I` smoothed. Its **sign** is the actionable part: `V > 0` = running hot (energetic, claims outrun results); `V < 0` = running careful (coherent but low progress).
-3. **The weights are hand-set, not learned.** That's the honest status of the current estimator — see §5.6.
+1. **Risk scoring becomes self-relative after warmup; the coordinates remain weighted indices.** Assessment compares them with the agent's own baseline as well as absolute thresholds. A low raw E or I is not itself a measurement of low capacity or false claims.
+2. **V carries a distinct temporal summary.** Its smoothing rate differs from E's and I's, so it is not generally their current smoothed values subtracted. Positive V records a positive smoothed `E_obs − I_obs` gap; negative V records the reverse. “Running hot” and “running careful” are interpretations to investigate, not facts established by the sign.
+3. **Controller feedback is part of the record.** Prior decisions enter E, so a policy response can change later E even with unchanged task and tool features. That reflects the controller's response without independently confirming its judgment. The blend weights are hand-set engineering parameters; the exact formulas and defaults are in [EISV_COMPUTATION.md](../EISV_COMPUTATION.md).
 
 ## 5.3 Verdict and margin
 
@@ -48,17 +48,22 @@ The assessment emits an internal `safe` / `caution` / `high-risk` label, which b
 | `pause` | hard stop: check-ins and new shared-memory entries refused | Stop, read the reason | usually dialectic, operator, or expiry; self-recovery only if risk is already under its gate ([§5.5](#55-recovery-self-recovery--dialectic)) |
 | `reject` | significant concern | Human input or dialectic | dialectic |
 
-Total risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — no sigmoid/phi black box, so you can trace exactly why a verdict fired ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
+Behavioral assessment risk is the **sum of named components** (`low_E`, `low_I`, high-`S`, `|V|`, …), each with an explicit weight — with each contribution available for inspection ([`src/behavioral_assessment.py`](../../src/behavioral_assessment.py)). **Absolute safety floors always apply to their named component**, overriding the self-relative component via `max`; they are not a verdict floor by default, so one breached dimension can still leave the behavioral verdict `safe`. The full result reports this separately under `behavioral.assessment.absolute_floor_observation`; it is telemetry, not a policy input. (An operator can enable a verdict floor for baselined agents with `UNITARES_FLOOR_BREACH_CAUTION_APPLY`; rows whose behavioral verdict it raised are labelled `policy_effect: behavioral_verdict_raised`. The label says only that the floor raised the behavioral verdict; the audit row's decision reason and final verdict show whether the decision changed.) Self-relative deviation risk is also *gated by absolute basin health* — inside the healthy basin, deviation from your own norm is treated as information, not danger.
 
 **Margin** (`comfortable` / `tight` / `critical`) rides along with the verdict, telling you how close the agent is to a basin boundary even while the verdict is still `proceed`.
 
 ## 5.4 Calibration and its trust boundary
 
-The system tracks whether stated `confidence` matches recorded outcomes — test
-pass/fail, command exit codes, lint results, or review labels — fed back via
-`record_result` / `outcome_event`. Over time this builds a calibration curve, and
-persistent overconfidence can penalize **Integrity** through the check-in
-pipeline.
+The system records stated `confidence` and result evidence — test pass/fail,
+command exit codes, lint results, or review labels — through
+`record_result` / `outcome_event`. These records support calibration analysis.
+The calibration input currently blended into I on the handler path is a
+lifetime **fleet** aggregate of strategic confidence-versus-trajectory-health
+bins. It is not an accuracy reading for the current claim or just this agent;
+the agent-scoped candidate is measurement-only. I also includes controller
+history and optional consistency features. Inspect the producer and scope in
+[EISV_COMPUTATION.md](../EISV_COMPUTATION.md#step-1--observations-srcbehavioral_sensorpy)
+before interpreting a change as improved or worsened calibration.
 
 Evidence is not automatically independent merely because it is called an
 outcome. CI-, tool-, or operator-authored records provide a stronger anchor than
@@ -89,12 +94,24 @@ Full protocol: [`../dev/CIRCUIT_BREAKER_DIALECTIC.md`](../dev/CIRCUIT_BREAKER_DI
 
 The KG isn't just storage — searching it *before* acting is how agents avoid re-discovering known failures, and it's where closed mysteries and corrected conclusions live. Discipline (agent-facing): **search before writing**; prefer a linked correction or `supersede` over a fresh note; store something only when a future agent would search for it and not already find it. Operational runbooks belong in `docs/`, not KG notes. Full operating manual: [`../../skills/knowledge-graph/SKILL.md`](../../skills/knowledge-graph/SKILL.md).
 
-## 5.7 Don't trust these numbers blindly
+## 5.7 Reading the instrument and evaluating its uses
 
-The most important interpretation rule. The deployed EISV is **auditable heuristics over observable behavior**, not the information-theoretic quantities (free energy, mutual information, entropy) the paper targets — those become instrumentable only when the inference layer exposes things like token-level logprobs. Every coordinate carries a provenance tier (`e_source`, `s_source`, …) so a heuristic is never laundered as a measurement.
+EISV records specified runtime features and controller history using auditable
+blends and smoothing. Narrow, derived and correlated signals remain information
+to inspect; they do not have to establish a particular use before being retained.
+The historical coordinate names are intended interpretations of these indices.
+They do not make the indices physical energy, mutual information or
+response-distribution entropy.
 
-Whether the numbers add useful signal beyond simple baselines is an **open,
-measured question.** The
+Read provenance alongside a value: `primary_eisv_source` identifies behavioral
+versus ODE-fallback metrics, and telemetry envelopes carry `measurement_source`.
+The legacy coherence producer has a `coherence_source`/`coherence_role` stamp.
+Per-coordinate tags such as `e_source`, `i_source` and `s_source` are attached
+when the opt-in grounding stage runs; they are not universal. Legacy rows without
+an envelope remain unclassified rather than acquiring an inferred source.
+
+Whether these summaries improve a particular diagnosis or decision beyond
+simpler inputs is a separate evaluation question. For outcome prediction, the
 [falsifiability harness](../REVIEWER_GUIDE.md#falsifiability-inspect-the-registered-evidence)
 tests ranking (AUC), calibration (Brier), and the selection cost of reporting the
 best of several candidates. In the frozen 2026-08-09 trusted-anchor matrix,
@@ -106,11 +123,91 @@ p < 0.05 after that correction. There is **no demonstrated prevention**. A
 to see one", and the
 [power audit](../operations/falsifiability-power-audit-2026-08-23.md) does not
 settle which applies: it withdrew its original power table and states that it
-"cannot quantify what it could have detected" for the frozen cohort. Run both yourself before treating EISV as load-bearing.
+"cannot quantify what it could have detected" for the frozen cohort. Inspect the
+[frozen rows and provenance](../operations/eisv-ablation-frozen-2026-08-09.md)
+and that audit; the reviewer guide also provides synthetic controls. Do not
+rerun deployment outcome discrimination between registered reads: the
+[outcome-grounding stop rule](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
+reserves it for the registered execution.
 
 For optional intuition (not a spec),
 [`../essays/tonality-metaphor.md`](../essays/tonality-metaphor.md) uses a bounded
 tonal analogy for self-relative measurement and names where the comparison stops.
+
+## 5.8 Worked example: a signal moves while the action stays the same
+
+This synthetic example calls the sensor, smoother, behavioral assessment and
+final decision functions directly. It holds the supplied histories and ODE
+structural state fixed, warms the smoother for 40 updates, then raises the tool
+error rate from 0 to 1 for ten updates. It does not append the selected decisions
+back into history or run the full handler/controller loop. It reads no live data
+and writes no check-ins.
+
+With these inputs, the E observation changes from 0.85975 to 0.70975. The tool
+term has weight 0.15, so changing its success fraction from 1 to 0 subtracts
+0.15. E's smoothing rate is 0.12; its first step moves by about 0.018. I and S
+observations remain 0.69 and 0.1575. V follows its own smoothing of the raw E−I
+gap, at rate 0.10.
+
+| Update | Tool error rate | E observation | Smoothed E | Smoothed V | Behavioral risk |
+|---|---|---|---|---|---|
+| 40 | 0 | 0.859750 | 0.859712 | 0.169700 | 0 |
+| 41 | 1 | 0.709750 | 0.841717 | 0.154705 | 0 |
+| 50 | 1 | 0.709750 | 0.751515 | 0.072034 | 0 |
+| 51 | 0 | 0.859750 | 0.764503 | 0.081806 | 0 |
+| 90 | 0 | 0.859750 | 0.859099 | 0.168306 | 0 |
+
+Every displayed update has verdict `safe` and policy `proceed` / `approve`.
+The trace records the perturbation and its decay even though this assessment
+and fixed structural state select the same action. Responsivity is visible;
+whether acting on that movement would help is a further question. This example
+does not prescribe how the full system should respond to real tool failures.
+
+<details>
+<summary>Reproduce from the repository root in a fresh Python process</summary>
+
+Use the repository's installed Python environment. The snippet clears
+`UNITARES_*` overrides only inside that process to illustrate the defaults.
+Values in the table are rounded to six decimal places.
+
+```python
+import os
+from types import SimpleNamespace
+
+for key in list(os.environ):
+    if key.startswith("UNITARES_"):
+        del os.environ[key]
+
+from src.behavioral_sensor import compute_behavioral_sensor_eisv
+from src.behavioral_state import BehavioralEISV
+from src.behavioral_assessment import assess_behavioral_state
+from src.monitor_decision import make_decision
+
+inputs = dict(
+    decision_history=["approve"] * 10, coherence_history=[0.5] * 10,
+    regime_history=["EXPLORATION"] * 10, E_history=[0.8] * 10,
+    I_history=[0.7] * 10, S_history=[0.2] * 10, V_history=[0.1] * 10,
+    calibration_error=0.25, drift_norm=0.2, complexity_divergence=0.15,
+)
+state = BehavioralEISV()
+structural = SimpleNamespace(
+    E=0.8, I=0.8, S=0.1, V=0.0, coherence=0.5,
+    coherence_history=[0.5] * 10, coherence_role="ode_control_feedback",
+    void_active=False, risk_history=[], locked_persistence_count=0,
+)
+for step in range(1, 91):
+    error = 1.0 if 41 <= step <= 50 else 0.0
+    obs = compute_behavioral_sensor_eisv(**inputs, tool_error_rate=error)
+    state.update(obs["E"], obs["I"], obs["S"])
+    assessment = assess_behavioral_state(state, rho=0.0, continuity_energy=0.0)
+    decision = make_decision(structural, assessment.risk, assessment.verdict)
+    if step in (40, 41, 50, 51, 90):
+        values = (obs["E"], state.E, state.V, assessment.risk)
+        print(step, error, *(round(x, 6) for x in values),
+              assessment.verdict, decision["action"], decision["sub_action"])
+```
+
+</details>
 
 ---
 
