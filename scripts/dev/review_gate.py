@@ -31,7 +31,9 @@ own lines are unchanged. `base_merge_equivalents` finds the earlier keys that
 describe the same PR change (clean automatic base merges with an unchanged
 `patch_fingerprint`), and `carry_records` reads their records as the head's;
 see their docstrings for exactly what stops the carry. A diff that touches a
-second-family path is never carried: it is reviewed on its exact key.
+second-family path is never carried automatically. An independent follow-up
+review can cover the complete delta from a full review and preserve its
+coverage, including its model families, without pretending the diff is equal.
 
 The record
 ----------
@@ -434,7 +436,7 @@ class Record:
     # Missing provenance stays legacy; never invent a reviewed commit/base.
     head: str = ""
     base: str = ""
-    scope: str = "legacy"  # full | fix | legacy
+    scope: str = "legacy"  # full | fix | full-required | legacy
     review_id: str = ""
     from_head: str = ""
     from_key: str = ""
@@ -444,6 +446,8 @@ class Record:
                 and not self.reviewer.startswith("fix-verify:"))
 
     def status(self) -> tuple[str, str]:
+        if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
+            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh"
         if self.verdict == "CLEAN":
             return "success", f"clean ({self.reviewer})"
         if self.verdict == "FINDINGS" and self.disposed:
@@ -506,33 +510,115 @@ def stamp_record(rec: Record, base_ref: str, scope: str, text: str, args=None,
     if scope == "fix":
         previous = getattr(args, "reviewed_from", None)
         if not previous or not getattr(args, "fixes_only", False):
-            raise SystemExit("fix scope requires --reviewed-from and --fixes-only: all changed lines and regression implications, no new work")
+            raise SystemExit("fix scope requires --reviewed-from and --fixes-only: all changes and interactions reviewed; bounded corrections only")
         rec.from_head = git("rev-parse", f"{previous}^{{commit}}").strip()
         if git("merge-base", rec.from_head, rec.head).strip() != rec.from_head:
             raise SystemExit("fix verification must extend the previously reviewed commit")
         rec.from_key = diff_key(base_ref, rec.from_head)
 
 
-def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] = ()) -> bool:
-    """Minor targeted coverage needs actual full source evidence, not invented native base."""
+def followup_sources(rec: Record, comments: list[dict], native: list[Record] = ()) -> list[Record]:
+    """Full reviews extended by a bounded, independently reviewed follow-up.
+
+    Always anchor to full reviews, not another follow-up: repeated edits review
+    the cumulative delta. Every source finding must be considered. Serious or
+    unclassified findings require a full pass; one clean family cannot hide
+    another family's blocker.
+    """
     if rec.scope != "fix" or not all((rec.head, rec.base, rec.from_head, rec.from_key)):
-        return False
+        return []
     sources = [(parse_record(c.get("body", "")), c.get("body", ""), False) for c in comments
                if c.get("author_association") in TRUSTED_ASSOCIATIONS]
     sources += [(r, r.text, True) for r in native]
+    eligible = []
+    anchored = False
     for source, body, actual_native in sources:
+        if (source and source.scope == "fix" and source.from_head == rec.from_head
+                and source.from_key == rec.from_key and source.verdict == "FINDINGS"
+                and not source.disposed and source.head != rec.head
+                and _is_ancestor(source.head, rec.head)
+                and (source.findings < 1 or len(SEVERITY_LABEL_RE.findall(body)) < source.findings
+                     or SEVERE_BADGE_RE.search(body))):
+            return []
         full = source and (source.full() or (actual_native and source.reviewer == "codex-native"
                                             and source.scope == "full" and source.head))
-        if (full and source.head == rec.from_head and source.key == rec.from_key
-                and (actual_native or source.base == rec.base)
-                and source.verdict == "FINDINGS" and source.findings > 0):
-            labels = SEVERITY_LABEL_RE.findall(body)
-            if len(labels) >= source.findings and not SEVERE_BADGE_RE.search(body):
-                return True
-    return False
+        anchor = full and source.head == rec.from_head and source.key == rec.from_key
+        # Another family may have fully reviewed a later revision within the
+        # cumulative delta. Preserve that contribution too, without chaining
+        # follow-up receipts or pretending both full reviews shared a head.
+        later = (full and source.head != rec.from_head and source.head != rec.head
+                 and _is_ancestor(rec.from_head, source.head) and _is_ancestor(source.head, rec.head)
+                 and (actual_native or same_reviewed_diff(source, rec.base)))
+        if ((anchor or later)
+                and (actual_native or source.base == rec.base
+                     or same_reviewed_diff(source, rec.base))):
+            anchored |= bool(anchor)
+            source.text = body
+            if source.verdict == "FINDINGS" and not source.disposed:
+                labels = SEVERITY_LABEL_RE.findall(body)
+                if source.findings < 1 or len(labels) < source.findings or SEVERE_BADGE_RE.search(body):
+                    return []
+                eligible.append(source)
+            elif source.verdict == "CLEAN":
+                eligible.append(source)
+    return eligible if anchored else []
+
+
+def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] = ()) -> bool:
+    return bool(followup_sources(rec, comments, native))
+
+
+def same_reviewed_diff(source: Record, base: str) -> bool:
+    """An unrelated advance of the base does not invalidate the source diff."""
+    try:
+        return (bool(source.base) and diff_key(source.base, source.head) == source.key
+                and diff_key(base, source.head) == source.key)
+    except (SystemExit, subprocess.SubprocessError):
+        return False
+
+
+def followup_objects_valid(rec: Record) -> bool:
+    """Prove the reviewed endpoints before preserving any security coverage."""
+    try:
+        return (rec.from_head != rec.head
+                and git("merge-base", rec.from_head, rec.head).strip() == rec.from_head
+                and diff_key(rec.base, rec.from_head) == rec.from_key
+                and diff_key(rec.base, rec.head) == rec.key)
+    except (SystemExit, subprocess.SubprocessError):
+        return False
+
+
+def followup_candidate(base: str, head: str, key: str, comments: list[dict],
+                       native: list[Record] = ()) -> Record | None:
+    """Latest usable full-review anchor; scope is decided by the reviewer."""
+    base_oid = git("rev-parse", "--verify", "--quiet", base, check=False).strip()
+    if not base_oid:
+        return None
+    sources = [parse_record(c.get("body", "")) for c in comments
+               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+    sources += list(native)
+    best, families = None, set()
+    for source in sources:
+        if (not source or source.scope != "full" or not source.head or source.key == key
+                or source.verdict not in {"CLEAN", "FINDINGS"}):
+            continue
+        rec = Record(key, "CLEAN", 0, False, "followup", head=head, base=base_oid,
+                     scope="fix", from_head=source.head, from_key=source.key)
+        if not followup_objects_valid(rec):
+            continue
+        covered = followup_sources(rec, comments, native)
+        if not covered:
+            continue
+        credited = {record_family(r) for r in covered} - {None}
+        if (best is None or len(credited) > len(families)
+                or (len(credited) == len(families) and _is_ancestor(best.from_head, rec.from_head))):
+            best, families = rec, credited
+    return best
 
 
 def targeted_coverage_valid(repo: str, pr: int, rec: Record, comments: list[dict]) -> bool:
+    if not followup_objects_valid(rec):
+        return False
     if fix_coverage_valid(rec, comments):
         return True
     if not rec.from_key or not rec.from_head:
@@ -568,7 +654,8 @@ def latest_matching(comments: list[dict], key: str,
         body = c.get("body", "")
         rec = parse_record(body)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
-            if rec.scope == "fix" and rec.status()[0] == "success" and not fix_coverage_valid(rec, comments, native):
+            if (rec.scope == "fix" and rec.status()[0] == "success"
+                    and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
                 rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
@@ -580,7 +667,7 @@ def latest_matching(comments: list[dict], key: str,
     found, completed, open_findings = None, None, []
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
         found = rec
-        if rec.verdict != "FAILED":
+        if rec.verdict != "FAILED" and rec.scope != "full-required":
             completed = rec
         if rec.verdict == "FINDINGS":
             # A disposition answers ONE findings record, not every earlier one.
@@ -592,17 +679,23 @@ def latest_matching(comments: list[dict], key: str,
                 # by URL, never another open finding with the same count.
                 match = [i for i, o in enumerate(open_findings) if o.url == cited]
                 if match:
-                    open_findings.pop(match[-1])
+                    original = open_findings.pop(match[-1])
+                    if original.scope == "full-required":
+                        rec.scope = original.scope
                 # Otherwise the review is no longer visible: native evidence
                 # is bound to the reviewed head commit, so a base merge that
                 # moves the head (keeping this diff key) drops it. The
                 # disposition names it, so it stays disposed and consumes
                 # nothing else.
             elif open_findings and open_findings[-1].findings == rec.findings:
-                open_findings.pop()
+                original = open_findings.pop()
+                if original.scope == "full-required":
+                    rec.scope = original.scope
             else:
                 rec.disposed = False
                 open_findings.append(rec)
+        if rec.scope == "full-required" and rec.disposed:
+            rec.verdict = "FAILED"  # findings answered, coverage still missing
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
     return open_findings[-1] if open_findings else completed or found
@@ -909,7 +1002,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
     for c in comments:
         rec = parse_record(c.get("body", ""))
-        if not rec or rec.key != key or c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not rec or c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+            continue
+        if rec.key != key and not (rec.scope == "full" and rec.reviewer == "codex-native"):
             continue
         source_key, source_head = (rec.from_key, rec.from_head) if rec.scope == "fix" else (rec.key, rec.head)
         if not source_head or not source_key or (rec.scope != "fix" and rec.reviewer != "codex-native"):
@@ -924,7 +1019,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                 equivalents = _CARRY.get((repo, pr), ("", []))
                 validated = equivalents[0] == key and source_head in {h for _, h in equivalents[1]}
                 trusted_base = _CARRY_BASES.get((repo, pr))
-                if not validated and (not trusted_base or diff_key(trusted_base, source_head) != key):
+                if not validated and (not trusted_base or diff_key(trusted_base, source_head) != source_key):
                     continue  # an ancestor alone cannot approve newly changed code
         except subprocess.SubprocessError:
             continue
@@ -1160,10 +1255,11 @@ def reviewer_family(reviewer: str) -> str | None:
 
 
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
-    """Families with a passing FULL review of this diff: CLEAN, or FINDINGS
-    whose dispositions are complete. Same trust rules as latest_matching.
-    A fix-verification receipt (``fix-verify:<model>``, past the round cap)
-    covers only the fix delta, so it never counts as a full family."""
+    """Full-review families, with independent coverage of any follow-up delta.
+
+    A follow-up preserves source families; its reviewer never invents an
+    additional full-review family. Missing sources or git objects carry none.
+    """
     families = set()
     trusted = [(c, parse_record(c.get("body", ""))) for c in comments
                if c.get("author_association") in TRUSTED_ASSOCIATIONS]
@@ -1185,7 +1281,17 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
-                continue  # targeted receipts never satisfy a full model family
+                answered = (rec.verdict == "FINDINGS" and rec.disposed
+                            and dispositions_complete(body, rec.findings)
+                            and any(r and r.scope == "fix" and not r.disposed
+                                    and r.verdict == "FINDINGS" and r.findings == rec.findings
+                                    and all(getattr(r, name) == getattr(rec, name) for name in
+                                            ("key", "head", "base", "reviewer", "from_head", "from_key"))
+                                    for _, r in trusted))
+                if rec.key == key and (rec.verdict == "CLEAN" or answered) and followup_objects_valid(rec):
+                    families.update(record_family(source)
+                                    for source in followup_sources(rec, comments, native))
+                continue
             rec.text = body
         native_source = next((r for r in native if rec and r.key == key and r.scope == "full" and r.head
                               and r.reviewer == "codex-native" and rec.reviewer == "codex-native"
@@ -1229,7 +1335,7 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
     more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
     missing = "two model families" if not families else "a second model family"
     return ("action_required",
-            f"security-sensitive path {sensitive[0]}{more}: needs passing full reviews "
+            f"security-sensitive path {sensitive[0]}{more}: needs review coverage "
             f"from {missing} (have: {have}); run review.sh again")
 
 
@@ -2322,6 +2428,26 @@ def cmd_review(args) -> int:
                 if native_activity_running(comments) or read_native(repo, pr, key, head, comments).running:
                     print("[review] UNREVIEWED: native review pending; join it before starting another reviewer")
                     return UNREVIEWED
+                # A small follow-up extends prior work instead of resetting it.
+                # Try this before the full-round cap: it spends no full round.
+                # --fresh explicitly asks for a full pass.
+                followup_declined = (existing and existing.verdict == "FAILED"
+                                     and (existing.scope == "full-required"
+                                          or "full review required: follow-up scope not confirmed" in existing.text))
+                if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None):
+                    snapshot = read_native(repo, pr, key, head, comments)
+                    source = followup_candidate(args.base, head, key, comments, snapshot.records)
+                    if source:
+                        args.followup = source
+                        args.followup_reviews = "\n\n".join(
+                            c.get("body", "") for c in comments
+                            if c.get("author_association") in TRUSTED_ASSOCIATIONS
+                            and parse_record(c.get("body", "")))
+                        args.followup_reviews += "\n\n" + "\n\n".join(r.text for r in snapshot.records)
+                        result = review_with_fallback(args, pr, key, reviewer)
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            completed_review_exit(repo, pr, key, head, result))
                 # The cap binds every full-review source; only an explicit reason overrides it.
                 rounds = pr_rounds(repo, pr, key, head, comments)
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
@@ -2662,7 +2788,8 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         if result != UNREVIEWED:
             # second_family_pass needs to know this without re-reading the
             # comment it just posted (GitHub reads can lag a fresh write).
-            args.completed_by = provider
+            if not getattr(args, "followup", None):
+                args.completed_by = provider
             return result
         print(f"[review] {provider} did not complete; no automatic provider cascade", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
@@ -2682,7 +2809,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if diff_key(reviewed_base_oid, reviewed_head_oid) != key:
         print("[review] UNREVIEWED: diff moved before launch; no reviewer started")
         return UNREVIEWED
-    diff_path.write_text(diff_text(reviewed_base_oid, reviewed_head_oid))
+    followup = getattr(args, "followup", None)
+    if followup and (followup.head != reviewed_head_oid or followup.base != reviewed_base_oid):
+        print("[review] UNREVIEWED: follow-up endpoints changed before launch")
+        return UNREVIEWED
+    diff_base = followup.from_head if followup else reviewed_base_oid
+    diff_path.write_text(diff_text(diff_base, reviewed_head_oid))
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -2693,6 +2825,26 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         # It cannot see the checkout; the material is written into its workspace.
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
+    if followup:
+        context = ("\n\nThis is an independent FOLLOW-UP review. The diff above contains the COMPLETE "
+                   f"cumulative delta from previously fully reviewed commit {followup.from_head} "
+                   f"to {reviewed_head_oid}. Review every changed line, relevant callers and "
+                   "interactions with the original PR. Documentation, tests and attestation corrections "
+                   "are eligible, but are not exempt from review. Verify all prior findings below. "
+                   "If this is a bounded correction or clarification that preserves the original "
+                   "design and security assumptions, include a standalone SCOPE: FOLLOWUP line "
+                   "before your final VERDICT. If behavior or trust boundaries materially expand, "
+                   "prior reasoning no longer applies, or you cannot establish the scope, use "
+                   "SCOPE: FULL_REQUIRED instead. Do not approve incomplete context.\n\n"
+                   "Prior full reviews:\n" + args.followup_reviews + "\n\nOriginal PR diff:\n"
+                   + diff_text(reviewed_base_oid, followup.from_head))
+        if materials is not None:
+            materials.append(("prior-review.txt", context.encode()))
+            prompt += "\nRead prior-review.txt for the original review context and mandatory follow-up scope decision.\n"
+        else:
+            context_path = (out_dir / "prior-review.txt").resolve()
+            context_path.write_text(context)
+            prompt += f"\nRead {context_path} for the original review context and mandatory follow-up scope decision.\n"
     model = getattr(args, "codex_model", "gpt-6.1-sol")
     effort = getattr(args, "codex_effort", "medium")
     if (model, effort) == ("gpt-6.1-sol", "medium"):
@@ -2701,11 +2853,19 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials, model, effort)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
+    scope_declined = bool(followup and parsed is not None
+                          and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
+    if scope_declined:
+        # A scope refusal cannot discard concrete findings the reviewer found.
+        if parsed[0] == "CLEAN":
+            parsed, note = None, "full review required: follow-up scope not confirmed"
+        print("[review] follow-up cannot establish coverage; run review.sh --fresh for a full pass within the budget")
     if parsed is not None and not has_reasoning(text):
         # Not a review: fall back to the next reviewer instead of recording it.
         parsed, note = None, "verdict without reasoning"
     if parsed is None:
-        remember_unavailable(reviewer, text, note)
+        if "follow-up scope not confirmed" not in note:
+            remember_unavailable(reviewer, text, note)
         rec = Record(key, "FAILED", 0, False, reviewer)
         heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
     else:
@@ -2714,8 +2874,14 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         rec = Record(key, verdict, n, False, reviewer,
                      model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
-    stamp_record(rec, args.base, "full", text, argparse.Namespace(review_id=review_run_id),
+    stamp_record(rec, args.base, "fix" if followup else "full", text,
+                 argparse.Namespace(review_id=review_run_id,
+                                    reviewed_from=followup.from_head if followup else None, fixes_only=True),
                  head=reviewed_head_oid, base_oid=reviewed_base_oid)
+    if scope_declined:
+        rec.scope = "full-required"
+    if followup:
+        heading += f" · follow-up from {followup.from_head[:10]}"
     authorization = getattr(args, "authorize_full_review", None)
     if authorization:
         text = f"Explicit additional full-review authorization: {authorization}\n\n" + text
@@ -2780,6 +2946,8 @@ def cmd_record(args) -> int:
 def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: Record) -> int:
     """record and dispose finish like a review run: a passing result on a
     security-sensitive diff still needs a second model family (exit 3)."""
+    if rec.scope == "full-required" and rec.disposed:
+        return UNREVIEWED
     if rec.scope == "fix" and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: targeted receipt lacks a valid prior full review at the declared head/base")
         return UNREVIEWED
@@ -3129,7 +3297,7 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("file")
     rc.add_argument("--scope", choices=["full", "fix"], default="full")
     rc.add_argument("--reviewed-from", help="fix verification: previously fully reviewed commit")
-    rc.add_argument("--fixes-only", action="store_true", help="independent verifier checked all changed lines/regression implications; no regressions, uncertainty or new work")
+    rc.add_argument("--fixes-only", action="store_true", help="independent reviewer checked every change, interactions and prior findings; bounded corrections or clarifications only")
     rc.add_argument("--review-id", help="stable identity for the original complete review, reused by duplicate receipts")
     rc.add_argument("--reviewer-name", required=True)
     rc.add_argument("--independent", action="store_true",

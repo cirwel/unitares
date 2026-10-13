@@ -222,8 +222,9 @@ the test run one.
   "carried across a base merge from `<sha>`" when a carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any
   change to an added or removed line stops the carry. A PR that touches a
-  second-family path (`review_policy.json`) is never carried: a base merge
-  that moves its diff key needs a fresh review on the new key. A base merge
+  second-family path (`review_policy.json`) is never carried automatically: a
+  base merge that moves its diff key needs independent follow-up coverage or
+  a full review on the new key. A base merge
   that leaves the PR's files untouched keeps the key, and its records still
   count, as for any PR.
 - The gate proves a review was recorded, not that it was honest: every agent
@@ -330,18 +331,42 @@ A base change can invalidate coverage but does not replenish the budget.
 Legacy records with insufficient provenance remain legacy: they are neither
 invented full reviews nor a fresh budget. Unknown history requires escalation.
 
-Ordinary code needs one independent full review, then targeted verification of
-minor fixes. The verifier must examine all changed lines and regression
-implications, independently confirm no regressions or uncertainty, answer the
-prior findings, and explicitly attest no unrelated new work. `git config review.verifier ollama:<model>` opts into a local verifier;
-no verifier is required or started by default. A separate independent human or
-model can instead record `record <file> --independent --reviewer-name <who>
---scope fix --reviewed-from <sha> --fixes-only`. A matching prior full findings
-receipt with minor severity is required. Targeted scope never counts as a full
-review or either security family. New work, uncertain scope, or work after a
-clean result requires fresh full review. Without verification, keep UNREVIEWED.
+**Review is collaboration: more minds on the work, with coverage proportional
+to the change (operator direction, 2026-10-13).** Keep completed full reviews
+as evidence. After a clean review or minor findings, `review.sh` normally asks
+an independent reviewer to examine the complete cumulative delta from that
+full review, its interactions with the original work, and all prior findings.
+The reviewer also receives the original diff and review history. Small code
+fixes, documentation corrections and attestation updates can use this route;
+file type alone never exempts a change from scrutiny.
 
-At three full rounds, stop paid requests and escalate unresolved issues. P0/P1
+A bounded follow-up preserves the original design and security assumptions.
+The reviewer explicitly confirms that scope and reviews every changed line.
+Materially expanded behavior or trust boundaries, invalidated prior reasoning,
+P0/P1 or unclassified source findings, and uncertain scope require a full pass.
+`--fresh` requests that pass. A declined follow-up does not automatically spend
+another round or repeatedly ask the same scope question.
+
+The receipt remains `scope=fix`, with the original reviewed commit and the
+current endpoints. It is additional coverage, not a claim that the original
+reviewers saw later edits. For sensitive changes it preserves the families
+that actually performed the original full reviews; it cannot invent a missing
+second family. Git verifies the source and destination diff keys and ancestry.
+A changed diff without an independent follow-up remains unreviewed, and open
+findings on the current diff remain blockers even if another reviewer is clean.
+Subsequent edits use the cumulative delta from a full review rather than a
+chain of unchecked receipts. Follow-ups do not consume full-review rounds,
+including when the full-round budget is exhausted.
+
+A separate human or model may also record this coverage with
+`record <file> --independent --reviewer-name <who> --scope fix
+--reviewed-from <full-review-sha> --fixes-only`. The last flag attests that the
+reviewer examined all changes and interactions, answered prior findings, and
+confirmed a bounded correction or clarification without scope expansion.
+The optional `git config review.verifier ollama:<model>` route remains
+available for minor-finding verification; no verifier is required by default.
+
+At three full rounds, stop further full-review requests and escalate unresolved issues. P0/P1
 and security findings remain blockers; budget exhaustion never manufactures
 approval. Only explicit operator authorization permits an additional round:
 `review.sh --authorize-full-review "operator request and reason"`. The reason
@@ -381,7 +406,8 @@ model and counts as none, so run Antigravity through `review.sh` instead. A reco
 carries its family as a word (`gemini-council`, `gpt-5-reviewer`, `claude-…`);
 an unrecognised name such as `council` counts as none. A passing review is
 `CLEAN`, or `FINDINGS` with every disposition recorded; a fix-verification
-receipt is not a full review and never counts. Open findings still block as
+receipt is not a full review: it preserves only the families of its verified
+full-review sources, never adding the follow-up reviewer's family. Open findings still block as
 before. CI enforces the rule, reading the policy as merged on the PR's base
 ref, never from the PR head, so a PR cannot remove itself from the list; if
 the changed paths cannot be read, it requires the second family.

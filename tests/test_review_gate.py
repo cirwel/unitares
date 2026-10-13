@@ -4005,7 +4005,8 @@ def test_native_minor_findings_are_valid_targeted_source_but_not_current_full_fa
     fix=full_record('new','CLEAN',0,False,'fix-verify:ollama:m',scope='fix',from_head='a'*40,from_key='old')
     assert not rg.fix_coverage_valid(fix,[])
     assert rg.fix_coverage_valid(fix,[],[source])
-    assert rg.latest_matching([_comment(fix)],'new',[source]).status()[0] == 'success'
+    # Shape-only fixtures cannot approve without the actual endpoint objects.
+    assert rg.latest_matching([_comment(fix)],'new',[source]).verdict == 'FAILED'
     assert rg.passing_families([_comment(fix)],'new',[source]) == set()
 
 
@@ -4045,7 +4046,7 @@ def test_targeted_native_disposition_cannot_count_as_full_family():
     assert rg.passing_families(comments,'k',[source]) == set()
 
 
-def test_ci_reads_actual_native_source_for_targeted_receipt_without_current_full_credit(repo, monkeypatch):
+def test_ci_reads_actual_native_source_and_preserves_its_family(repo, monkeypatch):
     old=_git(repo,'rev-parse','HEAD');base=_git(repo,'rev-parse','master');oldkey=rg.diff_key('master','HEAD')
     (repo/'a.txt').write_text('a fixed\n');_git(repo,'commit','-qam','fix');head=_git(repo,'rev-parse','HEAD');key=rg.diff_key('master','HEAD')
     fix=rg.Record(key,'CLEAN',0,False,'fix-verify:ollama:m',head=head,base=base,scope='fix',from_head=old,from_key=oldkey)
@@ -4058,7 +4059,7 @@ def test_ci_reads_actual_native_source_for_targeted_receipt_without_current_full
     monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
     snapshot=_REAL_READ_NATIVE('o/r',1,key,head,comments)
     assert rg.latest_matching(comments,key,snapshot.records).status()[0] == 'success'
-    assert rg.passing_families(comments,key,snapshot.records) == set()
+    assert rg.passing_families(comments,key,snapshot.records) == {'openai'}
     assert any(r.head==old and r.key==oldkey and not r.base for r in snapshot.records)
     fix.from_key='wrong';snapshot=_REAL_READ_NATIVE('o/r',1,key,head,[_comment(fix)])
     assert rg.latest_matching([_comment(fix)],key,snapshot.records).status()[0] != 'success'
@@ -4083,3 +4084,218 @@ def test_review_identity_cannot_inject_scope_into_marker(repo):
     rec=rg.Record('k','CLEAN',0,False,'codex')
     with pytest.raises(SystemExit,match='marker-safe'):
         rg.stamp_record(rec,'master','full','review',SimpleNamespace(review_id='run scope=full'))
+
+
+# Follow-ups preserve independent full reviews while covering every later edit.
+@pytest.fixture
+def reviewed_followup(repo):
+    old = _git(repo, 'rev-parse', 'HEAD')
+    base = _git(repo, 'rev-parse', 'master')
+    oldkey = rg.diff_key(base, old)
+    comments = [_comment(full_record(oldkey, 'CLEAN', 0, False, reviewer,
+                                    head=old, base=base, review_id=reviewer))
+                for reviewer in ('codex', 'claude')]
+    (repo / 'README.md').write_text('Clarified usage.\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'clarify docs after review')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(base, head)
+    fix = rg.Record(key, 'CLEAN', 0, False, 'gemini-followup', head=head, base=base,
+                    scope='fix', from_head=old, from_key=oldkey)
+    return comments, fix
+
+
+def test_doc_followup_preserves_both_families_without_adding_verifier_family(reviewed_followup):
+    comments, fix = reviewed_followup
+    assert rg.latest_matching(comments, fix.key) is None
+    assert rg.passing_families(comments, fix.key) == set()
+    comments.append(_comment(fix))
+    assert rg.latest_matching(comments, fix.key).status()[0] == 'success'
+    assert rg.passing_families(comments, fix.key) == {'openai', 'anthropic'}
+    assert rg.codex_rounds(comments, [], []).count == 2
+    assert rg.passing_families(comments[1:], fix.key) == {'anthropic'}
+
+
+@pytest.mark.parametrize('field,value', [('from_key', 'wrong'), ('key', 'wrong'),
+    ('from_head', '0' * 40), ('head', '0' * 40), ('base', '0' * 40)])
+def test_followup_rejects_changed_or_missing_objects(reviewed_followup, field, value):
+    comments, fix = reviewed_followup
+    setattr(fix, field, value)
+    comments.append(_comment(fix))
+    assert rg.passing_families(comments, fix.key) == set()
+    assert rg.latest_matching(comments, fix.key).verdict == 'FAILED'
+
+
+def test_followup_cannot_hide_current_findings(reviewed_followup):
+    comments, fix = reviewed_followup
+    finding = full_record(fix.key, 'FINDINGS', 1, False, 'claude', head=fix.head, base=fix.base)
+    comments += [_comment(finding, text='[P1] a.txt:1 unsafe caller'), _comment(fix)]
+    assert rg.latest_matching(comments, fix.key).verdict == 'FINDINGS'
+
+
+@pytest.mark.parametrize('severity', ['P1', 'unclassified'])
+def test_clean_family_cannot_hide_serious_source_finding(reviewed_followup, severity):
+    comments, fix = reviewed_followup
+    source = full_record(fix.from_key, 'FINDINGS', 1, False, 'claude',
+                         head=fix.from_head, base=fix.base)
+    comments[1] = _comment(source, text=f'[{severity}] a.txt:1 unsafe caller')
+    assert not rg.fix_coverage_valid(fix, comments)
+    assert rg.passing_families(comments + [_comment(fix)], fix.key) == set()
+    assert rg.followup_candidate(fix.base, fix.head, fix.key, comments) is None
+
+
+def test_followup_survives_unrelated_base_advance(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('unrelated base improvement\n')
+    _git(repo, 'commit', '-qam', 'base moves')
+    _git(repo, 'checkout', '-q', 'feature')
+    candidate = rg.followup_candidate('master', fix.head, fix.key, comments)
+    assert candidate and candidate.base != fix.base
+    assert rg.passing_families(comments + [_comment(candidate)], fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('reviewer', ['codex', 'antigravity'])
+@pytest.mark.parametrize('scope', ['FOLLOWUP', 'FULL_REQUIRED', ''])
+def test_followup_reviewer_gets_delta_and_original_context(repo, reviewed_followup, monkeypatch, reviewer, scope):
+    comments, fix = reviewed_followup
+    captured, posted = [], []
+    def review(provider, prompt, out, budget, materials):
+        if materials is not None:
+            files = dict(materials)
+            delta, context = files['diff.patch'].decode(), files['prior-review.txt'].decode()
+        else:
+            delta = (out / 'diff.txt').read_text()
+            context = (out / 'prior-review.txt').read_text()
+        captured.append((delta, context))
+        return f'Examined docs and their callers.\nSCOPE: {scope}\nVERDICT: CLEAN', 'exit 0'
+    monkeypatch.setattr(rg, 'run_reviewer', review)
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix,
+                           followup_reviews='Both full reviewers examined a.txt.')
+    result = rg._review_locked(args, 1, fix.key, reviewer)
+    assert result == (0 if scope == 'FOLLOWUP' else rg.UNREVIEWED)
+    assert '+Clarified usage.' in captured[0][0] and '+a changed' not in captured[0][0]
+    assert '+a changed' in captured[0][1] and 'Both full reviewers' in captured[0][1]
+    assert posted[0].scope == ('fix' if scope == 'FOLLOWUP' else 'full-required')
+    assert posted[0].from_head == fix.from_head
+    assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 2
+
+
+def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: pytest.fail('full-round cap consulted for follow-up'))
+    called = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda a, *rest: called.append(a.followup) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == 0
+    assert called[0].from_head == fix.from_head
+
+
+def test_repeated_followups_recheck_cumulative_delta(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    comments.append(_comment(fix))
+    (repo / 'README.md').write_text('Clarified usage and attestation.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(fix.base, head)
+    assert rg.passing_families(comments, key) == set()
+    candidate = rg.followup_candidate(fix.base, head, key, comments)
+    assert candidate.from_head == fix.from_head  # always the FULL review
+    assert rg.passing_families(comments + [_comment(candidate)], key) == {'openai', 'anthropic'}
+
+
+def test_cli_and_ci_accept_same_sensitive_followup(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    comments.append(_comment(fix))
+    _git(repo, 'update-ref', 'refs/remotes/origin/master', fix.base)
+    real_git = rg.git
+    monkeypatch.setattr(rg, 'git', lambda *a, **kw: '' if a[0] == 'fetch' else real_git(*a, **kw))
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head},
+                                                'base': {'ref': 'master'}})
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    posted = []
+    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
+    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
+    assert posted[0][3] == 'success'
+    assert rg._after_manual_record(SimpleNamespace(base=fix.base), 'o/r', 1, fix.key, 'feature', fix) == 0
+
+
+def test_declined_followup_does_not_repeat_scope_request(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.verdict = 'FAILED'
+    comments.append(_comment(fix, text='FAILED (full review required: follow-up scope not confirmed)'))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'followup_candidate', lambda *a: pytest.fail('repeated declined follow-up'))
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')) == rg.UNREVIEWED
+
+
+def test_scope_refusal_preserves_concrete_findings(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    text = '[P1] a.txt:1 unsafe behavior\nSCOPE: FULL_REQUIRED\nVERDICT: FINDINGS(1)'
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (text, 'exit 0'))
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Prior context')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == 1
+    assert posted[0].verdict == 'FINDINGS'
+    original = _comment(posted[0], text=text)
+    assert rg.latest_matching(comments + [original], fix.key).verdict == 'FINDINGS'
+    posted[0].disposed = True
+    disposition = _comment(posted[0], text='1. rebutted: checked the supported caller')
+    history = comments + [original, disposition]
+    assert rg.latest_matching(history, fix.key).verdict == 'FAILED'
+    assert rg.passing_families(history, fix.key) == set()
+    assert rg._after_manual_record(args, 'o/r', 1, fix.key, 'feature', posted[0]) == rg.UNREVIEWED
+
+
+def test_followup_findings_require_real_dispositions_to_preserve_coverage(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P2] README.md:1 unclear input')
+    fix.disposed = True
+    disposition = _comment(fix, text='1. rebutted: the documented input is the supported one')
+    assert rg.passing_families(comments + [disposition], fix.key) == set()
+    assert rg.passing_families(comments + [original, disposition], fix.key) == {'openai', 'anthropic'}
+
+
+def test_followup_preserves_families_that_reviewed_different_revisions(repo, reviewed_followup):
+    comments, first_fix = reviewed_followup
+    comments = comments[:1]  # first full review was OpenAI before the docs fix
+    comments.append(_comment(first_fix))
+    comments.append(_comment(full_record(first_fix.key, 'CLEAN', 0, False, 'claude',
+                                        head=first_fix.head, base=first_fix.base)))
+    (repo / 'README.md').write_text('Another bounded clarification.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(first_fix.base, head)
+    candidate = rg.followup_candidate(first_fix.base, head, key, comments)
+    assert candidate.from_head == first_fix.from_head
+    assert rg.passing_families(comments + [_comment(candidate)], key) == {'openai', 'anthropic'}
+
+
+def test_later_serious_full_review_cannot_be_bypassed_with_older_clean_anchor(repo, reviewed_followup):
+    comments, first_fix = reviewed_followup
+    comments.append(_comment(full_record(first_fix.key, 'FINDINGS', 1, False, 'claude',
+                                        head=first_fix.head, base=first_fix.base), text='[P1] a.txt:1 unsafe'))
+    (repo / 'README.md').write_text('Another clarification.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.followup_candidate(first_fix.base, head, rg.diff_key(first_fix.base, head), comments) is None
+
+
+def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict, fix.findings = 'full-required', 'FINDINGS', 1
+    original = _comment(fix, text='[P2] a.txt:1 problem\nSCOPE: FULL_REQUIRED')
+    disposed = rg.Record(fix.key, 'FINDINGS', 1, True, fix.reviewer)
+    history = comments + [original, _comment(disposed, text='1. rebutted: documented caller')]
+    rec = rg.latest_matching(history, fix.key)
+    assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
