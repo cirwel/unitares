@@ -423,9 +423,9 @@ properties, not surprises:
 - **Subagent onboards do not displace the pin.** An onboard that
   *explicitly declares* `spawn_reason="subagent"` writes the pin
   only-if-absent (SET NX). This is matched against the declared
-  argument only, never `infer_spawn_reason()`'s guess: inference can
-  label a fresh driver's succession onboard "subagent," and NX-gating
-  on that would lock the new driver behind its dead predecessor's
+  argument only: a parent or existing thread nodes do not declare a
+  dispatch. An omitted reason defaults to `new_session`, so a fresh
+  driver's succession onboard can replace its dead predecessor's
   still-live pin (incident class: 2026-06-10, where the inverse —
   unconditional writes — let each council subagent capture the
   driver's resolution; ~50 driver check-ins scattered across seven
