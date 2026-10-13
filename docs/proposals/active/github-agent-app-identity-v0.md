@@ -1,7 +1,8 @@
 # Separate GitHub automation identity from the operator
 
-**Status:** Draft capability/identity proposal, 2026-10-13. Operator decision
-required before registration, credential changes or enforcement. Implements nothing.
+**Status:** Attribution-first direction approved by Kenny on 2026-10-13
+(“proceed” after the KG-audit recommendations). Registration and local credential
+wiring remain pending. Actor-based authorization is expressly deferred.
 
 ## Problem
 
@@ -70,5 +71,51 @@ binding, token expiry/revocation, queue behavior and break-glass recovery. Map
 any new public capability against [INTENT_MAP](../../integration/INTENT_MAP.md)
 before implementation. Preserve UNITARES ownership and lineage rules.
 
-**Operator question:** Adopt the App for local attribution first, or require
-cloud credential isolation/separate human approval before actor enforcement?
+## Approved first rollout
+
+Start with one private App, `UNITARES agents`, installed only on the selected
+`cirwel/unitares` repository. Add other repositories deliberately after its
+smoke test. No webhooks, OAuth-on-install, account permissions, administration,
+or ruleset bypass. Proposed repository permissions are:
+
+| Permission | Level | Required operation |
+|---|---|---|
+| Contents | write | Fetch and push agent branches |
+| Pull requests | write | Open/edit draft PRs and write reviews |
+| Issues | write | PR labels and issue comments |
+| Checks | read | Inspect CI results |
+| Commit statuses | read | Inspect legacy status contexts |
+| Actions | read | Read workflow runs and logs |
+| Metadata | read | Repository identification (implicit) |
+
+Workflow-file pushes are intentionally outside this first permission set. If
+needed, request the separate Workflows write grant; do not fall back silently
+to the human credential. Neither the permission grant nor a bot actor permits
+bypassing branch ownership, reviews or the merge queue.
+
+[Open the prefilled registration](https://github.com/settings/apps/new?name=UNITARES+agents&url=https%3A%2F%2Fgithub.com%2Fcirwel%2Funitares&description=Attribution+for+UNITARES+agent+development%3B+no+operator+authority.&public=false&webhook_active=false&request_oauth_on_install=false&contents=write&pull_requests=write&issues=write&checks=read&statuses=read&actions=read).
+Review the settings in GitHub, create the App, and install it on the selected
+repository. The name may need a unique suffix. GitHub's
+[documented URL parameters](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-using-url-parameters)
+preselect settings; they do not create the App or prove installation.
+
+The current CLI token returned HTTP 403 for `GET /user/installations`: it is
+not authorized to a GitHub App. This does not prove no App exists. No private
+key or token was read, generated, committed or installed in this follow-up.
+The operator's registration screen is the remaining external setup boundary;
+no desktop/tab access was used.
+
+After registration, keep the private key in operator-controlled custody. A
+trusted broker/runner may mint repository-scoped installation tokens and give
+agents only those expiring tokens. Configure `GH_TOKEN` only for the agent
+process, leaving the operator's global `gh` login intact. Never write a token
+into a remote URL, a command log, shell history, the graph or a PR body.
+Do not implement a reusable-key reader in an agent worktree as a broker.
+
+Before general rollout, prove a bot-attributed draft PR on an agent-owned smoke
+branch, a permitted push and label operation, CI visibility, token expiry, and
+denial on an unselected repository. Verify the human's normal CLI remains
+`cirwel`. Record evidence on the original KG audit, then migrate supported
+clients individually. Until those checks pass, this is prepared configuration,
+not a live bot identity. Cloud Claude's limitation and all operator-only acts
+retain the existing policy; actor `cirwel` alone remains insufficient proof.
