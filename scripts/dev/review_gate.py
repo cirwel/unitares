@@ -10,6 +10,7 @@ the same diff-bound records; an unavailable reviewer never counts as a pass.
     review         run a review of HEAD's diff and post the record on its PR
     record         post a review that already happened elsewhere (a council,
                    a human, another model) as the record for this diff
+    editorial      attest a meaning-preserving prose edit; keep prior evidence
     dispose        post dispositions for a FINDINGS record, clearing it
     key            print the diff key for HEAD
     sweep          review one quiet ready/requested PR without a current review
@@ -123,6 +124,11 @@ REVIEWER_NAME_RE = re.compile(r"[A-Za-z0-9_.:@/+-]+")
 VERDICT_RE = re.compile(r"\s*\**VERDICT:\s*(CLEAN|FINDINGS\((\d+)\))\**\s*")
 RECORD_RE = re.compile(
     r"<!--\s*" + re.escape(MARKER) + r"\s+(?P<attrs>[^>]*?)\s*-->"
+)
+EDITORIAL_RE = re.compile(
+    r"\A<!-- unitares-editorial v1 head=(?P<head>[0-9a-f]{40}) "
+    r"key=(?P<key>[0-9a-f]{64}) from_head=(?P<from_head>[0-9a-f]{40}) "
+    r"from_key=(?P<from_key>[0-9a-f]{64}) -->\n"
 )
 
 REVIEW_PROMPT = """\
@@ -452,12 +458,125 @@ def carry_records(comments: list[dict], key: str,
     out, carried = [], {}
     for c in comments:
         rec = parse_record(c.get("body", ""))
-        if rec is not None and rec.key in origin:
+        source_key = c.get("_review_original_key", rec.key if rec else "")
+        if rec is not None and source_key in origin:
             c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1),
-                 "_review_original_key": c.get("_review_original_key", rec.key)}
-            carried[c.get("html_url", "")] = origin[rec.key]
+                 "_review_original_key": source_key}
+            carried[c.get("html_url", "")] = origin[source_key]
         out.append(c)
     return out, carried
+
+
+def editorial_path(path: str, sensitive: list[str]) -> bool:
+    """Eligibility only. The author, not a filename heuristic, attests meaning."""
+    parts = Path(path).parts
+    return (bool(parts) and not any(p.startswith('.') for p in parts)
+            and (parts[-1].lower() in {"readme.md", "changelog.md"}
+                 or (path.startswith("docs/") and path.endswith(".md")))
+            and parts[-1].upper() not in {"AGENTS.MD", "CLAUDE.MD", "GEMINI.MD", "SKILL.MD"}
+            and not any(p in {"skills", "commands", "prompts"} for p in parts)
+            and not sensitive_paths([path], sensitive))
+
+
+def editorial_span(base: str, previous: str, head: str) -> list[tuple[str, str]]:
+    """All prior keys in an attested prose-only span, or none if unprovable.
+
+    Check each commit, not only the net diff: code edited and reverted, a mode
+    change, a symlink, or a base merge is not an editorial continuation. Carry
+    EVERY intervening key so findings cannot disappear behind an attestation.
+    """
+    try:
+        if (previous == head or git("merge-base", previous, head).strip() != previous
+                or git("merge-base", base, previous) != git("merge-base", base, head)):
+            return []
+        sensitive = base_policy_paths(base)
+        out, cur = [], head
+        for _ in range(CARRY_MAX_BASE_MERGES):
+            parents = git("rev-list", "--parents", "-n", "1", cur).split()[1:]
+            if len(parents) != 1:
+                return []
+            parent = parents[0]
+            raw = subprocess.run(
+                ["git", "diff", "--raw", "--no-renames", "--no-abbrev", "-z", parent, cur],
+                capture_output=True, check=True).stdout.split(b"\0")
+            for header, path in zip(raw[0::2], raw[1::2]):
+                fields = header.split()
+                if (len(fields) != 5 or fields[0:2] != [b":100644", b"100644"]
+                        or fields[4] != b"M"
+                        or not editorial_path(path.decode("utf-8", "surrogateescape"), sensitive)):
+                    return []
+                # Markdown can still contain binary data; do not attest it as prose.
+                for commit in (parent, cur):
+                    blob = subprocess.run(["git", "show", f"{commit}:{os.fsdecode(path)}"],
+                                          capture_output=True, check=True).stdout
+                    if b"\0" in blob:
+                        return []
+                    blob.decode("utf-8")
+            out.append((diff_key(base, parent), parent))
+            if parent == previous:
+                return out
+            cur = parent
+    except (SystemExit, subprocess.SubprocessError, UnicodeError):
+        pass
+    return []
+
+
+def editorial_carry(comments: list[dict], key: str, base: str,
+                    equivalents: list[tuple[str, str]] = ()) -> tuple[list[tuple[str, str]], Record | None]:
+    """Use explicit author attestations, never silently classify a doc change.
+
+    This adds no reviewer, model family, or review cycle. Standalone editorial
+    work qualifies only if attestations cover the entire PR back to its merge
+    base; otherwise only the existing evidence is carried (including findings).
+    """
+    receipts = [(c, m.groupdict()) for c in comments if trusted_review_comment(c)
+                and (m := EDITORIAL_RE.match(c.get("body", "")))
+                and re.search(r"(?m)^Reason: \S", c.get("body", ""))]
+    if not base or not receipts:
+        return list(equivalents), None
+    out, reached, standalone = list(equivalents), {key, *(k for k, _ in equivalents)}, None
+    used = set()
+    for _ in range(CARRY_MAX_BASE_MERGES):
+        expanded = False
+        for i, (comment, attrs) in enumerate(receipts):
+            if i in used or attrs["key"] not in reached:
+                continue
+            used.add(i)
+            try:
+                if (diff_key(base, attrs["head"]) != attrs["key"]
+                        or diff_key(base, attrs["from_head"]) != attrs["from_key"]):
+                    continue
+                span = editorial_span(base, attrs["from_head"], attrs["head"])
+                if not span:
+                    continue
+                out.extend(pair for pair in span if pair not in out)
+                reached.update(k for k, _ in span)
+                expanded = True
+                if attrs["from_head"] == git("merge-base", base, attrs["head"]).strip():
+                    standalone = Record(key, "CLEAN", 0, False, "author", scope="editorial",
+                                        url=comment.get("html_url", ""), text=comment["body"])
+            except (SystemExit, subprocess.SubprocessError):
+                continue
+        if not expanded:
+            # An author cannot overrule a reviewer's scope refusal. A later
+            # actual full review of that revision can resolve it; dispositions
+            # and editorial explanations cannot.
+            declined = set()
+            for comment in comments:
+                if not trusted_review_comment(comment):
+                    continue
+                rec = comment_record(comment)
+                if rec is None:
+                    continue
+                source_key = rec.original_key or rec.key
+                if rec.scope == "full-required":
+                    declined.add(source_key)
+                elif rec.full() and rec.verdict in {"CLEAN", "FINDINGS"} and not rec.disposed:
+                    declined.discard(source_key)
+            if declined & reached:
+                return list(equivalents), None
+            return out, standalone
+    return list(equivalents), None  # do not accept a truncated attestation chain
 
 
 def diff_text(base: str, head: str) -> str:
@@ -517,7 +636,7 @@ class Record:
     # Missing provenance stays legacy; never invent a reviewed commit/base.
     head: str = ""
     base: str = ""
-    scope: str = "legacy"  # full | fix | full-required | legacy
+    scope: str = "legacy"  # full | fix | full-required | legacy; editorial is synthesized locally
     review_id: str = ""
     from_head: str = ""
     from_key: str = ""
@@ -529,6 +648,8 @@ class Record:
                 and not self.reviewer.startswith("fix-verify:"))
 
     def status(self) -> tuple[str, str]:
+        if self.scope == "editorial" and self.verdict == "CLEAN":
+            return "success", "editorial-only: author attested unchanged meaning; no independent review"
         if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
             return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh"
         if self.verdict == "CLEAN":
@@ -818,7 +939,10 @@ _CARRY_BASES: dict[tuple[str, int], str] = {}
 def pr_comments(repo: str, pr: int) -> list[dict]:
     comments = api_pages(f"repos/{repo}/issues/{pr}/comments")
     carry = _CARRY.get((repo, pr))
-    return carry_records(comments, *carry)[0] if carry else comments
+    if carry:
+        equivalents, _ = editorial_carry(comments, carry[0], _CARRY_BASES.get((repo, pr), ""), carry[1])
+        return carry_records(comments, carry[0], equivalents)[0]
+    return comments
 
 
 def api_pages(endpoint: str) -> list[dict]:
@@ -1251,7 +1375,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
     # finding stays open across the merge until it is fixed or disposed.
     carry = _CARRY.get((repo, pr))
     if carry and carry[0] == key:
-        for _earlier_key, commit in carry[1]:
+        equivalents, _ = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""), carry[1])
+        carry = (key, equivalents)
+        for _earlier_key, commit in equivalents:
             earlier = native_records(comments, reviews, inline, events, key, commit, reactions)
             snapshot.records.extend(earlier.records)
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
@@ -1271,7 +1397,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                 if diff_key(rec.base, source_head) != source_key:
                     continue
             elif source_head != head:
-                equivalents = _CARRY.get((repo, pr), ("", []))
+                equivalents = carry or ("", [])
                 validated = equivalents[0] == key and source_head in {h for _, h in equivalents[1]}
                 trusted_base = _CARRY_BASES.get((repo, pr))
                 if not validated and (not trusted_base or diff_key(trusted_base, source_head) != source_key):
@@ -1847,7 +1973,10 @@ def native_activity_running(comments: list[dict]) -> bool:
 def current_record(repo: str, pr: int, key: str, head: str,
                    comments: list[dict]) -> Record | None:
     records = read_native(repo, pr, key, head, comments).records
-    return latest_matching(comments, key, records)
+    rec = latest_matching(comments, key, records)
+    if rec is None:
+        _, rec = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""))
+    return rec
 
 
 def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
@@ -3269,6 +3398,43 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     return UNREVIEWED if parsed is None else (0 if state == "success" else 1)
 
 
+def cmd_editorial(args) -> int:
+    """An author's explicit semantic judgment, never a fabricated review."""
+    reason = " ".join(args.reason.split())
+    if not reason:
+        raise SystemExit("review_gate: explain why the prose edit preserves meaning")
+    pr, repo, key, branch = _resolve(args)
+    head = git("rev-parse", "HEAD").strip()
+    previous = git("rev-parse", f"{args.since}^{{commit}}").strip()
+    if not editorial_span(args.base, previous, head):
+        raise SystemExit("review_gate: editorial scope must contain only edits to existing prose files; "
+                         "code, policy-sensitive paths, agent instructions, file/mode changes and merges need review")
+    body = (f"<!-- unitares-editorial v1 head={head} key={key} from_head={previous} "
+            f"from_key={diff_key(args.base, previous)} -->\n"
+            "### Editorial attestation — author\n\n"
+            "I checked this complete span: only spelling, grammar or formatting changed. "
+            "Meaning, commands, API contracts, requirements, security and agent instructions are unchanged. "
+            "This is an author judgment, not an independent review or a model-family approval. "
+            "Prior findings and review requirements remain in force.\n\n"
+            f"Reason: {reason}\n")
+    with review_lock(f"pr-{pr}") as lock:
+        if not lock.held:
+            print("[review] review in progress; join it before recording the editorial attestation")
+            return UNREVIEWED
+        require_open(pr)
+        post_comment(pr, body)
+    print("[review] editorial attestation posted; no model invoked")
+    comments = pr_comments(repo, pr)
+    rec = current_record(repo, pr, key, head, comments)
+    if rec is None:
+        print("[review] prior review coverage is still missing; the attestation does not supply it")
+        return UNREVIEWED
+    print(f"[review] {rec.status()[1]}")
+    args.branch = branch
+    return second_family_pass(args, repo, pr, key, head,
+                              finish_record(repo, pr, key, head, rec, comments))
+
+
 def cmd_record(args) -> int:
     if not args.independent:
         raise SystemExit("review_gate: record requires --independent to attest that a "
@@ -3631,12 +3797,14 @@ def cmd_ci(args) -> int:
         f"+refs/pull/{pr}/head:refs/review-gate/head")
     key = diff_key(f"origin/{base_ref}", head)
     equivalents = base_merge_equivalents(f"origin/{base_ref}", head)
-    comments, carried = carry_records(pr_comments(repo, pr), key, equivalents)
     _CARRY_BASES[(repo, pr)] = git("rev-parse", f"origin/{base_ref}").strip()
-    _CARRY[(repo, pr)] = (key, equivalents)  # after the read: read_native carries native evidence
+    _CARRY[(repo, pr)] = (key, equivalents)
+    comments = pr_comments(repo, pr)
+    combined, editorial = editorial_carry(comments, key, f"origin/{base_ref}", equivalents)
+    comments, carried = carry_records(comments, key, combined)
     try:
         snapshot = read_native(repo, pr, key, head, comments)
-        rec = latest_matching(comments, key, snapshot.records)
+        rec = latest_matching(comments, key, snapshot.records) or editorial
     except SystemExit as exc:
         print(f"::warning::Review evidence incomplete: {exc}. Existing review check preserved; "
               "retry this workflow when GitHub evidence is readable.")
@@ -3668,7 +3836,8 @@ def cmd_ci(args) -> int:
     conclusion, desc = held
     carried = {**carried, **snapshot.carried}
     if rec is not None and rec.url in carried:
-        desc += f" · carried across a base merge from {carried[rec.url][:7]}"
+        kind = "base merge" if combined == equivalents else "editorial edit/base merge"
+        desc += f" · carried across a {kind} from {carried[rec.url][:7]}"
     if proposal_advisory(changed, f"origin/{base_ref}"):
         conclusion = "success"
         desc = "proposal-only advisory: " + desc + "; implementation requires correctness review"
@@ -3715,6 +3884,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the record body instead of posting it (no gh needed); "
                          "post it verbatim with any GitHub client")
 
+    ed = sub.add_parser("editorial", help="author: attest meaning-preserving prose edits without another model call")
+    ed.add_argument("--reason", required=True, help="why this edit changes no meaning, commands or requirements")
+    ed.add_argument("--since", default="HEAD^", help="start of the complete editorial span (default: previous commit)")
+
     d = sub.add_parser("dispose", help="post dispositions for a FINDINGS record")
     d.add_argument("file")
     d.add_argument("--base", default=argparse.SUPPRESS,
@@ -3749,7 +3922,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "ci" and args.pr is None:
         p.error("ci needs --pr")
     try:
-        return {"review": cmd_review, "record": cmd_record, "waive": cmd_waive, "dispose": cmd_dispose,
+        return {"review": cmd_review, "record": cmd_record, "editorial": cmd_editorial,
+                "waive": cmd_waive, "dispose": cmd_dispose,
                 "key": cmd_key, "ci": cmd_ci, "sweep": cmd_sweep}[args.cmd](args)
     except ClosedPullRequest as exc:
         print(f"[review] {exc}")

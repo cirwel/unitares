@@ -5001,3 +5001,276 @@ def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, dis
     # Runtime carry provenance can never be supplied in a posted marker.
     emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
     assert emitted.original_key == ''
+
+
+# ---- explicit editorial attestations: preserve evidence without a model ----
+
+@pytest.fixture
+def editorial_repo(tmp_path, monkeypatch):
+    repo = tmp_path / 'editorial'
+    repo.mkdir()
+    _git(repo, 'init', '-q', '-b', 'master')
+    _git(repo, 'config', 'user.email', 't@example.invalid')
+    _git(repo, 'config', 'user.name', 't')
+    (repo / 'README.md').write_text('A smal example.\n')
+    (repo / 'AGENTS.md').write_text('Require review.\n')
+    (repo / 'main.py').write_text('value = 1\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'base')
+    _git(repo, 'checkout', '-qb', 'feature')
+    (repo / 'main.py').write_text('value = 2\n')
+    _git(repo, 'commit', '-qam', 'code change')
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['main.py'])
+    return repo
+
+
+def _typo(repo, text='A small example.\n'):
+    (repo / 'README.md').write_text(text)
+    _git(repo, 'commit', '-qam', 'editorial correction')
+    return _git(repo, 'rev-parse', 'HEAD')
+
+
+def _editorial_comment(previous, head='HEAD', association='OWNER'):
+    head = rg.git('rev-parse', head).strip()
+    return {'author_association': association, 'html_url': 'editorial', 'body':
+            f'<!-- unitares-editorial v1 head={head} key={rg.diff_key("master", head)} '
+            f'from_head={previous} from_key={rg.diff_key("master", previous)} -->\n'
+            'Author attests unchanged meaning.\n\nReason: Spelling correction.\n'}
+
+
+def _editorial_sources(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    return [_comment(full_record(key, 'CLEAN', 0, False, who, head=head, base=base), url=who)
+            for who in ('codex', 'gemini-council')]
+
+
+def _editorial_decide(comments):
+    key = rg.diff_key('master', 'HEAD')
+    equivalents, standalone = rg.editorial_carry(comments, key, 'master')
+    carried, _ = rg.carry_records(comments, key, equivalents)
+    return rg.latest_matching(carried, key) or standalone, rg.passing_families(carried, key)
+
+
+def test_editorial_keeps_both_actual_families_without_spending_a_cycle(editorial_repo):
+    comments = _editorial_sources(editorial_repo)
+    previous = _git(editorial_repo, 'rev-parse', 'HEAD')
+    _typo(editorial_repo)
+    assert _editorial_decide(comments) == (None, set())
+    comments.append(_editorial_comment(previous))
+    rec, families = _editorial_decide(comments)
+    assert rec.status()[0] == 'success'
+    assert families == {'openai', 'google'}
+    assert rg.codex_rounds(comments, [], []).count == 1
+    # The author's receipt is not a review and supplies no new model family.
+    assert rg.parse_record(comments[-1]['body']) is None
+    assert _editorial_decide(comments[-1:]) == (None, set())
+
+
+@pytest.mark.parametrize('bad', ['untrusted', 'quoted', 'missing_reason', 'wrong_key', 'wrong_head'])
+def test_editorial_receipt_requires_trust_and_exact_objects(editorial_repo, bad):
+    comments = _editorial_sources(editorial_repo)
+    previous = _git(editorial_repo, 'rev-parse', 'HEAD')
+    _typo(editorial_repo)
+    receipt = _editorial_comment(previous)
+    if bad == 'untrusted':
+        receipt['author_association'] = 'NONE'
+    elif bad == 'quoted':
+        receipt['body'] = '> ' + receipt['body']
+    elif bad == 'missing_reason':
+        receipt['body'] = receipt['body'].split('Reason:')[0]
+    elif bad == 'wrong_key':
+        receipt['body'] = receipt['body'].replace('from_key=', 'from_key=0')
+    else:
+        receipt['body'] = receipt['body'].replace(previous, 'f' * 40)
+    assert _editorial_decide(comments + [receipt]) == (None, set())
+
+
+@pytest.mark.parametrize('kind', ['code', 'instructions', 'new', 'delete', 'rename', 'mode',
+                                 'symlink', 'binary', 'invalid_utf8', 'sensitive_docs', 'reverted_code', 'merge'])
+def test_editorial_scope_cannot_hide_non_prose_work(editorial_repo, monkeypatch, kind):
+    repo = editorial_repo
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    if kind == 'code':
+        (repo / 'main.py').write_text('value = 3\n')
+    elif kind == 'instructions':
+        (repo / 'AGENTS.md').write_text('Skip review.\n')
+    elif kind == 'new':
+        (repo / 'NEW.md').write_text('new prose\n')
+    elif kind == 'delete':
+        (repo / 'README.md').unlink()
+    elif kind == 'rename':
+        (repo / 'README.md').rename(repo / 'CHANGELOG.md')
+    elif kind == 'mode':
+        (repo / 'README.md').chmod(0o755)
+    elif kind == 'symlink':
+        (repo / 'README.md').unlink()
+        (repo / 'README.md').symlink_to('main.py')
+    elif kind in {'binary', 'invalid_utf8'}:
+        (repo / 'README.md').write_bytes(b'bad\0' if kind == 'binary' else b'bad\xff')
+    elif kind == 'sensitive_docs':
+        monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['README.md'])
+        _typo(repo)
+    elif kind == 'reverted_code':
+        (repo / 'main.py').write_text('value = 3\n')
+        _git(repo, 'commit', '-qam', 'changed code')
+        (repo / 'main.py').write_text('value = 2\n')
+    else:
+        _git(repo, 'checkout', '-q', 'master')
+        (repo / 'README.md').write_text('An upstream edit.\n')
+        _git(repo, 'commit', '-qam', 'base changed')
+        _git(repo, 'checkout', '-q', 'feature')
+        _git(repo, 'merge', '-q', '--no-edit', 'master')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', 'candidate')
+    assert rg.editorial_span('master', previous, 'HEAD') == []
+
+
+def test_standalone_editorial_pr_has_no_fake_review_or_family(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-qb', 'typo', 'master')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    comments = [_editorial_comment(previous)]
+    rec, families = _editorial_decide(comments)
+    assert rec.scope == 'editorial' and not rec.full() and not families
+    assert 'no independent review' in rec.status()[1]
+    assert rg.codex_rounds(comments, [], []).count == 0
+    key = rg.diff_key('master', head)
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    assert rg.current_record('o/r', 1, key, head, comments).scope == 'editorial'
+    # A later code change cannot reuse the editorial exception.
+    (repo / 'main.py').write_text('value = 3\n')
+    _git(repo, 'commit', '-qam', 'new behavior')
+    assert _editorial_decide(comments) == (None, set())
+
+
+def test_editorial_carries_intermediate_findings_and_their_dispositions(editorial_repo):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    middle = _typo(repo)
+    midkey = rg.diff_key('master', middle)
+    finding = full_record(midkey, 'FINDINGS', 1, False, 'codex', head=middle,
+                          base=_git(repo, 'rev-parse', 'master'))
+    comments.append(_comment(finding, text='[P1] existing defect'))
+    _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(previous))
+    assert _editorial_decide(comments)[0].verdict == 'FINDINGS'
+    finding.disposed = True
+    comments.append(_comment(finding, text='1. rebutted: existing behavior checked'))
+    assert _editorial_decide(comments)[0].status()[0] == 'success'
+
+
+def test_editorial_chain_covers_whole_pr_and_cannot_survive_receipt_removal(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-qb', 'typo', 'master')
+    base = _git(repo, 'rev-parse', 'HEAD')
+    first = _typo(repo)
+    comments = [_editorial_comment(base)]
+    head = _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(first))
+    assert _editorial_decide(comments)[0].scope == 'editorial'
+    assert _editorial_decide(comments[1:]) == (None, set())
+    key = rg.diff_key('master', head)
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)).scope == 'editorial'
+    comments.clear()
+    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)) is None
+
+
+def test_editorial_after_independently_reviewed_code_fix_keeps_source_families(editorial_repo):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    oldkey = rg.diff_key('master', previous)
+    (repo / 'main.py').write_text('value = 3\n')
+    _git(repo, 'commit', '-qam', 'bounded fix')
+    fixed = _git(repo, 'rev-parse', 'HEAD')
+    fix = rg.Record(rg.diff_key('master', fixed), 'CLEAN', 0, False, 'codex', scope='fix',
+                    head=fixed, base=_git(repo, 'rev-parse', 'master'), from_head=previous, from_key=oldkey)
+    comments.append(_comment(fix))
+    _typo(repo)
+    comments.append(_editorial_comment(fixed))
+    rec, families = _editorial_decide(comments)
+    assert rec.scope == 'fix' and rec.status()[0] == 'success'
+    assert families == {'openai', 'google'}
+
+
+def test_editorial_cannot_override_a_declined_followup_scope(editorial_repo):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    middle = _typo(repo)
+    refused = full_record(rg.diff_key('master', middle), 'FAILED', 0, False, 'codex',
+                          scope='full-required', head=middle, base=_git(repo, 'rev-parse', 'master'))
+    comments.append(_comment(refused))
+    _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(previous))
+    rec, families = _editorial_decide(comments)
+    assert rec is None or rec.status()[0] != 'success'
+    assert not families
+
+
+@pytest.mark.parametrize('finding', [False, True])
+def test_native_evidence_survives_editorial_edits(editorial_repo, monkeypatch, finding):
+    repo = editorial_repo
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    comments = [_editorial_comment(previous)]
+    review = {'id': 9, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': previous,
+              'state': 'COMMENTED' if finding else 'APPROVED', 'submitted_at': '2026-10-14T00:00:00Z',
+              'body': '', 'html_url': 'native-9'}
+    inline = {'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'pull_request_review_id': 9,
+              'path': 'main.py', 'line': 1, 'body': '[P1] Defect on input zero.', 'html_url': 'inline-9'}
+    pages = {'reviews': [review], 'comments': [inline] if finding else [], 'events': []}
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
+    snapshot = _REAL_READ_NATIVE('o/r', 1, key, head, comments)
+    rec = rg.latest_matching(comments, key, snapshot.records)
+    assert rec.verdict == ('FINDINGS' if finding else 'CLEAN')
+    assert rg.passing_families(comments, key, snapshot.records) == (set() if finding else {'openai'})
+
+
+def test_editorial_cli_posts_author_attestation_and_never_starts_a_model(editorial_repo, monkeypatch, capsys):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
+        {'author_association': 'OWNER', 'body': body, 'html_url': 'editorial'}))
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('editorial invoked a model'))
+    assert rg.cmd_editorial(SimpleNamespace(base='master', since=previous, reason='Corrected spelling.')) == 0
+    assert 'no model invoked' in capsys.readouterr().out
+    assert rg.parse_record(comments[-1]['body']) is None
+    # Re-running review or the host's current-record check reuses the evidence.
+    assert rg.cmd_review(SimpleNamespace(base='master', reviewer=None, fresh=False, budget=10)) == 0
+
+
+def test_editorial_ci_and_cli_agree_on_sensitive_coverage(editorial_repo, monkeypatch, capsys):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    comments.append(_editorial_comment(previous))
+    _git(repo, 'remote', 'add', 'origin', str(repo))
+    _git(repo, 'update-ref', 'refs/pull/1/head', head)
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': head}, 'base': {'ref': 'master'}})
+    posted = []
+    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
+    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
+    assert posted[0][3] == 'success'
+    assert 'editorial' in capsys.readouterr().out

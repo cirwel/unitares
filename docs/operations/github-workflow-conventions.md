@@ -222,10 +222,25 @@ shared App; the operator's user account is reserved for operator actions.
 > still comes first; the point is that an unavailable reviewer never stops a
 > finished PR.
 
-"Review round joined" used to be prose: some PRs carried a
-review in the body, some in a comment, most in neither, and nothing could tell
-which. It is now a command and a status check, the way `test-cache.sh` made
-the test run one.
+The purpose is another useful perspective on substantive work, not a required
+sequence of model invocations. Choose the review that helps the change:
+
+| Work | Appropriate scrutiny |
+|---|---|
+| Spelling, grammar or formatting with unchanged meaning | Author's editorial explanation; no new model review |
+| Substantive implementation | One completed independent review when available: human, fresh-context model, or council |
+| Bounded corrections after review | Independent review of the cumulative delta and interactions; retain prior full coverage |
+| Material scope or security-assumption change | Full review of the changed work |
+| Sensitive paths | Coverage from two actual model families, under the existing rules |
+
+Council can be the review. Give independent participants the actual diff and
+relevant surrounding code, preserve their findings and reasoning, and record
+the completed review with `record --independent`. Once that review covers the
+work, do not launch the CLI reviewer merely to repeat it. A design council
+before implementation is useful input but cannot establish coverage of code
+it has not seen. An author participating in council is not an independent
+reviewer of their own contribution. A synthesis does not turn one family's
+work into two: sensitive changes need each credited family's actual review.
 
 - `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
   reviewer session, defaulting to pinned Codex Sol medium, read-only, within
@@ -250,10 +265,11 @@ the test run one.
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
   where the file ends with `VERDICT: CLEAN` or `VERDICT: FINDINGS(n)`. The flag
   attests a separate reviewer examined this diff; it is not authentication.
-  Consult remains advisory; do not turn advice into a verdict by adding a
-  marker. Council/dialectic is optional escalation for consequential design
-  choices or disagreement. Routine PRs need one completed code review. The
-  gate needs no model and no paid key; CI only reads review evidence.
+  Advisory consult output does not become a review by adding a verdict.
+  Council that independently reviewed the actual change counts directly;
+  council for design advice or disagreement remains optional. Substantive
+  routine work seeks one completed review, subject to the availability policy
+  above. The gate needs no model and no paid key; CI only reads evidence.
 - The record is keyed on the diff (path + blob of every changed file against
   the merge base), not the commit, so a base merge that leaves the PR's files
   alone — including `draft-base-refresh.yml`'s — keeps it.
@@ -360,9 +376,10 @@ on closed or merged PRs and check again before publishing results. Native
 cloud reviews already in flight can still finish after merge; triage any valid
 late findings in a follow-up change rather than reopening the merged PR.
 
-Native review focuses on major correctness issues. Consult is still useful
-for focused design advice; council/dialectic remains an optional escalation.
-Neither becomes an extra mandatory review step.
+Native review focuses on major correctness issues. Consult is useful for
+focused design advice. A council may supply the independent implementation
+review or help resolve design disagreement; neither route adds a mandatory
+second ritual.
 
 Pilot evidence: [draft #2340 native completion](https://github.com/cirwel/unitares/pull/2340#issuecomment-5794562451)
 named its reviewed commit after an explicit request. Automatic review did not
@@ -393,8 +410,9 @@ as evidence. After a clean review or minor findings, `review.sh` normally asks
 an independent reviewer to examine the complete cumulative delta from that
 full review, its interactions with the original work, and all prior findings.
 The reviewer also receives the original diff and review history. Small code
-fixes, documentation corrections and attestation updates can use this route;
-file type alone never exempts a change from scrutiny.
+fixes, documentation corrections and attestation updates can use this route.
+Meaning-preserving prose edits instead use the editorial exception below;
+file type alone never establishes that meaning is unchanged.
 
 After a base merge, follow-up material distinguishes subsequent PR edits from
 integrated upstream work. Git reconstructs the previously reviewed contribution
@@ -418,8 +436,9 @@ current endpoints. It is additional coverage, not a claim that the original
 reviewers saw later edits. For sensitive changes it preserves the families
 that actually performed the original full reviews; it cannot invent a missing
 second family. Git verifies the source and destination diff keys and ancestry.
-A changed diff without an independent follow-up remains unreviewed, and open
-findings on the current diff remain blockers even if another reviewer is clean.
+A substantively changed diff without independent coverage remains unreviewed.
+Open findings remain blockers even if another reviewer is clean or the author
+posts an editorial attestation.
 Subsequent edits use the cumulative delta from a full review rather than a
 chain of unchecked receipts. Follow-ups do not consume full-review cycles,
 including when the full-cycle budget is exhausted.
@@ -465,6 +484,37 @@ the **trusted base** policy enables it. Runtime, policy and auth changes cannot
 qualify. Findings remain visible for the proposal's author; design suggestions
 do not block merging a proposal. Merging it does not authorize implementation,
 which requires correctness review under the ordinary/security rules above.
+
+#### Editorial changes
+
+Operator direction, 2026-10-14: a typo does not warrant another model review.
+The author can attest a spelling, grammar or formatting correction that leaves
+meaning, commands, API contracts, requirements, security and agent instructions
+unchanged:
+
+```bash
+./scripts/dev/review.sh editorial --reason "Corrected a spelling error; meaning unchanged"
+```
+
+This records the complete change from the previous commit to the pushed head.
+Use `--since <commit>` for a longer editorial span, after examining every change
+in it. The command calls no model. The record says **author attestation**,
+not independent review, and adds no model family or full-review cycle. Existing
+coverage carries forward, including a previously reviewed bounded fix; open
+findings still need dispositions. If the entire PR is covered by editorial
+attestations, it needs no independent review. An editorial receipt cannot supply
+missing review of earlier substantive work.
+
+Git verifies the endpoints and every intervening commit. Eligibility is limited
+to modifications of existing UTF-8 Markdown under `docs/`, `README.md` or
+`CHANGELOG.md`, excluding sensitive paths, agent instruction files and
+skills/commands/prompts directories. Added/deleted/renamed files, mode changes,
+symlinks, binary content, code and base merges do not qualify. These checks
+establish scope, not semantic equivalence: the author's explanation supplies
+that judgment. One word can change a requirement; “must” → “may”, a changed CLI
+example, a security claim or an agent instruction is substantive even in a
+README. If meaning or interactions are uncertain, use independent follow-up
+review. Tests and CI appropriate to the change still apply.
 
 #### Review provider availability
 
@@ -575,11 +625,9 @@ agy        # once, interactively: sign in, then /exit
 Antigravity's terms let Google collect interaction data unless you opt out in
 its settings. A review sends the diff and the changed files.
 
-Operator, 2026-09-25: Codex is unavailable indefinitely (the OpenAI account
-was suspended). Until that entry is removed, review with a fresh-context
-Claude subagent or council, or another model such as Gemini, and record it
-honestly ([Recording a review without gh](#recording-a-review-without-gh)
-when `gh` is missing).
+Provider availability is controlled by `review_providers.json`; historical
+outage notes are not a current provider policy. Existing independent human,
+subagent or council reviews can be recorded regardless of CLI availability.
 
 #### Requesting review without local tooling
 
@@ -627,9 +675,9 @@ the next section.
 #### Recording a review without gh
 
 Operator decision, 2026-09-24: an agent without `gh` (a cloud session with
-only a GitHub connector) may complete its own review gate with a **subagent
-or council review**, as long as the record says which it was. Before this, a
-Codex usage limit left such sessions with no way to finish a PR (#2423).
+only a GitHub connector) may record a **subagent or council review**, as long
+as the record says which it was. This is equally valid when `gh` is installed:
+omit `--emit` to post directly. It is not an outage-only alternative.
 
 1. Run the review in a **fresh context** that did not write the diff: a
    subagent given only the diff and `REVIEW_PROMPT` from `review_gate.py`, or
