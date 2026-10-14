@@ -53,7 +53,7 @@ record**. Privacy narrows the first.
 | A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
 | Advice from a specific HTTP host | `consult(host_id=...)` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; raw model/token/temperature controls remain on `call_model` |
 | A raw completion on a local or Hugging Face host | `call_model` *(hidden)* | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
-| Which hosts exist and are ready | `list_inference_hosts`, `describe_inference_host` *(hidden)* | readable before `start_session`; calling any inference tool needs an identity |
+| Which configured hosts can serve | `list_inference_hosts`, `describe_inference_host` *(hidden)* | default list includes configured hosts, including temporary outages; inspect `available` and `cooldown`. Use `include_unconfigured=true` for the full inventory. Readable before `start_session`; inference calls need identity |
 | A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
 
 **Routing facts.**
@@ -81,7 +81,10 @@ record**. Privacy narrows the first.
   default install. Without it, thorough `consult` fails with a recovery hint
   unless automatic routing uses `allow_degraded=true`, which returns a standard local answer marked
   `status: "degraded"` instead. `delegate_inference` has no fallback.
-  `list_inference_hosts` shows what this deployment has.
+  `list_inference_hosts` defaults to configured hosts. Unconfigured adapters
+  remain inspectable with `include_unconfigured=true` or by exact ID through
+  `describe_inference_host`. Configured hosts with outages or cooldowns remain
+  listed with their availability; configuration is not a readiness guarantee.
 - **A failed adapter call has caller-only diagnostics.** With
   `response_mode="full"`, `consult` keeps a bounded excerpt of unvalidated
   CLI output, the specific backend error message (up to 500 characters), and

@@ -409,7 +409,7 @@ def inference_extensions() -> dict[str, Any]:
 
 def list_inference_hosts(
     *,
-    include_unconfigured: bool = True,
+    include_unconfigured: bool = False,
     provider_kind: str | None = None,
 ) -> list[dict[str, Any]]:
     hosts = _base_hosts()

@@ -131,12 +131,12 @@ class TestInferenceHostRegistry:
     """Tests for list_inference_hosts and describe_inference_host."""
 
     @pytest.mark.asyncio
-    async def test_list_inference_hosts_includes_active_and_placeholder_hosts(self):
+    async def test_explicit_full_inventory_includes_unconfigured_hosts(self):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
              patch.dict(os.environ, {"UNITARES_MODEL_ID": "test-local:latest"}, clear=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
-            result = await handle_list_inference_hosts({})
+            result = await handle_list_inference_hosts({"include_unconfigured": True})
 
         parsed = _parse_text_content(result)
         host_ids = {host["host_id"] for host in parsed["hosts"]}
@@ -155,11 +155,12 @@ class TestInferenceHostRegistry:
         ]
 
     @pytest.mark.asyncio
-    async def test_list_inference_hosts_can_hide_unconfigured_hosts(self):
+    @pytest.mark.parametrize("arguments", [{}, {"include_unconfigured": False}])
+    async def test_list_inference_hosts_defaults_to_configured_hosts(self, arguments):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
-            result = await handle_list_inference_hosts({"include_unconfigured": False})
+            result = await handle_list_inference_hosts(arguments)
 
         parsed = _parse_text_content(result)
         assert [host["host_id"] for host in parsed["hosts"]] == ["ollama:local"]
@@ -173,6 +174,57 @@ class TestInferenceHostRegistry:
 
         parsed = _parse_text_content(result)
         assert [host["host_id"] for host in parsed["hosts"]] == ["hf:router"]
+
+    @pytest.mark.asyncio
+    async def test_default_listing_keeps_configured_but_unavailable_hosts(self):
+        from src.mcp_handlers.support import inference_registry as registry
+        from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+        with patch.object(registry, "_ollama_available", return_value=False), \
+             patch.object(registry, "_hf_token_present", return_value=False):
+            direct = registry.list_inference_hosts()
+            parsed = _parse_text_content(await handle_list_inference_hosts({}))
+
+        for hosts in (direct, parsed["hosts"]):
+            assert "hf:router" not in {host["host_id"] for host in hosts}
+            local = next(host for host in hosts if host["host_id"] == "ollama:local")
+            assert local["configured"] is True
+            assert local["available"] is False
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_provider_filter_requires_full_inventory(self):
+        from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+        with patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False):
+            default = _parse_text_content(await handle_list_inference_hosts({"provider_kind": "hf"}))
+            full = _parse_text_content(await handle_list_inference_hosts({
+                "provider_kind": "hf", "include_unconfigured": True,
+            }))
+
+        assert default["hosts"] == []
+        assert default["count"] == 0
+        assert full["count"] == 1
+        assert full["hosts"][0]["host_id"] == "hf:router"
+        assert full["hosts"][0]["configured"] is False
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_host_is_describable_but_rejected_before_http(self):
+        from src.mcp_handlers.support import model_inference as mi
+
+        with patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
+             patch.object(mi, "OPENAI_AVAILABLE", True), \
+             patch.object(mi, "OpenAI") as client:
+            described = _parse_text_content(await mi.handle_describe_inference_host({"host_id": "hf:router"}))
+            outcome = await mi.run_model_inference(mi.CallModelRequest(
+                prompt="hello", host_id="hf:router", privacy="cloud", requesting_agent_uuid=None,
+            ))
+
+        assert described["host"]["configured"] is False
+        assert described["host"]["available"] is False
+        assert described["host"]["accepts_host_id_from"] == ["call_model", "consult"]
+        assert outcome.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+        assert outcome.failure.execution_started is False
+        client.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_describe_inference_host_unknown_fails_closed(self):
@@ -266,7 +318,7 @@ class TestInvocationRoutingDisclosure:
             handle_list_inference_hosts,
         )
 
-        listed = _parse_text_content(await handle_list_inference_hosts({}))
+        listed = _parse_text_content(await handle_list_inference_hosts({"include_unconfigured": True}))
         assert listed["hosts"], "registry returned no hosts to check"
 
         for entry in listed["hosts"]:

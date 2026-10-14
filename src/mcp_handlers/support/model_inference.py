@@ -187,8 +187,8 @@ def _invocation_gate(host: Dict[str, Any] | None = None) -> Dict[str, Any]:
 
 @mcp_tool("list_inference_hosts", timeout=5.0, requires_identity="pre_onboard")
 async def handle_list_inference_hosts(arguments: Dict[str, Any]) -> Sequence[TextContent]:
-    """List known inference hosts and adapter placeholders."""
-    include_unconfigured = arguments.get("include_unconfigured", True)
+    """List configured inference hosts, with explicit opt-in to the full inventory."""
+    include_unconfigured = arguments.get("include_unconfigured", False)
     if isinstance(include_unconfigured, str):
         include_unconfigured = include_unconfigured.strip().lower() not in (
             "0", "false", "no",

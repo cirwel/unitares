@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.39.0",
+  "version": "1.40.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "d847184e96672b5a4b031252f4f55f4b96ced8461559425b4ce6d12413166864",
+  "surface_sha256": "83dbe6a47d53d242b889e15fe06868e09dd7d92c139f6d6b190858641aa38ce1",
   "capabilities": [
     {
       "name": "start_session",
@@ -312,7 +312,7 @@
       "name": "list_inference_hosts",
       "implementation": "list_inference_hosts",
       "kind": "canonical_tool",
-      "input_schema_sha256": "0edb23d1b0850da0ab0874405ba3822864c3906231ad9fc06e9cd37479a8e859",
+      "input_schema_sha256": "f040948548b5fd80b1818050474f0385d7f4cad63964affeff0ff5df2d73e925",
       "transport_names": {
         "mcp_streamable_http": "list_inference_hosts",
         "rest_v1_tools": "list_inference_hosts",
