@@ -1150,6 +1150,56 @@ async def test_failed_consultation_is_recorded_without_route_or_advice(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", ["compact", "full"])
+@pytest.mark.parametrize("oversized", [False, True])
+async def test_adapter_failure_diagnostics_are_caller_only(
+    monkeypatch, audit_sinks, response_mode, oversized
+):
+    from src.mcp_handlers.support.delegated_inference import _raw_excerpt_details
+
+    raw = "UNVALIDATED-HEAD " + "x" * 4000 + " UNVALIDATED-ANSWER-TAIL"
+    details = _raw_excerpt_details({"status": "malformed", "raw": raw})
+    if oversized:
+        # A stale/future service cannot flood the facade either.
+        details["adapter_raw_excerpt"] = raw
+    details.update({
+        "adapter_status": "malformed", "exit_status": 0,
+        "dispatch_phase": "terminal", "adapter_answer_region_located": False,
+        "adapter_answer_region_note": "No assistant answer region was isolated.",
+    })
+    delegated = AsyncMock(return_value=_failure(
+        "DELEGATED_INFERENCE_FAILED", execution_started=True, details=details,
+    ))
+    monkeypatch.setattr(co, "run_delegated_inference", delegated)
+    parsed = _payload(await co.handle_consult({
+        "brief": _BRIEF_SENTINEL, "effort": "thorough", "privacy": "cloud_allowed",
+        "response_mode": response_mode,
+    }))
+    assert parsed["success"] is False
+    assert parsed["status"] == "failed"
+    assert "advice" not in parsed
+    delegated.assert_awaited_once()
+    if response_mode == "full":
+        diagnostics = parsed["diagnostics"]["upstream"]
+        excerpt = diagnostics["adapter_raw_excerpt"]
+        assert excerpt.startswith("UNVALIDATED-HEAD")
+        assert excerpt.endswith("UNVALIDATED-ANSWER-TAIL")
+        assert len(excerpt) <= 2500
+        assert diagnostics["adapter_raw_excerpt_truncated"] is True
+        assert "not an answer" in diagnostics["adapter_raw_excerpt_note"]
+        assert diagnostics["adapter_status"] == "malformed"
+        assert diagnostics["exit_status"] == 0
+        assert diagnostics["adapter_answer_region_located"] is False
+        assert "No assistant" in diagnostics["adapter_answer_region_note"]
+    else:
+        assert "diagnostics" not in parsed
+    jsonl, pg = await audit_sinks()
+    assert len(pg) == 1
+    assert "UNVALIDATED" not in json.dumps(pg) + jsonl
+    assert "adapter_raw_excerpt" not in json.dumps(pg)
+
+
+@pytest.mark.asyncio
 async def test_policy_refusal_is_recorded(monkeypatch, audit_sinks):
     parsed = _payload(await co.handle_consult({
         "brief": "Deep analysis",

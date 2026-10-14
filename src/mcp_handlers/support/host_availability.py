@@ -1,4 +1,4 @@
-"""Provider-side availability for the subscription-CLI host adapters.
+"""Observed provider availability for subscription-CLI hosts and the HF router.
 
 ``host_adapter_available`` sees only the local side: flag, CLI, bearer. A
 provider account at its usage limit, or logged out, still has a working CLI,
@@ -28,6 +28,9 @@ forgets that a provider is at its limit and spends a failed call finding out
 again. Redis is a copy, never a dependency: every await is bounded, and
 Redis down or slow means the in-process behaviour, never an exception.
 Nothing polls a provider.
+
+The HTTP HF router uses the same cooldown store after observed 401/402/429
+responses. A token alone does not prove an account has usable credits.
 """
 
 from __future__ import annotations
