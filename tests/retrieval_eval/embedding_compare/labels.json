@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "frozen_at": "2026-10-14T04:05:38.532162+00:00",
+  "label_method": "24 hand-selected prior logged queries with in-scope targets; one agent-authored paraphrase per topic. Fixed before scoring. Correlated query pairs. Known-item pilot, not representative relevance ground truth. An initially considered lease-orphan topic was excluded BEFORE scoring because its target was archived.",
+  "pairs": [
+    {
+      "query_id": "forecast-logged",
+      "topic": "forecast",
+      "origin": "logged",
+      "query": "check-in forecasts restart open predictions",
+      "relevant_ids": [
+        "2026-09-24T10:22:28.558342+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:44:31.405292-06:00"
+    },
+    {
+      "query_id": "forecast-authored_paraphrase",
+      "topic": "forecast",
+      "origin": "authored_paraphrase",
+      "query": "Why can an outcome no longer find its forecast after the server restarts?",
+      "relevant_ids": [
+        "2026-09-24T10:22:28.558342+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "rest_binding-logged",
+      "topic": "rest_binding",
+      "origin": "logged",
+      "query": "check_working_state REST session id X-Session-ID",
+      "relevant_ids": [
+        "2026-09-24T11:35:07.363328+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:10:29.535739-06:00"
+    },
+    {
+      "query_id": "rest_binding-authored_paraphrase",
+      "topic": "rest_binding",
+      "origin": "authored_paraphrase",
+      "query": "Why does reading my working state over HTTP say I am unbound even though writes accept my session?",
+      "relevant_ids": [
+        "2026-09-24T11:35:07.363328+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "docker_upgrade-logged",
+      "topic": "docker_upgrade",
+      "origin": "logged",
+      "query": "Docker Compose upgrade path schema bootstrap empty postgres volume",
+      "relevant_ids": [
+        "2026-09-27T05:52:58.048572+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:44:28.463773-06:00"
+    },
+    {
+      "query_id": "docker_upgrade-authored_paraphrase",
+      "topic": "docker_upgrade",
+      "origin": "authored_paraphrase",
+      "query": "How could upgrading the containers leave an existing installation running against an old database schema?",
+      "relevant_ids": [
+        "2026-09-27T05:52:58.048572+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "connector_host-logged",
+      "topic": "connector_host",
+      "origin": "logged",
+      "query": "421 gov.cirwel.org Host allowed hosts claude.ai connector",
+      "relevant_ids": [
+        "2026-09-12T07:17:58.807585+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:10:09.405978-06:00"
+    },
+    {
+      "query_id": "connector_host-authored_paraphrase",
+      "topic": "connector_host",
+      "origin": "authored_paraphrase",
+      "query": "What stopped the Claude web connector from reaching governance even though the server was running?",
+      "relevant_ids": [
+        "2026-09-12T07:17:58.807585+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "catalog_payload-logged",
+      "topic": "catalog_payload",
+      "origin": "logged",
+      "query": "Antigravity AX eval 51-tool surface check-in payload",
+      "relevant_ids": [
+        "2026-09-21T07:01:03.014933+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T00:52:15.012182-06:00"
+    },
+    {
+      "query_id": "catalog_payload-authored_paraphrase",
+      "topic": "catalog_payload",
+      "origin": "authored_paraphrase",
+      "query": "What did the Gemini user experience evaluation say about onboarding and the context consumed by tools?",
+      "relevant_ids": [
+        "2026-09-21T07:01:03.014933+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "checkin_schema-logged",
+      "topic": "checkin_schema",
+      "origin": "logged",
+      "query": "Check-in complexity confidence schema bare string branch JSON Schema bound",
+      "relevant_ids": [
+        "2026-09-12T19:11:39.971044+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T00:52:20.718417-06:00"
+    },
+    {
+      "query_id": "checkin_schema-authored_paraphrase",
+      "topic": "checkin_schema",
+      "origin": "authored_paraphrase",
+      "query": "Why might a client think a confidence value is valid while the check-in handler refuses it?",
+      "relevant_ids": [
+        "2026-09-12T19:11:39.971044+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "alias_description-logged",
+      "topic": "alias_description",
+      "origin": "logged",
+      "query": "Workflow alias absent from schema catalog decorator registry description fallback Tool:",
+      "relevant_ids": [
+        "2026-09-12T09:26:02.212602+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T00:52:20.538306-06:00"
+    },
+    {
+      "query_id": "alias_description-authored_paraphrase",
+      "topic": "alias_description",
+      "origin": "authored_paraphrase",
+      "query": "Why did a workflow alias show only its name instead of a useful description when a client looked it up?",
+      "relevant_ids": [
+        "2026-09-12T09:26:02.212602+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "attestation_reload-logged",
+      "topic": "attestation_reload",
+      "origin": "logged",
+      "query": "dialectic v2 bilateral attestation signature_version _reconstruct_session_from_dict",
+      "relevant_ids": [
+        "2026-09-02T22:04:09.405935+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:10:35.79263-06:00"
+    },
+    {
+      "query_id": "attestation_reload-authored_paraphrase",
+      "topic": "attestation_reload",
+      "origin": "authored_paraphrase",
+      "query": "Why could the two-party review signatures no longer be verified after loading their session from the database?",
+      "relevant_ids": [
+        "2026-09-02T22:04:09.405935+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "facilitation_reap-logged",
+      "topic": "facilitation_reap",
+      "origin": "logged",
+      "query": "dialectic awaiting_facilitation reaped failed 4h inactivity timeout",
+      "relevant_ids": [
+        "2026-09-19T15:42:14.359904+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:55:54.150183-06:00"
+    },
+    {
+      "query_id": "facilitation_reap-authored_paraphrase",
+      "topic": "facilitation_reap",
+      "origin": "authored_paraphrase",
+      "query": "Why was a review waiting for human help marked failed after being idle for several hours?",
+      "relevant_ids": [
+        "2026-09-19T15:42:14.359904+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "delegation_timeout-logged",
+      "topic": "delegation_timeout",
+      "origin": "logged",
+      "query": "delegate_inference timeout_s",
+      "relevant_ids": [
+        "2026-09-17T06:57:23.056529+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:45:14.915811-06:00"
+    },
+    {
+      "query_id": "delegation_timeout-authored_paraphrase",
+      "topic": "delegation_timeout",
+      "origin": "authored_paraphrase",
+      "query": "How can a delegated model request allow several minutes but still time out at the client after one minute?",
+      "relevant_ids": [
+        "2026-09-17T06:57:23.056529+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "cold_label-logged",
+      "topic": "cold_label",
+      "origin": "logged",
+      "query": "cold-start sync_state verdict Behavioral assessment low risk ode_fallback",
+      "relevant_ids": [
+        "2026-06-29T10:48:00.649727+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T00:52:42.514256-06:00"
+    },
+    {
+      "query_id": "cold_label-authored_paraphrase",
+      "topic": "cold_label",
+      "origin": "authored_paraphrase",
+      "query": "Why does a new session describe its verdict as behavioral before it has accumulated behavior?",
+      "relevant_ids": [
+        "2026-06-29T10:48:00.649727+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "inbox_claim-logged",
+      "topic": "inbox_claim",
+      "origin": "logged",
+      "query": "/v1/msg/inbox consuming claim splits single-receiver mail SKIP LOCKED",
+      "relevant_ids": [
+        "2026-08-29T20:11:28.155684+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T12:03:11.669444-06:00"
+    },
+    {
+      "query_id": "inbox_claim-authored_paraphrase",
+      "topic": "inbox_claim",
+      "origin": "authored_paraphrase",
+      "query": "What happens when one recipient retries an inbox read while the first request is still claiming messages?",
+      "relevant_ids": [
+        "2026-08-29T20:11:28.155684+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "silence_surface-logged",
+      "topic": "silence_surface",
+      "origin": "logged",
+      "query": "Steward silent SILENCE probe",
+      "relevant_ids": [
+        "2026-09-03T05:13:57.626590+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:09:54.126622-06:00"
+    },
+    {
+      "query_id": "silence_surface-authored_paraphrase",
+      "topic": "silence_surface",
+      "origin": "authored_paraphrase",
+      "query": "How could a resident be silent for days when the server detected the outage but nobody saw it?",
+      "relevant_ids": [
+        "2026-09-03T05:13:57.626590+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "label_decay-logged",
+      "topic": "label_decay",
+      "origin": "logged",
+      "query": "KG retrieval eval fake regression labeled targets archived out of default search scope",
+      "relevant_ids": [
+        "2026-09-09T03:49:35.971083+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:10:39.926397-06:00"
+    },
+    {
+      "query_id": "label_decay-authored_paraphrase",
+      "topic": "label_decay",
+      "origin": "authored_paraphrase",
+      "query": "Could the search benchmark get worse because its expected answers were archived rather than because retrieval changed?",
+      "relevant_ids": [
+        "2026-09-09T03:49:35.971083+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "reranker-logged",
+      "topic": "reranker",
+      "origin": "logged",
+      "query": "cross encoder reranker for retrieval",
+      "relevant_ids": [
+        "2026-06-20T20:57:05.970284+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-11T04:31:39.863828-06:00"
+    },
+    {
+      "query_id": "reranker-authored_paraphrase",
+      "topic": "reranker",
+      "origin": "authored_paraphrase",
+      "query": "Did adding a second model to reorder search results improve memory retrieval enough to justify its delay?",
+      "relevant_ids": [
+        "2026-06-20T20:57:05.970284+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "heredoc-logged",
+      "topic": "heredoc",
+      "origin": "logged",
+      "query": "Bash heredoc python3 - <<PY silently swallows piped stdin",
+      "relevant_ids": [
+        "2026-04-17T21:55:45.824345"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:11:14.738309-06:00"
+    },
+    {
+      "query_id": "heredoc-authored_paraphrase",
+      "topic": "heredoc",
+      "origin": "authored_paraphrase",
+      "query": "Why does a Python script receive no piped data when its source is supplied through a shell heredoc?",
+      "relevant_ids": [
+        "2026-04-17T21:55:45.824345"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "summary_bloat-logged",
+      "topic": "summary_bloat",
+      "origin": "logged",
+      "query": "Summary Bloat long summaries inflate search results",
+      "relevant_ids": [
+        "2026-09-21T07:03:04.990640+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:44:03.631414-06:00"
+    },
+    {
+      "query_id": "summary_bloat-authored_paraphrase",
+      "topic": "summary_bloat",
+      "origin": "authored_paraphrase",
+      "query": "Where should long analysis go in a knowledge record so its search preview remains readable?",
+      "relevant_ids": [
+        "2026-09-21T07:03:04.990640+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "write_timeout-logged",
+      "topic": "write_timeout",
+      "origin": "logged",
+      "query": "update_finding TIMEOUT write committed blind retry duplicate resolution_notes",
+      "relevant_ids": [
+        "2026-09-27T09:22:54.648646+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T11:44:08.993558-06:00"
+    },
+    {
+      "query_id": "write_timeout-authored_paraphrase",
+      "topic": "write_timeout",
+      "origin": "authored_paraphrase",
+      "query": "Can an edit succeed even if the tool reports a timeout, and would retrying duplicate my notes?",
+      "relevant_ids": [
+        "2026-09-27T09:22:54.648646+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "migration_receipt-logged",
+      "topic": "migration_receipt",
+      "origin": "logged",
+      "query": "migration registered applied constraints exist 034 lease-plane 047 knowledge",
+      "relevant_ids": [
+        "2026-08-10T08:08:38.841593+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:10:55.863703-06:00"
+    },
+    {
+      "query_id": "migration_receipt-authored_paraphrase",
+      "topic": "migration_receipt",
+      "origin": "authored_paraphrase",
+      "query": "Does a migration being listed as applied prove that the expected database constraints actually exist?",
+      "relevant_ids": [
+        "2026-08-10T08:08:38.841593+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "freeze-logged",
+      "topic": "freeze",
+      "origin": "logged",
+      "query": "feature freeze through 2026-10-22",
+      "relevant_ids": [
+        "2026-10-13T09:17:42.808916+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-13T03:09:01.008678-06:00"
+    },
+    {
+      "query_id": "freeze-authored_paraphrase",
+      "topic": "freeze",
+      "origin": "authored_paraphrase",
+      "query": "Which work is still allowed while the forecast trial freezes new UNITARES capabilities?",
+      "relevant_ids": [
+        "2026-10-13T09:17:42.808916+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "handler_schema-logged",
+      "topic": "handler_schema",
+      "origin": "logged",
+      "query": "Pydantic schema is authoritative about what handlers see divergent handler assumption dead code",
+      "relevant_ids": [
+        "2026-04-19T18:14:06.020931"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:11:20.024582-06:00"
+    },
+    {
+      "query_id": "handler_schema-authored_paraphrase",
+      "topic": "handler_schema",
+      "origin": "authored_paraphrase",
+      "query": "What makes a handler option ineffective even when the code reads it from the request arguments?",
+      "relevant_ids": [
+        "2026-04-19T18:14:06.020931"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "shadow_actuation-logged",
+      "topic": "shadow_actuation",
+      "origin": "logged",
+      "query": "cold-start circuit_breaker maturity actuation_applied false enforcement applied true",
+      "relevant_ids": [
+        "2026-08-11T23:50:40.155966+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T01:09:41.485071-06:00"
+    },
+    {
+      "query_id": "shadow_actuation-authored_paraphrase",
+      "topic": "shadow_actuation",
+      "origin": "authored_paraphrase",
+      "query": "How did an observation-only cold-start risk check really pause an agent while reporting no actuation?",
+      "relevant_ids": [
+        "2026-08-11T23:50:40.155966+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "kg_authority-logged",
+      "topic": "kg_authority",
+      "origin": "logged",
+      "query": "backend drift AGE vs PG canonical",
+      "relevant_ids": [
+        "2026-06-17T14:23:13.683631+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-03T00:52:50.908889-06:00"
+    },
+    {
+      "query_id": "kg_authority-authored_paraphrase",
+      "topic": "kg_authority",
+      "origin": "authored_paraphrase",
+      "query": "Which store was chosen as the authoritative source for knowledge: the graph extension or the relational tables?",
+      "relevant_ids": [
+        "2026-06-17T14:23:13.683631+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    },
+    {
+      "query_id": "fleet_read_scope-logged",
+      "topic": "fleet_read_scope",
+      "origin": "logged",
+      "query": "ephemeral agent read access fleet observability scope",
+      "relevant_ids": [
+        "2026-10-12T06:00:49.304563+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments.",
+      "first_observed_at": "2026-10-12T00:00:18.193723-06:00"
+    },
+    {
+      "query_id": "fleet_read_scope-authored_paraphrase",
+      "topic": "fleet_read_scope",
+      "origin": "authored_paraphrase",
+      "query": "What standing objection limits the fleet monitoring information a temporary caller should be allowed to read?",
+      "relevant_ids": [
+        "2026-10-12T06:00:49.304563+00:00"
+      ],
+      "rationale": "Known-item lookup of the named incident, observation, or decision; not exhaustive relevance judgments."
+    }
+  ]
+}

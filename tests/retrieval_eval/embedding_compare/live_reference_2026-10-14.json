@@ -1,0 +1,400 @@
+{
+  "captured_at": "2026-10-14T04:09:27.249Z",
+  "caveat": "Live current BGE serving reference; mutable corpus and existing age/connectivity/authority ranking, not an exact frozen-corpus ablation.",
+  "results": [
+    {
+      "query_id": "forecast-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 494,
+      "target_rank": 1
+    },
+    {
+      "query_id": "forecast-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 952,
+      "target_rank": 14
+    },
+    {
+      "query_id": "rest_binding-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 1398,
+      "target_rank": 2
+    },
+    {
+      "query_id": "rest_binding-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 451,
+      "target_rank": 14
+    },
+    {
+      "query_id": "docker_upgrade-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 907,
+      "target_rank": 1
+    },
+    {
+      "query_id": "docker_upgrade-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1354,
+      "target_rank": 8
+    },
+    {
+      "query_id": "connector_host-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 400,
+      "target_rank": 1
+    },
+    {
+      "query_id": "connector_host-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 804,
+      "target_rank": 4
+    },
+    {
+      "query_id": "catalog_payload-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 1235,
+      "target_rank": 1
+    },
+    {
+      "query_id": "catalog_payload-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 390,
+      "target_rank": 1
+    },
+    {
+      "query_id": "checkin_schema-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 747,
+      "target_rank": 2
+    },
+    {
+      "query_id": "checkin_schema-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1144,
+      "target_rank": 19
+    },
+    {
+      "query_id": "alias_description-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 426,
+      "target_rank": 7
+    },
+    {
+      "query_id": "alias_description-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 875,
+      "target_rank": 7
+    },
+    {
+      "query_id": "attestation_reload-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 1298,
+      "target_rank": 1
+    },
+    {
+      "query_id": "attestation_reload-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 410,
+      "target_rank": 16
+    },
+    {
+      "query_id": "facilitation_reap-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 855,
+      "target_rank": 1
+    },
+    {
+      "query_id": "facilitation_reap-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1388,
+      "target_rank": 8
+    },
+    {
+      "query_id": "delegation_timeout-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 816,
+      "target_rank": 1
+    },
+    {
+      "query_id": "delegation_timeout-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 418,
+      "target_rank": 2
+    },
+    {
+      "query_id": "cold_label-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 1227,
+      "target_rank": 1
+    },
+    {
+      "query_id": "cold_label-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 412,
+      "target_rank": null
+    },
+    {
+      "query_id": "inbox_claim-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 855,
+      "target_rank": 4
+    },
+    {
+      "query_id": "inbox_claim-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1296,
+      "target_rank": 6
+    },
+    {
+      "query_id": "silence_surface-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 433,
+      "target_rank": 1
+    },
+    {
+      "query_id": "silence_surface-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 874,
+      "target_rank": 5
+    },
+    {
+      "query_id": "label_decay-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1231,
+      "target_rank": 10
+    },
+    {
+      "query_id": "label_decay-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 420,
+      "target_rank": 15
+    },
+    {
+      "query_id": "reranker-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 845,
+      "target_rank": 1
+    },
+    {
+      "query_id": "reranker-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1295,
+      "target_rank": 10
+    },
+    {
+      "query_id": "heredoc-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 336,
+      "target_rank": 1
+    },
+    {
+      "query_id": "heredoc-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 649,
+      "target_rank": 7
+    },
+    {
+      "query_id": "summary_bloat-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 949,
+      "target_rank": 4
+    },
+    {
+      "query_id": "summary_bloat-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 316,
+      "target_rank": 11
+    },
+    {
+      "query_id": "write_timeout-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 624,
+      "target_rank": 2
+    },
+    {
+      "query_id": "write_timeout-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 955,
+      "target_rank": 11
+    },
+    {
+      "query_id": "migration_receipt-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 340,
+      "target_rank": 1
+    },
+    {
+      "query_id": "migration_receipt-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 663,
+      "target_rank": 1
+    },
+    {
+      "query_id": "freeze-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 957,
+      "target_rank": 1
+    },
+    {
+      "query_id": "freeze-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 378,
+      "target_rank": 1
+    },
+    {
+      "query_id": "handler_schema-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "semantic",
+      "ms": 754,
+      "target_rank": 10
+    },
+    {
+      "query_id": "handler_schema-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1197,
+      "target_rank": null
+    },
+    {
+      "query_id": "shadow_actuation-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 434,
+      "target_rank": 1
+    },
+    {
+      "query_id": "shadow_actuation-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 784,
+      "target_rank": 13
+    },
+    {
+      "query_id": "kg_authority-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 1086,
+      "target_rank": 11
+    },
+    {
+      "query_id": "kg_authority-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 365,
+      "target_rank": 4
+    },
+    {
+      "query_id": "fleet_read_scope-logged",
+      "origin": "logged",
+      "success": true,
+      "mode": "hybrid_rrf",
+      "ms": 814,
+      "target_rank": 1
+    },
+    {
+      "query_id": "fleet_read_scope-authored_paraphrase",
+      "origin": "authored_paraphrase",
+      "success": true,
+      "mode": "semantic",
+      "ms": 1201,
+      "target_rank": 1
+    }
+  ],
+  "health_observed_after": {
+    "version": "3.3.0",
+    "build_sha": "54a282044",
+    "uptime": {
+      "seconds": 1030,
+      "formatted": "17m 10s",
+      "started_at": "2026-10-13T21:57:51.873647"
+    }
+  },
+  "export_note": "Candidate IDs omitted; query IDs join to labels.json, with observed target rank and mode retained."
+}
