@@ -5256,6 +5256,9 @@ def test_editorial_cli_posts_author_attestation_and_never_starts_a_model(editori
     assert rg.cmd_editorial(SimpleNamespace(base='master', since=previous, reason='Corrected spelling.')) == 0
     assert 'no model invoked' in capsys.readouterr().out
     assert rg.parse_record(comments[-1]['body']) is None
+    workflow = (SCRIPT.parents[2] / '.github/workflows/review-gate.yml').read_text()
+    triggers = re.findall(r"contains\(github.event.comment.body, '([^']+)'\)", workflow)
+    assert any(marker in comments[-1]['body'] for marker in triggers), 'posted evidence must wake CI'
     # Re-running review or the host's current-record check reuses the evidence.
     assert rg.cmd_review(SimpleNamespace(base='master', reviewer=None, fresh=False, budget=10)) == 0
 
