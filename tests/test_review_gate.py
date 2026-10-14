@@ -907,7 +907,7 @@ def test_app_findings_dispositions_failures_and_round_budget_share_admission():
     comments = [finding, clean, disposition]
     assert rg.latest_matching(comments, k).status()[0] == "success"
     assert rg.passing_families(comments, k) == {"openai", "google"}
-    assert rg.codex_rounds(comments, [], []).count == 2
+    assert rg.codex_rounds(comments, [], []).count == 1
     failure = _app_comment(full_record(k, "FAILED", 0, False, "codex"))
     assert rg.failed_runs([failure], k, "codex") == 1
     assert rg.passing_families([failure], k) == set()
@@ -2189,7 +2189,7 @@ def test_cap_applies_to_p2_fix_loops_only(count, last, capped):
 
 def test_check_description_shows_the_round():
     assert rg.round_note(None) == "" and rg.round_note(rg.CodexRounds()) == ""
-    assert rg.round_note(rg.CodexRounds(2)) == " · review round 2 of 3"
+    assert rg.round_note(rg.CodexRounds(2)) == " · review cycle 2 of 3"
     assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
 
 
@@ -2208,7 +2208,7 @@ def test_switched_off_cap_never_caps_a_p2_fix_loop(monkeypatch):
 
 def test_switched_off_cap_shows_the_round_without_a_limit(monkeypatch):
     monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", False)
-    assert rg.round_note(rg.CodexRounds(4)) == " · review round 4"
+    assert rg.round_note(rg.CodexRounds(4)) == " · review cycle 4"
 
 
 def _capped(repo, monkeypatch, verifier="", answers=()):
@@ -4203,7 +4203,7 @@ def test_doc_followup_preserves_both_families_without_adding_verifier_family(rev
     comments.append(_comment(fix))
     assert rg.latest_matching(comments, fix.key).status()[0] == 'success'
     assert rg.passing_families(comments, fix.key) == {'openai', 'anthropic'}
-    assert rg.codex_rounds(comments, [], []).count == 2
+    assert rg.codex_rounds(comments, [], []).count == 1
     assert rg.passing_families(comments[1:], fix.key) == {'anthropic'}
 
 
@@ -4270,7 +4270,7 @@ def test_followup_reviewer_gets_delta_and_original_context(repo, reviewed_follow
     assert '+a changed' in captured[0][1] and 'Both full reviewers' in captured[0][1]
     assert posted[0].scope == ('fix' if scope == 'FOLLOWUP' else 'full-required')
     assert posted[0].from_head == fix.from_head
-    assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 2
+    assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 1
 
 
 def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
@@ -4522,3 +4522,150 @@ def test_missing_review_objects_are_fetched_or_reported_incomplete(repo, reviewe
     with pytest.raises(SystemExit, match='review history is incomplete'):
         _REAL_READ_NATIVE('o/r', 1, fix.key, fix.head, comments)
     assert fetches == [('fetch', '--quiet', '--no-tags', 'origin', missing)]
+
+
+def test_review_cycles_pair_families_and_preserve_serious_findings():
+    first = full_record('k', 'FINDINGS', 1, False, 'codex', review_id='a')
+    second = full_record('k', 'CLEAN', 0, False, 'claude', review_id='b')
+    comments = [_comment(first, text='[P1] Unsafe transition'), _app_comment(second)]
+    rounds = rg.codex_rounds(comments, [], [])
+    assert rounds.count == 1 and rounds.last_severe
+    assert not rounds.can_join(first.head, first.key, 'google')
+    # Same-family reruns and a third family each start another cycle.
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'codex', review_id='c')))
+    assert rg.codex_rounds(comments, [], []).count == 2
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'gemini', review_id='d')))
+    assert rg.codex_rounds(comments, [], []).count == 2
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'claude', review_id='e')))
+    assert rg.codex_rounds(comments, [], []).count == 3
+
+
+@pytest.mark.parametrize('change', ['head', 'key', 'unknown-family', 'intervening-revision'])
+def test_changed_work_or_unknown_family_cannot_share_a_cycle(change):
+    a = full_record('k', 'CLEAN', 0, False, 'codex')
+    b = full_record('k', 'CLEAN', 0, False, 'claude')
+    between = []
+    if change == 'head':
+        b.head = 'c' * 40
+    elif change == 'key':
+        b.key = 'other'
+    elif change == 'unknown-family':
+        b.reviewer = 'council'
+    else:
+        between = [_comment(full_record('other', 'CLEAN', 0, False, 'codex', head='c' * 40))]
+    rounds = rg.codex_rounds([_comment(a), *between, _app_comment(b)], [], [])
+    assert rounds.count == (3 if between else 2)
+
+
+def test_native_and_local_second_family_share_a_review_cycle():
+    head = 'a' * 40
+    reviews, inline = _rounds((1, head, '2026-10-14T03:00:00Z', ['P2']))
+    c = _app_comment(full_record('k', 'CLEAN', 0, False, 'claude', head=head))
+    c['created_at'] = '2026-10-14T03:01:00Z'
+    rounds = rg.codex_rounds([c], reviews, inline)
+    assert rounds.count == 1 and rounds.cycles[0].families == {'openai', 'anthropic'}
+    assert len(rounds.last_findings) == 1
+
+
+GRANT_NOW = rg.timestamp('2026-10-14T04:00:00Z')
+
+
+def _cycle_grant_comment(head='a' * 40, key='b' * 64, after=3):
+    return {'id': 42, 'author_association': 'OWNER', 'user': {'type': 'User'},
+            'created_at': '2026-10-14T03:59:00Z',
+            'body': f'<!-- {rg.CYCLE_GRANT_MARKER} head={head} key={key} after={after} expires={int(GRANT_NOW + 300)} -->\n'
+                    'I authorize one additional cycle to finish these reviewed corrections.'}
+
+
+def test_user_grant_allows_exactly_one_additional_two_family_cycle():
+    comments = [_cycle_grant_comment()]
+    head, key = 'a' * 40, 'b' * 64
+    assert rg.cycle_grant(comments, 42, head, key, rg.CodexRounds(3), 'openai', GRANT_NOW)
+    fourth = rg.ReviewCycle(head, key, {'openai'})
+    rounds = rg.CodexRounds(4, cycles=[fourth])
+    assert rg.cycle_grant(comments, 42, head, key, rounds, 'anthropic', GRANT_NOW)
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'openai', GRANT_NOW)
+    fourth.families.add('anthropic')
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
+    rounds.count = 5
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
+
+
+@pytest.mark.parametrize('change', [
+    'bot', 'app', 'outsider', 'quoted', 'other-head', 'other-key', 'other-pr',
+    'expired', 'too-long', 'future', 'bad-date', 'short-reason', 'unknown-history',
+    'wrong-position', 'unknown-family', 'deleted',
+])
+def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change):
+    comment = _cycle_grant_comment()
+    rounds, family = rg.CodexRounds(3), 'openai'
+    comments = [comment]
+    if change == 'bot':
+        comment['user']['type'] = 'Bot'
+    elif change == 'app':
+        comment.update(user={'type': 'Bot', 'id': 342195540}, performed_via_github_app={'id': 5306351})
+    elif change == 'outsider':
+        comment['author_association'] = 'CONTRIBUTOR'
+    elif change == 'quoted':
+        comment['body'] = 'Quoted approval:\n' + comment['body']
+    elif change == 'other-head':
+        comment['body'] = comment['body'].replace('a' * 40, 'c' * 40)
+    elif change == 'other-key':
+        comment['body'] = comment['body'].replace('b' * 64, 'c' * 64)
+    elif change == 'other-pr':
+        comment['id'] = 43  # requested ID is absent from this PR's API comments
+    elif change in {'expired', 'too-long'}:
+        expiry = int(GRANT_NOW - 1 if change == 'expired' else GRANT_NOW + rg.CYCLE_GRANT_TTL_S)
+        comment['body'] = re.sub(r'expires=\d+', f'expires={expiry}', comment['body'])
+    elif change in {'future', 'bad-date'}:
+        comment['created_at'] = '2026-10-14T05:00:00Z' if change == 'future' else 'invalid'
+    elif change == 'short-reason':
+        comment['body'] = comment['body'].split('\n')[0] + '\nyes'
+    elif change == 'unknown-history':
+        rounds.unknown_history = True
+    elif change == 'wrong-position':
+        rounds.count = 2
+    elif change == 'unknown-family':
+        family = None
+    elif change == 'deleted':
+        comments = []
+    assert not rg.cycle_grant(comments, 42, 'a' * 40, 'b' * 64, rounds, family, GRANT_NOW)
+
+
+@pytest.mark.parametrize('count,families,reviewer,grant,expected', [
+    (3, {'openai'}, 'claude', False, 0),  # finish the third cycle normally
+    (3, {'openai'}, 'codex', False, rg.UNREVIEWED),
+    (3, {'openai', 'anthropic'}, 'codex', True, 0),
+    (4, {'openai'}, 'claude', True, 0),
+    (4, {'openai'}, 'claude', False, rg.UNREVIEWED),
+    (4, {'openai'}, 'codex', True, rg.UNREVIEWED),
+    (4, {'openai', 'anthropic'}, 'antigravity', True, rg.UNREVIEWED),
+])
+def test_cli_cycle_budget_and_app_consumption(repo, monkeypatch, count, families, reviewer, grant, expected):
+    head, key = _git(repo, 'rev-parse', 'HEAD'), rg.diff_key('master', 'HEAD')
+    args = SimpleNamespace(base='master', budget=30, fresh=True, reviewer=reviewer,
+                           review_cycle_grant=42 if grant else None)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    comments = [_cycle_grant_comment(head, key)] if grant else []
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg.time, 'time', lambda: GRANT_NOW)
+    rounds = rg.CodexRounds(count, cycles=[rg.ReviewCycle(head, key, families)])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds)
+    monkeypatch.setattr(rg, 'require_operator_account', lambda: pytest.fail('App used operator credentials'))
+    ran = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: ran.append(True) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == expected
+    assert bool(ran) is (expected == 0)
+    if grant and ran:
+        assert args.cycle_grant_url == 'https://github.com/o/r/pull/1#issuecomment-42'
+
+
+def test_grant_consumption_links_approval_in_the_actual_review_receipt(repo, monkeypatch):
+    posted = []
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: ('Examined the complete diff.\nVERDICT: CLEAN', 'exit 0'))
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, heading, text: posted.append(text))
+    args = SimpleNamespace(base='master', budget=30,
+                           cycle_grant_url='https://github.com/o/r/pull/1#issuecomment-42')
+    assert rg._review_locked(args, 1, rg.diff_key('master', 'HEAD'), 'codex') == 0
+    assert args.cycle_grant_url in posted[0]
