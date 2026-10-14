@@ -50,8 +50,8 @@ record**. Privacy narrows the first.
 |---|---|---|
 | Advice from whatever is configured, local only | `consult` (defaults: `effort="standard"`, `privacy="local"`) | `purpose` is `answer`, `critique`, `summarize` or `generate`. Writes an audit row with keyed hashes, not text (`_record_consultation`, `src/mcp_handlers/support/consultation.py`) |
 | Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host: it excludes the caller's own family, inferred from transport signals, and takes the first available peer (`_THOROUGH_PEERS`, `_caller_family`). Set `host_id` to select a specific existing host instead |
-| A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., effort="thorough", privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
-| Advice from a specific HTTP host | `consult(host_id=..., effort="standard")` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; raw model/token/temperature controls remain on `call_model` |
+| A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
+| Advice from a specific HTTP host | `consult(host_id=...)` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; raw model/token/temperature controls remain on `call_model` |
 | A raw completion on a local or Hugging Face host | `call_model` *(hidden)* | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
 | Which hosts exist and are ready | `list_inference_hosts`, `describe_inference_host` *(hidden)* | readable before `start_session`; calling any inference tool needs an identity |
 | A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
@@ -70,6 +70,9 @@ record**. Privacy narrows the first.
   Explicit selection appears in the compact `request.host_id`; full
   `diagnostics` retain the actual host, provider and model. Automatic calls
   report any peer failover in `failover`; pinned calls never fail over.
+- **Omitted effort follows a selected host.** Ollama/HF select standard; CLI
+  hosts select thorough. With no host, omitted effort stays standard. An
+  explicit effort must match the host; privacy is always a separate constraint.
 - **`effort="thorough"` routes to the operator-authorized subscription-CLI
   lane** (Claude, Codex, Antigravity); it names a lane, not a measured
   capability tier.
@@ -81,7 +84,8 @@ record**. Privacy narrows the first.
   `list_inference_hosts` shows what this deployment has.
 - **A failed adapter call has caller-only diagnostics.** With
   `response_mode="full"`, `consult` keeps a bounded excerpt of unvalidated
-  CLI output and any answer-region diagnostic supplied by the adapter. The
+  CLI output, the specific backend error message (up to 500 characters), and
+  any answer-region diagnostic supplied by the adapter. The
   excerpt is not advice and is omitted from the durable consultation audit.
   Malformed output remains a failure; an exit code of zero alone does not
   establish a complete answer or trigger peer failover.
@@ -92,6 +96,22 @@ record**. Privacy narrows the first.
   time, and every HF call route respects it. After expiry, an ordinary call
   tries again; success clears the failure history. Discovery makes no paid
   probe. Model-specific 403/404 responses do not disable the whole host.
+
+**Interpreting usage.** Full `consult` diagnostics include `tokens_used_note`.
+`tokens_used` is a backend aggregate, not answer length or a normalized billing
+measure. Missing usage can become zero. Current adapter rules are:
+
+| Backend | Aggregate exposed as `tokens_used` |
+|---|---|
+| Standard Ollama/HF | Provider `usage.total_tokens` |
+| Claude CLI | Input + output + cache creation + cache read tokens |
+| Codex app-server | Reported total; input + output when total is absent |
+| Codex exec JSONL | Input + output for the reported completed turn |
+| Antigravity CLI | Reported `usage.total_tokens` |
+
+Different tokenizers, context and cache rules limit comparisons between hosts.
+See `host_adapter.py`, `codex_app_server_client.py`, and `model_inference.py`.
+The clarification changes no counters, cost calculation or EISV accounting.
 
 ## Recipes
 
@@ -106,7 +126,7 @@ checked against `describe_tool` and the schemas; anything not checked says so.
 1. Optional: `use_tool(tool_name="list_inference_hosts", arguments={})` and
    look for `available: true` on the `*:host-adapter` entries.
 2. `consult(brief="<question plus the material, pasted inline>",
-   purpose="critique", host_id="codex:host-adapter", effort="thorough",
+   purpose="critique", host_id="codex:host-adapter",
    privacy="cloud_allowed", response_mode="full")`. The material goes in `brief` (up to 32,000
    characters); there is no file or attachment argument. `purpose` is
    `answer`, `critique`, `summarize` or `generate`.

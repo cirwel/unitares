@@ -52,7 +52,7 @@ lifecycle controls. They are not aliases for either primary verb.
 consult(
   brief,
   purpose="answer",              # answer | critique | summarize | generate
-  effort="standard",             # standard | thorough
+  effort=<inferred>,             # standard | thorough; omit to follow host, else standard
   privacy="local",               # local | cloud_allowed
   allow_degraded=false,
   response_mode="compact",       # compact | full
@@ -64,7 +64,9 @@ Provider, model, temperature, token limit, and timeout controls remain on the
 raw inference tools. Amended 2026-10-13: optional `host_id` accepts the five
 existing hosts. `ollama:local` and `hf:router` require standard effort;
 `claude:host-adapter`, `codex:host-adapter` and `antigravity:host-adapter` require
-thorough effort. External hosts require `cloud_allowed`. A pinned call requires
+thorough effort. Amended 2026-10-14: when effort is omitted, the selected
+host supplies it; with no host, it remains standard. Explicit effort must
+match the host. Null is not a supported effort value. External hosts require `cloud_allowed`. A pinned call requires
 `allow_degraded=false` and never tries another host. Selection grants no
 configuration or identity authority; own-family selection is advisory only.
 
@@ -112,6 +114,13 @@ policy (including `host_id` when selected), delivered effort, whether external p
 when applicable, completion state, and any external-cost warning. Full mode
 adds one `diagnostics` object with route, host, provider/model metadata,
 transport, hashes, usage, latency, requester identity, and orchestrator id.
+Alongside `tokens_used`, full diagnostics add `tokens_used_note`: the backend
+aggregate can include input/cache tokens and is not answer length or a
+normalized billing measure. Zero can mean missing usage. See the intent map
+for the per-adapter counting rules. No counters or accounting change. Full
+failure diagnostics retain the backend message (at most 500 characters),
+alongside the existing unvalidated output excerpt. Both are caller-only and
+excluded from compact responses and the durable audit.
 
 ## Routing and degradation
 

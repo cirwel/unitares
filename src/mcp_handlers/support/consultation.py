@@ -345,6 +345,12 @@ def _safe_provenance(
     # Attribution is the dispatch-resolved caller, never a backend assertion.
     safe["requester_uuid"] = requester_uuid
     safe["accountability_class"] = "tool_evidence"
+    if "tokens_used" in safe:
+        safe["tokens_used_note"] = (
+            "Backend aggregate usage, not answer length or billed cost. Counting "
+            "rules vary by provider, including input/cache tokens; 0 can mean "
+            "usage was not reported."
+        )
     safe["hashes"] = {
         "brief": brief_hash,
         "constructed_prompt": constructed_prompt_hash,
@@ -397,6 +403,10 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
 
 def _failure_diagnostics(failure: InferenceFailure) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {}
+    # The facade's generic failure summary must not erase the backend's
+    # specific validation reason. Like excerpts, this is caller-only text.
+    if isinstance(failure.message, str):
+        diagnostics["message"] = failure.message[:500]
     for key in (
         "adapter_status",
         "dispatch_phase",
@@ -1274,11 +1284,16 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     selected_host = (
         str(arguments["host_id"]) if arguments.get("host_id") is not None else None
     )
+    # Middleware materializes the same conditional schema default. Direct
+    # handler callers need it too; a supplied value is never overwritten.
+    effort = str(arguments.get(
+        "effort", "thorough" if selected_host in _THOROUGH_HOST_ROUTES else "standard",
+    ))
     request = ConsultRequest(
         brief=brief_text,
         requester_uuid=requester_uuid,
         purpose=str(arguments.get("purpose", "answer")),
-        effort=str(arguments.get("effort", "standard")),
+        effort=effort,
         privacy=str(arguments.get("privacy", "local")),
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
@@ -1289,7 +1304,7 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
                 "thorough_host_id": _thorough_host_for_caller(),
                 "thorough_peers": _thorough_peers_for_caller(),
             }
-            if arguments.get("effort") == "thorough" and selected_host is None
+            if effort == "thorough" and selected_host is None
             else {}
         ),
         **(
