@@ -5274,3 +5274,41 @@ def test_editorial_ci_and_cli_agree_on_sensitive_coverage(editorial_repo, monkey
     assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
     assert posted[0][3] == 'success'
     assert 'editorial' in capsys.readouterr().out
+
+
+def test_editorial_only_base_merge_is_reused_by_cli_and_host(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'README.md').write_text('one\ntwo\nthree\nfour\nfive\n')
+    _git(repo, 'commit', '-qam', 'prose baseline')
+    _git(repo, 'checkout', '-qb', 'typo')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    (repo / 'README.md').write_text('one\ntwo\nTHREE\nfour\nfive\n')
+    _git(repo, 'commit', '-qam', 'capitalization')
+    receipt = _editorial_comment(previous)
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'README.md').write_text('ONE\ntwo\nthree\nfour\nfive\n')
+    _git(repo, 'commit', '-qam', 'upstream prose')
+    _git(repo, 'checkout', '-q', 'typo')
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key('master', head)
+    equivalents = rg.base_merge_equivalents('master', head)
+    assert equivalents and equivalents[0][0] != key
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, equivalents)})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: [receipt])
+    comments = rg.pr_comments('o/r', 1)
+    assert rg.editorial_carry(comments, key, 'master', equivalents)[1].scope == 'editorial'
+    assert rg.current_record('o/r', 1, key, head, comments).scope == 'editorial'
+    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'typo'))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('needless model review'))
+    assert rg.cmd_review(SimpleNamespace(base='master', reviewer=None, fresh=False, budget=10)) == 0
+
+
+@pytest.mark.parametrize('path,allowed', [
+    ('agents/sdk/README.md', True), ('docs/guide.md', True), ('docs/AGENTS.md', False),
+    ('skills/foo/README.md', False), ('.github/README.md', False), ('agents/policy.md', False),
+])
+def test_editorial_document_scope_includes_nested_readmes_but_not_instruction_dirs(path, allowed):
+    assert rg.editorial_path(path, []) is allowed

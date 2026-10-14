@@ -1975,7 +1975,9 @@ def current_record(repo: str, pr: int, key: str, head: str,
     records = read_native(repo, pr, key, head, comments).records
     rec = latest_matching(comments, key, records)
     if rec is None:
-        _, rec = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""))
+        carry_key, equivalents = _CARRY.get((repo, pr), ("", []))
+        _, rec = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""),
+                                equivalents if carry_key == key else [])
     return rec
 
 

@@ -241,6 +241,9 @@ before implementation is useful input but cannot establish coverage of code
 it has not seen. An author participating in council is not an independent
 reviewer of their own contribution. A synthesis does not turn one family's
 work into two: sensitive changes need each credited family's actual review.
+If publishing with `ship.sh`, use its existing `SHIP_NO_REVIEW=1` option for
+that push, then immediately record the completed council review. This avoids
+starting an automatic model review before its evidence has been recorded.
 
 - `./scripts/dev/review.sh` reviews the PR diff for `HEAD` in a fresh
   reviewer session, defaulting to pinned Codex Sol medium, read-only, within
@@ -496,6 +499,10 @@ unchanged:
 ./scripts/dev/review.sh editorial --reason "Corrected a spelling error; meaning unchanged"
 ```
 
+After a normal `git push`, run the command above. With `ship.sh`, set
+`SHIP_NO_REVIEW=1` for the editorial push, then record the attestation; otherwise
+shipping starts a model before the author has identified the editorial scope.
+
 This records the complete change from the previous commit to the pushed head.
 Use `--since <commit>` for a longer editorial span, after examining every change
 in it. The command calls no model. The record says **author attestation**,
@@ -506,9 +513,10 @@ attestations, it needs no independent review. An editorial receipt cannot supply
 missing review of earlier substantive work.
 
 Git verifies the endpoints and every intervening commit. Eligibility is limited
-to modifications of existing UTF-8 Markdown under `docs/`, `README.md` or
-`CHANGELOG.md`, excluding sensitive paths, agent instruction files and
-skills/commands/prompts directories. Added/deleted/renamed files, mode changes,
+to modifications of existing UTF-8 Markdown under `docs/`, or an existing
+`README.md` / `CHANGELOG.md` at any non-hidden location (including nested
+READMEs). Sensitive paths, agent instruction files and skills/commands/prompts
+directories are excluded. Added/deleted/renamed files, mode changes,
 symlinks, binary content, code and base merges do not qualify. These checks
 establish scope, not semantic equivalence: the author's explanation supplies
 that judgment. One word can change a requirement; “must” → “may”, a changed CLI
