@@ -5546,17 +5546,34 @@ def test_editorial_after_sensitive_base_merge_cannot_restore_premerge_family(car
     assert _editorial_decide(comments)[1] == {'google'}
 
 
-def test_editorial_handoff_rejects_head_race_even_when_revert_restores_diff_key(editorial_repo, monkeypatch):
+@pytest.mark.parametrize('coverage', ['standalone', 'full', 'fix'])
+def test_editorial_handoff_rejects_head_race_even_when_revert_restores_diff_key(
+        editorial_repo, monkeypatch, coverage):
     repo = editorial_repo
-    _git(repo, 'checkout', '-qb', 'typo', 'master')
-    base = _git(repo, 'rev-parse', 'HEAD')
+    base = _git(repo, 'rev-parse', 'master')
+    comments = []
+    if coverage == 'standalone':
+        _git(repo, 'checkout', '-qb', 'typo', 'master')
+    else:
+        comments = _editorial_sources(repo)
+        if coverage == 'fix':
+            source = _git(repo, 'rev-parse', 'HEAD')
+            (repo / 'main.py').write_text('value = 3\n')
+            _git(repo, 'commit', '-qam', 'bounded correction')
+            comments.append(_comment(rg.Record(
+                rg.diff_key(base, 'HEAD'), 'CLEAN', 0, False, 'codex', scope='fix',
+                head=_git(repo, 'rev-parse', 'HEAD'), base=base,
+                from_head=source, from_key=rg.diff_key(base, source))))
+    before = _git(repo, 'rev-parse', 'HEAD')
+    original = (repo / 'main.py').read_text()
     old = _typo(repo)
     key = rg.diff_key(base, old)
-    comments = [_editorial_comment(base)]
-    _, rec = rg.editorial_carry(comments, key, base, head=old)
+    comments.append(_editorial_comment(before))
+    rec, _ = _editorial_decide(comments)
+    assert rec.scope == ('editorial' if coverage == 'standalone' else coverage)
     (repo / 'main.py').write_text('value = 9\n')
     _git(repo, 'commit', '-qam', 'substantive work during publication')
-    (repo / 'main.py').write_text('value = 1\n')
+    (repo / 'main.py').write_text(original)
     _git(repo, 'commit', '-qam', 'revert restores key')
     new = _git(repo, 'rev-parse', 'HEAD')
     assert rg.diff_key(base, new) == key
@@ -5570,3 +5587,143 @@ def test_editorial_handoff_rejects_head_race_even_when_revert_restores_diff_key(
     monkeypatch.setattr(rg, 'pr_view', lambda *a: {'state': 'OPEN', 'headRefOid': new, 'baseRefName': 'master'})
     monkeypatch.setattr(rg, 'completed_review_exit', completed_review_exit)
     assert rg.finish_record('o/r', 1, key, old, rec, comments) == rg.UNREVIEWED
+
+
+def test_editorial_handoff_keeps_coverage_when_base_merge_moves_key(carry_repo, monkeypatch):
+    repo = carry_repo
+    (repo / 'README.md').write_text('A smal example.\n')
+    _git(repo, 'add', 'README.md')
+    _git(repo, 'commit', '-qm', 'document reviewed code')
+    comments = _editorial_sources(repo)
+    source = _git(repo, 'rev-parse', 'HEAD')
+    old = _typo(repo)
+    key = rg.diff_key('master', old)
+    comments.append(_editorial_comment(source))
+    _git(repo, 'remote', 'add', 'origin', str(repo))
+
+    def pr_info(*args):
+        _master_edits_next_to_the_pr(repo)
+        _git(repo, 'merge', '-q', '--no-edit', 'master')
+        _git(repo, 'update-ref', 'refs/pull/1/head', 'HEAD')
+        return {'baseRefName': 'master', 'state': 'OPEN'}
+
+    monkeypatch.setattr(rg, 'pr_view', pr_info)
+    monkeypatch.setattr(rg, 'api_pages', lambda *args: comments)
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    assert completed_review_exit('o/r', 1, key, old, 0) == 0
+    assert rg.diff_key('master', 'HEAD') != key
+    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'openai', 'google'}
+
+
+@pytest.mark.parametrize('count', [1, 3])
+def test_editorial_second_family_finishes_the_same_cycle(editorial_repo, monkeypatch, count):
+    repo = editorial_repo
+    source = rg.parse_record(_editorial_sources(repo)[0]['body'])
+    comments = [_comment(rg.replace(source, review_id=f'run-{i}')) for i in range(count)]
+    before = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    comments.append(_editorial_comment(before))
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, '_CARRY', {})
+    monkeypatch.setattr(rg, 'api_pages', lambda *args: [])
+    rounds = read_native_api('o/r', 1, key, head, comments).rounds
+    assert rounds.count == count
+    assert rounds.can_join(head, key, 'google')
+    # Exercise the real cap decision, including an unfinished third cycle.
+    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *args: comments)
+    monkeypatch.setattr(rg, 'read_native', read_native_api)
+    ran = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *args: ran.append(True) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *args: 0)
+    assert rg.cmd_review(SimpleNamespace(base='master', budget=30, fresh=True, reviewer='antigravity')) == 0
+    assert ran == [True]
+    # Unposted completions use the same equivalence without adding coverage.
+    cache = repo / 'local-cache'
+    run = cache / 'pr-1-unposted'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': _git(repo, 'rev-parse', 'master'),
+        'review_id': 'local-google', 'started_at': rg.time.time() - 1, 'model': 'gemini'}))
+    assert rg.local_budget_rounds(rounds, cache, 1, set()).count == count
+    # An editorial receipt never widens an operator's exact revision grant.
+    grant = _cycle_grant_comment(before, source.key)
+    assert not rg.cycle_grant([grant], 42, head, key, rounds, 'google', GRANT_NOW)
+    comments.append(_editorial_sources(repo)[1])
+    assert read_native_api('o/r', 1, key, head, comments).rounds.count == count
+    repeated = rg.parse_record(comments[-1]['body'])
+    comments.append(_comment(rg.replace(repeated, review_id='repeated-google')))
+    assert read_native_api('o/r', 1, key, head, comments).rounds.count == count + 1
+
+
+@pytest.mark.parametrize('bad', ['untrusted', 'missing_reason', 'wrong_key', 'code', 'reverted_code'])
+def test_unproven_editorial_work_cannot_share_a_review_cycle(editorial_repo, monkeypatch, bad):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)[:1]
+    before = _git(repo, 'rev-parse', 'HEAD')
+    _typo(repo)
+    if bad in {'code', 'reverted_code'}:
+        (repo / 'main.py').write_text('value = 8\n')
+        _git(repo, 'commit', '-qam', 'substantive edit')
+        if bad == 'reverted_code':
+            (repo / 'main.py').write_text('value = 2\n')
+            _git(repo, 'commit', '-qam', 'revert')
+    receipt = _editorial_comment(before)
+    if bad == 'untrusted':
+        receipt['author_association'] = 'NONE'
+    elif bad == 'missing_reason':
+        receipt['body'] = receipt['body'].split('Reason:')[0]
+    elif bad == 'wrong_key':
+        receipt['body'] = receipt['body'].replace('from_key=', 'from_key=0')
+    comments.append(receipt)
+    comments.append(_editorial_sources(repo)[1])
+    rounds = rg.codex_rounds(comments, [], [], base='master')
+    assert rounds.count == 2 and not rounds.revision_aliases
+
+
+def test_native_abbreviated_review_can_finish_an_editorial_cycle(editorial_repo):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)[1:]
+    before = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    comments.append(_editorial_comment(before))
+    comments.append({'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'created_at': '2026-10-14T04:00:00Z',
+                     'body': "Codex Review: Didn't find any major issues.\n"
+                             f'**Reviewed commit:** `{head[:10]}`'})
+    rounds = rg.codex_rounds(comments, [], [], base='master')
+    assert rounds.count == 1
+    assert rounds.cycles[0].families == {'google', 'openai'}
+
+
+def test_editorial_disposition_cannot_borrow_later_review_identity(editorial_repo):
+    repo = editorial_repo
+    base = _git(repo, 'rev-parse', 'master')
+    before = _git(repo, 'rev-parse', 'HEAD')
+    old = full_record(rg.diff_key(base, before), 'FINDINGS', 1, False, 'codex',
+                      head=before, base=base, review_id='old-full')
+    comments = [_comment(old), _comment(rg.replace(old, disposed=True))]
+    middle = _typo(repo)
+    comments.append(_comment(full_record(rg.diff_key(base, middle), 'FAILED', 0, False,
+                                         'gemini', head=middle, base=base, scope='full-required')))
+    head = _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(before))
+    fresh = full_record(rg.diff_key(base, head), 'FINDINGS', 1, False, 'codex',
+                        head=head, base=base, review_id='fresh-full')
+    comments.append(_comment(fresh))
+    rec, families = _editorial_decide(comments)
+    assert rec.verdict == 'FINDINGS' and not rec.disposed
+    assert families == set()
+    comments.append(_comment(rg.replace(fresh, disposed=True)))
+    assert _editorial_decide(comments)[1] == {'openai'}
+
+
+def test_scope_refusal_cannot_shadow_disposed_full_review(editorial_repo):
+    repo = editorial_repo
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    full = full_record(key, 'FINDINGS', 1, False, 'codex', head=head, base=base, review_id='full')
+    refusal = rg.replace(full, scope='full-required', review_id='refusal')
+    comments = [_comment(full), _comment(rg.replace(full, disposed=True)),
+                _comment(refusal), _comment(rg.replace(refusal, disposed=True))]
+    assert rg.passing_families(comments, key) == {'openai'}

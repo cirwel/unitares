@@ -396,7 +396,8 @@ Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
 gets three **full review cycles**. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
-revision/diff starts another cycle. The second family can finish cycle three
+revision/diff starts another cycle, except for Git-verified editorial spans
+covered by an author attestation. The second family can finish cycle three
 without an extra approval. Unknown families cannot share a cycle. Native
 reviews group by their explicit reviewed commit; where both records carry
 diff keys those must match too. This spending ledger never establishes review
@@ -510,7 +511,10 @@ not independent review, and adds no model family or full-review cycle. Existing
 coverage carries forward, including a previously reviewed bounded fix; open
 findings still need dispositions. If the entire PR is covered by editorial
 attestations, it needs no independent review. An editorial receipt cannot supply
-missing review of earlier substantive work.
+missing review of earlier substantive work. An unfinished full-review pair can
+continue across a verified editorial span without starting another cycle.
+Repeated families still consume cycles, and operator grants remain bound to
+the exact head and key they authorize.
 
 Git verifies the endpoints and every intervening commit. Eligibility is limited
 to modifications of existing UTF-8 Markdown under `docs/`, or an existing

@@ -540,11 +540,14 @@ def editorial_carry(comments: list[dict], key: str, base: str,
         return list(equivalents), None
     try:
         head = head or git("rev-parse", "HEAD").strip()
-        if diff_key(base, head) != key:
+        head_key = diff_key(base, head)
+        if head_key != key and (head_key, head) not in equivalents:
             return list(equivalents), None
     except (SystemExit, subprocess.SubprocessError):
         return list(equivalents), None
-    out, pending, visited, standalone = [], [(key, head)], set(), None
+    # A handoff may project the fetched head back onto its caller's key.
+    # Preserve that proven bridge, but walk receipts from the actual head/key.
+    out, pending, visited, standalone = list(equivalents), [(head_key, head)], set(), None
     while pending:
         node_key, node = pending.pop()
         if node in visited:
@@ -569,7 +572,7 @@ def editorial_carry(comments: list[dict], key: str, base: str,
                                         url=comment.get("html_url", ""), text=comment["body"])
             except (SystemExit, subprocess.SubprocessError):
                 continue
-    return out, standalone
+    return list(dict.fromkeys(out)), standalone
 
 
 def diff_text(base: str, head: str) -> str:
@@ -1004,6 +1007,49 @@ class ReviewCycle:
                     and family not in self.families and len(self.families) < 2)
 
 
+def editorial_cycle_aliases(comments: list[dict], base: str) -> dict:
+    """Verified editorial endpoints denote the same work for spending only.
+
+    Keep the original run identities and finding history. This lets a second
+    family finish a pair after an attested typo without refunding repeated
+    families or treating substantive revisions as interchangeable.
+    """
+    aliases = {}
+    if not base:
+        return aliases
+    for c in comments:
+        match = EDITORIAL_RE.match(c.get("body", ""))
+        if (not trusted_review_comment(c) or not match
+                or not re.search(r"(?m)^Reason: \S", c.get("body", ""))):
+            continue
+        attrs = match.groupdict()
+        try:
+            head, prior = attrs["head"], attrs["from_head"]
+            key, prior_key = attrs["key"], attrs["from_key"]
+            if (diff_key(base, head) != key or diff_key(base, prior) != prior_key
+                    or not editorial_span(base, prior, head)):
+                continue
+            old = aliases.get((head, key))
+            if old and not _is_ancestor(prior, old[0]):
+                continue
+            aliases[(head, key)] = aliases[(head, "")] = (prior, prior_key)
+        except (SystemExit, subprocess.SubprocessError):
+            continue
+    return aliases
+
+
+def cycle_revision(head: str, key: str, aliases: dict) -> tuple[str, str]:
+    if aliases and re.fullmatch(r"[0-9a-f]{7,39}", head):
+        # Native clean comments abbreviate their commit. Resolve it only when
+        # Git can identify one object; a prefix match alone is not proof.
+        head = git("rev-parse", "--verify", "--quiet", f"{head}^{{commit}}", check=False).strip() or head
+    visited = set()
+    while (head, key) in aliases and (head, key) not in visited:
+        visited.add((head, key))
+        head, key = aliases[(head, key)]
+    return head, key
+
+
 @dataclass
 class CodexRounds:
     """Full review cycles across every revision, including an unfinished pair."""
@@ -1015,8 +1061,10 @@ class CodexRounds:
     cycles: list[ReviewCycle] = field(default_factory=list)
     # Spending evidence only, also used to include unposted local reviews.
     runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
+    revision_aliases: dict = field(default_factory=dict)
 
     def can_join(self, head: str, key: str, family: str | None) -> bool:
+        head, key = cycle_revision(head, key, self.revision_aliases)
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
 
     @property
@@ -1040,7 +1088,7 @@ class CodexRounds:
 
 
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
-                 events: list[dict] = (), reactions: list[dict] = ()) -> CodexRounds:
+                 events: list[dict] = (), reactions: list[dict] = (), *, base: str = "") -> CodexRounds:
     """Count full review cycles across sources without resetting on retarget.
 
     Native artifacts deduplicate by their actual reviewed commit. Local and
@@ -1150,30 +1198,33 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if rec and (rec.disposed or rec.reviewer.startswith("fix-verify:")):
             answered_at = max(answered_at, timestamp(c.get("created_at", "")))
             continue  # an answer to a round, never a run of its own
-    if not runs:
-        return CodexRounds(unknown_history=unknown_history)
-    return count_review_cycles(list(runs.values()), unknown_history, answered_at)
+    return count_review_cycles(list(runs.values()), unknown_history, answered_at,
+                               revision_aliases=editorial_cycle_aliases(comments, base))
 
 
 def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
-                        unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
+                        unknown_history: bool = False, answered_at: float = 0, *,
+                        revision_aliases: dict | None = None) -> CodexRounds:
     """Share spending accounting with the local reviewer, never coverage."""
+    aliases = revision_aliases or {}
     if not runs:
-        return CodexRounds(unknown_history=unknown_history)
+        return CodexRounds(unknown_history=unknown_history, revision_aliases=aliases)
     cycles = []
     findings = []
     for last_at, last, run_findings, key, family in sorted(runs, key=lambda r: r[0]):
-        if not cycles or not cycles[-1].accepts(last, key, family):
-            cycles.append(ReviewCycle(last, key))
+        cycle_head, cycle_key = cycle_revision(last, key, aliases)
+        if not cycles or not cycles[-1].accepts(cycle_head, cycle_key, family):
+            cycles.append(ReviewCycle(cycle_head, cycle_key))
             findings = []
         cycle = cycles[-1]
         cycle.families.add(family)
-        cycle.key = cycle.key or key
-        if len(last) > len(cycle.head):
-            cycle.head = last
+        cycle.key = cycle.key or cycle_key
+        if len(cycle_head) > len(cycle.head):
+            cycle.head = cycle_head
         findings.extend(run_findings)
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
-                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
+                       answered_since=answered_at > last_at, cycles=cycles, runs=runs,
+                       revision_aliases=aliases)
 
 
 def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
@@ -1220,7 +1271,7 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
         runs.append((when, receipt['head'], [], key, family))
-    return count_review_cycles(runs, rounds.unknown_history)
+    return count_review_cycles(runs, rounds.unknown_history, revision_aliases=rounds.revision_aliases)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
@@ -1453,7 +1504,8 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             ancestor = _is_ancestor(commit, head)
             snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known
                                     and (ancestor or r.verdict == "FINDINGS"))
-    snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
+    snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions,
+                                   base=_CARRY_BASES.get((repo, pr), ""))
     return snapshot
 
 
@@ -1710,22 +1762,32 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     requirements.extend(r for r in native if r.key == key and r.scope == "full-required" and not r.disposed)
 
     def allowed(rec: Record) -> bool:
-        source = originals.get((rec.reviewer, rec.findings), rec) if rec.disposed else rec
-        return all(full_scope_covers(source, refusal, native) for refusal in requirements)
+        source = original_for(rec) if rec.disposed else rec
+        return source is not None and all(full_scope_covers(source, refusal, native) for refusal in requirements)
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
-    # (reviewer, findings) -> the original review's model (for agy records).
-    originals = {(r.reviewer, r.findings): r for _, r in trusted
+    originals = [r for _, r in trusted
                  if r and (r.full() or r.scope in {"fix", "full-required"})
-                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed]
+
+    def original_for(rec: Record) -> Record | None:
+        # Carry changes the display key, never the identity of the review a
+        # disposition answers. A newer review with the same count cannot lend
+        # its scope, model or approval to an older disposition.
+        matches = [r for r in originals
+                   if (r.reviewer, r.findings, r.original_key or r.key)
+                   == (rec.reviewer, rec.findings, rec.original_key or rec.key)
+                   and (rec.scope == "legacy" or all(getattr(r, name) == getattr(rec, name)
+                        for name in ("scope", "head", "base", "from_head", "from_key", "review_id")))]
+        return matches[-1] if matches else None
     # A native Codex review is a GitHub review, not a comment: its disposition
     # cites the review by URL (as latest_matching matches it), with its count.
     native_findings = {r.url: r.findings for r in native
                        if r.key == key and r.verdict == "FINDINGS" and r.url}
     for c, rec in trusted:
         if rec and rec.disposed and rec.scope == "legacy":
-            original = originals.get((rec.reviewer, rec.findings))
+            original = original_for(rec)
             if original:
                 for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
                     setattr(rec, name, getattr(original, name))
@@ -1745,7 +1807,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
                                        and r.verdict == "CLEAN"))), None)
         if rec is None or rec.key != key or not (rec.full() or native_source) or not allowed(native_source or rec):
             continue
-        answers_a_review = (rec.reviewer, rec.findings) in originals
+        answers_a_review = original_for(rec) is not None
         if not answers_a_review and rec.reviewer == "codex-native":
             rec.text = body
             cited = _cited_native_review(rec)
@@ -1761,7 +1823,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
             if rec.disposed and not rec.model:
                 # A disposition written without the model (older, or --emit)
                 # counts by the model of the review it answers.
-                original = originals.get((rec.reviewer, rec.findings))
+                original = original_for(rec)
                 rec.model = original.model if original else ""
             families.add(record_family(rec))
     for rec in native:
@@ -2813,10 +2875,16 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
     # The receipt's network write can race a push too. Validate after it so
     # publishing evidence for an earlier diff cannot finish the current one.
     result = completed_review_exit(repo, pr, key, head, result)
-    if (result == 0 and rec.scope == "editorial"
+    if (result == 0 and (rec.scope == "editorial" or rec.original_key)
             and _CARRY_HEADS.get((repo, pr), head) != editorial_head):
-        print("[review] UNREVIEWED: PR head moved during editorial handoff; rerun to join current evidence")
-        return UNREVIEWED
+        try:
+            latest = current_record(repo, pr, key, _CARRY_HEADS[(repo, pr)], pr_comments(repo, pr))
+        except SystemExit as exc:
+            print(f"[review] UNREVIEWED: cannot confirm carried review after head change: {exc}")
+            return UNREVIEWED
+        if latest is None or latest.status()[0] != "success":
+            print("[review] UNREVIEWED: PR head moved during editorial handoff; rerun to join current evidence")
+            return UNREVIEWED
     return result
 
 
