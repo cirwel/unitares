@@ -872,7 +872,10 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if prior is None:
             runs[run] = (t, commit, findings, "", "openai")
         else:
-            runs[run] = (max(t, prior[0]), commit if t >= prior[0] else prior[1],
+            # A later duplicate receipt must not reorder an old review into a
+            # newer cycle and refund budget. Keep its first known evidence time.
+            first = min(t, prior[0]) if t and prior[0] else t or prior[0]
+            runs[run] = (first, commit if len(commit) > len(prior[1]) else prior[1],
                          findings or prior[2], "", "openai")
 
     for c in comments:
@@ -882,7 +885,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
         if commit:
             if re.match(r"^Codex Review: Didn['’]t find any major issues\.", body):
-                seen(commit[1], c.get("updated_at") or c.get("created_at", ""), [])
+                seen(commit[1], c.get("created_at") or c.get("updated_at", ""), [])
             else:
                 completed_without_evidence.add(commit[1][:7])
         if "<!-- codex-pull-request-review-summary -->" in body:

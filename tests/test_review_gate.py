@@ -4567,6 +4567,24 @@ def test_native_and_local_second_family_share_a_review_cycle():
     assert len(rounds.last_findings) == 1
 
 
+@pytest.mark.parametrize('source', ['review', 'comment'])
+def test_later_native_receipt_cannot_reorder_cycles_and_refund_budget(source):
+    reviews, inline = _rounds((1, 'a' * 40, '2026-10-14T01:00:00Z'),
+                              (2, 'b' * 40, '2026-10-14T02:00:00Z'))
+    comments = []
+    if source == 'comment':
+        reviews, inline = [], []
+        comments = [_native_comment('a' * 40, when='2026-10-14T01:00:00Z'),
+                    _native_comment('b' * 40, when='2026-10-14T02:00:00Z')]
+        comments[0]['updated_at'] = '2026-10-14T04:00:00Z'
+    other = _app_comment(full_record('k', 'CLEAN', 0, False, 'claude', head='a' * 40))
+    other['created_at'] = '2026-10-14T03:00:00Z'
+    duplicate = _app_comment(full_record('k', 'CLEAN', 0, False, 'codex-native', head='a' * 40))
+    duplicate['created_at'] = '2026-10-14T04:00:00Z'
+    assert rg.codex_rounds([*comments, other], reviews, inline).count == 3
+    assert rg.codex_rounds([*comments, other, duplicate], reviews, inline).count == 3
+
+
 GRANT_NOW = rg.timestamp('2026-10-14T04:00:00Z')
 
 
