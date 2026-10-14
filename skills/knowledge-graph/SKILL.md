@@ -58,6 +58,23 @@ summary), up to 17 rows; `state_summary.more_results_shown` counts them. Open
 any row with `knowledge(action="details", discovery_id=...)`. Leave `limit`
 unset and the response is the three digests alone.
 
+Lean reads keep the result tier, an `open_one` route and any disclosure that an
+explicit `include_details=true` request was overridden. Repeated mode tutorials
+and serialization diagnostics live in `compact`; `full` retains the canonical
+payload. The response budget is a ceiling, so spare room need not be filled with
+coaching. Confidence/degradation caveats, author identity, imported-memory
+warnings, supersession and appended-note pointers retain their existing budget
+and omission-marker rules.
+
+For a small working context, search first, open the few relevant records by ID,
+and use their note offsets or pagination when needed. Keep the decision, its
+scope and caveats, and evidence IDs in the working summary; retrieve the original
+record when the evidence must be checked. A summary is not a replacement for
+its source. After processing delivered change notices, acknowledge their exact
+revision IDs through `knowledge(action="notices", acknowledge=[...])` so the
+same receipts stop repeating. Do not acknowledge unseen revisions or mute
+delivery merely to reduce context.
+
 You may omit `query` entirely when filtering by `tags`, `discovery_type`,
 `severity`, `status`, or `agent_id_filter` (author UUID). The explicit
 `agent_id_filter` takes precedence; `agent_id` remains a fallback for existing
