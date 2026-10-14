@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.37.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.38.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -542,3 +542,27 @@ durable audit do not include this explanatory text. Full failure diagnostics
 also retain the backend message, bounded to 500 characters and excluded from
 compact responses and audit storage; the facade summary and failure semantics
 remain unchanged.
+
+## 1.38.0 (2026-10-14)
+
+KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+
+Output-only compatible addition to knowledge search, agent-scoped get and
+details. A record with recognizable dated `Resolution notes (...)` blocks in its
+full details carries `resolution_notes={source: "details_text", count,
+first_offset, latest_offset}`. Offsets count Unicode characters, matching the
+existing details pagination, and refer to the full stored text before any
+preview or imported-content truncation. Records without such blocks are unchanged.
+The metadata survives canonical lean search, the friendly search digests and
+`more_results`; a response-level `resolution_notes_hint` explains the read route.
+The existing 3,000-byte digest and 2,000-byte extra-row budgets still apply.
+
+Clients may call `knowledge(action="details", discovery_id=..., offset=...)`
+at `latest_offset` to read the last block or `first_offset` to inspect the history.
+The details read returns fresh locations: replacing text can invalidate an earlier
+offset. The locations are parsed from text, not authenticated update receipts;
+the last note may be administrative, and no claim of truth, current policy or
+note-author identity is implied. No excerpts are substituted for original claims.
+Stored content, identity, authority, ranking, input schemas and schema digests
+are unchanged. Existing clients may ignore the added fields; no schema refresh
+is needed to keep using existing inputs.
