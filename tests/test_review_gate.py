@@ -43,6 +43,7 @@ def full_record(*args, **kwargs):
 def no_cloud_reads(monkeypatch):
     """Unit commands must not contact GitHub; native fixtures opt in explicitly."""
     monkeypatch.setattr(rg, "_CARRY_BASES", {})
+    monkeypatch.setattr(rg, "_CARRY_HEADS", {})
     monkeypatch.setattr(rg, "read_native", lambda *args: rg.NativeReview([]))
     monkeypatch.setattr(rg, "completed_review_exit", lambda repo, pr, key, head, result: result)
     monkeypatch.setattr(rg, "require_open", lambda *args: None)
@@ -4537,6 +4538,7 @@ def test_scope_refusal_preserves_concrete_findings(repo, reviewed_followup, monk
     history = comments + [original, disposition]
     assert rg.latest_matching(history, fix.key).verdict == 'FAILED'
     assert rg.passing_families(history, fix.key) == set()
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: history)
     assert rg._after_manual_record(args, 'o/r', 1, fix.key, 'feature', posted[0]) == rg.UNREVIEWED
 
 
@@ -5340,3 +5342,202 @@ def test_editorial_only_receipt_overrides_outage_but_not_findings_or_scope_refus
     monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
     assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
     assert (posted[0][3] == 'success') is editorial_allowed
+
+
+@pytest.mark.parametrize('refusal_has_findings', [False, True])
+def test_editorial_keeps_refused_scope_and_open_findings_until_fresh_review_and_disposal(
+        editorial_repo, monkeypatch, refusal_has_findings):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    base = _git(repo, 'rev-parse', 'master')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    middle = _typo(repo)
+    midkey = rg.diff_key(base, middle)
+    refused = full_record(midkey, 'FINDINGS' if refusal_has_findings else 'FAILED',
+                          1 if refusal_has_findings else 0, False, 'codex',
+                          scope='full-required', head=middle, base=base, review_id='refused')
+    comments.append(_comment(refused, text='[P1] Concrete defect'))
+    if not refusal_has_findings:
+        comments.append(_comment(full_record(midkey, 'FINDINGS', 1, False, 'google',
+                                             head=middle, base=base), text='[P1] Separate defect'))
+    head = _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(previous))
+    key = rg.diff_key(base, head)
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    current = rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1))
+    assert current.verdict == 'FINDINGS'
+    assert rg.review_check(current)[0] == 'action_required'
+    # A new full CLEAN cannot hide a carried finding.
+    comments.append(_comment(full_record(key, 'CLEAN', 0, False, 'gemini', head=head,
+                                         base=base, review_id='fresh-google')))
+    assert rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1)).verdict == 'FINDINGS'
+    disposed = Path('dispositions.txt')
+    disposed.write_text('1. fixed: verified the concrete failure is addressed\n')
+    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
+        {'author_association': 'OWNER', 'html_url': 'disposal', 'body': body}))
+    # Only the new full Google review can supply coverage after the refusal;
+    # neither old family approval is resurrected by disposing the finding.
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    assert rg.cmd_dispose(SimpleNamespace(file=str(disposed), base=base)) == rg.NEEDS_SECOND_FAMILY
+    current = rg.current_record('o/r', 1, key, head, rg.pr_comments('o/r', 1))
+    assert current.status()[0] == 'success'
+    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'google'}
+    comments.append(_comment(full_record(key, 'CLEAN', 0, False, 'codex', head=head,
+                                         base=base, review_id='fresh-openai')))
+    assert rg.passing_families(rg.pr_comments('o/r', 1), key) == {'google', 'openai'}
+
+
+def test_dispose_editorial_carried_followup_preserves_real_review_key_and_families(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    base = _git(repo, 'rev-parse', 'master')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    oldkey = rg.diff_key(base, previous)
+    (repo / 'main.py').write_text('value = 3\n')
+    _git(repo, 'commit', '-qam', 'bounded fix')
+    fixed = _git(repo, 'rev-parse', 'HEAD')
+    fixkey = rg.diff_key(base, fixed)
+    fix = rg.Record(fixkey, 'FINDINGS', 1, False, 'codex', scope='fix', head=fixed, base=base,
+                    from_head=previous, from_key=oldkey, review_id='fix-review')
+    comments.append(_comment(fix, text='[P2] Clarify documented output'))
+    head = _typo(repo)
+    key = rg.diff_key(base, head)
+    comments.append(_editorial_comment(fixed))
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    monkeypatch.setattr(rg, '_resolve', lambda args: (1, 'o/r', key, 'feature'))
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: comments.append(
+        {'author_association': 'OWNER', 'html_url': 'disposal', 'body': body}))
+    disposition = Path('disposition.txt')
+    disposition.write_text('1. rebutted: the documented output matches the CLI\n')
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    assert rg.cmd_dispose(SimpleNamespace(file=str(disposition), base=base)) == 0
+    assert rg.parse_record(comments[-1]['body']).key == fixkey
+    carried = rg.pr_comments('o/r', 1)
+    assert rg.current_record('o/r', 1, key, head, carried).status()[0] == 'success'
+    assert rg.passing_families(carried, key) == {'openai', 'google'}
+
+
+@pytest.mark.parametrize('finding', [False, True])
+def test_editorial_after_base_merge_retains_premerge_reviews_and_findings(editorial_repo, monkeypatch, finding):
+    repo = editorial_repo
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: [])
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'README.md').write_text('one\ntwo\nthree\nfour\nfive\n')
+    _git(repo, 'commit', '-qam', 'prose baseline')
+    _git(repo, 'checkout', '-qb', 'typo')
+    base = _git(repo, 'rev-parse', 'HEAD')
+    _typo(repo, 'one\ntwo\nTHREE\nfour\nfive\n')
+    reviewed = _git(repo, 'rev-parse', 'HEAD')
+    oldkey = rg.diff_key('master', reviewed)
+    review = full_record(oldkey, 'FINDINGS' if finding else 'CLEAN', 1 if finding else 0,
+                         False, 'codex', head=reviewed, base=base)
+    comments = [_comment(review, text='[P1] Existing defect')]
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'README.md').write_text('ONE\ntwo\nthree\nfour\nfive\n')
+    _git(repo, 'commit', '-qam', 'upstream prose')
+    _git(repo, 'checkout', '-q', 'typo')
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    merged = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.base_merge_equivalents('master', merged)
+    comments.append(_comment(full_record(rg.diff_key('master', merged), 'CLEAN', 0, False,
+                                         'gemini', head=merged, base=_git(repo, 'rev-parse', 'master'))))
+    _typo(repo, 'ONE\ntwo\nTHREE\nfour\nfive.\n')
+    comments.append(_editorial_comment(merged))
+    rec, families = _editorial_decide(comments)
+    assert rec.verdict == ('FINDINGS' if finding else 'CLEAN')
+    if not finding:
+        assert families == {'openai', 'google'}
+    # Editorial -> base merge -> editorial also composes without full reviews.
+    standalone = [_editorial_comment(base, reviewed), comments[-1]]
+    assert _editorial_decide(standalone)[0].scope == 'editorial'
+
+
+def test_editorial_receipt_is_bound_to_head_not_reappearing_key(editorial_repo):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-qb', 'typo', 'master')
+    base = _git(repo, 'rev-parse', 'HEAD')
+    _typo(repo)
+    key = rg.diff_key('master', 'HEAD')
+    comments = [_editorial_comment(base)]
+    (repo / 'main.py').write_text('value = 7\n')
+    _git(repo, 'commit', '-qam', 'substantive change')
+    bad = _git(repo, 'rev-parse', 'HEAD')
+    comments.append(_comment(full_record(rg.diff_key('master', bad), 'FINDINGS', 1, False,
+                                         'codex', head=bad, base=base), text='[P1] Defect'))
+    (repo / 'main.py').write_text('value = 1\n')
+    _git(repo, 'commit', '-qam', 'revert substantive change')
+    assert rg.diff_key('master', 'HEAD') == key
+    assert _editorial_decide(comments) == (None, set())
+
+
+def test_editorial_requires_actual_prose_changes(editorial_repo):
+    repo = editorial_repo
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', 'empty')
+    assert rg.editorial_span('master', previous, 'HEAD') == []
+
+
+def test_editorial_host_uses_pr_head_when_its_checkout_is_elsewhere(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    comments = _editorial_sources(repo)
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    comments.append(_editorial_comment(previous))
+    _git(repo, 'checkout', '-q', 'master')
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, '_CARRY_HEADS', {('o/r', 1): head})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    carried = rg.pr_comments('o/r', 1)
+    assert rg.current_record('o/r', 1, key, head, carried).status()[0] == 'success'
+    assert rg.passing_families(carried, key) == {'openai', 'google'}
+
+
+def test_editorial_does_not_invalidate_full_review_already_covering_refused_revision(editorial_repo):
+    repo = editorial_repo
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    base = _git(repo, 'rev-parse', 'master')
+    reviewed = full_record(key, 'FINDINGS', 1, False, 'codex', head=head, base=base, review_id='full')
+    refusal = full_record(key, 'FAILED', 0, False, 'gemini', scope='full-required', head=head, base=base)
+    comments = [_comment(reviewed, text='[P2] Documentation concern'), _comment(refusal)]
+    comments.append(_comment(rg.replace(reviewed, disposed=True), text='1. rebutted: checked the actual behavior'))
+    assert rg.latest_matching(comments, key).status()[0] == 'success'
+    assert rg.passing_families(comments, key) == {'openai'}
+    _typo(repo, 'A small example.\n\n')
+    comments.append(_editorial_comment(head))
+    rec, families = _editorial_decide(comments)
+    assert rec.status()[0] == 'success' and families == {'openai'}
+    assert previous != head
+
+
+def test_editorial_after_sensitive_base_merge_cannot_restore_premerge_family(carry_repo, monkeypatch):
+    repo = carry_repo
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'README.md').write_text('A smal example.\n')
+    _git(repo, 'add', 'README.md')
+    _git(repo, 'commit', '-qm', 'prose baseline')
+    _git(repo, 'checkout', '-q', 'feature')
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    base = _git(repo, 'rev-parse', 'master')
+    comments = [_comment(full_record(rg.diff_key(base, previous), 'CLEAN', 0, False,
+                                     'codex', head=previous, base=base))]
+    _master_edits_next_to_the_pr(repo)
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    merged = _git(repo, 'rev-parse', 'HEAD')
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda base: ['f.txt'])
+    assert rg.base_merge_equivalents('master', merged) == []
+    comments.append(_comment(full_record(rg.diff_key('master', merged), 'CLEAN', 0, False,
+                                         'gemini', head=merged, base=_git(repo, 'rev-parse', 'master'))))
+    _typo(repo)
+    comments.append(_editorial_comment(merged))
+    assert _editorial_decide(comments)[1] == {'google'}
