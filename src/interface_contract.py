@@ -302,7 +302,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.37.0 (2026-10-14): Infer omitted consult effort from a selected host; full diagnostics explain aggregate tokens and retain bounded backend failure messages.
 # 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
 # 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
-INTERFACE_CONTRACT_VERSION = "1.39.0"
+# 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
+INTERFACE_CONTRACT_VERSION = "1.40.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

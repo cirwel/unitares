@@ -29,7 +29,7 @@ name: Review Gate
 on:
   pull_request_target:
     # edited: a PR retargeted to another base has a different diff on the same head.
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   issue_comment:
     types: [created, edited, deleted]
   pull_request_review:
@@ -52,7 +52,9 @@ concurrency:
 jobs:
   gate:
     if: >-
-      github.event_name == 'pull_request_target' ||
+      (github.event_name == 'pull_request_target' &&
+        ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+          github.event.label.name == 'review-requested' || github.event.label.name == 'no-auto-review')) ||
       ((github.event_name == 'pull_request_review' || github.event_name == 'pull_request_review_comment') &&
         github.event.pull_request.head.repo.full_name == github.repository) ||
       (github.event.issue.pull_request &&

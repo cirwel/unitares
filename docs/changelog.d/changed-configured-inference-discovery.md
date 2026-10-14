@@ -1,0 +1,1 @@
+- Interface contract 1.40.0: Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
