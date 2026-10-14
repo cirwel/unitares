@@ -3950,14 +3950,15 @@ def test_sweep_refuses_forks_and_unknown_repository_identity(head_repo):
     assert rg.sweep_candidates([rg.pr_fields(raw)], "cirwel", rg.time.time(), 0) == []
 
 
-@pytest.mark.parametrize("verdict,requested,providers,expected", [
-    ("CLEAN", True, ["antigravity"], 1),
-    ("CLEAN", False, ["antigravity"], 0),
-    ("FINDINGS", True, ["antigravity"], 0),
-    ("CLEAN", True, [], 0),
+@pytest.mark.parametrize("verdict,requested,providers,waiver,expected", [
+    ("CLEAN", True, ["antigravity"], None, 1),
+    ("CLEAN", False, ["antigravity"], None, 0),
+    ("FINDINGS", True, ["antigravity"], None, 0),
+    ("CLEAN", True, [], None, 0),
+    ("CLEAN", True, ["antigravity"], "valid operator waiver", 0),
 ])
 def test_requested_sweep_continues_required_family_without_bypassing_findings(
-        monkeypatch, tmp_path, verdict, requested, providers, expected):
+        monkeypatch, tmp_path, verdict, requested, providers, waiver, expected):
     pr = _pr(3)
     pr["labels"] = [{"name": "review-requested"}] if requested else []
     monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
@@ -3969,13 +3970,24 @@ def test_requested_sweep_continues_required_family_without_bypassing_findings(
     monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "base_policy_paths", lambda *a: ["src/oauth_provider.py"])
     monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
-    monkeypatch.setattr(rg, "second_family_candidates", lambda *a: providers)
+    waiver_calls = []
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: waiver_calls.append(a) or waiver)
+    def candidates(*args):
+        assert not waiver, "a valid waiver must avoid selecting another provider"
+        return providers
+    monkeypatch.setattr(rg, "second_family_candidates", candidates)
     monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
     monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
     calls = []
     monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
     assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
     assert len(calls) == expected
+    if verdict == "CLEAN" and requested:
+        assert waiver_calls == [([], "k", ["src/oauth_provider.py"],
+                                 ["src/oauth_provider.py"], {"openai"},
+                                 "origin/master", "h")]
+    else:
+        assert waiver_calls == []
     if expected:
         assert calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
 

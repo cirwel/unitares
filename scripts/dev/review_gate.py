@@ -3465,15 +3465,21 @@ def cmd_sweep(args) -> int:
         requested = any(label["name"] == "review-requested" for label in p.get("labels", []))
         if requested and rec is not None and rec.status()[0] == "success":
             changed = changed_paths(f"origin/{base}", head)
-            sensitive = changed is None or (bool(changed) and sensitive_paths(
-                changed, base_policy_paths(f"origin/{base}")))
+            sensitive = (["(changed paths unreadable)"] if changed is None else
+                         sensitive_paths(changed, base_policy_paths(f"origin/{base}"))
+                         if changed else [])
             if sensitive:
                 native = read_native(repo, n, key, head, comments)
                 families = passing_families(comments, key, native.records)
                 if len(families) < 2:
-                    eligible = second_family_candidates(p["headRefName"], families, comments, key)
+                    waived = waiver_reason_for(comments, key, changed, sensitive, families,
+                                               f"origin/{base}", head)
+                    eligible = ([] if waived else second_family_candidates(
+                        p["headRefName"], families, comments, key))
                     if eligible:
                         reviewer = eligible[0]
+                    elif waived:
+                        print(f"[sweep] PR #{n}: second family covered by operator waiver")
                     else:
                         print(f"[sweep] PR #{n}: required family unavailable; coverage remains incomplete")
         if reviewer is None and rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
