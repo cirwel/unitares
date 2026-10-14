@@ -47,19 +47,20 @@ def test_install_does_not_interrupt_or_overwrite_loaded_service(tmp_path, monkey
     assert not (tmp_path / ".local").exists()
 
 
-def _bootstrap_repo(tmp_path):
+def _bootstrap_repo(tmp_path, slug="unitares"):
     repo = tmp_path / "repo with spaces"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c",
                     "user.email=test@example.test", "commit", "--allow-empty", "-qm", "base"], check=True)
     subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
-                    "https://github.com/cirwel/unitares.git"], check=True)
+                    f"https://github.com/cirwel/{slug}.git"], check=True)
     subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/master", "HEAD"], check=True)
     return repo
 
 
-def test_bootstrap_routes_fetch_and_review_through_app_in_trusted_checkout(tmp_path):
-    repo = _bootstrap_repo(tmp_path)
+@pytest.mark.parametrize("slug", ["unitares", "unitares-governance-plugin"])
+def test_bootstrap_routes_fetch_and_review_through_app_in_trusted_checkout(tmp_path, slug):
+    repo = _bootstrap_repo(tmp_path, slug)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.jsonl"
@@ -85,8 +86,9 @@ with Path(os.environ['TEST_CALL_LOG']).open('a') as f:
     ]
 
 
-def test_bootstrap_refuses_missing_app_runner_before_fetch(tmp_path):
-    repo = _bootstrap_repo(tmp_path)
+@pytest.mark.parametrize("slug", ["unitares", "unitares-governance-plugin"])
+def test_bootstrap_refuses_missing_app_runner_before_fetch(tmp_path, slug):
+    repo = _bootstrap_repo(tmp_path, slug)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name in ("git", "tr"):
