@@ -66,7 +66,8 @@ existing hosts. `ollama:local` and `hf:router` require standard effort;
 `claude:host-adapter`, `codex:host-adapter` and `antigravity:host-adapter` require
 thorough effort. Amended 2026-10-14: when effort is omitted, the selected
 host supplies it; with no host, it remains standard. Explicit effort must
-match the host. Null is not a supported effort value. External hosts require `cloud_allowed`. A pinned call requires
+match the host. Null is outside the advertised effort schema. External hosts
+require `cloud_allowed`. A pinned call requires
 `allow_degraded=false` and never tries another host. Selection grants no
 configuration or identity authority; own-family selection is advisory only.
 
