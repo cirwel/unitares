@@ -467,6 +467,36 @@ def diff_text(base: str, head: str) -> str:
     return out.decode("utf-8", "replace")
 
 
+def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
+    """Separate subsequent PR edits from automatically integrated base changes.
+
+    Reconstruct the reviewed contribution on the base actually included in
+    HEAD. Comparing that tree with HEAD retains every later author edit,
+    including merge resolutions and reversions. Nothing is dropped: the
+    base integration diff accompanies it as interaction-review context.
+    """
+    integrated_base = git("merge-base", base, head).strip()
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
+                             previous, integrated_base], capture_output=True, text=True)
+    tree = merged.stdout.split("\n", 1)[0].strip()
+    if merged.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        return (diff_text(previous, head),
+                "Base integration could not be reconstructed conflict-free. The supplied delta "
+                "contains ALL changes since the full review, without separating upstream work. "
+                "Do not assume any changes are already covered; uncertain scope requires FULL_REQUIRED.")
+
+    def patch(left: str, right: str) -> str:
+        return subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "--no-renames",
+                               "--binary", left, right], capture_output=True,
+                              check=True).stdout.decode("utf-8", "replace")
+
+    return (patch(tree, head),
+            f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "
+            f"resulting tree {tree}. The supplied delta is every PR edit relative to that tree.\n\n"
+            "Base integration changes (context, not new PR scope; inspect relevant interactions):\n"
+            + (patch(previous, tree) or "(none)\n"))
+
+
 # --------------------------------------------------------------------------
 # records
 
@@ -3135,8 +3165,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if followup and (followup.head != reviewed_head_oid or followup.base != reviewed_base_oid):
         print("[review] UNREVIEWED: follow-up endpoints changed before launch")
         return UNREVIEWED
-    diff_base = followup.from_head if followup else reviewed_base_oid
-    diff_path.write_text(diff_text(diff_base, reviewed_head_oid))
+    integration_context = ""
+    if followup:
+        delta, integration_context = followup_diff(reviewed_base_oid, followup.from_head, reviewed_head_oid)
+    else:
+        delta = diff_text(reviewed_base_oid, reviewed_head_oid)
+    diff_path.write_text(delta)
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -3148,10 +3182,13 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
     if followup:
-        context = ("\n\nThis is an independent FOLLOW-UP review. The diff above contains the COMPLETE "
-                   f"cumulative delta from previously fully reviewed commit {followup.from_head} "
-                   f"to {reviewed_head_oid}. Review every changed line, relevant callers and "
-                   "interactions with the original PR. Documentation, tests and attestation corrections "
+        context = ("\n\nThis is an independent FOLLOW-UP review from previously fully reviewed commit "
+                   f"{followup.from_head} to {reviewed_head_oid}. Review every subsequent PR edit, "
+                   "relevant callers and interactions with the original PR and integrated base. "
+                   "Base changes are supplied separately when Git can reconstruct the integration. "
+                   "Do not equate upstream breadth alone with expanded PR scope. Even an empty "
+                   "PR-edit delta requires checking whether base integration invalidates prior reasoning. "
+                   "Documentation, tests and attestation corrections "
                    "are eligible, but are not exempt from review. Verify all prior findings below. "
                    "If this is a bounded correction or clarification that preserves the original "
                    "design and security assumptions, include a standalone SCOPE: FOLLOWUP line "
@@ -3159,7 +3196,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
                    "prior reasoning no longer applies, or you cannot establish the scope, use "
                    "SCOPE: FULL_REQUIRED instead. Do not approve incomplete context.\n\n"
                    "Prior full reviews:\n" + args.followup_reviews + "\n\nOriginal PR diff:\n"
-                   + diff_text(reviewed_base_oid, followup.from_head))
+                   + diff_text(reviewed_base_oid, followup.from_head)
+                   + "\n\nCurrent PR diff:\n" + diff_text(reviewed_base_oid, reviewed_head_oid)
+                   + "\n\n" + integration_context)
         if materials is not None:
             materials.append(("prior-review.txt", context.encode()))
             prompt += "\nRead prior-review.txt for the original review context and mandatory follow-up scope decision.\n"
