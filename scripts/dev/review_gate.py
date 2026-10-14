@@ -826,6 +826,8 @@ class CodexRounds:
     unknown_history: bool = False  # legacy completed reviews without head/base/scope
     answered_since: bool = False  # a disposition or fix verification answered the last round
     cycles: list[ReviewCycle] = field(default_factory=list)
+    # Spending evidence only, also used to include unposted local reviews.
+    runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
 
     def can_join(self, head: str, key: str, family: str | None) -> bool:
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
@@ -960,9 +962,17 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             continue  # an answer to a round, never a run of its own
     if not runs:
         return CodexRounds(unknown_history=unknown_history)
+    return count_review_cycles(list(runs.values()), unknown_history, answered_at)
+
+
+def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
+                        unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
+    """Share spending accounting with the local reviewer, never coverage."""
+    if not runs:
+        return CodexRounds(unknown_history=unknown_history)
     cycles = []
     findings = []
-    for last_at, last, run_findings, key, family in sorted(runs.values(), key=lambda r: r[0]):
+    for last_at, last, run_findings, key, family in sorted(runs, key=lambda r: r[0]):
         if not cycles or not cycles[-1].accepts(last, key, family):
             cycles.append(ReviewCycle(last, key))
             findings = []
@@ -973,7 +983,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             cycle.head = last
         findings.extend(run_findings)
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
-                       answered_since=answered_at > last_at, cycles=cycles)
+                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
 
 
 CYCLE_GRANT_MARKER = "unitares-review-cycle v1"

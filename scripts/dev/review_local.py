@@ -6,6 +6,7 @@ Usage and shared configuration: docs/operations/local-pr-review.md.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import fcntl
 import hashlib
 import dataclasses
@@ -253,6 +254,32 @@ def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
     return count
 
 
+def local_budget_rounds(gate, rounds, cache: Path, pr: int, posted_ids: set[str]):
+    """Unposted completions spend the same cycles, but grant no coverage."""
+    if not local_completed_rounds(cache, pr, posted_ids):
+        return rounds
+    runs, seen = list(rounds.runs), set(posted_ids)
+    for run in sorted(cache.glob(f'pr-{pr}-*')):
+        receipt = json.loads((run / 'manifest.json').read_text())
+        identity = receipt.get('review_id', run.name)
+        if receipt['status'] not in ('CLEAN', 'FINDINGS') or identity in seen:
+            continue
+        seen.add(identity)
+        # Old manifests used a nanosecond start time in their directory name.
+        when = receipt.get('started_at')
+        if when is None:
+            match = re.fullmatch(rf'pr-{pr}-[0-9a-f]{{12}}-(\d{{16,20}})', run.name)
+            if not match:
+                raise ValueError(f'Local review timestamp missing at {run}; history unknown')
+            when = int(match[1]) / 1e9
+        if not isinstance(when, (int, float)) or not 0 < when <= time.time():
+            raise ValueError(f'Invalid local review timestamp at {run}')
+        key = gate.diff_key(receipt['base'], receipt['head'])
+        family = gate.model_family(receipt.get('architecture') or receipt.get('model', ''))
+        runs.append((when, receipt['head'], [], key, family))
+    return gate.count_review_cycles(runs, rounds.unknown_history)
+
+
 def config(repo: Path, key: str, default: str) -> str:
     result = subprocess.run(['git', 'config', '--get', key], cwd=repo,
                             capture_output=True, text=True)
@@ -268,6 +295,8 @@ def main(argv=None) -> int:
     parser.add_argument('--context', type=int, help='Default: 131072 on this 128 GiB host')
     parser.add_argument('--budget', type=int, default=1800, help='Total seconds, including generation')
     parser.add_argument('--record', action='store_true', help='Post a canonical full-review record')
+    parser.add_argument('--review-cycle-grant', type=int, metavar='COMMENT_ID',
+                        help='Consume a user-authored grant for one additional review cycle')
     args = parser.parse_args(argv)
     repo = Path(command('git', 'rev-parse', '--show-toplevel', cwd=args.repo).strip())
     model = args.model or config(repo, 'review.localSecondModel' if args.second_family else
@@ -282,7 +311,7 @@ def main(argv=None) -> int:
     # Cross-repository lock: never concurrently load two large local reviewers.
     lockpath = Path.home() / '.cache/unitares-local-review.lock'
     lockpath.parent.mkdir(parents=True, exist_ok=True)
-    with lockpath.open('w') as lock:
+    with ExitStack() as locks, lockpath.open('w') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -301,6 +330,9 @@ def main(argv=None) -> int:
         old = Path.cwd()
         try:
             os.chdir(repo)
+            pr_lock = locks.enter_context(gate.review_lock(f'pr-{args.pr}'))
+            if not pr_lock.held:
+                raise ValueError('Another review of this PR is running; join it before starting a local review')
             command('git', 'fetch', '--quiet', 'origin', head, base, cwd=repo)
             key = gate.diff_key(base, head)
             slug = gate.repo_slug()
@@ -308,13 +340,21 @@ def main(argv=None) -> int:
             rounds = gate.pr_rounds(slug, args.pr, key, head, comments)
             posted_ids = set()
             for comment in comments:
-                if comment.get('author_association') in gate.TRUSTED_ASSOCIATIONS:
+                if gate.trusted_review_comment(comment):
                     record = gate.parse_record(comment.get('body', ''))
                     if record and getattr(record, 'scope', '') == 'full':
                         posted_ids.add(getattr(record, 'review_id', ''))
-            local_rounds = local_completed_rounds(cache, args.pr, posted_ids) if gate.ROUND_CAP_ENABLED else 0
-            if gate.ROUND_CAP_ENABLED and (rounds.count + local_rounds >= gate.ROUND_CAP or
-                                          getattr(rounds, 'unknown_history', False)):
+            if gate.ROUND_CAP_ENABLED:
+                rounds = local_budget_rounds(gate, rounds, cache, args.pr, posted_ids)
+            family = gate.model_family(architecture)
+            grant_url = ''
+            if args.review_cycle_grant:
+                if not gate.cycle_grant(comments, args.review_cycle_grant, head, key, rounds, family, time.time()):
+                    raise ValueError('Cycle grant is missing, expired, consumed, untrusted, or for different work')
+                grant_url = f'https://github.com/{slug}/pull/{args.pr}#issuecomment-{args.review_cycle_grant}'
+            if gate.ROUND_CAP_ENABLED and not grant_url and (
+                    rounds.unknown_history or rounds.count > gate.ROUND_CAP or
+                    (rounds.count == gate.ROUND_CAP and not rounds.can_join(head, key, family))):
                 raise ValueError('Full-review budget exhausted or history unknown; use gate escalation')
             if gate.read_native(slug, args.pr, key, head, comments).running:
                 raise ValueError('Native review still running; join it before starting a local review')
@@ -335,6 +375,7 @@ def main(argv=None) -> int:
         (run / 'diff.patch').write_text(diff)
         print(f'Local full review: {model}, PR #{args.pr}, artifacts {run}', flush=True)
         manifest = {'pr': args.pr, 'head': head, 'base': base, 'model': model,
+                    'started_at': time.time(), 'cycle_grant': grant_url,
                     'context': args.context, 'budget': args.budget, 'architecture': architecture, 'review_id': uuid.uuid4().hex,
                     'diff_sha256': hashlib.sha256(diff.encode()).hexdigest(), 'seeded_source_paths': list(source_context), 'status': 'UNREVIEWED'}
         try:
@@ -359,6 +400,8 @@ def main(argv=None) -> int:
                     record = gate.Record(key, parsed[0], parsed[1], False, reviewer, model=model,
                                          head=head, base=base, scope='full', review_id=manifest['review_id'])
                     evidence = f'Model `{model}` · immutable head `{head}` · base `{base}`\n\n' + text
+                    if grant_url:
+                        evidence = f'Additional review cycle authorized by the operator: {grant_url}\n\n' + evidence
                     gate.post_record(args.pr, record, f'{parsed[0]} (independent local full review)', evidence)
                     manifest['recorded'] = True
                 finally:
