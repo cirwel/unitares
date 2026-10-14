@@ -3836,7 +3836,7 @@ def test_a_multiline_reason_is_posted_as_one_line_that_ci_accepts(monkeypatch):
 def test_a_quoted_or_fenced_waiver_marker_is_not_a_waiver():
     k = "c" * 64
     marker = f"<!-- {rg.WAIVER_MARKER} key={k} -->"
-    quoted = {"author_association": "OWNER",
+    quoted = {"author_association": "OWNER", "user": {"type": "User"},
               "body": f"This is a rejected example, not approval:\n```\n{marker}\nReason: help string only, nothing else\n```\n"}
     assert rg.active_waiver([quoted], k, rg.waiver_policy()) is None
     assert rg.apply_waiver(_HELD, [quoted], k, _PATHS, _PATHS, {"openai"}, 2, _POLICY) == _HELD
