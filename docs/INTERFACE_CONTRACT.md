@@ -533,7 +533,7 @@ advertises an unconditional standard default. Descriptions state the
 conditional default. Only the `consult` input digest and aggregate surface hash
 move; refresh cached schemas and omit effort to use inference. Existing calls
 with a matching explicit effort, and automatic calls with no host, keep their
-behavior. Explicit null is still invalid.
+behavior. Null remains outside the advertised effort schema.
 
 Full consultation diagnostics add `tokens_used_note` when a token aggregate is
 present. It explains provider-specific counting and zero-as-unreported behavior.
