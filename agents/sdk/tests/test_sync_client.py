@@ -275,7 +275,8 @@ class TestSyncToolMapping:
         assert captured["timeout"] == 135.0
         assert result.models_used == ["claude-opus-5"]
 
-    def test_list_inference_hosts_maps_tool(self):
+    @pytest.mark.parametrize("include_unconfigured", [None, False, True])
+    def test_list_inference_hosts_maps_tool(self, include_unconfigured):
         client = SyncGovernanceClient(transport="rest")
         calls = []
 
@@ -289,9 +290,11 @@ class TestSyncToolMapping:
             }
 
         client.call_tool = fake_call
-        result = client.list_inference_hosts(provider_kind="ollama")
+        supplied = {} if include_unconfigured is None else {"include_unconfigured": include_unconfigured}
+        result = client.list_inference_hosts(provider_kind="ollama", **supplied)
         assert calls[-1][0] == "list_inference_hosts"
         assert calls[-1][1]["provider_kind"] == "ollama"
+        assert calls[-1][1]["include_unconfigured"] is (include_unconfigured is True)
         assert result.hosts[0].host_id == "ollama:local"
 
     def test_describe_inference_host_maps_tool(self):

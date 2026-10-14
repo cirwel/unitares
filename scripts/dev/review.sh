@@ -32,7 +32,7 @@ for a in "$@"; do
 done
 
 case "${ARGS[0]:-}" in
-    record|dispose|waive|key) CMD=("${ARGS[@]}") ;;
+    record|dispose|waive|key|sweep) CMD=("${ARGS[@]}") ;;
     *) CMD=(review "${ARGS[@]+"${ARGS[@]}"}") ;;
 esac
 

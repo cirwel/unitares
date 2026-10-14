@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """review_gate.py — the PR review pass, as reflexive as the test gate.
 
-The delivery contract says an agent marks its PR ready once "CI green, review
-round joined" (docs/operations/github-workflow-conventions.md §2). Until this
-script, the second half was prose: some PRs carried a review in the body, some
-in a comment, most in neither, and nothing could tell which. This makes the
-review a command with a cache and a machine-checkable record, the way
-test-cache.sh made the test run one.
+Review is best-effort for ordinary changes; sensitive paths retain their
+required coverage (docs/operations/github-workflow-conventions.md §2).
+Local authors can run a reviewer directly. Any author with GitHub access can
+request the shared host with the review-requested label. Both routes publish
+the same diff-bound records; an unavailable reviewer never counts as a pass.
 
     review         run a review of HEAD's diff and post the record on its PR
     record         post a review that already happened elsewhere (a council,
@@ -52,8 +51,8 @@ findings from a reviewer that did not finish is not a review.
 
 What the gate does NOT establish
 --------------------------------
-That the record was honest. Local agents share a GitHub App and cloud agents
-still use the operator's account. Neither publisher identity proves an
+That the record was honest. Local and provisioned cloud agents share a GitHub
+App. Publisher identity does not prove an
 independent review, and nothing here signs reviewer output. The
 gate makes a review impossible to FORGET and visible to check — the record and
 its full text sit on the PR — not impossible to fake by an author with write
@@ -247,6 +246,9 @@ def pr_fields(pr: dict) -> dict:
     of OPEN/CLOSED/MERGED, and require_open and its messages still use that.
     """
     merged = pr.get("merged") or pr.get("merged_at")
+    head_repo = (pr["head"].get("repo") or {}).get("id")
+    base_repo = (pr["base"].get("repo") or {}).get("id")
+    author = pr.get("user") or {}
     return {
         "number": pr["number"],
         "headRefOid": pr["head"]["sha"],
@@ -255,6 +257,14 @@ def pr_fields(pr: dict) -> dict:
         "state": "MERGED" if merged else str(pr["state"]).upper(),
         "isDraft": bool(pr.get("draft")),
         "author": {"login": (pr.get("user") or {}).get("login", "")},
+        # PR REST objects omit performed_via_github_app. Their GitHub-issued
+        # bot actor ID establishes routing eligibility only; review comments
+        # still require the full App/actor pair. Names/association grant neither.
+        "trustedReviewApp": (author.get("type") == "Bot"
+                             and type(author.get("id")) is int
+                             and author["id"] in TRUSTED_REVIEW_APPS.values()),
+        "sameRepository": (type(head_repo) is int and head_repo > 0
+                           and type(base_repo) is int and head_repo == base_repo),
         "updatedAt": pr.get("updated_at", ""),
         "labels": [{"name": label["name"]} for label in pr.get("labels") or []],
     }
@@ -457,6 +467,36 @@ def diff_text(base: str, head: str) -> str:
     return out.decode("utf-8", "replace")
 
 
+def followup_diff(base: str, previous: str, head: str) -> tuple[str, str]:
+    """Separate subsequent PR edits from automatically integrated base changes.
+
+    Reconstruct the reviewed contribution on the base actually included in
+    HEAD. Comparing that tree with HEAD retains every later author edit,
+    including merge resolutions and reversions. Nothing is dropped: the
+    base integration diff accompanies it as interaction-review context.
+    """
+    integrated_base = git("merge-base", base, head).strip()
+    merged = subprocess.run(["git", "merge-tree", "--write-tree", "--no-messages",
+                             previous, integrated_base], capture_output=True, text=True)
+    tree = merged.stdout.split("\n", 1)[0].strip()
+    if merged.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40,64}", tree):
+        return (diff_text(previous, head),
+                "Base integration could not be reconstructed conflict-free. The supplied delta "
+                "contains ALL changes since the full review, without separating upstream work. "
+                "Do not assume any changes are already covered; uncertain scope requires FULL_REQUIRED.")
+
+    def patch(left: str, right: str) -> str:
+        return subprocess.run(["git", "diff", "--no-color", "--no-ext-diff", "--no-renames",
+                               "--binary", left, right], capture_output=True,
+                              check=True).stdout.decode("utf-8", "replace")
+
+    return (patch(tree, head),
+            f"Reviewed contribution {previous} automatically integrated with base {integrated_base}; "
+            f"resulting tree {tree}. The supplied delta is every PR edit relative to that tree.\n\n"
+            "Base integration changes (context, not new PR scope; inspect relevant interactions):\n"
+            + (patch(previous, tree) or "(none)\n"))
+
+
 # --------------------------------------------------------------------------
 # records
 
@@ -497,7 +537,7 @@ class Record:
             return "success", f"{self.findings} finding(s) disposed ({self.reviewer})"
         if self.verdict == "FINDINGS":
             return "pending", f"{self.findings} finding(s) need fixes or dispositions"
-        return "pending", f"UNREVIEWED: {self.reviewer} unavailable; author must retry or hand off explicitly"
+        return "pending", f"UNREVIEWED: {self.reviewer} unavailable; no completed review"
 
 
 def render_marker(r: Record) -> str:
@@ -1288,12 +1328,12 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 # workspace). The material used to ride inline in ONE argv element, which Linux
 # caps at 128 KiB: PR #2470's diff alone was 143 KB, so every agy review of it
 # failed before starting. Files have no such limit.
-#: Default model: Gemini 3.8 Flash (High), available in `agy models` on
-#: 2026-10-13. The former 3.1 Pro pin is no longer served. This restores
-#: availability; it is not evidence of equivalent review quality.
-#: REVIEW_AGY_MODEL overrides it;
-#: "default" leaves the choice to agy.
-AGY_DEFAULT_MODEL = "gemini-3.8-flash-high"
+#: Default model: Gemini 4 Argon (High), in `agy models` on 2026-10-13 (the
+#: former 3.1 Pro pin is no longer served). Chosen over 3.8 Flash on a replay
+#: of three past PRs with known defects: Argon found 5, Flash 1, Pro 1. One run
+#: per diff, so a sample, not a quality guarantee. REVIEW_AGY_MODEL overrides
+#: it; "default" leaves the choice to agy.
+AGY_DEFAULT_MODEL = "gemini-4-argon-high"
 #: A changed file whose name agy would load as instructions (AGENTS.md,
 #: GEMINI.md, CLAUDE.md, anything under .agents/, .agent/ or .gemini/) is
 #: written with this suffix, so the PR under review cannot configure its own
@@ -2201,6 +2241,25 @@ def _agy_output_limited(stdout: str) -> str | None:
     return _agy_truncation(stdout)[1]
 
 
+def reviewer_environment(github_config: str, agy_home: str | None = None) -> dict[str, str]:
+    """Keep fetch/publication credentials in the parent, never in the model.
+
+    An empty gh config and disabled Git credential helpers also prevent a
+    stripped token from falling back to the operator's configured login.
+    This is credential hygiene, not isolation from other same-user files.
+    """
+    env = agy_env(agy_home) if agy_home is not None else os.environ.copy()
+    for name in list(env):
+        if (name.startswith(("GH_", "GITHUB_", "UNITARES_GITHUB_", "GIT_CONFIG_"))
+                or name in ("GIT_CONFIG", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND")):
+            env.pop(name)
+    env.update(GH_CONFIG_DIR=github_config, GH_PROMPT_DISABLED="1",
+               GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/usr/bin/false",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="")
+    return env
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                  materials: list[tuple[str, bytes]] | None = None,
                  codex_model: str = "gpt-6.1-sol", codex_effort: str = "medium") -> tuple[str, str]:
@@ -2257,6 +2316,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             workspace.cleanup()
             return failure, "skipped: review material could not be written"
     deadline = time.monotonic() + budget_s
+    github_config = tempfile.TemporaryDirectory(prefix="review-github-")
+    model_env = reviewer_environment(github_config.name, agy_home if isolated else None)
 
     def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
@@ -2271,7 +2332,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                 proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if separate else subprocess.STDOUT,
                                         cwd=agy_cwd,
-                                        env=agy_env(agy_home) if isolated else None,
+                                        env=model_env,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
                 return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
@@ -2314,6 +2375,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                     ["agy", "-p", AGY_RESUME_PROMPTS[stall], "--conversation", cid, *cmd[3:]],
                     fh, deadline - time.monotonic())
     finally:
+        github_config.cleanup()
         if workspace:
             workspace.cleanup()
     resumed = sum(resumes.values())
@@ -2785,7 +2847,7 @@ def cmd_review(args) -> int:
             joined = True
         if time.monotonic() >= deadline:
             print("[review] still running; no completed review joined. "
-                  "Run scripts/dev/review.sh again before marking ready.")
+                  "The PR remains unreviewed until completion; sensitive paths still require coverage.")
             return UNREVIEWED
         time.sleep(min(5, max(0, deadline - time.monotonic())))
 
@@ -3081,9 +3143,10 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
                 args.completed_followup = getattr(attempt, "completed_followup", None)
             return result
         print(f"[review] {provider} did not complete; no automatic provider cascade", flush=True)
-    print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
-          "this blocker and next action; retry scripts/dev/review.sh or record "
-          "an independent code review with record <file> --reviewer-name <who> --independent.")
+    print("[review] UNREVIEWED: no reviewer completed. Record that in the PR body. "
+          "Ordinary changes may proceed after validation; sensitive paths still need "
+          "their required review coverage. Add review-requested on the PR for the "
+          "shared host; do not repeatedly retry an unavailable provider.")
     return UNREVIEWED
 
 
@@ -3102,8 +3165,12 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     if followup and (followup.head != reviewed_head_oid or followup.base != reviewed_base_oid):
         print("[review] UNREVIEWED: follow-up endpoints changed before launch")
         return UNREVIEWED
-    diff_base = followup.from_head if followup else reviewed_base_oid
-    diff_path.write_text(diff_text(diff_base, reviewed_head_oid))
+    integration_context = ""
+    if followup:
+        delta, integration_context = followup_diff(reviewed_base_oid, followup.from_head, reviewed_head_oid)
+    else:
+        delta = diff_text(reviewed_base_oid, reviewed_head_oid)
+    diff_path.write_text(delta)
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -3115,10 +3182,13 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
     if followup:
-        context = ("\n\nThis is an independent FOLLOW-UP review. The diff above contains the COMPLETE "
-                   f"cumulative delta from previously fully reviewed commit {followup.from_head} "
-                   f"to {reviewed_head_oid}. Review every changed line, relevant callers and "
-                   "interactions with the original PR. Documentation, tests and attestation corrections "
+        context = ("\n\nThis is an independent FOLLOW-UP review from previously fully reviewed commit "
+                   f"{followup.from_head} to {reviewed_head_oid}. Review every subsequent PR edit, "
+                   "relevant callers and interactions with the original PR and integrated base. "
+                   "Base changes are supplied separately when Git can reconstruct the integration. "
+                   "Do not equate upstream breadth alone with expanded PR scope. Even an empty "
+                   "PR-edit delta requires checking whether base integration invalidates prior reasoning. "
+                   "Documentation, tests and attestation corrections "
                    "are eligible, but are not exempt from review. Verify all prior findings below. "
                    "If this is a bounded correction or clarification that preserves the original "
                    "design and security assumptions, include a standalone SCOPE: FOLLOWUP line "
@@ -3126,7 +3196,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
                    "prior reasoning no longer applies, or you cannot establish the scope, use "
                    "SCOPE: FULL_REQUIRED instead. Do not approve incomplete context.\n\n"
                    "Prior full reviews:\n" + args.followup_reviews + "\n\nOriginal PR diff:\n"
-                   + diff_text(reviewed_base_oid, followup.from_head))
+                   + diff_text(reviewed_base_oid, followup.from_head)
+                   + "\n\nCurrent PR diff:\n" + diff_text(reviewed_base_oid, reviewed_head_oid)
+                   + "\n\n" + integration_context)
         if materials is not None:
             materials.append(("prior-review.txt", context.encode()))
             prompt += "\nRead prior-review.txt for the original review context and mandatory follow-up scope decision.\n"
@@ -3369,11 +3441,11 @@ def failed_runs(comments: list[dict], key: str, reviewer: str | None = None) -> 
 def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> list[dict]:
     """Open PRs the sweep may review, oldest-updated first.
 
-    - Drafts are included: review is how their owners reach readiness. Reading
-      a diff never authorizes editing the branch, marking ready, or merging.
+    - Drafts need review-requested; ready PRs remain eligible automatically.
+      Reading never authorizes editing, marking ready, or merging.
     - `no-auto-review` explicitly holds automatic review of unfinished work.
-    - Only the owner's account and dependabot: a stranger's PR gets a human
-      first, not a model running over its code on this machine.
+    - Same-repository PRs from the owner, Dependabot, or an already trusted
+      review App. Forks, unknown authors and unreadable repository IDs wait.
     - Nothing updated in the last `quiet_s`: the pusher's own review may be
       about to start, and the lock only sees reviews already running.
     """
@@ -3387,7 +3459,10 @@ def sweep_candidates(prs: list[dict], owner: str, now: float, quiet_s: int) -> l
             continue
         if SWEEP_HOLD_LABEL in labels:
             continue
-        if login.lower() != owner.lower() and login not in BOT_AUTHORS:
+        if not p.get("sameRepository"):
+            continue
+        if (login.lower() != owner.lower() and login not in BOT_AUTHORS
+                and not p.get("trustedReviewApp")):
             continue
         updated = datetime.fromisoformat(p["updatedAt"].replace("Z", "+00:00")).timestamp()
         if now - updated < quiet_s:
@@ -3405,6 +3480,7 @@ def cmd_sweep(args) -> int:
     prs = open_prs(repo)
     candidates = 0
     for p in sweep_candidates(prs, repo.split("/")[0], time.time(), args.quiet_minutes * 60):
+        reviewer = None
         n, head, base = p["number"], p["headRefOid"], p["baseRefName"]
         git("fetch", "--quiet", "--no-tags", "origin",
             f"+refs/heads/{base}:refs/remotes/origin/{base}",
@@ -3422,9 +3498,30 @@ def cmd_sweep(args) -> int:
         except SystemExit as exc:
             print(f"[sweep] WARNING: native evidence unavailable: {exc}")
             continue  # cannot decide which findings remain open from partial evidence
-        # A sensitive diff with one family's pass is left to its author: the
-        # review check says what is missing, and no review starts on its own.
-        if rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
+        # An explicit host request covers the required review cycle. Continue
+        # its missing family on a later tick, one provider attempt per tick.
+        # Ordinary ready PRs without the label keep the original single pass.
+        requested = any(label["name"] == "review-requested" for label in p.get("labels", []))
+        if requested and rec is not None and rec.status()[0] == "success":
+            changed = changed_paths(f"origin/{base}", head)
+            sensitive = (["(changed paths unreadable)"] if changed is None else
+                         sensitive_paths(changed, base_policy_paths(f"origin/{base}"))
+                         if changed else [])
+            if sensitive:
+                native = read_native(repo, n, key, head, comments)
+                families = passing_families(comments, key, native.records)
+                if len(families) < 2:
+                    waived = waiver_reason_for(comments, key, changed, sensitive, families,
+                                               f"origin/{base}", head)
+                    eligible = ([] if waived else second_family_candidates(
+                        p["headRefName"], families, comments, key))
+                    if eligible:
+                        reviewer = eligible[0]
+                    elif waived:
+                        print(f"[sweep] PR #{n}: second family covered by operator waiver")
+                    else:
+                        print(f"[sweep] PR #{n}: required family unavailable; coverage remains incomplete")
+        if reviewer is None and rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
@@ -3439,7 +3536,8 @@ def cmd_sweep(args) -> int:
             continue  # report findings/retry exhaustion rather than silently skipping
         if native_activity_running(comments) or read_native(repo, n, key, head, comments).running or review_lock(f"pr-{n}").holder_alive():
             continue
-        print(f"[sweep] PR #{n} ({p['headRefName']}) has no review for {key[:12]}")
+        reason = f"needs required family via {reviewer}" if reviewer else "needs review"
+        print(f"[sweep] PR #{n} ({p['headRefName']}) {reason} for {key[:12]}")
         candidates += 1
         if args.dry_run:
             continue
@@ -3448,12 +3546,14 @@ def cmd_sweep(args) -> int:
             _run(["git", "-C", str(wt), "checkout", "--quiet", "--detach", head])
         else:
             git("worktree", "add", "--quiet", "--detach", str(wt), head)
-        rc = subprocess.run([sys.executable, str(Path(__file__).resolve()),
-                             "--pr", str(n), "review"], cwd=wt).returncode
+        command = [sys.executable, str(Path(__file__).resolve()), "--pr", str(n), "review"]
+        if reviewer:
+            command += ["--reviewer", reviewer, "--fresh"]
+        rc = subprocess.run(command, cwd=wt).returncode
         if rc == NEEDS_SECOND_FAMILY:
-            # The review passed; the second family is the author's call. Not a
-            # job failure (launchd would flag it for the operator).
-            print(f"[sweep] PR #{n}: reviewed; a second model family is left to its author")
+            # Missing coverage is visible on the PR, not a runner crash.
+            next_step = "requested from shared host on a later tick" if requested else "needs the author's request"
+            print(f"[sweep] PR #{n}: first family passed; second family {next_step}")
             return 0
         return rc
     print(f"[sweep] {candidates} review candidate(s)" if candidates else
@@ -3466,9 +3566,13 @@ def cmd_key(args) -> int:
     return 0
 
 
-def review_check(rec: Record | None) -> tuple[str, str]:
+def review_check(rec: Record | None, *, requested: bool = False, held: bool = False) -> tuple[str, str]:
     if rec is None:
-        return "neutral", "UNREVIEWED: author should run scripts/dev/review.sh (drafts included)"
+        if held:
+            return "neutral", "UNREVIEWED: automatic review held by no-auto-review"
+        return "neutral", ("UNREVIEWED: requested from shared host; no completed review"
+                           if requested else
+                           "UNREVIEWED: add review-requested for shared-host review, or run review.sh locally")
     if rec.verdict == "FAILED":
         return "neutral", rec.status()[1]
     if rec.verdict == "FINDINGS" and not rec.disposed:
@@ -3543,7 +3647,9 @@ def cmd_ci(args) -> int:
         url = f"https://github.com/{repo}/blob/{base_ref}/docs/operations/github-workflow-conventions.md#review-workflow"
     else:
         url = rec.url
-    conclusion, desc = review_check(rec)
+    labels = {label["name"] for label in info.get("labels", [])}
+    conclusion, desc = review_check(rec, requested="review-requested" in labels,
+                                  held=SWEEP_HOLD_LABEL in labels)
     changed = changed_paths(f"origin/{base_ref}", head)
     # A diff whose paths cannot be read is treated as sensitive: this is the
     # gate, and "could not tell" must not pass with a single family.
@@ -3653,8 +3759,10 @@ def main(argv: list[str] | None = None) -> int:
         # findings needing author action (exit 1), which is what the uncaught
         # FileNotFoundError traceback used to report.
         print(f"[review] UNREVIEWED: {exc}, so review evidence can be neither "
-              "read nor posted from here. Run review.sh where gh is available, "
-              "request native review (`@codex review` on the PR), or run an "
+              "read nor posted from here. Add the review-requested label through "
+              "GitHub or your connector for shared-host review. Ordinary changes "
+              "may proceed after validation with an explicit unreviewed note; "
+              "sensitive paths retain their required coverage. You can also run an "
               "independent review and render its record with `review.sh record "
               "FILE --reviewer-name NAME --independent --emit`, then post the "
               "printed body verbatim through your GitHub connector "

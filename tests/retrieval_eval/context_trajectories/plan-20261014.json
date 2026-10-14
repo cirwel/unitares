@@ -1,0 +1,58 @@
+{
+  "schema": "kg-context-trajectories.plan.v1",
+  "frozen_at": "2026-10-14T09:16:41.977353+00:00",
+  "repository_head": "bdd7dda0adcf5062aeeeb6f2ee9f3b6705b113e9",
+  "model_selected": "gemini-4-argon-high",
+  "inputs": {
+    "scripts/eval/kg_context_trajectories.py": "4c16ae3b510258baf94d6fb82763d74a54f207341c9f285ce7c86ab662681aa4",
+    "tests/retrieval_eval/context_trajectories/tasks.json": "31ca0436f652c0ba94766db61fd93bf61b1cb81419741660eaeedb1276682003",
+    "src/mcp_handlers/middleware/envelope_step.py": "c4d9c5e361675554555ea2e59305c3d4ab8f0c7ae1e52347e6f1687d49c35d6c",
+    "src/mcp_handlers/knowledge/handlers.py": "ad2288219165e960d30390a067462311a7fd7b7e51126a8b1a38582e05892612",
+    "src/mcp_handlers/knowledge/read_metadata.py": "6f1961e994adbcb304d121805260fbcea75ea771e8594fa572f51b283da928ba",
+    "src/mcp_handlers/support/antigravity_cli_client.py": "e384f3bc41f2282244f1cd1135c06823109e43d2febe03606956e1a9b66d8d8d",
+    "baseline_envelope": "e98bcd346431d718770a7e4a0f16d66369c4231b002d53a077ed121150d6e9da",
+    "instructions": "b9ae9350b4f0d7684c373f096213f6634552ed5a97c090b0eae3d258df252b8c",
+    "src": "8186357ea423268293fb0dd3bd86d2a492627f6e",
+    "governance_core": "002111bf297cff801e54d50b26b2dbd081a28bea"
+  },
+  "schedule": [
+    {
+      "task": "replacement",
+      "condition": "before"
+    },
+    {
+      "task": "replacement",
+      "condition": "after"
+    },
+    {
+      "task": "imported_claim",
+      "condition": "after"
+    },
+    {
+      "task": "imported_claim",
+      "condition": "before"
+    },
+    {
+      "task": "appended_correction",
+      "condition": "before"
+    },
+    {
+      "task": "appended_correction",
+      "condition": "after"
+    },
+    {
+      "task": "mid_task_change",
+      "condition": "after"
+    },
+    {
+      "task": "mid_task_change",
+      "condition": "before"
+    }
+  ],
+  "limits": {
+    "turns": 8,
+    "turn_seconds": 60,
+    "episode_seconds": 240
+  },
+  "interpretation": "One paired exploratory run per synthetic task; descriptive only. No deployment/retirement threshold, no equivalence or general capability claim. All attempts, errors, limits and missing usage remain in the report."
+}

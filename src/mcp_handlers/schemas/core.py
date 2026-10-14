@@ -1011,10 +1011,11 @@ class ConsultParams(AgentIdentityMixin):
 class ListInferenceHostsParams(AgentIdentityMixin):
     """Parameters for list_inference_hosts"""
     include_unconfigured: bool = Field(
-        True,
+        False,
         description=(
-            "Include known but unconfigured adapter placeholders such as "
-            "codex:host-adapter, claude:host-adapter and antigravity:host-adapter."
+            "Include all registered hosts, including unconfigured adapters. "
+            "By default, list configured hosts only; inspect available and "
+            "cooldown before selecting one."
         ),
     )
     provider_kind: Optional[str] = Field(

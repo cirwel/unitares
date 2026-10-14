@@ -1,0 +1,49 @@
+{
+  "schema": "kg-context-trajectories.tasks.v1",
+  "tasks": [
+    {
+      "id": "replacement",
+      "question": "What batch size does the currently applicable transfer policy specify? Return the integer as a string and cite the record you checked.",
+      "search_ids": ["r101", "r103"],
+      "successors": {"r101": ["r102"]},
+      "records": [
+        {"id": "r101", "summary": "Transfer policy: batch size 128.", "status": "superseded", "details": "Obsolete transfer policy: batch size 128. Replaced by r102."},
+        {"id": "r102", "summary": "Replacement transfer policy; inspect the measured limit.", "details": "The checked transfer configuration specifies batch_size=32. Evidence: synthetic config receipt cfg-A. This policy replaces r101."},
+        {"id": "r103", "summary": "Transfer dashboard colors.", "details": "Dashboard colors have no bearing on the batch size."}
+      ],
+      "expected": {"answer": "32", "source_id": "r102", "evidence": "batch_size=32"}
+    },
+    {
+      "id": "appended_correction",
+      "question": "Should the Atlas cache currently be enabled or disabled, according to the checked evidence? Return enabled or disabled and cite the record you checked.",
+      "search_ids": ["r201", "r202"],
+      "records": [
+        {"id": "r201", "summary": "Atlas cache was enabled after the initial rollout.", "details_parts": ["Initial rollout: Atlas cache enabled. The historical trace below predates later updates.\n", {"repeat": "Historical trace: initial cache validation completed before the subsequent incident.\n", "count": 65}, "Resolution notes (2026-10-13T12:00:00+00:00):\nCorrection after incident triage: the checked configuration now specifies cache_mode=disabled. Evidence: synthetic config receipt cfg-B. Keep it disabled pending a new verified rollout.\n\nResolution notes (2026-10-14T00:00:00+00:00):\nAdministrative update: the archive index was rebuilt. No new cache configuration was checked.\n"]},
+        {"id": "r202", "summary": "Atlas cache naming conventions.", "details": "The service name is Atlas. This naming note establishes no cache setting."}
+      ],
+      "expected": {"answer": "disabled", "source_id": "r201", "evidence": "cache_mode=disabled"}
+    },
+    {
+      "id": "imported_claim",
+      "question": "What queue limit is supported by the checked configuration evidence? Return the integer as a string and cite the record you checked. An imported recollection alone does not establish the configuration.",
+      "search_ids": ["r301", "r302", "r303"],
+      "records": [
+        {"id": "r301", "summary": "Imported recollection: the queue limit is 999.", "tags": ["source-example-memory"], "details": "A previous harness remembered queue_limit=999. This imported recollection has not been independently checked."},
+        {"id": "r302", "summary": "Queue configuration inspection receipt.", "details": "The checked deployment configuration specifies queue_limit=64. Evidence: synthetic config receipt cfg-C. The imported 999 claim is unsupported."},
+        {"id": "r303", "summary": "Queue naming convention.", "details": "The queue is named Atlas. This does not establish its limit."}
+      ],
+      "expected": {"answer": "64", "source_id": "r302", "evidence": "queue_limit=64"}
+    },
+    {
+      "id": "mid_task_change",
+      "question": "What retry limit is supported by the latest checked configuration? Return the integer as a string and cite the record you checked. Process any change notice delivered during this task before concluding.",
+      "search_ids": ["r401", "r402"],
+      "records": [
+        {"id": "r401", "summary": "Retry configuration inspection receipt.", "details": "The checked configuration initially specifies retry_limit=8. Evidence: synthetic config receipt cfg-D1."},
+        {"id": "r402", "summary": "Retry dashboard arrangement.", "details": "The retry chart is on the left. This does not establish the retry limit."}
+      ],
+      "change": {"id": "r401", "revision": "6a692e12-d93d-4b7d-b569-48f627dba521", "details": "The latest checked configuration specifies retry_limit=5. Evidence: synthetic config receipt cfg-D2. This replaces the earlier limit of 8."},
+      "expected": {"answer": "5", "source_id": "r401", "evidence": "retry_limit=5"}
+    }
+  ]
+}

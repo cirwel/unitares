@@ -347,10 +347,11 @@ class SyncGovernanceClient:
 
     def list_inference_hosts(
         self,
-        include_unconfigured: bool = True,
+        include_unconfigured: bool = False,
         provider_kind: str | None = None,
         **kwargs: Any,
     ) -> InferenceHostsResult:
+        """List configured hosts; pass include_unconfigured=True for the full inventory."""
         args: dict[str, Any] = {"include_unconfigured": include_unconfigured}
         if provider_kind is not None:
             args["provider_kind"] = provider_kind

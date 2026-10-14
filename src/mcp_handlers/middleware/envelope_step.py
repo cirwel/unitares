@@ -156,6 +156,8 @@ _RELATED_DISCOVERY_LIMIT = 5
 _RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
+_SEARCH_FULL_MODE_ROUTE = "search_shared_memory(response_mode='full')"
+_SEARCH_FULL_MODE_HINT = f"Re-call {_SEARCH_FULL_MODE_ROUTE} for the complete result set."
 # A lean search shows three digests whatever `limit` asked for, so a caller
 # who asked for twenty rows had one route to row four: the full tier, which
 # serializes every record. An explicit `limit` above the digest count is a
@@ -2029,9 +2031,7 @@ def _raw_governance_policy(
     response_mode = str(
         arguments.get("response_mode") or "lean"
     ).strip().lower()
-    return response_mode == "full", (
-        "Re-call search_shared_memory(response_mode='full') for the complete result set."
-    )
+    return response_mode == "full", _SEARCH_FULL_MODE_HINT
 
 
 def _effective_discovery_retrieval_options(
@@ -2367,6 +2367,11 @@ def _coaching_yields(envelope: Dict[str, Any]) -> List[tuple]:
     # A truncated digest's pointer repeats the route raw_governance_hint names.
     if envelope.get("raw_governance_hint") and "expand_with" in envelope:
         steps.append(("expand_with", None))
+    # Lean search has already omitted the tier ladder. This final wording
+    # reduction preserves its executable route and frees enough space for
+    # the attribution-omitted marker even at the exact budget boundary.
+    if envelope.get("raw_governance_hint") == _SEARCH_FULL_MODE_HINT:
+        steps.append(("raw_governance_hint", _SEARCH_FULL_MODE_ROUTE))
     return steps
 
 
@@ -2464,8 +2469,8 @@ def _restore_digest_attribution(
     once attribution is whole. Only if something must still be withheld is
     the restore redone with the marker's room reserved, so the marker says
     so. In a bounded search the room freed by then is always more than the
-    marker's ~36 bytes (the tier ladder alone is ~190, and once truncation
-    has dropped it `expand_with` is ~65), so withheld attribution there is
+    marker's ~36 bytes (lean's full-route wording alone can free 37;
+    compact's tier ladder and `expand_with` can free more), so withheld attribution there is
     always marked; the marker-free restore is the fallback for an envelope
     with nothing optional left. Last, each piece that gave way comes back,
     most useful first, if the whole piece still fits beside the attribution.
@@ -2583,6 +2588,15 @@ def build_experience_envelope(
         include_raw=include_raw,
         arguments=arguments,
     )
+    lean_search = (
+        friendly_name == "search_shared_memory"
+        and _mode_in_effect(friendly_name, arguments, source_payload) == "lean"
+    )
+    if lean_search and retrieval_options:
+        # The routine read needs its tier, a way to open evidence, and any
+        # disclosure that an explicit details request was overridden. The
+        # full serialization diagnostics and tier ladder remain in compact.
+        retrieval_options = _lift(retrieval_options, *_RETRIEVAL_KEPT_FOR_ATTRIBUTION)
 
     if canonical_name in {"process_agent_update", "get_governance_metrics"}:
         summary = _action_summary(source_payload, risk)
@@ -2599,7 +2613,7 @@ def build_experience_envelope(
     bounded_metrics = friendly_name == "check_working_state" and not include_raw
     options = (
         None
-        if bounded_sync or bounded_metrics
+        if bounded_sync or bounded_metrics or lean_search
         else _response_options(friendly_name, source_payload, arguments)
     )
 
@@ -2954,6 +2968,14 @@ def build_experience_envelope(
             next_action = (
                 "No prior discoveries matched. Broaden terms or search tags before "
                 "recording a new finding."
+            )
+        if lean_search and total:
+            # Search is a read: write recipes belong in the write tools.
+            # The structured open_one/full routes below already explain
+            # expansion, while confidence_note keeps the actual caveat.
+            next_action = (
+                "Verify these exploratory matches before acting."
+                if low_confidence else "Read relevant details before acting."
             )
         state_summary = _lift(
             source_payload,
