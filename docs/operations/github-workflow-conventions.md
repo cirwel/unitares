@@ -396,6 +396,16 @@ The reviewer also receives the original diff and review history. Small code
 fixes, documentation corrections and attestation updates can use this route;
 file type alone never exempts a change from scrutiny.
 
+After a base merge, follow-up material distinguishes subsequent PR edits from
+integrated upstream work. Git reconstructs the previously reviewed contribution
+on the base included in the new head; the remaining diff contains every later
+author edit, including resolutions and reversions. The complete base integration
+diff is supplied separately for checking interactions, alongside the original
+and current PR diffs. Upstream file count alone is not expanded PR scope, and an
+empty author delta does not prove that prior reasoning still applies. If Git
+cannot reconstruct the integration conflict-free, the reviewer receives the
+complete unseparated delta and must decline uncertain scope.
+
 A bounded follow-up preserves the original design and security assumptions.
 The reviewer explicitly confirms that scope and reviews every changed line.
 Materially expanded behavior or trust boundaries, invalidated prior reasoning,
