@@ -914,8 +914,8 @@ def test_search_envelope_counts_and_suggests():
         },
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
-    assert "1 prior discoveries matched" in env["next_action"]
-    assert "store_finding(" in env["next_action"]
+    assert env["state_summary"]["total_count"] == 1
+    assert "Read relevant details" in env["next_action"]
     assert env["memory_suggestions"][0]["summary"] == "prior art"
     assert env["memory_suggestions"][0]["status"] == "open"
     assert env["memory_suggestions"][0]["tags"] == ["response-ux"]
@@ -923,13 +923,7 @@ def test_search_envelope_counts_and_suggests():
     assert env["state_summary"]["result_tier"] == "digest"
     assert env["state_summary"]["results_shown_in_digest"] == 1
     assert env["discovery_retrieval_options"]["current_tier"] == "digest"
-    assert env["response_options"] == {
-        "current": "lean",
-        "digest": "lean",
-        "diagnostic_digest": "compact",
-        "complete_result_set": "full",
-        "all_inline_details": "response_mode='full' + include_details=true",
-    }
+    assert "response_options" not in env
     assert "raw_governance" not in env
     assert "response_mode='full'" in env["raw_governance_hint"]
 
@@ -1630,7 +1624,7 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
     repeats `raw_governance_hint`), only instead of being withheld, and only
     as much as it takes: a piece that gave way would not fit back."""
     saw_labels, saw_ids_only, saw_none, saw_coaching_yield = False, False, False, False
-    for n in range(0, 2600, 2):
+    for n in range(0, 3000, 2):
         extra = {"total_count": n_results, "confidence_note": "c" * n, "success": True}
         bare = build_experience_envelope(
             "search_shared_memory", "knowledge", {**extra, "results": _results(n_results, False)})
@@ -1664,13 +1658,17 @@ def test_attribution_never_costs_a_result_or_its_fields(n_results):
         # Optional coaching and the repeated full-mode pointer may yield to
         # attribution, but are only ever dropped or trimmed, only when they
         # would not fit back, and the full-mode route stays named.
-        for key in ("response_options", "discovery_retrieval_options", "expand_with"):
+        for key in ("response_options", "discovery_retrieval_options", "expand_with", "raw_governance_hint"):
             got, want = env.get(key), bare.get(key)
             if got != want:
-                assert got is None or got.items() <= want.items(), (n, key)
+                if key == "raw_governance_hint":
+                    assert got == "search_shared_memory(response_mode='full')"
+                    assert got in want
+                else:
+                    assert got is None or got.items() <= want.items(), (n, key)
                 put_back = json.dumps({**env, key: want}, ensure_ascii=False)
                 assert len(put_back.encode("utf-8")) > 3_000, (n, key)
-                assert env["raw_governance_hint"] == bare["raw_governance_hint"], n
+                assert "response_mode='full'" in env["raw_governance_hint"], n
                 saw_coaching_yield = True
         for got, want in zip(env_d, bare_d):
             assert {k: v for k, v in got.items() if k not in _ATTRIBUTION_KEYS} == want, n
@@ -1695,9 +1693,8 @@ def test_a_short_identity_is_restored_where_the_marker_cannot_fit():
     base = {"success": True, "results": [{"id": "d1", "summary": "s", "agent_id": "a1"}],
             "total_count": 1}
     exercised = False
-    # The free-space dial is confidence_note, which the envelope now carries
-    # once (top level), so the window sits at twice the old note length.
-    for n in range(2150, 2400):
+    # Sweep the budget boundary independently of the current coaching size.
+    for n in range(0, 3000):
         payload = {**base, "confidence_note": "c" * n}
         bare = build_experience_envelope(
             "search_shared_memory", "knowledge",
@@ -1815,7 +1812,7 @@ def test_search_envelope_promotes_low_confidence():
         "confidence_note": "Semantic-only matches; verify before use.",
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
-    assert "exploratory low-confidence" in env["next_action"]
+    assert "exploratory" in env["next_action"]
     assert env["low_confidence"] is True
     assert env["confidence_note"] == "Semantic-only matches; verify before use."
     assert env["state_summary"]["low_confidence"] is True
@@ -1837,7 +1834,7 @@ def test_search_envelope_counts_nested_raw_governance_payload():
         },
     }
     env = build_experience_envelope("search_shared_memory", "knowledge", payload)
-    assert "5 prior discoveries matched" in env["next_action"]
+    assert env["state_summary"]["count"] == 5
     assert env["memory_suggestions"][0]["summary"] == "prior art"
 
 

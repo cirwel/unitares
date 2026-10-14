@@ -1406,14 +1406,11 @@ class TestFriendlySearchDigest:
 
     @pytest.mark.asyncio
     async def test_coaching_gives_attribution_only_the_room_it_takes(self, patch_common):
-        """Review on this change: coaching used to yield to attribution all
-        at once, so a response that was never over budget lost the tier
-        ladder, the all-inline route and the include_details override
-        disclosure together, and ended hundreds of bytes under budget. Each
-        piece now yields in turn and comes back if it still fits, and the
-        override disclosure never yields (a lean envelope carries no
-        normalized_parameters, so it is the only notice). Compared with the
-        same real payload stripped of attribution."""
+        """Compact diagnostics keep optional coaching. Each piece yields to
+        attribution in turn and comes back if it fits; explicit detail-request
+        omission disclosures remain. Compare with the same real payload
+        stripped of attribution. Lean omits the repeated coaching by default
+        and is covered by the independent budget/attribution sweeps."""
         from src.mcp_handlers.middleware.envelope_step import build_experience_envelope
 
         mock_mcp_server, mock_graph = patch_common
@@ -1431,7 +1428,7 @@ class TestFriendlySearchDigest:
                             for rank in range(3)
                         ]
                         extra = {"include_details": True} if details else {}
-                        payload, args = await _friendly_payload(mock_graph, rows, **extra)
+                        payload, args = await _friendly_payload(mock_graph, rows, response_mode="compact", **extra)
                         bare_payload = json.loads(json.dumps(payload))
                         for row in bare_payload["discoveries"]:
                             row.pop("by", None)
