@@ -3,11 +3,16 @@
 A small matched local check following the reported overlong critique. This is
 format-following evidence, not an evaluation of factual or advisory quality.
 
-**Result:** both the current and candidate wrappers met all three tested
+**Result at the time:** both the current and candidate wrappers met all three tested
 constraints (3/3 each). The reported failure was not reproduced. No prompt
 change is shipped on this evidence; the diagnostic and HF-readiness repairs
 are independent of it. The original brief, raw response and sampling settings
 from the reported failure were not available for an exact replay.
+
+**Follow-up 2026-10-14:** the original brief and local response have now been
+provided. The [exact-brief replay](consult-constraint-replay-2026-10-14.md)
+reproduces the failure and evaluates a revised wrapper. The six-call result
+below remains evidence about these synthetic briefs, not the original request.
 
 ## Method
 
