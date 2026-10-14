@@ -109,10 +109,9 @@ COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
 NATIVE_WAIT_S = 600
-# Full Codex reviews per PR before the remaining findings are answered without
-# another run (conventions §Review workflow, "Round cap"). Each run spends the
-# same subscription quota authoring does, and past the third round most
-# findings are about text the previous fix added.
+# Full review cycles per PR. A cycle holds at most two distinct model families
+# on the same revision/diff; rerunning a family or changing the work starts
+# another cycle. Coverage remains separate from this spending budget.
 ROUND_CAP = 3
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
@@ -805,13 +804,31 @@ class NativeReview:
 
 
 @dataclass
+class ReviewCycle:
+    head: str
+    key: str
+    families: set[str | None] = field(default_factory=set)
+
+    def accepts(self, head: str, key: str, family: str | None) -> bool:
+        same_head = (len(self.head) >= 7 and len(head) >= 7
+                     and (head.startswith(self.head) or self.head.startswith(head)))
+        return bool(same_head and (not self.key or not key or self.key == key)
+                    and family and None not in self.families
+                    and family not in self.families and len(self.families) < 2)
+
+
+@dataclass
 class CodexRounds:
-    """Completed Codex reviews on the PR, across every head it has had."""
+    """Full review cycles across every revision, including an unfinished pair."""
     count: int = 0
     last_head: str = ""          # as Codex printed it; may be abbreviated
     last_findings: list[dict] = field(default_factory=list)  # inline comments
     unknown_history: bool = False  # legacy completed reviews without head/base/scope
     answered_since: bool = False  # a disposition or fix verification answered the last round
+    cycles: list[ReviewCycle] = field(default_factory=list)
+
+    def can_join(self, head: str, key: str, family: str | None) -> bool:
+        return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
 
     @property
     def last_severe(self) -> bool:
@@ -835,14 +852,14 @@ class CodexRounds:
 
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
                  events: list[dict] = (), reactions: list[dict] = ()) -> CodexRounds:
-    """Count completed full reviews across sources without resetting on retarget.
+    """Count full review cycles across sources without resetting on retarget.
 
     Native artifacts deduplicate by their actual reviewed commit. Local and
     external receipts require head/base/full-scope provenance and deduplicate
     by review identity. Unknown legacy history requires explicit escalation.
     Coverage rules remain separate from this spending ledger.
     """
-    runs: dict[str, tuple[float, str, list[dict]]] = {}
+    runs: dict[str, tuple[float, str, list[dict], str, str | None]] = {}
     unknown_history = False
     completed_without_evidence: set[str] = set()
 
@@ -853,10 +870,10 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         # One run leaves several artifacts (review, activity row) seconds
         # apart, in any order: keep its findings whichever arrives first.
         if prior is None:
-            runs[run] = (t, commit, findings)
+            runs[run] = (t, commit, findings, "", "openai")
         else:
             runs[run] = (max(t, prior[0]), commit if t >= prior[0] else prior[1],
-                         findings or prior[2])
+                         findings or prior[2], "", "openai")
 
     for c in comments:
         if not is_codex_bot(c):
@@ -927,7 +944,8 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             findings.append(finding)
         if rec.verdict == "FINDINGS" and not findings:
             findings = [{"body": "unlabelled finding; full review required"}]
-        runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings))
+        runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
+                                   rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
     answered_at = 0.0
     for c in comments:
@@ -939,8 +957,65 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             continue  # an answer to a round, never a run of its own
     if not runs:
         return CodexRounds(unknown_history=unknown_history)
-    last_at, last, findings = max(runs.values(), key=lambda r: r[0])
-    return CodexRounds(len(runs), last, findings, unknown_history=unknown_history, answered_since=answered_at > last_at)
+    cycles = []
+    findings = []
+    for last_at, last, run_findings, key, family in sorted(runs.values(), key=lambda r: r[0]):
+        if not cycles or not cycles[-1].accepts(last, key, family):
+            cycles.append(ReviewCycle(last, key))
+            findings = []
+        cycle = cycles[-1]
+        cycle.families.add(family)
+        cycle.key = cycle.key or key
+        if len(last) > len(cycle.head):
+            cycle.head = last
+        findings.extend(run_findings)
+    return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
+                       answered_since=answered_at > last_at, cycles=cycles)
+
+
+CYCLE_GRANT_MARKER = "unitares-review-cycle v1"
+CYCLE_GRANT_TTL_S = 24 * 60 * 60
+CYCLE_GRANT_RE = re.compile(
+    r"\A<!-- " + re.escape(CYCLE_GRANT_MARKER)
+    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\n(.+)\Z",
+    re.S,
+)
+
+
+def cycle_grant(comments: list[dict], comment_id: int, head: str, key: str,
+                rounds: CodexRounds, family: str | None, now: float) -> bool:
+    """One user-authored grant on this PR buys one revision-bound cycle.
+
+    The fixed ledger position prevents reuse, including after a force-push or
+    duplicate comment. App publishers may consume it, never issue it. Reads
+    come from the current PR API, so a comment from another PR is not a grant.
+    """
+    if rounds.unknown_history or not family:
+        return False
+    for comment in comments:
+        if comment.get("id") != comment_id or not trusted_operator_comment(comment):
+            continue
+        match = CYCLE_GRANT_RE.fullmatch(comment.get("body") or "")
+        if not match or match[1] != head or match[2] != key or len(match[5].strip()) < 20:
+            return False
+        after, expires = int(match[3]), int(match[4])
+        try:
+            created = timestamp(comment.get("created_at", ""))
+        except (TypeError, ValueError):
+            return False
+        if not (0 < created <= now < expires <= created + CYCLE_GRANT_TTL_S):
+            return False
+        return after >= ROUND_CAP and (rounds.count == after or
+                (rounds.count == after + 1 and rounds.can_join(head, key, family)))
+    return False
+
+
+def cycle_grant_instructions(head: str, key: str, rounds: CodexRounds) -> str:
+    expires = int(time.time()) + CYCLE_GRANT_TTL_S
+    return ("An operator can post this comment on the PR (expires in 24h), then the App can run "
+            "review.sh --fresh --reviewer PROVIDER --review-cycle-grant COMMENT_ID:\n"
+            f"<!-- {CYCLE_GRANT_MARKER} head={head} key={key} after={rounds.count} expires={expires} -->\n"
+            "I authorize one additional full review cycle on this revision to finish validation.")
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
@@ -2478,6 +2553,7 @@ def cmd_review(args) -> int:
     reviewer = args.reviewer or default_reviewer(branch)
     args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
+    grant_id = getattr(args, "review_cycle_grant", None)
     deadline = time.monotonic() + args.budget
     joined = False
     while True:
@@ -2525,10 +2601,10 @@ def cmd_review(args) -> int:
                 followup_declined = (existing and existing.verdict == "FAILED"
                                      and (existing.scope == "full-required"
                                           or "full review required: follow-up scope not confirmed" in existing.text))
-                if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None):
+                if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None) and not grant_id:
                     print("[review] UNREVIEWED: follow-up scope was declined; explicitly request --fresh for a full pass")
                     return UNREVIEWED
-                if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None):
+                if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
                     snapshot = read_native(repo, pr, key, head, comments)
                     source = followup_candidate(args.base, head, key, comments, snapshot.records)
                     if source:
@@ -2542,20 +2618,31 @@ def cmd_review(args) -> int:
                         return second_family_pass(
                             args, repo, pr, key, head,
                             completed_review_exit(repo, pr, key, head, result))
-                # The cap binds every full-review source; only an explicit reason overrides it.
+                # The second family completes an existing cycle, including at
+                # the cap. A new cycle beyond it needs operator authorization.
                 rounds = pr_rounds(repo, pr, key, head, comments)
+                joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
+                if grant_id:
+                    if not cycle_grant(comments, grant_id, head, key, rounds,
+                                       provider_family(reviewer), time.time()):
+                        print("[review] UNREVIEWED: cycle grant is missing, expired, consumed, untrusted, or for different work")
+                        return UNREVIEWED
+                    args.cycle_grant_url = f"https://github.com/{repo}/pull/{pr}#issuecomment-{grant_id}"
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if rounds.count >= ROUND_CAP and ROUND_CAP_ENABLED and not getattr(args, "authorize_full_review", None):
-                    print("[review] full-review budget exhausted; escalate unresolved issues. "
-                          "An operator may authorize --authorize-full-review REASON; --fresh/--reviewer do not bypass it.")
+                if (rounds.count >= ROUND_CAP and ROUND_CAP_ENABLED and not joining_cycle
+                        and not grant_id and not getattr(args, "authorize_full_review", None)):
+                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                          "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
+                    print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
                 # After an ordinary findings round, verify fixes instead of
                 # automatically commissioning another full pass. A clean last
                 # round followed by new work still needs a fresh full review.
-                if rounds.last_findings and not rounds.answered_since and not args.fresh and not getattr(args, "authorize_full_review", None):
+                if (rounds.last_findings and not rounds.answered_since and not args.fresh
+                        and not joining_cycle and not grant_id and not getattr(args, "authorize_full_review", None)):
                     sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
@@ -2988,6 +3075,9 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     authorization = getattr(args, "authorize_full_review", None)
     if authorization:
         text = f"Explicit additional full-review authorization: {authorization}\n\n" + text
+    grant_url = getattr(args, "cycle_grant_url", None)
+    if grant_url:
+        text = f"Additional review cycle authorized by the operator: {grant_url}\n\n" + text
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
     post_record(pr, rec, heading, text)
@@ -3320,8 +3410,8 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not rounds or not rounds.count:
         return ""
     if not ROUND_CAP_ENABLED:
-        return f" · review round {rounds.count}"
-    note = f" · review round {rounds.count} of {ROUND_CAP}"
+        return f" · review cycle {rounds.count}"
+    note = f" · review cycle {rounds.count} of {ROUND_CAP}"
     return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
 
 
@@ -3396,7 +3486,10 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("review", help="review HEAD's diff and post the record")
     r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS))
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
-    r.add_argument("--authorize-full-review", metavar="REASON", help="operator-authorized additional full review; explain why")
+    authorization = r.add_mutually_exclusive_group()
+    authorization.add_argument("--authorize-full-review", metavar="REASON", help="operator account: authorize an additional full review; explain why")
+    authorization.add_argument("--review-cycle-grant", type=int, metavar="COMMENT_ID",
+                               help="consume a user-authored, revision-bound grant for one extra review cycle")
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
