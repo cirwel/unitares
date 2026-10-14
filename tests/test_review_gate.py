@@ -907,7 +907,7 @@ def test_app_findings_dispositions_failures_and_round_budget_share_admission():
     comments = [finding, clean, disposition]
     assert rg.latest_matching(comments, k).status()[0] == "success"
     assert rg.passing_families(comments, k) == {"openai", "google"}
-    assert rg.codex_rounds(comments, [], []).count == 2
+    assert rg.codex_rounds(comments, [], []).count == 1
     failure = _app_comment(full_record(k, "FAILED", 0, False, "codex"))
     assert rg.failed_runs([failure], k, "codex") == 1
     assert rg.passing_families([failure], k) == set()
@@ -2189,7 +2189,7 @@ def test_cap_applies_to_p2_fix_loops_only(count, last, capped):
 
 def test_check_description_shows_the_round():
     assert rg.round_note(None) == "" and rg.round_note(rg.CodexRounds()) == ""
-    assert rg.round_note(rg.CodexRounds(2)) == " · review round 2 of 3"
+    assert rg.round_note(rg.CodexRounds(2)) == " · review cycle 2 of 3"
     assert rg.round_note(rg.CodexRounds(3)).endswith("(cap reached)")
 
 
@@ -2208,7 +2208,7 @@ def test_switched_off_cap_never_caps_a_p2_fix_loop(monkeypatch):
 
 def test_switched_off_cap_shows_the_round_without_a_limit(monkeypatch):
     monkeypatch.setattr(rg, "ROUND_CAP_ENABLED", False)
-    assert rg.round_note(rg.CodexRounds(4)) == " · review round 4"
+    assert rg.round_note(rg.CodexRounds(4)) == " · review cycle 4"
 
 
 def _capped(repo, monkeypatch, verifier="", answers=()):
@@ -4080,7 +4080,7 @@ def test_native_clean_receipt_after_unchanged_key_merge_uses_actual_source(carry
     head=_git(carry_repo,'rev-parse','HEAD');assert key == rg.diff_key('master','HEAD')
     monkeypatch.setattr(rg,'_CARRY_BASES',{('o/r',1):_git(carry_repo,'rev-parse','master')})
     receipt=rg.Record(key,'CLEAN',0,False,'codex-native',head=old,scope='full')
-    comments=[_comment(receipt),_comment(full_record(key,'CLEAN',0,False,'claude'))]
+    comments=[_comment(receipt),_comment(full_record(key,'CLEAN',0,False,'claude',head=head,base=_git(carry_repo,'rev-parse','master')))]
     review={'id':9,'user':{'login':rg.CODEX_BOT,'type':'Bot'},'commit_id':old,'state':'APPROVED',
             'submitted_at':'2026-09-30T20:00:00Z','body':'','html_url':'native-9'}
     pages={'reviews':[review],'comments':[],'events':[{'event':'base_ref_changed'}] if retarget else []}
@@ -4095,7 +4095,8 @@ def test_native_minor_findings_are_valid_targeted_source_but_not_current_full_fa
     fix=full_record('new','CLEAN',0,False,'fix-verify:ollama:m',scope='fix',from_head='a'*40,from_key='old')
     assert not rg.fix_coverage_valid(fix,[])
     assert rg.fix_coverage_valid(fix,[],[source])
-    assert rg.latest_matching([_comment(fix)],'new',[source]).status()[0] == 'success'
+    # Shape-only fixtures cannot approve without the actual endpoint objects.
+    assert rg.latest_matching([_comment(fix)],'new',[source]).verdict == 'FAILED'
     assert rg.passing_families([_comment(fix)],'new',[source]) == set()
 
 
@@ -4135,7 +4136,7 @@ def test_targeted_native_disposition_cannot_count_as_full_family():
     assert rg.passing_families(comments,'k',[source]) == set()
 
 
-def test_ci_reads_actual_native_source_for_targeted_receipt_without_current_full_credit(repo, monkeypatch):
+def test_ci_reads_actual_native_source_and_preserves_its_family(repo, monkeypatch):
     old=_git(repo,'rev-parse','HEAD');base=_git(repo,'rev-parse','master');oldkey=rg.diff_key('master','HEAD')
     (repo/'a.txt').write_text('a fixed\n');_git(repo,'commit','-qam','fix');head=_git(repo,'rev-parse','HEAD');key=rg.diff_key('master','HEAD')
     fix=rg.Record(key,'CLEAN',0,False,'fix-verify:ollama:m',head=head,base=base,scope='fix',from_head=old,from_key=oldkey)
@@ -4148,7 +4149,7 @@ def test_ci_reads_actual_native_source_for_targeted_receipt_without_current_full
     monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
     snapshot=_REAL_READ_NATIVE('o/r',1,key,head,comments)
     assert rg.latest_matching(comments,key,snapshot.records).status()[0] == 'success'
-    assert rg.passing_families(comments,key,snapshot.records) == set()
+    assert rg.passing_families(comments,key,snapshot.records) == {'openai'}
     assert any(r.head==old and r.key==oldkey and not r.base for r in snapshot.records)
     fix.from_key='wrong';snapshot=_REAL_READ_NATIVE('o/r',1,key,head,[_comment(fix)])
     assert rg.latest_matching([_comment(fix)],key,snapshot.records).status()[0] != 'success'
@@ -4165,7 +4166,8 @@ def test_old_native_clean_rebound_to_new_changed_key_cannot_approve_ancestor(rep
     monkeypatch.setattr(rg,'api_pages',lambda ep:pages[ep.rsplit('/',1)[-1]])
     monkeypatch.setattr(rg,'_CARRY_BASES',{('o/r',1):_git(repo,'rev-parse','master')})
     snapshot=_REAL_READ_NATIVE('o/r',1,key,head,[_comment(receipt)])
-    assert not snapshot.records
+    # The real old review remains evidence for its original key, never the forged current one.
+    assert snapshot.records and all(r.key != key for r in snapshot.records)
     assert rg.passing_families([_comment(receipt)],key,snapshot.records) == set()
 
 
@@ -4173,3 +4175,637 @@ def test_review_identity_cannot_inject_scope_into_marker(repo):
     rec=rg.Record('k','CLEAN',0,False,'codex')
     with pytest.raises(SystemExit,match='marker-safe'):
         rg.stamp_record(rec,'master','full','review',SimpleNamespace(review_id='run scope=full'))
+
+
+# Follow-ups preserve independent full reviews while covering every later edit.
+@pytest.fixture(params=[_comment, _app_comment], ids=['user-published', 'app-published'])
+def reviewed_followup(repo, request):
+    old = _git(repo, 'rev-parse', 'HEAD')
+    base = _git(repo, 'rev-parse', 'master')
+    oldkey = rg.diff_key(base, old)
+    comments = [request.param(full_record(oldkey, 'CLEAN', 0, False, reviewer,
+                                         head=old, base=base, review_id=reviewer))
+                for reviewer in ('codex', 'claude')]
+    (repo / 'README.md').write_text('Clarified usage.\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'clarify docs after review')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(base, head)
+    fix = rg.Record(key, 'CLEAN', 0, False, 'gemini-followup', head=head, base=base,
+                    scope='fix', from_head=old, from_key=oldkey)
+    return comments, fix
+
+
+def test_doc_followup_preserves_both_families_without_adding_verifier_family(reviewed_followup):
+    comments, fix = reviewed_followup
+    assert rg.latest_matching(comments, fix.key) is None
+    assert rg.passing_families(comments, fix.key) == set()
+    comments.append(_comment(fix))
+    assert rg.latest_matching(comments, fix.key).status()[0] == 'success'
+    assert rg.passing_families(comments, fix.key) == {'openai', 'anthropic'}
+    assert rg.codex_rounds(comments, [], []).count == 1
+    assert rg.passing_families(comments[1:], fix.key) == {'anthropic'}
+
+
+@pytest.mark.parametrize('field,value', [('from_key', 'wrong'), ('key', 'wrong'),
+    ('from_head', '0' * 40), ('head', '0' * 40), ('base', '0' * 40)])
+def test_followup_rejects_changed_or_missing_objects(reviewed_followup, field, value):
+    comments, fix = reviewed_followup
+    setattr(fix, field, value)
+    comments.append(_comment(fix))
+    assert rg.passing_families(comments, fix.key) == set()
+    assert rg.latest_matching(comments, fix.key).verdict == 'FAILED'
+
+
+def test_followup_cannot_hide_current_findings(reviewed_followup):
+    comments, fix = reviewed_followup
+    finding = full_record(fix.key, 'FINDINGS', 1, False, 'claude', head=fix.head, base=fix.base)
+    comments += [_comment(finding, text='[P1] a.txt:1 unsafe caller'), _comment(fix)]
+    assert rg.latest_matching(comments, fix.key).verdict == 'FINDINGS'
+
+
+@pytest.mark.parametrize('severity', ['P1', 'unclassified'])
+def test_clean_family_cannot_hide_serious_source_finding(reviewed_followup, severity):
+    comments, fix = reviewed_followup
+    source = full_record(fix.from_key, 'FINDINGS', 1, False, 'claude',
+                         head=fix.from_head, base=fix.base)
+    comments[1] = _comment(source, text=f'[{severity}] a.txt:1 unsafe caller')
+    assert not rg.fix_coverage_valid(fix, comments)
+    assert rg.passing_families(comments + [_comment(fix)], fix.key) == set()
+    assert rg.followup_candidate(fix.base, fix.head, fix.key, comments) is None
+
+
+def test_followup_survives_unrelated_base_advance(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('unrelated base improvement\n')
+    _git(repo, 'commit', '-qam', 'base moves')
+    _git(repo, 'checkout', '-q', 'feature')
+    candidate = rg.followup_candidate('master', fix.head, fix.key, comments)
+    assert candidate and candidate.base != fix.base
+    assert rg.passing_families(comments + [_comment(candidate)], fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('reviewer', ['codex', 'antigravity'])
+@pytest.mark.parametrize('scope', ['FOLLOWUP', 'FULL_REQUIRED', ''])
+def test_followup_reviewer_gets_delta_and_original_context(repo, reviewed_followup, monkeypatch, reviewer, scope):
+    comments, fix = reviewed_followup
+    captured, posted = [], []
+    def review(provider, prompt, out, budget, materials):
+        if materials is not None:
+            files = dict(materials)
+            delta, context = files['diff.patch'].decode(), files['prior-review.txt'].decode()
+        else:
+            delta = (out / 'diff.txt').read_text()
+            context = (out / 'prior-review.txt').read_text()
+        captured.append((delta, context))
+        return f'Examined docs and their callers.\nSCOPE: {scope}\nVERDICT: CLEAN', 'exit 0'
+    monkeypatch.setattr(rg, 'run_reviewer', review)
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix,
+                           followup_reviews='Both full reviewers examined a.txt.')
+    result = rg._review_locked(args, 1, fix.key, reviewer)
+    assert result == (0 if scope == 'FOLLOWUP' else rg.UNREVIEWED)
+    assert '+Clarified usage.' in captured[0][0] and '+a changed' not in captured[0][0]
+    assert '+a changed' in captured[0][1] and 'Both full reviewers' in captured[0][1]
+    assert posted[0].scope == ('fix' if scope == 'FOLLOWUP' else 'full-required')
+    assert posted[0].from_head == fix.from_head
+    assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 1
+
+
+def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: pytest.fail('full-round cap consulted for follow-up'))
+    called = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda a, *rest: called.append(a.followup) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == 0
+    assert called[0].from_head == fix.from_head
+    assert all(c['body'] in args.followup_reviews for c in comments)
+
+
+def test_repeated_followups_recheck_cumulative_delta(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    comments.append(_comment(fix))
+    (repo / 'README.md').write_text('Clarified usage and attestation.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(fix.base, head)
+    assert rg.passing_families(comments, key) == set()
+    candidate = rg.followup_candidate(fix.base, head, key, comments)
+    assert candidate.from_head == fix.from_head  # always the FULL review
+    assert rg.passing_families(comments + [_comment(candidate)], key) == {'openai', 'anthropic'}
+
+
+def test_cli_and_ci_accept_same_sensitive_followup(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    comments.append(_app_comment(fix))
+    _git(repo, 'update-ref', 'refs/remotes/origin/master', fix.base)
+    real_git = rg.git
+    monkeypatch.setattr(rg, 'git', lambda *a, **kw: '' if a[0] == 'fetch' else real_git(*a, **kw))
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': fix.head},
+                                                'base': {'ref': 'master'}})
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    posted = []
+    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
+    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
+    assert posted[0][3] == 'success'
+    assert rg._after_manual_record(SimpleNamespace(base=fix.base), 'o/r', 1, fix.key, 'feature', fix) == 0
+
+
+def test_declined_followup_does_not_repeat_scope_request(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.verdict = 'FAILED'
+    comments.append(_comment(fix, text='FAILED (full review required: follow-up scope not confirmed)'))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'followup_candidate', lambda *a: pytest.fail('repeated declined follow-up'))
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=3))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')) == rg.UNREVIEWED
+
+
+def test_scope_refusal_preserves_concrete_findings(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    text = '[P1] a.txt:1 unsafe behavior\nSCOPE: FULL_REQUIRED\nVERDICT: FINDINGS(1)'
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: (text, 'exit 0'))
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Prior context')
+    assert rg._review_locked(args, 1, fix.key, 'codex') == 1
+    assert posted[0].verdict == 'FINDINGS'
+    original = _comment(posted[0], text=text)
+    assert rg.latest_matching(comments + [original], fix.key).verdict == 'FINDINGS'
+    posted[0].disposed = True
+    disposition = _comment(posted[0], text='1. rebutted: checked the supported caller')
+    history = comments + [original, disposition]
+    assert rg.latest_matching(history, fix.key).verdict == 'FAILED'
+    assert rg.passing_families(history, fix.key) == set()
+    assert rg._after_manual_record(args, 'o/r', 1, fix.key, 'feature', posted[0]) == rg.UNREVIEWED
+
+
+def test_followup_findings_require_real_dispositions_to_preserve_coverage(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P2] README.md:1 unclear input')
+    fix.disposed = True
+    disposition = _comment(fix, text='1. rebutted: the documented input is the supported one')
+    assert rg.passing_families(comments + [disposition], fix.key) == set()
+    assert rg.passing_families(comments + [original, disposition], fix.key) == {'openai', 'anthropic'}
+
+
+def test_followup_preserves_families_that_reviewed_different_revisions(repo, reviewed_followup):
+    comments, first_fix = reviewed_followup
+    comments = comments[:1]  # first full review was OpenAI before the docs fix
+    comments.append(_comment(first_fix))
+    comments.append(_comment(full_record(first_fix.key, 'CLEAN', 0, False, 'claude',
+                                        head=first_fix.head, base=first_fix.base)))
+    (repo / 'README.md').write_text('Another bounded clarification.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(first_fix.base, head)
+    candidate = rg.followup_candidate(first_fix.base, head, key, comments)
+    assert candidate.from_head == first_fix.from_head
+    assert rg.passing_families(comments + [_comment(candidate)], key) == {'openai', 'anthropic'}
+
+
+def test_later_serious_full_review_cannot_be_bypassed_with_older_clean_anchor(repo, reviewed_followup):
+    comments, first_fix = reviewed_followup
+    comments.append(_comment(full_record(first_fix.key, 'FINDINGS', 1, False, 'claude',
+                                        head=first_fix.head, base=first_fix.base), text='[P1] a.txt:1 unsafe'))
+    (repo / 'README.md').write_text('Another clarification.\n')
+    _git(repo, 'commit', '-qam', 'second correction')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.followup_candidate(first_fix.base, head, rg.diff_key(first_fix.base, head), comments) is None
+
+
+def test_offline_disposition_cannot_clear_followup_scope_refusal(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict, fix.findings = 'full-required', 'FINDINGS', 1
+    original = _comment(fix, text='[P2] a.txt:1 problem\nSCOPE: FULL_REQUIRED')
+    disposed = rg.Record(fix.key, 'FINDINGS', 1, True, fix.reviewer)
+    history = comments + [original, _comment(disposed, text='1. rebutted: documented caller')]
+    rec = rg.latest_matching(history, fix.key)
+    assert rec.scope == 'full-required' and rg.review_check(rec)[0] == 'neutral'
+
+
+def test_scope_refusal_requires_full_review_even_after_another_push(repo, reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict = 'full-required', 'FAILED'
+    comments.append(_comment(fix))
+    (repo / 'README.md').write_text('Another correction after scope refusal.\n')
+    _git(repo, 'commit', '-qam', 'push after refusal')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key(fix.base, head)
+    assert rg.followup_candidate(fix.base, head, key, comments) is None
+
+
+def test_switching_full_anchors_cannot_skip_serious_followup(repo, reviewed_followup):
+    comments, first = reviewed_followup
+    comments.append(_comment(full_record(first.key, 'CLEAN', 0, False, 'claude',
+                                        head=first.head, base=first.base)))
+    (repo / 'README.md').write_text('First subsequent correction.\n')
+    _git(repo, 'commit', '-qam', 'C')
+    middle = _git(repo, 'rev-parse', 'HEAD')
+    finding = rg.Record(rg.diff_key(first.base, middle), 'FINDINGS', 1, False, 'codex',
+                        scope='fix', head=middle, base=first.base,
+                        from_head=first.from_head, from_key=first.from_key)
+    comments.append(_comment(finding, text='[P1] a.txt:1 unsafe behavior'))
+    (repo / 'README.md').write_text('Second subsequent correction.\n')
+    _git(repo, 'commit', '-qam', 'D')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.followup_candidate(first.base, head, rg.diff_key(first.base, head), comments) is None
+
+
+@pytest.mark.parametrize('rewrite', [False, True])
+def test_unjoined_intermediate_native_finding_blocks_followup(repo, reviewed_followup, monkeypatch, rewrite):
+    comments, fix = reviewed_followup
+    middle = fix.head
+    (repo / 'README.md').write_text('Correction after a native finding.\n')
+    _git(repo, 'commit', *(['--amend'] if rewrite else []), '-qam', 'C')
+    fix.head = _git(repo, 'rev-parse', 'HEAD')
+    fix.key = rg.diff_key(fix.base, fix.head)
+    review = {'id': 12, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': middle,
+              'state': 'COMMENTED', 'submitted_at': '2026-10-13T20:00:00Z', 'body': '', 'html_url': 'native-12'}
+    finding = {'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'pull_request_review_id': 12,
+               'path': 'a.txt', 'line': 1, 'body': '[P1] unsafe caller', 'html_url': 'finding-12'}
+    pages = {'reviews': [review], 'comments': [finding], 'events': []}
+    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): fix.base})
+    monkeypatch.setattr(rg, 'read_native', _REAL_READ_NATIVE)
+    snapshot = rg.read_native('o/r', 1, fix.key, fix.head, comments)
+    assert any(r.head == middle and r.verdict == 'FINDINGS' for r in snapshot.records)
+    assert rg.followup_candidate(fix.base, fix.head, fix.key, comments, snapshot.records) is None
+    assert not rg.targeted_coverage_valid('o/r', 1, fix, comments)
+    comments.append(_comment(fix))
+    assert rg.latest_matching(comments, fix.key, snapshot.records).verdict == 'FAILED'
+    assert rg.passing_families(comments, fix.key, snapshot.records) == set()
+
+
+def test_offline_fix_disposition_preserves_same_families_as_online(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    comments.append(_comment(fix, text='[P2] README.md:1 unclear input'))
+    offline = rg.Record(fix.key, 'FINDINGS', 1, True, fix.reviewer)
+    comments.append(_comment(offline, text='1. rebutted: this is the supported input'))
+    assert rg.latest_matching(comments, fix.key).status()[0] == 'success'
+    assert rg.passing_families(comments, fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('kind', ['full-required', 'fix', 'full'])
+def test_rewriting_followup_commits_does_not_erase_blockers(repo, reviewed_followup, kind):
+    comments, fix = reviewed_followup
+    fix.scope = kind
+    fix.verdict, fix.findings = ('FAILED', 0) if kind == 'full-required' else ('FINDINGS', 1)
+    comments.append(_comment(fix, text='[P1] a.txt:1 unsafe behavior'))
+    # Amend only the post-review work, retaining the full-review anchor.
+    (repo / 'README.md').write_text('Amended documentation.\n')
+    _git(repo, 'commit', '--amend', '-qam', 'rewritten follow-up')
+    head = _git(repo, 'rev-parse', 'HEAD')
+    assert not rg._is_ancestor(fix.head, head)
+    assert rg.followup_candidate(fix.base, head, rg.diff_key(fix.base, head), comments) is None
+
+
+def test_declined_followup_under_cap_does_not_start_full_review(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.scope, fix.verdict = 'full-required', 'FAILED'
+    comments.append(_comment(fix))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.CodexRounds(count=1))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('automatic full review'))
+    assert rg.cmd_review(SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')) == rg.UNREVIEWED
+
+
+def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # POST not yet visible
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['a.txt', 'README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['a.txt'])
+    args = SimpleNamespace(base=fix.base, completed_followup=fix)
+    assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
+
+
+def test_dispose_followup_preserves_families_during_api_read_lag(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    comments.append(_comment(fix, text='[P2] README.md:1 unclear input'))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # fresh POST remains unreadable
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    posted = []
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: posted.append(body))
+    disposition = repo / 'disposition.txt'
+    disposition.write_text('1. rebutted: the documented input is the supported one')
+    args = SimpleNamespace(base=fix.base, file=str(disposition))
+    assert rg.cmd_dispose(args) == 0
+    assert len(posted) == 1
+    assert rg.passing_families(comments, fix.key) == set()  # no API visibility invented
+    assert rg.passing_families(comments + [{'author_association': 'OWNER', 'body': posted[0]}],
+                               fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('invalid', ['missing-original', 'untrusted-original', 'incomplete', 'wrong-reviewer',
+                                      'serious', 'missing-source', 'stale-head'])
+def test_read_lag_does_not_relax_disposition_coverage(reviewed_followup, monkeypatch, invalid):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P1] README.md:1 unsafe' if invalid == 'serious'
+                        else '[P2] README.md:1 unclear input')
+    if invalid == 'untrusted-original':
+        original['author_association'] = 'NONE'
+        original['user'] = {'login': 'untrusted', 'type': 'User'}
+    if invalid != 'missing-original':
+        comments.append(original)
+    if invalid == 'missing-source':
+        comments = [original]
+    fix.disposed = True
+    fix.text = 'not a disposition' if invalid == 'incomplete' else '1. rebutted: checked the supported input'
+    if invalid == 'wrong-reviewer':
+        fix.reviewer = 'different-reviewer'
+    head = fix.head
+    if invalid == 'stale-head':
+        fix.head = 'f' * 40
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    args = SimpleNamespace(base=fix.base, completed_followup=fix)
+    assert rg.second_family_pass(args, 'o/r', 1, fix.key, head, 0) == rg.NEEDS_SECOND_FAMILY
+
+
+@pytest.mark.parametrize('missing', ['head', 'base'])
+def test_main_cli_missing_local_objects_reports_unreviewed(repo, monkeypatch, capsys, missing):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    run = repo / '.git/local-reviews/pr-1-missing'
+    run.mkdir(parents=True)
+    receipt = {'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+               'started_at': 100, 'architecture': 'gemma4'}
+    receipt[missing] = 'f' * 40
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('spent budget with missing history'))
+    assert rg.cmd_review(SimpleNamespace(base=base, budget=30, fresh=True, reviewer='codex')) == rg.UNREVIEWED
+    assert 'UNREVIEWED: Local review history incomplete' in capsys.readouterr().out
+    assert json.loads((run / 'manifest.json').read_text()) == receipt
+
+
+def test_disposed_serious_followup_still_requires_full_coverage(reviewed_followup):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P1] a.txt:1 unsafe behavior')
+    fix.disposed = True
+    comments += [original, _comment(fix, text='1. rebutted: the caller handles this')]
+    assert rg.latest_matching(comments, fix.key).verdict == 'FAILED'
+    assert rg.passing_families(comments, fix.key) == set()
+
+
+@pytest.mark.parametrize('source_kind', ['native', 'comment', 'app-comment'])
+def test_missing_review_objects_are_fetched_or_reported_incomplete(repo, reviewed_followup, monkeypatch, source_kind):
+    comments, fix = reviewed_followup
+    missing = 'f' * 40
+    review = {'id': 99, 'user': {'login': rg.CODEX_BOT, 'type': 'Bot'}, 'commit_id': missing,
+              'state': 'COMMENTED', 'submitted_at': '2026-10-13T20:00:00Z', 'body': '', 'html_url': 'native-99'}
+    pages = {'reviews': [review] if source_kind == 'native' else [], 'comments': [], 'events': []}
+    if source_kind != 'native':
+        publisher = _app_comment if source_kind == 'app-comment' else _comment
+        comments.append(publisher(rg.Record('old', 'FAILED', 0, False, 'codex', scope='full-required', head=missing, base=fix.base)))
+    monkeypatch.setattr(rg, 'api_pages', lambda ep: pages[ep.rsplit('/', 1)[-1]])
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): fix.base})
+    real_git, fetches = rg.git, []
+    def git(*args, **kwargs):
+        if args[0] == 'fetch':
+            fetches.append(args)
+            return ''  # unavailable object; never contact a remote in this test
+        return real_git(*args, **kwargs)
+    monkeypatch.setattr(rg, 'git', git)
+    with pytest.raises(SystemExit, match='review history is incomplete'):
+        _REAL_READ_NATIVE('o/r', 1, fix.key, fix.head, comments)
+    assert fetches == [('fetch', '--quiet', '--no-tags', 'origin', missing)]
+
+
+def test_review_cycles_pair_families_and_preserve_serious_findings():
+    first = full_record('k', 'FINDINGS', 1, False, 'codex', review_id='a')
+    second = full_record('k', 'CLEAN', 0, False, 'claude', review_id='b')
+    comments = [_comment(first, text='[P1] Unsafe transition'), _app_comment(second)]
+    rounds = rg.codex_rounds(comments, [], [])
+    assert rounds.count == 1 and rounds.last_severe
+    assert not rounds.can_join(first.head, first.key, 'google')
+    # Same-family reruns and a third family each start another cycle.
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'codex', review_id='c')))
+    assert rg.codex_rounds(comments, [], []).count == 2
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'gemini', review_id='d')))
+    assert rg.codex_rounds(comments, [], []).count == 2
+    comments.append(_app_comment(full_record('k', 'CLEAN', 0, False, 'claude', review_id='e')))
+    assert rg.codex_rounds(comments, [], []).count == 3
+
+
+@pytest.mark.parametrize('change', ['head', 'key', 'unknown-family', 'intervening-revision'])
+def test_changed_work_or_unknown_family_cannot_share_a_cycle(change):
+    a = full_record('k', 'CLEAN', 0, False, 'codex')
+    b = full_record('k', 'CLEAN', 0, False, 'claude')
+    between = []
+    if change == 'head':
+        b.head = 'c' * 40
+    elif change == 'key':
+        b.key = 'other'
+    elif change == 'unknown-family':
+        b.reviewer = 'council'
+    else:
+        between = [_comment(full_record('other', 'CLEAN', 0, False, 'codex', head='c' * 40))]
+    rounds = rg.codex_rounds([_comment(a), *between, _app_comment(b)], [], [])
+    assert rounds.count == (3 if between else 2)
+
+
+def test_native_and_local_second_family_share_a_review_cycle():
+    head = 'a' * 40
+    reviews, inline = _rounds((1, head, '2026-10-14T03:00:00Z', ['P2']))
+    c = _app_comment(full_record('k', 'CLEAN', 0, False, 'claude', head=head))
+    c['created_at'] = '2026-10-14T03:01:00Z'
+    rounds = rg.codex_rounds([c], reviews, inline)
+    assert rounds.count == 1 and rounds.cycles[0].families == {'openai', 'anthropic'}
+    assert len(rounds.last_findings) == 1
+
+
+@pytest.mark.parametrize('source', ['review', 'comment'])
+def test_later_native_receipt_cannot_reorder_cycles_and_refund_budget(source):
+    reviews, inline = _rounds((1, 'a' * 40, '2026-10-14T01:00:00Z'),
+                              (2, 'b' * 40, '2026-10-14T02:00:00Z'))
+    comments = []
+    if source == 'comment':
+        reviews, inline = [], []
+        comments = [_native_comment('a' * 40, when='2026-10-14T01:00:00Z'),
+                    _native_comment('b' * 40, when='2026-10-14T02:00:00Z')]
+        comments[0]['updated_at'] = '2026-10-14T04:00:00Z'
+    other = _app_comment(full_record('k', 'CLEAN', 0, False, 'claude', head='a' * 40))
+    other['created_at'] = '2026-10-14T03:00:00Z'
+    duplicate = _app_comment(full_record('k', 'CLEAN', 0, False, 'codex-native', head='a' * 40))
+    duplicate['created_at'] = '2026-10-14T04:00:00Z'
+    assert rg.codex_rounds([*comments, other], reviews, inline).count == 3
+    assert rg.codex_rounds([*comments, other, duplicate], reviews, inline).count == 3
+
+
+GRANT_NOW = rg.timestamp('2026-10-14T04:00:00Z')
+
+
+def _cycle_grant_comment(head='a' * 40, key='b' * 64, after=3):
+    return {'id': 42, 'author_association': 'OWNER', 'user': {'type': 'User'},
+            'created_at': '2026-10-14T03:59:00Z',
+            'body': f'<!-- {rg.CYCLE_GRANT_MARKER} head={head} key={key} after={after} expires={int(GRANT_NOW + 300)} -->\n'
+                    'I authorize one additional cycle to finish these reviewed corrections.'}
+
+
+def test_user_grant_allows_exactly_one_additional_two_family_cycle():
+    comments = [_cycle_grant_comment()]
+    head, key = 'a' * 40, 'b' * 64
+    assert rg.cycle_grant(comments, 42, head, key, rg.CodexRounds(3), 'openai', GRANT_NOW)
+    fourth = rg.ReviewCycle(head, key, {'openai'})
+    rounds = rg.CodexRounds(4, cycles=[fourth])
+    assert rg.cycle_grant(comments, 42, head, key, rounds, 'anthropic', GRANT_NOW)
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'openai', GRANT_NOW)
+    fourth.families.add('anthropic')
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
+    rounds.count = 5
+    assert not rg.cycle_grant(comments, 42, head, key, rounds, 'google', GRANT_NOW)
+
+
+@pytest.mark.parametrize('change', [
+    'bot', 'app', 'outsider', 'quoted', 'other-head', 'other-key', 'other-pr',
+    'expired', 'too-long', 'future', 'bad-date', 'short-reason', 'unknown-history',
+    'wrong-position', 'unknown-family', 'deleted',
+])
+def test_cycle_grants_fail_closed_on_untrusted_stale_or_unbounded_approval(change):
+    comment = _cycle_grant_comment()
+    rounds, family = rg.CodexRounds(3), 'openai'
+    comments = [comment]
+    if change == 'bot':
+        comment['user']['type'] = 'Bot'
+    elif change == 'app':
+        comment.update(user={'type': 'Bot', 'id': 342195540}, performed_via_github_app={'id': 5306351})
+    elif change == 'outsider':
+        comment['author_association'] = 'CONTRIBUTOR'
+    elif change == 'quoted':
+        comment['body'] = 'Quoted approval:\n' + comment['body']
+    elif change == 'other-head':
+        comment['body'] = comment['body'].replace('a' * 40, 'c' * 40)
+    elif change == 'other-key':
+        comment['body'] = comment['body'].replace('b' * 64, 'c' * 64)
+    elif change == 'other-pr':
+        comment['id'] = 43  # requested ID is absent from this PR's API comments
+    elif change in {'expired', 'too-long'}:
+        expiry = int(GRANT_NOW - 1 if change == 'expired' else GRANT_NOW + rg.CYCLE_GRANT_TTL_S)
+        comment['body'] = re.sub(r'expires=\d+', f'expires={expiry}', comment['body'])
+    elif change in {'future', 'bad-date'}:
+        comment['created_at'] = '2026-10-14T05:00:00Z' if change == 'future' else 'invalid'
+    elif change == 'short-reason':
+        comment['body'] = comment['body'].split('\n')[0] + '\nyes'
+    elif change == 'unknown-history':
+        rounds.unknown_history = True
+    elif change == 'wrong-position':
+        rounds.count = 2
+    elif change == 'unknown-family':
+        family = None
+    elif change == 'deleted':
+        comments = []
+    assert not rg.cycle_grant(comments, 42, 'a' * 40, 'b' * 64, rounds, family, GRANT_NOW)
+
+
+@pytest.mark.parametrize('count,families,reviewer,grant,expected', [
+    (3, {'openai'}, 'claude', False, 0),  # finish the third cycle normally
+    (3, {'openai'}, 'codex', False, rg.UNREVIEWED),
+    (3, {'openai', 'anthropic'}, 'codex', True, 0),
+    (4, {'openai'}, 'claude', True, 0),
+    (4, {'openai'}, 'claude', False, rg.UNREVIEWED),
+    (4, {'openai'}, 'codex', True, rg.UNREVIEWED),
+    (4, {'openai', 'anthropic'}, 'antigravity', True, rg.UNREVIEWED),
+])
+def test_cli_cycle_budget_and_app_consumption(repo, monkeypatch, count, families, reviewer, grant, expected):
+    head, key = _git(repo, 'rev-parse', 'HEAD'), rg.diff_key('master', 'HEAD')
+    args = SimpleNamespace(base='master', budget=30, fresh=True, reviewer=reviewer,
+                           review_cycle_grant=42 if grant else None)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    comments = [_cycle_grant_comment(head, key)] if grant else []
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg.time, 'time', lambda: GRANT_NOW)
+    rounds = rg.CodexRounds(count, cycles=[rg.ReviewCycle(head, key, families)])
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rounds)
+    monkeypatch.setattr(rg, 'require_operator_account', lambda: pytest.fail('App used operator credentials'))
+    ran = []
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: ran.append(True) or 0)
+    monkeypatch.setattr(rg, 'second_family_pass', lambda *a: 0)
+    assert rg.cmd_review(args) == expected
+    assert bool(ran) is (expected == 0)
+    if grant and ran:
+        assert args.cycle_grant_url == 'https://github.com/o/r/pull/1#issuecomment-42'
+
+
+def test_grant_consumption_links_approval_in_the_actual_review_receipt(repo, monkeypatch):
+    posted = []
+    monkeypatch.setattr(rg, 'run_reviewer', lambda *a: ('Examined the complete diff.\nVERDICT: CLEAN', 'exit 0'))
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, heading, text: posted.append(text))
+    args = SimpleNamespace(base='master', budget=30,
+                           cycle_grant_url='https://github.com/o/r/pull/1#issuecomment-42')
+    assert rg._review_locked(args, 1, rg.diff_key('master', 'HEAD'), 'codex') == 0
+    assert args.cycle_grant_url in posted[0]
+
+
+def test_main_cli_cannot_reuse_grant_after_unposted_local_second_family(repo, monkeypatch):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    args = SimpleNamespace(base=base, budget=30, fresh=True, reviewer='codex', review_cycle_grant=42)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [_cycle_grant_comment(head, key)])
+    monkeypatch.setattr(rg.time, 'time', lambda: GRANT_NOW)
+    runs = [(GRANT_NOW - 100 + i, 'c' * 40, [], 'old', 'openai') for i in range(3)]
+    runs.append((GRANT_NOW - 10, head, [], key, 'anthropic'))
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.count_review_cycles(runs))
+    run = repo / '.git/local-reviews/pr-1-local'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({'pr': 1, 'status': 'CLEAN', 'head': head,
+        'base': base, 'architecture': 'gemma4', 'started_at': GRANT_NOW - 20, 'review_id': 'local'}))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('reused an exhausted cycle grant'))
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+
+
+def test_native_receipt_key_prevents_pairing_across_retarget():
+    first = _comment(full_record('old', 'CLEAN', 0, False, 'codex-native'))
+    second = _app_comment(full_record('new', 'CLEAN', 0, False, 'claude'))
+    assert rg.codex_rounds([first, second], [], []).count == 2
+    conflicting = _comment(full_record('new', 'CLEAN', 0, False, 'codex-native'))
+    assert rg.codex_rounds([first, conflicting, second], [], []).unknown_history
+
+
+@pytest.mark.parametrize('tampered,disposed', [(False, False), (True, False), (False, True)])
+def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, disposed):
+    r = carry_repo
+    base, anchor = _git(r, 'rev-parse', 'master'), _git(r, 'rev-parse', 'HEAD')
+    anchor_key = rg.diff_key(base, anchor)
+    comments = [_comment(full_record(anchor_key, 'CLEAN', 0, False, who, head=anchor, base=base))
+                for who in ['codex', 'claude']]
+    (r / 'README.md').write_text('Clarification.\n')
+    _git(r, 'add', 'README.md'); _git(r, 'commit', '-qm', 'clarify')
+    follow_head = _git(r, 'rev-parse', 'HEAD')
+    follow_key = rg.diff_key(base, follow_head)
+    fix = rg.Record(follow_key, 'FINDINGS' if disposed else 'CLEAN', int(disposed), False, 'codex',
+                    head=follow_head, base=base, scope='fix', from_head=anchor,
+                    from_key='tampered' if tampered else anchor_key)
+    comments.append(_comment(fix, text='[P2] README.md:1 clarification'))
+    if disposed:
+        comments.append(_comment(rg.Record(follow_key, 'FINDINGS', 1, True, 'codex'),
+                                 text='1. rebutted: the documented input is correct'))
+    _master_edits_next_to_the_pr(r)
+    _git(r, 'merge', '-q', '--no-edit', 'master')
+    key = rg.diff_key('master', 'HEAD')
+    assert key != follow_key
+    carried, _ = rg.carry_records(comments, key, rg.base_merge_equivalents('master', 'HEAD'))
+    assert rg.latest_matching(carried, key).status()[0] == ('pending' if tampered else 'success')
+    assert rg.passing_families(carried, key) == (set() if tampered else {'openai', 'anthropic'})
+    # Runtime carry provenance can never be supplied in a posted marker.
+    emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
+    assert emitted.original_key == ''

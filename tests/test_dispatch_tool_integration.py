@@ -272,6 +272,10 @@ class TestDispatchToolIdentityInjection:
         assert "mismatch" in text or "error" in text
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("host_id", [
+        None, "ollama:local", "hf:router", "claude:host-adapter",
+        "codex:host-adapter", "antigravity:host-adapter",
+    ])
     async def test_consult_accepts_trusted_identity_metadata_with_strict_schema(
         self,
         mock_identity,
@@ -280,39 +284,50 @@ class TestDispatchToolIdentityInjection:
         mock_pattern_tracker,
         mock_onboard_pin,
         mock_derive_session_key,
+        host_id,
     ):
         """Real dispatch identity handoff must survive ConsultParams extra=forbid."""
         from src.mcp_handlers import dispatch_tool
         from src.mcp_handlers.support import consultation as co
         from src.mcp_handlers.support.inference_outcome import InferenceOutcome
 
+        routed_host = host_id or "ollama:local"
+        cli = routed_host.endswith(":host-adapter")
+        route = "agent_orchestrator" if cli else "huggingface" if host_id == "hf:router" else "ollama"
+        privacy_class = "operator_authorized_external" if cli else "external_cloud" if host_id == "hf:router" else "local"
+        provider = routed_host.split(":")[0] + "_host_adapter" if cli else "hf" if host_id == "hf:router" else "ollama"
         backend = AsyncMock(return_value=InferenceOutcome(
             response="careful advice",
-            routed_via="ollama",
+            routed_via=route,
             task_type="reasoning",
             inference={
                 "schema": "unitares.inference_result.v0",
-                "host_id": "ollama:local",
-                "provider_kind": "ollama",
+                "host_id": routed_host,
+                "provider_kind": provider,
                 "transport": "openai_compatible_http",
                 "model_used": "test-model",
                 "models_used": ["test-model"],
                 "task_type": "reasoning",
-                "privacy_class": "local",
+                "privacy_class": privacy_class,
                 "cost_class": "local_compute",
                 "accountability_class": "tool_evidence",
                 "finish_reason": "stop",
             },
         ))
 
-        with patch.object(co, "run_model_inference", backend):
-            result = await dispatch_tool("consult", {"brief": "Explain this"})
+        with patch.object(co, "run_model_inference", backend), patch.object(co, "run_delegated_inference", backend):
+            result = await dispatch_tool("consult", {
+                "brief": "Explain this", "host_id": host_id, "privacy": "cloud_allowed",
+            })
 
         parsed = json.loads(result[0].text)
         assert parsed["success"] is True
         assert parsed["status"] == "completed"
+        assert parsed["request"]["effort"] == ("thorough" if cli else "standard")
+        assert backend.await_count == 1
         request = backend.await_args.args[0]
         assert request.requesting_agent_uuid == "test-uuid-0000-1111-2222"
+        assert request.host_id == host_id
 
     @pytest.mark.asyncio
     async def test_consult_rejects_public_route_controls_before_backend(

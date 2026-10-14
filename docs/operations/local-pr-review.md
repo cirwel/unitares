@@ -46,8 +46,13 @@ match. Exit codes: 0 = CLEAN, 1 = FINDINGS, 2 = UNREVIEWED/error. A CLEAN exit d
 not itself assert CI green, family coverage, readiness, or authorization to merge.
 Assess findings independently and follow the normal gate/disposition workflow.
 
-A local full review consumes a review attempt; honor repository review budgets and
-operator pauses. This command does not resume scheduled sweeps. Never use it to
+A local full review uses the shared three-cycle budget: two distinct families on
+the same revision can complete one cycle, including cycle three. Unposted completed
+local reviews consume budget but provide no approval coverage; posted App receipts
+are deduplicated. Local and main reviewers share a PR lock. An operator can authorize
+one additional cycle using the [bounded comment grant](github-workflow-conventions.md#round-cap),
+consumed with `--review-cycle-grant COMMENT_ID`. Honor operator pauses.
+This command does not resume scheduled sweeps. Never use it to
 manufacture a missing review or replace a required reviewer with author reasoning.
 
 For a shared shortcut, set `git config alias.review-local "!ABSOLUTE/PATH/TO/scripts/dev/review-local.sh"`.

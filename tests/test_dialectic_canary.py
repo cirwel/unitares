@@ -276,6 +276,20 @@ def test_db_ground_truth_rejects_missing_usage_event(monkeypatch):
     assert "audit.tool_usage" in detail
 
 
+def test_db_ground_truth_uses_redacted_keyed_session(monkeypatch):
+    import hashlib
+
+    session = "agent-12345678-123-abcdefghijklmnopqrst"
+    expected = "csid:" + hashlib.sha256(session.encode()).hexdigest()[:24]
+    cursor = _FakeCursor([(1,), (1,), (1,)])
+    monkeypatch.setitem(
+        sys.modules, "psycopg2",
+        SimpleNamespace(connect=lambda _dsn: _FakeConnection(cursor)),
+    )
+    assert canary.db_ground_truth("sess-1", "agent-uuid", session) == (True, "ok")
+    assert cursor.executed[-1][1] == ("agent-uuid", expected)
+
+
 @pytest.mark.asyncio
 async def test_wait_for_terminal_review_polls_until_resolved(monkeypatch):
     responses = [

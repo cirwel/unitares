@@ -296,7 +296,13 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.34.0 (2026-10-13): Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
 # 1.35.0 (2026-10-13): Add bounded replayable knowledge notices for proven active sessions; canonical notify-agent-<UUID> mentions
 # 1.35.1 (2026-10-13): Return knowledge notices as flat MCP text content with structured JSON fields.
-INTERFACE_CONTRACT_VERSION = "1.35.1"
+# 1.36.0 (2026-10-13): consult accepts an optional host_id for the five existing
+# advisory hosts, with pinned routing, matching effort, unchanged privacy and
+# authority gates, and no fallback. Omitted selection keeps automatic routing.
+# 1.37.0 (2026-10-14): Infer omitted consult effort from a selected host; full diagnostics explain aggregate tokens and retain bounded backend failure messages.
+# 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+# 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
+INTERFACE_CONTRACT_VERSION = "1.39.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

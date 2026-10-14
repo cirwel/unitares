@@ -67,8 +67,8 @@ _AUTHORITY = {
 _PURPOSE_INSTRUCTIONS = {
     "answer": "Answer the request directly. State material uncertainty.",
     "critique": (
-        "Critique the proposal as advisory model evidence. Identify concrete "
-        "risks, counterarguments, and improvements; do not claim a review verdict."
+        "Provide a critical perspective as advisory model evidence. Identify concrete "
+        "risks, counterarguments, or improvements where relevant; do not claim a review verdict."
     ),
     "summarize": "Summarize the material accurately and preserve important caveats.",
     "generate": "Generate the requested material while respecting the stated constraints.",
@@ -109,8 +109,14 @@ _THOROUGH_HOST_ROUTES = {
     ),
 }
 
+_STANDARD_HOST_ROUTES = {
+    "ollama:local": ("ollama", "ollama:local", "ollama", "local"),
+    "hf:router": ("huggingface", "hf:router", "hf", "external_cloud"),
+}
+_SELECTABLE_HOST_ROUTES = {**_STANDARD_HOST_ROUTES, **_THOROUGH_HOST_ROUTES}
+
 # Model family -> the thorough hosts that family is sent to, in preference
-# order. A caller is never sent to its own family; an unrecognised caller may
+# order for automatic routing. It excludes the caller family; an unknown caller may
 # get any of them. Claude stays first wherever it is eligible, which keeps the
 # pre-Antigravity default for unknown callers.
 _THOROUGH_PEERS: dict[str | None, tuple[str, ...]] = {
@@ -155,7 +161,8 @@ class ConsultRequest:
     privacy: str = "local"
     allow_degraded: bool = False
     response_mode: str = "compact"
-    # Derived from transport provenance by handle_consult, never caller input.
+    host_id: str | None = None
+    # Explicitly pinned, or derived from transport provenance when unselected.
     thorough_host_id: str = "claude:host-adapter"
     # The caller's eligible peers in preference order (never its own family);
     # a thorough attempt that finds its provider unavailable fails over along
@@ -192,7 +199,15 @@ class ConsultationOutcome:
 
 def _constructed_prompt(request: ConsultRequest) -> str:
     instruction = _PURPOSE_INSTRUCTIONS[request.purpose]
-    return f"{instruction}\n\nConsultation brief:\n{request.brief}"
+    # The brief is the caller's request, not necessarily a proposal to critique.
+    # Constraints apply to answer content; host adapters still add their own
+    # terminal-answer envelope outside it.
+    return (
+        "Follow the request in the consultation brief, including its length, format, "
+        "and scope constraints for the answer content. Use the consultation purpose "
+        "within those constraints; do not add unrequested sections.\n\n"
+        f"Consultation purpose: {instruction}\n\nConsultation brief:\n{request.brief}"
+    )
 
 
 def _family_of(value: Any) -> str | None:
@@ -338,6 +353,12 @@ def _safe_provenance(
     # Attribution is the dispatch-resolved caller, never a backend assertion.
     safe["requester_uuid"] = requester_uuid
     safe["accountability_class"] = "tool_evidence"
+    if "tokens_used" in safe:
+        safe["tokens_used_note"] = (
+            "Backend aggregate usage, not answer length or billed cost. Counting "
+            "rules vary by provider, including input/cache tokens; 0 can mean "
+            "usage was not reported."
+        )
     safe["hashes"] = {
         "brief": brief_hash,
         "constructed_prompt": constructed_prompt_hash,
@@ -390,6 +411,10 @@ def _safe_failure(failure: InferenceFailure) -> dict[str, Any]:
 
 def _failure_diagnostics(failure: InferenceFailure) -> dict[str, Any]:
     diagnostics: dict[str, Any] = {}
+    # The facade's generic failure summary must not erase the backend's
+    # specific validation reason. Like excerpts, this is caller-only text.
+    if isinstance(failure.message, str):
+        diagnostics["message"] = failure.message[:500]
     for key in (
         "adapter_status",
         "dispatch_phase",
@@ -397,12 +422,28 @@ def _failure_diagnostics(failure: InferenceFailure) -> dict[str, Any]:
         "orchestrator_agent_id",
         "host_id",
         "exit_status",
+        "adapter_raw_excerpt_note",
+        "adapter_raw_excerpt_truncated",
+        "adapter_answer_region_located",
+        "adapter_answer_region_note",
     ):
         value = failure.details.get(key)
         if isinstance(value, str):
             diagnostics[key] = value[:500]
         elif isinstance(value, (int, float, bool)):
             diagnostics[key] = value
+    # Caller-only diagnostic evidence: never advice and never part of the
+    # durable consultation record. Keep both ends, as the answer is at the
+    # tail of CLI output. The service normally already bounds this to ~2 KB.
+    excerpt = failure.details.get("adapter_raw_excerpt")
+    if isinstance(excerpt, str) and excerpt.strip():
+        if len(excerpt) > 2500:
+            excerpt = excerpt[:500] + "\n... [excerpt elided] ...\n" + excerpt[-1500:]
+            diagnostics["adapter_raw_excerpt_truncated"] = True
+        diagnostics["adapter_raw_excerpt"] = excerpt
+        diagnostics["adapter_raw_excerpt_note"] = (
+            "Unvalidated host-CLI output for diagnosis only; it is not an answer."
+        )
     return diagnostics
 
 
@@ -431,6 +472,7 @@ def _base_data(request: ConsultRequest) -> dict[str, Any]:
             "effort": request.effort,
             "privacy": request.privacy,
             "allow_degraded": request.allow_degraded,
+            **({"host_id": request.host_id} if request.host_id is not None else {}),
         },
         "guidance": {
             "on_record_review": (
@@ -467,6 +509,11 @@ def _failed(
         data["degradation"] = degradation
     if request.response_mode == "full" and diagnostics:
         data["diagnostics"] = diagnostics
+    elif diagnostics:
+        recovery_action += (
+            " Future calls can request response_mode='full' for bounded failure "
+            "diagnostics; it does not retrieve this call's output."
+        )
     return ConsultationOutcome(
         data=data,
         failure=ConsultationFailure(
@@ -490,6 +537,7 @@ async def _run_standard(
     return await run_model_inference(CallModelRequest(
         prompt=prompt,
         requesting_agent_uuid=request.requester_uuid,
+        host_id=request.host_id,
         provider="ollama" if force_local else "auto",
         privacy="local" if force_local else "auto",
         task_type=_STANDARD_TASK_TYPES[request.purpose],
@@ -591,6 +639,7 @@ def _delivery_postcondition_error(
     delivery_policy: str,
     *,
     thorough_host_id: str,
+    selected_host_id: str | None = None,
 ) -> tuple[str, str] | None:
     """Fail closed when a backend result violates the facade's resolved route."""
     inference = outcome.inference
@@ -600,6 +649,11 @@ def _delivery_postcondition_error(
         inference.get("provider_kind"),
         inference.get("privacy_class"),
     )
+    if selected_host_id is not None and actual != _SELECTABLE_HOST_ROUTES[selected_host_id]:
+        return (
+            "CONSULT_ROUTE_POSTCONDITION_FAILED",
+            "inference resolved outside the explicitly selected host route",
+        )
     standard_local = ("ollama", "ollama:local", "ollama", "local")
     standard_cloud_allowed = {
         standard_local,
@@ -691,6 +745,7 @@ def _success(
         outcome,
         delivery_policy,
         thorough_host_id=request.thorough_host_id,
+        selected_host_id=request.host_id,
     )
     if postcondition_error:
         code, reason = postcondition_error
@@ -760,7 +815,15 @@ _THOROUGH_NOT_CONFIGURED_RECOVERY = (
 )
 
 
-def _recovery_for_upstream(failure: InferenceFailure, *, lane: str) -> str:
+def _recovery_for_upstream(
+    failure: InferenceFailure, *, lane: str, selected_host_id: str | None = None,
+) -> str:
+    if selected_host_id is not None and not failure.possibly_running:
+        return (
+            "Inspect the selected host with describe_inference_host, then retry "
+            "when it is ready or choose another host explicitly. No alternate "
+            "host was requested."
+        )
     if failure.details.get("reason") == "extension_not_configured":
         return _THOROUGH_NOT_CONFIGURED_RECOVERY
     if failure.possibly_running:
@@ -800,6 +863,37 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
     brief_hash = sha256_text(request.brief)
     prompt_hash = sha256_text(prompt)
 
+    if request.host_id is not None:
+        selected_effort = "standard" if request.host_id in _STANDARD_HOST_ROUTES else "thorough"
+        if request.allow_degraded or request.effort != selected_effort:
+            return _failed(
+                request,
+                message="Explicit host selection conflicts with the consultation policy",
+                code="CONSULT_POLICY_UNSATISFIED",
+                category="validation_error",
+                recovery_action=(
+                    f"Use effort='{selected_effort}' and allow_degraded=false for "
+                    "this host, or omit host_id for automatic routing."
+                ),
+                failure_details={"reason": "selected_host_policy_conflict"},
+            )
+        if request.privacy == "local" and request.host_id != "ollama:local":
+            return _failed(
+                request,
+                message="The selected host cannot satisfy privacy='local'",
+                code="CONSULT_POLICY_UNSATISFIED",
+                category="validation_error",
+                recovery_action=(
+                    "Select ollama:local to stay local, or explicitly permit "
+                    "external processing with privacy='cloud_allowed'."
+                ),
+                failure_details={"reason": "selected_host_requires_external_processing"},
+            )
+        if selected_effort == "thorough":
+            request = dataclasses.replace(
+                request, thorough_host_id=request.host_id, thorough_peers=(),
+            )
+
     if request.effort == "standard":
         outcome = await _guarded_inference(
             "standard",
@@ -817,7 +911,9 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 message="Standard advisory consultation is unavailable",
                 code=failure.code,
                 category=failure.category,
-                recovery_action=_recovery_for_upstream(failure, lane="standard"),
+                recovery_action=_recovery_for_upstream(
+                    failure, lane="standard", selected_host_id=request.host_id,
+                ),
                 failure_details={"upstream": _safe_failure(failure)},
                 diagnostics={"upstream": _failure_diagnostics(failure)},
             )
@@ -924,7 +1020,7 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
             code=primary_failure.code,
             category=primary_failure.category,
             recovery_action=_recovery_for_upstream(
-                primary_failure, lane="thorough"
+                primary_failure, lane="thorough", selected_host_id=request.host_id,
             ),
             failure_details={"upstream": _safe_failure(primary_failure)},
             diagnostics={"upstream": _failure_diagnostics(primary_failure)},
@@ -1084,7 +1180,7 @@ def _consultation_record(
     brief against the row; the caller, holding the key and the text, can
     prove which exchange the row describes. ``request`` and ``completion``
     hold only server-validated values (the purpose/effort/privacy enums, a
-    boolean, a thorough host id from ``_THOROUGH_PEERS``, the normalized
+    boolean, host ids from the accepted registry enum, the normalized
     completion state). Every other string passes ``_record_value``: it is
     kept only when it has the shape of an identifier (codes: of a
     snake_case constant), and otherwise as a keyed hash. Backend-reported
@@ -1193,21 +1289,35 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # historically accepts non-UUID agent_id values as legacy references; that
     # compatibility must not turn an unbound value into inference authority.
     requester_uuid = get_context_resolved_agent_id()
+    selected_host = (
+        str(arguments["host_id"]) if arguments.get("host_id") is not None else None
+    )
+    # Middleware materializes the same conditional schema default. Direct
+    # handler callers need it too; a supplied value is never overwritten.
+    effort = str(arguments.get(
+        "effort", "thorough" if selected_host in _THOROUGH_HOST_ROUTES else "standard",
+    ))
     request = ConsultRequest(
         brief=brief_text,
         requester_uuid=requester_uuid,
         purpose=str(arguments.get("purpose", "answer")),
-        effort=str(arguments.get("effort", "standard")),
+        effort=effort,
         privacy=str(arguments.get("privacy", "local")),
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
+        host_id=selected_host,
         # Only a thorough consult delegates; a standard one never probes hosts.
         **(
             {
                 "thorough_host_id": _thorough_host_for_caller(),
                 "thorough_peers": _thorough_peers_for_caller(),
             }
-            if arguments.get("effort") == "thorough"
+            if effort == "thorough" and selected_host is None
+            else {}
+        ),
+        **(
+            {"thorough_host_id": selected_host}
+            if selected_host in _THOROUGH_HOST_ROUTES
             else {}
         ),
     )
@@ -1262,6 +1372,14 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             code="INVALID_CONSULT_RESPONSE_MODE",
             category="validation_error",
             recovery_action="Use compact or full.",
+        )
+    elif request.host_id is not None and request.host_id not in _SELECTABLE_HOST_ROUTES:
+        outcome = _failed(
+            request,
+            message="Unknown consultation host",
+            code="INFERENCE_HOST_NOT_FOUND",
+            category="validation_error",
+            recovery_action="Choose a host listed by list_inference_hosts that accepts consult.",
         )
     else:
         try:

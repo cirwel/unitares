@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.35.1`
+**Current contract:** `unitares.interface-contract.v1`, version `1.39.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -495,3 +495,95 @@ of exposing `notices`, `muted`, `has_more`, and acknowledgement guidance.
 This corrects the 1.35.0 output contract without changing inputs, permissions,
 or notice delivery. Schema digests do not move. Clients can read the documented
 JSON fields directly after the server upgrade; no request changes are needed.
+
+## 1.36.0 (2026-10-13)
+
+`consult` accepts optional `host_id` for the five existing advisory hosts.
+HTTP hosts (`ollama:local`, `hf:router`) require standard effort; the three CLI
+adapters require thorough effort. External hosts require `cloud_allowed`.
+Pinned calls reject `allow_degraded=true` and never try another peer or local
+fallback. The compact request receipt and text-free audit include the selected
+host; existing full diagnostics retain the actual route. Selecting the caller's
+own family is permitted for advice and never grants governed-review authority.
+
+Discovery lists `consult` in `accepts_host_id_from` for all five hosts. Raw tool
+contracts and default recommendations remain compatible. `consult`'s input
+schema digest and the aggregate surface hash change; callers omitting `host_id`
+retain automatic routing and need no request changes. Refresh cached schemas
+to use explicit selection.
+
+Full consultation failures retain a bounded, unvalidated adapter-output excerpt
+for the caller, excluded from audit storage. HF HTTP 401/402/429 failures now
+feed the existing bounded auth/quota cooldown; discovery reports the observed
+unavailability, without a model or billing probe. These output/description fixes
+change no raw-tool input schemas.
+
+## 1.37.0 (2026-10-14)
+
+Infer omitted consult effort from a selected host and explain aggregate token usage in full diagnostics.
+
+For `consult`, omitted `effort` becomes thorough for an explicitly selected CLI
+host, otherwise standard. An explicit value is never overwritten; incompatible
+host/effort pairs still fail before dispatch. Privacy, pinning, failover and
+advisory authority are unchanged. The compact request receipt and audit show
+the resolved effort.
+
+The `effort` input retains its string enum and optionality but no longer
+advertises an unconditional standard default. Descriptions state the
+conditional default. Only the `consult` input digest and aggregate surface hash
+move; refresh cached schemas and omit effort to use inference. Existing calls
+with a matching explicit effort, and automatic calls with no host, keep their
+behavior. Null remains outside the advertised effort schema.
+
+Full consultation diagnostics add `tokens_used_note` when a token aggregate is
+present. It explains provider-specific counting and zero-as-unreported behavior.
+Counts, pricing and EISV accounting are unchanged. Compact responses and the
+durable audit do not include this explanatory text. Full failure diagnostics
+also retain the backend message, bounded to 500 characters and excluded from
+compact responses and audit storage; the facade summary and failure semantics
+remain unchanged.
+
+## 1.38.0 (2026-10-14)
+
+KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+
+Output-only compatible addition to knowledge search, agent-scoped get and
+details. A record with recognizable dated `Resolution notes (...)` blocks in its
+full details carries `resolution_notes={source: "details_text", count,
+first_offset, latest_offset}`. Offsets count Unicode characters, matching the
+existing details pagination, and refer to the full stored text before any
+preview or imported-content truncation. Records without such blocks are unchanged.
+The metadata survives canonical lean search, the friendly search digests and
+`more_results`; a response-level `resolution_notes_hint` explains the read route.
+The existing 3,000-byte digest and 2,000-byte extra-row budgets still apply.
+
+Clients may call `knowledge(action="details", discovery_id=..., offset=...)`
+at `latest_offset` to read the last block or `first_offset` to inspect the history.
+The details read returns fresh locations: replacing text can invalidate an earlier
+offset. The locations are parsed from text, not authenticated update receipts;
+the last note may be administrative, and no claim of truth, current policy or
+note-author identity is implied. No excerpts are substituted for original claims.
+Stored content, identity, authority, ranking, input schemas and schema digests
+are unchanged. Existing clients may ignore the added fields; no schema refresh
+is needed to keep using existing inputs.
+
+## 1.39.0 (2026-10-14)
+
+The default/explicit `lean` response from `search_shared_memory` omits the optional
+`response_options` tier ladder and repeated write recipes in `next_action`.
+`discovery_retrieval_options` keeps `current_tier`, `open_one`, and, when present,
+`requested_tier` and `details_omitted_by`. Serialization diagnostics and all-inline
+coaching remain in `compact`; `full` retains the canonical response. Confidence,
+degradation and imported-memory caveats, lifecycle markers, correction pointers,
+and attribution keep their existing semantics and budgets.
+
+Under byte pressure, the full-mode hint may shrink to its executable call while
+preserving the expansion route. This also reserves room for the existing
+attribution-omitted marker after lean coaching is removed. Result summaries,
+ranking, storage and write behavior are unchanged. The digest and extra-row
+budgets remain 3 KB and 2 KB.
+
+This is output shaping within fields already optional under response budgeting;
+input schemas and schema digests are unchanged. Clients must tolerate absent
+optional coaching and should use the structured result count and retrieval tier.
+Request `compact` for serialization diagnostics or `full` for canonical fields.

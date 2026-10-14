@@ -172,7 +172,9 @@ cannot add a publisher. This admission also applies to dispositions, review
 history and failure counts. It preserves the diff, provenance, findings and
 model-family checks; a shared bot identity does not prove reviewer independence.
 Bot comments cannot grant an operator waiver, even with a write association.
-The `waive` and `--authorize-full-review` CLI paths verify a user account via
+The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
+user-authored approval; it never lets the App issue one. The `waive` and
+legacy `--authorize-full-review` CLI paths verify a user account via
 GitHub and refuse App credentials or an unreadable actor. Cloud agents using
 the operator's user credential still require explicit operator instruction;
 this check cannot distinguish them from the operator.
@@ -181,7 +183,8 @@ this check cannot distinguish them from the operator.
 > longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
 > `second_family_paths` file still needs `review` to pass. What
 > follows still applies to the review you run. The round cap still bounds paid
-> full rounds (another needs the operator's own `--authorize-full-review`), and
+> full cycles (another needs a scoped operator grant or the operator's own
+> `--authorize-full-review`), and
 > a `review` check of `action_required` (undisposed findings, or a sensitive
 > diff with one passing family of two) still parks the PR in the queue. Quality
 > still comes first; the point is that an unavailable reviewer never stops a
@@ -209,7 +212,7 @@ the test run one.
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
 - Findings: fix and push (the new diff is reviewed; targeted minor-fix verification follows one full review; the
-  [round cap](#round-cap) bounds full rounds), or post rebuttals with
+  [round cap](#round-cap) bounds full cycles), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -236,8 +239,9 @@ the test run one.
   "carried across a base merge from `<sha>`" when a carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any
   change to an added or removed line stops the carry. A PR that touches a
-  second-family path (`review_policy.json`) is never carried: a base merge
-  that moves its diff key needs a fresh review on the new key. A base merge
+  second-family path (`review_policy.json`) is never carried automatically: a
+  base merge that moves its diff key needs independent follow-up coverage or
+  a full review on the new key. A base merge
   that leaves the PR's files untouched keeps the key, and its records still
   count, as for any PR.
 - The gate proves a review was recorded, not that it was honest: every agent
@@ -334,34 +338,83 @@ fallback validation.
 
 #### Round cap
 
-Operator decision, 2026-09-30: `ROUND_CAP_ENABLED=True` supersedes the
-September 27 uncapped setting. A PR gets three completed **full** review rounds
-across native, local and external sources. Each local/external receipt records
-its captured head, base, scope and review identity; native artifacts supply
-actual reviewed commit evidence. Duplicate receipts and dispositions do not
-count again. FAILED attempts and targeted fix verification are not full rounds.
-A base change can invalidate coverage but does not replenish the budget.
-Legacy records with insufficient provenance remain legacy: they are neither
-invented full reviews nor a fresh budget. Unknown history requires escalation.
+Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
+gets three **full review cycles**. A cycle starts with its first completed
+full review and can include one other, distinct model family on the same
+revision. Repeating a family, requesting a third family, or changing the
+revision/diff starts another cycle. The second family can finish cycle three
+without an extra approval. Unknown families cannot share a cycle. Native
+reviews group by their explicit reviewed commit; where both records carry
+diff keys those must match too. This spending ledger never establishes review
+coverage by itself.
 
-Ordinary code needs one independent full review, then targeted verification of
-minor fixes. The verifier must examine all changed lines and regression
-implications, independently confirm no regressions or uncertainty, answer the
-prior findings, and explicitly attest no unrelated new work. `git config review.verifier ollama:<model>` opts into a local verifier;
-no verifier is required or started by default. A separate independent human or
-model can instead record `record <file> --independent --reviewer-name <who>
---scope fix --reviewed-from <sha> --fixes-only`. A matching prior full findings
-receipt with minor severity is required. Targeted scope never counts as a full
-review or either security family. New work, uncertain scope, or work after a
-clean result requires fresh full review. Without verification, keep UNREVIEWED.
+Receipts deduplicate by actual review identity; dispositions, FAILED attempts
+and targeted follow-ups do not spend cycles. Existing provenance is used
+without inventing a head or family. Unknown legacy history still requires
+escalation. Retargeting or rewriting work does not reset the PR's ledger.
 
-At three full rounds, stop paid requests and escalate unresolved issues. P0/P1
-and security findings remain blockers; budget exhaustion never manufactures
-approval. Only explicit operator authorization permits an additional round:
-`review.sh --authorize-full-review "operator request and reason"`. The reason
-is recorded visibly with the result. `--fresh` and `--reviewer` alone do not
-bypass the cap. Council/dialectic is optional escalation, not another automatic
-review loop. Deterministic tests, lint and CI remain required.
+**Review is collaboration: more minds on the work, with coverage proportional
+to the change (operator direction, 2026-10-13).** Keep completed full reviews
+as evidence. After a clean review or minor findings, `review.sh` normally asks
+an independent reviewer to examine the complete cumulative delta from that
+full review, its interactions with the original work, and all prior findings.
+The reviewer also receives the original diff and review history. Small code
+fixes, documentation corrections and attestation updates can use this route;
+file type alone never exempts a change from scrutiny.
+
+A bounded follow-up preserves the original design and security assumptions.
+The reviewer explicitly confirms that scope and reviews every changed line.
+Materially expanded behavior or trust boundaries, invalidated prior reasoning,
+P0/P1 or unclassified source findings, and uncertain scope require a full pass.
+`--fresh` requests that pass. A declined follow-up does not automatically spend
+another round or repeatedly ask the same scope question.
+
+The receipt remains `scope=fix`, with the original reviewed commit and the
+current endpoints. It is additional coverage, not a claim that the original
+reviewers saw later edits. For sensitive changes it preserves the families
+that actually performed the original full reviews; it cannot invent a missing
+second family. Git verifies the source and destination diff keys and ancestry.
+A changed diff without an independent follow-up remains unreviewed, and open
+findings on the current diff remain blockers even if another reviewer is clean.
+Subsequent edits use the cumulative delta from a full review rather than a
+chain of unchecked receipts. Follow-ups do not consume full-review cycles,
+including when the full-cycle budget is exhausted.
+
+A separate human or model may also record this coverage with
+`record <file> --independent --reviewer-name <who> --scope fix
+--reviewed-from <full-review-sha> --fixes-only`. The last flag attests that the
+reviewer examined all changes and interactions, answered prior findings, and
+confirmed a bounded correction or clarification without scope expansion.
+The optional `git config review.verifier ollama:<model>` route remains
+available for minor-finding verification; no verifier is required by default.
+
+After cycle three, a new full cycle needs explicit operator approval. P0/P1
+and security findings remain blockers; exhausting the budget never creates
+approval. The operator may still invoke
+`review.sh --authorize-full-review "operator request and reason"` using a user
+account for one additional invocation. App credentials cannot use that flag.
+
+For an App-executable approval, the capped CLI prints a ready-to-post comment:
+
+```text
+<!-- unitares-review-cycle v1 head=<40-hex-commit> key=<64-hex-diff-key> after=<current-cycle-count> expires=<unix-seconds> -->
+I authorize one additional full review cycle on this revision to finish validation.
+```
+
+The operator posts it on that PR using a trusted **user** account. The App then
+runs `review.sh --fresh --reviewer <provider> --review-cycle-grant <comment-id>`
+for each required family. GitHub supplies the author metadata; quoted markers,
+bot comments, a comment from another PR, mismatched work, unknown history, and
+expired grants are refused before a reviewer starts. The grant expires within
+24 hours of comment creation. Its fixed `after` position allows one additional
+cycle only; repeating a family, changing the revision, or completing that
+cycle exhausts it. The second family must use the same unexpired grant once
+the base budget is exceeded. Each review receipt links its authorization.
+Deleting the grant prevents future use. Approval in chat is not synthesized
+into a user-authored GitHub comment, and no human credential fallback is used.
+
+`--fresh` and `--reviewer` alone never bypass the budget. Council/dialectic
+remains optional escalation. Deterministic tests, lint and CI remain required.
 
 Markdown-only changes under `docs/proposals/**` receive advisory review when
 the **trusted base** policy enables it. Runtime, policy and auth changes cannot
@@ -395,7 +448,8 @@ model and counts as none, so run Antigravity through `review.sh` instead. A reco
 carries its family as a word (`gemini-council`, `gpt-5-reviewer`, `claude-…`);
 an unrecognised name such as `council` counts as none. A passing review is
 `CLEAN`, or `FINDINGS` with every disposition recorded; a fix-verification
-receipt is not a full review and never counts. Open findings still block as
+receipt is not a full review: it preserves only the families of its verified
+full-review sources, never adding the follow-up reviewer's family. Open findings still block as
 before. CI enforces the rule, reading the policy as merged on the PR's base
 ref, never from the PR head, so a PR cannot remove itself from the list; if
 the changed paths cannot be read, it requires the second family.
@@ -508,11 +562,11 @@ operator's), the environment-independent path is a PR comment:
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
-   The enabled [round cap](#round-cap) applies here too: after three completed
-   full rounds, stop requests and escalate unresolved findings. Ordinary minor
+   The enabled [round cap](#round-cap) applies here too: after three full
+   cycles, stop requests and escalate unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
-   round requires explicit operator authorization with a recorded reason.
+   cycle requires explicit operator authorization with a recorded reason.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -883,7 +937,7 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review round 3 done | Escalate unresolved findings; another full round needs explicit operator authorization ([round cap](#round-cap)) |
+| Review cycle 3 done | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

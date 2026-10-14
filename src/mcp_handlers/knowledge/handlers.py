@@ -81,6 +81,7 @@ from src.knowledge_graph import (
     closure_evidence_to_json,
 )
 from src.mcp_handlers.knowledge.imported_preview import annotate_imported_read
+from src.mcp_handlers.knowledge.read_metadata import annotate_resolution_notes, add_resolution_notes_hint
 
 from src.knowledge_authority import (
     CHANNEL_MESSAGE,
@@ -185,6 +186,7 @@ _LEAN_DISCOVERY_FIELDS = (
     "authority",
     "imported_memory",
     "closure_class",
+    "resolution_notes",
     # Who wrote it: the write-time display label and the identity a reader
     # passes back as agent_id_filter. Without them the default lean search
     # told a reader what a finding says but not who wrote it (#2386); the
@@ -270,6 +272,7 @@ def _lean_search_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             "search_mode_used",
             "low_confidence",
             "confidence_note",
+            "resolution_notes_hint",
             "search_degraded",
             "search_degraded_message",
             "limit_clamped_from",
@@ -2512,6 +2515,12 @@ async def _retrieve_hybrid_candidates(
             str(request.query_text),
             limit=fetch_limit,
             min_similarity=state.min_similarity,
+            # RRF needs semantic relevance, not AGE's implicit graph/age/status
+            # blend. A resolved incident can still be the best answer. Apply
+            # visibility, explicit recency and authority in their handler stages.
+            connectivity_weight=0.0,
+            temporal_decay=False,
+            status_weight=False,
             **tag_kwargs,
             **_window_kwargs(request),
         ),
@@ -2569,6 +2578,10 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         str(request.query_text),
         limit=state.first_stage_limit,
         min_similarity=state.min_similarity,
+        # Match the semantic leg of hybrid search; recency is opt-in below.
+        connectivity_weight=0.0,
+        temporal_decay=False,
+        status_weight=False,
         **_tag_kwargs(request),
         **_window_kwargs(request),
     )
@@ -3258,6 +3271,7 @@ def _serialize_search_discoveries(
             item["provenance"] = redact_provenance(document.provenance)
             if document.provenance_chain:
                 item["provenance_chain"] = document.provenance_chain
+        annotate_resolution_notes(item, document)
         annotate_imported_read(item, document)
         discoveries.append(item)
     return discoveries
@@ -3278,7 +3292,7 @@ def _base_search_response(
         if include_details
         else " (summaries only)"
     )
-    return {
+    response = {
         "search_mode_used": state.search_mode,
         "search_mode_requested": request.search_mode_requested,
         "operator_used": state.operator_used,
@@ -3289,6 +3303,8 @@ def _base_search_response(
         "message": f"Found {len(state.results)} discovery(ies){detail_suffix}",
         **_search_order_echo(request),
     }
+    add_resolution_notes_hint(response)
+    return response
 
 
 def _search_order_echo(request: _KnowledgeSearchRequest) -> dict[str, Any]:
@@ -3778,6 +3794,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
             if include_details and full_dict.get("details"):
                 d_dict["details"] = full_dict.get("details")
             d_dict["_agent_id"] = d.agent_id
+            annotate_resolution_notes(d_dict, d)
             annotate_imported_read(d_dict, d)
             discovery_list.append(d_dict)
 
@@ -3789,6 +3806,7 @@ async def handle_get_knowledge_graph(arguments: Dict[str, Any]) -> Sequence[Text
             "discoveries": discovery_list,
             "count": len(discoveries)
         }
+        add_resolution_notes_hint(response_data)
 
         # Visibility hints (v2.5.0+)
         if not include_details and len(discoveries) > 0:
@@ -4905,6 +4923,9 @@ async def handle_get_discovery_details(arguments: Dict[str, Any]) -> Sequence[Te
                 "discovery": discovery.to_dict(include_details=True),
                 "message": f"Full details for discovery '{discovery_id}'"
             }
+
+        annotate_resolution_notes(response["discovery"], discovery)
+        add_resolution_notes_hint(response)
 
         # This is the route a search digest's open_one hint points at, so a
         # superseded record has to name its replacement here too; the stored

@@ -31,7 +31,9 @@ own lines are unchanged. `base_merge_equivalents` finds the earlier keys that
 describe the same PR change (clean automatic base merges with an unchanged
 `patch_fingerprint`), and `carry_records` reads their records as the head's;
 see their docstrings for exactly what stops the carry. A diff that touches a
-second-family path is never carried: it is reviewed on its exact key.
+second-family path is never carried automatically. An independent follow-up
+review can cover the complete delta from a full review and preserve its
+coverage, including its model families, without pretending the diff is equal.
 
 The record
 ----------
@@ -107,10 +109,9 @@ COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
 NATIVE_WAIT_S = 600
-# Full Codex reviews per PR before the remaining findings are answered without
-# another run (conventions §Review workflow, "Round cap"). Each run spends the
-# same subscription quota authoring does, and past the third round most
-# findings are about text the previous fix added.
+# Full review cycles per PR. A cycle holds at most two distinct model families
+# on the same revision/diff; rerunning a family or changing the work starts
+# another cycle. Coverage remains separate from this spending budget.
 ROUND_CAP = 3
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
@@ -442,7 +443,8 @@ def carry_records(comments: list[dict], key: str,
     for c in comments:
         rec = parse_record(c.get("body", ""))
         if rec is not None and rec.key in origin:
-            c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1)}
+            c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1),
+                 "_review_original_key": c.get("_review_original_key", rec.key)}
             carried[c.get("html_url", "")] = origin[rec.key]
         out.append(c)
     return out, carried
@@ -475,16 +477,20 @@ class Record:
     # Missing provenance stays legacy; never invent a reviewed commit/base.
     head: str = ""
     base: str = ""
-    scope: str = "legacy"  # full | fix | legacy
+    scope: str = "legacy"  # full | fix | full-required | legacy
     review_id: str = ""
     from_head: str = ""
     from_key: str = ""
+    # In-memory provenance from proven base-merge carry; never a marker field.
+    original_key: str = ""
 
     def full(self) -> bool:
         return (self.scope == "full" and bool(self.head and self.base)
                 and not self.reviewer.startswith("fix-verify:"))
 
     def status(self) -> tuple[str, str]:
+        if self.scope == "full-required" and (self.disposed or self.verdict == "FAILED"):
+            return "pending", "UNREVIEWED: follow-up scope was declined; run review.sh --fresh"
         if self.verdict == "CLEAN":
             return "success", f"clean ({self.reviewer})"
         if self.verdict == "FINDINGS" and self.disposed:
@@ -547,39 +553,133 @@ def stamp_record(rec: Record, base_ref: str, scope: str, text: str, args=None,
     if scope == "fix":
         previous = getattr(args, "reviewed_from", None)
         if not previous or not getattr(args, "fixes_only", False):
-            raise SystemExit("fix scope requires --reviewed-from and --fixes-only: all changed lines and regression implications, no new work")
+            raise SystemExit("fix scope requires --reviewed-from and --fixes-only: all changes and interactions reviewed; bounded corrections only")
         rec.from_head = git("rev-parse", f"{previous}^{{commit}}").strip()
         if git("merge-base", rec.from_head, rec.head).strip() != rec.from_head:
             raise SystemExit("fix verification must extend the previously reviewed commit")
         rec.from_key = diff_key(base_ref, rec.from_head)
 
 
-def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] = ()) -> bool:
-    """Minor targeted coverage needs actual full source evidence, not invented native base."""
+def comment_record(comment: dict) -> Record | None:
+    rec = parse_record(comment.get("body", ""))
+    if rec:
+        rec.original_key = comment.get("_review_original_key", "")
+    return rec
+
+
+def followup_sources(rec: Record, comments: list[dict], native: list[Record] = ()) -> list[Record]:
+    """Full reviews extended by a bounded, independently reviewed follow-up.
+
+    Always anchor to full reviews, not another follow-up: repeated edits review
+    the cumulative delta. Every source finding must be considered. Serious or
+    unclassified findings require a full pass; one clean family cannot hide
+    another family's blocker.
+    """
     if rec.scope != "fix" or not all((rec.head, rec.base, rec.from_head, rec.from_key)):
-        return False
+        return []
     sources = [(parse_record(c.get("body", "")), c.get("body", ""), False) for c in comments
                if trusted_review_comment(c)]
     sources += [(r, r.text, True) for r in native]
+    eligible = []
+    anchored = False
     for source, body, actual_native in sources:
+        if (source and source.scope == "full-required" and source.head != rec.from_head
+                and (source.from_head == rec.from_head or _is_ancestor(rec.from_head, source.head))):
+            return []  # a push or disposition cannot erase a scope refusal
+        if (source and source.scope == "fix" and source.verdict == "FINDINGS"
+                and not source.disposed and source.head != rec.from_head
+                and (source.from_head == rec.from_head or _is_ancestor(rec.from_head, source.head))
+                and (source.findings < 1 or len(SEVERITY_LABEL_RE.findall(body)) < source.findings
+                     or SEVERE_BADGE_RE.search(body))):
+            return []
         full = source and (source.full() or (actual_native and source.reviewer == "codex-native"
                                             and source.scope == "full" and source.head))
-        if (full and source.head == rec.from_head and source.key == rec.from_key
-                and (actual_native or source.base == rec.base)
-                and source.verdict == "FINDINGS" and source.findings > 0):
-            labels = SEVERITY_LABEL_RE.findall(body)
-            if len(labels) >= source.findings and not SEVERE_BADGE_RE.search(body):
-                return True
-    return False
+        if (full and source.head != rec.from_head and source.verdict == "FINDINGS" and not source.disposed
+                and _is_ancestor(rec.from_head, source.head)
+                and (source.findings < 1 or len(SEVERITY_LABEL_RE.findall(body)) < source.findings
+                     or SEVERE_BADGE_RE.search(body))):
+            return []
+        anchor = full and source.head == rec.from_head and source.key == rec.from_key
+        # Another family may have fully reviewed a later revision within the
+        # cumulative delta. Preserve that contribution too, without chaining
+        # follow-up receipts or pretending both full reviews shared a head.
+        later = (full and source.head != rec.from_head and source.head != rec.head
+                 and _is_ancestor(rec.from_head, source.head) and _is_ancestor(source.head, rec.head)
+                 and (actual_native or same_reviewed_diff(source, rec.base)))
+        if ((anchor or later)
+                and (actual_native or source.base == rec.base
+                     or same_reviewed_diff(source, rec.base))):
+            anchored |= bool(anchor)
+            source.text = body
+            if source.verdict == "FINDINGS" and not source.disposed:
+                labels = SEVERITY_LABEL_RE.findall(body)
+                if source.findings < 1 or len(labels) < source.findings or SEVERE_BADGE_RE.search(body):
+                    return []
+                eligible.append(source)
+            elif source.verdict == "CLEAN":
+                eligible.append(source)
+    return eligible if anchored else []
+
+
+def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] = ()) -> bool:
+    return bool(followup_sources(rec, comments, native))
+
+
+def same_reviewed_diff(source: Record, base: str) -> bool:
+    """An unrelated advance of the base does not invalidate the source diff."""
+    try:
+        return (bool(source.base) and diff_key(source.base, source.head) == source.key
+                and diff_key(base, source.head) == source.key)
+    except (SystemExit, subprocess.SubprocessError):
+        return False
+
+
+def followup_objects_valid(rec: Record) -> bool:
+    """Prove the reviewed endpoints before preserving any security coverage."""
+    try:
+        return (rec.from_head != rec.head
+                and git("merge-base", rec.from_head, rec.head).strip() == rec.from_head
+                and diff_key(rec.base, rec.from_head) == rec.from_key
+                and diff_key(rec.base, rec.head) == (rec.original_key or rec.key))
+    except (SystemExit, subprocess.SubprocessError):
+        return False
+
+
+def followup_candidate(base: str, head: str, key: str, comments: list[dict],
+                       native: list[Record] = ()) -> Record | None:
+    """Latest usable full-review anchor; scope is decided by the reviewer."""
+    base_oid = git("rev-parse", "--verify", "--quiet", base, check=False).strip()
+    if not base_oid:
+        return None
+    sources = [parse_record(c.get("body", "")) for c in comments
+               if trusted_review_comment(c)]
+    sources += list(native)
+    best, families = None, set()
+    for source in sources:
+        if (not source or source.scope != "full" or not source.head or source.key == key
+                or source.verdict not in {"CLEAN", "FINDINGS"}):
+            continue
+        rec = Record(key, "CLEAN", 0, False, "followup", head=head, base=base_oid,
+                     scope="fix", from_head=source.head, from_key=source.key)
+        if not followup_objects_valid(rec):
+            continue
+        covered = followup_sources(rec, comments, native)
+        if not covered:
+            continue
+        credited = {record_family(r) for r in covered} - {None}
+        if (best is None or len(credited) > len(families)
+                or (len(credited) == len(families) and _is_ancestor(best.from_head, rec.from_head))):
+            best, families = rec, credited
+    return best
 
 
 def targeted_coverage_valid(repo: str, pr: int, rec: Record, comments: list[dict]) -> bool:
-    if fix_coverage_valid(rec, comments):
-        return True
-    if not rec.from_key or not rec.from_head:
+    if not followup_objects_valid(rec):
         return False
+    # Native findings anywhere in the intervening history matter even when
+    # comment-only evidence would be sufficient to identify a source.
     return fix_coverage_valid(rec, comments,
-                              read_native(repo, pr, rec.from_key, rec.from_head, comments).records)
+                              read_native(repo, pr, rec.key, rec.head, comments).records)
 
 
 def proposal_advisory(paths: list[str] | None, base: str) -> bool:
@@ -607,10 +707,14 @@ def latest_matching(comments: list[dict], key: str,
         if not trusted_review_comment(c):
             continue
         body = c.get("body", "")
-        rec = parse_record(body)
+        rec = comment_record(c)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
-            if rec.scope == "fix" and rec.status()[0] == "success" and not fix_coverage_valid(rec, comments, native):
-                rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
+            if (rec.scope == "fix" and rec.status()[0] == "success"
+                    and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
+                if rec.disposed:
+                    rec.scope = "full-required"  # answer the findings without approving the scope
+                else:
+                    rec.verdict = "FAILED"  # coverage gap cannot manufacture approval
             if rec.disposed and not dispositions_complete(body, rec.findings):
                 rec.disposed = False
             rec.url = c.get("html_url", "")
@@ -620,8 +724,9 @@ def latest_matching(comments: list[dict], key: str,
     records.extend(rec for rec in native if rec.key == key)
     found, completed, open_findings = None, None, []
     for rec in sorted(records, key=lambda r: timestamp(r.created_at)):
+        original = None
         found = rec
-        if rec.verdict != "FAILED":
+        if rec.verdict != "FAILED" and rec.scope != "full-required":
             completed = rec
         if rec.verdict == "FINDINGS":
             # A disposition answers ONE findings record, not every earlier one.
@@ -633,17 +738,30 @@ def latest_matching(comments: list[dict], key: str,
                 # by URL, never another open finding with the same count.
                 match = [i for i, o in enumerate(open_findings) if o.url == cited]
                 if match:
-                    open_findings.pop(match[-1])
+                    original = open_findings.pop(match[-1])
+                    if original.scope == "full-required":
+                        rec.scope = original.scope
                 # Otherwise the review is no longer visible: native evidence
                 # is bound to the reviewed head commit, so a base merge that
                 # moves the head (keeping this diff key) drops it. The
                 # disposition names it, so it stays disposed and consumes
                 # nothing else.
             elif open_findings and open_findings[-1].findings == rec.findings:
-                open_findings.pop()
+                original = open_findings.pop()
+                if rec.scope == "legacy" and original.scope == "fix":
+                    for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
+                        setattr(rec, name, getattr(original, name))
+                    if not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native)):
+                        rec.scope = "full-required"
+                elif original.scope == "full-required":
+                    rec.scope = original.scope
             else:
                 rec.disposed = False
                 open_findings.append(rec)
+        if rec.scope == "full-required" and rec.disposed:
+            rec.verdict = "FAILED"  # findings answered, coverage still missing
+            if completed is rec or completed is original:
+                completed = None
     # Open findings decide the status whatever came after them on this diff —
     # a quieter re-run, a FAILED re-run — so they stay visible and disposable.
     return open_findings[-1] if open_findings else completed or found
@@ -696,13 +814,33 @@ class NativeReview:
 
 
 @dataclass
+class ReviewCycle:
+    head: str
+    key: str
+    families: set[str | None] = field(default_factory=set)
+
+    def accepts(self, head: str, key: str, family: str | None) -> bool:
+        same_head = (len(self.head) >= 7 and len(head) >= 7
+                     and (head.startswith(self.head) or self.head.startswith(head)))
+        return bool(same_head and (not self.key or not key or self.key == key)
+                    and family and None not in self.families
+                    and family not in self.families and len(self.families) < 2)
+
+
+@dataclass
 class CodexRounds:
-    """Completed Codex reviews on the PR, across every head it has had."""
+    """Full review cycles across every revision, including an unfinished pair."""
     count: int = 0
     last_head: str = ""          # as Codex printed it; may be abbreviated
     last_findings: list[dict] = field(default_factory=list)  # inline comments
     unknown_history: bool = False  # legacy completed reviews without head/base/scope
     answered_since: bool = False  # a disposition or fix verification answered the last round
+    cycles: list[ReviewCycle] = field(default_factory=list)
+    # Spending evidence only, also used to include unposted local reviews.
+    runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
+
+    def can_join(self, head: str, key: str, family: str | None) -> bool:
+        return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
 
     @property
     def last_severe(self) -> bool:
@@ -726,28 +864,34 @@ class CodexRounds:
 
 def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
                  events: list[dict] = (), reactions: list[dict] = ()) -> CodexRounds:
-    """Count completed full reviews across sources without resetting on retarget.
+    """Count full review cycles across sources without resetting on retarget.
 
     Native artifacts deduplicate by their actual reviewed commit. Local and
     external receipts require head/base/full-scope provenance and deduplicate
     by review identity. Unknown legacy history requires explicit escalation.
     Coverage rules remain separate from this spending ledger.
     """
-    runs: dict[str, tuple[float, str, list[dict]]] = {}
+    runs: dict[str, tuple[float, str, list[dict], str, str | None]] = {}
     unknown_history = False
     completed_without_evidence: set[str] = set()
 
-    def seen(commit: str, when: str, findings: list[dict]) -> None:
+    def seen(commit: str, when: str, findings: list[dict], key: str = "") -> None:
+        nonlocal unknown_history
         t = timestamp(when)
         run = commit[:7]
         prior = runs.get(run)
         # One run leaves several artifacts (review, activity row) seconds
         # apart, in any order: keep its findings whichever arrives first.
         if prior is None:
-            runs[run] = (t, commit, findings)
+            runs[run] = (t, commit, findings, key, "openai")
         else:
-            runs[run] = (max(t, prior[0]), commit if t >= prior[0] else prior[1],
-                         findings or prior[2])
+            if key and prior[3] and key != prior[3]:
+                unknown_history = True  # conflicting native work cannot refund a cycle
+            # A later duplicate receipt must not reorder an old review into a
+            # newer cycle and refund budget. Keep its first known evidence time.
+            first = min(t, prior[0]) if t and prior[0] else t or prior[0]
+            runs[run] = (first, commit if len(commit) > len(prior[1]) else prior[1],
+                         findings or prior[2], prior[3] or key, "openai")
 
     for c in comments:
         if not is_codex_bot(c):
@@ -756,7 +900,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         commit = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]+)`", body, re.M)
         if commit:
             if re.match(r"^Codex Review: Didn['’]t find any major issues\.", body):
-                seen(commit[1], c.get("updated_at") or c.get("created_at", ""), [])
+                seen(commit[1], c.get("created_at") or c.get("updated_at", ""), [])
             else:
                 completed_without_evidence.add(commit[1][:7])
         if "<!-- codex-pull-request-review-summary -->" in body:
@@ -797,14 +941,14 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     for c in comments:
         if not trusted_review_comment(c):
             continue
-        rec = parse_record(c.get("body", ""))
+        rec = comment_record(c)
         if (rec and rec.scope == "legacy" and not rec.disposed and rec.verdict != "FAILED"
                 and rec.reviewer != "codex-native" and not rec.reviewer.startswith("fix-verify:")):
             unknown_history = True
         if not rec or not rec.full() or rec.disposed or rec.verdict == "FAILED":
             continue
         if rec.reviewer == "codex-native":
-            seen(rec.head, c.get("created_at", ""), [])
+            seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
         body = c.get("body", "")
@@ -818,7 +962,8 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             findings.append(finding)
         if rec.verdict == "FINDINGS" and not findings:
             findings = [{"body": "unlabelled finding; full review required"}]
-        runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings))
+        runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
+                                   rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
     answered_at = 0.0
     for c in comments:
@@ -830,8 +975,130 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             continue  # an answer to a round, never a run of its own
     if not runs:
         return CodexRounds(unknown_history=unknown_history)
-    last_at, last, findings = max(runs.values(), key=lambda r: r[0])
-    return CodexRounds(len(runs), last, findings, unknown_history=unknown_history, answered_since=answered_at > last_at)
+    return count_review_cycles(list(runs.values()), unknown_history, answered_at)
+
+
+def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
+                        unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
+    """Share spending accounting with the local reviewer, never coverage."""
+    if not runs:
+        return CodexRounds(unknown_history=unknown_history)
+    cycles = []
+    findings = []
+    for last_at, last, run_findings, key, family in sorted(runs, key=lambda r: r[0]):
+        if not cycles or not cycles[-1].accepts(last, key, family):
+            cycles.append(ReviewCycle(last, key))
+            findings = []
+        cycle = cycles[-1]
+        cycle.families.add(family)
+        cycle.key = cycle.key or key
+        if len(last) > len(cycle.head):
+            cycle.head = last
+        findings.extend(run_findings)
+    return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
+                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
+
+
+def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
+    count = 0
+    for run in cache.glob(f'pr-{pr}-*'):
+        try:
+            receipt = json.loads((run / 'manifest.json').read_text())
+            if receipt['pr'] != pr or receipt['status'] not in ('CLEAN', 'FINDINGS', 'UNREVIEWED'):
+                raise ValueError('Invalid local receipt')
+            if receipt['status'] in ('CLEAN', 'FINDINGS'):
+                if not receipt.get('head') or not receipt.get('base'):
+                    raise ValueError('Missing local provenance')
+                if receipt.get('review_id', run.name) not in posted_ids:
+                    count += 1
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f'Local review history incomplete at {run}; escalate before another review') from exc
+    return count
+
+
+def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
+    """Unposted completions spend the same cycles, but grant no coverage."""
+    if not local_completed_rounds(cache, pr, posted_ids):
+        return rounds
+    runs, seen = list(rounds.runs), set(posted_ids)
+    for run in sorted(cache.glob(f'pr-{pr}-*')):
+        receipt = json.loads((run / 'manifest.json').read_text())
+        identity = receipt.get('review_id', run.name)
+        if receipt['status'] not in ('CLEAN', 'FINDINGS') or identity in seen:
+            continue
+        seen.add(identity)
+        # Old manifests used a nanosecond start time in their directory name.
+        when = receipt.get('started_at')
+        if when is None:
+            match = re.fullmatch(rf'pr-{pr}-[0-9a-f]{{12}}-(\d{{16,20}})', run.name)
+            if not match:
+                raise ValueError(f'Local review timestamp missing at {run}; history unknown')
+            when = int(match[1]) / 1e9
+        if not isinstance(when, (int, float)) or not 0 < when <= time.time():
+            raise ValueError(f'Invalid local review timestamp at {run}')
+        try:
+            key = diff_key(receipt['base'], receipt['head'])
+        except (SystemExit, subprocess.SubprocessError) as exc:
+            raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
+                             f"Git objects; restore the history before reviewing ({exc})") from exc
+        family = model_family(receipt.get('architecture') or receipt.get('model', ''))
+        runs.append((when, receipt['head'], [], key, family))
+    return count_review_cycles(runs, rounds.unknown_history)
+
+
+def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
+    """All local spending entries share a ledger, independent of approval coverage."""
+    if not ROUND_CAP_ENABLED:
+        return rounds
+    cache = Path(git("rev-parse", "--git-common-dir").strip()).resolve() / "local-reviews"
+    posted_ids = {rec.review_id for c in comments if trusted_review_comment(c)
+                  if (rec := parse_record(c.get("body", ""))) and rec.scope == "full"}
+    return local_budget_rounds(rounds, cache, pr, posted_ids)
+
+
+CYCLE_GRANT_MARKER = "unitares-review-cycle v1"
+CYCLE_GRANT_TTL_S = 24 * 60 * 60
+CYCLE_GRANT_RE = re.compile(
+    r"\A<!-- " + re.escape(CYCLE_GRANT_MARKER)
+    + r" head=([0-9a-f]{40}) key=([0-9a-f]{64}) after=(\d+) expires=(\d+) -->\n(.+)\Z",
+    re.S,
+)
+
+
+def cycle_grant(comments: list[dict], comment_id: int, head: str, key: str,
+                rounds: CodexRounds, family: str | None, now: float) -> bool:
+    """One user-authored grant on this PR buys one revision-bound cycle.
+
+    The fixed ledger position prevents reuse, including after a force-push or
+    duplicate comment. App publishers may consume it, never issue it. Reads
+    come from the current PR API, so a comment from another PR is not a grant.
+    """
+    if rounds.unknown_history or not family:
+        return False
+    for comment in comments:
+        if comment.get("id") != comment_id or not trusted_operator_comment(comment):
+            continue
+        match = CYCLE_GRANT_RE.fullmatch(comment.get("body") or "")
+        if not match or match[1] != head or match[2] != key or len(match[5].strip()) < 20:
+            return False
+        after, expires = int(match[3]), int(match[4])
+        try:
+            created = timestamp(comment.get("created_at", ""))
+        except (TypeError, ValueError):
+            return False
+        if not (0 < created <= now < expires <= created + CYCLE_GRANT_TTL_S):
+            return False
+        return after >= ROUND_CAP and (rounds.count == after or
+                (rounds.count == after + 1 and rounds.can_join(head, key, family)))
+    return False
+
+
+def cycle_grant_instructions(head: str, key: str, rounds: CodexRounds) -> str:
+    expires = int(time.time()) + CYCLE_GRANT_TTL_S
+    return ("An operator can post this comment on the PR (expires in 24h), then the App can run "
+            "review.sh --fresh --reviewer PROVIDER --review-cycle-grant COMMENT_ID:\n"
+            f"<!-- {CYCLE_GRANT_MARKER} head={head} key={key} after={rounds.count} expires={expires} -->\n"
+            "I authorize one additional full review cycle on this revision to finish validation.")
 
 
 def native_records(comments: list[dict], reviews: list[dict], inline: list[dict],
@@ -950,7 +1217,9 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
     for c in comments:
         rec = parse_record(c.get("body", ""))
-        if not rec or rec.key != key or not trusted_review_comment(c):
+        if not rec or not trusted_review_comment(c):
+            continue
+        if rec.key != key and not (rec.scope == "full" and rec.reviewer == "codex-native"):
             continue
         source_key, source_head = (rec.from_key, rec.from_head) if rec.scope == "fix" else (rec.key, rec.head)
         if not source_head or not source_key or (rec.scope != "fix" and rec.reviewer != "codex-native"):
@@ -965,13 +1234,43 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
                 equivalents = _CARRY.get((repo, pr), ("", []))
                 validated = equivalents[0] == key and source_head in {h for _, h in equivalents[1]}
                 trusted_base = _CARRY_BASES.get((repo, pr))
-                if not validated and (not trusted_base or diff_key(trusted_base, source_head) != key):
+                if not validated and (not trusted_base or diff_key(trusted_base, source_head) != source_key):
                     continue  # an ancestor alone cannot approve newly changed code
         except subprocess.SubprocessError:
             continue
         actual = native_records(comments, reviews, inline, events, source_key, source_head, reactions)
         known = {(r.key, r.head, r.url) for r in snapshot.records}
         snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known)
+    # A native review needs no joined receipt to matter. Include intervening
+    # native heads so a later follow-up cannot omit an unrecorded P1 at B while
+    # carrying clean full reviews from A to C.
+    trusted_base = _CARRY_BASES.get((repo, pr))
+    prior_heads = {r.get("commit_id", "") for r in reviews if is_codex_bot(r)}
+    for c in comments:
+        rec = parse_record(c.get("body", ""))
+        if rec and trusted_review_comment(c) and rec.head:
+            prior_heads.add(rec.head)
+        if is_codex_bot(c):
+            match = re.search(r"^\*\*Reviewed commit:\*\*\s*`([0-9a-f]{7,40})`", c.get("body", ""), re.M)
+            if match:
+                prior_heads.add(git("rev-parse", "--verify", f"{match[1]}^{{commit}}", check=False).strip())
+    if trusted_base:
+        for commit in prior_heads:
+            if not re.fullmatch(r"[0-9a-f]{40}", commit) or commit == head:
+                continue
+            # A force-push can make a reviewed commit unreachable from the
+            # current PR head. GitHub retains it; fetch the immutable object
+            # rather than silently dropping its findings in a fresh CI clone.
+            if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
+                git("fetch", "--quiet", "--no-tags", "origin", commit, check=False)
+                if not git("rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}", check=False).strip():
+                    raise SystemExit(f"reviewed commit {commit} is unavailable; review history is incomplete")
+            earlier_key = diff_key(trusted_base, commit)
+            actual = native_records(comments, reviews, inline, events, earlier_key, commit, reactions)
+            known = {(r.key, r.head, r.url) for r in snapshot.records}
+            ancestor = _is_ancestor(commit, head)
+            snapshot.records.extend(r for r in actual.records if (r.key, r.head, r.url) not in known
+                                    and (ancestor or r.verdict == "FINDINGS"))
     snapshot.rounds = codex_rounds(comments, reviews, inline, events, reactions)
     return snapshot
 
@@ -1200,20 +1499,34 @@ def reviewer_family(reviewer: str) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
+def followup_passes(rec: Record, body: str, originals: list[Record | None]) -> bool:
+    """A clean follow-up, or complete dispositions of its matching findings."""
+    return rec.verdict == "CLEAN" or (
+        rec.verdict == "FINDINGS" and rec.disposed
+        and dispositions_complete(body, rec.findings)
+        and any(r and r.scope == "fix" and not r.disposed
+                and r.verdict == "FINDINGS" and r.findings == rec.findings
+                and all(getattr(r, name) == getattr(rec, name) for name in
+                        ("key", "head", "base", "reviewer", "from_head", "from_key"))
+                for r in originals))
+
+
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
-    """Families with a passing FULL review of this diff: CLEAN, or FINDINGS
-    whose dispositions are complete. Same trust rules as latest_matching.
-    A fix-verification receipt (``fix-verify:<model>``, past the round cap)
-    covers only the fix delta, so it never counts as a full family."""
+    """Full-review families, with independent coverage of any follow-up delta.
+
+    A follow-up preserves source families; its reviewer never invents an
+    additional full-review family. Missing sources or git objects carry none.
+    """
     families = set()
-    trusted = [(c, parse_record(c.get("body", ""))) for c in comments
+    trusted = [(c, comment_record(c)) for c in comments
                if trusted_review_comment(c)]
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
     # (reviewer, findings) -> the original review's model (for agy records).
     originals = {(r.reviewer, r.findings): r for _, r in trusted
-                 if r and r.full() and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
+                 if r and (r.full() or r.scope in {"fix", "full-required"})
+                 and r.key == key and r.verdict == "FINDINGS" and not r.disposed}
     # A native Codex review is a GitHub review, not a comment: its disposition
     # cites the review by URL (as latest_matching matches it), with its count.
     native_findings = {r.url: r.findings for r in native
@@ -1222,11 +1535,16 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         if rec and rec.disposed and rec.scope == "legacy":
             original = originals.get((rec.reviewer, rec.findings))
             if original:
-                rec.scope, rec.head, rec.base = original.scope, original.head, original.base
+                for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
+                    setattr(rec, name, getattr(original, name))
         body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
-                continue  # targeted receipts never satisfy a full model family
+                if (rec.key == key and followup_passes(rec, body, [r for _, r in trusted])
+                        and followup_objects_valid(rec)):
+                    families.update(record_family(source)
+                                    for source in followup_sources(rec, comments, native))
+                continue
             rec.text = body
         native_source = next((r for r in native if rec and r.key == key and r.scope == "full" and r.head
                               and r.reviewer == "codex-native" and rec.reviewer == "codex-native"
@@ -1270,7 +1588,7 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
     more = f" (+{len(sensitive) - 1} more)" if len(sensitive) > 1 else ""
     missing = "two model families" if not families else "a second model family"
     return ("action_required",
-            f"security-sensitive path {sensitive[0]}{more}: needs passing full reviews "
+            f"security-sensitive path {sensitive[0]}{more}: needs review coverage "
             f"from {missing} (have: {have}); run review.sh again")
 
 
@@ -2039,7 +2357,9 @@ def render_body(rec: Record, heading: str, text: str) -> str:
 
 def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     require_open(pr)  # a local reviewer may have finished after the merge
-    post_comment(pr, render_body(rec, heading, text))
+    body = render_body(rec, heading, text)
+    post_comment(pr, body)
+    rec.text = body  # only a successfully posted body can bridge API read lag
 
 
 def _resolve_offline(args) -> str:
@@ -2324,6 +2644,7 @@ def cmd_review(args) -> int:
     reviewer = args.reviewer or default_reviewer(branch)
     args.branch = branch  # review_with_fallback picks the next candidate by author family
     head = git("rev-parse", "HEAD").strip()
+    grant_id = getattr(args, "review_cycle_grant", None)
     deadline = time.monotonic() + args.budget
     joined = False
     while True:
@@ -2365,20 +2686,60 @@ def cmd_review(args) -> int:
                 if native_activity_running(comments) or read_native(repo, pr, key, head, comments).running:
                     print("[review] UNREVIEWED: native review pending; join it before starting another reviewer")
                     return UNREVIEWED
-                # The cap binds every full-review source; only an explicit reason overrides it.
+                # A small follow-up extends prior work instead of resetting it.
+                # Try this before the cycle cap: it spends no full cycle.
+                # --fresh explicitly asks for a full pass.
+                followup_declined = (existing and existing.verdict == "FAILED"
+                                     and (existing.scope == "full-required"
+                                          or "full review required: follow-up scope not confirmed" in existing.text))
+                if followup_declined and not args.fresh and not getattr(args, "authorize_full_review", None) and not grant_id:
+                    print("[review] UNREVIEWED: follow-up scope was declined; explicitly request --fresh for a full pass")
+                    return UNREVIEWED
+                if not args.fresh and not followup_declined and not getattr(args, "authorize_full_review", None) and not grant_id:
+                    snapshot = read_native(repo, pr, key, head, comments)
+                    source = followup_candidate(args.base, head, key, comments, snapshot.records)
+                    if source:
+                        args.followup = source
+                        args.followup_reviews = "\n\n".join(
+                            c.get("body", "") for c in comments
+                            if trusted_review_comment(c)
+                            and parse_record(c.get("body", "")))
+                        args.followup_reviews += "\n\n" + "\n\n".join(r.text for r in snapshot.records)
+                        result = review_with_fallback(args, pr, key, reviewer)
+                        return second_family_pass(
+                            args, repo, pr, key, head,
+                            completed_review_exit(repo, pr, key, head, result))
+                # The second family completes an existing cycle, including at
+                # the cap. A new cycle beyond it needs operator authorization.
                 rounds = pr_rounds(repo, pr, key, head, comments)
+                try:
+                    rounds = review_budget(rounds, pr, comments)
+                except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                    print(f"[review] UNREVIEWED: {exc}")
+                    return UNREVIEWED
+                joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
+                if grant_id:
+                    if not cycle_grant(comments, grant_id, head, key, rounds,
+                                       provider_family(reviewer), time.time()):
+                        print("[review] UNREVIEWED: cycle grant is missing, expired, consumed, untrusted, or for different work")
+                        return UNREVIEWED
+                    args.cycle_grant_url = f"https://github.com/{repo}/pull/{pr}#issuecomment-{grant_id}"
                 if rounds.unknown_history and not getattr(args, "authorize_full_review", None):
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if rounds.count >= ROUND_CAP and ROUND_CAP_ENABLED and not getattr(args, "authorize_full_review", None):
-                    print("[review] full-review budget exhausted; escalate unresolved issues. "
-                          "An operator may authorize --authorize-full-review REASON; --fresh/--reviewer do not bypass it.")
+                if (ROUND_CAP_ENABLED and (rounds.count > ROUND_CAP or
+                        (rounds.count == ROUND_CAP and not joining_cycle))
+                        and not grant_id and not getattr(args, "authorize_full_review", None)):
+                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                          "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
+                    print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
                 # After an ordinary findings round, verify fixes instead of
                 # automatically commissioning another full pass. A clean last
                 # round followed by new work still needs a fresh full review.
-                if rounds.last_findings and not rounds.answered_since and not args.fresh and not getattr(args, "authorize_full_review", None):
+                if (rounds.last_findings and not rounds.answered_since and not args.fresh
+                        and not joining_cycle and not grant_id and not getattr(args, "authorize_full_review", None)):
                     sensitive = sensitive_paths(changed or ["(unreadable)"], base_policy_paths(args.base))
                     if not sensitive and not rounds.last_severe:
                         return capped_review(args, repo, pr, key, head, rounds)
@@ -2473,6 +2834,15 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         print(f"[review] UNREVIEWED: review evidence is incomplete: {exc}; retry review.sh")
         return UNREVIEWED
     families = passing_families(comments, key, native)
+    completed = getattr(args, "completed_followup", None)
+    if (completed and completed.scope == "fix" and completed.key == key and completed.head == head
+            and followup_passes(completed, completed.text,
+                                [comment_record(c) for c in comments if trusted_review_comment(c)])
+            and followup_objects_valid(completed)):
+        # This command just posted this receipt. Recheck its sources against
+        # freshly read history, but do not let API read lag restart full reviews.
+        families.update(record_family(source) for source in followup_sources(completed, comments, native))
+        families.discard(None)
     # The review that just passed may not be readable yet (API read lag after
     # its own post): count its family from what is already known. A fix-verify
     # receipt is targeted rather than full coverage (see passing_families).
@@ -2499,8 +2869,8 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
     else:
         next_step = ("no other provider is eligible now (disabled, cooling down or exhausted "
                      "on this diff)")
-    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs passing full "
-          f"reviews from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
+    print(f"[review] NEEDS SECOND FAMILY: {sensitive[0]} is security-sensitive and needs review "
+          f"coverage from two model families (have: {have}). {next_step[0].upper()}{next_step[1:]}. "
           "Or record an independent review under a name that carries its model family "
           "(e.g. gemini-…, gpt-…) with ./scripts/dev/review.sh record --independent.")
     return NEEDS_SECOND_FAMILY
@@ -2600,7 +2970,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     unrelated new work and posts an honest targeted-scope receipt.
     """
     n = len(rounds.last_findings)
-    print(f"[review] targeted follow-up after full round {rounds.count} ({ROUND_CAP}-round budget), "
+    print(f"[review] targeted follow-up after full cycle {rounds.count} ({ROUND_CAP}-cycle budget), "
           f"last round {n} finding(s), no P0/P1): not requesting another run.")
     verifier = git("config", "review.verifier", check=False).strip()
     last = git("rev-parse", "--verify", "--quiet", f"{rounds.last_head}^{{commit}}", check=False).strip()
@@ -2646,7 +3016,7 @@ def capped_review(args, repo: str, pr: int, key: str, head: str, rounds: CodexRo
     open_ = [c for c, ok in results if not ok]
     done = [c for c, ok in results if ok]
     lines = [f"Targeted follow-up after full review round {rounds.count}. {verifier} checked each "
-             f"finding from the last full round (`{last[:10]}`) against the fixes pushed since "
+             f"finding from the last full cycle (`{last[:10]}`) against the fixes pushed since "
              f"(`{last[:10]}..{head[:10]}`). It checked the "
              "entire changed delta and regression implications, found no correctness regressions or uncertainty, "
              "and found no unrelated new work. "
@@ -2705,7 +3075,10 @@ def review_with_fallback(args, pr: int, key: str, preferred: str) -> int:
         if result != UNREVIEWED:
             # second_family_pass needs to know this without re-reading the
             # comment it just posted (GitHub reads can lag a fresh write).
-            args.completed_by = provider
+            if not getattr(args, "followup", None):
+                args.completed_by = provider
+            else:
+                args.completed_followup = getattr(attempt, "completed_followup", None)
             return result
         print(f"[review] {provider} did not complete; no automatic provider cascade", flush=True)
     print("[review] UNREVIEWED: no reviewer completed. Keep the PR draft and report "
@@ -2719,13 +3092,18 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
     out_dir = Path(CACHE_DIR) / key / reviewer
     out_dir.mkdir(parents=True, exist_ok=True)
     diff_path = (out_dir / "diff.txt").resolve()
-    review_run_id = uuid.uuid4().hex  # every actual invocation is a distinct full round
+    review_run_id = uuid.uuid4().hex  # every actual invocation is a distinct review run
     reviewed_head_oid = git("rev-parse", "HEAD").strip()
     reviewed_base_oid = git("rev-parse", args.base).strip()
     if diff_key(reviewed_base_oid, reviewed_head_oid) != key:
         print("[review] UNREVIEWED: diff moved before launch; no reviewer started")
         return UNREVIEWED
-    diff_path.write_text(diff_text(reviewed_base_oid, reviewed_head_oid))
+    followup = getattr(args, "followup", None)
+    if followup and (followup.head != reviewed_head_oid or followup.base != reviewed_base_oid):
+        print("[review] UNREVIEWED: follow-up endpoints changed before launch")
+        return UNREVIEWED
+    diff_base = followup.from_head if followup else reviewed_base_oid
+    diff_path.write_text(diff_text(diff_base, reviewed_head_oid))
     prompt = REVIEW_PROMPT.format(diff_path=diff_path, base=args.base,
                                   head=git("rev-parse", "--short", "HEAD").strip())
     print(f"[review] {reviewer} reviewing PR #{pr} (key {key[:12]}, budget {args.budget}s)…",
@@ -2736,6 +3114,26 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         # It cannot see the checkout; the material is written into its workspace.
         prompt = antigravity_prompt(args.base, git("rev-parse", "--short", "HEAD").strip())
         materials = antigravity_materials(diff_path.read_text(errors="replace"), args.base)
+    if followup:
+        context = ("\n\nThis is an independent FOLLOW-UP review. The diff above contains the COMPLETE "
+                   f"cumulative delta from previously fully reviewed commit {followup.from_head} "
+                   f"to {reviewed_head_oid}. Review every changed line, relevant callers and "
+                   "interactions with the original PR. Documentation, tests and attestation corrections "
+                   "are eligible, but are not exempt from review. Verify all prior findings below. "
+                   "If this is a bounded correction or clarification that preserves the original "
+                   "design and security assumptions, include a standalone SCOPE: FOLLOWUP line "
+                   "before your final VERDICT. If behavior or trust boundaries materially expand, "
+                   "prior reasoning no longer applies, or you cannot establish the scope, use "
+                   "SCOPE: FULL_REQUIRED instead. Do not approve incomplete context.\n\n"
+                   "Prior full reviews:\n" + args.followup_reviews + "\n\nOriginal PR diff:\n"
+                   + diff_text(reviewed_base_oid, followup.from_head))
+        if materials is not None:
+            materials.append(("prior-review.txt", context.encode()))
+            prompt += "\nRead prior-review.txt for the original review context and mandatory follow-up scope decision.\n"
+        else:
+            context_path = (out_dir / "prior-review.txt").resolve()
+            context_path.write_text(context)
+            prompt += f"\nRead {context_path} for the original review context and mandatory follow-up scope decision.\n"
     model = getattr(args, "codex_model", "gpt-6.1-sol")
     effort = getattr(args, "codex_effort", "medium")
     if (model, effort) == ("gpt-6.1-sol", "medium"):
@@ -2744,11 +3142,19 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         text, note = run_reviewer(reviewer, prompt, out_dir, args.budget, materials, model, effort)
     minutes = (time.monotonic() - t0) / 60
     parsed = parse_verdict(text) if note == "exit 0" else None
+    scope_declined = bool(followup and parsed is not None
+                          and re.findall(r"(?m)^SCOPE: (\w+)\s*$", text) != ["FOLLOWUP"])
+    if scope_declined:
+        # A scope refusal cannot discard concrete findings the reviewer found.
+        if parsed[0] == "CLEAN":
+            parsed, note = None, "full review required: follow-up scope not confirmed"
+        print("[review] follow-up cannot establish coverage; run review.sh --fresh for a full pass within the budget")
     if parsed is not None and not has_reasoning(text):
         # Not a review: fall back to the next reviewer instead of recording it.
         parsed, note = None, "verdict without reasoning"
     if parsed is None:
-        remember_unavailable(reviewer, text, note)
+        if "follow-up scope not confirmed" not in note:
+            remember_unavailable(reviewer, text, note)
         rec = Record(key, "FAILED", 0, False, reviewer)
         heading = f"FAILED ({note}, no VERDICT line)" if note == "exit 0" else f"FAILED ({note})"
     else:
@@ -2757,14 +3163,25 @@ def _review_locked(args, pr: int, key: str, reviewer: str) -> int:
         rec = Record(key, verdict, n, False, reviewer,
                      model=marker_model(agy_model_name()) if reviewer == "antigravity" else "")
         heading = "CLEAN" if verdict == "CLEAN" else f"FINDINGS({n})"
-    stamp_record(rec, args.base, "full", text, argparse.Namespace(review_id=review_run_id),
+    stamp_record(rec, args.base, "fix" if followup else "full", text,
+                 argparse.Namespace(review_id=review_run_id,
+                                    reviewed_from=followup.from_head if followup else None, fixes_only=True),
                  head=reviewed_head_oid, base_oid=reviewed_base_oid)
+    if scope_declined:
+        rec.scope = "full-required"
+    if followup:
+        heading += f" · follow-up from {followup.from_head[:10]}"
     authorization = getattr(args, "authorize_full_review", None)
     if authorization:
         text = f"Explicit additional full-review authorization: {authorization}\n\n" + text
+    grant_url = getattr(args, "cycle_grant_url", None)
+    if grant_url:
+        text = f"Additional review cycle authorized by the operator: {grant_url}\n\n" + text
     heading += f" · {minutes:.1f} min"
     (out_dir / "review.txt").write_text(text)
     post_record(pr, rec, heading, text)
+    if followup and rec.verdict == "CLEAN":
+        args.completed_followup = rec
     print(f"[review] full result: {out_dir / 'review.txt'}")
     if parsed is not None:
         print(text.strip())  # the working agent needs the findings, not just a count
@@ -2823,12 +3240,16 @@ def cmd_record(args) -> int:
 def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: Record) -> int:
     """record and dispose finish like a review run: a passing result on a
     security-sensitive diff still needs a second model family (exit 3)."""
+    if rec.scope == "full-required" and rec.disposed:
+        return UNREVIEWED
     if rec.scope == "fix" and not targeted_coverage_valid(repo, pr, rec, pr_comments(repo, pr)):
         print("[review] UNREVIEWED: targeted receipt lacks a valid prior full review at the declared head/base")
         return UNREVIEWED
     if rec.status()[0] != "success":
         return 0  # findings recorded for later disposition: nothing passed yet
     args.branch = branch
+    if rec.scope == "fix":
+        args.completed_followup = rec
     return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
                               passed_family=record_family(rec) if rec.full() else None)
 
@@ -3003,7 +3424,7 @@ def cmd_sweep(args) -> int:
             continue  # cannot decide which findings remain open from partial evidence
         # A sensitive diff with one family's pass is left to its author: the
         # review check says what is missing, and no review starts on its own.
-        if rec is not None and not (rec.verdict == "FAILED" and any(
+        if rec is not None and not (rec.verdict == "FAILED" and rec.scope != "full-required" and any(
                 failed_runs(comments, key, provider) < SWEEP_MAX_FAILED
                 for provider in ("claude", "codex"))):
             if rec.status()[0] != "success":
@@ -3088,8 +3509,8 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not rounds or not rounds.count:
         return ""
     if not ROUND_CAP_ENABLED:
-        return f" · review round {rounds.count}"
-    note = f" · review round {rounds.count} of {ROUND_CAP}"
+        return f" · review cycle {rounds.count}"
+    note = f" · review cycle {rounds.count} of {ROUND_CAP}"
     return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
 
 
@@ -3164,7 +3585,10 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("review", help="review HEAD's diff and post the record")
     r.add_argument("--reviewer", choices=sorted(KNOWN_PROVIDERS))
     r.add_argument("--budget", type=int, default=DEFAULT_BUDGET_S)
-    r.add_argument("--authorize-full-review", metavar="REASON", help="operator-authorized additional full review; explain why")
+    authorization = r.add_mutually_exclusive_group()
+    authorization.add_argument("--authorize-full-review", metavar="REASON", help="operator account: authorize an additional full review; explain why")
+    authorization.add_argument("--review-cycle-grant", type=int, metavar="COMMENT_ID",
+                               help="consume a user-authored, revision-bound grant for one extra review cycle")
     r.add_argument("--codex-model", default="gpt-6.1-sol")
     r.add_argument("--codex-effort", choices=["low", "medium", "high", "xhigh"], default="medium")
     r.add_argument("--fresh", action="store_true", help="ignore an existing record")
@@ -3173,7 +3597,7 @@ def main(argv: list[str] | None = None) -> int:
     rc.add_argument("file")
     rc.add_argument("--scope", choices=["full", "fix"], default="full")
     rc.add_argument("--reviewed-from", help="fix verification: previously fully reviewed commit")
-    rc.add_argument("--fixes-only", action="store_true", help="independent verifier checked all changed lines/regression implications; no regressions, uncertainty or new work")
+    rc.add_argument("--fixes-only", action="store_true", help="independent reviewer checked every change, interactions and prior findings; bounded corrections or clarifications only")
     rc.add_argument("--review-id", help="stable identity for the original complete review, reused by duplicate receipts")
     rc.add_argument("--reviewer-name", required=True)
     rc.add_argument("--independent", action="store_true",

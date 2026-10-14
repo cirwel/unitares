@@ -1,0 +1,18 @@
+{
+  "requested_model": "gemini-4-argon-high",
+  "effective_model_receipt": "not reported",
+  "conditions_hidden": true,
+  "expected_answers_hidden": true,
+  "scores": {
+    "before": {
+      "correct": 9,
+      "total": 9
+    },
+    "after": {
+      "correct": 9,
+      "total": 9
+    }
+  },
+  "errors": [],
+  "scope": "Nine synthetic reading questions, each shown in old and new formats in one shuffled text-only call. Checks basic interpretation, not independent agent trajectories, retrieval quality or statistical equivalence."
+}
