@@ -1767,7 +1767,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
-    originals = [r for _, r in trusted
+    originals = [(c, r) for c, r in trusted
                  if r and (r.full() or r.scope in {"fix", "full-required"})
                  and r.key == key and r.verdict == "FINDINGS" and not r.disposed]
 
@@ -1775,9 +1775,12 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         # Carry changes the display key, never the identity of the review a
         # disposition answers. A newer review with the same count cannot lend
         # its scope, model or approval to an older disposition.
-        matches = [r for r in originals
-                   if (r.reviewer, r.findings, r.original_key or r.key)
-                   == (rec.reviewer, rec.findings, rec.original_key or rec.key)
+        cited = re.search(rf"dispositions for FINDINGS\({rec.findings}\) — (\S+)", rec.text)
+        matches = [r for c, r in originals
+                   if (r.reviewer, r.findings) == (rec.reviewer, rec.findings)
+                   and ((r.original_key or r.key) == (rec.original_key or rec.key)
+                        or (rec.scope == "legacy" and not rec.original_key and cited
+                            and c.get("html_url") == cited[1]))
                    and (rec.scope == "legacy" or all(getattr(r, name) == getattr(rec, name)
                         for name in ("scope", "head", "base", "from_head", "from_key", "review_id")))]
         return matches[-1] if matches else None
@@ -1786,12 +1789,14 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     native_findings = {r.url: r.findings for r in native
                        if r.key == key and r.verdict == "FINDINGS" and r.url}
     for c, rec in trusted:
+        body = c.get("body", "")
+        if rec:
+            rec.text = body
         if rec and rec.disposed and rec.scope == "legacy":
             original = original_for(rec)
             if original:
                 for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
                     setattr(rec, name, getattr(original, name))
-        body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
                 if (rec.key == key and followup_passes(rec, body, [r for _, r in trusted])
@@ -3682,6 +3687,8 @@ def _dispose_emit(args) -> int:
     Any other cite, and the reviewer, are NOT verified: CI answers the latest
     open FINDINGS record with the same count, and the check shows whatever
     reviewer was passed. Copy both from the open record exactly.
+    Carried model-family credit additionally needs the exact cited review URL
+    when the emitted record lacks the original review's provenance.
     """
     missing = [f for f in ("findings", "reviewer", "cites") if getattr(args, f, None) in (None, "")]
     if missing:

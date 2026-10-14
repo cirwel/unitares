@@ -5727,3 +5727,22 @@ def test_scope_refusal_cannot_shadow_disposed_full_review(editorial_repo):
     comments = [_comment(full), _comment(rg.replace(full, disposed=True)),
                 _comment(refusal), _comment(rg.replace(refusal, disposed=True))]
     assert rg.passing_families(comments, key) == {'openai'}
+
+
+@pytest.mark.parametrize('correct_cite', [True, False])
+def test_emitted_disposition_preserves_carried_full_review_family(editorial_repo, correct_cite):
+    repo = editorial_repo
+    before, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    original = full_record(rg.diff_key(base, before), 'FINDINGS', 1, False, 'codex',
+                           head=before, base=base, review_id='original')
+    url = 'https://github.com/o/r/pull/1#issuecomment-1'
+    comments = [_comment(original, url=url)]
+    head = _typo(repo)
+    comments.append(_editorial_comment(before))
+    disposition = rg.Record(rg.diff_key(base, head), 'FINDINGS', 1, True, 'codex')
+    cited = url if correct_cite else url + '0'
+    comments.append({'author_association': 'OWNER', 'body': rg.render_body(
+        disposition, f'dispositions for FINDINGS(1) — {cited}', '1. rebutted: verified behavior')})
+    rec, families = _editorial_decide(comments)
+    assert rec.status()[0] == 'success'
+    assert families == ({'openai'} if correct_cite else set())

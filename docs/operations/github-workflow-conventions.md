@@ -726,7 +726,9 @@ omit `--emit` to post directly. It is not an outage-only alternative.
    (`#pullrequestreview-…`) URL; a wrong one leaves the findings open. It does
    **not** verify `--reviewer` or any other `--cites`: it answers the latest
    open record with that count and displays the reviewer you passed. Copy both
-   from the open record exactly, or the record misattributes.
+   from the open record exactly, or the record misattributes. When editorial
+   carry changed the key, model-family credit additionally needs the exact
+   cited review URL to recover the original review's provenance.
 
 A fresh same-model context is valid independent coverage for ordinary code.
 Security-sensitive diffs require a distinct full model family as well. Name
