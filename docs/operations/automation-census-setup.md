@@ -6,6 +6,26 @@ automations are already defined, normalizes them into one schema
 (`unitares.automation_census.v1`), and writes a snapshot the dashboard renders.
 Nothing in it runs or schedules your jobs.
 
+For launchd, configuration and execution are separate evidence. The collector
+reads `launchctl list` and the user domain's disabled overrides. `active` means
+loaded, not healthy; a loaded periodic job can legitimately have no PID.
+An enabled plist absent from the scheduler is `inactive`; an unavailable
+scheduler read is `unknown`. Nonzero last exits on idle jobs and unconfirmed
+running receipts enter `needs_attention`. A previous exit on a currently
+running service is historical, not evidence that its current process failed.
+Operator classifications (including intentional pauses) remain available,
+but cannot erase the execution evidence in `notes`.
+
+Run receipts retain their original timestamps. An old `running/` receipt
+cannot override a newer terminal receipt in `latest/`. A running receipt with
+no launchd process is reported as unknown completion, never invented success
+or failure. The census itself may appear running in the snapshot it is in the
+process of writing; inspect its subsequent completion receipt when auditing it.
+
+For the dependency-ordered operational closure plan, immutable safety surfaces
+and registered adaptive-versus-fixed evaluation, see
+[Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
+
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
 no dependencies). The operator's live install is a copy on `PATH`
 (`~/.local/bin/unitares-automations`); this repo copy is canonical.

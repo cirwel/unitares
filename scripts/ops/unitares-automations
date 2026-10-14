@@ -273,11 +273,40 @@ def calendar_interval_to_text(value: Any) -> str | None:
     return None
 
 
+def launchd_runtime(warnings: list[str]) -> tuple[dict[str, tuple[str, int]] | None, dict[str, bool]]:
+    """Read scheduler evidence once; a plist alone proves only configuration."""
+    loaded = None
+    disabled: dict[str, bool] = {}
+    for command in (["launchctl", "list"], ["launchctl", "print-disabled", f"gui/{os.getuid()}"]):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=5)
+            if result.returncode:
+                warnings.append(f"launchd: {' '.join(command)} failed ({result.returncode}); state unknown")
+                continue
+            if command[1] == "list":
+                lines = result.stdout.splitlines()
+                if not lines or lines[0].split() != ["PID", "Status", "Label"]:
+                    warnings.append("launchd: unrecognized list output; state unknown")
+                    continue
+                loaded = {}
+                for line in lines[1:]:
+                    parts = line.split()
+                    if len(parts) == 3 and re.fullmatch(r"-?\d+", parts[1]):
+                        loaded[parts[2]] = (parts[0], int(parts[1]))
+            else:
+                for label, state in re.findall(r'"([^"\n]+)"\s*=>\s*(disabled|enabled|true|false)', result.stdout):
+                    disabled[label] = state in {"disabled", "true"}
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            warnings.append(f"launchd: {command[1]} unavailable ({type(exc).__name__}); state unknown")
+    return loaded, disabled
+
+
 def collect_launchd(warnings: list[str]) -> list[Automation]:
     results: list[Automation] = []
     launch_dir = HOME / "Library/LaunchAgents"
     if not launch_dir.exists():
         return results
+    loaded, disabled = launchd_runtime(warnings)
 
     for path in sorted(launch_dir.glob("*.plist")):
         try:
@@ -310,7 +339,25 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
         if plist.get("RunAtLoad"):
             cadence = "run_at_load" if cadence is None else f"{cadence}; run_at_load"
 
-        status = "active" if plist.get("Disabled") is not True else "disabled"
+        notes = []
+        is_disabled = disabled.get(label, plist.get("Disabled") is True)
+        status = "disabled" if is_disabled else "unknown"
+        if loaded is not None:
+            runtime = loaded.get(label)
+            if runtime is None:
+                notes.append("launchd:unloaded")
+                if not is_disabled:
+                    status = "inactive"
+                    notes.append("attention:launchd_unloaded")
+            else:
+                pid, exit_code = runtime
+                status = "disabled" if is_disabled else "active"
+                notes.extend([f"launchd:pid={pid}", f"launchd:last_exit_code={exit_code}"])
+                # A previous failure is not the current running process's outcome.
+                if pid == "-" and exit_code != 0:
+                    notes.append("attention:launchd_last_exit_nonzero")
+        else:
+            notes.append("attention:launchd_state_unknown")
         results.append(
             Automation(
                 id=stable_id("launchd", label),
@@ -326,6 +373,7 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
                 command=args,
                 expected_outputs=infer_expected_outputs(text),
                 config_path=str(path),
+                notes=notes,
             )
         )
     return results
@@ -1349,6 +1397,15 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
 
     apply_overrides(items, warnings)
 
+    for item in items:
+        if item.source == "launchd" and item.last_status == "running" and (
+            "launchd:unloaded" in item.notes or "launchd:pid=-" in item.notes
+        ):
+            # Preserve the receipt on disk, but do not present an old start as
+            # live work. Missing completion is unknown, not a fabricated failure.
+            item.last_status = "unknown"
+            item.notes.append("attention:running_receipt_without_launchd_process")
+
     generated_at = datetime.now(timezone.utc)
     by_source: dict[str, int] = {}
     by_kind: dict[str, int] = {}
@@ -1378,6 +1435,7 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
             or (item.source == "claude" and status == "pending")
             or is_past_due
             or stale_snapshot
+            or any(note.startswith("attention:") for note in item.notes)
         ):
             needs_attention.append(item.id)
 
@@ -1413,7 +1471,15 @@ def load_latest_runs() -> dict[str, dict[str, Any]]:
                 continue
             automation_id = event.get("automation_id")
             if isinstance(automation_id, str):
-                runs[automation_id] = event
+                previous = runs.get(automation_id)
+                event_at = parse_utc_datetime(event.get("timestamp"))
+                previous_at = parse_utc_datetime((previous or {}).get("timestamp"))
+                # A stranded running/ file must not override a newer terminal
+                # receipt from latest/. On a tie, prefer the terminal receipt.
+                if previous is None or (event_at is not None and (
+                    previous_at is None or event_at > previous_at
+                )):
+                    runs[automation_id] = event
     return runs
 
 

@@ -1046,7 +1046,11 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             when = int(match[1]) / 1e9
         if not isinstance(when, (int, float)) or not 0 < when <= time.time():
             raise ValueError(f'Invalid local review timestamp at {run}')
-        key = diff_key(receipt['base'], receipt['head'])
+        try:
+            key = diff_key(receipt['base'], receipt['head'])
+        except (SystemExit, subprocess.SubprocessError) as exc:
+            raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
+                             f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
         runs.append((when, receipt['head'], [], key, family))
     return count_review_cycles(runs, rounds.unknown_history)
@@ -1505,6 +1509,18 @@ def reviewer_family(reviewer: str) -> str | None:
     return found[0] if len(found) == 1 else None
 
 
+def followup_passes(rec: Record, body: str, originals: list[Record | None]) -> bool:
+    """A clean follow-up, or complete dispositions of its matching findings."""
+    return rec.verdict == "CLEAN" or (
+        rec.verdict == "FINDINGS" and rec.disposed
+        and dispositions_complete(body, rec.findings)
+        and any(r and r.scope == "fix" and not r.disposed
+                and r.verdict == "FINDINGS" and r.findings == rec.findings
+                and all(getattr(r, name) == getattr(rec, name) for name in
+                        ("key", "head", "base", "reviewer", "from_head", "from_key"))
+                for r in originals))
+
+
 def passing_families(comments: list[dict], key: str, native: list[Record] = ()) -> set[str]:
     """Full-review families, with independent coverage of any follow-up delta.
 
@@ -1534,14 +1550,8 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         body = c.get("body", "")
         if rec is not None:
             if rec.scope == "fix" or rec.reviewer.startswith("fix-verify:"):
-                answered = (rec.verdict == "FINDINGS" and rec.disposed
-                            and dispositions_complete(body, rec.findings)
-                            and any(r and r.scope == "fix" and not r.disposed
-                                    and r.verdict == "FINDINGS" and r.findings == rec.findings
-                                    and all(getattr(r, name) == getattr(rec, name) for name in
-                                            ("key", "head", "base", "reviewer", "from_head", "from_key"))
-                                    for _, r in trusted))
-                if rec.key == key and (rec.verdict == "CLEAN" or answered) and followup_objects_valid(rec):
+                if (rec.key == key and followup_passes(rec, body, [r for _, r in trusted])
+                        and followup_objects_valid(rec)):
                     families.update(record_family(source)
                                     for source in followup_sources(rec, comments, native))
                 continue
@@ -2379,7 +2389,9 @@ def render_body(rec: Record, heading: str, text: str) -> str:
 
 def post_record(pr: int, rec: Record, heading: str, text: str) -> None:
     require_open(pr)  # a local reviewer may have finished after the merge
-    post_comment(pr, render_body(rec, heading, text))
+    body = render_body(rec, heading, text)
+    post_comment(pr, body)
+    rec.text = body  # only a successfully posted body can bridge API read lag
 
 
 def _resolve_offline(args) -> str:
@@ -2855,8 +2867,10 @@ def second_family_pass(args, repo: str, pr: int, key: str, head: str, result: in
         return UNREVIEWED
     families = passing_families(comments, key, native)
     completed = getattr(args, "completed_followup", None)
-    if (completed and completed.scope == "fix" and completed.verdict == "CLEAN"
-            and completed.key == key and completed.head == head and followup_objects_valid(completed)):
+    if (completed and completed.scope == "fix" and completed.key == key and completed.head == head
+            and followup_passes(completed, completed.text,
+                                [comment_record(c) for c in comments if trusted_review_comment(c)])
+            and followup_objects_valid(completed)):
         # This command just posted this receipt. Recheck its sources against
         # freshly read history, but do not let API read lag restart full reviews.
         families.update(record_family(source) for source in followup_sources(completed, comments, native))
@@ -3267,7 +3281,7 @@ def _after_manual_record(args, repo: str, pr: int, key: str, branch: str, rec: R
     if rec.status()[0] != "success":
         return 0  # findings recorded for later disposition: nothing passed yet
     args.branch = branch
-    if rec.scope == "fix" and rec.verdict == "CLEAN":
+    if rec.scope == "fix":
         args.completed_followup = rec
     return second_family_pass(args, repo, pr, key, git("rev-parse", "HEAD").strip(), 0,
                               passed_family=record_family(rec) if rec.full() else None)

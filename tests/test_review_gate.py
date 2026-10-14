@@ -4582,6 +4582,72 @@ def test_posted_followup_read_lag_does_not_request_full_reviews(reviewed_followu
     assert rg.second_family_pass(args, 'o/r', 1, fix.key, fix.head, 0) == 0
 
 
+def test_dispose_followup_preserves_families_during_api_read_lag(repo, reviewed_followup, monkeypatch):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    comments.append(_comment(fix, text='[P2] README.md:1 unclear input'))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', fix.key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)  # fresh POST remains unreadable
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    posted = []
+    monkeypatch.setattr(rg, 'post_comment', lambda pr, body: posted.append(body))
+    disposition = repo / 'disposition.txt'
+    disposition.write_text('1. rebutted: the documented input is the supported one')
+    args = SimpleNamespace(base=fix.base, file=str(disposition))
+    assert rg.cmd_dispose(args) == 0
+    assert len(posted) == 1
+    assert rg.passing_families(comments, fix.key) == set()  # no API visibility invented
+    assert rg.passing_families(comments + [{'author_association': 'OWNER', 'body': posted[0]}],
+                               fix.key) == {'openai', 'anthropic'}
+
+
+@pytest.mark.parametrize('invalid', ['missing-original', 'untrusted-original', 'incomplete', 'wrong-reviewer',
+                                      'serious', 'missing-source', 'stale-head'])
+def test_read_lag_does_not_relax_disposition_coverage(reviewed_followup, monkeypatch, invalid):
+    comments, fix = reviewed_followup
+    fix.verdict, fix.findings = 'FINDINGS', 1
+    original = _comment(fix, text='[P1] README.md:1 unsafe' if invalid == 'serious'
+                        else '[P2] README.md:1 unclear input')
+    if invalid == 'untrusted-original':
+        original['author_association'] = 'NONE'
+        original['user'] = {'login': 'untrusted', 'type': 'User'}
+    if invalid != 'missing-original':
+        comments.append(original)
+    if invalid == 'missing-source':
+        comments = [original]
+    fix.disposed = True
+    fix.text = 'not a disposition' if invalid == 'incomplete' else '1. rebutted: checked the supported input'
+    if invalid == 'wrong-reviewer':
+        fix.reviewer = 'different-reviewer'
+    head = fix.head
+    if invalid == 'stale-head':
+        fix.head = 'f' * 40
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: comments)
+    monkeypatch.setattr(rg, 'changed_paths', lambda *a: ['README.md'])
+    monkeypatch.setattr(rg, 'base_policy_paths', lambda *a: ['README.md'])
+    args = SimpleNamespace(base=fix.base, completed_followup=fix)
+    assert rg.second_family_pass(args, 'o/r', 1, fix.key, head, 0) == rg.NEEDS_SECOND_FAMILY
+
+
+@pytest.mark.parametrize('missing', ['head', 'base'])
+def test_main_cli_missing_local_objects_reports_unreviewed(repo, monkeypatch, capsys, missing):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    run = repo / '.git/local-reviews/pr-1-missing'
+    run.mkdir(parents=True)
+    receipt = {'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+               'started_at': 100, 'architecture': 'gemma4'}
+    receipt[missing] = 'f' * 40
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('spent budget with missing history'))
+    assert rg.cmd_review(SimpleNamespace(base=base, budget=30, fresh=True, reviewer='codex')) == rg.UNREVIEWED
+    assert 'UNREVIEWED: Local review history incomplete' in capsys.readouterr().out
+    assert json.loads((run / 'manifest.json').read_text()) == receipt
+
+
 def test_disposed_serious_followup_still_requires_full_coverage(reviewed_followup):
     comments, fix = reviewed_followup
     fix.verdict, fix.findings = 'FINDINGS', 1

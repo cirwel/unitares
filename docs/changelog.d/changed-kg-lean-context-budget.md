@@ -1,0 +1,1 @@
+- Interface contract 1.39.0: Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
