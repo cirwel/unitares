@@ -585,7 +585,7 @@ def test_registry_reflects_availability(monkeypatch):
     assert hosts["codex:host-adapter"]["available"] is True
 
     monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
-    hosts2 = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    hosts2 = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
     assert hosts2["codex:host-adapter"]["available"] is False
 
 
@@ -604,7 +604,7 @@ def test_every_host_adapter_is_agent_callable(monkeypatch):
             _enable(monkeypatch)
         else:
             monkeypatch.delenv("UNITARES_HOST_ADAPTER_ENABLED", raising=False)
-        hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+        hosts = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
         for host_id in (
             "codex:host-adapter", "claude:host-adapter", "antigravity:host-adapter",
         ):
@@ -612,7 +612,7 @@ def test_every_host_adapter_is_agent_callable(monkeypatch):
             assert hosts[host_id]["implementation_status"] == "active"
 
     # The synchronous hosts are the ones call_model can actually serve.
-    hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
+    hosts = {h["host_id"]: h for h in reg.list_inference_hosts(include_unconfigured=True)}
     assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model", "consult"]
     assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model", "consult"]
 

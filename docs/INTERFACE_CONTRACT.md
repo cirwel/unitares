@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.39.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.40.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -587,3 +587,23 @@ This is output shaping within fields already optional under response budgeting;
 input schemas and schema digests are unchanged. Clients must tolerate absent
 optional coaching and should use the structured result count and retrieval tier.
 Request `compact` for serialization diagnostics or `full` for canonical fields.
+
+## 1.40.0 (2026-10-14)
+
+`list_inference_hosts` now defaults `include_unconfigured` to `false` in the
+advertised schema, handler and registry. Omitted arguments list configured hosts
+only, including when `provider_kind` filters the result. Configured hosts remain
+listed during outages or quota/auth cooldowns; callers must inspect `available`
+and `cooldown` before selecting a host.
+
+Explicit `include_unconfigured=true` retains the complete registered inventory.
+`describe_inference_host` still accepts any registered host ID, and the static
+host enums remain unchanged. No adapter or invocation capability is removed.
+The discovery description and intent map now explain these distinctions.
+
+The `list_inference_hosts` input-schema digest and aggregate surface digest
+change; output envelope shapes and other input-schema digests are unchanged.
+Clients relying on omission to return every registered host must send
+`include_unconfigured=true`. Refresh cached schemas so clients do not inject
+the previous `true` default. Explicit `false` and `true` retain their existing
+behavior.
