@@ -272,7 +272,31 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # = refuse | log | accept) with stable_session_id_rejected, and a verified
 # continuity token naming the agent converts to the keyed id. No input schema
 # changes, so no digest moves.
-INTERFACE_CONTRACT_VERSION = "1.31.0"
+# 1.32.0 (2026-10-11): observe(action=agent), output and target resolution.
+# target_agent_id resolves the identifier agent(action=list) prints for an
+# agent whose UUID it withholds ({public_agent_id}_{uuid8}, or the
+# agent-redacted digest); those answered not-found before. A caller that is
+# neither the operator nor the observed agent receives that identifier in
+# agent_id, with uuid_redacted true, where it used to receive the UUID.
+# Resolution order is UUID, server-composed listed identifier, then alias;
+# an alias names its one live holder ahead of archived or deleted ones, and
+# a target naming more than one agent is refused with AMBIGUOUS_TARGET where
+# the first matching registry row used to be returned. Only target_agent_id's long
+# description changes, which is outside every input digest, so no digest
+# moves: the version records the behavior change.
+# 1.33.0 (2026-10-13): search_shared_memory, output only. A lean or compact
+# search called with limit above 3 lists the results after the three digests
+# under more_results, one row each (discovery_id, type, status, a summary
+# bounded at 100 characters), up to 17 rows inside a 2,000-byte budget of
+# their own, and reports their number as state_summary.more_results_shown.
+# A search with no limit, or limit of 3 or less, returns what it did before,
+# and the full tier is unchanged. Only limit's long description changes,
+# which is outside every input digest, so no digest moves: the version
+# records the output change.
+# 1.34.0 (2026-10-13): Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+# 1.35.0 (2026-10-13): Add bounded replayable knowledge notices for proven active sessions; canonical notify-agent-<UUID> mentions
+# 1.35.1 (2026-10-13): Return knowledge notices as flat MCP text content with structured JSON fields.
+INTERFACE_CONTRACT_VERSION = "1.35.1"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

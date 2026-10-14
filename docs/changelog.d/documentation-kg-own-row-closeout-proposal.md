@@ -1,0 +1,1 @@
+- Add a bounded own-finding reminder to the existing closeout command and lifecycle skill; keep closure evidence explicit and unresolved knowledge open.

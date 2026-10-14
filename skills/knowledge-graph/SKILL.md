@@ -3,9 +3,11 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-09-21"
+last_verified: "2026-10-13"
 freshness_days: 21
 source_files:
+  - unitares/src/knowledge_notices.py
+  - unitares/db/postgres/migrations/074_knowledge_change_notices.sql
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
@@ -47,6 +49,13 @@ same handler (`knowledge(action="search")`), but it defaults `response_mode` to
 `lean` and forces `include_details=false`; pass `response_mode="full"` for the
 router's inline-detail behaviour. Use either it or the unified router;
 duplicate entries fragment knowledge and make search less effective.
+
+The `lean` and `compact` tiers show three digests whatever `limit` asked for.
+Pass `limit` above 3 and the same response lists the results after those three
+under `more_results`, one row each (`discovery_id`, `type`, `status`, a short
+summary), up to 17 rows; `state_summary.more_results_shown` counts them. Open
+any row with `knowledge(action="details", discovery_id=...)`. Leave `limit`
+unset and the response is the three digests alone.
 
 You may omit `query` entirely when filtering by `tags`, `discovery_type`,
 `severity`, `status`, or `agent_id_filter` (author UUID). The explicit
@@ -346,3 +355,33 @@ so a rollup does not establish that the whole topic has been covered.
 Run it **on demand or on a periodic cadence (like cleanup/lint), not on every
 write** — a per-write LLM pass across a multi-agent fleet is exactly the
 high-frequency-noise anti-pattern this graph avoids.
+
+### Imported-memory previews
+
+Search and agent-scoped get cap imported inline details at 2 KiB UTF-8, even
+in full mode. A truncated row reports its original character/byte lengths and
+`details_retrieval` arguments; use `knowledge(action="details", discovery_id=...,
+offset=0, length=2000)` and the returned pagination to read the stored evidence.
+Native findings and governed promotions keep their existing behavior.
+
+The imported digest's `imported_memory` marker says `trust="unreviewed"` and
+gives `age_days` since the KG row was created (`age_basis="created_at"`), or null
+if unknown. This is not source age or proof of review; a routine sync does not
+rejuvenate it. Markers share the existing digest budgets, so fewer rows may fit.
+
+## Active-session change notices
+
+Successful tool responses may include `knowledge_changes`, with up to three
+coalesced row/revision pointers. Read the current details before acting; a notice
+is not authority. Acknowledge only received revisions with
+`knowledge(action="notices", acknowledge=["<revision UUID>"])`. Reading alone
+replays the pointer. An old receipt cannot erase a newer revision.
+
+The inbox belongs to the proved process UUID. Exact `notify-agent-<UUID>` tags
+address a row; prose/display names and predecessor identities do not. Use
+`knowledge(action="notices", muted=true)` to suppress automatic display, or
+`muted=false` to restore it. The queue keeps at most 100 row pointers for seven
+days. A `gap_token` means rescan relevant rows, then acknowledge that exact token
+with `acknowledge_gap`. No wake, background model call, automatic check-in or KG
+status change occurs. Writer identity is not guessed; these pointers omit actor
+attribution. Migration 074 must be deployed before the capability is available.

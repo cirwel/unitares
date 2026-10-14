@@ -45,6 +45,40 @@ def _or_default_query(query: str) -> str:
 class KnowledgeGraphMixin:
     """Knowledge graph (PostgreSQL FTS) discovery operations."""
 
+    async def kg_read_change_notices(self, recipient, receipts, gap_receipt, muted):
+        """Maintain one process's delivery hints and read without claiming them.
+
+        The existing shared graph is publicly readable; current row membership
+        is checked as well as the caller-proven recipient supplied by the handler.
+        Future row ACLs must extend this check alongside get/details.
+        """
+        async with self.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SET LOCAL statement_timeout = '250ms'")
+                await conn.execute("SELECT knowledge.trim_change_notices($1)", recipient)
+                if receipts:
+                    # A concurrent mutation rotates the revision. A late ack cannot
+                    # erase it, and a guessed receipt never acknowledges another UUID.
+                    await conn.execute(
+                        "DELETE FROM knowledge.change_notices WHERE recipient=$1 AND revision=ANY($2::uuid[])",
+                        recipient, receipts,
+                    )
+                if gap_receipt:
+                    await conn.execute(
+                        "UPDATE knowledge.notice_preferences SET gap_token=NULL WHERE recipient=$1 AND gap_token=$2",
+                        recipient, gap_receipt,
+                    )
+                if muted is not None:
+                    await conn.execute("UPDATE knowledge.notice_preferences SET muted=$2 WHERE recipient=$1", recipient, muted)
+                prefs = await conn.fetchrow("SELECT muted, gap_token FROM knowledge.notice_preferences WHERE recipient=$1", recipient)
+                rows = [] if prefs["muted"] else await conn.fetch(
+                    """SELECT n.discovery_id, n.revision, n.change_kind, n.changed_fields
+                       FROM knowledge.change_notices n JOIN knowledge.discoveries d ON d.id=n.discovery_id
+                       WHERE n.recipient=$1 AND (d.agent_id=$1 OR ('notify-agent-' || $1)=ANY(d.tags))
+                       ORDER BY n.changed_at, n.discovery_id LIMIT 4""", recipient,
+                )
+        return dict(prefs), [dict(row) for row in rows]
+
     async def kg_add_discovery(self, discovery) -> None:
         """Add a discovery to the knowledge graph."""
         from datetime import datetime as dt

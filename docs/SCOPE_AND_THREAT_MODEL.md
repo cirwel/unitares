@@ -68,14 +68,15 @@ self-reports should ever affect the decision remains an open policy question,
 parked when PR #2372 was closed. Described-behavior semantics don't fully register
 until check-in 3; self-relative scoring still waits until check-in 25.
 
-State lives in PostgreSQL + AGE. **The verdict path is the auditable behavioral
-model** — component risk plus self-relative z-scores, source in
-[`src/behavioral_assessment.py`](../src/behavioral_assessment.py). A separate
-dynamical-systems model (`governance_core/`, the thermodynamic / free-energy
-formulation) runs **in parallel as a research cross-check and does not drive
-verdicts by default** ([`governance_monitor.py`](../src/governance_monitor.py):
-*"the ODE runs in parallel but does NOT drive verdicts… primary verdicts come
-from behavioral assessment"*). Its derivation is in
+State lives in PostgreSQL + AGE. **Behavioral assessment owns the
+post-cold-start risk assessment**, using fixed thresholds and, after warmup,
+self-relative comparisons ([`src/behavioral_assessment.py`](../src/behavioral_assessment.py)).
+The coupled ODE state in `governance_core/` also feeds final structural basin,
+void and coherence checks and later behavioral observations. Prior policy
+responses enter the behavioral sensor's decision history, so later readings can
+reflect those responses. The [computation reference](EISV_COMPUTATION.md)
+separates the observations, assessment and final policy inputs. The ODE's
+research derivation is in
 [Paper v6](https://github.com/cirwel/unitares-paper-v6) (DOI 10.5281/zenodo.19647159).
 
 ## What anchors the signal

@@ -40,19 +40,34 @@ class TestGenerateThreadId:
 
 
 class TestInferSpawnReason:
-    def test_explicit_reason_wins(self):
+    @pytest.mark.parametrize(
+        "declared", ["explicit", "subagent", "compaction", "dispatch", "custom-handoff"]
+    )
+    def test_explicit_reason_wins(self, declared):
         reason = infer_spawn_reason(
-            {"spawn_reason": "explicit"},
+            {"spawn_reason": declared, "parent_agent_id": "some-uuid", "client_hint": "claude-code"},
             existing_nodes=[{"agent_id": "prev"}],
         )
-        assert reason == "explicit"
+        assert reason == declared
 
-    def test_claude_code_with_existing_nodes_and_parent(self):
+    @pytest.mark.parametrize(
+        "client_hint", ["claude-code", "claude_code", "claude-code-web", "codex", ""]
+    )
+    @pytest.mark.parametrize("existing_nodes", [[], [{"agent_id": "prev"}]])
+    def test_declared_parent_does_not_establish_spawn_cause(
+        self, client_hint, existing_nodes
+    ):
         reason = infer_spawn_reason(
-            {"client_hint": "claude-code", "parent_agent_id": "some-uuid"},
-            existing_nodes=[{"agent_id": "prev"}],
+            {"client_hint": client_hint, "parent_agent_id": "some-uuid"},
+            existing_nodes=existing_nodes,
         )
-        assert reason == "compaction"
+        assert reason == "new_session"
+        # Preserve the caller's parent claim without inventing a dispatch or
+        # compaction event to explain it.
+        assert classify_episode_fork(2, "child", "some-uuid", reason) == (
+            "identity_lineage",
+            True,
+        )
 
     @pytest.mark.parametrize("client_hint", ["claude-code", "claude_code", "claude-code-web"])
     def test_claude_code_without_parent_is_not_lineage(self, client_hint):
@@ -83,7 +98,7 @@ class TestInferSpawnReason:
             {"parent_agent_id": "some-uuid"},
             existing_nodes=[{"agent_id": "prev"}],
         )
-        assert reason == "subagent"
+        assert reason == "new_session"
 
     def test_existing_nodes_default(self):
         reason = infer_spawn_reason(

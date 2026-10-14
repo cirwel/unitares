@@ -74,6 +74,13 @@ deploy_lib_require_plist_target "$TAG" "$PLIST" "$DEPLOY/src/mcp_server.py" \
 
 deploy_lib_ff_worktree "$TAG" "$REPO" "$DEPLOY"
 PREV="$DEPLOY_LIB_PREV"
+verify_migration_revision() {
+  if deploy_lib_verify_expected_revision "$TAG" "$DEPLOY" HEAD; then
+    return 0
+  fi
+  deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
+  return 1
+}
 mkdir -p "$DEPLOY/data/logs"
 
 # ── Migration preflight (gate, not silent) ───────────────────────────────────
@@ -98,21 +105,28 @@ MIGRATE_DBURL=()
 # (the default /bin/bash) "${empty_array[@]}" trips `set -u` ("unbound variable")
 # and aborts the deploy when no UNITARES_DEPLOY_DB_URL is set (the common case).
 if [[ -f "$MIGRATE" ]]; then
+  verify_migration_revision
   echo "[deploy-mcp] migration preflight: is the live DB in sync with the deploy-worktree manifest?"
-  if ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
+  migration_check_rc=0
+  python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" || migration_check_rc=$?
+  verify_migration_revision
+  if [[ "$migration_check_rc" != 0 ]]; then
     if [[ "$APPLY_MIGRATIONS" == 1 ]]; then
+      # Still under the shared checkout lock. A failed schema check must not
+      # authorize SQL from a checkout that moved after the caller's review.
+      verify_migration_revision
       echo "[deploy-mcp] applying pending migrations (operator opt-in) BEFORE restart"
       if ! python3 "$MIGRATE" --apply "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}" \
          || ! python3 "$MIGRATE" --check "${MIGRATE_DBURL[@]+"${MIGRATE_DBURL[@]}"}"; then
         echo "[deploy-mcp] FAILED — migrations did not reach sync; rolling worktree back to ${PREV:0:8} and NOT restarting." >&2
-        git -C "$DEPLOY" reset --hard "$PREV"
+        deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
         exit 1
       fi
     else
       echo "[deploy-mcp] REFUSING: live DB is not in sync with the migration manifest in the code about to deploy." >&2
       echo "[deploy-mcp] Restarting now would bring up code expecting an unapplied schema (the Phase-A / #042 half-deploy failure mode)." >&2
       echo "[deploy-mcp] Rolling the worktree back to ${PREV:0:8} (so disk does not sit ahead of the running process)." >&2
-      git -C "$DEPLOY" reset --hard "$PREV"
+      deploy_lib_restore_reviewed_worktree "$TAG" "$DEPLOY" "$PREV" || :
       echo "[deploy-mcp] Then either apply the gap and re-deploy:" >&2
       echo "[deploy-mcp]     python3 $MIGRATE --apply" >&2
       echo "[deploy-mcp]   or re-run this deploy with migrations applied automatically:" >&2
@@ -121,6 +135,10 @@ if [[ -f "$MIGRATE" ]]; then
     fi
   fi
 fi
+
+# A successful schema read (including the post-apply read) must not bless a
+# checkout that moved while the checker ran. Recover before any restart.
+verify_migration_revision
 
 # This deployment's environment overlay (scripts/ops/governance-mcp.env, from
 # the worktree just fast-forwarded, so reviewed values only) into the live

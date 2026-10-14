@@ -73,9 +73,9 @@ _PATH_PATTERNS = [
 ]
 
 # Individual files where dead refs are expected. Keep these narrow: most
-# ontology docs are current contract docs, but plan.md is an intentionally
+# ontology docs are current contract docs, but the dated plan is an intentionally
 # preserved internal ledger after public master removed some private drafts.
-_DEAD_REF_SKIP_FILES = {"docs/ontology/plan.md"}
+_DEAD_REF_SKIP_FILES = {"docs/ontology/plan-2026-06-14.md"}
 
 # Directories where dead refs are expected: historical planning records, not
 # current documentation. Specs/handoffs/plans describe intent at a moment in
@@ -797,6 +797,17 @@ def check_demotion_candidates(md_files: list[Path]) -> list[str]:
 # CANONICAL_SOURCES.md quotes them by design.
 
 _CONTESTED_CLAIMS: list[tuple[re.Pattern, str]] = [
+    (
+        re.compile(
+            r"\bODE\s*\(diagnostic only\)"
+            r"|parallel ODE model is diagnostic by default"
+            r"|Each score is self-relative after warmup",
+            re.IGNORECASE,
+        ),
+        "corrected EISV semantics: raw coordinates are weighted indices; "
+        "risk assessment adds baseline comparisons, and ODE state still feeds "
+        "structural policy checks — see EISV_COMPUTATION.md and the registry",
+    ),
     (
         re.compile(
             r"Whether EISV moves out of the core is an open proposal",

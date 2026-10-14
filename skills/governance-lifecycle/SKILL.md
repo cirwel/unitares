@@ -7,6 +7,7 @@ description: >
 last_verified: "2026-10-11"
 freshness_days: 14
 source_files:
+  - unitares/commands/closeout.md
   - unitares/src/mcp_handlers/core.py
   - unitares/src/mcp_handlers/identity/handlers.py
   - unitares/src/mcp_handlers/admin/handlers.py
@@ -50,7 +51,7 @@ source_files:
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.31.0` on 2026-10-11.
+contract `1.34.0` on 2026-10-13.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -261,6 +262,24 @@ Hosts differ in what they automate: some write a per-turn interpretation for you
 some write almost nothing. Do not infer from a quiet history that you are being
 watched less, or from a busy one that you have already reported.
 
+## Closing a session
+
+Before your final response, if you created actionable findings in this session,
+review at most three still-open bugs, questions or improvements owned by this
+process. Use `knowledge(action="search", agent_id_filter="<your UUID>",
+status="open", limit=10, include_details=false, response_mode="lean")`, then
+open details before deciding. A predecessor or similarly named agent is not
+you. Close addressed rows with the existing `update_finding`, closure class
+and evidence; a merged fix alone is not `fix_verified` until deployed and
+positively observed. Keep unresolved rows open; add a short blocker/artifact
+pointer only when useful. Insights and decisions may legitimately stay open.
+
+This reminder has no quota, automatic closure, new check-in or permission
+change. Skip the lookup when you wrote no actionable findings; if unavailable,
+continue closeout without retrying or minting an identity for it. The repository
+workflow is `commands/closeout.md`; shared-memory closure standards are in
+`skills/knowledge-graph/SKILL.md`.
+
 ## Reading Verdicts
 
 | Verdict | What to Do |
@@ -364,3 +383,12 @@ because this skill mentions it. Upgrade the server for the complete catalog.
 - `config()` — Read or change runtime thresholds; writes are privileged
 - `list_tools()` / `describe_tool()` — Inspect the deployed catalog instead of guessing tool names. The default list is a name-only handshake; use `list_tools(lite=false)` for rich catalog metadata and `describe_tool()` for full action parameters. Available in the complete catalog; older servers may require their own discovery-profile configuration.
 - `use_tool(tool_name=..., arguments={...})` — Invoke a complete-catalog capability omitted from the initial progressive `tools/list`; target middleware and authorization still apply
+
+### Row-change pointers during active work
+
+A successful active call can also carry `knowledge_changes`, at most three
+coalesced row pointers in a separate 2 KiB budget. Read details before acting;
+acknowledge received revision UUIDs through `knowledge(action="notices")`.
+Delivery does not wake a session, perform a model call or create a check-in.
+See the knowledge-graph skill for mute, gaps and retention. A successor does
+not inherit the predecessor's inbox merely by sharing its workspace or lineage.

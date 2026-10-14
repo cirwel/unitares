@@ -56,13 +56,16 @@ negative ([claim ledger](EVIDENCE_AND_LIMITS.md#current-claim-status)), and a
 [registered stop rule](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
 constrains how it may be answered.
 
-**"A structured handoff note would do as well."** A note exists only if the
-outgoing agent writes it, and it carries one author's summary. The UNITARES record
-is written as the work happens, ties each entry to the process that wrote it, is
-searchable by every agent and vendor at once, and carries a correction everywhere
-the fact is read. Whether that yields better outcomes than a well-written note is
-untested; a matched comparison (forced mid-task handoffs, a handoff-note arm and a
-record arm, machine-checked outcomes) is the study that would answer it.
+**"How does this work with a handoff note?"** A well-written note may be all a
+task needs. An agent can also reference it in a UNITARES finding alongside code,
+logs, and test results. The document supplies a concise summary; the shared record
+keeps process attribution, selected findings, corrections, and participating
+reviewers' decisions available to authorized readers. Agents and integrations
+must capture those records explicitly. Updating or superseding a finding does
+not rewrite a handoff file or a copy already held in another agent's context;
+later readers must retrieve current records to see the correction. Retention,
+authorization, and replacement-link traversal have the boundaries described in
+[capabilities and deployment](CAPABILITIES_AND_DEPLOYMENT.md).
 
 **"EISV is not a validated measure."** EISV computes specified weighted indices
 and their evolution from runtime observations and controller history. The

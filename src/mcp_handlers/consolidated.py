@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable, Dict, Sequence
 
 from mcp.types import TextContent
 
+from src.knowledge_notices import handle_knowledge_notices
 from .decorators import action_router
 from .utils import success_response
 
@@ -200,6 +201,7 @@ handle_knowledge = action_router(
         "supersede": handle_supersede_discovery,
         "promote": handle_promote_memory_claim,
         "audit": handle_audit_knowledge_graph,
+        "notices": handle_knowledge_notices,
     },
     timeout=120.0,
     description="Unified knowledge graph operations",

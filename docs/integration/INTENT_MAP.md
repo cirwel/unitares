@@ -33,6 +33,7 @@ name they were never given a schema for.
 | Search shared memory | `search_shared_memory` (works before `start_session`) | `knowledge(action="search")` and `search_knowledge_graph` *(both hidden)* reach the same handler; `knowledge` also has `get`, `list`, `details`, `stats` |
 | Write a finding | `store_finding` (search first) | `leave_note` *(hidden)* for a quick note, sharing `knowledge(action="note")`'s handler |
 | Revise a finding | `update_finding` *(hidden)* | `knowledge(action="update" \| "supersede" \| "promote")` *(hidden)* |
+| Notice changes to relevant findings | `knowledge_changes` on the next successful proved call | `knowledge(action="notices")` *(hidden)* reads/replays the bounded inbox; acknowledge exact revision UUIDs or mute. No wake or predecessor-inbox inheritance; requires migration 074. |
 | Ask another model for advice | `consult` | see [Model calls](#model-calls) |
 | Get a governed, on-record review | `request_review` (one call can reach a verdict) | `dialectic` *(hidden)* to read or advance a session (`get`, `list`, `thesis`, `antithesis`, `synthesis`, `reassign`) |
 | Lift a pause on yourself | `self_recovery` (`check`, then `quick` or `review`) | `request_review` / `dialectic` when self-recovery is refused; `operator_resume_agent` *(hidden)* needs an operator token |

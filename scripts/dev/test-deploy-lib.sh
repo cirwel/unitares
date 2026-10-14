@@ -553,7 +553,7 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
 ) && ok "deploy-status follows the proxy plist and labels pre-migration DEV" \
   || bad "deploy-status OpenAI proxy topology selection"
 
-# Unknown automation stays non-fatal for compatibility, but the operator must
+# Unknown automation returns an incomplete result, and the operator must
 # be told exactly what was not changed. The old "still restart-DEV?" text was
 # speculative and omitted the checkout even though JSON already carried both.
 (
@@ -565,7 +565,8 @@ grep -q '"dialectic-live|com.unitares.dialectic-live|.*|elixir/dialectic_live|re
 printf '[{"name":"mystery","verdict":"BEHIND(2)","checkout":"/tmp/mystery","pickup":"restart-DEV"}]\n'
 EOS
   chmod +x "$AP/deploy-status.sh"
-  out="$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1)"
+  rc=0; out="$(bash "$AP/deploy-apply.sh" --no-fetch 2>&1)" || rc=$?
+  [[ "$rc" = 3 ]] || exit 20
   printf '%s' "$out" | grep -q 'no deploy automation registered (pickup=restart-DEV; checkout=/tmp/mystery)'
   printf '%s' "$out" | grep -q 'live process and checkout were left unchanged'
   printf '%s' "$out" | grep -q 'skipped = drift remains; no deploy automation ran'

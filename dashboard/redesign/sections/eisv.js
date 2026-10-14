@@ -188,7 +188,7 @@
     }).join("");
     return `<div class="panel" style="margin-bottom:var(--space-5)">
         <div class="panel-head" style="margin-bottom:var(--space-3)"><h2>Fleet readings</h2>
-          <span class="spring"></span><span class="fresh">raw values · neutral display · click a row</span></div>
+          <span class="spring"></span><span class="fresh">reported values · neutral display · click a row</span></div>
         <div style="display:flex;flex-direction:column;gap:4px">${header}${body}</div></div>`;
   }
 
@@ -350,7 +350,7 @@
       <th style="padding:6px;text-align:left">${dimension}</th><td>${fmtValue((primary.values || {})[dimension])}</td>
       <td>${fmtValue(raw[dimension])}</td><td>${fmtValue(smoothed[dimension])}</td></tr>`).join("");
     const distinction = primary.source === "behavioral"
-      ? "Primary values use the behavioral estimate. Raw E/I/S are clamped inputs before smoothing; behavioral V is an EMA of their raw E−I imbalance."
+      ? "Primary values use the behavioral estimate. Raw E/I/S are clamped inputs before smoothing; behavioral V separately smooths the raw E−I gap, so it need not equal the difference of the displayed smoothed E and I."
       : "Primary values use a separate instrument; the latent behavioral observations below do not explain the primary values.";
     const features = derivation.inputs && derivation.inputs.features;
     const featureRows = features && typeof features === "object" ? Object.entries(features).slice(0, 20).map(([name, value]) =>
@@ -484,6 +484,7 @@
          <span class="spring"></span><label style="font-size:var(--text-sm);color:var(--muted)">source
            <select id="eisv-source-filter" style="margin-left:6px">${sourceOptions(MODEL.sourceLanes)}</select></label>
          <span class="src-badge ${MODEL.source}">${MODEL.source}</span></div>
+       <p class="sub">Read each trajectory with its measurement source. With behavioral-sensor inputs, E blends observations and prior decisions, I includes calibration and consistency, and S includes drift and activity. Behavioral V separately smooths the raw E−I gap. Physical inputs and ODE readings have their own mappings. <a href="https://github.com/cirwel/unitares/blob/master/docs/EISV_COMPUTATION.md" target="_blank" rel="noopener noreferrer">Signal definitions and provenance</a>.</p>
        <div id="eisv-source-lanes">${sourceLanesHTML(MODEL.sourceLanes)}</div>
        <div id="eisv-heatmap">${heatmapHTML(MODEL.residents)}</div>
        <div id="eisv-trajectory"></div>

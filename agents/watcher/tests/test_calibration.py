@@ -343,6 +343,36 @@ class TestRuleVersions:
         assert ("P006", "app") not in result
 
 
+def test_constrained_retry_findings_stay_out_of_pattern_precision():
+    """The constrained retry is a different detector (thinking off), so a
+    resolution of one of its findings grades that request, not the pattern's
+    normal scans. Same reason a row from another rule revision is left out.
+    Without this, adjudicating retry findings would move a pattern's floor."""
+    from agents.watcher.calibration import CONSTRAINED_MODE_SUFFIX
+
+    now = datetime(2026, 10, 11, tzinfo=timezone.utc)
+
+    def confirmed(model_used):
+        row = _row(pattern="P2", file="/wt/tree/src/mod.py", status="confirmed",
+                   ts="2026-10-10T00:00:00Z", confirmed_at="2026-10-10T00:00:00Z")
+        row["model_used"] = model_used
+        return row
+
+    normal_only = precision_by_pattern_and_class([confirmed("gemma4:latest")], now=now)
+    mixed = precision_by_pattern_and_class(
+        [confirmed("gemma4:latest"), confirmed("gemma4:latest" + CONSTRAINED_MODE_SUFFIX)],
+        now=now,
+    )
+    retry_only = precision_by_pattern_and_class(
+        [confirmed("gemma4:latest" + CONSTRAINED_MODE_SUFFIX)], now=now
+    )
+
+    assert mixed[("P2", "app")].weighted_confirmed == pytest.approx(
+        normal_only[("P2", "app")].weighted_confirmed
+    )
+    assert retry_only == {}
+
+
 def test_precision_reasons_constant_shape():
     """Document the canonical taxonomy. Precision math counts as TN ONLY
     the reasons that mean 'this finding was a false positive'."""

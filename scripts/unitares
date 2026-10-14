@@ -10,8 +10,8 @@
 #                         cli-<shorthost>-<user>). Identity is bound to this.
 #   UNITARES_TOKEN        Optional bearer token; sent as Authorization header.
 #   UNITARES_SESSION_FILE Path to the local session JSON (default:
-#                         ~/.unitares_session.json). Onboard uses cached
-#                         uuid only as parent_agent_id lineage.
+#                         ~/.unitares_session.json). Onboard creates a fresh
+#                         identity without inferring ancestry from this cache.
 
 set -u
 set -o pipefail
@@ -55,22 +55,18 @@ if value is not None:
 }
 
 _py_write_session() {
-    SESSION_FILE="$SESSION_FILE" AGENT_ID="$AGENT_ID" CSID="${1:-}" CTOKEN="${2:-}" UUID="${3:-}" PARENT="${4:-}" python3 -c '
+    SESSION_FILE="$SESSION_FILE" AGENT_ID="$AGENT_ID" CSID="${1:-}" CTOKEN="${2:-}" UUID="${3:-}" python3 -c '
 import json, os
 payload = {"agent_id": os.environ["AGENT_ID"]}
 sid = os.environ.get("CSID") or ""
 token = os.environ.get("CTOKEN") or ""
 uuid = os.environ.get("UUID") or ""
-parent = os.environ.get("PARENT") or ""
 if uuid:
     payload["uuid"] = uuid
 if sid:
     payload["client_session_id"] = sid
 if token:
     payload["continuity_token"] = token
-if parent:
-    payload["parent_agent_id"] = parent
-    payload["spawn_reason"] = "new_session"
 path = os.environ["SESSION_FILE"]
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
 with os.fdopen(fd, "w") as f:
@@ -323,20 +319,16 @@ cmd_diag() {
 }
 
 cmd_onboard() {
-    local name="${1:-$AGENT_ID}" purpose="${2:-}" force="${3:-}"
+    # The legacy third "force" argument remains accepted; every onboard is
+    # fresh. A session cache is not evidence of a causal parent relationship.
+    local name="${1:-$AGENT_ID}" purpose="${2:-}"
     local args
-    args=$(NAME="$name" PURPOSE="$purpose" FORCE="$force" PARENT_UUID="${STORED_UUID:-}" python3 -c '
+    args=$(NAME="$name" PURPOSE="$purpose" python3 -c '
 import json, os
 args = {"name": os.environ["NAME"], "force_new": True}
 purpose = os.environ.get("PURPOSE") or ""
 if purpose:
     args["purpose"] = purpose
-force = (os.environ.get("FORCE") or "").lower()
-if force not in ("1", "true", "force", "yes", "--force"):
-    parent = os.environ.get("PARENT_UUID") or ""
-    if parent:
-        args["parent_agent_id"] = parent
-        args["spawn_reason"] = "new_session"
 print(json.dumps(args))
 ')
     local body
@@ -368,7 +360,7 @@ except Exception:
     fi
 
     # Extract session + continuity token + uuid in a single python invocation.
-    local extracted sid token token_uuid uuid parent
+    local extracted sid token token_uuid uuid
     extracted=$(BODY="$body" python3 -c '
 import json, os
 try:
@@ -382,15 +374,7 @@ except Exception:
     token_uuid="${extracted#*	}"
     token="${token_uuid%%	*}"
     uuid="${token_uuid#*	}"
-    parent=$(ARGS="$args" python3 -c '
-import json, os
-try:
-    args = json.loads(os.environ["ARGS"])
-    print(args.get("parent_agent_id") or "")
-except Exception:
-    print("")
-')
-    _py_write_session "$sid" "$token" "$uuid" "$parent"
+    _py_write_session "$sid" "$token" "$uuid"
     printf '%s' "$body" | parse_onboard
     echo "Session: ${sid:-<none>}"
 }
@@ -1408,9 +1392,8 @@ Commands:
   status [--json] [--no-release]    One operator screen: server, release
                                     currency, agent tiers, residents. Pure
                                     reads; try: watch -n30 unitares status
-  onboard [name] [purpose] [force]  Onboard a fresh identity; cached uuid is
-                                    declared as parent_agent_id unless "force"
-                                    is passed as 3rd arg
+  onboard [name] [purpose] [force]  Onboard a fresh identity without inferred
+                                    lineage; legacy "force" remains accepted
   metrics                           Show EISV + summary
   health                            Server health (GET /health)
   tools                             List available tools (GET /v1/tools)

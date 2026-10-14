@@ -5,11 +5,11 @@ This folder is the system's **versioned identity ontology** — the conceptual m
 ## Start here (in order)
 
 1. **[`identity.md`](identity.md)** — the canonical ontology doc, v2. Three stances (performative / descriptive / inventive), the layered taxonomy of continuity, and the Synthetic Life Axioms it's evaluated against. ~30 min read.
-2. **[`plan.md`](plan.md)** — the **resolution ledger**: every open question, research item, and system implication that flows from `identity.md`, with state and dependencies. Read the tables, skim the appendix. Not a starting point — a state board.
+2. **[`plan.md`](plan.md)** — locator for the **June 14, 2026 resolution ledger** in [`plan-2026-06-14.md`](plan-2026-06-14.md). Its row states and dependencies are historical, not a current work queue.
 3. **[`paper-positioning.md`](paper-positioning.md)** — how the ontology relates to the v6 paper and the planned v7. Read after `identity.md`.
 4. **[`glossary.md`](glossary.md)** — the question-keyed vocabulary glossary: high-risk homonyms (substrate, fingerprint, basin, …), single-sense terms, and the cross-register Rosetta map. Published at [cirwel.github.io/unitares/glossary.html](https://cirwel.github.io/unitares/glossary.html) with an [interactive viewer](https://cirwel.github.io/unitares/glossary-viewer.html); drift-checked in CI (`scripts/dev/check_glossary_drift.py`).
 
-The remaining files are working RFCs and specs that resolve specific rows in `plan.md`.
+The remaining files are RFCs and specs associated with rows in the archived ledger. References to `plan.md` below retain the historical row vocabulary; the locator leads to the complete snapshot.
 
 ## File naming convention
 
@@ -68,7 +68,7 @@ Not every doc cited by a `plan.md` row is in this folder. On 2026-05-21 the inte
 
 ## How rows resolve
 
-A row in `plan.md` typically progresses: open → spec doc lands here as `{id}-*.md` → council review → operator decision recorded inline → implementation shipped (referenced from `src/` and tests) → row marked **Resolved** in `plan.md` with a date. Older resolved rows stay in `plan.md` as the historical record.
+Historically, a ledger row progressed: open → spec doc lands here as `{id}-*.md` → council review → operator decision recorded inline → implementation shipped (referenced from `src/` and tests) → row marked **Resolved** in `plan.md` with a date. The June ledger is now a preserved snapshot; current work belongs in the roadmap and linked issues, rather than edits to that historical board.
 
 ## What this folder is not
 

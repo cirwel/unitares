@@ -24,6 +24,9 @@ from src.schema_brief import (
 # discovery map can lag the handler (search's provenance/type/severity did).
 ALIAS_SCHEMA_DROP = {
     "search_shared_memory": frozenset({
+        "acknowledge",
+        "acknowledge_gap",
+        "muted",
         "content",
         "summary",
         "details",
@@ -197,7 +200,7 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         },
         "include_details": {
             "description": (
-                "Expand every result inline only with response_mode='full'. "
+                "Inline details require response_mode='full'; imports are capped at 2 KiB. "
                 "Compact/lean search suppresses detail serialization upstream "
                 "and returns bounded previews; open one result with "
                 "knowledge(action='details', discovery_id='...')."
@@ -261,7 +264,9 @@ ALIAS_SCHEMA_PROPERTY_OVERRIDES = {
         "limit": {
             "description": (
                 "Max results (for action=search: min 1, values above 100 are "
-                "capped, 0 or negative is rejected)"
+                "capped, 0 or negative is rejected). search_shared_memory's "
+                "bounded tiers show three digests; pass limit above 3 and they "
+                "list up to 17 further results as one-line more_results rows"
             ),
             "brief": "Max results, 1-100 (more is capped).",
         },

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.31.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.35.1`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -340,7 +340,28 @@ The two identifiers serve different jobs:
   (`UNITARES_LEGACY_SESSION_IDS` = `refuse` | `log` | `accept`) with
   `stable_session_id_rejected`, and a verified continuity token naming the
   agent converts to the keyed id. No input schema changes, so no digest
-  moves).
+  moves;
+  1.32.0, 2026-10-11: `observe(action="agent")`, output and target
+  resolution. `target_agent_id` resolves the identifier
+  `agent(action="list")` prints for an agent whose UUID it withholds
+  (`{public_agent_id}_{uuid8}`, or the `agent-redacted` digest); those
+  answered not-found before. A caller that is neither the operator nor the
+  observed agent receives that identifier in `agent_id`, with
+  `uuid_redacted: true`, where it used to receive the UUID. Resolution order
+  is UUID, server-composed listed identifier, then alias; an alias names its
+  one live holder ahead of archived or deleted ones, and a target naming more
+  than one agent is refused with `AMBIGUOUS_TARGET` where the first matching
+  registry row used to be returned. Only the long description of `target_agent_id`
+  changes, which is outside every input digest, so no digest moves;
+  1.33.0, 2026-10-13: `search_shared_memory`, output only. A `lean` or
+  `compact` search called with `limit` above 3 lists the results after the
+  three digests under `more_results`, one row each (`discovery_id`, `type`,
+  `status`, a summary bounded at 100 characters), up to 17 rows inside a
+  2,000-byte budget of their own, and reports their number as
+  `state_summary.more_results_shown`. A search with no `limit`, or a `limit`
+  of 3 or less, returns what it did before, and the `full` tier is
+  unchanged. Only the long description of `limit` changes, which is outside
+  every input digest, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
@@ -384,10 +405,93 @@ newest in-range version, which is 2.x as well. A client
 should negotiate the UNITARES contract above rather than infer compatibility
 from its locally installed MCP package version.
 
-Regenerate the artifact from the repository root with:
+For an output or description change, prepare the release files in one command
+from the repository root (choose the next version deliberately):
+
+```bash
+python3 scripts/dev/prepare_interface_release.py --version 1.34.0 \
+  --slug describe-output --summary "Describe the observable change."
+```
+
+Use `--dry-run` to preview destinations and skills citing affected files. The
+command bumps the source version with a dated note, regenerates the artifact,
+adds a release-entry stub here and writes a changelog fragment. It refuses an
+existing fragment or a nonadvancing version and restores the original files if
+generation fails. Finish the compatibility/digest/client-action prose, re-check
+the listed skills, then explicitly stamp them with a named verifier. It never
+certifies skills on your behalf. Commit all release files with the actual fix.
+
+To regenerate only the artifact from the repository root:
 
 ```bash
 python3 -m src.interface_contract > docs/interface-contract.v1.json
 ```
 
 Then run `tests/test_interface_contract.py` and the normal repository test gate.
+
+## 1.34.0 (2026-10-13)
+
+Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+
+Search and agent-scoped get retain full stored bodies but cap imported inline
+`details` at 2,048 UTF-8 bytes. Oversized rows report `details_truncated`, original
+`details_length` (characters), `details_bytes`, `has_more_details`, and a
+`details_retrieval` argument object for `knowledge(action="details")`. Its explicit
+paged read is unchanged. Native findings and governed promotions are unchanged.
+
+Imported rows carry `imported_memory` with `trust="unreviewed"`, `age_days`
+(or null for an unreadable timestamp) and `age_basis="created_at"`. This age is
+KG row age, not source-file age or time since verification. Routine sync/status
+updates do not reset it. Digest and additional-result rows retain the marker
+inside their existing byte budgets, so fewer rows may fit. No ranking or
+retention policy changes.
+
+The knowledge include_details description changes the knowledge schema digest;
+search_shared_memory retains its brief description and digest. Clients should
+follow `details_retrieval` to read long imported evidence instead of assuming
+inline content is complete. No arguments are removed or retyped.
+
+## 1.35.0 (2026-10-13)
+
+Add bounded replayable knowledge notices for proven active sessions
+
+`knowledge(action="notices")` adds optional `acknowledge` (at most three
+revision UUIDs), `acknowledge_gap` (one gap UUID) and `muted` (boolean).
+The knowledge schema digest changes; no existing argument is removed.
+The action requires a caller-proven process binding and never accepts another
+recipient from an argument. Reads replay; exact acknowledgements cannot erase
+newer revisions or another process's pending notice.
+
+Successful active tool responses may carry `knowledge_changes`: at most three
+coalesced row pointers under a separate 2,048-byte UTF-8 budget. Existing base
+response budgets still apply before this optional field. Each pointer names a
+row, revision, kind, changed fields and details arguments. If `_response_size`
+exists, its measurement includes this field. No background/model work is started.
+Typed refusals and errors pass through without notices.
+
+Recipients are the row owner (on updates) and exact `notify-agent-<UUID>` tags.
+A removed mention revokes its pending pointer. Process identity, not a display
+name or predecessor, owns an inbox. The delivery backlog keeps at most 100
+rows for seven days; lazy trimming reports a stable `gap_token`. Intermediate
+changes to one row deliberately coalesce. Read details before acting, acknowledge
+only received revisions, and rescan before acknowledging a gap. Muting suppresses
+automatic display without granting authority or changing KG status/content.
+
+Migration 074 couples pointers to canonical-table commits for both KG backends.
+No historical events are backfilled. Writer attribution is not inferred from
+ownership: this version exposes no actor field because system mutation paths do
+not consistently carry a proven writer. The current shared KG permits unbound
+row reads; delivery still joins the current row and checks current recipient
+membership. A future row-ACL feature must extend both details and notice checks.
+No credentials, permission checks or scientific instruments are changed.
+
+## 1.35.1 (2026-10-13)
+
+`knowledge(action="notices")` now returns one MCP text-content item containing
+the JSON notice response. Previously its success path nested the content list,
+causing the gateway to stringify the Python representation into `result` instead
+of exposing `notices`, `muted`, `has_more`, and acknowledgement guidance.
+
+This corrects the 1.35.0 output contract without changing inputs, permissions,
+or notice delivery. Schema digests do not move. Clients can read the documented
+JSON fields directly after the server upgrade; no request changes are needed.
