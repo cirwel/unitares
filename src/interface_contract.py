@@ -300,7 +300,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # advisory hosts, with pinned routing, matching effort, unchanged privacy and
 # authority gates, and no fallback. Omitted selection keeps automatic routing.
 # 1.37.0 (2026-10-14): Infer omitted consult effort from a selected host; full diagnostics explain aggregate tokens and retain bounded backend failure messages.
-INTERFACE_CONTRACT_VERSION = "1.37.0"
+# 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+INTERFACE_CONTRACT_VERSION = "1.38.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

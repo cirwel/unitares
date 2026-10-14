@@ -10,6 +10,7 @@ source_files:
   - unitares/db/postgres/migrations/074_knowledge_change_notices.sql
   - unitares/src/knowledge_authority.py
   - unitares/src/mcp_handlers/knowledge/handlers.py
+  - unitares/src/mcp_handlers/knowledge/read_metadata.py
   - unitares/src/mcp_handlers/knowledge/synthesis.py
   - unitares/src/mcp_handlers/schemas/knowledge.py
   - unitares/src/alias_schema.py
@@ -363,6 +364,27 @@ in full mode. A truncated row reports its original character/byte lengths and
 `details_retrieval` arguments; use `knowledge(action="details", discovery_id=...,
 offset=0, length=2000)` and the returned pagination to read the stored evidence.
 Native findings and governed promotions keep their existing behavior.
+
+### Appended notes on a retrieved record
+
+A summary can predate later evidence. Search, agent-scoped get and details reads
+carry `resolution_notes` when the full stored details contain recognizable dated
+`Resolution notes (...)` blocks. It reports `source="details_text"`, `count`,
+`first_offset` and `latest_offset`. These are character offsets, in the same units
+as details pagination, computed before previews or imported-memory truncation.
+
+Open the last block with `knowledge(action="details", discovery_id=...,
+offset=<latest_offset>)`; start at `first_offset` to inspect the note history.
+The last block may be administrative while an earlier one contains the correction.
+Use the returned pagination to continue through long notes. On a later read,
+compare its fresh note locations before reusing offsets: replacing details can
+move or remove them.
+
+These locations are parsed from authored text, not authenticated update receipts.
+“Latest” means last in text order, not most authoritative. A note can confirm the
+original claim, correct it, or append unrelated progress; neither `resolved` nor
+the presence of notes means the summary is false. Read the evidence before acting.
+Original content, authorship, lifecycle and ranking are unchanged.
 
 The imported digest's `imported_memory` marker says `trust="unreviewed"` and
 gives `age_days` since the KG row was created (`age_basis="created_at"`), or null
