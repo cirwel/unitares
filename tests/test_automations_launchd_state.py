@@ -27,14 +27,16 @@ def census_mod():
     return module
 
 
-def _plist(home: Path, label: str, args: list[str], *, disabled: bool = False) -> None:
+def _plist(
+    home: Path, label: str, args: list[str], *, disabled: bool = False, program: str | None = None,
+) -> None:
     launch_dir = home / "Library" / "LaunchAgents"
     launch_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"Label": label, "ProgramArguments": args, "Disabled": disabled}
+    if program is not None:
+        payload["Program"] = program
     with (launch_dir / f"{label}.plist").open("wb") as handle:
-        plistlib.dump(
-            {"Label": label, "ProgramArguments": args, "Disabled": disabled},
-            handle,
-        )
+        plistlib.dump(payload, handle)
 
 
 def test_launchctl_list_and_disabled_overrides_are_parsed(census_mod, monkeypatch):
@@ -101,6 +103,21 @@ def test_collect_launchd_reconciles_loaded_disabled_missing_and_not_loaded(
     assert items["job.not-loaded"].status == "inactive"
 
 
+def test_collect_launchd_validates_program_before_argv_zero(census_mod, tmp_path, monkeypatch):
+    monkeypatch.setattr(census_mod, "HOME", tmp_path)
+    missing_program = tmp_path / "removed-executable"
+    _plist(tmp_path, "job.bad-program", ["custom-argv0"], program=str(missing_program))
+    _plist(tmp_path, "job.custom-argv0", [str(missing_program)], program="/usr/bin/true")
+    monkeypatch.setattr(census_mod, "launchd_runtime", lambda _warnings: ({}, {}))
+
+    items = {item.name: item for item in census_mod.collect_launchd([])}
+    assert items["job.bad-program"].status == "missing"
+    assert f"attention:command_missing:{census_mod.short_path(missing_program)}" in (
+        items["job.bad-program"].notes
+    )
+    assert items["job.custom-argv0"].status == "inactive"
+
+
 def test_scheduler_result_supersedes_an_older_wrapper_receipt(census_mod):
     item = census_mod.Automation(
         id="launchd:job",
@@ -127,7 +144,10 @@ def test_scheduler_result_supersedes_an_older_wrapper_receipt(census_mod):
     assert "attention:receipt_disagrees_with_scheduler" in item.notes
 
 
-def test_dead_running_receipt_is_stale_when_job_is_not_loaded(census_mod, monkeypatch):
+@pytest.mark.parametrize("receipt_pid_alive", [False, True])
+def test_dead_running_receipt_is_stale_when_job_is_not_loaded(
+    census_mod, monkeypatch, receipt_pid_alive,
+):
     item = census_mod.Automation(
         id="launchd:job",
         name="job",
@@ -138,7 +158,7 @@ def test_dead_running_receipt_is_stale_when_job_is_not_loaded(census_mod, monkey
         status="not_loaded",
         scheduler_state="not_loaded",
     )
-    monkeypatch.setattr(census_mod, "pid_is_alive", lambda _pid: False)
+    monkeypatch.setattr(census_mod, "pid_is_alive", lambda _pid: receipt_pid_alive)
     census_mod.apply_run_receipt(
         item,
         {"status": "running", "timestamp": "2026-09-29T00:00:00Z", "pid": 42},
@@ -167,6 +187,10 @@ def test_dead_running_receipt_without_definition_becomes_attention_item(census_m
     assert (rows[0].status, rows[0].last_status, rows[0].scheduler) == (
         "orphaned", "unknown", "receipt-only",
     )
+    original_message = rows[0].last_message
+    census_mod.apply_run_receipt(rows[0], {"status": "running", "message": "started"})
+    assert rows[0].last_status == "unknown"
+    assert rows[0].last_message == original_message
 
 
 def test_launchctl_failure_degrades_to_config_only(census_mod, monkeypatch):

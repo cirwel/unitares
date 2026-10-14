@@ -304,19 +304,23 @@ def launchd_runtime(warnings: list[str]) -> tuple[dict[str, tuple[str, int]] | N
     return loaded, disabled
 
 
-def missing_launchd_command(args: list[str]) -> str | None:
+def missing_launchd_command(program: Any, args: list[str]) -> str | None:
     """Return an absent executable or interpreter script, when provable."""
-    if not args:
+    executable = str(program) if program else (args[0] if args else "")
+    if not executable:
         return None
-    program = Path(args[0])
-    if program.is_absolute() and not program.exists():
-        return str(program)
-    interpreter = program.name.lower()
+    executable_path = Path(executable)
+    if executable_path.is_absolute() and not executable_path.exists():
+        return str(executable_path)
+    interpreter = executable_path.name.lower()
     if interpreter not in {"bash", "sh", "zsh", "python", "python3"}:
         return None
-    if len(args) < 2 or args[1] in {"-c", "-m"} or args[1].startswith("-"):
+    script_index = 1
+    if len(args) <= script_index:
         return None
-    script = Path(args[1])
+    if args[script_index] in {"-c", "-m"} or args[script_index].startswith("-"):
+        return None
+    script = Path(args[script_index])
     if script.is_absolute() and not script.exists():
         return str(script)
     return None
@@ -391,7 +395,7 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
                     notes.append("attention:launchd_last_exit_nonzero")
         else:
             notes.append("attention:launchd_state_unknown")
-        missing_command = missing_launchd_command(args)
+        missing_command = missing_launchd_command(plist.get("Program"), args)
         if missing_command is not None:
             status = "missing"
             notes.append(f"attention:command_missing:{short_path(missing_command)}")
@@ -1431,6 +1435,8 @@ def pid_is_alive(raw_pid: Any) -> bool | None:
 
 def apply_run_receipt(item: Automation, run: dict[str, Any]) -> None:
     """Merge a wrapper receipt without letting it overrule scheduler truth."""
+    if item.scheduler == "receipt-only":
+        return
     item.last_status = run.get("status") or item.last_status
     item.last_run = run.get("timestamp") or item.last_run
     item.last_message = run.get("message")
@@ -1453,12 +1459,11 @@ def apply_run_receipt(item: Automation, run: dict[str, Any]) -> None:
         # The stale start is disproven, but launchctl has no timestamp tying
         # its previous exit code to this receipt. Preserve the exit separately
         # and report the wrapper outcome as unknown rather than fabricating it.
-        if pid_is_alive(run.get("pid")) is not True:
-            item.last_status = "unknown"
-            item.last_exit_code = None
-            item.last_message = "running receipt is stale; completion outcome is unknown"
-            item.notes.append("attention:stale_running_receipt")
-            item.notes.append("attention:running_receipt_without_launchd_process")
+        item.last_status = "unknown"
+        item.last_exit_code = None
+        item.last_message = "running receipt is stale; completion outcome is unknown"
+        item.notes.append("attention:stale_running_receipt")
+        item.notes.append("attention:running_receipt_without_launchd_process")
         return
 
     if item.scheduler_state == "loaded" and item.scheduler_last_exit_code is not None:
