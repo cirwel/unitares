@@ -989,12 +989,12 @@ OPTIONAL_CLI = {"antigravity": "agy"}
 # workspace). The material used to ride inline in ONE argv element, which Linux
 # caps at 128 KiB: PR #2470's diff alone was 143 KB, so every agy review of it
 # failed before starting. Files have no such limit.
-#: Default model: Gemini 3.1 Pro (High), full effort. Chosen 2026-09-26 on a
-#: small sample (two PRs, file mode): the default model (3.7 Flash) called
-#: #2458 CLEAN while Pro found two real pre-existing defects in its changed
-#: files, with about half the output tokens. REVIEW_AGY_MODEL overrides it;
+#: Default model: Gemini 3.8 Flash (High), available in `agy models` on
+#: 2026-10-13. The former 3.1 Pro pin is no longer served. This restores
+#: availability; it is not evidence of equivalent review quality.
+#: REVIEW_AGY_MODEL overrides it;
 #: "default" leaves the choice to agy.
-AGY_DEFAULT_MODEL = "gemini-3.1-pro-high"
+AGY_DEFAULT_MODEL = "gemini-3.8-flash-high"
 #: A changed file whose name agy would load as instructions (AGENTS.md,
 #: GEMINI.md, CLAUDE.md, anything under .agents/, .agent/ or .gemini/) is
 #: written with this suffix, so the PR under review cannot configure its own

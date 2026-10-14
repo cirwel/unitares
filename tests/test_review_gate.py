@@ -2569,11 +2569,13 @@ def test_instruction_bearing_names_are_defused(repo):
     assert rg.agy_review_path("src/agents.py") == "src/agents.py"
 
 
-def test_agy_model_defaults_to_pro_and_is_overridable(monkeypatch):
+def test_agy_model_defaults_to_available_gemini_and_is_overridable(monkeypatch):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
-    assert rg.agy_model_args() == ["--model", rg.AGY_DEFAULT_MODEL]
-    monkeypatch.setenv("REVIEW_AGY_MODEL", "gemini-3.8-flash-high")
     assert rg.agy_model_args() == ["--model", "gemini-3.8-flash-high"]
+    assert rg.provider_family("antigravity") == "google"
+    monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
+    assert rg.agy_model_args() == ["--model", "claude-opus-5-5-high"]
+    assert rg.provider_family("antigravity") == "anthropic"
     monkeypatch.setenv("REVIEW_AGY_MODEL", "default")
     assert rg.agy_model_args() == []
 
