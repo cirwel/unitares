@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.37.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.38.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -542,3 +542,10 @@ durable audit do not include this explanatory text. Full failure diagnostics
 also retain the backend message, bounded to 500 characters and excluded from
 compact responses and audit storage; the facade summary and failure semantics
 remain unchanged.
+
+## 1.38.0 (2026-10-14)
+
+KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+
+<!-- Complete before readiness: affected outputs/descriptions, compatibility,
+     changed schema digests (or why none move), and client action. -->
