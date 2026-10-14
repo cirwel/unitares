@@ -1974,10 +1974,11 @@ def current_record(repo: str, pr: int, key: str, head: str,
                    comments: list[dict]) -> Record | None:
     records = read_native(repo, pr, key, head, comments).records
     rec = latest_matching(comments, key, records)
-    if rec is None:
+    if rec is None or rec.verdict == "FAILED":
         carry_key, equivalents = _CARRY.get((repo, pr), ("", []))
-        _, rec = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""),
-                                equivalents if carry_key == key else [])
+        _, editorial = editorial_carry(comments, key, _CARRY_BASES.get((repo, pr), ""),
+                                      equivalents if carry_key == key else [])
+        rec = editorial or rec  # an outage does not create a new review requirement
     return rec
 
 
@@ -3806,7 +3807,9 @@ def cmd_ci(args) -> int:
     comments, carried = carry_records(comments, key, combined)
     try:
         snapshot = read_native(repo, pr, key, head, comments)
-        rec = latest_matching(comments, key, snapshot.records) or editorial
+        rec = latest_matching(comments, key, snapshot.records)
+        if rec is None or rec.verdict == "FAILED":
+            rec = editorial or rec
     except SystemExit as exc:
         print(f"::warning::Review evidence incomplete: {exc}. Existing review check preserved; "
               "retry this workflow when GitHub evidence is readable.")

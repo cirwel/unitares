@@ -5312,3 +5312,31 @@ def test_editorial_only_base_merge_is_reused_by_cli_and_host(editorial_repo, mon
 ])
 def test_editorial_document_scope_includes_nested_readmes_but_not_instruction_dirs(path, allowed):
     assert rg.editorial_path(path, []) is allowed
+
+
+@pytest.mark.parametrize('verdict,scope,editorial_allowed', [
+    ('FAILED', 'full', True), ('FINDINGS', 'full', False), ('FAILED', 'full-required', False),
+])
+def test_editorial_only_receipt_overrides_outage_but_not_findings_or_scope_refusal(
+        editorial_repo, monkeypatch, verdict, scope, editorial_allowed):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-qb', 'typo', 'master')
+    previous = _git(repo, 'rev-parse', 'HEAD')
+    head = _typo(repo)
+    key = rg.diff_key('master', head)
+    attempt = full_record(key, verdict, 1 if verdict == 'FINDINGS' else 0, False,
+                          'codex', head=head, base=previous, scope=scope)
+    comments = [_comment(attempt), _editorial_comment(previous)]
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): 'master'})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    rec = rg.current_record('o/r', 1, key, head, comments)
+    assert (rec.scope == 'editorial') is editorial_allowed
+    _git(repo, 'remote', 'add', 'origin', str(repo))
+    _git(repo, 'update-ref', 'refs/pull/1/head', head)
+    monkeypatch.setattr(rg, 'changed_paths', _REAL_CHANGED_PATHS)
+    monkeypatch.setattr(rg, 'gh_json', lambda *a: {'state': 'open', 'head': {'sha': head}, 'base': {'ref': 'master'}})
+    posted = []
+    monkeypatch.setattr(rg, 'post_check', lambda *a: posted.append(a))
+    assert rg.cmd_ci(SimpleNamespace(repo='o/r', pr=1, post_status=True)) == 0
+    assert (posted[0][3] == 'success') is editorial_allowed
