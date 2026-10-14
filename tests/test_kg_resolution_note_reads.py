@@ -116,6 +116,49 @@ def test_more_result_rows_keep_note_locations_inside_existing_budget(monkeypatch
     assert len(json.dumps(extra, ensure_ascii=False).encode()) <= 2000
 
 
+@pytest.mark.parametrize("mode", ["lean", "compact"])
+@pytest.mark.parametrize("explicit_limit", [False, True])
+def test_hint_describes_only_visible_notes(monkeypatch, mode, explicit_limit):
+    docs = [document("Original body.", id=f"d{i}") for i in range(3)]
+    docs.append(document(note("Later evidence."), id="d3"))
+    args = {"response_mode": mode, **({"limit": 10} if explicit_limit else {})}
+    env = build_experience_envelope("search_shared_memory", "knowledge", search_payload(monkeypatch, docs), args)
+    assert len(env["memory_suggestions"]) == 3
+    assert ("resolution_notes_hint" in env) == explicit_limit
+    assert bool(env.get("more_results")) == explicit_limit
+
+
+def test_budget_drops_hint_when_its_last_note_row_is_removed(monkeypatch):
+    docs = [document("Original body.", id="d0"), document(note("Later evidence."), id="d1")]
+    payload = search_payload(monkeypatch, docs)
+    # An oversized lower-ranked lifecycle field forces the real budget path
+    # to remove that digest; its coaching must not outlive the row.
+    payload["discoveries"][1]["closure_standard"] = "x" * 4000
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload, {})
+    assert [d["discovery_id"] for d in env["memory_suggestions"]] == ["d0"]
+    assert "resolution_notes_hint" not in env
+    assert len(json.dumps(env, ensure_ascii=False).encode()) <= 3000
+
+
+def test_more_rows_hidden_by_their_budget_do_not_keep_a_hint(monkeypatch):
+    docs = [document("Original body.", id=f"d{i}") for i in range(3)]
+    docs.append(document(note("Later evidence."), id="x" * 2100))
+    env = build_experience_envelope("search_shared_memory", "knowledge", search_payload(monkeypatch, docs), {"limit": 10})
+    assert "more_results" not in env
+    assert "resolution_notes_hint" not in env
+
+
+def test_digest_budget_withholds_extra_notes_and_their_hint_together(monkeypatch):
+    docs = [document("Original body.", id=f"d{i}") for i in range(3)]
+    docs.append(document(note("Later evidence."), id="d3"))
+    payload = search_payload(monkeypatch, docs)
+    payload["discoveries"][1]["closure_standard"] = "x" * 4000
+    env = build_experience_envelope("search_shared_memory", "knowledge", payload, {"limit": 10})
+    assert [d["discovery_id"] for d in env["memory_suggestions"]] == ["d0"]
+    assert "more_results" not in env
+    assert "resolution_notes_hint" not in env
+
+
 @pytest.mark.asyncio
 async def test_agent_get_and_imported_inline_cap_keep_full_text_offsets(monkeypatch):
     details = "Old context. " * 700 + "\n\n" + note("Later correction.")

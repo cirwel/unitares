@@ -48,7 +48,11 @@ comparison here retains summaries rather than expanding all details inline.
 The tests exercise Unicode offsets through the actual details handler, multiple
 notes, an administrative last note, invalid headers, open and resolved records,
 imported-content truncation, all search response modes and extra-row budgets.
-Seven regression cases failed before the fix; all twelve pass after it. A text
+Seven regression cases failed before the fix; all twelve original cases pass.
+Review added seven cases for note hints on shown versus hidden rows, including
+both digest and extra-result budgets; four failed before the follow-up fix.
+All nineteen now pass. Hints only remain while a shown row has note locations.
+A text
 replacement can invalidate an old offset: details reads return fresh locations,
 which callers should compare before reusing a pointer.
 

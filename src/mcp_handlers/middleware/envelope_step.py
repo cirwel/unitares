@@ -2253,7 +2253,19 @@ def _attach_response_size(
     envelope["_response_size"] = metadata
 
 
-def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
+def _prune_resolution_notes_hint(envelope: Dict[str, Any], notes_in_more: bool) -> None:
+    """Keep note coaching only while a digest or bounded extra row uses it."""
+    suggestions = envelope.get("memory_suggestions") or []
+    if any(isinstance(row, dict) and "resolution_notes" in row for row in suggestions):
+        return
+    if notes_in_more and len(suggestions) == _MEMORY_SUGGESTION_LIMIT:
+        return
+    envelope.pop("resolution_notes_hint", None)
+
+
+def _enforce_search_projection_budget(
+    envelope: Dict[str, Any], *, notes_in_more: bool = False,
+) -> None:
     """Keep the friendly KG digest inside its declared wire budget.
 
     Result summaries and tags are already bounded independently. This final
@@ -2285,8 +2297,9 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     # The staleness note is written before the budget steps so they measure
     # it, and re-checked after them: it goes if no stale digest survived.
     _note_stale_digests(envelope)
+    _prune_resolution_notes_hint(envelope, notes_in_more)
     if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-        _truncate_search_projection(envelope, wire_bytes)
+        _truncate_search_projection(envelope, wire_bytes, notes_in_more=notes_in_more)
         _note_stale_digests(envelope)
     _restore_digest_attribution(envelope, set_aside, wire_bytes)
 
@@ -2357,7 +2370,9 @@ def _coaching_yields(envelope: Dict[str, Any]) -> List[tuple]:
     return steps
 
 
-def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+def _truncate_search_projection(
+    envelope: Dict[str, Any], wire_bytes, *, notes_in_more: bool = False,
+) -> None:
     """The budget steps proper, run on the attribution-free envelope: drop
     optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
@@ -2390,6 +2405,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
     ):
         if len(suggestions) > 1:
             suggestions.pop()
+            _prune_resolution_notes_hint(envelope, notes_in_more)
             continue
 
         # A single result can still carry unbounded historical fields (for
@@ -2426,6 +2442,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
 
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
+            _prune_resolution_notes_hint(envelope, notes_in_more)
 
     # The digest set is final now, so its count is settled before any
     # attribution is restored: it must be inside the budget the restore
@@ -3198,7 +3215,13 @@ def build_experience_envelope(
     bounded_search = friendly_name == "search_shared_memory" and not include_raw
     bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
-        _enforce_search_projection_budget(envelope)
+        # Preview the separately bounded extra rows to reserve coaching only
+        # if a note is reachable there. If budgeting later drops a digest,
+        # extras are withheld too, and the hint is reconciled at that step.
+        more_preview = {"memory_suggestions": envelope.get("memory_suggestions")}
+        _append_more_results(more_preview, source_payload, arguments)
+        notes_in_more = any("resolution_notes" in row for row in more_preview.get("more_results", []))
+        _enforce_search_projection_budget(envelope, notes_in_more=notes_in_more)
 
     # Routine sync responses should spend their budget on the decision, not on
     # a size receipt about the decision. Keep the receipt when the projection
