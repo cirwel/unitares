@@ -2512,6 +2512,12 @@ async def _retrieve_hybrid_candidates(
             str(request.query_text),
             limit=fetch_limit,
             min_similarity=state.min_similarity,
+            # RRF needs semantic relevance, not AGE's implicit graph/age/status
+            # blend. A resolved incident can still be the best answer. Apply
+            # visibility, explicit recency and authority in their handler stages.
+            connectivity_weight=0.0,
+            temporal_decay=False,
+            status_weight=False,
             **tag_kwargs,
             **_window_kwargs(request),
         ),
@@ -2569,6 +2575,10 @@ async def _retrieve_semantic_candidates(state: _KnowledgeSearchState) -> None:
         str(request.query_text),
         limit=state.first_stage_limit,
         min_similarity=state.min_similarity,
+        # Match the semantic leg of hybrid search; recency is opt-in below.
+        connectivity_weight=0.0,
+        temporal_decay=False,
+        status_weight=False,
         **_tag_kwargs(request),
         **_window_kwargs(request),
     )
