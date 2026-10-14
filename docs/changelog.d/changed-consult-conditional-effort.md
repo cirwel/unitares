@@ -1,0 +1,1 @@
+- Interface contract 1.37.0: Infer omitted consult effort from a selected host and explain aggregate token usage in full diagnostics. Full failure diagnostics also preserve the bounded backend error message.

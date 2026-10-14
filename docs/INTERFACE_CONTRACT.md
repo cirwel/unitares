@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.36.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.37.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -517,3 +517,28 @@ for the caller, excluded from audit storage. HF HTTP 401/402/429 failures now
 feed the existing bounded auth/quota cooldown; discovery reports the observed
 unavailability, without a model or billing probe. These output/description fixes
 change no raw-tool input schemas.
+
+## 1.37.0 (2026-10-14)
+
+Infer omitted consult effort from a selected host and explain aggregate token usage in full diagnostics.
+
+For `consult`, omitted `effort` becomes thorough for an explicitly selected CLI
+host, otherwise standard. An explicit value is never overwritten; incompatible
+host/effort pairs still fail before dispatch. Privacy, pinning, failover and
+advisory authority are unchanged. The compact request receipt and audit show
+the resolved effort.
+
+The `effort` input retains its string enum and optionality but no longer
+advertises an unconditional standard default. Descriptions state the
+conditional default. Only the `consult` input digest and aggregate surface hash
+move; refresh cached schemas and omit effort to use inference. Existing calls
+with a matching explicit effort, and automatic calls with no host, keep their
+behavior. Explicit null is still invalid.
+
+Full consultation diagnostics add `tokens_used_note` when a token aggregate is
+present. It explains provider-specific counting and zero-as-unreported behavior.
+Counts, pricing and EISV accounting are unchanged. Compact responses and the
+durable audit do not include this explanatory text. Full failure diagnostics
+also retain the backend message, bounded to 500 characters and excluded from
+compact responses and audit storage; the facade summary and failure semantics
+remain unchanged.

@@ -1810,8 +1810,9 @@ async def test_allow_degraded_treats_a_live_usage_limit_like_a_cooldown(monkeypa
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_id", tuple(co._SELECTABLE_HOST_ROUTES))
+@pytest.mark.parametrize("omit_effort", [False, True])
 async def test_pinned_host_reaches_existing_service_and_is_recorded(
-    monkeypatch, audit_sinks, host_id
+    monkeypatch, audit_sinks, host_id, omit_effort
 ):
     route, _, _, privacy_class = co._SELECTABLE_HOST_ROUTES[host_id]
     completed = _completed(route=route, host_id=host_id, privacy_class=privacy_class)
@@ -1827,7 +1828,7 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
     parsed = _payload(await co.handle_consult({
         "brief": _BRIEF_SENTINEL,
         "host_id": host_id,
-        "effort": "standard" if is_standard else "thorough",
+        **({} if omit_effort else {"effort": "standard" if is_standard else "thorough"}),
         "privacy": "local" if host_id == "ollama:local" else "cloud_allowed",
     }))
     assert parsed["success"] is True
@@ -1836,6 +1837,7 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
     assert selected.await_args.args[0].host_id == host_id
     unused.assert_not_awaited()
     assert parsed["request"]["host_id"] == host_id
+    assert parsed["request"]["effort"] == ("standard" if is_standard else "thorough")
     assert parsed["authority"]["advisory"] is True
     assert parsed["authority"]["can_satisfy_peer_review"] is False
     assert "failover" not in parsed
@@ -1848,12 +1850,12 @@ async def test_pinned_host_reaches_existing_service_and_is_recorded(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("arguments", [
     {"host_id": "hf:router"},
-    {"host_id": "claude:host-adapter", "effort": "thorough"},
-    {"host_id": "codex:host-adapter", "effort": "thorough"},
-    {"host_id": "antigravity:host-adapter", "effort": "thorough"},
+    {"host_id": "claude:host-adapter"},
+    {"host_id": "codex:host-adapter"},
+    {"host_id": "antigravity:host-adapter"},
     {"host_id": "ollama:local", "effort": "thorough"},
     {"host_id": "hf:router", "effort": "thorough", "privacy": "cloud_allowed"},
-    {"host_id": "codex:host-adapter", "privacy": "cloud_allowed"},
+    {"host_id": "codex:host-adapter", "effort": "standard", "privacy": "cloud_allowed"},
     {"host_id": "ollama:local", "allow_degraded": True},
     {"host_id": "codex:host-adapter", "effort": "thorough",
      "privacy": "cloud_allowed", "allow_degraded": True},
@@ -1954,3 +1956,76 @@ async def test_pinned_cancellation_records_selected_target(monkeypatch, audit_si
     assert record["status"] == "cancelled"
     assert record["request"]["host_id"] == "codex:host-adapter"
     assert record["request"]["thorough_host_id"] == "codex:host-adapter"
+
+
+@pytest.mark.parametrize("host_id,expected", [
+    (None, "standard"),
+    ("ollama:local", "standard"),
+    ("hf:router", "standard"),
+    ("claude:host-adapter", "thorough"),
+    ("codex:host-adapter", "thorough"),
+    ("antigravity:host-adapter", "thorough"),
+])
+def test_schema_materializes_host_effort_only_when_omitted(host_id, expected):
+    parsed = ConsultParams(brief="q", host_id=host_id)
+    assert parsed.model_dump()["effort"] == expected
+    # Explicit contradictions survive schema validation to the router's
+    # existing policy refusal; no supplied choice is silently overwritten.
+    explicit = "standard" if expected == "thorough" else "thorough"
+    assert ConsultParams(brief="q", host_id=host_id, effort=explicit).effort == explicit
+    with pytest.raises(ValidationError):
+        ConsultParams(brief="q", host_id=host_id, effort=None)
+    # An unconditional advertised standard default would encourage callers
+    # to insert it and defeat inference for explicitly selected CLI hosts.
+    assert "default" not in ConsultParams.model_json_schema()["properties"]["effort"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", ["compact", "full"])
+@pytest.mark.parametrize("tokens", [0, 28044])
+async def test_usage_explanation_is_full_diagnostics_only_and_preserves_counts(
+    monkeypatch, audit_sinks, response_mode, tokens
+):
+    result = _completed()
+    result.inference["tokens_used"] = tokens
+    result.inference["tokens_used_note"] = "untrusted-provider-note"
+    monkeypatch.setattr(co, "run_model_inference", AsyncMock(return_value=result))
+    parsed = _payload(await co.handle_consult({"brief": "q", "response_mode": response_mode}))
+    assert parsed["success"] is True
+    if response_mode == "full":
+        assert parsed["diagnostics"]["tokens_used"] == tokens
+        assert "billed cost" in parsed["diagnostics"]["tokens_used_note"]
+        assert "not reported" in parsed["diagnostics"]["tokens_used_note"]
+    else:
+        assert "diagnostics" not in parsed
+    assert "untrusted-provider-note" not in json.dumps(parsed)
+    _, pg = await audit_sinks()
+    assert pg[0]["details"]["route"]["tokens_used"] == tokens
+    assert "tokens_used_note" not in json.dumps(pg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_mode", ["compact", "full"])
+async def test_bounded_backend_failure_message_is_caller_only(
+    monkeypatch, audit_sinks, response_mode
+):
+    message = "FAILURE-MESSAGE-SENTINEL " + "private backend detail " * 80
+    result = InferenceOutcome.failed(
+        message, code="DELEGATED_INFERENCE_FAILED", category="system_error",
+        details={"adapter_status": "malformed", "exit_status": 0},
+        recovery={}, execution_started=True,
+    )
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(return_value=result))
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "host_id": "claude:host-adapter", "privacy": "cloud_allowed",
+        "response_mode": response_mode,
+    }))
+    assert parsed["error_code"] == "DELEGATED_INFERENCE_FAILED"
+    assert "advice" not in parsed
+    if response_mode == "full":
+        assert parsed["diagnostics"]["upstream"]["message"] == message[:500]
+    else:
+        assert "FAILURE-MESSAGE-SENTINEL" not in json.dumps(parsed)
+    _, pg = await audit_sinks()
+    assert "FAILURE-MESSAGE-SENTINEL" not in json.dumps(pg)
+    assert "private backend detail" not in json.dumps(pg)
