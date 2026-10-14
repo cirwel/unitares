@@ -22,6 +22,10 @@ no launchd process is reported as unknown completion, never invented success
 or failure. The census itself may appear running in the snapshot it is in the
 process of writing; inspect its subsequent completion receipt when auditing it.
 
+For the dependency-ordered operational closure plan, immutable safety surfaces
+and registered adaptive-versus-fixed evaluation, see
+[Bounded fix-loop readiness](bounded-fix-loop-readiness.md).
+
 Tool: `scripts/ops/unitares-automations` (single file, Python 3.11+ stdlib only —
 no dependencies). The operator's live install is a copy on `PATH`
 (`~/.local/bin/unitares-automations`); this repo copy is canonical.
