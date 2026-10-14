@@ -38,12 +38,13 @@ groups of ten with default and explicit limits, and an empty result. These are
 
 | Measurement | Before | After |
 |---|---:|---:|
-| Lean response bytes, summed across cases | 2,330,259 | 1,781,016 |
+| Lean response bytes, summed across cases | 2,331,826 | 1,783,984 |
 | Median lean response bytes | 1,787 | 1,249 |
 | 95th percentile response bytes | 4,199 | 3,660 |
 | Visible result occurrences | 2,309 | 2,309 |
+| Visible replacement-pointer occurrences | 56 | 56 |
 
-Total serialized lean bytes fall **23.57%**. The comparison verifies zero lost
+Total serialized lean bytes fall **23.49%**. The comparison verifies zero lost
 previously visible rows, zero changed checked evidence fields, and identical
 compact and full envelopes in all 1,079 cases. A record appears in multiple cases;
 the occurrence count is not a count of unique records. The larger responses
@@ -55,6 +56,16 @@ markers, imported-memory provenance, supersession, note offsets, relevance and i
 basis, detail availability, tags and summary content. A formerly shortened summary
 may regain a longer preview; no earlier preview content may disappear. These
 checks concern the visible projection, not the truth or completeness of a record.
+
+Review caught that the initial replay omitted production supersession annotation,
+making its replacement-pointer comparison vacuous. The corrected replay calls
+the production annotator with a separately frozen AGE successor map: 22 of the
+41 superseded corpus rows have replacement edges. This sidecar was captured
+read-only at `2026-10-14T07:17:09.452934+00:00`, after the original corpus snapshot,
+so it is not a reconstruction of the graph at the original capture time. Both
+conditions use the same map; its hash and timestamp are in the aggregate. The
+comparator now requires nonzero visible replacement-pointer coverage. Three
+regression tests exercise annotation, pointer loss and the empty-coverage trap.
 
 ## Reproduction and limits
 
@@ -69,13 +80,18 @@ receipt. The prompt, answer key and unedited response are retained privately wit
 the captures. This is a synthetic reading check in one shared context, not an
 independent agent trajectory or evidence of statistical equivalence.
 
-Use `scripts/eval/kg_context_budget.py capture SNAPSHOT --output CAPTURE.json`
+Use `scripts/eval/kg_context_budget.py capture SNAPSHOT --successors SUCCESSORS.json
+--output CAPTURE.json`
 against the pre-change and final code, then run `compare BEFORE.json AFTER.json
 --output AGGREGATE.json`. Captures contain private corpus text; publish only the
 aggregate. The script reads no live database and invokes no model. The baseline
 is master commit `7b717630e`; copy the same evaluation script into that checkout
-before capturing its responses. Private captures are retained in the operator's
-`kg-context-budget-20261014-493412bd` evaluation directory.
+before capturing its responses. The successor sidecar has `captured_at` and a
+`successors` object mapping old discovery IDs to lists of replacement IDs from
+AGE's directed `SUPERSEDES` edges. Private captures (`before-with-successors.json`,
+`after-with-successors.json`) and `successors.json` are retained in the operator's
+`kg-context-budget-20261014-493412bd` evaluation directory. Earlier captures remain
+there for audit; their 23.57% reduction is superseded by the corrected replay.
 
 Six targeted tests check default and explicit lean mode, expansion routes,
 requested-detail omission disclosures, caveat retention and diagnostic modes;
