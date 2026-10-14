@@ -5541,3 +5541,29 @@ def test_editorial_after_sensitive_base_merge_cannot_restore_premerge_family(car
     _typo(repo)
     comments.append(_editorial_comment(merged))
     assert _editorial_decide(comments)[1] == {'google'}
+
+
+def test_editorial_handoff_rejects_head_race_even_when_revert_restores_diff_key(editorial_repo, monkeypatch):
+    repo = editorial_repo
+    _git(repo, 'checkout', '-qb', 'typo', 'master')
+    base = _git(repo, 'rev-parse', 'HEAD')
+    old = _typo(repo)
+    key = rg.diff_key(base, old)
+    comments = [_editorial_comment(base)]
+    _, rec = rg.editorial_carry(comments, key, base, head=old)
+    (repo / 'main.py').write_text('value = 9\n')
+    _git(repo, 'commit', '-qam', 'substantive work during publication')
+    (repo / 'main.py').write_text('value = 1\n')
+    _git(repo, 'commit', '-qam', 'revert restores key')
+    new = _git(repo, 'rev-parse', 'HEAD')
+    assert rg.diff_key(base, new) == key
+    _git(repo, 'remote', 'add', 'origin', str(repo))
+    _git(repo, 'update-ref', 'refs/pull/1/head', new)
+    _git(repo, 'checkout', '-q', '--detach', old)
+    monkeypatch.setattr(rg, '_CARRY', {('o/r', 1): (key, [])})
+    monkeypatch.setattr(rg, '_CARRY_BASES', {('o/r', 1): base})
+    monkeypatch.setattr(rg, '_CARRY_HEADS', {('o/r', 1): old})
+    monkeypatch.setattr(rg, 'api_pages', lambda *a: comments)
+    monkeypatch.setattr(rg, 'pr_view', lambda *a: {'state': 'OPEN', 'headRefOid': new, 'baseRefName': 'master'})
+    monkeypatch.setattr(rg, 'completed_review_exit', completed_review_exit)
+    assert rg.finish_record('o/r', 1, key, old, rec, comments) == rg.UNREVIEWED

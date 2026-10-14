@@ -2794,6 +2794,7 @@ def completed_review_exit(repo: str, pr: int, key: str, head: str, result: int) 
 
 def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
                   comments: list[dict]) -> int:
+    editorial_head = _CARRY_HEADS.get((repo, pr), head)
     result = UNREVIEWED if rec.verdict == "FAILED" else 0 if rec.status()[0] == "success" else 1
     if result == 0 and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
         # Reactions have no workflow event. A durable comment both re-runs CI
@@ -2811,7 +2812,12 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
                         f"CLEAN — native review joined: {rec.url}", rec.text)
     # The receipt's network write can race a push too. Validate after it so
     # publishing evidence for an earlier diff cannot finish the current one.
-    return completed_review_exit(repo, pr, key, head, result)
+    result = completed_review_exit(repo, pr, key, head, result)
+    if (result == 0 and rec.scope == "editorial"
+            and _CARRY_HEADS.get((repo, pr), head) != editorial_head):
+        print("[review] UNREVIEWED: PR head moved during editorial handoff; rerun to join current evidence")
+        return UNREVIEWED
+    return result
 
 
 class review_lock:
