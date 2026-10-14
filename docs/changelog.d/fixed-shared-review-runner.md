@@ -1,0 +1,1 @@
+Fixed the existing shared PR review path for local and cloud authors: `review-requested` uses one host and the existing evidence/budget rules, including required families; stable App-authored same-repository PRs are eligible, the bootstrap uses App credentials, and unavailable ordinary reviews no longer instruct authors to hold finished work in draft.

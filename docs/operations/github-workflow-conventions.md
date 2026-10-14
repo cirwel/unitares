@@ -163,6 +163,36 @@ veto by removing the label.
 
 ### Review workflow
 
+**One request path for local and cloud authors.** Add `review-requested` to
+an open PR using GitHub, its REST API, or a connector. No local model CLI or
+`review.sh` is needed on the author's machine. Keep unfinished work draft;
+the request does not mark it ready or authorize a merge. `no-auto-review`
+holds automatic review, even when a request is present.
+
+The opted-in shared host reviews a quiet PR and posts the existing diff-bound
+review record on that PR. One provider attempt runs per scheduled tick. For
+an explicitly requested sensitive diff, a later tick selects an eligible
+missing model family; the normal cycle budget, provider pauses and retry
+limits still apply. Findings require author action before another family is
+started. A request never authorizes extra cycles or an operator waiver.
+
+Read the PR's `review` check: **UNREVIEWED** means no completed coverage,
+**action_required** means findings or required coverage need attention, and
+**success** means review coverage passed. A request label does not prove a
+runner is online; a paused/offline host leaves the PR visibly unreviewed.
+Ordinary work may still proceed after validation with that fact in the body;
+sensitive paths retain their required coverage. `approved-to-merge` remains
+the owning author's separate readiness declaration.
+
+On this operator's host, `com.unitares.review-sweep` is the designated runner.
+`scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
+clean checkout of merged `origin/master`, reads PR heads separately, and uses
+`unitares-github` for this repository's fetches and review publication. It
+refuses a missing App runner instead of using the human login. Other
+installers opt in to their own host and keep their existing credentials.
+Direct local `./scripts/dev/review.sh` remains available and shares the same
+per-PR lock and evidence, so it joins an in-flight host review.
+
 **Review publishers and operator authority.** In addition to the existing
 `OWNER`/`MEMBER`/`COLLABORATOR` accounts, ordinary review records accept the
 UNITARES agents App only when GitHub's comment metadata contains App ID
@@ -200,7 +230,7 @@ the test run one.
   a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
-  runs the same command without waiting for an operator prompt. If a review
+  requests the shared host or runs the same command locally. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
@@ -248,10 +278,12 @@ the test run one.
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own
   author is not a review.
-- Bot PRs (dependabot) get no exemption: the incident that motivated "no
+- Bot PRs use the same evidence rules: the incident that motivated "no
   mechanical exemption" was a dependency bump. Nobody has to remember them
   either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
-  from the owner's account or dependabot after 15 minutes without an update.
+  from the owner's account, Dependabot, or the already trusted UNITARES agents
+  App after 15 minutes without an update. Forks and unknown publishers wait
+  for explicit human handling.
   Drafts require the owner's explicit `review-requested` label; unfinished
   drafts are excluded by default. `no-auto-review` holds
   automatic review of intentionally unfinished work. Outside contributors'
@@ -715,8 +747,8 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Queue it instead of watching.** When your PR is ready (CI green, `review`
-check passing), mark it ready and apply `approved-to-merge` in the same step.
+**Queue it instead of watching.** When your PR is ready (CI green, known findings addressed, and required
+sensitive-path review coverage passing), mark it ready and apply `approved-to-merge` in the same step.
 The queue below arms it in turn, GitHub updates the branch when the base moves
 (the repo has "always suggest updating pull request branches" enabled), and it
 merges as soon as the required checks pass. Do not arm with `gh pr merge

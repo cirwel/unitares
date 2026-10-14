@@ -1,8 +1,12 @@
 """Exercise the installed launchd configuration without loading a real service."""
 import importlib.util
+import json
+import os
 from pathlib import Path
 import plistlib
+import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -41,3 +45,70 @@ def test_install_does_not_interrupt_or_overwrite_loaded_service(tmp_path, monkey
         installer.install(tmp_path)
     assert len(calls) == 1 and calls[0][:2] == ["launchctl", "print"]
     assert not (tmp_path / ".local").exists()
+
+
+def _bootstrap_repo(tmp_path):
+    repo = tmp_path / "repo with spaces"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=test", "-c",
+                    "user.email=test@example.test", "commit", "--allow-empty", "-qm", "base"], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin",
+                    "https://github.com/cirwel/unitares.git"], check=True)
+    subprocess.run(["git", "-C", str(repo), "update-ref", "refs/remotes/origin/master", "HEAD"], check=True)
+    return repo
+
+
+def test_bootstrap_routes_fetch_and_review_through_app_in_trusted_checkout(tmp_path):
+    repo = _bootstrap_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.jsonl"
+    runner = bin_dir / "unitares-github"
+    runner.write_text(f"#!{sys.executable}\n" + '''import json, os, sys
+from pathlib import Path
+with Path(os.environ['TEST_CALL_LOG']).open('a') as f:
+    f.write(json.dumps({'args': sys.argv[1:], 'cwd': os.getcwd()}) + '\\n')
+''')
+    runner.chmod(0o755)
+    lane = tmp_path / "lane"
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+           "UNITARES_REVIEW_REPO": str(repo), "UNITARES_REVIEW_WORKTREES": str(lane),
+           "TEST_CALL_LOG": str(log)}
+    result = subprocess.run(["bash", str(SCRIPT.with_name("review-sweep.sh")), "--dry-run"],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert calls == [
+        {"args": ["--read-only", "--", "git", "fetch", "--quiet", "origin", "master"], "cwd": str(repo)},
+        {"args": ["--", "review", "sweep", "--worktree", str(lane / "unitares-review-bot-pr"), "--dry-run"],
+         "cwd": str(lane / "unitares-review-bot")},
+    ]
+
+
+def test_bootstrap_refuses_missing_app_runner_before_fetch(tmp_path):
+    repo = _bootstrap_repo(tmp_path)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name in ("git", "tr"):
+        (bin_dir / name).symlink_to(shutil.which(name))
+    env = {**os.environ, "PATH": str(bin_dir), "UNITARES_REVIEW_REPO": str(repo),
+           "UNITARES_REVIEW_WORKTREES": str(tmp_path / "unused")}
+    result = subprocess.run([shutil.which("bash"), str(SCRIPT.with_name("review-sweep.sh"))],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 2
+    assert "no human-login fallback" in result.stderr
+    assert not (tmp_path / "unused").exists()
+
+
+def test_review_entrypoint_dispatches_sweep_without_starting_author_review(tmp_path):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python = bin_dir / "python3"
+    python.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    python.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    entrypoint = SCRIPT.parents[1] / "dev/review.sh"
+    result = subprocess.run(["bash", str(entrypoint), "sweep", "--worktree", str(tmp_path), "--dry-run"],
+                            env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["scripts/dev/review_gate.py", "sweep", "--worktree", str(tmp_path), "--dry-run"]
