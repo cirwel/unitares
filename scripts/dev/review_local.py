@@ -238,46 +238,11 @@ def assert_current(initial: dict, current: dict):
 
 
 def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
-    count = 0
-    for run in cache.glob(f'pr-{pr}-*'):
-        try:
-            receipt = json.loads((run / 'manifest.json').read_text())
-            if receipt['pr'] != pr or receipt['status'] not in ('CLEAN', 'FINDINGS', 'UNREVIEWED'):
-                raise ValueError('Invalid local receipt')
-            if receipt['status'] in ('CLEAN', 'FINDINGS'):
-                if not receipt.get('head') or not receipt.get('base'):
-                    raise ValueError('Missing local provenance')
-                if receipt.get('review_id', run.name) not in posted_ids:
-                    count += 1
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            raise ValueError(f'Local review history incomplete at {run}; escalate before another review') from exc
-    return count
+    return gate_module().local_completed_rounds(cache, pr, posted_ids)
 
 
 def local_budget_rounds(gate, rounds, cache: Path, pr: int, posted_ids: set[str]):
-    """Unposted completions spend the same cycles, but grant no coverage."""
-    if not local_completed_rounds(cache, pr, posted_ids):
-        return rounds
-    runs, seen = list(rounds.runs), set(posted_ids)
-    for run in sorted(cache.glob(f'pr-{pr}-*')):
-        receipt = json.loads((run / 'manifest.json').read_text())
-        identity = receipt.get('review_id', run.name)
-        if receipt['status'] not in ('CLEAN', 'FINDINGS') or identity in seen:
-            continue
-        seen.add(identity)
-        # Old manifests used a nanosecond start time in their directory name.
-        when = receipt.get('started_at')
-        if when is None:
-            match = re.fullmatch(rf'pr-{pr}-[0-9a-f]{{12}}-(\d{{16,20}})', run.name)
-            if not match:
-                raise ValueError(f'Local review timestamp missing at {run}; history unknown')
-            when = int(match[1]) / 1e9
-        if not isinstance(when, (int, float)) or not 0 < when <= time.time():
-            raise ValueError(f'Invalid local review timestamp at {run}')
-        key = gate.diff_key(receipt['base'], receipt['head'])
-        family = gate.model_family(receipt.get('architecture') or receipt.get('model', ''))
-        runs.append((when, receipt['head'], [], key, family))
-    return gate.count_review_cycles(runs, rounds.unknown_history)
+    return gate.local_budget_rounds(rounds, cache, pr, posted_ids)
 
 
 def config(repo: Path, key: str, default: str) -> str:
@@ -338,14 +303,7 @@ def main(argv=None) -> int:
             slug = gate.repo_slug()
             comments = gate.pr_comments(slug, args.pr)
             rounds = gate.pr_rounds(slug, args.pr, key, head, comments)
-            posted_ids = set()
-            for comment in comments:
-                if gate.trusted_review_comment(comment):
-                    record = gate.parse_record(comment.get('body', ''))
-                    if record and getattr(record, 'scope', '') == 'full':
-                        posted_ids.add(getattr(record, 'review_id', ''))
-            if gate.ROUND_CAP_ENABLED:
-                rounds = local_budget_rounds(gate, rounds, cache, args.pr, posted_ids)
+            rounds = gate.review_budget(rounds, args.pr, comments)
             family = gate.model_family(architecture)
             grant_url = ''
             if args.review_cycle_grant:

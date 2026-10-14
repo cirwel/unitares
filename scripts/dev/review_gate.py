@@ -443,7 +443,8 @@ def carry_records(comments: list[dict], key: str,
     for c in comments:
         rec = parse_record(c.get("body", ""))
         if rec is not None and rec.key in origin:
-            c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1)}
+            c = {**c, "body": c["body"].replace(f"key={rec.key}", f"key={key}", 1),
+                 "_review_original_key": c.get("_review_original_key", rec.key)}
             carried[c.get("html_url", "")] = origin[rec.key]
         out.append(c)
     return out, carried
@@ -480,6 +481,8 @@ class Record:
     review_id: str = ""
     from_head: str = ""
     from_key: str = ""
+    # In-memory provenance from proven base-merge carry; never a marker field.
+    original_key: str = ""
 
     def full(self) -> bool:
         return (self.scope == "full" and bool(self.head and self.base)
@@ -557,6 +560,13 @@ def stamp_record(rec: Record, base_ref: str, scope: str, text: str, args=None,
         rec.from_key = diff_key(base_ref, rec.from_head)
 
 
+def comment_record(comment: dict) -> Record | None:
+    rec = parse_record(comment.get("body", ""))
+    if rec:
+        rec.original_key = comment.get("_review_original_key", "")
+    return rec
+
+
 def followup_sources(rec: Record, comments: list[dict], native: list[Record] = ()) -> list[Record]:
     """Full reviews extended by a bounded, independently reviewed follow-up.
 
@@ -630,7 +640,7 @@ def followup_objects_valid(rec: Record) -> bool:
         return (rec.from_head != rec.head
                 and git("merge-base", rec.from_head, rec.head).strip() == rec.from_head
                 and diff_key(rec.base, rec.from_head) == rec.from_key
-                and diff_key(rec.base, rec.head) == rec.key)
+                and diff_key(rec.base, rec.head) == (rec.original_key or rec.key))
     except (SystemExit, subprocess.SubprocessError):
         return False
 
@@ -697,7 +707,7 @@ def latest_matching(comments: list[dict], key: str,
         if not trusted_review_comment(c):
             continue
         body = c.get("body", "")
-        rec = parse_record(body)
+        rec = comment_record(c)
         if rec and rec.key == key and rec.verdict in {"CLEAN", "FINDINGS", "FAILED"}:
             if (rec.scope == "fix" and rec.status()[0] == "success"
                     and not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native))):
@@ -739,7 +749,7 @@ def latest_matching(comments: list[dict], key: str,
             elif open_findings and open_findings[-1].findings == rec.findings:
                 original = open_findings.pop()
                 if rec.scope == "legacy" and original.scope == "fix":
-                    for name in ("scope", "head", "base", "from_head", "from_key", "review_id"):
+                    for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
                         setattr(rec, name, getattr(original, name))
                     if not (followup_objects_valid(rec) and fix_coverage_valid(rec, comments, native)):
                         rec.scope = "full-required"
@@ -865,20 +875,23 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     unknown_history = False
     completed_without_evidence: set[str] = set()
 
-    def seen(commit: str, when: str, findings: list[dict]) -> None:
+    def seen(commit: str, when: str, findings: list[dict], key: str = "") -> None:
+        nonlocal unknown_history
         t = timestamp(when)
         run = commit[:7]
         prior = runs.get(run)
         # One run leaves several artifacts (review, activity row) seconds
         # apart, in any order: keep its findings whichever arrives first.
         if prior is None:
-            runs[run] = (t, commit, findings, "", "openai")
+            runs[run] = (t, commit, findings, key, "openai")
         else:
+            if key and prior[3] and key != prior[3]:
+                unknown_history = True  # conflicting native work cannot refund a cycle
             # A later duplicate receipt must not reorder an old review into a
             # newer cycle and refund budget. Keep its first known evidence time.
             first = min(t, prior[0]) if t and prior[0] else t or prior[0]
             runs[run] = (first, commit if len(commit) > len(prior[1]) else prior[1],
-                         findings or prior[2], "", "openai")
+                         findings or prior[2], prior[3] or key, "openai")
 
     for c in comments:
         if not is_codex_bot(c):
@@ -928,14 +941,14 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     for c in comments:
         if not trusted_review_comment(c):
             continue
-        rec = parse_record(c.get("body", ""))
+        rec = comment_record(c)
         if (rec and rec.scope == "legacy" and not rec.disposed and rec.verdict != "FAILED"
                 and rec.reviewer != "codex-native" and not rec.reviewer.startswith("fix-verify:")):
             unknown_history = True
         if not rec or not rec.full() or rec.disposed or rec.verdict == "FAILED":
             continue
         if rec.reviewer == "codex-native":
-            seen(rec.head, c.get("created_at", ""), [])
+            seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
         body = c.get("body", "")
@@ -950,7 +963,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
         if rec.verdict == "FINDINGS" and not findings:
             findings = [{"body": "unlabelled finding; full review required"}]
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
-                                   rec.key, record_family(rec)))
+                                   rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
     answered_at = 0.0
     for c in comments:
@@ -984,6 +997,59 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
         findings.extend(run_findings)
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
                        answered_since=answered_at > last_at, cycles=cycles, runs=runs)
+
+
+def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
+    count = 0
+    for run in cache.glob(f'pr-{pr}-*'):
+        try:
+            receipt = json.loads((run / 'manifest.json').read_text())
+            if receipt['pr'] != pr or receipt['status'] not in ('CLEAN', 'FINDINGS', 'UNREVIEWED'):
+                raise ValueError('Invalid local receipt')
+            if receipt['status'] in ('CLEAN', 'FINDINGS'):
+                if not receipt.get('head') or not receipt.get('base'):
+                    raise ValueError('Missing local provenance')
+                if receipt.get('review_id', run.name) not in posted_ids:
+                    count += 1
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise ValueError(f'Local review history incomplete at {run}; escalate before another review') from exc
+    return count
+
+
+def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
+    """Unposted completions spend the same cycles, but grant no coverage."""
+    if not local_completed_rounds(cache, pr, posted_ids):
+        return rounds
+    runs, seen = list(rounds.runs), set(posted_ids)
+    for run in sorted(cache.glob(f'pr-{pr}-*')):
+        receipt = json.loads((run / 'manifest.json').read_text())
+        identity = receipt.get('review_id', run.name)
+        if receipt['status'] not in ('CLEAN', 'FINDINGS') or identity in seen:
+            continue
+        seen.add(identity)
+        # Old manifests used a nanosecond start time in their directory name.
+        when = receipt.get('started_at')
+        if when is None:
+            match = re.fullmatch(rf'pr-{pr}-[0-9a-f]{{12}}-(\d{{16,20}})', run.name)
+            if not match:
+                raise ValueError(f'Local review timestamp missing at {run}; history unknown')
+            when = int(match[1]) / 1e9
+        if not isinstance(when, (int, float)) or not 0 < when <= time.time():
+            raise ValueError(f'Invalid local review timestamp at {run}')
+        key = diff_key(receipt['base'], receipt['head'])
+        family = model_family(receipt.get('architecture') or receipt.get('model', ''))
+        runs.append((when, receipt['head'], [], key, family))
+    return count_review_cycles(runs, rounds.unknown_history)
+
+
+def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
+    """All local spending entries share a ledger, independent of approval coverage."""
+    if not ROUND_CAP_ENABLED:
+        return rounds
+    cache = Path(git("rev-parse", "--git-common-dir").strip()).resolve() / "local-reviews"
+    posted_ids = {rec.review_id for c in comments if trusted_review_comment(c)
+                  if (rec := parse_record(c.get("body", ""))) and rec.scope == "full"}
+    return local_budget_rounds(rounds, cache, pr, posted_ids)
 
 
 CYCLE_GRANT_MARKER = "unitares-review-cycle v1"
@@ -1436,7 +1502,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     additional full-review family. Missing sources or git objects carry none.
     """
     families = set()
-    trusted = [(c, parse_record(c.get("body", ""))) for c in comments
+    trusted = [(c, comment_record(c)) for c in comments
                if trusted_review_comment(c)]
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
@@ -1453,7 +1519,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
         if rec and rec.disposed and rec.scope == "legacy":
             original = originals.get((rec.reviewer, rec.findings))
             if original:
-                for name in ("scope", "head", "base", "from_head", "from_key", "review_id"):
+                for name in ("scope", "head", "base", "from_head", "from_key", "review_id", "original_key"):
                     setattr(rec, name, getattr(original, name))
         body = c.get("body", "")
         if rec is not None:
@@ -2634,6 +2700,11 @@ def cmd_review(args) -> int:
                 # The second family completes an existing cycle, including at
                 # the cap. A new cycle beyond it needs operator authorization.
                 rounds = pr_rounds(repo, pr, key, head, comments)
+                try:
+                    rounds = review_budget(rounds, pr, comments)
+                except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                    print(f"[review] UNREVIEWED: {exc}")
+                    return UNREVIEWED
                 joining_cycle = rounds.can_join(head, key, provider_family(reviewer))
                 if grant_id:
                     if not cycle_grant(comments, grant_id, head, key, rounds,

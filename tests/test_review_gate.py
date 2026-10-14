@@ -4687,3 +4687,59 @@ def test_grant_consumption_links_approval_in_the_actual_review_receipt(repo, mon
                            cycle_grant_url='https://github.com/o/r/pull/1#issuecomment-42')
     assert rg._review_locked(args, 1, rg.diff_key('master', 'HEAD'), 'codex') == 0
     assert args.cycle_grant_url in posted[0]
+
+
+def test_main_cli_cannot_reuse_grant_after_unposted_local_second_family(repo, monkeypatch):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    key = rg.diff_key(base, head)
+    args = SimpleNamespace(base=base, budget=30, fresh=True, reviewer='codex', review_cycle_grant=42)
+    monkeypatch.setattr(rg, '_resolve', lambda a: (1, 'o/r', key, 'codex/x'))
+    monkeypatch.setattr(rg, 'pr_comments', lambda *a: [_cycle_grant_comment(head, key)])
+    monkeypatch.setattr(rg.time, 'time', lambda: GRANT_NOW)
+    runs = [(GRANT_NOW - 100 + i, 'c' * 40, [], 'old', 'openai') for i in range(3)]
+    runs.append((GRANT_NOW - 10, head, [], key, 'anthropic'))
+    monkeypatch.setattr(rg, 'pr_rounds', lambda *a: rg.count_review_cycles(runs))
+    run = repo / '.git/local-reviews/pr-1-local'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({'pr': 1, 'status': 'CLEAN', 'head': head,
+        'base': base, 'architecture': 'gemma4', 'started_at': GRANT_NOW - 20, 'review_id': 'local'}))
+    monkeypatch.setattr(rg, 'review_with_fallback', lambda *a: pytest.fail('reused an exhausted cycle grant'))
+    assert rg.cmd_review(args) == rg.UNREVIEWED
+
+
+def test_native_receipt_key_prevents_pairing_across_retarget():
+    first = _comment(full_record('old', 'CLEAN', 0, False, 'codex-native'))
+    second = _app_comment(full_record('new', 'CLEAN', 0, False, 'claude'))
+    assert rg.codex_rounds([first, second], [], []).count == 2
+    conflicting = _comment(full_record('new', 'CLEAN', 0, False, 'codex-native'))
+    assert rg.codex_rounds([first, conflicting, second], [], []).unknown_history
+
+
+@pytest.mark.parametrize('tampered,disposed', [(False, False), (True, False), (False, True)])
+def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, disposed):
+    r = carry_repo
+    base, anchor = _git(r, 'rev-parse', 'master'), _git(r, 'rev-parse', 'HEAD')
+    anchor_key = rg.diff_key(base, anchor)
+    comments = [_comment(full_record(anchor_key, 'CLEAN', 0, False, who, head=anchor, base=base))
+                for who in ['codex', 'claude']]
+    (r / 'README.md').write_text('Clarification.\n')
+    _git(r, 'add', 'README.md'); _git(r, 'commit', '-qm', 'clarify')
+    follow_head = _git(r, 'rev-parse', 'HEAD')
+    follow_key = rg.diff_key(base, follow_head)
+    fix = rg.Record(follow_key, 'FINDINGS' if disposed else 'CLEAN', int(disposed), False, 'codex',
+                    head=follow_head, base=base, scope='fix', from_head=anchor,
+                    from_key='tampered' if tampered else anchor_key)
+    comments.append(_comment(fix, text='[P2] README.md:1 clarification'))
+    if disposed:
+        comments.append(_comment(rg.Record(follow_key, 'FINDINGS', 1, True, 'codex'),
+                                 text='1. rebutted: the documented input is correct'))
+    _master_edits_next_to_the_pr(r)
+    _git(r, 'merge', '-q', '--no-edit', 'master')
+    key = rg.diff_key('master', 'HEAD')
+    assert key != follow_key
+    carried, _ = rg.carry_records(comments, key, rg.base_merge_equivalents('master', 'HEAD'))
+    assert rg.latest_matching(carried, key).status()[0] == ('pending' if tampered else 'success')
+    assert rg.passing_families(carried, key) == (set() if tampered else {'openai', 'anthropic'})
+    # Runtime carry provenance can never be supplied in a posted marker.
+    emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
+    assert emitted.original_key == ''
