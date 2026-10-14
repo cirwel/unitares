@@ -454,10 +454,11 @@ load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
 that the reviewer cannot browse the rest of the repository. There is no size
 limit: the material used to be inlined as one command-line argument, capped
 at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
-default model is Gemini 3.8 Flash (High); `REVIEW_AGY_MODEL` overrides it
+default model is Gemini 4 Argon (High); `REVIEW_AGY_MODEL` overrides it
 (`default` leaves the choice to `agy`). The prior 3.1 Pro pin was no longer
-served on 2026-10-13; the replacement was verified with `agy models`. This
-restores availability, with no claim of equivalent review quality. A
+served on 2026-10-13. Argon replaced the interim 3.8 Flash pin after a replay
+of three past PRs with known defects (one run each): Argon found 5 of them,
+Flash 1 and 3.1 Pro 1. That is a small sample, not a quality guarantee. A
 shell command `agy` reaches for is denied and the conversation is resumed with
 a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths

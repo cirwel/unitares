@@ -900,7 +900,7 @@ def test_app_findings_dispositions_failures_and_round_budget_share_admission():
     k = "a" * 64
     finding = _app_comment(full_record(k, "FINDINGS", 1, False, "codex"),
                            text="[P2] Check the input", url="finding")
-    clean = _app_comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-3.8-flash-high"))
+    clean = _app_comment(full_record(k, "CLEAN", 0, False, "antigravity", model="gemini-4-argon-high"))
     assert rg.latest_matching([finding, clean], k).status()[0] == "pending"
     disposition = _app_comment(full_record(k, "FINDINGS", 1, True, "codex"),
                               text="1. fixed in abc", url="answer")
@@ -2571,7 +2571,7 @@ def test_instruction_bearing_names_are_defused(repo):
 
 def test_agy_model_defaults_to_available_gemini_and_is_overridable(monkeypatch):
     monkeypatch.delenv("REVIEW_AGY_MODEL", raising=False)
-    assert rg.agy_model_args() == ["--model", "gemini-3.8-flash-high"]
+    assert rg.agy_model_args() == ["--model", "gemini-4-argon-high"]
     assert rg.provider_family("antigravity") == "google"
     monkeypatch.setenv("REVIEW_AGY_MODEL", "claude-opus-5-5-high")
     assert rg.agy_model_args() == ["--model", "claude-opus-5-5-high"]
