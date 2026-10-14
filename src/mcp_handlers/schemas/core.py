@@ -941,11 +941,11 @@ class ConsultParams(AgentIdentityMixin):
         None,
         description=(
             "Pin an existing advisory host; omitted means automatic routing. "
-            "Use standard effort for Ollama/HF, thorough for CLI hosts. External "
+            "Omitted effort follows the host: standard for Ollama/HF, thorough for CLI. External "
             "hosts require cloud_allowed; allow_degraded must be false. No peer "
             "or local fallback occurs when a host is pinned."
         ),
-        json_schema_extra={"brief": "Pin a host; standard for Ollama/HF, thorough for CLI. External needs cloud_allowed; no fallback."},
+        json_schema_extra={"brief": "Pin a host; omitted effort follows it. External needs cloud_allowed; no fallback."},
     )
 
     brief: str = Field(
@@ -962,11 +962,20 @@ class ConsultParams(AgentIdentityMixin):
         ),
     )
     effort: Literal["standard", "thorough"] = Field(
-        "standard",
-        description=(
-            "standard uses the lower-overhead inference lane; thorough requests "
-            "the operator-authorized strong-model lane. Neither value is a latency SLA."
+        # host_id is declared first, so it is validated before this factory.
+        # Keep the schema free of an unconditional default: clients must not
+        # insert standard before we can infer a selected CLI host's lane.
+        default_factory=lambda data: (
+            "thorough" if data.get("host_id") in (
+                "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter",
+            ) else "standard"
         ),
+        description=(
+            "Omit to infer from host_id, or use standard when no host is selected. "
+            "standard uses HTTP inference; thorough uses the operator-authorized CLI lane. "
+            "An explicit value must match the selected host. Neither is a latency SLA."
+        ),
+        json_schema_extra={"brief": "Omit: follows host_id, otherwise standard. Explicit effort must match the host."},
     )
     privacy: Literal["local", "cloud_allowed"] = Field(
         "local",

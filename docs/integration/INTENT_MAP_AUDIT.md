@@ -98,7 +98,9 @@ broad. `request_review` keeps its separate assignment and authority rules;
   Keep raw `call_model` and `delegate_inference` compatible.
 - The five accepted hosts resolve through the existing typed inference
   services and their registry checks. Reject unknown, unreachable or effort-incompatible selections
-  before dispatch. HTTP hosts use standard effort; CLI hosts use thorough.
+  before dispatch. Omitted effort is inferred: standard for HTTP hosts, thorough
+  for CLI hosts; with no host it remains standard. Explicit contradictions are
+  refused. Callers do not need to name the transport lane twice.
 - Privacy remains a constraint: a selected external host requires
   `cloud_allowed`. Host selection never grants deployment authorization.
 - Pin explicit selection: no silent switch to another peer or the local

@@ -177,11 +177,13 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "Audited as event_type='consultation', readable by bound agents: "
         "route and keyed hashes, never text (key: record.hash_key). "
         "A success also updates your governance state. "
-        "host_id pins Ollama/HF with standard effort or a CLI host with thorough "
-        "effort; external hosts require cloud_allowed and pinned calls require "
+        "host_id pins a host and infers omitted effort (standard for Ollama/HF, "
+        "thorough for CLI); an explicit effort must match. External hosts require "
+        "cloud_allowed and pinned calls require "
         "allow_degraded=false. No host fallback or same-family exclusion applies "
         "to explicit selection. Use call_model or delegate_inference for model, "
-        "provider or timeout control."
+        "provider or timeout control. Full diagnostics explain tokens_used: backend "
+        "aggregate usage, not answer length or comparable billed cost."
     ),
     "request_review": (
         "Request governed, on-record judgment through the dialectic lifecycle. "
