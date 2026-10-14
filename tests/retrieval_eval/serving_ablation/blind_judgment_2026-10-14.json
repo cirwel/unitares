@@ -1,0 +1,111 @@
+{
+  "selection": "all 3 pinned-target regressions plus 5 seeded-random improvements, 8 queries, 16 candidates; not representative",
+  "cases": [
+    {
+      "query_id": "connector_host-authored_paraphrase",
+      "before": {
+        "relevance": 0,
+        "answer_validity": "superseded_claim"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "historical_supported"
+      }
+    },
+    {
+      "query_id": "summary_bloat-logged",
+      "before": {
+        "relevance": 1,
+        "answer_validity": "current_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "current_supported"
+      }
+    },
+    {
+      "query_id": "facilitation_reap-logged",
+      "before": {
+        "relevance": 2,
+        "answer_validity": "historical_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "superseded_claim"
+      }
+    },
+    {
+      "query_id": "checkin_schema-authored_paraphrase",
+      "before": {
+        "relevance": 0,
+        "answer_validity": "historical_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "current_supported"
+      }
+    },
+    {
+      "query_id": "silence_surface-logged",
+      "before": {
+        "relevance": 2,
+        "answer_validity": "historical_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "historical_supported"
+      }
+    },
+    {
+      "query_id": "summary_bloat-authored_paraphrase",
+      "before": {
+        "relevance": 1,
+        "answer_validity": "current_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "current_supported"
+      }
+    },
+    {
+      "query_id": "freeze-authored_paraphrase",
+      "before": {
+        "relevance": 2,
+        "answer_validity": "current_supported"
+      },
+      "after": {
+        "relevance": 0,
+        "answer_validity": "superseded_claim"
+      }
+    },
+    {
+      "query_id": "docker_upgrade-authored_paraphrase",
+      "before": {
+        "relevance": 0,
+        "answer_validity": "current_supported"
+      },
+      "after": {
+        "relevance": 2,
+        "answer_validity": "current_supported"
+      }
+    }
+  ],
+  "direct_answer_top1": {
+    "before": 3,
+    "after": 7
+  },
+  "grade_wins_ties_losses": {
+    "wins": 5,
+    "ties": 2,
+    "losses": 1
+  },
+  "limitations": [
+    "Purposive sample (3 regressions + 5 improvements) and top-1 pooling only; cannot estimate overall system ranking quality.",
+    "Three candidates (Q1D2, Q3D1, Q4D1) have details_omitted=true, hiding intermediate resolution context.",
+    "Referenced companion records (e.g., Q4D2 superseding entry, Q8D1 missing upgrade-path finding) are outside the supplied pool."
+  ],
+  "judge": "Antigravity subscription CLI default; exact model unavailable",
+  "first_attempt": "Host-adapter timeout, terminal/possibly_running=false; no grades. Retried once using the existing isolated CLI client with a 180-second budget.",
+  "prompt_sha256": "3799d259bd4d41f94adc2254c90669adcbe9a50ba4f24b72a35820946d2acffb",
+  "response_sha256": "262a7b708aaa77419317c3d329bdb284a8d4ed6409f13bbc7209de016647dd14"
+}
