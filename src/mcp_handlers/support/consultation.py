@@ -484,7 +484,10 @@ def _failed(
     if request.response_mode == "full" and diagnostics:
         data["diagnostics"] = diagnostics
     elif diagnostics:
-        recovery_action += " Use response_mode='full' for bounded failure diagnostics."
+        recovery_action += (
+            " Future calls can request response_mode='full' for bounded failure "
+            "diagnostics; it does not retrieve this call's output."
+        )
     return ConsultationOutcome(
         data=data,
         failure=ConsultationFailure(

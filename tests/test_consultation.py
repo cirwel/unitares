@@ -1194,6 +1194,7 @@ async def test_adapter_failure_diagnostics_are_caller_only(
     else:
         assert "diagnostics" not in parsed
         assert "response_mode='full'" in parsed["recovery"]["action"]
+        assert "does not retrieve this call's output" in parsed["recovery"]["action"]
     jsonl, pg = await audit_sinks()
     assert len(pg) == 1
     assert "UNVALIDATED" not in json.dumps(pg) + jsonl
