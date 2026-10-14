@@ -1,0 +1,75 @@
+{
+  "root": "$CHECKOUT (codex/kg-change-notice-proposal-1013, bdda576f2)",
+  "backend": "KnowledgeGraphAGE",
+  "results": {
+    "untagged baseline": {
+      "n": 10,
+      "p50_ms": 63.4,
+      "p95_ms": 70.4,
+      "max_ms": 72.7,
+      "mode": "hybrid_rrf",
+      "count": 16,
+      "untagged_returned": 0,
+      "tag_filter_dropped": 0,
+      "top3": [
+        "2026-06-13T20:55:22.147315+00:00",
+        "2026-10-03T23:11:11.431832+00:00",
+        "2026-10-03T18:17:53.253904+00:00"
+      ]
+    },
+    "common tag + query": {
+      "n": 10,
+      "p50_ms": 62.8,
+      "p95_ms": 73.6,
+      "max_ms": 74.7,
+      "mode": "hybrid_rrf",
+      "count": 17,
+      "untagged_returned": 0,
+      "tag_filter_dropped": 0,
+      "top3": [
+        "2026-06-13T20:55:22.147315+00:00",
+        "2026-10-11T21:43:13.587653+00:00",
+        "2026-10-11T11:36:54.007970+00:00"
+      ]
+    },
+    "sparse tag + matching query": {
+      "n": 10,
+      "p50_ms": 54.6,
+      "p95_ms": 83.8,
+      "max_ms": 682.6,
+      "mode": "hybrid_rrf",
+      "count": 2,
+      "untagged_returned": 0,
+      "tag_filter_dropped": 0,
+      "top3": [
+        "2026-06-13T20:55:22.147315+00:00",
+        "2026-10-13T18:43:20.747647+00:00"
+      ]
+    },
+    "sparse tag + weak query": {
+      "n": 10,
+      "p50_ms": 56.3,
+      "p95_ms": 75.5,
+      "max_ms": 276.0,
+      "mode": "hybrid_rrf",
+      "count": 2,
+      "untagged_returned": 0,
+      "tag_filter_dropped": 0,
+      "top3": [
+        "2026-10-13T18:43:20.747647+00:00",
+        "2026-06-13T20:55:22.147315+00:00"
+      ]
+    },
+    "nonexistent tag (probe)": {
+      "n": 10,
+      "p50_ms": 18.4,
+      "p95_ms": 19.5,
+      "max_ms": 294.8,
+      "mode": "hybrid_rrf",
+      "count": 0,
+      "untagged_returned": 0,
+      "tag_filter_dropped": 0,
+      "top3": []
+    }
+  }
+}

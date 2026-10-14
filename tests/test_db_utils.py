@@ -230,6 +230,8 @@ TRUNCATE_TABLES = [
     "audit.events",
     "audit.tool_usage",
     "audit.outcome_events",
+    "knowledge.change_notices",
+    "knowledge.notice_preferences",
     "knowledge.discovery_edges",
     "knowledge.discovery_tags",
     "knowledge.discoveries",

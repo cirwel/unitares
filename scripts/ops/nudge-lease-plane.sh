@@ -43,6 +43,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# A sweep's DOWN exclusion applies to indirect restarts too, even if the job
+# remains loaded in launchd. Direct deployments without this snapshot retain
+# the existing recovery behavior.
+if printf '%s\n' "${UNITARES_DEPLOY_DOWN_SERVICES:-}" | grep -qxF lease-plane; then
+  echo "[nudge-lease-plane] lease-plane was DOWN at sweep start — leaving it stopped"
+  exit 0
+fi
+
 if [[ ${#CHECK_RANGE[@]} -eq 2 ]]; then
   # elixir/unitares_sdk is a path dep compiled into the lease plane — an
   # SDK-only change must still trigger the restart or the node runs stale.

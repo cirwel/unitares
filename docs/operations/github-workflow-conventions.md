@@ -163,6 +163,20 @@ veto by removing the label.
 
 ### Review workflow
 
+**Review publishers and operator authority.** In addition to the existing
+`OWNER`/`MEMBER`/`COLLABORATOR` accounts, ordinary review records accept the
+UNITARES agents App only when GitHub's comment metadata contains App ID
+`5306351`, bot actor ID `342195540`, and actor type `Bot`. The allowlist lives
+in the trusted base's `review_gate.py`; a login, marker text, or PR-head edit
+cannot add a publisher. This admission also applies to dispositions, review
+history and failure counts. It preserves the diff, provenance, findings and
+model-family checks; a shared bot identity does not prove reviewer independence.
+Bot comments cannot grant an operator waiver, even with a write association.
+The `waive` and `--authorize-full-review` CLI paths verify a user account via
+GitHub and refuse App credentials or an unreadable actor. Cloud agents using
+the operator's user credential still require explicit operator instruction;
+this check cannot distinguish them from the operator.
+
 > **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
 > longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
 > `second_family_paths` file still needs `review` to pass. What
@@ -398,8 +412,9 @@ files (`review_gate.py`, `review_policy.json`, `review.sh`,
 `review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
 behavioural change on a sensitive path can be waived too, so read the hunks
 before you waive. The comment shows the waived hunks and
-the reason. The gate cannot tell who posted it, since every agent uses the
-operator's account, so an agent runs `waive` only when the operator says to.
+the reason. Bot comments are excluded; cloud agents using the operator's
+account remain indistinguishable from the operator, so an agent runs `waive`
+only when the operator says to and never through the App runner.
 
 `review.sh` never starts the second review itself. When a sensitive diff has
 only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)
@@ -439,9 +454,10 @@ load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
 that the reviewer cannot browse the rest of the repository. There is no size
 limit: the material used to be inlined as one command-line argument, capped
 at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
-default model is Gemini 3.1 Pro (High); `REVIEW_AGY_MODEL` overrides it
-(`default` leaves the choice to `agy`). It was chosen on two PRs, where it was
-the only model that found real defects, so treat it as a starting point. A
+default model is Gemini 3.8 Flash (High); `REVIEW_AGY_MODEL` overrides it
+(`default` leaves the choice to `agy`). The prior 3.1 Pro pin was no longer
+served on 2026-10-13; the replacement was verified with `agy models`. This
+restores availability, with no claim of equivalent review quality. A
 shell command `agy` reaches for is denied and the conversation is resumed with
 a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths

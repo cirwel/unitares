@@ -37,10 +37,18 @@
 # Flags:
 #   --dry-run   show what would be deployed; run nothing
 #   --no-fetch  use cached remotes (default refreshes them for accurate verdicts)
+# Exit 1: deployment/inspection failed. Exit 3: incomplete (skipped or DOWN).
 set -uo pipefail
 
 OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATUS="$OPS_DIR/deploy-status.sh"
+
+# Read-only handshake for wrappers: older tooling must not silently ignore a
+# caller's reviewed-revision pin. Kept in this script so no status/deploy runs.
+if [[ "$#" = 1 && "$1" = --capabilities ]]; then
+  echo 'expected-revision-v1 incomplete-exit-v1'
+  exit 0
+fi
 
 DRY_RUN=0
 FETCH=1
@@ -111,7 +119,7 @@ needs="$(
 import json, sys
 for svc in json.load(sys.stdin):
     v = svc.get("verdict", "")
-    if v.startswith("STALE") or v.startswith("BEHIND"):
+    if v.startswith("STALE") or v.startswith("BEHIND") or v.startswith("DOWN"):
         print("%s\t%s\t%s\t%s" % (
             svc.get("name", ""), v, svc.get("checkout", ""),
             svc.get("pickup", "unknown"),
@@ -120,11 +128,28 @@ for svc in json.load(sys.stdin):
 )" || { echo "[apply] could not parse deploy-status --json" >&2; exit 1; }
 
 if [ -z "$needs" ]; then
-  echo "[apply] nothing to deploy — no service is STALE or BEHIND."
+  echo "[apply] nothing to deploy — no service is STALE, BEHIND or DOWN."
   exit 0
 fi
 
-deployed=""; skipped=""; failed=""; held=""
+# Record every DOWN service before dispatch: an earlier service can indirectly
+# restart one later in the table (shared lease-plane nudges, paired bots).
+UNITARES_DEPLOY_DOWN_SERVICES=""
+down_scripts=""
+while IFS=$'\t' read -r name verdict checkout pickup; do
+  case "$verdict" in
+    DOWN*)
+      UNITARES_DEPLOY_DOWN_SERVICES="$(printf '%s\n%s' "$UNITARES_DEPLOY_DOWN_SERVICES" "$name")"
+      script="$(deploy_script_for "$name")"
+      [ -z "$script" ] || down_scripts="$(printf '%s\n%s' "$down_scripts" "$script")"
+      ;;
+  esac
+done <<EOF
+$needs
+EOF
+export UNITARES_DEPLOY_DOWN_SERVICES
+
+deployed=""; skipped=""; failed=""; held=""; down=""
 # Checkouts a failed deploy has pinned. Newline-delimited and matched whole-line:
 # a substring test would let /a/b hold /a/b-two, which is a different tree.
 held_trees=""
@@ -135,7 +160,20 @@ tree_is_held() {
 
 while IFS=$'\t' read -r name verdict checkout pickup; do
   [ -z "$name" ] && continue
+  case "$verdict" in
+    DOWN*)
+      echo "[apply] DOWN  $name — not restarted automatically; inspect why the service stopped" >&2
+      down="$down $name"
+      continue
+      ;;
+  esac
   script="$(deploy_script_for "$name")"
+
+  if [ -n "$script" ] && printf '%s\n' "$down_scripts" | grep -qxF "$script"; then
+    echo "[apply] SKIP  $name ($verdict) — its deploy script also controls a DOWN service" >&2
+    skipped="$skipped $name"
+    continue
+  fi
 
   # Ordering is not a fix here. Whichever service comes second inherits the
   # problem, so the hold is on the TREE, not on a position in the list.
@@ -187,8 +225,12 @@ echo "  deployed:${deployed:-  none}"
 echo "  skipped: ${skipped:-  none}"
 echo "  held:    ${held:-  none}"
 echo "  failed:  ${failed:-  none}"
+echo "  down:    ${down:-  none}"
 [ -n "$held" ] && echo "  (held = not attempted: shares a checkout with a failed deploy. Fix that failure, then re-run.)"
 [ -n "$skipped" ] && echo "  (skipped = drift remains; no deploy automation ran for those services.)"
 
-# Non-zero if anything failed, so callers/CI can gate on it.
-[ -z "$failed" ]
+# Preserve an actual deploy failure; otherwise distinguish an incomplete
+# update from success, including dry runs that cannot cover every service.
+[ -z "$failed" ] || exit 1
+[ -z "$skipped$held$down" ] || exit 3
+exit 0
