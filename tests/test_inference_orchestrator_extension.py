@@ -61,7 +61,7 @@ def test_adapter_records_name_their_extension_and_local_hosts_do_not(default_ins
         assert hosts[host_id]["extension"] == HOST_ADAPTER_EXTENSION
         assert hosts[host_id]["configured"] is False
         # Still listed, still reachable by contract: routing does not flap.
-        assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference"]
+        assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference", "consult"]
     assert hosts["ollama:local"]["extension"] is None
     assert hosts["hf:router"]["extension"] is None
 

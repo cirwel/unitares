@@ -92,12 +92,9 @@ def _is_hf_model_id(model: str) -> bool:
     return model.startswith(_HF_MODEL_PREFIXES)
 
 
-# Tools that take a ``host_id`` at all. ``consult`` is deliberately absent: it
-# reaches host adapters, but chooses the host itself and exposes no host
-# control, so it can never be the answer to "which tool do I pass this host_id
-# to". A tool added here must also be accepted in some host's
+# Tools that take a ``host_id``. A tool added here must also be accepted in some host's
 # ``accepts_host_id_from``, or it can never be recommended.
-_HOST_ID_ACCEPTING_TOOLS = ("call_model", "delegate_inference")
+_HOST_ID_ACCEPTING_TOOLS = ("call_model", "delegate_inference", "consult")
 
 _ROUTING_PRECEDENCE_NOTE = (
     "Per-host reachability is the host's own accepts_host_id_from. "

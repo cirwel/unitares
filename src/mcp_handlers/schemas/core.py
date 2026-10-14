@@ -934,6 +934,20 @@ class ConsultParams(AgentIdentityMixin):
 
     model_config = ConfigDict(extra="forbid")
 
+    host_id: Optional[Literal[
+        "ollama:local", "hf:router", "claude:host-adapter",
+        "codex:host-adapter", "antigravity:host-adapter",
+    ]] = Field(
+        None,
+        description=(
+            "Pin an existing advisory host; omitted means automatic routing. "
+            "Use standard effort for Ollama/HF, thorough for CLI hosts. External "
+            "hosts require cloud_allowed; allow_degraded must be false. No peer "
+            "or local fallback occurs when a host is pinned."
+        ),
+        json_schema_extra={"brief": "Pin a host; standard for Ollama/HF, thorough for CLI. External needs cloud_allowed; no fallback."},
+    )
+
     brief: str = Field(
         ...,
         min_length=1,

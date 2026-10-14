@@ -200,7 +200,7 @@ class TestInferenceHostRegistry:
         assert parsed["host"]["host_id"] == "ollama:local"
         assert parsed["host"]["provider_kind"] == "ollama"
         assert parsed["host"]["available"] is True
-        assert parsed["host"]["accepts_host_id_from"] == ["call_model"]
+        assert parsed["host"]["accepts_host_id_from"] == ["call_model", "consult"]
     def test_ollama_available_caches_probe_within_ttl(self):
         """The blocking socket probe runs once within the TTL, not per call —
         the bound on event-loop pressure from repeated host-registry reads."""
@@ -294,12 +294,11 @@ class TestInvocationRoutingDisclosure:
         assert parsed["invocation"]["tool_authoritative"] is False
         assert "accepts_host_id_from" in parsed["invocation"]["routing_precedence"]
 
-    def test_consult_is_never_recommended(self):
-        """consult reaches the host adapters but picks the host itself and
-        takes no host_id, so it can never answer "pass this host_id where?"."""
+    def test_consult_can_be_recommended_for_explicit_host_selection(self):
+        """The advisory facade now accepts a registered host_id."""
         from src.mcp_handlers.support.model_inference import _recommended_tool
 
-        assert _recommended_tool({"accepts_host_id_from": ["consult"]}) is None
+        assert _recommended_tool({"accepts_host_id_from": ["consult"]}) == "consult"
 
     def test_no_host_and_malformed_accepts_yield_no_recommendation(self):
         from src.mcp_handlers.support.model_inference import _recommended_tool
@@ -1277,7 +1276,7 @@ class TestErrorHandling:
         assert hf["available"] is False
         assert hf["cooldown"]["reason"] == reason
         assert "private provider error" not in json.dumps(hf)
-        assert hf["accepts_host_id_from"] == ["call_model"]
+        assert hf["accepts_host_id_from"] == ["call_model", "consult"]
 
         for route in (
             {"host_id": "hf:router"},

@@ -608,13 +608,13 @@ def test_every_host_adapter_is_agent_callable(monkeypatch):
         for host_id in (
             "codex:host-adapter", "claude:host-adapter", "antigravity:host-adapter",
         ):
-            assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference"]
+            assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference", "consult"]
             assert hosts[host_id]["implementation_status"] == "active"
 
     # The synchronous hosts are the ones call_model can actually serve.
     hosts = {h["host_id"]: h for h in reg.list_inference_hosts()}
-    assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model"]
-    assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model"]
+    assert hosts["ollama:local"]["accepts_host_id_from"] == ["call_model", "consult"]
+    assert hosts["hf:router"]["accepts_host_id_from"] == ["call_model", "consult"]
 
 
 def test_codex_model_request_is_passed_to_the_cli(monkeypatch):

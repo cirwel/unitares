@@ -49,8 +49,9 @@ record**. Privacy narrows the first.
 | You want | Use | Notes |
 |---|---|---|
 | Advice from whatever is configured, local only | `consult` (defaults: `effort="standard"`, `privacy="local"`) | `purpose` is `answer`, `critique`, `summarize` or `generate`. Writes an audit row with keyed hashes, not text (`_record_consultation`, `src/mcp_handlers/support/consultation.py`) |
-| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host: it excludes the caller's own family, inferred from transport signals, and takes the first available peer (`_THOROUGH_PEERS`, `_caller_family`). The caller cannot name or exclude a host |
-| A specific subscription CLI: Claude, Codex or Antigravity | `delegate_inference(host_id=...)` *(hidden, advanced)* | Same orchestrator lane as thorough consult; advisory, no tools. `host_id` is one of `claude:host-adapter` (default), `codex:host-adapter`, `antigravity:host-adapter` (`DelegateInferenceParams`, `src/mcp_handlers/schemas/core.py`) |
+| Advice from a strong model of another family | `consult(effort="thorough", privacy="cloud_allowed")` | Needs the operator's agent-orchestrator extension (off by default). The server picks the host: it excludes the caller's own family, inferred from transport signals, and takes the first available peer (`_THOROUGH_PEERS`, `_caller_family`). Set `host_id` to select a specific existing host instead |
+| A specific subscription CLI: Claude, Codex or Antigravity | `consult(host_id=..., effort="thorough", privacy="cloud_allowed")` | Pin `claude:host-adapter`, `codex:host-adapter` or `antigravity:host-adapter`; `allow_degraded` must stay false. No alternate host is tried. `delegate_inference` remains available for raw model/timeout controls |
+| Advice from a specific HTTP host | `consult(host_id=..., effort="standard")` | Pin `ollama:local` or `hf:router`; HF requires `privacy="cloud_allowed"`. No fallback; raw model/token/temperature controls remain on `call_model` |
 | A raw completion on a local or Hugging Face host | `call_model` *(hidden)* | `provider` `auto`/`ollama`/`hf`, or `host_id` from `list_inference_hosts`; only hosts whose `accepts_host_id_from` includes `call_model` (local Ollama, HF router) are accepted |
 | Which hosts exist and are ready | `list_inference_hosts`, `describe_inference_host` *(hidden)* | readable before `start_session`; calling any inference tool needs an identity |
 | A verdict that goes on the record | `request_review` | The reviewer is not caller-selectable. By default an in-process reviewer answers on the local model; the orchestrated reviewer is opt-in (`UNITARES_DIALECTIC_ORCHESTRATED_REVIEW=1`) and its backend is operator config, `UNITARES_DIALECTIC_REVIEWER_HOST(S)` (local, codex, claude, antigravity, external), outside the inference registry (`src/mcp_handlers/dialectic/orchestrator_dispatch.py`) |
@@ -62,20 +63,20 @@ record**. Privacy narrows the first.
   orchestrated reviewer and its backend are operator configuration.
   Reassigning a reviewer needs an operator credential or the current
   reviewer.
-- **`consult` infers which family to exclude.** The server reads your family
-  from transport signals (reported model, harness, client hint, user agent)
-  and skips it; if it cannot tell, a Claude host is tried first. The compact
-  response does not name the host; `response_mode="full"` adds `diagnostics`
-  with `host_id`, `provider_kind` and `model_used`, and a `failover` list
-  appears whenever the call failed over to another peer. To choose a family,
-  use `delegate_inference` (recipe a).
+- **Automatic thorough routing excludes the inferred caller family.** The
+  server reads transport signals and skips that family; unknown callers try
+  Claude first. `host_id` overrides this choice and pins one existing host,
+  including the caller's own family. It remains advisory, never peer review.
+  Explicit selection appears in the compact `request.host_id`; full
+  `diagnostics` retain the actual host, provider and model. Automatic calls
+  report any peer failover in `failover`; pinned calls never fail over.
 - **`effort="thorough"` routes to the operator-authorized subscription-CLI
   lane** (Claude, Codex, Antigravity); it names a lane, not a measured
   capability tier.
 - **The orchestrator lane is configuration.** The agent-orchestrator extension
   behind `consult(effort="thorough")` and `delegate_inference` is off on a
   default install. Without it, thorough `consult` fails with a recovery hint
-  unless `allow_degraded=true`, which returns a standard local answer marked
+  unless automatic routing uses `allow_degraded=true`, which returns a standard local answer marked
   `status: "degraded"` instead. `delegate_inference` has no fallback.
   `list_inference_hosts` shows what this deployment has.
 - **A failed adapter call has caller-only diagnostics.** With
@@ -105,26 +106,20 @@ checked against `describe_tool` and the schemas; anything not checked says so.
 1. Optional: `use_tool(tool_name="list_inference_hosts", arguments={})` and
    look for `available: true` on the `*:host-adapter` entries.
 2. `consult(brief="<question plus the material, pasted inline>",
-   purpose="critique", effort="thorough", privacy="cloud_allowed",
-   response_mode="full")`. The material goes in `brief` (up to 32,000
+   purpose="critique", host_id="codex:host-adapter", effort="thorough",
+   privacy="cloud_allowed", response_mode="full")`. The material goes in `brief` (up to 32,000
    characters); there is no file or attachment argument. `purpose` is
    `answer`, `critique`, `summarize` or `generate`.
 3. Read `advice`. Keep `consultation_id`; `record.hash_key` lets you prove
    later which audit row describes the exchange (the server keeps hashes, not
    text).
-4. Check `diagnostics.host_id`. The server skips only the family it inferred
-   for you and takes the first available peer: Codex first for a recognised
-   Claude caller, Claude first if it could not tell. If the host is wrong for
-   you, or you need a particular family, call it directly:
-   `use_tool(tool_name="delegate_inference", arguments={"prompt": "<same
-   text>", "host_id": "codex:host-adapter" | "antigravity:host-adapter" |
-   "claude:host-adapter", "task_type": "review"})`. Note `prompt`, not
-   `brief`; `task_type` is `reasoning`, `review` or `summarize`. The response
-   carries the answer with provenance; its exact field names were not
-   checked for this draft.
+4. Check `diagnostics.host_id` and `model_used`. The selected host must
+   answer or the call fails with recovery guidance. To choose another host,
+   change `host_id` explicitly. Omit `host_id` to use automatic selection,
+   which excludes the inferred caller family and may try another peer.
 
-Nothing to close: neither call opens a review. For a verdict on the record,
-see (f).
+Nothing to close: `consult` opens no review. For a verdict on the record,
+see (f). Raw model and timeout controls remain on hidden `delegate_inference`.
 
 ### (b) Grade an earlier check-in
 

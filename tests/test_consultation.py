@@ -114,7 +114,7 @@ def _failure(
 
 
 class TestConsultSchema:
-    def test_schema_is_bounded_and_forbids_route_controls(self):
+    def test_schema_allows_only_existing_hosts_and_keeps_raw_controls_hidden(self):
         fields = set(ConsultParams.model_fields)
         assert fields == {
             "agent_id",
@@ -126,6 +126,7 @@ class TestConsultSchema:
             "privacy",
             "allow_degraded",
             "response_mode",
+            "host_id",
         }
         with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
             ConsultParams(brief="help", provider="hf")
@@ -137,8 +138,11 @@ class TestConsultSchema:
         )
         schema = get_tool_input_schema(tool)
         assert schema["additionalProperties"] is False
-        for hidden_control in ("provider", "host_id", "model", "temperature", "timeout_s"):
+        assert set(schema["properties"]["host_id"]["anyOf"][0]["enum"]) == set(co._SELECTABLE_HOST_ROUTES)
+        for hidden_control in ("provider", "model", "temperature", "timeout_s"):
             assert hidden_control not in schema["properties"]
+        with pytest.raises(ValidationError):
+            ConsultParams(brief="help", host_id="unknown:host")
 
     def test_schema_rejects_blank_and_overlong_briefs(self):
         with pytest.raises(ValidationError, match="non-whitespace"):
@@ -1801,3 +1805,151 @@ async def test_allow_degraded_treats_a_live_usage_limit_like_a_cooldown(monkeypa
     }))
     assert parsed["success"] is False
     standard.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_id", tuple(co._SELECTABLE_HOST_ROUTES))
+async def test_pinned_host_reaches_existing_service_and_is_recorded(
+    monkeypatch, audit_sinks, host_id
+):
+    route, _, _, privacy_class = co._SELECTABLE_HOST_ROUTES[host_id]
+    completed = _completed(route=route, host_id=host_id, privacy_class=privacy_class)
+    standard = AsyncMock(return_value=completed)
+    thorough = AsyncMock(return_value=completed)
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    # Explicit selection bypasses inferred family and automatic availability picks.
+    chooser = lambda: pytest.fail("a pinned host must not use automatic selection")
+    monkeypatch.setattr(co, "_thorough_host_for_caller", chooser)
+    monkeypatch.setattr(co, "_thorough_peers_for_caller", chooser)
+    is_standard = host_id in co._STANDARD_HOST_ROUTES
+    parsed = _payload(await co.handle_consult({
+        "brief": _BRIEF_SENTINEL,
+        "host_id": host_id,
+        "effort": "standard" if is_standard else "thorough",
+        "privacy": "local" if host_id == "ollama:local" else "cloud_allowed",
+    }))
+    assert parsed["success"] is True
+    selected, unused = (standard, thorough) if is_standard else (thorough, standard)
+    assert selected.await_count == 1
+    assert selected.await_args.args[0].host_id == host_id
+    unused.assert_not_awaited()
+    assert parsed["request"]["host_id"] == host_id
+    assert parsed["authority"]["advisory"] is True
+    assert parsed["authority"]["can_satisfy_peer_review"] is False
+    assert "failover" not in parsed
+    _, pg = await audit_sinks()
+    assert pg[0]["details"]["request"]["host_id"] == host_id
+    assert pg[0]["details"]["route"]["host_id"] == host_id
+    assert _BRIEF_SENTINEL not in json.dumps(pg)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arguments", [
+    {"host_id": "hf:router"},
+    {"host_id": "claude:host-adapter", "effort": "thorough"},
+    {"host_id": "codex:host-adapter", "effort": "thorough"},
+    {"host_id": "antigravity:host-adapter", "effort": "thorough"},
+    {"host_id": "ollama:local", "effort": "thorough"},
+    {"host_id": "hf:router", "effort": "thorough", "privacy": "cloud_allowed"},
+    {"host_id": "codex:host-adapter", "privacy": "cloud_allowed"},
+    {"host_id": "ollama:local", "allow_degraded": True},
+    {"host_id": "codex:host-adapter", "effort": "thorough",
+     "privacy": "cloud_allowed", "allow_degraded": True},
+])
+async def test_pinned_policy_conflict_rejected_before_dispatch(monkeypatch, arguments):
+    standard, thorough = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult({"brief": "q", **arguments}))
+    assert parsed["success"] is False
+    assert parsed["error_code"] == "CONSULT_POLICY_UNSATISFIED"
+    standard.assert_not_awaited()
+    thorough.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("host_id", ["unknown:host", "", ["codex:host-adapter"]])
+async def test_unknown_selected_host_is_not_dispatched_or_recorded(
+    monkeypatch, audit_sinks, host_id
+):
+    standard, thorough = AsyncMock(), AsyncMock()
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    parsed = _payload(await co.handle_consult({"brief": "q", "host_id": host_id}))
+    assert parsed["error_code"] == "INFERENCE_HOST_NOT_FOUND"
+    standard.assert_not_awaited()
+    thorough.assert_not_awaited()
+    _, pg = await audit_sinks()
+    assert not pg
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [
+    _quota_failure(),
+    _failure("INFERENCE_HOST_UNAVAILABLE"),
+    _failure("DELEGATED_INFERENCE_FAILED", execution_started=True,
+             details={"adapter_status": "malformed"}),
+    _failure("DELEGATED_INFERENCE_TIMEOUT", execution_started=True, possibly_running=True),
+])
+async def test_selected_peer_never_fails_over(monkeypatch, failure):
+    standard, thorough = AsyncMock(), AsyncMock(return_value=failure)
+    monkeypatch.setattr(co, "run_model_inference", standard)
+    monkeypatch.setattr(co, "run_delegated_inference", thorough)
+    monkeypatch.setattr(co, "host_adapter_available", lambda _: True)
+    request = co.ConsultRequest(
+        brief="q", requester_uuid="caller", effort="thorough", privacy="cloud_allowed",
+        host_id="codex:host-adapter", thorough_host_id="claude:host-adapter",
+        thorough_peers=("claude:host-adapter", "antigravity:host-adapter"),
+    )
+    outcome = await co.run_consultation(request)
+    assert not outcome.ok
+    assert thorough.await_count == 1
+    assert thorough.await_args.args[0].host_id == "codex:host-adapter"
+    standard.assert_not_awaited()
+    assert "failover" not in outcome.data
+    if not failure.failure.possibly_running:
+        assert "No alternate host was requested" in outcome.failure.recovery["action"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selected,actual,route,privacy_class,effort", [
+    ("hf:router", "ollama:local", "ollama", "local", "standard"),
+    ("ollama:local", "hf:router", "huggingface", "external_cloud", "standard"),
+    ("codex:host-adapter", "claude:host-adapter", "agent_orchestrator",
+     "operator_authorized_external", "thorough"),
+])
+async def test_selected_host_route_drift_returns_no_advice_but_records_actual_route(
+    monkeypatch, audit_sinks, selected, actual, route, privacy_class, effort
+):
+    service = AsyncMock(return_value=_completed(
+        host_id=actual, route=route, privacy_class=privacy_class,
+    ))
+    monkeypatch.setattr(co, "run_model_inference", service)
+    monkeypatch.setattr(co, "run_delegated_inference", service)
+    parsed = _payload(await co.handle_consult({
+        "brief": "q", "host_id": selected, "effort": effort, "privacy": "cloud_allowed",
+    }))
+    assert parsed["error_code"] == "CONSULT_ROUTE_POSTCONDITION_FAILED"
+    assert "advice" not in parsed
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["request"]["host_id"] == selected
+    assert record["route"]["host_id"] == actual
+
+
+@pytest.mark.asyncio
+async def test_pinned_cancellation_records_selected_target(monkeypatch, audit_sinks):
+    import asyncio
+
+    monkeypatch.setattr(co, "run_delegated_inference", AsyncMock(side_effect=asyncio.CancelledError))
+    with pytest.raises(asyncio.CancelledError):
+        await co.handle_consult({
+            "brief": "q", "host_id": "codex:host-adapter", "effort": "thorough",
+            "privacy": "cloud_allowed",
+        })
+    _, pg = await audit_sinks()
+    record = pg[0]["details"]
+    assert record["status"] == "cancelled"
+    assert record["request"]["host_id"] == "codex:host-adapter"
+    assert record["request"]["thorough_host_id"] == "codex:host-adapter"

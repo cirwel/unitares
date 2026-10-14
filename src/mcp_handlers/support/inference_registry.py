@@ -13,7 +13,7 @@ orchestrator, not started by the default install), gated by
 run if something invoked it". ``accepts_host_id_from`` answers the question an
 agent actually has: "which tools will accept this host as a ``host_id``
 argument". They diverge in the ordinary case: every subscription-CLI adapter
-is reachable from ``delegate_inference`` on every install, while ``available``
+is reachable from ``delegate_inference`` and ``consult`` on every install, while ``available``
 goes false on any install where the opt-in flag is off, the CLI is absent, or
 the orchestrator bearer is unset. Reachability is a routing contract and must
 not flap with runtime readiness. A host that advertises itself as usable while
@@ -25,7 +25,7 @@ implementation status in the same change.
 about traffic. This registry does not see all inference: ``llm_delegation.py``
 opens the Ollama endpoint directly for the dialectic, knowledge-synthesis, and
 check-in-coaching paths, none of which take a ``host_id`` or consult this
-module. So ``ollama:local`` carries ``["call_model"]`` — the tools that will
+module. So ``ollama:local`` carries ``["call_model", "consult"]`` — the tools that will
 accept it as an argument — and that is not a claim that ``call_model`` is the
 only code reaching Ollama. Do not "fix" it to enumerate those callers; that
 would answer a question no caller of this registry is asking.
@@ -264,7 +264,7 @@ def _base_hosts() -> list[InferenceHost]:
             # host_id="ollama:local" forces privacy='local', so an endpoint
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
-            accepts_host_id_from=["call_model"] if local_route_is_local else [],
+            accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
             notes=(
                 "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
@@ -289,7 +289,7 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "generation", "analysis"],
             models=["deepseek-ai/DeepSeek-R1:fastest", "Qwen/Qwen2.5-72B-Instruct:fastest"],
             implementation_status="active",
-            accepts_host_id_from=["call_model"],
+            accepts_host_id_from=["call_model", "consult"],
             cooldown=hf_cooldown,
             notes=(
                 "Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment. "
@@ -312,9 +312,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["codex"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Codex served ASYNC via the agent-orchestrator, not the sync "
                 "call_model path. Requires "
                 "UNITARES_HOST_ADAPTER_ENABLED=1, a codex CLI (PATH, "
@@ -346,9 +346,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["claude"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Claude (`claude -p`) runs with safe mode, no tools, and no "
                 "session persistence via the agent-orchestrator; it is not on "
                 "the synchronous call_model path. Requires "
@@ -373,9 +373,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["antigravity"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Antigravity (`agy -p`, Google) runs in plan mode and its "
                 "sandbox, from an empty temporary workspace with an "
                 "allowlisted environment, via the agent-orchestrator. A turn "
