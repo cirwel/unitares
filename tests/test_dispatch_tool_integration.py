@@ -272,6 +272,7 @@ class TestDispatchToolIdentityInjection:
         assert "mismatch" in text or "error" in text
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("host_id", [None, "ollama:local"])
     async def test_consult_accepts_trusted_identity_metadata_with_strict_schema(
         self,
         mock_identity,
@@ -280,6 +281,7 @@ class TestDispatchToolIdentityInjection:
         mock_pattern_tracker,
         mock_onboard_pin,
         mock_derive_session_key,
+        host_id,
     ):
         """Real dispatch identity handoff must survive ConsultParams extra=forbid."""
         from src.mcp_handlers import dispatch_tool
@@ -306,13 +308,14 @@ class TestDispatchToolIdentityInjection:
         ))
 
         with patch.object(co, "run_model_inference", backend):
-            result = await dispatch_tool("consult", {"brief": "Explain this"})
+            result = await dispatch_tool("consult", {"brief": "Explain this", "host_id": host_id})
 
         parsed = json.loads(result[0].text)
         assert parsed["success"] is True
         assert parsed["status"] == "completed"
         request = backend.await_args.args[0]
         assert request.requesting_agent_uuid == "test-uuid-0000-1111-2222"
+        assert request.host_id == host_id
 
     @pytest.mark.asyncio
     async def test_consult_rejects_public_route_controls_before_backend(

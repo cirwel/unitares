@@ -1,6 +1,6 @@
 # Intent map audit: overlaps, gaps, open questions
 
-**Status: draft for maintainer reaction (2026-10-10).** Companion to the
+**Status: audit from 2026-10-10, host-selection fix updated 2026-10-13.** Companion to the
 [intent map](INTENT_MAP.md), which is the agent-facing front door. This page
 holds the surface audit behind it: where several tools serve one need, needs
 no single tool expresses, tools hidden from the initial listing, and a
@@ -19,7 +19,7 @@ the questions at the end are for the maintainer.
    hosts (`accepts_host_id_from` in `list_inference_hosts`; the refusal at
    `src/mcp_handlers/support/model_inference.py`, "Pick a host whose
    accepts_host_id_from includes call_model"). For an agent, both mean "ask
-   model X".
+   model X". The optional `consult.host_id` now spans these existing routes.
 2. *Descriptions route agents between each other.* `consult`: "on-record:
    request_review"; `call_model`: "for advisory help prefer consult";
    `delegate_inference`: "for a raw completion use call_model"; `dialectic`:
@@ -45,14 +45,12 @@ the questions at the end are for the maintainer.
 
 **Needs no single tool expresses**
 
-1. *"A strong model that is not family X."* `consult` excludes only the
-   caller's own inferred family. A Claude caller wanting a non-Codex answer
-   gets Codex first (`_THOROUGH_PEERS["anthropic"]`); to choose, it must drop
-   to `delegate_inference`, which is hidden and reached through `use_tool`.
-2. *"A cloud model, chosen by me, as advice."* `consult` has no model or host
-   field (`ConsultParams` forbids extra keys); `call_model` has them but is
-   hidden. Whether `call_model` leaves an audit row comparable to
-   `consult`'s was not checked for this draft.
+1. *"A strong model that is not family X."* Named-host selection is now
+   expressible through `consult.host_id`; a family-exclusion selector remains
+   absent. Automatic routing still excludes the caller's inferred family.
+2. *"A cloud model, chosen by me, as advice."* Selecting one of the five
+   existing hosts is now supported directly by `consult`. Exact model
+   overrides remain on hidden `call_model` and `delegate_inference`.
 3. *"A strong model, on the record, chosen by me."* `request_review` has no
    reviewer field; the backend is deployment config, and the default reviewer
    is the local model.
@@ -68,7 +66,8 @@ the questions at the end are for the maintainer.
 
 - Revising a finding needs `update_finding`. `src/tool_modes.py` says why it
   is hidden: advertising it costs ~3.4 KB against a down-only byte ratchet.
-- Choosing a model needs `list_inference_hosts`, plus `call_model` or
+- Host discovery needs hidden `list_inference_hosts`; selecting a known host
+  uses advertised `consult`. Exact model overrides still need `call_model` or
   `delegate_inference`.
 - Advancing an open review needs `dialectic`.
 - Tier and advertisement disagree: `leave_note` and `health_check` are tier
@@ -76,15 +75,50 @@ the questions at the end are for the maintainer.
 
 **Open questions for the maintainer**
 
-- Could one advice entry point take an optional "who answers" input (any,
-  a named family, not a named family, local only) and route to the existing
-  lanes, leaving `call_model` and `delegate_inference` as they are?
+- Named-host selection now uses the existing advice entry point. Are family
+  preferences still needed beyond automatic routing and a concrete host?
 - Should every tool a listed need depends on be advertised, or should the
   initial listing at least name them?
 - Should `dialectic(action="consult")` get a name that does not collide with
   `consult`?
 
 ## Adding to the surface (proposal)
+
+### Implemented friction fix: explicit advisory host selection
+
+Updated 2026-10-13 after the consult/inference usability review. This is a
+`fix` under the freeze's explicit allowance for friction reduction: it
+exposes existing routes through the existing advice entry point, adding no
+tool, transport or model channel. The earlier post-freeze deferral was too
+broad. `request_review` keeps its separate assignment and authority rules;
+`dialectic(action="consult")` still attaches supplied evidence to a review.
+
+- `consult` accepts optional `host_id`. Omitted means today's automatic
+  routing. Explicit means the named registered advisory host must answer.
+  Keep raw `call_model` and `delegate_inference` compatible.
+- The five accepted hosts resolve through the existing typed inference
+  services and their registry checks. Reject unknown, unreachable or effort-incompatible selections
+  before dispatch. HTTP hosts use standard effort; CLI hosts use thorough.
+- Privacy remains a constraint: a selected external host requires
+  `cloud_allowed`. Host selection never grants deployment authorization.
+- Pin explicit selection: no silent switch to another peer or the local
+  model. Reject `allow_degraded=true` with an explicit host; return the host's
+  bounded failure diagnostics instead. Automatic calls retain their existing
+  failover policy.
+- Echo explicit selection in the compact request receipt. Full diagnostics
+  and the text-free audit retain the actual route. Choosing one's own family
+  is allowed for advisory calls and never satisfies governed peer review.
+- Keep model, temperature, token and timeout controls on the raw tools for
+  this first change. Evaluate family preferences separately once named-host
+  selection works; do not introduce competing selector fields together.
+
+Acceptance examples: a Gemini caller can explicitly ask Codex; selecting
+Claude with local privacy fails before dispatch; a selected host's quota
+failure never returns advice from a different host; omitted selection keeps
+the current routing, audit and authority contracts. The facade contract,
+schema and intent map are updated together; regression tests cover these cases.
+
+### Addition check
 
 Before a new tool, alias, action or model channel is added:
 

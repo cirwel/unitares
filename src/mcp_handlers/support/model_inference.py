@@ -20,6 +20,7 @@ import time
 
 from ..utils import success_response, error_response, require_argument
 from ..decorators import mcp_tool
+from . import host_availability
 from .inference_registry import (
     _ollama_available,
     default_local_model,
@@ -91,12 +92,9 @@ def _is_hf_model_id(model: str) -> bool:
     return model.startswith(_HF_MODEL_PREFIXES)
 
 
-# Tools that take a ``host_id`` at all. ``consult`` is deliberately absent: it
-# reaches host adapters, but chooses the host itself and exposes no host
-# control, so it can never be the answer to "which tool do I pass this host_id
-# to". A tool added here must also be accepted in some host's
+# Tools that take a ``host_id``. A tool added here must also be accepted in some host's
 # ``accepts_host_id_from``, or it can never be recommended.
-_HOST_ID_ACCEPTING_TOOLS = ("call_model", "delegate_inference")
+_HOST_ID_ACCEPTING_TOOLS = ("call_model", "delegate_inference", "consult")
 
 _ROUTING_PRECEDENCE_NOTE = (
     "Per-host reachability is the host's own accepts_host_id_from. "
@@ -319,6 +317,27 @@ def _endpoint_not_local_outcome(endpoint, privacy: str) -> InferenceOutcome:
     )
 
 
+def _hf_cooldown_failure(cooling: dict[str, Any]) -> InferenceOutcome:
+    return InferenceOutcome.failed(
+        f"Inference host 'hf:router' is cooling down after a {cooling['reason']} "
+        f"failure until {cooling['retry_after']}",
+        code="INFERENCE_HOST_UNAVAILABLE",
+        category="system_error",
+        details={
+            "host_id": "hf:router",
+            "provider_kind": "hf",
+            "privacy_class": "external_cloud",
+            "provider_unavailable": cooling,
+            "dispatch_phase": "preflight",
+        },
+        recovery={
+            "action": f"Use local inference or retry after {cooling['retry_after']}; "
+            "the next call after that re-checks the provider.",
+            "related_tools": ["list_inference_hosts"],
+        },
+    )
+
+
 async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     """Run one standard advisory inference without an MCP response envelope."""
     if not OPENAI_AVAILABLE:
@@ -387,6 +406,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 },
             )
         if not host.get("configured") or not host.get("available"):
+            if host_id == "hf:router" and host.get("configured") and host.get("cooldown"):
+                return _hf_cooldown_failure(host["cooldown"])
             return InferenceOutcome.failed(
                 f"Inference host '{host_id}' is not available",
                 code="INFERENCE_HOST_UNAVAILABLE",
@@ -515,7 +536,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
         provider = "hf"  # may arrive as "auto" via model-prefix detection
         logger.info(f"Using Hugging Face Inference Providers: {model}")
     elif provider == "auto":
-        # Auto-select: Try Ollama first (local, free), then Gemini, then HF.
+        # Auto-select: Try Ollama first (local, free), then HF.
         # Reuse the registry's cached probe instead of a second inline socket
         # connect — same source of truth, and it benefits from the TTL cache.
         ollama_available = _ollama_available()
@@ -580,6 +601,14 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             category="validation_error",
         )
     
+    # All HF routes (host id, provider, model prefix, and auto fallback) share
+    # the same observed account readiness. Listing a host must not be the only
+    # path that respects its cooldown.
+    if provider == "hf":
+        cooling = host_availability.cooldown("hf:router")
+        if cooling is not None:
+            return _hf_cooldown_failure(cooling)
+
     try:
         started = time.monotonic()
 
@@ -659,6 +688,8 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
             )
         tokens_used = response.usage.total_tokens if hasattr(response, 'usage') else 0
         model_used = getattr(response, 'model', model)
+        if provider == "hf":
+            await host_availability.clear_async("hf:router")
         
         # Estimate Energy cost (simple: +0.01 per call; refine later based on tokens)
         # Free/local models (llama, qwen, gemma): minimal cost.
@@ -766,7 +797,24 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
     except Exception as e:
         # Provide helpful error message
         error_msg = str(e)
-        if isinstance(e, TimeoutError):
+        provider_unavailable = None
+        # Use the HTTP status, not arbitrary exception text: only a response
+        # from the HF router establishes account unavailability. Model access
+        # errors (403/404) and transient server errors do not disable the host.
+        status_code = getattr(e, "status_code", None)
+        if provider == "hf" and status_code in (401, 402, 429):
+            provider_unavailable = await host_availability.record_unavailable_async(
+                "hf:router",
+                {"reason": "auth" if status_code == 401 else "quota", "stated_reset": None},
+                detail=f"HF router returned HTTP {status_code}",
+            )
+        if provider_unavailable is not None:
+            error_code = "RATE_LIMIT_EXCEEDED" if status_code == 429 else "INFERENCE_HOST_UNAVAILABLE"
+            recovery_hint = (
+                "Check the Hugging Face account's authentication or credits; "
+                f"use local inference or retry after {provider_unavailable['retry_after']}."
+            )
+        elif isinstance(e, TimeoutError):
             error_msg = (
                 f"request exceeded the {request.timeout_s:g}s wall-clock timeout"
             )
@@ -848,6 +896,7 @@ async def run_model_inference(request: CallModelRequest) -> InferenceOutcome:
                 "base_url": base_url,
                 "task_type": task_type,
                 **route_details,
+                **({"provider_unavailable": provider_unavailable} if provider_unavailable else {}),
             },
             recovery={
                 "action": recovery_hint,

@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.35.1`
+**Current contract:** `unitares.interface-contract.v1`, version `1.36.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -495,3 +495,25 @@ of exposing `notices`, `muted`, `has_more`, and acknowledgement guidance.
 This corrects the 1.35.0 output contract without changing inputs, permissions,
 or notice delivery. Schema digests do not move. Clients can read the documented
 JSON fields directly after the server upgrade; no request changes are needed.
+
+## 1.36.0 (2026-10-13)
+
+`consult` accepts optional `host_id` for the five existing advisory hosts.
+HTTP hosts (`ollama:local`, `hf:router`) require standard effort; the three CLI
+adapters require thorough effort. External hosts require `cloud_allowed`.
+Pinned calls reject `allow_degraded=true` and never try another peer or local
+fallback. The compact request receipt and text-free audit include the selected
+host; existing full diagnostics retain the actual route. Selecting the caller's
+own family is permitted for advice and never grants governed-review authority.
+
+Discovery lists `consult` in `accepts_host_id_from` for all five hosts. Raw tool
+contracts and default recommendations remain compatible. `consult`'s input
+schema digest and the aggregate surface hash change; callers omitting `host_id`
+retain automatic routing and need no request changes. Refresh cached schemas
+to use explicit selection.
+
+Full consultation failures retain a bounded, unvalidated adapter-output excerpt
+for the caller, excluded from audit storage. HF HTTP 401/402/429 failures now
+feed the existing bounded auth/quota cooldown; discovery reports the observed
+unavailability, without a model or billing probe. These output/description fixes
+change no raw-tool input schemas.
