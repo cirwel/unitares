@@ -497,6 +497,17 @@ def test_check_and_probe_read_a_wrapped_bearer_from_the_secrets_file(
     job = _run("check", "--home", home, env=env)
     assert job.returncode == 2
     assert "does not match the current governance bearer" in job.stderr
+
+    # The wrapper takes an override literally (no ~), and a relative one would
+    # depend on the job's cwd: both are refused rather than guessed.
+    for override in ("~/private.env", "private.env"):
+        _write_plist(sentinel, {"UNITARES_UDS_SOCKET": str(uds), "CIRWEL_SECRETS_FILE": override})
+        _wrap(sentinel, "UNITARES_HTTP_API_TOKEN")
+        literal = _run("check", "--home", home, env=env)
+        assert literal.returncode == 2
+        assert "CIRWEL_SECRETS_FILE must be an absolute path" in literal.stderr
+    _write_plist(sentinel, {"UNITARES_HTTP_API_TOKEN": "x", "UNITARES_UDS_SOCKET": str(uds)})
+    _wrap(sentinel, "UNITARES_MCP_BEARER_TOKEN,UNITARES_HTTP_API_TOKEN")
     _write_plist(sentinel, {"UNITARES_HTTP_API_TOKEN": "x", "UNITARES_UDS_SOCKET": str(uds)})
     _wrap(sentinel, "UNITARES_MCP_BEARER_TOKEN,UNITARES_HTTP_API_TOKEN")
 
@@ -546,6 +557,19 @@ def test_render_keeps_an_installed_wrapper_and_never_writes_the_bearer_back(
     assert rendered["ProgramArguments"][4:] == [
         "/bin/bash", str(root / "elixir/sentinel/scripts/start.sh")
     ]
+
+    # Without an override, the installed job's HOME chose the file. The render
+    # pins that file, so the template's --home cannot move the source.
+    job_home = tmp_path / "job-home"
+    job_file = job_home / ".config/cirwel/secrets.env"
+    _write_secrets(job_file, f"UNITARES_HTTP_API_TOKEN={token}\n")
+    _write_plist(output, {"HOME": str(job_home)})
+    _wrap(output, "UNITARES_HTTP_API_TOKEN")
+    pinned = _run("render", "--home", home, "--root", root, env=env)
+    assert pinned.returncode == 0, pinned.stderr
+    with output.open("rb") as handle:
+        environment = plistlib.load(handle)["EnvironmentVariables"]
+    assert environment["CIRWEL_SECRETS_FILE"] == str(job_file)
 
 
 def test_set_secret_rewrites_only_the_named_key(tmp_path: Path) -> None:

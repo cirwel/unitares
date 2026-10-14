@@ -56,7 +56,11 @@ def _wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
     source = os.environ if environment is None else environment
     override = source.get("CIRWEL_SECRETS_FILE")
     if isinstance(override, str) and override:
-        return Path(override).expanduser()
+        # Taken literally, as the wrapper takes it: no ~ expansion. A relative
+        # path would resolve against the job's cwd, so it is refused instead.
+        if not os.path.isabs(override):
+            raise PlistConfigError(f"CIRWEL_SECRETS_FILE must be an absolute path: {override!r}")
+        return Path(override)
     # The wrapper resolves ~ in the launched job, so the job's HOME decides.
     home = source.get("HOME")
     base = Path(home) if isinstance(home, str) and home else _default_home()
@@ -361,15 +365,15 @@ def render_plist(
     existing = _existing_optional_values(output)
     # A re-render keeps an installed wrapper, so it never writes the bearer
     # back into a plist that had been moved off it.
-    # Its secrets-file override stays with it, or the wrapper would read
-    # another file.
+    # The file its wrapper reads is pinned explicitly, so a template HOME that
+    # differs from the installed one cannot move the job's credential source.
     wrapper: list[str] = []
     wrapper_file = None
     if output.exists():
         installed = _load_plist(output)
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
-            wrapper_file = _environment(installed, output).get("CIRWEL_SECRETS_FILE")
+            wrapper_file = str(_wrapper_secrets_file(_environment(installed, output)))
     if audit_session is None:
         audit_session = existing.get(AUDIT_SESSION_KEY, "")
     if enforced_surface_kinds is None:
@@ -389,8 +393,7 @@ def render_plist(
     environment = _environment(payload, template)
     if wrapper:
         environment.pop(HTTP_TOKEN_KEY, None)
-        if isinstance(wrapper_file, str) and wrapper_file:
-            environment["CIRWEL_SECRETS_FILE"] = wrapper_file
+        environment["CIRWEL_SECRETS_FILE"] = wrapper_file
         payload["ProgramArguments"] = wrapper + list(payload.get("ProgramArguments") or [])
     else:
         environment[HTTP_TOKEN_KEY] = token
