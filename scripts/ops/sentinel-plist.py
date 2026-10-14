@@ -57,7 +57,10 @@ def _wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
     override = source.get("CIRWEL_SECRETS_FILE")
     if isinstance(override, str) and override:
         return Path(override).expanduser()
-    return _default_home() / ".config/cirwel/secrets.env"
+    # The wrapper resolves ~ in the launched job, so the job's HOME decides.
+    home = source.get("HOME")
+    base = Path(home) if isinstance(home, str) and home else _default_home()
+    return base / ".config/cirwel/secrets.env"
 
 
 def _sourced_secrets_file() -> Path:
@@ -74,9 +77,22 @@ def _sourced_secrets_file() -> Path:
 
 
 def _rotation_files() -> list[Path]:
-    """Every existing secrets file a reader of the rotated keys may use."""
+    """Every existing secrets file a reader of the rotated keys may use: this
+    process's wrapper default, the file start.sh sources, and the file each
+    installed wrapped LaunchAgent's wrapper reads (its own override or HOME)."""
+    candidates = [_wrapper_secrets_file(), _sourced_secrets_file()]
+    for plist in sorted((_default_home() / "Library/LaunchAgents").glob("*.plist")):
+        try:
+            payload = _load_plist(plist)
+        except PlistConfigError:
+            continue
+        environment = payload.get("EnvironmentVariables")
+        if _wrapped_keys(payload) and isinstance(environment, dict):
+            candidates.append(_wrapper_secrets_file(environment))
+        elif _wrapped_keys(payload):
+            candidates.append(_wrapper_secrets_file({}))
     found: list[Path] = []
-    for path in (_wrapper_secrets_file(), _sourced_secrets_file()):
+    for path in candidates:
         if path.exists() and not any(path.samefile(seen) for seen in found):
             found.append(path)
     return found

@@ -44,7 +44,17 @@ def _write_plist(
     path.chmod(mode)
 
 
+# set-secret discovers secrets files from ~/Library/LaunchAgents, so a test
+# that inherits the developer's HOME can rotate the developer's real secrets
+# (it did, once, during development of this file). Every run gets a HOME that
+# does not exist unless the test supplies its own.
+ISOLATED_HOME = "/nonexistent/sentinel-plist-test-home"
+
+
 def _run(*arguments: object, input_text: str | None = None, env=None):
+    if env is None:
+        env = _clean_env()
+    assert env.get("HOME") != str(Path.home()), "tests must not run with the real HOME"
     return subprocess.run(
         [sys.executable, str(SCRIPT), *(str(argument) for argument in arguments)],
         input=input_text,
@@ -430,7 +440,7 @@ def _wrap(path: Path, keys: str, *, secrets_file: Path | None = None) -> None:
 
 
 def _clean_env(**overrides: str) -> dict[str, str]:
-    env = {**os.environ, **overrides}
+    env = {**os.environ, "HOME": ISOLATED_HOME, **overrides}
     for name in ("UNITARES_SECRETS_ENV", "CIRWEL_SECRETS_FILE"):
         if name not in overrides:
             env.pop(name, None)
@@ -477,6 +487,16 @@ def test_check_and_probe_read_a_wrapped_bearer_from_the_secrets_file(
     assert "does not match the current governance bearer" in redirected.stderr
     _write_secrets(moved, f"UNITARES_HTTP_API_TOKEN='{token}'\n")
     assert _run("check", "--home", home, env=env).returncode == 0
+
+    # Without an override the wrapper resolves ~ in the job, so the job's
+    # HOME decides, not the HOME of whoever runs the check.
+    job_home = tmp_path / "job-home"
+    _write_secrets(job_home / ".config/cirwel/secrets.env", "UNITARES_HTTP_API_TOKEN=job-home-value\n")
+    _write_plist(sentinel, {"HOME": str(job_home), "UNITARES_UDS_SOCKET": str(uds)})
+    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN")
+    job = _run("check", "--home", home, env=env)
+    assert job.returncode == 2
+    assert "does not match the current governance bearer" in job.stderr
     _write_plist(sentinel, {"UNITARES_HTTP_API_TOKEN": "x", "UNITARES_UDS_SOCKET": str(uds)})
     _wrap(sentinel, "UNITARES_MCP_BEARER_TOKEN,UNITARES_HTTP_API_TOKEN")
 
@@ -610,8 +630,12 @@ def test_rotate_script_rotates_the_secrets_file_for_wrapped_jobs(
     tmp_path: Path,
 ) -> None:
     home, sentinel = _rotation_home(tmp_path, include_sentinel_token=False)
-    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN")
-    # The wrapper's default file, which the wrapped Sentinel reads.
+    # The installed Sentinel points its wrapper at its own file; rotation must
+    # find it from the plist, not only from this process's environment.
+    custom = home / "sentinel-secrets.env"
+    _write_secrets(custom, "UNITARES_HTTP_API_TOKEN=old-http-token\n")
+    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN", secrets_file=custom)
+    # This process's wrapper default.
     secrets_file = home / ".config/cirwel/secrets.env"
     _write_secrets(
         secrets_file,
@@ -648,11 +672,12 @@ def test_rotate_script_rotates_the_secrets_file_for_wrapped_jobs(
     assert continuity not in result.stdout + result.stderr
     assert sentinel.read_bytes() == sentinel_before
     assert sourced.read_text() == f"UNITARES_HTTP_API_TOKEN='{http}'\n"
+    assert custom.read_text() == f"UNITARES_HTTP_API_TOKEN='{http}'\n"
     assert "com.unitares.sentinel-beam" in result.stderr
     (backup,) = (home / ".unitares").glob("rotation-backup-*")
     assert stat.S_IMODE(backup.stat().st_mode) == 0o700
-    assert "old-http-token" in (backup / "secrets-1.env").read_text()
-    assert "old-http-token" in (backup / "secrets-2.env").read_text()
+    for index in (1, 2, 3):
+        assert "old-http-token" in (backup / f"secrets-{index}.env").read_text()
 
 
 def test_rotate_script_updates_sentinel_key_and_does_not_log_secret(
