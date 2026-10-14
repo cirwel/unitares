@@ -27,7 +27,10 @@ def affected_skills(root: Path, sources: set[str]) -> dict[str, list[str]]:
     for skill in sorted((root / "skills").glob("*/SKILL.md")):
         meta = module.parse_frontmatter(skill.read_text())
         cited = module.load_source_files(skill.parent, meta.get("source_files", []))
-        matches = sorted(set(cited) & {"unitares/" + p for p in sources})
+        # A citation may name a fragment after `#`; a changed file affects the
+        # skill whatever part it cites, so match on the path and report it.
+        changed = {"unitares/" + p for p in sources}
+        matches = sorted({module.split_anchor(c)[0] for c in cited} & changed)
         if matches:
             affected[skill.parent.name] = matches
     return affected
