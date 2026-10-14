@@ -164,6 +164,14 @@ def _read_secret(key: str, path: Path) -> str | None:
     return value
 
 
+def _defines_key(path: Path, key: str) -> bool:
+    """Whether ``path`` has a line defining ``key``; values are not parsed."""
+    return any(
+        (parts := _split_secret_line(line)) is not None and parts[1] == key
+        for line in path.read_text(encoding="utf-8").splitlines()
+    )
+
+
 def set_secret(key: str, value: str) -> list[Path]:
     """Replace ``key`` in every secrets file a reader may use.
 
@@ -666,11 +674,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"rotated {HTTP_TOKEN_KEY} in {args.plist}")
         elif args.command == "set-secret":
-            rewritten = set_secret(args.key, sys.stdin.read().strip())
-            if rewritten:
-                for path in rewritten:
-                    print(f"rotated {args.key} in {path}")
-            else:
+            set_secret(args.key, sys.stdin.read().strip())
+            # Reported from key names alone, never from anything the value
+            # touched, so no secret can reach the output.
+            defined = [path for path in _rotation_files() if _defines_key(path, args.key)]
+            for path in defined:
+                print(f"rotated {args.key} in {path}")
+            if not defined:
                 print(f"no secrets file defines {args.key}; left unchanged")
         elif args.command == "secrets-files":
             for path in _rotation_files():
