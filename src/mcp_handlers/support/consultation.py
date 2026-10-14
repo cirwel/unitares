@@ -203,34 +203,56 @@ def _family_of(value: Any) -> str | None:
         return "anthropic"
     if any(m in text for m in ("codex", "chatgpt", "openai", "gpt")):
         return "openai"
-    if any(m in text for m in ("antigravity", "gemini", "google")):
+    tokens = set(re.split(r"[^a-z]+", text))
+    if any(m in text for m in ("antigravity", "gemini", "gemma", "google")) or (
+        tokens & {"argon", "agy"}
+    ):
         return "google"
     return None
 
 
 def _caller_family() -> str | None:
-    """The caller's model family from descriptive transport data, or None.
+    """The caller's model family from descriptive transport or session data.
 
     The reported model and provider decide first, because a harness can host
     several families (Antigravity runs Claude and GPT-OSS models as well as
     Gemini); then the reported harness, the detected client, and the raw user
-    agent (the Gemini connector announces itself only as ``Google``). None of
+    agent (the Gemini connector announces itself only as ``Google``). When the
+    transport carries only a generic HTTP client UA (e.g. Antigravity's
+    ``Go-http-client/1.1``), fall back to the bound caller's onboarded
+    metadata (``public_agent_id``, ``auto_label``, ``structured_id``). None of
     these is proof; they choose between already-authorized peers and never
     grant authority.
     """
     signals = get_session_signals()
-    if signals is None:
-        return None
-    for value in (
-        signals.reported_model,
-        signals.model_provider,
-        signals.reported_harness_type,
-        signals.client_hint,
-        signals.user_agent,
-    ):
-        family = _family_of(value)
-        if family is not None:
-            return family
+    if signals is not None:
+        for value in (
+            signals.reported_model,
+            signals.model_provider,
+            signals.reported_harness_type,
+            signals.client_hint,
+            signals.user_agent,
+        ):
+            family = _family_of(value)
+            if family is not None:
+                return family
+    resolved_uuid = get_context_resolved_agent_id()
+    if resolved_uuid:
+        try:
+            from src.agent_metadata_model import agent_metadata
+
+            meta = agent_metadata.get(resolved_uuid)
+        except Exception:
+            meta = None
+        if meta is not None:
+            for value in (
+                getattr(meta, "public_agent_id", None),
+                getattr(meta, "auto_label", None),
+                getattr(meta, "structured_id", None),
+            ):
+                family = _family_of(value)
+                if family is not None:
+                    return family
     return None
 
 
