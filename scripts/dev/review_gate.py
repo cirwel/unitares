@@ -36,7 +36,8 @@ second-family path is never carried: it is reviewed on its exact key.
 The record
 ----------
 A PR comment starting with the marker below, posted by an account with write
-access. The latest record whose key matches the head decides the status:
+access or an explicitly trusted review App. The latest record whose key
+matches the head decides the status:
 
     CLEAN                          -> success
     FINDINGS(n) with dispositions  -> success
@@ -49,9 +50,9 @@ findings from a reviewer that did not finish is not a review.
 
 What the gate does NOT establish
 --------------------------------
-That the record was honest. Every agent on this repo posts through the
-operator's GitHub account, so a comment cannot tell a real review from one an
-author wrote about its own diff, and nothing here signs reviewer output. The
+That the record was honest. Local agents share a GitHub App and cloud agents
+still use the operator's account. Neither publisher identity proves an
+independent review, and nothing here signs reviewer output. The
 gate makes a review impossible to FORGET and visible to check — the record and
 its full text sit on the PR — not impossible to fake by an author with write
 access. Treat a `record` whose reviewer is the PR's own author as no review.
@@ -99,6 +100,9 @@ UNREVIEWED = 2  # infrastructure unavailable, distinct from actionable findings
 #: family (review_policy.json). Not an outage: the next step is the author's.
 NEEDS_SECOND_FAMILY = 3
 TRUSTED_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
+# GitHub-issued App ID -> bot actor ID. This is review-evidence admission
+# only, configured in the trusted gate checkout, never in a PR's marker.
+TRUSTED_REVIEW_APPS = {5306351: 342195540}  # UNITARES agents
 COMMENT_LIMIT = 60000  # GitHub caps a comment body at 65536 chars
 CODEX_BOT = "chatgpt-codex-connector[bot]"
 NATIVE_REQUEST = "unitares-native-review v1"
@@ -187,6 +191,43 @@ def git(*args: str, check: bool = True) -> str:
 
 def gh_json(*args: str):
     return json.loads(_run(["gh", *args]))
+
+
+def trusted_review_comment(comment: dict) -> bool:
+    """Accept GitHub API provenance, never a login or body claiming an App ID."""
+    if comment.get("author_association") in TRUSTED_ASSOCIATIONS:
+        return True
+    app = comment.get("performed_via_github_app")
+    user = comment.get("user")
+    if not isinstance(app, dict) or not isinstance(user, dict):
+        return False
+    app_id, actor_id = app.get("id"), user.get("id")
+    return (type(app_id) is int and type(actor_id) is int
+            and user.get("type") == "Bot"
+            and TRUSTED_REVIEW_APPS.get(app_id) == actor_id)
+
+
+def trusted_operator_comment(comment: dict) -> bool:
+    """Preserve account-based waiver trust; review Apps get no operator role."""
+    user = comment.get("user") or {}
+    return (comment.get("author_association") in TRUSTED_ASSOCIATIONS
+            and isinstance(user, dict) and user.get("type") == "User")
+
+
+def require_operator_account() -> None:
+    """Operator-only CLI flags require a user credential, never an App token.
+
+    This excludes installation tokens (GET /user is unavailable) and bot
+    actors. It does not distinguish a human from a cloud agent using their
+    account: explicit operator instruction is still required there.
+    """
+    try:
+        actor = gh_json("api", "user")
+    except (SystemExit, subprocess.SubprocessError, ValueError, GhUnavailable):
+        raise SystemExit("review_gate: operator account could not be verified; "
+                         "App credentials cannot authorize operator-only actions") from None
+    if not isinstance(actor, dict) or actor.get("type") != "User":
+        raise SystemExit("review_gate: operator-only actions require a user account, not a bot")
 
 
 # Every PR read and write here goes through REST (`gh api`), never `gh pr`
@@ -518,7 +559,7 @@ def fix_coverage_valid(rec: Record, comments: list[dict], native: list[Record] =
     if rec.scope != "fix" or not all((rec.head, rec.base, rec.from_head, rec.from_key)):
         return False
     sources = [(parse_record(c.get("body", "")), c.get("body", ""), False) for c in comments
-               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+               if trusted_review_comment(c)]
     sources += [(r, r.text, True) for r in native]
     for source, body, actual_native in sources:
         full = source and (source.full() or (actual_native and source.reviewer == "codex-native"
@@ -563,7 +604,7 @@ def latest_matching(comments: list[dict], key: str,
     """
     records = []
     for c in comments:
-        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not trusted_review_comment(c):
             continue
         body = c.get("body", "")
         rec = parse_record(body)
@@ -754,7 +795,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     # dispositions do not spend rounds; native receipts share the native head
     # identity so the same run is not counted again as a comment.
     for c in comments:
-        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not trusted_review_comment(c):
             continue
         rec = parse_record(c.get("body", ""))
         if (rec and rec.scope == "legacy" and not rec.disposed and rec.verdict != "FAILED"
@@ -781,7 +822,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     unknown_history |= bool(completed_without_evidence - runs.keys())
     answered_at = 0.0
     for c in comments:
-        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not trusted_review_comment(c):
             continue
         rec = parse_record(c.get("body", ""))
         if rec and (rec.disposed or rec.reviewer.startswith("fix-verify:")):
@@ -909,7 +950,7 @@ def read_native(repo: str, pr: int, key: str, head: str, comments: list[dict]) -
             snapshot.carried.update({r.url: commit for r in earlier.records if r.url})
     for c in comments:
         rec = parse_record(c.get("body", ""))
-        if not rec or rec.key != key or c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not rec or rec.key != key or not trusted_review_comment(c):
             continue
         source_key, source_head = (rec.from_key, rec.from_head) if rec.scope == "fix" else (rec.key, rec.head)
         if not source_head or not source_key or (rec.scope != "fix" and rec.reviewer != "codex-native"):
@@ -1166,7 +1207,7 @@ def passing_families(comments: list[dict], key: str, native: list[Record] = ()) 
     covers only the fix delta, so it never counts as a full family."""
     families = set()
     trusted = [(c, parse_record(c.get("body", ""))) for c in comments
-               if c.get("author_association") in TRUSTED_ASSOCIATIONS]
+               if trusted_review_comment(c)]
     # A disposition's reviewer field is not verified (dispose --emit takes it
     # as given), so a disposed FINDINGS credits a family only when the review
     # it answers, the same reviewer's open FINDINGS on this diff, is on record.
@@ -1245,9 +1286,9 @@ def second_family_check(conclusion: str, desc: str, sensitive: list[str],
 #   - it never covers the gate's own files, which cannot waive themselves;
 #   - a PR can carry at most a few of them, and each shows the waived hunks and
 #     the stated reason on the PR.
-# The record is a comment, and every agent here posts through the operator's
-# account, so the gate cannot tell who typed it (see "What the gate does NOT
-# establish"). Agents must not post one unless the operator said to.
+# Review App comments are excluded. Cloud agents can still share the operator's
+# account, so user attribution cannot prove who typed a waiver. They must not
+# post one unless the operator said to.
 
 WAIVER_MARKER = "unitares-review-waiver v1"
 # Anchored to the start of the comment: a marker quoted in prose or a code fence
@@ -1344,7 +1385,7 @@ def active_waiver(comments: list[dict], key: str, policy: dict) -> str | None:
     """The reason of a valid waiver for ``key``, or None. Counts every trusted
     waiver on the PR against the cap, so reposting cannot extend it."""
     posted = [c for c in comments
-              if c.get("author_association") in TRUSTED_ASSOCIATIONS and WAIVER_RE.search(c.get("body") or "")]
+              if trusted_operator_comment(c) and WAIVER_RE.search(c.get("body") or "")]
     if len(posted) > policy["max_per_pr"]:
         return None
     for c in posted:
@@ -1479,7 +1520,7 @@ def join_native(args, repo: str, pr: int, key: str, head: str) -> Record | None:
         existing = latest_matching(comments, key, snapshot.records)
         if existing and existing.verdict != "FAILED":
             return existing
-        requests = [c for c in comments if c.get("author_association") in TRUSTED_ASSOCIATIONS
+        requests = [c for c in comments if trusted_review_comment(c)
                     and request_marker in (c.get("body") or "")]
         requested |= bool(requests)
         # A stuck activity row must not grant a new ten-minute wait on every
@@ -2212,7 +2253,7 @@ def finish_record(repo: str, pr: int, key: str, head: str, rec: Record,
     if result == 0 and rec.verdict == "CLEAN" and rec.reviewer == "codex-native":
         # Reactions have no workflow event. A durable comment both re-runs CI
         # when the clean reaction arrives late and preserves diff equivalence.
-        recorded = any(c.get("author_association") in TRUSTED_ASSOCIATIONS
+        recorded = any(trusted_review_comment(c)
                        and (r := parse_record(c.get("body", "")))
                        and r.key == key and r.verdict == "CLEAN"
                        # Another family's CLEAN is not this receipt: on a
@@ -2276,6 +2317,8 @@ class review_lock:
 
 
 def cmd_review(args) -> int:
+    if getattr(args, "authorize_full_review", None):
+        require_operator_account()
     args.base = getattr(args, "base", DEFAULT_BASE)
     pr, repo, key, branch = _resolve(args)
     reviewer = args.reviewer or default_reviewer(branch)
@@ -2801,6 +2844,7 @@ def cmd_waive(args) -> int:
     if not args.operator_approved:
         raise SystemExit("review_gate: waive needs --operator-approved: only the operator may "
                          "waive a review, and an agent runs this only when told to")
+    require_operator_account()
     pr, repo, key, branch = _resolve(args)
     head = git("rev-parse", "HEAD").strip()
     changed = changed_paths(args.base, head)
@@ -2814,7 +2858,7 @@ def cmd_waive(args) -> int:
     if refusal:
         print(f"[review] cannot waive: {refusal}")
         return 1
-    already = [c for c in comments if c.get("author_association") in TRUSTED_ASSOCIATIONS
+    already = [c for c in comments if trusted_operator_comment(c)
                and WAIVER_RE.search(c.get("body") or "")]
     if len(already) >= policy["max_per_pr"]:
         print(f"[review] cannot waive: this PR already carries {len(already)} waiver(s) "
@@ -2893,7 +2937,7 @@ SWEEP_HOLD_LABEL = "no-auto-review"
 def failed_runs(comments: list[dict], key: str, reviewer: str | None = None) -> int:
     n = 0
     for c in comments:
-        if c.get("author_association") not in TRUSTED_ASSOCIATIONS:
+        if not trusted_review_comment(c):
             continue
         rec = parse_record(c.get("body", ""))
         n += bool(rec and rec.key == key and rec.verdict == "FAILED"

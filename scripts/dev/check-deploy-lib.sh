@@ -90,6 +90,9 @@ bash "$ROOT/scripts/dev/test-deploy-gov-plugin.sh" \
 bash "$ROOT/scripts/dev/test-deploy-openai-gov-proxy.sh" \
   || err "OpenAI proxy deploy guards failed (scripts/dev/test-deploy-openai-gov-proxy.sh)"
 
+bash "$ROOT/scripts/dev/test-deploy-integrity.sh" \
+  || err "deployment revision/result tests failed"
+
 # 6. advisory shellcheck (never fails the gate)
 if command -v shellcheck >/dev/null 2>&1; then
   # SC1091: sourced file not followed — the lib is sourced via a computed path.
