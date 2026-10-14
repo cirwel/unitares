@@ -1248,6 +1248,85 @@ class TestErrorHandling:
     """Tests for API call error handling."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("status,reason", [(401, "auth"), (402, "quota"), (429, "quota")])
+    async def test_hf_observed_failure_gates_every_route_then_recovers(self, monkeypatch, status, reason):
+        from src.mcp_handlers.support import host_availability as ha
+        from src.mcp_handlers.support import inference_registry as registry
+
+        now = [1_790_000_000.0]
+        monkeypatch.setattr(ha.time, "time", lambda: now[0])
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        monkeypatch.setattr(registry, "_ollama_available", lambda: False)
+        monkeypatch.setattr(_mi, "_ollama_available", lambda: False)
+        monkeypatch.setattr(_mi, "OPENAI_AVAILABLE", True)
+        error = Exception("You have no remaining credits; private provider error")
+        error.status_code = status
+        client = MagicMock()
+        client.chat.completions.create.side_effect = error
+        factory = MagicMock(return_value=client)
+        monkeypatch.setattr(_mi, "OpenAI", factory)
+
+        initial = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, provider="hf",
+        ))
+        assert not initial.ok
+        assert initial.failure.details["provider_unavailable"]["reason"] == reason
+        hosts = _parse_text_content(await _mi.handle_list_inference_hosts({}))
+        hf = next(host for host in hosts["hosts"] if host["host_id"] == "hf:router")
+        assert hf["configured"] is True
+        assert hf["available"] is False
+        assert hf["cooldown"]["reason"] == reason
+        assert "private provider error" not in json.dumps(hf)
+        assert hf["accepts_host_id_from"] == ["call_model"]
+
+        for route in (
+            {"host_id": "hf:router"},
+            {"provider": "hf"},
+            {"model": "hf:org/model"},
+            {"provider": "auto", "privacy": "cloud"},
+        ):
+            blocked = await _mi.run_model_inference(_mi.CallModelRequest(
+                prompt="hello", requesting_agent_uuid=None, **route,
+            ))
+            assert blocked.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+            assert blocked.failure.details["dispatch_phase"] == "preflight"
+            assert blocked.failure.execution_started is False
+            assert hf["cooldown"]["retry_after"] in blocked.failure.recovery["action"]
+        assert factory.call_count == 1
+
+        # Expiry allows one ordinary attempt; success clears the failure history.
+        now[0] += ha.BACKOFF_BASE_S + 1
+        assert registry.get_inference_host("hf:router")["available"] is True
+        client.chat.completions.create.side_effect = None
+        client.chat.completions.create.return_value = _make_mock_response()
+        recovered = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, host_id="hf:router",
+        ))
+        assert recovered.ok
+        assert "hf:router" not in ha._state
+        assert registry.get_inference_host("hf:router")["cooldown"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider,status", [
+        ("hf", 403), ("hf", 404), ("hf", 500), ("hf", None), ("ollama", 402),
+    ])
+    async def test_non_account_failures_do_not_disable_hf(self, monkeypatch, provider, status):
+        from src.mcp_handlers.support import host_availability as ha
+
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        monkeypatch.setattr(_mi, "OPENAI_AVAILABLE", True)
+        error = Exception("private error with quota words but no account failure")
+        error.status_code = status
+        client = MagicMock()
+        client.chat.completions.create.side_effect = error
+        monkeypatch.setattr(_mi, "OpenAI", lambda **kwargs: client)
+        result = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, provider=provider,
+        ))
+        assert not result.ok
+        assert ha.cooldown("hf:router") is None
+
+    @pytest.mark.asyncio
     async def test_timeout_error(self):
         """Timeout errors get specific error code."""
         mock_client_instance = MagicMock()

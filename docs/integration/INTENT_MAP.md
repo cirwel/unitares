@@ -78,6 +78,19 @@ record**. Privacy narrows the first.
   unless `allow_degraded=true`, which returns a standard local answer marked
   `status: "degraded"` instead. `delegate_inference` has no fallback.
   `list_inference_hosts` shows what this deployment has.
+- **A failed adapter call has caller-only diagnostics.** With
+  `response_mode="full"`, `consult` keeps a bounded excerpt of unvalidated
+  CLI output and any answer-region diagnostic supplied by the adapter. The
+  excerpt is not advice and is omitted from the durable consultation audit.
+  Malformed output remains a failure; an exit code of zero alone does not
+  establish a complete answer or trigger peer failover.
+- **HF availability is based on configuration and observed failures.** A token
+  with no known cooldown makes `hf:router` eligible to try; this is not a live
+  credit check. Observed HTTP 401, 402 and 429 responses start the existing
+  bounded auth/quota cooldown. Listing shows `available=false` and the retry
+  time, and every HF call route respects it. After expiry, an ordinary call
+  tries again; success clears the failure history. Discovery makes no paid
+  probe. Model-specific 403/404 responses do not disable the whole host.
 
 ## Recipes
 

@@ -86,6 +86,42 @@ the questions at the end are for the maintainer.
 
 ## Adding to the surface (proposal)
 
+### Concrete follow-up: explicit advisory host selection
+
+Proposed 2026-10-13 after the consult/inference usability review. This is a
+follow-up design for after the feature freeze, not part of the implemented
+v1 contract. It changes the existing advice entry point; it adds no transport
+or model channel. `request_review` keeps its separate assignment and authority
+rules, and `dialectic(action="consult")` remains a way to attach supplied
+evidence to a review, not an inference call.
+
+- Add an optional `host_id` to `consult`. Omitted means today's automatic
+  routing. Explicit means the named registered advisory host must answer.
+  Keep raw `call_model` and `delegate_inference` compatible.
+- Resolve the selected host through the registry and existing typed inference
+  services. Reject unknown, unreachable or effort-incompatible selections
+  before dispatch. HTTP hosts use standard effort; CLI hosts use thorough.
+- Privacy remains a constraint: a selected external host requires
+  `cloud_allowed`. Host selection never grants deployment authorization.
+- Pin explicit selection: no silent switch to another peer or the local
+  model. Reject `allow_degraded=true` with an explicit host; return the host's
+  bounded failure diagnostics instead. Automatic calls retain their existing
+  failover policy.
+- Echo explicit selection in the compact request receipt. Full diagnostics
+  and the text-free audit retain the actual route. Choosing one's own family
+  is allowed for advisory calls and never satisfies governed peer review.
+- Keep model, temperature, token and timeout controls on the raw tools for
+  this first change. Evaluate family preferences separately once named-host
+  selection works; do not introduce competing selector fields together.
+
+Acceptance examples: a Gemini caller can explicitly ask Codex; selecting
+Claude with local privacy fails before dispatch; a selected host's quota
+failure never returns advice from a different host; omitted selection keeps
+the current routing, audit and authority contracts. Implementing this would
+amend `consult-advisory-facade-v1.md`, the schema and the intent map together.
+
+### Addition check
+
 Before a new tool, alias, action or model channel is added:
 
 1. Find the need on the [intent map](INTENT_MAP.md) it serves. If none fits, add the need first.

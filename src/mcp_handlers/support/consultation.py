@@ -397,12 +397,28 @@ def _failure_diagnostics(failure: InferenceFailure) -> dict[str, Any]:
         "orchestrator_agent_id",
         "host_id",
         "exit_status",
+        "adapter_raw_excerpt_note",
+        "adapter_raw_excerpt_truncated",
+        "adapter_answer_region_located",
+        "adapter_answer_region_note",
     ):
         value = failure.details.get(key)
         if isinstance(value, str):
             diagnostics[key] = value[:500]
         elif isinstance(value, (int, float, bool)):
             diagnostics[key] = value
+    # Caller-only diagnostic evidence: never advice and never part of the
+    # durable consultation record. Keep both ends, as the answer is at the
+    # tail of CLI output. The service normally already bounds this to ~2 KB.
+    excerpt = failure.details.get("adapter_raw_excerpt")
+    if isinstance(excerpt, str) and excerpt.strip():
+        if len(excerpt) > 2500:
+            excerpt = excerpt[:500] + "\n... [excerpt elided] ...\n" + excerpt[-1500:]
+            diagnostics["adapter_raw_excerpt_truncated"] = True
+        diagnostics["adapter_raw_excerpt"] = excerpt
+        diagnostics["adapter_raw_excerpt_note"] = (
+            "Unvalidated host-CLI output for diagnosis only; it is not an answer."
+        )
     return diagnostics
 
 
@@ -467,6 +483,8 @@ def _failed(
         data["degradation"] = degradation
     if request.response_mode == "full" and diagnostics:
         data["diagnostics"] = diagnostics
+    elif diagnostics:
+        recovery_action += " Use response_mode='full' for bounded failure diagnostics."
     return ConsultationOutcome(
         data=data,
         failure=ConsultationFailure(

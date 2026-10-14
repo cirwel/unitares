@@ -243,6 +243,7 @@ def _hf_token_present() -> bool:
 def _base_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
     hf_configured = _hf_token_present()
+    hf_cooldown = host_availability.cooldown("hf:router")
     # The record describes the configured endpoint, not the loopback default:
     # an endpoint that classifies external is neither local nor free.
     local_route_is_local = classify_endpoint(model_base_url()).is_local
@@ -281,7 +282,7 @@ def _base_hosts() -> list[InferenceHost]:
             provider_kind="hf",
             transport="openai_compatible_http",
             configured=hf_configured,
-            available=hf_configured,
+            available=hf_configured and hf_cooldown is None,
             privacy_class="external_cloud",
             cost_class="token_or_free_tier",
             accountability_class="tool_evidence",
@@ -289,7 +290,12 @@ def _base_hosts() -> list[InferenceHost]:
             models=["deepseek-ai/DeepSeek-R1:fastest", "Qwen/Qwen2.5-72B-Instruct:fastest"],
             implementation_status="active",
             accepts_host_id_from=["call_model"],
-            notes="Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment.",
+            cooldown=hf_cooldown,
+            notes=(
+                "Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment. "
+                "Availability means configured with no known quota/auth cooldown; "
+                "credits and authentication are not proactively checked."
+            ),
         ),
         InferenceHost(
             host_id="codex:host-adapter",
