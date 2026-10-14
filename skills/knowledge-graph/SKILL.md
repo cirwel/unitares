@@ -18,7 +18,12 @@ source_files:
   - unitares/src/mcp_handlers/tool_stability.py
   - unitares/src/tool_descriptions.json
   - unitares/src/mcp_handlers/support/param_normalization.py
-  - unitares/src/mcp_handlers/middleware/envelope_step.py
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_MEMORY_SUGGESTION_LIMIT
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_SEARCH_MORE_ROW_LIMIT
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_memory_suggestions
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_append_more_results
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_enforce_search_projection_budget
+  - unitares/src/mcp_handlers/middleware/envelope_step.py#_note_stale_digests
   - unitares/src/knowledge_graph.py
   - unitares/src/knowledge_graph_lifecycle.py
   - unitares/src/storage/knowledge_graph_age.py
