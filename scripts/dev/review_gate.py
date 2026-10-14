@@ -51,8 +51,8 @@ findings from a reviewer that did not finish is not a review.
 
 What the gate does NOT establish
 --------------------------------
-That the record was honest. Local agents share a GitHub App and cloud agents
-still use the operator's account. Neither publisher identity proves an
+That the record was honest. Local and provisioned cloud agents share a GitHub
+App. Publisher identity does not prove an
 independent review, and nothing here signs reviewer output. The
 gate makes a review impossible to FORGET and visible to check — the record and
 its full text sit on the PR — not impossible to fake by an author with write

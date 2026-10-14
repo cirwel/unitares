@@ -188,8 +188,11 @@ On this operator's host, `com.unitares.review-sweep` is the designated runner.
 `scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
 clean checkout of merged `origin/master`, reads PR heads separately, and uses
 `unitares-github` for this repository's fetches and review publication. It
-refuses a missing App runner instead of using the human login. Other
-installers opt in to their own host and keep their existing credentials.
+refuses a missing App runner instead of using the human login across `cirwel`
+repositories. Cloud agents use explicitly provisioned repository-scoped App
+credentials; a missing cloud integration must be reported, never replaced
+with the operator's login. Other installers opt in to their own host and
+credentials.
 Direct local `./scripts/dev/review.sh` remains available and shares the same
 per-PR lock and evidence, so it joins an in-flight host review.
 
@@ -205,9 +208,8 @@ Bot comments cannot grant an operator waiver, even with a write association.
 The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
 user-authored approval; it never lets the App issue one. The `waive` and
 legacy `--authorize-full-review` CLI paths verify a user account via
-GitHub and refuse App credentials or an unreadable actor. Cloud agents using
-the operator's user credential still require explicit operator instruction;
-this check cannot distinguish them from the operator.
+GitHub and refuse App credentials or an unreadable actor. All agents use the
+shared App; the operator's user account is reserved for operator actions.
 
 > **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
 > longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a

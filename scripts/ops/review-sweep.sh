@@ -12,7 +12,7 @@ PR_WT="$LANE/unitares-review-bot-pr"
 # reads/writes. Never fall back to the human login for this App's repository.
 APP_RUNNER=()
 case "$(git -C "$REPO" remote get-url origin | tr '[:upper:]' '[:lower:]')" in
-    https://github.com/cirwel/unitares|https://github.com/cirwel/unitares.git)
+    https://github.com/cirwel/*)
         command -v unitares-github >/dev/null || {
             echo "[review-sweep] unitares-github is required; no human-login fallback" >&2
             exit 2
@@ -20,8 +20,8 @@ case "$(git -C "$REPO" remote get-url origin | tr '[:upper:]' '[:lower:]')" in
         APP_RUNNER=(unitares-github)
         (cd "$REPO" && "${APP_RUNNER[@]}" --read-only -- git fetch --quiet origin master)
         ;;
-    *github.com*cirwel/unitares*)
-        echo "[review-sweep] UNITARES requires its canonical HTTPS origin" >&2
+    *github.com*cirwel/*)
+        echo "[review-sweep] cirwel repositories require their canonical HTTPS origin" >&2
         exit 2
         ;;
     *) git -C "$REPO" fetch --quiet origin master ;;
