@@ -67,8 +67,8 @@ _AUTHORITY = {
 _PURPOSE_INSTRUCTIONS = {
     "answer": "Answer the request directly. State material uncertainty.",
     "critique": (
-        "Critique the proposal as advisory model evidence. Identify concrete "
-        "risks, counterarguments, and improvements; do not claim a review verdict."
+        "Provide a critical perspective as advisory model evidence. Identify concrete "
+        "risks, counterarguments, or improvements where relevant; do not claim a review verdict."
     ),
     "summarize": "Summarize the material accurately and preserve important caveats.",
     "generate": "Generate the requested material while respecting the stated constraints.",
@@ -199,7 +199,15 @@ class ConsultationOutcome:
 
 def _constructed_prompt(request: ConsultRequest) -> str:
     instruction = _PURPOSE_INSTRUCTIONS[request.purpose]
-    return f"{instruction}\n\nConsultation brief:\n{request.brief}"
+    # The brief is the caller's request, not necessarily a proposal to critique.
+    # Constraints apply to answer content; host adapters still add their own
+    # terminal-answer envelope outside it.
+    return (
+        "Follow the request in the consultation brief, including its length, format, "
+        "and scope constraints for the answer content. Use the consultation purpose "
+        "within those constraints; do not add unrequested sections.\n\n"
+        f"Consultation purpose: {instruction}\n\nConsultation brief:\n{request.brief}"
+    )
 
 
 def _family_of(value: Any) -> str | None:
