@@ -4377,6 +4377,94 @@ def test_followup_reviewer_gets_delta_and_original_context(repo, reviewed_follow
     assert rg.codex_rounds(comments + [_comment(posted[0])], [], []).count == 1
 
 
+@pytest.mark.parametrize('reviewer', ['codex', 'antigravity'])
+def test_followup_separates_merged_base_from_authored_work(repo, reviewed_followup, monkeypatch, reviewer):
+    comments, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('Upstream caller changed.\n')
+    (repo / 'upstream.txt').write_text('Unrelated upstream feature.\n')
+    _git(repo, 'add', '.')
+    _git(repo, 'commit', '-qm', 'upstream work')
+    _git(repo, 'checkout', '-q', 'feature')
+    _git(repo, 'merge', '-q', '--no-edit', 'master')
+    fix.head, fix.base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    fix.key = rg.diff_key(fix.base, fix.head)
+    def review(provider, prompt, out, budget, materials):
+        files = dict(materials) if materials is not None else {}
+        delta = files['diff.patch'].decode() if files else (out / 'diff.txt').read_text()
+        context = files['prior-review.txt'].decode() if files else (out / 'prior-review.txt').read_text()
+        assert '+Clarified usage.' in delta
+        assert 'Upstream caller changed.' not in delta
+        assert 'Unrelated upstream feature.' not in delta
+        assert 'Upstream caller changed.' in context  # integration evidence remains available
+        assert 'Unrelated upstream feature.' in context
+        assert 'Current PR diff:' in context and '+a changed' in context
+        assert 'upstream breadth alone' in context
+        return 'Examined the authored change and base integration.\nSCOPE: FOLLOWUP\nVERDICT: CLEAN', 'exit 0'
+    monkeypatch.setattr(rg, 'run_reviewer', review)
+    posted = []
+    monkeypatch.setattr(rg, 'post_record', lambda pr, rec, *a: posted.append(rec))
+    args = SimpleNamespace(base=fix.base, budget=30, followup=fix, followup_reviews='Original reviews')
+    assert rg._review_locked(args, 1, fix.key, reviewer) == 0
+    assert rg.passing_families(comments + [_comment(posted[0])], fix.key) == {'openai', 'anthropic'}
+
+
+def test_base_merge_context_change_is_not_an_author_edit(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    key = rg.diff_key('master', previous)
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, 'merge', '-q', '--no-edit', 'master')
+    assert key != rg.diff_key('master', 'HEAD')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert delta == ''  # integration still needs the independent scope decision
+    assert '+ONE on master' in context
+
+
+def test_followup_keeps_new_work_and_reverted_base_changes(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    _master_edits_next_to_the_pr(carry_repo)
+    _git(carry_repo, 'merge', '-q', '--no-edit', 'master')
+    # A hand edit in the merge must remain reviewable, even if its text is
+    # identical to the old reviewed head and absent from a raw head-to-head diff.
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE by the PR\nfour\nfive\n')
+    (carry_repo / 'new.py').write_text('unrelated_new_work()\n')
+    _git(carry_repo, 'add', '.')
+    _git(carry_repo, 'commit', '--amend', '-qm', 'merge with author changes')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert '-ONE on master' in delta and '+one' in delta
+    assert '+unrelated_new_work()' in delta
+    assert '+ONE on master' in context
+
+
+def test_followup_does_not_subtract_base_changes_not_yet_merged(repo, reviewed_followup):
+    _, fix = reviewed_followup
+    _git(repo, 'checkout', '-q', 'master')
+    (repo / 'b.txt').write_text('Not integrated yet.\n')
+    _git(repo, 'commit', '-qam', 'base advances')
+    _git(repo, 'checkout', '-q', 'feature')
+    delta, context = rg.followup_diff('master', fix.from_head, fix.head)
+    assert '+Clarified usage.' in delta
+    assert 'Not integrated yet.' not in delta + context
+
+
+def test_conflicting_base_keeps_the_complete_followup_delta(carry_repo):
+    previous = _git(carry_repo, 'rev-parse', 'HEAD')
+    _git(carry_repo, 'checkout', '-q', 'master')
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE conflicting upstream\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'conflicting base')
+    _git(carry_repo, 'checkout', '-q', 'feature')
+    result = subprocess.run(['git', 'merge', '--no-edit', 'master'], cwd=carry_repo,
+                            capture_output=True)
+    assert result.returncode == 1
+    (carry_repo / 'f.txt').write_text('one\ntwo\nTHREE manually resolved\nfour\nfive\n')
+    _git(carry_repo, 'commit', '-qam', 'resolve conflict')
+    delta, context = rg.followup_diff('master', previous, 'HEAD')
+    assert '+THREE manually resolved' in delta
+    assert delta == rg.diff_text(previous, 'HEAD')
+    assert 'could not be reconstructed conflict-free' in context
+    assert 'FULL_REQUIRED' in context
+
+
 def test_default_followup_runs_before_full_round_cap(repo, reviewed_followup, monkeypatch):
     comments, fix = reviewed_followup
     args = SimpleNamespace(base=fix.base, budget=30, fresh=False, reviewer='codex')
