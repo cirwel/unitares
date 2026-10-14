@@ -1368,10 +1368,10 @@ async def _lookup_identity_anchor_inner(base_fingerprint: str) -> Optional[Dict[
 # matters for the argument-less fallback they should not win.
 #
 # Matched against the EXPLICITLY-DECLARED spawn_reason argument only,
-# never infer_spawn_reason()'s output: inference can label a fresh
-# driver's succession onboard "subagent" (parent declared, reason
-# omitted, client_hint not in arguments), and NX-gating on that would
-# lock the new driver behind its dead predecessor's still-live pin.
+# not a descriptive default. A parent or prior thread nodes do not
+# declare dispatch; an omitted reason defaults to "new_session".
+# A fresh driver's succession onboard must be able to replace its dead
+# predecessor's still-live pin.
 # Honor-system boundary, accepted deliberately: a dispatched child that omits
 # spawn_reason keeps the displacing write (today's behavior). The
 # authoritative continuity path was never the pin — it is echoing

@@ -1,8 +1,10 @@
 # Separate GitHub automation identity from the operator
 
-**Status:** Attribution-first direction approved by Kenny on 2026-10-13
-(“proceed” after the KG-audit recommendations). Registration and local credential
-wiring remain pending. Actor-based authorization is expressly deferred.
+**Status:** Attribution-first direction approved by Kenny on 2026-10-13.
+The private App is registered and installed on this repository; the local
+command runner authenticates as `unitares-agents[bot]`. Kenny subsequently
+authorized registration, credential setup and local-client rollout. Bot write
+and CI evidence belongs in the rollout PR. Actor-based authorization is deferred.
 
 ## Problem
 
@@ -59,9 +61,10 @@ Options for the operator:
    still prepare ordinary PRs, but cannot mint that approval. This is a second
    identity/authorization design needing its own reviewed protocol.
 
-Recommendation: stage attribution first; do not claim actor-only enforcement
-until option 2 or 3 resolves the cloud exception. No credential inspection,
-App registration, token minting, ruleset update or live enforcement test was done.
+Adopted direction: stage attribution first; do not claim actor-only enforcement
+until option 2 or 3 resolves the cloud exception. The initial proposal did no
+credential or enforcement work; the authorized installation is recorded below.
+No ruleset or operator-only enforcement change is part of this rollout.
 
 ## Acceptance and decision
 
@@ -99,11 +102,12 @@ repository. The name may need a unique suffix. GitHub's
 [documented URL parameters](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-using-url-parameters)
 preselect settings; they do not create the App or prove installation.
 
-The current CLI token returned HTTP 403 for `GET /user/installations`: it is
-not authorized to a GitHub App. This does not prove no App exists. No private
-key or token was read, generated, committed or installed in this follow-up.
-The operator's registration screen is the remaining external setup boundary;
-no desktop/tab access was used.
+Registration completed on 2026-10-13 using an operator-authorized new Chrome
+tab and operator passkey confirmation. App ID **5306351**, installation ID
+**171128073**; only `cirwel/unitares` is selected. These are public identifiers,
+not credentials. The signing key is held in owner-only local configuration;
+its fingerprint was verified and the unused first key was revoked. No private
+key or installation token is committed, placed in a PR body, or stored in KG.
 
 After registration, keep the private key in operator-controlled custody. A
 trusted broker/runner may mint repository-scoped installation tokens and give
@@ -119,3 +123,44 @@ denial on an unselected repository. Verify the human's normal CLI remains
 clients individually. Until those checks pass, this is prepared configuration,
 not a live bot identity. Cloud Claude's limitation and all operator-only acts
 retain the existing policy; actor `cirwel` alone remains insufficient proof.
+
+## Local command path and verification
+
+The operator-local `unitares-github` runner lives in private host tooling and
+is installed as a stable executable outside agent worktrees. It requests an
+explicit single-repository installation token for each command, supplies only
+that expiring token to the child, and revokes it on completion. Its default
+permissions match the table; `--read-only` downgrades every permission.
+
+```sh
+unitares-github --read-only -- gh pr list
+unitares-github -- git push -u origin codex/example-1013
+unitares-github -- git prepr
+unitares-github -- gh pr create --draft --body-file /path/to/body.md
+unitares-github --read-only -- gh pr checks 123
+```
+
+Local commits remain ordinary Git operations. Use HTTPS remotes; the runner
+rejects SSH and redirects, replaces inherited credential helpers, and refuses
+HTTP extraheaders that could substitute a human identity. It preserves Git hooks and uses an
+empty temporary `gh` configuration. No global login or credential helper is
+replaced. A missing permission fails the command: never silently retry with
+the human credential. Tokens expire after one hour; commands are bounded to
+55 minutes, with revocation attempted even on failure or handled interruption.
+An abrupt process kill can leave a token valid until expiry.
+
+Initial live checks verified the App JWT, exactly one accessible repository,
+CI reads (HTTP 200), denial on an unselected private repository (404), and
+token revocation (204 followed by 401). The installed runner's GraphQL viewer
+is `unitares-agents[bot]`; the unwrapped operator CLI remains `cirwel`. The
+rollout PR supplies bot-authored draft-PR, push, label and CI-check evidence.
+Natural one-hour expiry was not waited out; GitHub's returned expiry and
+explicit revocation were checked separately.
+
+Local Codex and local Claude share the host contract directing UNITARES
+GitHub operations through this runner. Existing sessions need that instruction
+in their current context; there is no automatic shell-command rewriting.
+Other repositories and cloud Claude retain their existing paths. This is an
+attribution convention, not OS isolation: same-user processes can still read
+same-user files, so the runner cannot establish exclusive human credentials.
+It grants no new authority to the PR footer or bot actor.

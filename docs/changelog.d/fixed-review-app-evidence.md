@@ -1,0 +1,1 @@
+- Accept ordinary review evidence from the verified UNITARES agents GitHub App, preserving diff and model-family checks. Keep bot comments and App credentials out of operator waivers and extra-review authorization.

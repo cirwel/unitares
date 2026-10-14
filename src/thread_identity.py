@@ -47,35 +47,21 @@ def infer_spawn_reason(
     existing_nodes: list[dict],
 ) -> str:
     """
-    Infer why this fork was created from available signals.
+    Return the declared reason, or the descriptive ``new_session`` default.
 
-    Priority:
-    1. Explicit caller-provided spawn_reason
-    2. No parent_agent_id declared → "new_session"
-    3. Claude Code client + existing thread nodes → "compaction"
-    4. parent_agent_id present + existing thread nodes → "subagent"
-    5. Declared parent, no prior thread nodes → "new_session"
+    A declared parent establishes a claimed relationship, not its cause.
+    Neither client_hint nor prior thread nodes establish a compaction or a
+    dispatched child. Persisting those guesses would report a declaration
+    the caller never made. ``new_session`` grants no live-parent exemption
+    and does not by itself declare intentional inheritance.
 
-    Inference never manufactures a lineage reason for an undeclared parent.
-    A lineage reason (``compaction``, ``subagent``) classifies the fork as
-    ``identity_lineage`` and is persisted as ``spawn_reason``, so returning
-    one here would report and record a declaration the caller never made.
-    Thread co-location alone does not establish it: a thread derived from an
-    IP:UA fingerprint is shared by every unrelated session behind one egress
-    address and client (cloud-hosted harnesses, 2026-09-23).
+    Keep existing_nodes in the signature for caller compatibility; it is not
+    evidence of a spawn event. Fingerprint-derived threads can group unrelated
+    sessions behind the same client and egress address.
     """
     explicit = arguments.get("spawn_reason")
     if explicit:
         return explicit
-
-    if not arguments.get("parent_agent_id"):
-        return "new_session"
-
-    if existing_nodes:
-        client_hint = arguments.get("client_hint", "")
-        if "claude_code" in client_hint or "claude-code" in client_hint:
-            return "compaction"
-        return "subagent"
 
     return "new_session"
 
