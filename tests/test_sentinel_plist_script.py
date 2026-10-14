@@ -406,22 +406,35 @@ def _rotation_env(home: Path, *, plist_buddy: Path, launchctl: Path) -> dict[str
         # Pinned inside the test home, so a developer's own setting is never
         # the file a test rotates.
         "UNITARES_SECRETS_ENV": str(home / ".config/unitares/secrets.env"),
+        "CIRWEL_SECRETS_FILE": str(home / ".config/cirwel/secrets.env"),
     }
 
 
 WRAPPER = "/opt/fleet/bin/with-cirwel-secrets"
 
 
-def _wrap(path: Path, keys: str) -> None:
+def _wrap(path: Path, keys: str, *, secrets_file: Path | None = None) -> None:
     """Move a test plist onto the secrets wrapper, as the operator's
-    externalizer does: the wrapper prefix goes on, the values come off."""
+    externalizer does: the wrapper prefix goes on, the values come off.
+    ``secrets_file`` sets the job's CIRWEL_SECRETS_FILE, the wrapper's
+    override of its default file."""
     with path.open("rb") as handle:
         payload = plistlib.load(handle)
     payload["ProgramArguments"] = [WRAPPER, "--keys", keys, "--", *payload["ProgramArguments"]]
     for key in keys.split(","):
         payload["EnvironmentVariables"].pop(key, None)
+    if secrets_file is not None:
+        payload["EnvironmentVariables"]["CIRWEL_SECRETS_FILE"] = str(secrets_file)
     with path.open("wb") as handle:
         plistlib.dump(payload, handle, sort_keys=False)
+
+
+def _clean_env(**overrides: str) -> dict[str, str]:
+    env = {**os.environ, **overrides}
+    for name in ("UNITARES_SECRETS_ENV", "CIRWEL_SECRETS_FILE"):
+        if name not in overrides:
+            env.pop(name, None)
+    return env
 
 
 def _write_secrets(path: Path, text: str, mode: int = 0o600) -> None:
@@ -444,14 +457,28 @@ def test_check_and_probe_read_a_wrapped_bearer_from_the_secrets_file(
     _wrap(sentinel, "UNITARES_MCP_BEARER_TOKEN,UNITARES_HTTP_API_TOKEN")
     encoded = token.replace("$", "\\$")
     _write_secrets(secrets_file, f'# fleet\nexport OTHER=1\nUNITARES_HTTP_API_TOKEN="{encoded}"\n')
-    env = {**os.environ, "HOME": str(home)}
-    env.pop("UNITARES_SECRETS_ENV", None)
+    # start.sh would source this file first; the wrapper never reads it, so a
+    # different value here must not change what the check sees.
+    _write_secrets(home / ".config/unitares/secrets.env", "UNITARES_HTTP_API_TOKEN=start-sh-only\n")
+    env = _clean_env(HOME=str(home))
 
-    # The default lookup falls back to the cirwel file, as start.sh does; a
-    # wrapped plist holds no bearer, so its mode is not a secret's concern.
+    # The wrapper's default file decides; a wrapped plist holds no bearer, so
+    # its mode is not a secret's concern.
     ok = _run("check", "--home", home, env=env)
     assert ok.returncode == 0, ok.stderr
     assert token not in ok.stdout + ok.stderr
+
+    # The job's CIRWEL_SECRETS_FILE moves the wrapper, and the check with it.
+    moved = tmp_path / "moved.env"
+    _write_secrets(moved, "UNITARES_HTTP_API_TOKEN=elsewhere\n")
+    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN", secrets_file=moved)
+    redirected = _run("check", "--home", home, env=env)
+    assert redirected.returncode == 2
+    assert "does not match the current governance bearer" in redirected.stderr
+    _write_secrets(moved, f"UNITARES_HTTP_API_TOKEN='{token}'\n")
+    assert _run("check", "--home", home, env=env).returncode == 0
+    _write_plist(sentinel, {"UNITARES_HTTP_API_TOKEN": "x", "UNITARES_UDS_SOCKET": str(uds)})
+    _wrap(sentinel, "UNITARES_MCP_BEARER_TOKEN,UNITARES_HTTP_API_TOKEN")
 
     # The governance plist can be wrapped too: both sides read the one file.
     _wrap(governance, "UNITARES_HTTP_API_TOKEN")
@@ -484,15 +511,16 @@ def test_render_keeps_an_installed_wrapper_and_never_writes_the_bearer_back(
     token = "current-governance-bearer"
     _write_plist(governance, {"UNITARES_HTTP_API_TOKEN": token})
     _write_plist(output, {"UNITARES_HTTP_API_TOKEN": token})
-    _wrap(output, "UNITARES_HTTP_API_TOKEN")
+    _wrap(output, "UNITARES_HTTP_API_TOKEN", secrets_file=secrets_file)
     _write_secrets(secrets_file, f"UNITARES_HTTP_API_TOKEN={token}\n")
-    env = {**os.environ, "UNITARES_SECRETS_ENV": str(secrets_file)}
+    env = _clean_env(HOME=str(home))
 
     result = _run("render", "--home", home, "--root", root, env=env)
     assert result.returncode == 0, result.stderr
     with output.open("rb") as handle:
         rendered = plistlib.load(handle)
     assert "UNITARES_HTTP_API_TOKEN" not in rendered["EnvironmentVariables"]
+    assert rendered["EnvironmentVariables"]["CIRWEL_SECRETS_FILE"] == str(secrets_file)
     assert token.encode() not in output.read_bytes()
     assert rendered["ProgramArguments"][:4] == [WRAPPER, "--keys", "UNITARES_HTTP_API_TOKEN", "--"]
     assert rendered["ProgramArguments"][4:] == [
@@ -509,7 +537,10 @@ def test_set_secret_rewrites_only_the_named_key(tmp_path: Path) -> None:
         "UNITARES_HTTP_API_TOKEN=older-duplicate\n"
     )
     _write_secrets(secrets_file, before)
-    env = {**os.environ, "UNITARES_SECRETS_ENV": str(secrets_file)}
+    env = _clean_env(
+        CIRWEL_SECRETS_FILE=str(secrets_file),
+        UNITARES_SECRETS_ENV=str(tmp_path / "absent.env"),
+    )
     new_value = "new-value-with-'quote-and-$dollar"
 
     result = _run("set-secret", "--key", "UNITARES_HTTP_API_TOKEN", input_text=new_value, env=env)
@@ -530,13 +561,28 @@ def test_set_secret_rewrites_only_the_named_key(tmp_path: Path) -> None:
 
     skipped = _run("set-secret", "--key", "NOT_DEFINED", input_text="value-x", env=env)
     assert skipped.returncode == 0
-    assert "does not define NOT_DEFINED" in skipped.stdout
+    assert "no secrets file defines NOT_DEFINED" in skipped.stdout
     assert "NOT_DEFINED" not in secrets_file.read_text()
 
-    secrets_file.chmod(0o640)
-    refused = _run("set-secret", "--key", "UNRELATED", input_text="value-y", env=env)
+    # Both readers' files are rotated: the wrapper's and the one start.sh
+    # sources. A file that does not define the key is left alone.
+    sourced = tmp_path / "sourced.env"
+    _write_secrets(sourced, "UNITARES_HTTP_API_TOKEN=start-sh-copy\n")
+    both = _clean_env(CIRWEL_SECRETS_FILE=str(secrets_file), UNITARES_SECRETS_ENV=str(sourced))
+    listed = _run("secrets-files", env=both)
+    assert listed.stdout.splitlines() == [str(secrets_file), str(sourced)]
+    rotated = _run("set-secret", "--key", "UNITARES_HTTP_API_TOKEN", input_text="v2-value", env=both)
+    assert rotated.returncode == 0, rotated.stderr
+    assert sourced.read_text() == "UNITARES_HTTP_API_TOKEN='v2-value'\n"
+    assert "export UNITARES_HTTP_API_TOKEN='v2-value'" in secrets_file.read_text()
+
+    # Every file is checked before any is written.
+    sourced.chmod(0o640)
+    snapshot = secrets_file.read_bytes()
+    refused = _run("set-secret", "--key", "UNITARES_HTTP_API_TOKEN", input_text="v3-value", env=both)
     assert refused.returncode == 2
     assert "readable by group or others" in refused.stderr
+    assert secrets_file.read_bytes() == snapshot
 
 
 def test_rotate_token_on_a_wrapped_plist_requires_the_secrets_file_first(
@@ -545,9 +591,9 @@ def test_rotate_token_on_a_wrapped_plist_requires_the_secrets_file_first(
     sentinel = tmp_path / "sentinel.plist"
     secrets_file = tmp_path / "secrets.env"
     _write_plist(sentinel, {"UNITARES_UDS_SOCKET": str(tmp_path / "governance.sock")})
-    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN")
+    _wrap(sentinel, "UNITARES_HTTP_API_TOKEN", secrets_file=secrets_file)
     _write_secrets(secrets_file, "UNITARES_HTTP_API_TOKEN=old-bearer\n")
-    env = {**os.environ, "UNITARES_SECRETS_ENV": str(secrets_file)}
+    env = _clean_env()
     before = sentinel.read_bytes()
 
     early = _run("rotate-token", "--plist", sentinel, input_text="new-bearer", env=env)
@@ -565,13 +611,17 @@ def test_rotate_script_rotates_the_secrets_file_for_wrapped_jobs(
 ) -> None:
     home, sentinel = _rotation_home(tmp_path, include_sentinel_token=False)
     _wrap(sentinel, "UNITARES_HTTP_API_TOKEN")
-    secrets_file = home / ".config/unitares/secrets.env"
+    # The wrapper's default file, which the wrapped Sentinel reads.
+    secrets_file = home / ".config/cirwel/secrets.env"
     _write_secrets(
         secrets_file,
         "UNITARES_HTTP_API_TOKEN=old-http-token\n"
         "UNITARES_CONTINUITY_TOKEN_SECRET=old-continuity-secret\n"
         "LEASE_PLANE_BEARER_TOKEN=untouched\n",
     )
+    # The file start.sh sources: rotated to the same new value.
+    sourced = home / ".config/unitares/secrets.env"
+    _write_secrets(sourced, "UNITARES_HTTP_API_TOKEN=old-http-token\n")
     sentinel_before = sentinel.read_bytes()
     fake = tmp_path / "fake-command"
     _write_fake_command(fake)
@@ -597,10 +647,12 @@ def test_rotate_script_rotates_the_secrets_file_for_wrapped_jobs(
     assert http not in result.stdout + result.stderr
     assert continuity not in result.stdout + result.stderr
     assert sentinel.read_bytes() == sentinel_before
+    assert sourced.read_text() == f"UNITARES_HTTP_API_TOKEN='{http}'\n"
     assert "com.unitares.sentinel-beam" in result.stderr
     (backup,) = (home / ".unitares").glob("rotation-backup-*")
     assert stat.S_IMODE(backup.stat().st_mode) == 0o700
-    assert "old-http-token" in (backup / "secrets.env").read_text()
+    assert "old-http-token" in (backup / "secrets-1.env").read_text()
+    assert "old-http-token" in (backup / "secrets-2.env").read_text()
 
 
 def test_rotate_script_updates_sentinel_key_and_does_not_log_secret(

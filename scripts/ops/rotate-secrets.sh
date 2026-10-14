@@ -33,11 +33,6 @@ OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
 SENTINEL_PLIST_TOOL="${UNITARES_SENTINEL_PLIST_TOOL:-$OPS_DIR/sentinel-plist.py}"
 PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 LAUNCHCTL="${UNITARES_LAUNCHCTL:-launchctl}"
-# Resolved as elixir/sentinel/scripts/start.sh and sentinel-plist.py resolve it.
-SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/unitares/secrets.env}"
-if [[ -z "${UNITARES_SECRETS_ENV:-}" && ! -f "${SECRETS_FILE}" && -f "${HOME}/.config/cirwel/secrets.env" ]]; then
-  SECRETS_FILE="${HOME}/.config/cirwel/secrets.env"
-fi
 ROTATED_KEYS_RE='UNITARES_(CONTINUITY_TOKEN_SECRET|HTTP_API_TOKEN)'
 
 log()  { printf '\033[1;34m[rotate]\033[0m %s\n' "$*"; }
@@ -82,12 +77,22 @@ cp -a "${ANCHOR_DIR}" "${BACKUP_DIR}/anchors"
 new_continuity_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 new_http_api_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 
-# --- Write into the secrets file, before any plist ---
-# The Sentinel step below confirms a wrapped Sentinel will start with the new
-# bearer, so this must come first. A key the file does not define is skipped.
-if [[ -f "${SECRETS_FILE}" ]]; then
-  cp -p "${SECRETS_FILE}" "${BACKUP_DIR}/secrets.env"
-  log "rotating secrets in ${SECRETS_FILE}..."
+# --- Write into the secrets files, before any plist ---
+# Every file a reader may use: the wrapper's and the one start.sh sources
+# (sentinel-plist.py secrets-files). The Sentinel step below confirms a wrapped
+# Sentinel will start with the new bearer, so this must come first. A key a
+# file does not define is skipped there.
+# Captured first (not read from a process substitution) so a failing lookup
+# stops the rotation under set -e.
+secrets_files="$(python3 "${SENTINEL_PLIST_TOOL}" secrets-files)"
+backed_up=0
+while IFS= read -r secrets_file; do
+  [[ -n "${secrets_file}" ]] || continue
+  backed_up=$((backed_up + 1))
+  cp -p "${secrets_file}" "${BACKUP_DIR}/secrets-${backed_up}.env"
+  log "backed up ${secrets_file} as secrets-${backed_up}.env"
+done <<< "${secrets_files}"
+if (( backed_up > 0 )); then
   printf '%s' "${new_continuity_secret}" | \
     python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_CONTINUITY_TOKEN_SECRET
   printf '%s' "${new_http_api_token}" | \
@@ -147,7 +152,7 @@ for plist in "${LAUNCHAGENTS_DIR}"/*.plist; do
   fi
 done
 if (( ${#wrapped[@]} > 0 )); then
-  warn "these wrapped jobs take a rotated key from ${SECRETS_FILE} at launch;"
+  warn "these wrapped jobs take a rotated key from a secrets file at launch;"
   warn "reload the long-running ones: ${wrapped[*]}"
 fi
 

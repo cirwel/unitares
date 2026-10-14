@@ -8,11 +8,13 @@ rotation-time update used by ``rotate-secrets.sh``.
 
 A plist may instead launch through the operator's secrets wrapper
 (``with-cirwel-secrets --keys K1,K2 -- program ...``), which supplies the named
-keys from the secrets file at exec time so the plist holds no value. For such
-a plist the bearer is read from, and rotated in, that secrets file: the same
-file ``elixir/sentinel/scripts/start.sh`` and ``deploy-lease-plane.sh`` read
-(``UNITARES_SECRETS_ENV``, else ``~/.config/unitares/secrets.env``, else
-``~/.config/cirwel/secrets.env``).
+keys from a secrets file at exec time so the plist holds no value. For such a
+plist the bearer is read exactly where the wrapper reads it: the job's
+``CIRWEL_SECRETS_FILE``, else ``~/.config/cirwel/secrets.env``. Rotation
+(``set-secret``) updates every secrets file a reader may use: the wrapper's,
+and the one ``elixir/sentinel/scripts/start.sh`` and ``deploy-lease-plane.sh``
+source (``UNITARES_SECRETS_ENV``, else ``~/.config/unitares/secrets.env``, else
+the cirwel file).
 """
 
 from __future__ import annotations
@@ -47,8 +49,19 @@ class PlistConfigError(ValueError):
     """An installed or source plist is unsafe or incomplete."""
 
 
-def _secrets_file() -> Path:
-    """The operator secrets file, resolved as start.sh resolves it."""
+def _wrapper_secrets_file(environment: dict[str, Any] | None = None) -> Path:
+    """The file with-cirwel-secrets reads: ``CIRWEL_SECRETS_FILE`` from the
+    job's environment (a plist's EnvironmentVariables; this process's own
+    environment when no plist is given), else ~/.config/cirwel/secrets.env."""
+    source = os.environ if environment is None else environment
+    override = source.get("CIRWEL_SECRETS_FILE")
+    if isinstance(override, str) and override:
+        return Path(override).expanduser()
+    return _default_home() / ".config/cirwel/secrets.env"
+
+
+def _sourced_secrets_file() -> Path:
+    """The file start.sh and deploy-lease-plane.sh source."""
     explicit = os.environ.get("UNITARES_SECRETS_ENV")
     if explicit:
         return Path(explicit).expanduser()
@@ -58,6 +71,15 @@ def _secrets_file() -> Path:
     if not path.exists() and fallback.exists():
         return fallback
     return path
+
+
+def _rotation_files() -> list[Path]:
+    """Every existing secrets file a reader of the rotated keys may use."""
+    found: list[Path] = []
+    for path in (_wrapper_secrets_file(), _sourced_secrets_file()):
+        if path.exists() and not any(path.samefile(seen) for seen in found):
+            found.append(path)
+    return found
 
 
 def _check_private(path: Path) -> None:
@@ -111,9 +133,8 @@ def _encode_secret_value(value: str) -> str:
     return '"' + "".join("\\" + c if c in '\\"$`' else c for c in value) + '"'
 
 
-def _read_secret(key: str) -> str | None:
-    """The last value of ``key`` in the secrets file (the wrapper's rule)."""
-    path = _secrets_file()
+def _read_secret(key: str, path: Path) -> str | None:
+    """The last value of ``key`` in ``path`` (the wrapper's rule)."""
     _check_private(path)
     value = None
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -123,18 +144,26 @@ def _read_secret(key: str) -> str | None:
     return value
 
 
-def set_secret(key: str, value: str) -> bool:
-    """Replace every line defining ``key`` in the secrets file, atomically.
+def set_secret(key: str, value: str) -> list[Path]:
+    """Replace ``key`` in every secrets file a reader may use.
 
-    Other lines are kept byte for byte. Returns False, writing nothing, when
-    the file does not define ``key``: no wrapped job reads it from there.
+    Returns the files rewritten. A file that does not define ``key`` is left
+    alone: nothing reads the key from there. Every file is checked before any
+    is written, so an unsafe file refuses the whole rotation.
     """
     if not SECRET_KEY_RE.fullmatch(key):
         raise PlistConfigError(f"not a variable name: {key!r}")
     if not _valid_token(value) or "\n" in value or "\r" in value:
         raise PlistConfigError("refusing to install an empty or placeholder secret")
-    path = _secrets_file()
-    _check_private(path)
+    files = _rotation_files()
+    for path in files:
+        _check_private(path)
+    return [path for path in files if _replace_secret_line(path, key, value)]
+
+
+def _replace_secret_line(path: Path, key: str, value: str) -> bool:
+    """Atomically rewrite every line of ``path`` defining ``key``; other lines
+    are kept byte for byte. False, writing nothing, when none does."""
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     changed = False
     for index, line in enumerate(lines):
@@ -183,9 +212,10 @@ def _wrapped_keys(payload: dict[str, Any]) -> set[str]:
 def _token_from(payload: dict[str, Any], path: Path) -> object:
     """The bearer the job runs with. The wrapper exports over the plist's
     environment, so for a wrapped key the secrets file wins."""
+    environment = _environment(payload, path)
     if HTTP_TOKEN_KEY in _wrapped_keys(payload):
-        return _read_secret(HTTP_TOKEN_KEY)
-    return _environment(payload, path).get(HTTP_TOKEN_KEY)
+        return _read_secret(HTTP_TOKEN_KEY, _wrapper_secrets_file(environment))
+    return environment.get(HTTP_TOKEN_KEY)
 
 
 def _load_plist(path: Path) -> dict[str, Any]:
@@ -315,11 +345,15 @@ def render_plist(
     existing = _existing_optional_values(output)
     # A re-render keeps an installed wrapper, so it never writes the bearer
     # back into a plist that had been moved off it.
+    # Its secrets-file override stays with it, or the wrapper would read
+    # another file.
     wrapper: list[str] = []
+    wrapper_file = None
     if output.exists():
         installed = _load_plist(output)
         if HTTP_TOKEN_KEY in _wrapped_keys(installed):
             wrapper = list(installed["ProgramArguments"][:4])
+            wrapper_file = _environment(installed, output).get("CIRWEL_SECRETS_FILE")
     if audit_session is None:
         audit_session = existing.get(AUDIT_SESSION_KEY, "")
     if enforced_surface_kinds is None:
@@ -339,6 +373,8 @@ def render_plist(
     environment = _environment(payload, template)
     if wrapper:
         environment.pop(HTTP_TOKEN_KEY, None)
+        if isinstance(wrapper_file, str) and wrapper_file:
+            environment["CIRWEL_SECRETS_FILE"] = wrapper_file
         payload["ProgramArguments"] = wrapper + list(payload.get("ProgramArguments") or [])
     else:
         environment[HTTP_TOKEN_KEY] = token
@@ -426,7 +462,7 @@ def rotate_token(plist: Path, token: str) -> None:
     if not _valid_token(token):
         raise PlistConfigError("refusing to install an empty or placeholder bearer")
     if rotation_preflight(plist):
-        current = _read_secret(HTTP_TOKEN_KEY)
+        current = _token_from(_load_plist(plist), plist)
         if not isinstance(current, str) or not secrets.compare_digest(current, token):
             raise PlistConfigError(
                 f"{plist} takes {HTTP_TOKEN_KEY} from the secrets file, "
@@ -557,9 +593,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     set_file = commands.add_parser(
         "set-secret",
-        help="replace KEY in the secrets file with a value read from stdin",
+        help="replace KEY in every secrets file with a value read from stdin",
     )
     set_file.add_argument("--key", required=True)
+
+    commands.add_parser(
+        "secrets-files", help="list the existing secrets files set-secret rotates"
+    )
     return parser
 
 
@@ -607,10 +647,15 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"rotated {HTTP_TOKEN_KEY} in {args.plist}")
         elif args.command == "set-secret":
-            if set_secret(args.key, sys.stdin.read().strip()):
-                print(f"rotated {args.key} in {_secrets_file()}")
+            rewritten = set_secret(args.key, sys.stdin.read().strip())
+            if rewritten:
+                for path in rewritten:
+                    print(f"rotated {args.key} in {path}")
             else:
-                print(f"{_secrets_file()} does not define {args.key}; left unchanged")
+                print(f"no secrets file defines {args.key}; left unchanged")
+        elif args.command == "secrets-files":
+            for path in _rotation_files():
+                print(path)
         return 0
     except PlistConfigError as exc:
         print(f"sentinel-plist: REFUSING: {exc}", file=sys.stderr)
