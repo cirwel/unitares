@@ -1066,6 +1066,35 @@ def test_a_reviewer_that_cannot_start_is_a_failure_not_an_exception(tmp_path, mo
     assert note.startswith("could not start codex")
 
 
+@pytest.mark.parametrize("reviewer", ["codex", "claude", "antigravity"])
+def test_models_do_not_inherit_parent_github_credentials(tmp_path, monkeypatch, reviewer):
+    credentials = {"GH_TOKEN": "test-app-token", "GITHUB_TOKEN": "test-other-token",
+                   "GH_ENTERPRISE_TOKEN": "test-enterprise-token", "UNITARES_GITHUB_CHILD": "1",
+                   "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_1": "http.extraheader",
+                   "GIT_CONFIG_VALUE_1": "Authorization: test-header", "GIT_ASKPASS": "/old/helper"}
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
+    configs = []
+
+    def launch(cmd, **kwargs):
+        env = kwargs["env"]
+        assert env is not None
+        assert all(name not in env for name in credentials if name not in ("GIT_ASKPASS", "GIT_CONFIG_COUNT"))
+        assert env["GIT_ASKPASS"] == "/usr/bin/false"
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper" and env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+        config = Path(env["GH_CONFIG_DIR"])
+        assert config.is_dir() and list(config.iterdir()) == []
+        configs.append(config)
+        assert os.environ["GH_TOKEN"] == "test-app-token"  # publication parent unchanged
+        return SimpleNamespace(pid=0, wait=lambda timeout: 0)
+
+    monkeypatch.setattr(rg.subprocess, "Popen", launch)
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    assert configs and all(not path.exists() for path in configs)
+
+
 def test_a_failed_rerun_does_not_hide_open_findings():
     # Codex round 11 on #2318: FAILED after FINDINGS made dispose unreachable.
     k = "k" * 64
@@ -1090,14 +1119,15 @@ def test_reviewer_input_survives_a_non_utf8_file_name(repo):
 
 def _pr(n, login="cirwel", draft=False, updated="2026-09-19T00:00:00Z"):
     return {"labels": [{"name": "review-requested"}] if draft else [],
-            "number": n, "isDraft": draft, "author": {"login": login},
+            "number": n, "isDraft": draft, "author": {"login": login}, "sameRepository": True,
             "updatedAt": updated, "headRefOid": "h", "headRefName": "b", "baseRefName": "master"}
 
 
 def _rest_pr(n=7, state="open", **extra):
     return {"number": n, "state": state, "draft": False, "user": {"login": "cirwel"},
             "updated_at": "2026-10-03T00:00:00Z", "labels": [{"name": "x", "id": 1}],
-            "head": {"sha": "abc", "ref": "claude/topic"}, "base": {"ref": "master"}, **extra}
+            "head": {"sha": "abc", "ref": "claude/topic", "repo": {"id": 10}},
+            "base": {"ref": "master", "repo": {"id": 10}}, **extra}
 
 
 @pytest.mark.parametrize("state,extra,expected", [
@@ -1114,7 +1144,7 @@ def test_pr_fields_maps_rest_to_the_graphql_names_callers_compare(state, extra, 
     assert info == {"number": 7, "headRefOid": "abc", "headRefName": "claude/topic",
                     "baseRefName": "master", "state": expected, "isDraft": False,
                     "author": {"login": "cirwel"}, "updatedAt": "2026-10-03T00:00:00Z",
-                    "labels": [{"name": "x"}]}
+                    "labels": [{"name": "x"}], "trustedReviewApp": False, "sameRepository": True}
 
 
 def test_pr_reads_and_writes_never_use_graphql(monkeypatch):
@@ -3897,6 +3927,80 @@ def test_draft_sweep_requires_explicit_request():
     prs = [{**_pr(1,draft=True),'labels':[]}, _pr(2,draft=True), _pr(3),
            {**_pr(4,draft=True),'labels':[{'name':'review-requested'},{'name':'no-auto-review'}]}]
     assert [p['number'] for p in rg.sweep_candidates(prs,'cirwel',now,0)] == [2,3]
+
+
+@pytest.mark.parametrize("login,actor_id,actor_type,eligible", [
+    ("unitares-agents[bot]", 342195540, "Bot", True),
+    ("renamed-app[bot]", 342195540, "Bot", True),
+    ("unitares-agents[bot]", 1, "Bot", False),
+    ("unitares-agents[bot]", 342195540, "User", False),
+    ("unitares-agents[bot]", "342195540", "Bot", False),
+    ("unitares-agents[bot]", None, "Bot", False),
+])
+def test_sweep_app_eligibility_uses_github_metadata_not_name(login, actor_id, actor_type, eligible):
+    raw = _rest_pr(user={"login": login, "id": actor_id, "type": actor_type},
+                   author_association="COLLABORATOR")
+    pr = rg.pr_fields(raw)
+    assert bool(rg.sweep_candidates([pr], "cirwel", rg.time.time(), 0)) is eligible
+
+
+@pytest.mark.parametrize("head_repo", [{"id": 99}, None, {}, {"id": True}])
+def test_sweep_refuses_forks_and_unknown_repository_identity(head_repo):
+    raw = _rest_pr(head={"sha": "abc", "ref": "topic", "repo": head_repo})
+    assert rg.sweep_candidates([rg.pr_fields(raw)], "cirwel", rg.time.time(), 0) == []
+
+
+@pytest.mark.parametrize("verdict,requested,providers,waiver,expected", [
+    ("CLEAN", True, ["antigravity"], None, 1),
+    ("CLEAN", False, ["antigravity"], None, 0),
+    ("FINDINGS", True, ["antigravity"], None, 0),
+    ("CLEAN", True, [], None, 0),
+    ("CLEAN", True, ["antigravity"], "valid operator waiver", 0),
+])
+def test_requested_sweep_continues_required_family_without_bypassing_findings(
+        monkeypatch, tmp_path, verdict, requested, providers, waiver, expected):
+    pr = _pr(3)
+    pr["labels"] = [{"name": "review-requested"}] if requested else []
+    monkeypatch.setattr(rg, "repo_slug", lambda: "cirwel/repo")
+    monkeypatch.setattr(rg, "open_prs", lambda *a: [pr])
+    monkeypatch.setattr(rg, "git", lambda *a, **k: "h")
+    monkeypatch.setattr(rg, "diff_key", lambda *a: "k")
+    monkeypatch.setattr(rg, "pr_comments", lambda *a: [])
+    monkeypatch.setattr(rg, "current_record", lambda *a: full_record("k", verdict, 1, False, "codex"))
+    monkeypatch.setattr(rg, "changed_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "base_policy_paths", lambda *a: ["src/oauth_provider.py"])
+    monkeypatch.setattr(rg, "passing_families", lambda *a: {"openai"})
+    waiver_calls = []
+    monkeypatch.setattr(rg, "waiver_reason_for", lambda *a: waiver_calls.append(a) or waiver)
+    def candidates(*args):
+        assert not waiver, "a valid waiver must avoid selecting another provider"
+        return providers
+    monkeypatch.setattr(rg, "second_family_candidates", candidates)
+    monkeypatch.setattr(rg, "review_lock", lambda *a: SimpleNamespace(holder_alive=lambda: False))
+    monkeypatch.setattr(rg, "_run", lambda *a, **k: "")
+    calls = []
+    monkeypatch.setattr(rg.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or SimpleNamespace(returncode=0))
+    assert rg.cmd_sweep(SimpleNamespace(quiet_minutes=0, dry_run=False, worktree=str(tmp_path / "wt"))) == 0
+    assert len(calls) == expected
+    if verdict == "CLEAN" and requested:
+        assert waiver_calls == [([], "k", ["src/oauth_provider.py"],
+                                 ["src/oauth_provider.py"], {"openai"},
+                                 "origin/master", "h")]
+    else:
+        assert waiver_calls == []
+    if expected:
+        assert calls[0][-3:] == ["--reviewer", "antigravity", "--fresh"]
+
+
+def test_shared_request_never_claims_a_completed_review_or_clears_findings():
+    state, desc = rg.review_check(None, requested=True)
+    assert state == "neutral" and "requested from shared host" in desc
+    assert "no completed review" in desc
+    finding = full_record("k", "FINDINGS", 1, False, "codex")
+    assert rg.review_check(finding, requested=True)[0] == "action_required"
+    assert rg.review_check(finding, requested=True, held=True)[0] == "action_required"
+    state, desc = rg.review_check(None, requested=True, held=True)
+    assert state == "neutral" and "held by no-auto-review" in desc
 
 
 @pytest.mark.parametrize('paths,expected', [(['docs/proposals/x.md'], True), (['docs/proposals/nested/x.md'], True),
