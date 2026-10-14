@@ -3,7 +3,7 @@
 Covers the behavior described in `scripts/client/onboard_helper.py`:
 
 * successful onboard writes a fresh cache and returns ok
-* startup always sends ``force_new=true`` and declares cached UUID lineage
+* fresh startup sends ``force_new=true`` without inventing cached UUID lineage
 * a failure (including a failed retry) leaves the existing cache untouched
 * missing ``uuid`` in the response counts as a failure, not success
 * response unwrapping handles both the native MCP envelope and the REST-direct
@@ -231,19 +231,22 @@ class TestRunOnboard:
         # Restore for other tests in the same session.
         monkeypatch.setattr(onboard_helper.os, "replace", real_replace)
 
-    def test_cached_uuid_declared_as_parent_on_startup(self, tmp_path: Path) -> None:
+    def test_cached_uuid_does_not_declare_a_parent_on_startup(self, tmp_path: Path) -> None:
         initial = {
             "uuid": "parent-uuid",
             "continuity_token": "v1.cached-token",
             "client_session_id": "agent-cached",
         }
-        _, poster, _ = self._call(
+        _, poster, cache_path = self._call(
             tmp_path, [_success_response()], initial_cache=initial
         )
         sent_args = poster.calls[0][1]["arguments"]
         assert sent_args["force_new"] is True
-        assert sent_args["parent_agent_id"] == "parent-uuid"
-        assert sent_args["spawn_reason"] == "new_session"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
+        written = json.loads(cache_path.read_text())
+        assert "parent_agent_id" not in written
+        assert "spawn_reason" not in written
         assert "continuity_token" not in sent_args
         assert "client_session_id" not in sent_args
 
@@ -537,10 +540,8 @@ class TestSlotIsolation:
         assert "continuity_token" not in sent_args_b
         assert "client_session_id" not in sent_args_b
 
-    def test_slot_falls_back_to_legacy_cache_for_lineage_if_no_slot_file_yet(self, tmp_path: Path) -> None:
-        # A pre-existing unslotted cache (from before this change) should still
-        # provide a lineage candidate to a slotted run on first start. Slotted
-        # writes then own that slot going forward.
+    def test_legacy_cache_is_not_promoted_to_lineage(self, tmp_path: Path) -> None:
+        # Neither a legacy cache nor its proof fields establish ancestry.
         legacy = {
             "uuid": "legacy-parent-uuid",
             "continuity_token": "v1.legacy-token",
@@ -553,10 +554,10 @@ class TestSlotIsolation:
         )
         assert result["status"] == "ok"
         sent_args = poster.calls[0][1]["arguments"]
-        # Declared lineage via legacy cache UUID; did not resume via token.
+        # Fresh identity without cached lineage or token resume.
         assert sent_args["force_new"] is True
-        assert sent_args["parent_agent_id"] == "legacy-parent-uuid"
-        assert sent_args["spawn_reason"] == "new_session"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
         assert "continuity_token" not in sent_args
         assert "client_session_id" not in sent_args
         # New write went to the slotted file, not back to session.json
@@ -566,10 +567,10 @@ class TestSlotIsolation:
         assert legacy_path.exists()
         assert json.loads(legacy_path.read_text()) == legacy
 
-    def test_new_slot_uses_newest_existing_slotted_cache_for_lineage(self, tmp_path: Path) -> None:
-        """A fresh process usually has a fresh slot. It should still see
-        workspace lineage from the newest existing session cache, not only
-        from legacy session.json."""
+    def test_newest_existing_slot_is_not_promoted_to_lineage(
+        self, tmp_path: Path
+    ) -> None:
+        """The newest workspace identity is not evidence of a predecessor."""
         older = {
             "uuid": "older-parent",
             "updated_at": "2026-05-01T00:00:00+00:00",
@@ -590,11 +591,11 @@ class TestSlotIsolation:
 
         assert result["status"] == "ok"
         sent_args = poster.calls[0][1]["arguments"]
-        assert sent_args["parent_agent_id"] == "newer-parent"
-        assert sent_args["spawn_reason"] == "new_session"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
         assert cache_path.name == "session-fresh-process.json"
 
-    def test_exact_slot_cache_wins_over_newer_other_slot(self, tmp_path: Path) -> None:
+    def test_neither_exact_slot_nor_newer_slot_establishes_lineage(self, tmp_path: Path) -> None:
         exact = {
             "uuid": "exact-parent",
             "updated_at": "2026-05-01T00:00:00+00:00",
@@ -614,9 +615,10 @@ class TestSlotIsolation:
         )
 
         sent_args = poster.calls[0][1]["arguments"]
-        assert sent_args["parent_agent_id"] == "exact-parent"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
 
-    def test_newest_cache_without_uuid_does_not_hide_older_lineage(self, tmp_path: Path) -> None:
+    def test_uuid_less_newest_cache_does_not_promote_older_cache_to_lineage(self, tmp_path: Path) -> None:
         uuid_less = {
             "client_session_id": "agent-no-uuid",
             "updated_at": "2026-05-03T00:00:00+00:00",
@@ -636,7 +638,8 @@ class TestSlotIsolation:
         )
 
         sent_args = poster.calls[0][1]["arguments"]
-        assert sent_args["parent_agent_id"] == "usable-parent"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
 
     def test_unsanitized_slot_filename_chars_are_replaced(self, tmp_path: Path) -> None:
         # Slot keys come from external input (Claude Code session_id) — must
@@ -698,9 +701,10 @@ class TestBootstrapInitialState:
         sent_args = poster.calls[0][1]["arguments"]
         assert "initial_state" not in sent_args
 
-    def test_initial_state_present_with_declared_lineage(self, tmp_path: Path) -> None:
-        """Declared-lineage startup still sends initial_state so the new
-        identity gets its t=0 anchor."""
+    def test_initial_state_does_not_require_invented_lineage(
+        self, tmp_path: Path
+    ) -> None:
+        """Startup can initialize an identity without claiming a cached parent."""
         initial = {
             "uuid": "parent-uuid",
             "continuity_token": "v1.cached-token",
@@ -719,7 +723,8 @@ class TestBootstrapInitialState:
             post_json=poster,
         )
         sent_args = poster.calls[0][1]["arguments"]
-        assert sent_args["parent_agent_id"] == "parent-uuid"
+        assert "parent_agent_id" not in sent_args
+        assert "spawn_reason" not in sent_args
         assert "continuity_token" not in sent_args
         assert "initial_state" in sent_args
 

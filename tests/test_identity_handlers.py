@@ -2151,14 +2151,16 @@ class TestHandleOnboardV2:
         assert pin_mock.await_args.kwargs.get("if_absent") is False
 
     @pytest.mark.asyncio
-    async def test_driver_succession_inference_never_triggers_nx(self, patch_onboard_deps, mock_db, mock_redis):
-        """Council block (PR #604): the textbook succession onboard —
-        parent_agent_id declared, spawn_reason OMITTED, thread already
-        has nodes — lets infer_spawn_reason label the fork 'subagent'
-        (client_hint absent from arguments). The NX gate must key on the
-        EXPLICIT argument only, so this driver still takes the pin
+    async def test_driver_succession_without_declared_dispatch_replaces_pin(
+        self, patch_onboard_deps, mock_db, mock_redis
+    ):
+        """A parent and prior thread nodes do not declare a dispatch.
+
+        With spawn_reason omitted, the descriptive default is new_session.
+        The NX gate keys on explicit dispatch, so this driver takes the pin
         (if_absent=False) instead of being locked behind its dead
-        predecessor's still-live pin."""
+        predecessor's still-live pin (council block, PR #604).
+        """
         from src.mcp_handlers.identity import handlers as h
 
         mock_redis.get.return_value = None
@@ -2169,7 +2171,7 @@ class TestHandleOnboardV2:
         ]
         # Charitable lineage path: parent has no class tag.
         mock_db.read_class_tag = AsyncMock(return_value=None)
-        # Existing thread nodes make the inference branch reachable.
+        # Existing thread nodes still do not establish a dispatch.
         mock_db.get_thread_nodes.return_value = [
             {"agent_uuid": "dead-predecessor", "position": 1},
         ]
@@ -2180,7 +2182,7 @@ class TestHandleOnboardV2:
                 "client_session_id": "onboard-succession-wiring",
                 "force_new": True,
                 "parent_agent_id": "11111111-2222-3333-4444-555555555555",
-                # spawn_reason deliberately omitted — inference territory
+                # Omitted reason must not acquire a dispatch-only exemption.
             })
         data = parse_result(result)
         assert data["success"] is True
