@@ -367,7 +367,9 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
         notes = []
         is_disabled = disabled.get(label, plist.get("Disabled") is True)
         status = "disabled" if is_disabled else "unknown"
-        scheduler_state = "disabled" if is_disabled else "unknown"
+        # Disabled is configuration evidence.  It becomes runtime evidence only
+        # when a successful launchctl list also proves the label is not loaded.
+        scheduler_state = "unknown"
         scheduler_pid = None
         scheduler_last_exit_code = None
         last_status = None

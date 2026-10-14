@@ -118,6 +118,29 @@ def test_collect_launchd_validates_program_before_argv_zero(census_mod, tmp_path
     assert items["job.custom-argv0"].status == "inactive"
 
 
+def test_config_disabled_does_not_disprove_running_receipt_when_runtime_unknown(
+    census_mod, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(census_mod, "HOME", tmp_path)
+    _plist(tmp_path, "job.disabled", ["/usr/bin/true"], disabled=True)
+    monkeypatch.setattr(
+        census_mod,
+        "launchd_runtime",
+        lambda _warnings: (None, {"job.disabled": True}),
+    )
+
+    item = census_mod.collect_launchd([])[0]
+    census_mod.apply_run_receipt(
+        item,
+        {"status": "running", "timestamp": "2026-10-14T00:00:00Z", "pid": 42},
+    )
+
+    assert item.status == "disabled"
+    assert item.scheduler_state == "unknown"
+    assert item.last_status == "running"
+    assert "attention:stale_running_receipt" not in item.notes
+
+
 def test_scheduler_result_supersedes_an_older_wrapper_receipt(census_mod):
     item = census_mod.Automation(
         id="launchd:job",
