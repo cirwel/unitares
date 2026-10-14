@@ -114,7 +114,8 @@ def _failure(
 
 
 class TestConsultSchema:
-    def test_schema_allows_only_existing_hosts_and_keeps_raw_controls_hidden(self):
+    def test_schema_is_bounded_and_forbids_route_controls(self):
+        """Keep the CI node id stable; only the documented host enum is public."""
         fields = set(ConsultParams.model_fields)
         assert fields == {
             "agent_id",
