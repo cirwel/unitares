@@ -1,0 +1,34 @@
+{
+  "note": "Post-hoc diagnostic, one longest-document batch of size 1 then 8; MPS, bfloat16, text-only Gemma 2. Not a quality rerun or a peak-memory requirement.",
+  "measurements": [
+    {
+      "parameters": 271002624,
+      "model_class": "EmbeddingGemma2Model"
+    },
+    {
+      "stage": "loaded",
+      "current_allocated": 542014720,
+      "driver_allocated": 1174896640
+    },
+    {
+      "stage": "long_batch_1",
+      "current_allocated": 542014720,
+      "driver_allocated": 1305313280
+    },
+    {
+      "stage": "after_empty_cache_1",
+      "current_allocated": 542014720,
+      "driver_allocated": 1219198976
+    },
+    {
+      "stage": "long_batch_8",
+      "current_allocated": 542014720,
+      "driver_allocated": 5590089728
+    },
+    {
+      "stage": "after_empty_cache_8",
+      "current_allocated": 542014720,
+      "driver_allocated": 1771782144
+    }
+  ]
+}
