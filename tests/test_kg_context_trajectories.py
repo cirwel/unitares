@@ -1,5 +1,6 @@
 """Offline trajectory controls: evidence, corrections, accounting and isolation."""
 import json
+from copy import deepcopy
 import subprocess
 
 import pytest
@@ -95,6 +96,9 @@ async def test_guess_and_unread_or_invalid_citations_do_not_count():
 async def test_malformed_read_arguments_are_errors_not_lost_episodes():
     fixture = probe.Fixture(task("replacement"), probe.build_experience_envelope)
     for read in (request("search_shared_memory", response_mode=[]),
+                 request("forbidden-write", summary="x"),
+                 request("search_shared_memory", query="   "),
+                 request("search_shared_memory", query={}),
                  request(action="details", discovery_id={}),
                  request(action="details", discovery_id="r102", offset=True)):
         assert (await fixture.call(read))["success"] is False
@@ -115,15 +119,80 @@ class ScriptedConversation:
 
 @pytest.mark.asyncio
 async def test_episode_retains_errors_and_sums_all_turn_usage():
-    replies = [request("forbidden-write", summary="x"),
+    replies = [request("search_shared_memory", query="   "),
                request(action="details", discovery_id="r102"), final("replacement")]
-    result = await probe.episode(task("replacement"), probe.build_experience_envelope, ScriptedConversation(replies))
+    checkpoints = []
+    result = await probe.episode(task("replacement"), probe.build_experience_envelope, ScriptedConversation(replies),
+                                 lambda turns: checkpoints.append(deepcopy(turns)))
     assert result["task_success"]
     assert result["tool_errors"] == 1
     assert result["tool_calls"] == 2
     assert result["usage"] == {"input_tokens": 300, "output_tokens": 60}
     assert result["usage_complete"]
     assert len(result["turns"]) == 3
+    assert checkpoints[0][0]["pending"] is True
+    assert any(c[-1].get("tool_response", {}).get("success") is False for c in checkpoints)
+
+
+@pytest.mark.asyncio
+async def test_split_evidence_joins_adjacent_pages_but_not_gaps_or_revisions():
+    fixture = probe.Fixture(task("replacement"), probe.build_experience_envelope)
+    body = fixture.docs["r102"].details
+    split = body.index("batch_size=32") + 6
+    await fixture.call(request(action="details", discovery_id="r102", offset=split + 1))
+    await fixture.call(request(action="details", discovery_id="r102", length=split))
+    assert not fixture.score(final("replacement"))["task_success"]
+    await fixture.call(request(action="details", discovery_id="r102", offset=split, length=1))
+    assert fixture.score(final("replacement"))["task_success"]
+
+    separate = probe.Fixture(task("replacement"), probe.build_experience_envelope)
+    await separate.call(request(action="details", discovery_id="r102", length=split))
+    separate.docs["r102"].details = body + " A new revision."
+    await separate.call(request(action="details", discovery_id="r102", offset=split))
+    assert not separate.score(final("replacement"))["task_success"]
+    await separate.call(request(action="details", discovery_id="r102", length=split))
+    assert separate.score(final("replacement"))["task_success"]
+
+
+@pytest.mark.asyncio
+async def test_changed_details_can_be_acknowledged_after_multiple_pages():
+    fixture = probe.Fixture(task("mid_task_change"), probe.build_experience_envelope)
+    old = await fixture.call(request(action="details", discovery_id="r401"))
+    revision = old["knowledge_changes"]["notices"][0]["revision"]
+    await fixture.call(request(action="details", discovery_id="r401", length=50))
+    assert not (await fixture.call(request(action="notices", acknowledge=[revision])))["success"]
+    await fixture.call(request(action="details", discovery_id="r401", offset=50))
+    assert (await fixture.call(request(action="notices", acknowledge=[revision])))["success"]
+
+
+@pytest.mark.asyncio
+async def test_complete_evidence_in_full_search_is_credited_and_triggers_notice():
+    fixture = probe.Fixture(task("imported_claim"), probe.build_experience_envelope)
+    await fixture.call(request("search_shared_memory", query="queue", response_mode="lean"))
+    assert not fixture.score(final("imported_claim"))["task_success"]
+    await fixture.call(request("search_shared_memory", query="queue", response_mode="full"))
+    assert fixture.score(final("imported_claim"))["task_success"]
+    changing = probe.Fixture(task("mid_task_change"), probe.build_experience_envelope)
+    first = await changing.call(request("search_shared_memory", query="retry", response_mode="full"))
+    assert first["knowledge_changes"]["notices"]
+    assert not changing.score(final("mid_task_change"))["task_success"]
+    await changing.call(request("search_shared_memory", query="retry", response_mode="full"))
+    assert changing.score(final("mid_task_change"))["task_success"]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_fixture_failure_retains_attempted_model_usage(monkeypatch):
+    async def broken(*_):
+        raise RuntimeError("fixture defect")
+
+    monkeypatch.setattr(probe.Fixture, "call", broken)
+    result = await probe.episode(task("replacement"), probe.build_experience_envelope,
+                                 ScriptedConversation([request(action="details", discovery_id="r102")]))
+    assert result["termination"] == "harness_error"
+    assert result["tool_calls"] == 1
+    assert result["usage"]["input_tokens"] == 100
+    assert "fixture defect" in result["turns"][0]["harness_error"]
+    assert not result["task_success"]
 
 
 @pytest.mark.asyncio
@@ -175,3 +244,18 @@ async def test_changed_frozen_inputs_refuse_execution(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="frozen inputs changed"):
         await probe.run({"inputs": {"fixture": "original"}}, tmp_path / "results")
     assert not (tmp_path / "results").exists()
+
+
+@pytest.mark.asyncio
+async def test_failed_canary_prevents_scored_calls_and_retains_receipt(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "input_hashes", lambda: {})
+    monkeypatch.setattr(probe, "transport_canary", lambda _: {"passed": False, "turns": [{"error": "bad resume"}]})
+    plan = {"inputs": {}, "model_selected": "fixture", "schedule": [{"task": "replacement", "condition": "before"}],
+            "limits": {"turns": probe.MAX_TURNS, "turn_seconds": probe.TURN_SECONDS,
+                       "episode_seconds": probe.EPISODE_SECONDS}}
+    output = tmp_path / "result"
+    with pytest.raises(RuntimeError, match="no scored episodes"):
+        await probe.run(plan, output)
+    assert not list(output.glob("episode-*.json"))
+    assert json.loads((output / "aggregate.json").read_text())["completed_episode_receipts"] == 0
+    assert json.loads((output / "transport-canary.json").read_text())["passed"] is False

@@ -59,7 +59,7 @@ revision with {"tool":"knowledge","arguments":{"action":"notices",
 "acknowledge":["revision UUID"]}}. Do not acknowledge unread changes.
 
 When finished, return {"answer":"...","source_ids":["..."],"reason":"..."}.
-Cite only records whose details you actually inspected. Keep the reason short.
+Cite only records whose underlying evidence text you actually inspected. Keep the reason short.
 No writes, shell commands, external browsing, or other tool names are available.
 """
 
@@ -141,6 +141,7 @@ class Fixture:
             "provenance": {"writer_label_at_write": "Fixture writer"}, **r})
             for r in self.task["records"]}
         self.read_text = {}
+        self.delivered = {}
         self.changed = False
         self.notice_delivered = False
         self.acknowledged = False
@@ -163,9 +164,14 @@ class Fixture:
             if (not isinstance(mode, str) or mode not in {"lean", "compact", "full"}
                     or type(limit) is not int or not 1 <= limit <= 10):
                 return {"success": False, "error": "invalid response mode or limit"}
-            state = handlers._KnowledgeSearchState(
-                request=handlers._parse_knowledge_search_request({"query": str(args.get("query", "evidence"))}),
-                graph=self)
+            query = args.get("query", "evidence")
+            if not isinstance(query, str):
+                return {"success": False, "error": "query must be a nonempty string"}
+            try:
+                parsed = handlers._parse_knowledge_search_request({"query": query})
+            except handlers._SearchParameterError:
+                return {"success": False, "error": "query must be a nonempty string"}
+            state = handlers._KnowledgeSearchState(request=parsed, graph=self)
             state.results = [self.docs[key] for key in self.task["search_ids"][:limit]]
             # Keep metadata age stable on later replays without changing the
             # production age calculation or labelling an old record fresh.
@@ -178,6 +184,15 @@ class Fixture:
             if mode == "lean":
                 source = handlers._lean_search_payload(source)
             response = self.builder("search_shared_memory", "knowledge", source, {**args, "response_mode": mode})
+            # A full search may deliver complete short evidence in its preview.
+            # Credit only text that survives the formatter, not pre-projection rows.
+            for item in response.get("raw_governance", {}).get("discoveries", []):
+                key = item.get("id")
+                body = item.get("details", item.get("details_preview", ""))
+                if key in self.docs and isinstance(body, str) and body:
+                    if not self.docs[key].details.startswith(body) and body.endswith("..."):
+                        body = body[:-3]
+                    self.record_delivery(key, body, 0)
         elif tool == "knowledge" and args.get("action") == "details":
             key = args.get("discovery_id")
             if not isinstance(key, str) or key not in self.docs:
@@ -191,15 +206,13 @@ class Fixture:
                  patch.object(handlers, "success_response", lambda payload, **_: {"success": True, **payload}):
                 response = await inspect.unwrap(handlers.handle_get_discovery_details)(args)
             body = response.get("details", response.get("discovery", {}).get("details", ""))
-            self.read_text.setdefault(key, []).append(body)
-            change = self.task.get("change")
-            if change and key == change["id"] and not self.changed:
-                self.docs[key].details = change["details"]
-                self.changed = True
+            offset = response.get("pagination", {}).get("offset", 0)
+            self.record_delivery(key, body, offset)
         elif tool == "knowledge" and args.get("action") == "notices":
             change = self.task.get("change", {})
             if (not self.notice_delivered or args.get("acknowledge") != [change.get("revision")]
-                    or change.get("details") not in self.read_text.get(change.get("id"), [])):
+                    or not self.covered(change.get("id"), change.get("details"), 0,
+                                        len(change.get("details", "")))):
                 self.premature_acks += 1
                 response = {"success": False, "error": "ack requires the delivered revision and its newly read details"}
             else:
@@ -207,6 +220,10 @@ class Fixture:
                 response = {"success": True, "notices": []}
         else:
             return {"success": False, "error": "only the declared read-only fixture operations are available"}
+        change = self.task.get("change")
+        if change and not self.changed and any(self.read_text.get(change["id"], [])):
+            self.docs[change["id"]].details = change["details"]
+            self.changed = True
         if self.changed and not self.acknowledged:
             change = self.task["change"]
             response["knowledge_changes"] = {"notices": [{"discovery_id": change["id"],
@@ -218,13 +235,39 @@ class Fixture:
             self.notice_deliveries += 1
         return response
 
+    def record_delivery(self, key, body, offset):
+        version = self.docs[key].details
+        if version[offset:offset + len(body)] != body:
+            raise ValueError("fixture delivery does not match its source range")
+        self.read_text.setdefault(key, []).append(body)
+        self.delivered.setdefault((key, version), []).append((offset, offset + len(body)))
+
+    def covered(self, key, version, start, end):
+        """Coverage is contiguous, character-based, and never joins revisions."""
+        cursor = start
+        for left, right in sorted(self.delivered.get((key, version), [])):
+            if left > cursor:
+                return False
+            cursor = max(cursor, right)
+            if cursor >= end:
+                return True
+        return False
+
     def score(self, final):
         final = final if isinstance(final, dict) else {}
         expected = self.task["expected"]
         citations = final.get("source_ids", [])
         citation_shape = isinstance(citations, list) and all(isinstance(c, str) for c in citations)
-        valid_citations = citation_shape and bool(citations) and all(c in self.read_text for c in citations)
-        evidence_read = any(expected["evidence"] in page for page in self.read_text.get(expected["source_id"], []))
+        valid_citations = citation_shape and bool(citations) and all(any(self.read_text.get(c, [])) for c in citations)
+        evidence_read = False
+        for key, version in self.delivered:
+            if key != expected["source_id"]:
+                continue
+            start = version.find(expected["evidence"])
+            while start >= 0:
+                if self.covered(key, version, start, start + len(expected["evidence"])):
+                    evidence_read = True
+                start = version.find(expected["evidence"], start + 1)
         correct = final.get("answer") == expected["answer"]
         return {"answer_correct": correct, "evidence_read": evidence_read,
                 "citations_valid": valid_citations,
@@ -298,7 +341,7 @@ def parse_reply(text):
     return value
 
 
-async def episode(task, builder, conversation):
+async def episode(task, builder, conversation, checkpoint=lambda turns: None):
     fixture = Fixture(task, builder)
     prompt = INSTRUCTIONS + "\nTask: " + task["question"]
     turns, final, termination = [], None, "turn_limit"
@@ -308,9 +351,13 @@ async def episode(task, builder, conversation):
         if remaining <= 0:
             termination = "episode_timeout"
             break
-        receipt = conversation.ask(prompt, min(TURN_SECONDS, remaining))
-        entry = {"prompt": prompt, **receipt}
+        entry = {"prompt": prompt, "pending": True}
         turns.append(entry)
+        checkpoint(turns)
+        receipt = conversation.ask(prompt, min(TURN_SECONDS, remaining))
+        entry.update(receipt)
+        entry.pop("pending")
+        checkpoint(turns)
         if receipt["error"]:
             termination = "provider_error"
             break
@@ -318,14 +365,23 @@ async def episode(task, builder, conversation):
             reply = parse_reply(receipt["raw"]["response"])
         except (ValueError, TypeError) as exc:
             entry["protocol_error"] = str(exc)
+            checkpoint(turns)
             prompt = "Invalid reply: " + str(exc) + ". Return the next request or final answer as one JSON object."
             continue
         entry["reply"] = reply
+        checkpoint(turns)
         if "tool" not in reply:
             final, termination = reply, "final"
             break
-        response = await fixture.call(reply)
+        try:
+            response = await fixture.call(reply)
+        except Exception as exc:  # preserve attempted calls; do not score a broken harness
+            entry["harness_error"] = f"{type(exc).__name__}: {exc}"
+            checkpoint(turns)
+            termination = "harness_error"
+            break
         entry["tool_response"] = response
+        checkpoint(turns)
         prompt = "Result of your preceding simulated read:\n" + encoded(response).decode() + "\nReturn your next JSON request or final answer."
     usage = {}
     for turn in turns:
@@ -339,7 +395,7 @@ async def episode(task, builder, conversation):
                 isinstance(t["raw"].get("usage"), dict)
                 and all(type(t["raw"]["usage"].get(key)) is int and t["raw"]["usage"][key] >= 0
                         for key in ("input_tokens", "output_tokens")) for t in turns),
-            "tool_calls": sum("tool_response" in t for t in turns),
+            "tool_calls": sum("tool" in t.get("reply", {}) for t in turns),
             "tool_errors": sum(t.get("tool_response", {}).get("success") is False for t in turns),
             "protocol_errors": sum("protocol_error" in t for t in turns),
             "tool_response_bytes": sum(len(encoded(t["tool_response"])) for t in turns if "tool_response" in t),
@@ -362,25 +418,63 @@ def summarize(plan, records):
             "or statistical equivalence claim. No live KG or existing adoption-pilot execution."}
 
 
+def write_json(path, value):
+    pending = path.with_suffix(path.suffix + ".pending")
+    pending.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+    pending.replace(path)
+
+
+def transport_canary(model):
+    receipts = []
+    with ArgonConversation(model) as conversation:
+        prompts = [
+            'Remember marker copper-742. Return exactly {"answer":"copper-742","source_ids":[],"reason":"marker"}.',
+            'Return the marker from the previous turn as answer, with source_ids=[] and a short reason. Use the same JSON shape.',
+        ]
+        for prompt in prompts:
+            receipt = conversation.ask(prompt, TURN_SECONDS)
+            receipts.append({"prompt": prompt, **receipt})
+            if receipt["error"]:
+                break
+    try:
+        passed = len(receipts) == 2 and all(not r["error"] and
+            parse_reply(r["raw"]["response"]).get("answer") == "copper-742" for r in receipts)
+    except (ValueError, TypeError):
+        passed = False
+    return {"passed": passed, "turns": receipts, "scope": "Neutral transport check; excluded from scored task totals."}
+
+
 async def run(plan, output):
     if plan.get("inputs") != input_hashes():
         raise ValueError("frozen inputs changed; do not execute or score against this plan")
     if plan.get("limits") != {"turns": MAX_TURNS, "turn_seconds": TURN_SECONDS, "episode_seconds": EPISODE_SECONDS}:
         raise ValueError("frozen limits changed")
     output.mkdir(parents=True, exist_ok=False)
-    (output / "plan.json").write_text(json.dumps(plan, indent=2) + "\n")
+    write_json(output / "plan.json", plan)
+    canary = transport_canary(plan["model_selected"])
+    write_json(output / "transport-canary.json", canary)
+    if not canary["passed"]:
+        write_json(output / "aggregate.json", {**summarize(plan, []), "transport_canary_passed": False})
+        raise RuntimeError("transport canary failed; no scored episodes attempted")
     tasks = {task["id"]: task for task in load_tasks()}
     variants, records = builders(), []
     for index, scheduled in enumerate(plan["schedule"]):
+        path = output / f"episode-{index + 1:02}.json"
+
+        def checkpoint(turns):
+            write_json(path, {**scheduled, "termination": "running", "turns": turns})
+
         with ArgonConversation(plan["model_selected"]) as conversation:
-            result = await episode(tasks[scheduled["task"]], variants[scheduled["condition"]], conversation)
+            result = await episode(tasks[scheduled["task"]], variants[scheduled["condition"]], conversation, checkpoint)
         record = {**scheduled, **result}
         records.append(record)
-        (output / f"episode-{index + 1:02}.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n")
-        (output / "aggregate.json").write_text(json.dumps(summarize(plan, records), indent=2) + "\n")
+        write_json(path, record)
+        write_json(output / "aggregate.json", {**summarize(plan, records), "transport_canary_passed": True})
         print(json.dumps({"episode": index + 1, **scheduled, "termination": result["termination"],
                           "task_success": result["task_success"], "tool_calls": result["tool_calls"],
                           "usage": result["usage"]}), flush=True)
+        if result["termination"] == "harness_error":
+            raise RuntimeError("harness error retained; remaining episodes not attempted")
 
 
 def main():
