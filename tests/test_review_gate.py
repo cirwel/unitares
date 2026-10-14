@@ -1066,6 +1066,35 @@ def test_a_reviewer_that_cannot_start_is_a_failure_not_an_exception(tmp_path, mo
     assert note.startswith("could not start codex")
 
 
+@pytest.mark.parametrize("reviewer", ["codex", "claude", "antigravity"])
+def test_models_do_not_inherit_parent_github_credentials(tmp_path, monkeypatch, reviewer):
+    credentials = {"GH_TOKEN": "test-app-token", "GITHUB_TOKEN": "test-other-token",
+                   "GH_ENTERPRISE_TOKEN": "test-enterprise-token", "UNITARES_GITHUB_CHILD": "1",
+                   "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_1": "http.extraheader",
+                   "GIT_CONFIG_VALUE_1": "Authorization: test-header", "GIT_ASKPASS": "/old/helper"}
+    for name, value in credentials.items():
+        monkeypatch.setenv(name, value)
+    configs = []
+
+    def launch(cmd, **kwargs):
+        env = kwargs["env"]
+        assert env is not None
+        assert all(name not in env for name in credentials if name not in ("GIT_ASKPASS", "GIT_CONFIG_COUNT"))
+        assert env["GIT_ASKPASS"] == "/usr/bin/false"
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "credential.helper" and env["GIT_CONFIG_VALUE_0"] == ""
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+        config = Path(env["GH_CONFIG_DIR"])
+        assert config.is_dir() and list(config.iterdir()) == []
+        configs.append(config)
+        assert os.environ["GH_TOKEN"] == "test-app-token"  # publication parent unchanged
+        return SimpleNamespace(pid=0, wait=lambda timeout: 0)
+
+    monkeypatch.setattr(rg.subprocess, "Popen", launch)
+    rg.run_reviewer(reviewer, "PROMPT", tmp_path, 30)
+    assert configs and all(not path.exists() for path in configs)
+
+
 def test_a_failed_rerun_does_not_hide_open_findings():
     # Codex round 11 on #2318: FAILED after FINDINGS made dispose unreachable.
     k = "k" * 64

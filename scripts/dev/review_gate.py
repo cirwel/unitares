@@ -2201,6 +2201,25 @@ def _agy_output_limited(stdout: str) -> str | None:
     return _agy_truncation(stdout)[1]
 
 
+def reviewer_environment(github_config: str, agy_home: str | None = None) -> dict[str, str]:
+    """Keep fetch/publication credentials in the parent, never in the model.
+
+    An empty gh config and disabled Git credential helpers also prevent a
+    stripped token from falling back to the operator's configured login.
+    This is credential hygiene, not isolation from other same-user files.
+    """
+    env = agy_env(agy_home) if agy_home is not None else os.environ.copy()
+    for name in list(env):
+        if (name.startswith(("GH_", "GITHUB_", "UNITARES_GITHUB_", "GIT_CONFIG_"))
+                or name in ("GIT_CONFIG", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND")):
+            env.pop(name)
+    env.update(GH_CONFIG_DIR=github_config, GH_PROMPT_DISABLED="1",
+               GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="/usr/bin/false",
+               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+               GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="")
+    return env
+
+
 def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                  materials: list[tuple[str, bytes]] | None = None,
                  codex_model: str = "gpt-6.1-sol", codex_effort: str = "medium") -> tuple[str, str]:
@@ -2257,6 +2276,8 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
             workspace.cleanup()
             return failure, "skipped: review material could not be written"
     deadline = time.monotonic() + budget_s
+    github_config = tempfile.TemporaryDirectory(prefix="review-github-")
+    model_env = reviewer_environment(github_config.name, agy_home if isolated else None)
 
     def launch(argv: list[str], fh, timeout: float) -> tuple[int | None, str | None]:
         """Run once; (exit code, None) or (None, failure note)."""
@@ -2271,7 +2292,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                 proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out,
                                         stderr=fh if separate else subprocess.STDOUT,
                                         cwd=agy_cwd,
-                                        env=agy_env(agy_home) if isolated else None,
+                                        env=model_env,
                                         start_new_session=True)
             except OSError as exc:  # reviewer CLI missing or not executable
                 return None, f"could not start {reviewer}: {exc.__class__.__name__}|{exc}"
@@ -2314,6 +2335,7 @@ def run_reviewer(reviewer: str, prompt: str, out_dir: Path, budget_s: int,
                     ["agy", "-p", AGY_RESUME_PROMPTS[stall], "--conversation", cid, *cmd[3:]],
                     fh, deadline - time.monotonic())
     finally:
+        github_config.cleanup()
         if workspace:
             workspace.cleanup()
     resumed = sum(resumes.values())
