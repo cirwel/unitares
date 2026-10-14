@@ -1,0 +1,23 @@
+{
+  "snapshot_sha256": "a0580b87910b0dcfb72fb4df6a5c7ac230ae24bd1de28697200c267ca31d810d",
+  "captured_at": "2026-10-14T04:44:39.402699+00:00",
+  "counts": {
+    "visible": 702,
+    "with_notes": 153,
+    "offsets_verified": 153,
+    "single_digest_note_pointers": 153,
+    "all_modes_equal": 153,
+    "latest_beyond_default_page": 75,
+    "latest_beyond_embedding_window": 14
+  },
+  "single_lean_response_bytes": {
+    "min": 1775,
+    "max": 2078
+  },
+  "sequential_pages_to_last_note_header": {
+    "total": 312,
+    "max": 23
+  },
+  "direct_offset_reads_to_last_note_header": 153,
+  "scope": "Frozen navigation replay, not retrieval quality or agent comprehension. Page counts compare sequential 2000-character pages to direct offsets; larger pages or a calculated tail offset were already possible. One page reaches a header, not necessarily all evidence. Full mode here retains summaries, not inline details."
+}
