@@ -14,7 +14,14 @@ import pytest
 from scripts.analysis import eisv_incremental_value_contract as contract
 
 
-NOW = datetime.now(timezone.utc)
+def _now() -> datetime:
+    """The clock the contract compares against, read at call time.
+
+    A module-level constant drifted past the five-minute skew limit on any
+    full-suite run longer than that, so the tests failed on slow runners and in
+    containers while passing alone.
+    """
+    return datetime.now(timezone.utc)
 
 
 @pytest.fixture
@@ -35,7 +42,7 @@ def _request(**overrides: Any) -> contract.ReadRequest:
         "purpose": "pilot_instrumentation",
         "read_protocol": "pilot_instrumentation",
         "access_classes": frozenset({"structural"}),
-        "requested_at": NOW,
+        "requested_at": _now(),
     }
     values.update(overrides)
     return contract.ReadRequest(**values)
@@ -265,7 +272,7 @@ def test_firewall_denies_cross_study_namespace() -> None:
 
 def test_firewall_denies_backdated_or_future_dated_request() -> None:
     with pytest.raises(contract.AccessDenied, match="trusted clock"):
-        contract.authorize_read(_request(requested_at=NOW + timedelta(days=1)))
+        contract.authorize_read(_request(requested_at=_now() + timedelta(days=1)))
 
 
 def test_registered_read_requires_frozen_boundaries_and_hashes() -> None:
@@ -275,15 +282,15 @@ def test_registered_read_requires_frozen_boundaries_and_hashes() -> None:
         purpose="registered_analysis",
         read_protocol="registered",
         access_classes=frozenset({"predictions", "outcomes"}),
-        as_of=NOW - timedelta(days=1),
-        not_before=NOW - timedelta(hours=1),
+        as_of=_now() - timedelta(days=1),
+        not_before=_now() - timedelta(hours=1),
         config_sha256="a" * 64,
         preregistration_sha256="b" * 64,
     )
     contract.authorize_read(valid)
 
     early = copy.copy(valid)
-    object.__setattr__(early, "not_before", NOW + timedelta(hours=1))
+    object.__setattr__(early, "not_before", _now() + timedelta(hours=1))
     with pytest.raises(contract.AccessDenied, match="early"):
         contract.authorize_read(early)
 
@@ -301,8 +308,8 @@ def test_firewall_rejects_naive_datetimes(field: str) -> None:
         "purpose": "registered_analysis",
         "read_protocol": "registered",
         "access_classes": frozenset({"predictions", "outcomes"}),
-        "as_of": NOW - timedelta(days=1),
-        "not_before": NOW - timedelta(hours=1),
+        "as_of": _now() - timedelta(days=1),
+        "not_before": _now() - timedelta(hours=1),
         "config_sha256": "a" * 64,
         "preregistration_sha256": "b" * 64,
     }

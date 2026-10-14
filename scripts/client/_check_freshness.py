@@ -2,7 +2,13 @@
 """Check skill freshness against the content of the sources each skill cites.
 
 A skill's frontmatter declares `last_verified` (when its content was last
-reviewed), `freshness_days`, and the `source_files` its claims depend on.
+reviewed), `freshness_days`, and the `source_files` its claims depend on. A
+source is a whole file, or one part of it after `#`: `path.py#name` (a
+top-level def, class or assignment; `Class.method` for a method) or
+`path.md#Heading text` (that section). Cite the part a claim rests on and a
+change elsewhere in the file does not stale the skill. Added 2026-10-14 after
+three skills went stale on a 70-line change to a 3,000-line file they cited
+whole (#2767).
 Verification records live beside the skills as attestations (below). Two checks:
 
 - STALE: a cited source's current content matches no digest on record for
@@ -236,9 +242,101 @@ def content_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()[:DIGEST_HEX]
 
 
+# A source may name a part of a file after `#`: `path.py#name` is the
+# top-level def, class or assignment called `name` (dotted for a method,
+# `Class.method`), and `path.md#Heading text` is that section up to the next
+# heading of the same or a higher level. Only that fragment is digested, so a
+# change elsewhere in the file leaves the skill FRESH. A whole-file citation
+# is the default and is unchanged. The anchor is part of the source key as
+# recorded in attestations, so a narrowed citation is a new source.
+ANCHOR_SEPARATOR = "#"
+
+
+def split_anchor(src: str) -> tuple[str, str | None]:
+    path, sep, anchor = src.partition(ANCHOR_SEPARATOR)
+    return (path, anchor) if sep and anchor else (src, None)
+
+
+def _python_fragment(text: str, anchor: str) -> str | None:
+    import ast
+
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return None
+    lines = text.splitlines(keepends=True)
+    parts = anchor.split(".")
+
+    def _find(body, name):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == name:
+                    return node
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+                    return node
+        return None
+
+    node = None
+    body = tree.body
+    for part in parts:
+        node = _find(body, part)
+        if node is None:
+            return None
+        body = getattr(node, "body", [])
+    start = node.lineno
+    for deco in getattr(node, "decorator_list", []):
+        start = min(start, deco.lineno)
+    return "".join(lines[start - 1 : node.end_lineno])
+
+
+def _markdown_fragment(text: str, anchor: str) -> str | None:
+    import re
+
+    lines = text.splitlines(keepends=True)
+    heading = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+    start = level = None
+    for index, line in enumerate(lines):
+        match = heading.match(line)
+        if not match:
+            continue
+        if start is None:
+            if match.group(2).strip() == anchor:
+                start, level = index, len(match.group(1))
+        elif len(match.group(1)) <= level:
+            return "".join(lines[start:index])
+    return "".join(lines[start:]) if start is not None else None
+
+
+def fragment_text(path: Path, anchor: str) -> str | None:
+    """The anchored fragment of `path`, or None when the anchor does not resolve."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix == ".py":
+        return _python_fragment(text, anchor)
+    if path.suffix in (".md", ".markdown"):
+        return _markdown_fragment(text, anchor)
+    return None
+
+
+def source_digest(path: Path, anchor: str | None) -> str | None:
+    """Digest of the cited source: the whole file, or its anchored fragment.
+
+    None when an anchor names nothing in the file; the caller reports that as
+    drift (the cited symbol or section is gone), not as fresh.
+    """
+    if anchor is None:
+        return content_digest(path)
+    fragment = fragment_text(path, anchor)
+    if fragment is None:
+        return None
+    return hashlib.sha256(fragment.encode("utf-8")).hexdigest()[:DIGEST_HEX]
+
+
 def resolve_source(root: str, projects_root: str, src: str) -> Path:
     """`unitares/...` resolves against this repository; anything else against
-    the projects root."""
+    the projects root. An `#anchor` suffix is not part of the path."""
+    src, _ = split_anchor(src)
     if src.startswith(THIS_REPO_PREFIX):
         return Path(root) / src[len(THIS_REPO_PREFIX):]
     return Path(projects_root) / src
@@ -472,7 +570,10 @@ def check_skills(root: str, projects_root: str) -> int:
                 if not recorded:
                     drifts.append((src, "has no recorded digest"))
                     continue
-                current = content_digest(full_path)
+                current = source_digest(full_path, split_anchor(src)[1])
+                if current is None:
+                    drifts.append((src, "anchor no longer resolves in the file"))
+                    continue
                 if current in recorded:
                     continue
                 if current in carried_forward(recorded, edges.get(src, {})):
@@ -641,7 +742,11 @@ def stamp_skills(root: str, projects_root: str, names: list[str]) -> int:
         for src in load_source_files(skill_dir, meta["source_files"]):
             full_path = resolve_source(root, projects_root, src)
             if full_path.exists():
-                digests[src] = content_digest(full_path)
+                digest = source_digest(full_path, split_anchor(src)[1])
+                if digest is None:
+                    absent.append(src)
+                    continue
+                digests[src] = digest
                 # A change only if the content moved on from everything the
                 # check accepts for this text (a return to content an older
                 # certification recorded is not one). It records the change
@@ -778,7 +883,9 @@ def _transition_records(root: str, projects_root: str, skills_dir: Path, name: s
     needed: set[Path] = set()
     for src in sources:
         full_path = resolve_source(root, projects_root, src)
-        current = content_digest(full_path) if full_path.exists() else None
+        current = (
+            source_digest(full_path, split_anchor(src)[1]) if full_path.exists() else None
+        )
         for path, transitions in carriers:
             if src not in transitions:
                 continue
