@@ -29,6 +29,9 @@ or [User Manual](../manual/README.md).
   the automation census.
 - [`automation-census-setup.md`](automation-census-setup.md) — automation-census
   setup behind the dashboard registry.
+- [`automation-self-improvement-readiness-audit-2026-10-14.md`](automation-self-improvement-readiness-audit-2026-10-14.md)
+  — execution-grounded census audit, forecast-trial receipt check, and bounded
+  fixed-to-adaptive dependency plan; authorizes no actuator or experiment.
 - [`branch-hygiene-runbook.md`](branch-hygiene-runbook.md) — safe resident
   branch-hygiene sweep.
 - [`test-suite-triage.md`](test-suite-triage.md) — test-gate state and known

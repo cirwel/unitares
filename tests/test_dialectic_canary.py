@@ -244,6 +244,9 @@ class _FakeConnection:
 
 
 def test_db_ground_truth_verifies_usage_in_adoption_source(monkeypatch):
+    from src.mcp_handlers.identity.stable_session import audit_reference
+
+    client_session_id = "agent-5e728ecb-123-xjc4uauir6jvdvqxylny"
     cursor = _FakeCursor([(1,), (1,), (1,)])
     monkeypatch.setitem(
         sys.modules,
@@ -251,7 +254,7 @@ def test_db_ground_truth_verifies_usage_in_adoption_source(monkeypatch):
         SimpleNamespace(connect=lambda _dsn: _FakeConnection(cursor)),
     )
 
-    ok, detail = canary.db_ground_truth("sess-1", "agent-uuid", "agent-csid")
+    ok, detail = canary.db_ground_truth("sess-1", "agent-uuid", client_session_id)
 
     assert ok
     assert detail == "ok"
@@ -259,7 +262,8 @@ def test_db_ground_truth_verifies_usage_in_adoption_source(monkeypatch):
     assert "FROM audit.tool_usage" in usage_query
     assert "tool_name = 'request_review'" in usage_query
     assert "payload->>'action' = 'request'" in usage_query
-    assert usage_params == ("agent-uuid", "agent-csid")
+    assert usage_params == ("agent-uuid", audit_reference(client_session_id))
+    assert usage_params[1].startswith("csid:")
 
 
 def test_db_ground_truth_rejects_missing_usage_event(monkeypatch):

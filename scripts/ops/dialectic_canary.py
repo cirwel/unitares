@@ -440,6 +440,7 @@ def db_ground_truth(
 ) -> Tuple[bool, str]:
     """Verify persistence and the usage instrument the adoption report reads."""
     import psycopg2  # type: ignore
+    from src.mcp_handlers.identity.stable_session import audit_reference
 
     dsn = os.environ.get(
         "GOVERNANCE_DATABASE_URL",
@@ -465,7 +466,7 @@ def db_ground_truth(
                 "WHERE agent_id = %s AND session_id = %s "
                 "AND tool_name = 'request_review' AND success "
                 "AND payload->>'action' = 'request'",
-                (agent_uuid, client_session_id),
+                (agent_uuid, audit_reference(client_session_id)),
             )
             if cur.fetchone() is None:
                 return False, (

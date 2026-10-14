@@ -65,6 +65,9 @@ class Automation:
     escalates_to: str | None = None
     description: str | None = None
     dashboard_priority: int | None = None
+    scheduler_state: str | None = None
+    scheduler_last_exit_code: int | None = None
+    scheduler_pid: int | None = None
 
 
 def now_iso() -> str:
@@ -273,11 +276,97 @@ def calendar_interval_to_text(value: Any) -> str | None:
     return None
 
 
+def read_launchd_runtime(warnings: list[str]) -> tuple[dict[str, dict[str, int | str | None]], set[str]] | None:
+    """Read the user's loaded and disabled launchd state without ``print``.
+
+    ``launchctl print`` includes the job environment, which commonly contains
+    credentials.  ``launchctl list`` gives the only fields the census needs
+    (label, current PID and last exit code) without exposing that environment.
+    The plist collector remains config-only when launchctl is unavailable.
+    """
+    if not sys.platform.startswith("darwin"):
+        return None
+    try:
+        listed = subprocess.run(
+            ["launchctl", "list"], capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warnings.append(f"launchd: could not read loaded jobs: {exc}")
+        return None
+    if listed.returncode != 0:
+        message = (listed.stderr or listed.stdout).strip().splitlines()
+        warnings.append(
+            "launchd: could not read loaded jobs"
+            + (f": {message[0]}" if message else "")
+        )
+        return None
+
+    jobs: dict[str, dict[str, int | str | None]] = {}
+    for line in listed.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) != 3 or parts[2] == "Label":
+            continue
+        raw_pid, raw_exit, label = parts
+        try:
+            pid = None if raw_pid == "-" else int(raw_pid)
+            exit_code = None if raw_exit == "-" else int(raw_exit)
+        except ValueError:
+            continue
+        jobs[label] = {
+            "state": "running" if pid is not None else "loaded",
+            "pid": pid,
+            "last_exit_code": exit_code,
+        }
+
+    disabled: set[str] = set()
+    try:
+        disabled_out = subprocess.run(
+            ["launchctl", "print-disabled", f"gui/{os.getuid()}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        warnings.append(f"launchd: could not read disabled overrides: {exc}")
+        return jobs, disabled
+    if disabled_out.returncode != 0:
+        message = (disabled_out.stderr or disabled_out.stdout).strip().splitlines()
+        warnings.append(
+            "launchd: could not read disabled overrides"
+            + (f": {message[0]}" if message else "")
+        )
+        return jobs, disabled
+    for label, raw in re.findall(r'"([^"]+)"\s*=>\s*(true|false)', disabled_out.stdout):
+        if raw == "true":
+            disabled.add(label)
+    return jobs, disabled
+
+
+def missing_launchd_command(args: list[str]) -> str | None:
+    """Return an absent executable or interpreter script, when provable."""
+    if not args:
+        return None
+    program = Path(args[0])
+    if program.is_absolute() and not program.exists():
+        return str(program)
+    interpreter = program.name.lower()
+    if interpreter not in {"bash", "sh", "zsh", "python", "python3"}:
+        return None
+    if len(args) < 2 or args[1] in {"-c", "-m"} or args[1].startswith("-"):
+        return None
+    script = Path(args[1])
+    if script.is_absolute() and not script.exists():
+        return str(script)
+    return None
+
+
 def collect_launchd(warnings: list[str]) -> list[Automation]:
     results: list[Automation] = []
     launch_dir = HOME / "Library/LaunchAgents"
     if not launch_dir.exists():
         return results
+    runtime = read_launchd_runtime(warnings)
+    loaded_jobs, disabled_overrides = runtime if runtime is not None else ({}, set())
 
     for path in sorted(launch_dir.glob("*.plist")):
         try:
@@ -310,7 +399,38 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
         if plist.get("RunAtLoad"):
             cadence = "run_at_load" if cadence is None else f"{cadence}; run_at_load"
 
-        status = "active" if plist.get("Disabled") is not True else "disabled"
+        runtime_job = loaded_jobs.get(label)
+        is_disabled = plist.get("Disabled") is True or label in disabled_overrides
+        missing_command = missing_launchd_command(args)
+        if is_disabled:
+            status = "disabled"
+        elif missing_command is not None:
+            status = "missing"
+        elif runtime is not None and runtime_job is None:
+            status = "not_loaded"
+        else:
+            status = "active"
+
+        scheduler_state = None
+        scheduler_pid = None
+        scheduler_last_exit_code = None
+        last_status = None
+        if is_disabled:
+            scheduler_state = "disabled"
+        elif runtime is not None and runtime_job is None:
+            scheduler_state = "not_loaded"
+        elif runtime_job is not None:
+            scheduler_state = str(runtime_job["state"])
+            scheduler_pid = runtime_job["pid"]
+            scheduler_last_exit_code = runtime_job["last_exit_code"]
+            if scheduler_state == "running":
+                last_status = "running"
+            elif scheduler_last_exit_code is not None:
+                last_status = "ok" if scheduler_last_exit_code == 0 else "failed"
+
+        notes = []
+        if missing_command is not None:
+            notes.append(f"attention:command_missing:{short_path(missing_command)}")
         results.append(
             Automation(
                 id=stable_id("launchd", label),
@@ -320,12 +440,22 @@ def collect_launchd(warnings: list[str]) -> list[Automation]:
                 scheduler="launchd",
                 runner=infer_runner(text, "launchd"),
                 status=status,
+                last_status=last_status,
                 cadence=cadence,
                 repo=repo_for_workdir(str(workdir)) if workdir else None,
                 workdir=str(workdir) if workdir else None,
                 command=args,
                 expected_outputs=infer_expected_outputs(text),
                 config_path=str(path),
+                notes=notes,
+                last_exit_code=(
+                    scheduler_last_exit_code
+                    if scheduler_state != "running"
+                    else None
+                ),
+                scheduler_state=scheduler_state,
+                scheduler_last_exit_code=scheduler_last_exit_code,
+                scheduler_pid=scheduler_pid,
             )
         )
     return results
@@ -1316,6 +1446,100 @@ def check_own_install_health(warnings: list[str]) -> None:
         )
 
 
+def pid_is_alive(raw_pid: Any) -> bool | None:
+    """Return definitive local PID liveness, or None when it is unknowable."""
+    try:
+        pid = int(raw_pid)
+    except (TypeError, ValueError):
+        return None
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def apply_run_receipt(item: Automation, run: dict[str, Any]) -> None:
+    """Apply a wrapper receipt, then let the scheduler settle disagreements.
+
+    A receipt can be older than launchd's latest run (for example when a job
+    stopped using the wrapper), or it can remain ``running`` after its process
+    was booted out.  launchd is authoritative for what it currently has loaded
+    and for the most recent exit code; receipts remain the timestamp/message
+    authority only when they do not contradict that state.
+    """
+    item.last_status = run.get("status") or item.last_status
+    item.last_run = run.get("timestamp") or item.last_run
+    item.last_message = run.get("message")
+    item.last_exit_code = run.get("exit_code")
+    item.last_duration_seconds = run.get("duration_seconds")
+    item.run_id = run.get("run_id")
+
+    if item.source != "launchd" or item.scheduler_state is None:
+        return
+
+    receipt_status = str(run.get("status") or "").lower()
+    if item.scheduler_state == "running":
+        item.last_status = "running"
+        item.last_exit_code = None
+        return
+
+    if item.scheduler_state == "loaded" and item.scheduler_last_exit_code is not None:
+        scheduler_status = "ok" if item.scheduler_last_exit_code == 0 else "failed"
+        if receipt_status and receipt_status != scheduler_status:
+            item.notes.append("attention:receipt_disagrees_with_scheduler")
+            item.last_run = None
+            item.last_message = None
+            item.last_duration_seconds = None
+            item.run_id = None
+        item.last_status = scheduler_status
+        item.last_exit_code = item.scheduler_last_exit_code
+        return
+
+    if item.scheduler_state in {"disabled", "not_loaded"} and receipt_status == "running":
+        if pid_is_alive(run.get("pid")) is False:
+            item.last_status = "stale"
+            item.last_exit_code = None
+            item.last_message = "running receipt is stale; recorded PID is no longer live"
+            item.notes.append("attention:stale_running_receipt")
+
+
+def orphaned_stale_receipts(
+    items: list[Automation], latest_runs: dict[str, dict[str, Any]],
+) -> list[Automation]:
+    """Expose dead ``running`` receipts whose scheduler definition is gone."""
+    discovered = {item.id for item in items}
+    residues: list[Automation] = []
+    for automation_id, run in latest_runs.items():
+        if automation_id in discovered or str(run.get("status") or "").lower() != "running":
+            continue
+        if pid_is_alive(run.get("pid")) is not False:
+            continue
+        residues.append(
+            Automation(
+                id=automation_id,
+                name=str(run.get("name") or automation_id),
+                source=str(run.get("source") or "receipt"),
+                kind=str(run.get("kind") or "automation"),
+                scheduler="receipt-only",
+                runner="unknown",
+                status="orphaned",
+                last_run=run.get("timestamp"),
+                last_status="stale",
+                last_message="running receipt is stale; scheduler definition is absent",
+                run_id=run.get("run_id"),
+                notes=["attention:orphaned_stale_running_receipt"],
+            )
+        )
+    return residues
+
+
 def collect_all(projects_root: Path) -> dict[str, Any]:
     warnings: list[str] = []
     items: list[Automation] = []
@@ -1336,16 +1560,12 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
     items.extend(collect_github_actions(projects_root, warnings))
 
     latest_runs = load_latest_runs()
+    items.extend(orphaned_stale_receipts(items, latest_runs))
     for item in items:
         run = latest_runs.get(item.id)
         if not run:
             continue
-        item.last_status = run.get("status") or item.last_status
-        item.last_run = run.get("timestamp") or item.last_run
-        item.last_message = run.get("message")
-        item.last_exit_code = run.get("exit_code")
-        item.last_duration_seconds = run.get("duration_seconds")
-        item.run_id = run.get("run_id")
+        apply_run_receipt(item, run)
 
     apply_overrides(items, warnings)
 
@@ -1373,8 +1593,10 @@ def collect_all(projects_root: Path) -> dict[str, Any]:
             # "missing" = wired to a script that is not on disk. Both are
             # the drift this census exists to surface, so they belong in
             # --attention rather than only in the full listing.
-            status in {"disabled", "paused", "failing", "failed", "orphaned", "missing"}
-            or last_status in {"failed", "error"}
+            status in {
+                "disabled", "paused", "failing", "failed", "orphaned", "missing", "not_loaded",
+            }
+            or last_status in {"failed", "error", "stale"}
             or (item.source == "claude" and status == "pending")
             or is_past_due
             or stale_snapshot
