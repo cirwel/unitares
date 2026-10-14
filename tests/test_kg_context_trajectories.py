@@ -108,17 +108,19 @@ class ScriptedConversation:
     def __init__(self, replies, *, usage=True, provider_error=False):
         self.replies = iter(replies)
         self.usage, self.provider_error = usage, provider_error
+        self.calls = 0
 
     def ask(self, prompt, timeout):
+        self.calls += 1
         raw = {"response": json.dumps(next(self.replies))}
         if self.usage:
-            raw["usage"] = {"input_tokens": 100, "output_tokens": 20}
+            raw["usage"] = {"input_tokens": 100 * self.calls, "output_tokens": 20 * self.calls}
         return {"raw": raw, "error": "provider unavailable" if self.provider_error else None,
                 "prompt_bytes": len(prompt.encode()), "latency_ms": 1}
 
 
 @pytest.mark.asyncio
-async def test_episode_retains_errors_and_sums_all_turn_usage():
+async def test_episode_retains_errors_and_cumulative_usage_without_double_counting():
     replies = [request("search_shared_memory", query="   "),
                request(action="details", discovery_id="r102"), final("replacement")]
     checkpoints = []
@@ -129,9 +131,55 @@ async def test_episode_retains_errors_and_sums_all_turn_usage():
     assert result["tool_calls"] == 2
     assert result["usage"] == {"input_tokens": 300, "output_tokens": 60}
     assert result["usage_complete"]
+    assert result["peak_call_input_tokens"] == 100
+    assert result["peak_context_tokens"] is None
     assert len(result["turns"]) == 3
     assert checkpoints[0][0]["pending"] is True
     assert any(c[-1].get("tool_response", {}).get("success") is False for c in checkpoints)
+
+
+def test_cumulative_usage_uses_last_snapshot_and_keeps_cache_separate():
+    turns = [{"raw": {"usage": {"input_tokens": 14000, "output_tokens": 300, "cache_read_tokens": 0}}},
+             {"raw": {"usage": {"input_tokens": 17000, "output_tokens": 700, "cache_read_tokens": 12000}}}]
+    metrics = probe.usage_metrics(turns)
+    assert metrics["usage"] == turns[-1]["raw"]["usage"]
+    assert metrics["peak_call_input_tokens"] == 14000
+    assert metrics["usage_complete"]
+    assert not metrics["usage_issues"]
+
+
+def test_missing_or_decreasing_usage_stays_partial():
+    good = {"raw": {"usage": {"input_tokens": 100, "output_tokens": 20}}}
+    for bad in ({"raw": {}}, {"pending": True},
+                {"raw": {"usage": {"input_tokens": 10, "output_tokens": 5}}},
+                {"raw": {"usage": {"input_tokens": True, "output_tokens": 20}}}):
+        metrics = probe.usage_metrics([good, bad])
+        assert not metrics["usage_complete"]
+        assert metrics["usage_issues"]
+        assert metrics["peak_call_input_tokens"] is None
+    assert probe.usage_metrics([good, {"raw": {}}])["usage"] == good["raw"]["usage"]
+    assert not probe.usage_metrics([])["usage_complete"]
+
+
+@pytest.mark.asyncio
+async def test_offline_report_preserves_scores_and_original_receipts(tmp_path, monkeypatch):
+    result = await probe.episode(task("replacement"), probe.build_experience_envelope,
+        ScriptedConversation([request(action="details", discovery_id="r102"), final("replacement")]))
+    schedule = {"task": "replacement", "condition": "after"}
+    record = {**result, **schedule, "usage": {"input_tokens": 300, "output_tokens": 60}}
+    plan = {"schedule": [schedule], "model_selected": "fixture"}
+    probe.write_json(tmp_path / "plan.json", plan)
+    probe.write_json(tmp_path / "episode-01.json", record)
+    probe.write_json(tmp_path / "aggregate.json", {"completed_episode_receipts": 1, "transport_canary_passed": True})
+    originals = {p.name: p.read_bytes() for p in tmp_path.iterdir()}
+    monkeypatch.setattr(probe, "ArgonConversation", lambda *_: pytest.fail("offline report called model"))
+    report = probe.report_existing(tmp_path)
+    row = report["rows"][0]
+    assert row["usage"] == {"input_tokens": 200, "output_tokens": 40}
+    for key in ("task_success", "answer_correct", "evidence_read", "citations_valid", "tool_calls", "termination"):
+        assert row[key] == record[key]
+    assert {p.name: p.read_bytes() for p in tmp_path.iterdir()} == originals
+    assert report["accounting_correction"]["source_receipt_sha256"]["episode-01.json"] == probe.digest(originals["episode-01.json"])
 
 
 @pytest.mark.asyncio

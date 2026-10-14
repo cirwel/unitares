@@ -70,14 +70,19 @@ separate measures; an acknowledgement alone cannot make an answer correct.
 The fixture and expected values are authored development cases, not a held-out
 sample. They are never included in model prompts as answer keys.
 
-Usage sums the CLI's reported counters over every turn, retaining input, output,
-thinking and cache counters separately. Thinking/cache counters are not added
-again to input/output totals. Peak reported input tokens, calls, errors, response
-bytes and elapsed model-call time are reported too. Missing usage stays missing,
-with `usage_complete=false`; it is not replaced by zero. These counters include
-hidden CLI instructions and may vary with caching and provider behavior. They
-are not a tokenizer estimate, billable-cost calculation or isolated measurement
-of KG text. The selected model is recorded; an effective-model receipt is not
+Usage keeps the CLI's final cumulative session snapshot for each episode.
+Resumed result snapshots must not be summed: they include earlier turns.
+Input, output, thinking and cache counters remain separate, using the provider's
+names. The largest input-counter delta is reported as peak **call** input;
+context-window occupancy is unavailable. Missing or decreasing counters mark
+usage incomplete, rather than inventing zero usage. Calls, errors, response
+bytes and measured wall time per CLI invocation are also retained.
+
+These counters include hidden CLI instructions and depend on caching and
+provider behavior. They are not a tokenizer estimate, billable-cost calculation
+or isolated measurement of KG text. See Google's [headless CLI accounting
+documentation](https://www.antigravity.google/docs/cli/headless/) (checked
+2026-10-14). The selected model is recorded; an effective-model receipt is not
 inferred from the selector.
 
 ## Running
@@ -108,7 +113,65 @@ The two historical-formatter integration cases require the baseline Git object;
 they skip explicitly in shallow checkouts. Current-formatter controls still run,
 and the live evaluation refuses to run without the historical source.
 
-## Results
+## Results: 2026-10-14
 
-Pending the first frozen run. No task or token-savings claim is made by this
-protocol alone.
+All eight scheduled episodes ran once under the [frozen plan](plan-20261014.json).
+The neutral transport canary passed. The [corrected aggregate](aggregate-20261014.json)
+contains every episode, including the unsuccessful one; no task was rerun.
+
+| Task | Success before / after | Fixture calls before / after | Reported input before / after | Reported output before / after |
+|---|---|---|---|---|
+| Replacement | yes / yes | 3 / 2 | 39,538 / 20,332 | 1,152 / 895 |
+| Imported claim | yes / yes | 2 / 2 | 20,676 / 20,513 | 990 / 822 |
+| Appended correction | yes / **no** | 3 / 2 | 23,162 / 21,309 | 2,274 / 1,045 |
+| Mid-task change | yes / yes | 4 / 4 | 27,526 / 25,891 | 1,301 / 1,058 |
+| All attempts | **4/4 / 3/4** | **12 / 10** | **110,902 / 88,045** | **5,717 / 3,820** |
+
+The failed lean-format correction episode returned a provider `ERROR` for an
+improperly formatted function call on turn three, after reading the initial
+details page. It did not reach the correction or produce a final answer.
+Its usage receipt is present and included. This observed provider failure does
+not identify the format as its cause, but it remains a failed task in that arm.
+
+All seven completed answers had the expected value, delivered supporting
+evidence and valid citations. Both change-notice episodes read the updated
+configuration, acknowledged its exact revision, and had no premature
+acknowledgement attempts. In the replacement pair, the old-format agent read
+the obsolete record before its successor; the lean-format agent went directly
+to the successor. The imported-claim pair took the same two reads in both arms.
+
+Across all attempts, tool responses were 16,104 versus 11,267 UTF-8 JSON bytes,
+provider calls were 16 versus 14, and reported cache reads were 157,843 versus
+156,554 tokens (before versus after). These totals include the failed episode's
+early termination. They do not establish lower cost for equally successful
+work. One authored pair per task, provider/cache variability, and the 4/4 versus
+3/4 outcome do not establish equal reliability or a general context-savings
+percentage. The earlier frozen-response replay in #2797 remains the evidence
+for the narrower 23.49% response-byte reduction.
+
+### Accounting correction and audit trail
+
+The execution at `bdd7dda0adcf5062aeeeb6f2ee9f3b6705b113e9` used the original
+reviewed v1 reporter. During the run, cumulative `num_turns` and cache counters
+prompted a check of the provider documentation. That exposed an error in the
+reporter: it summed cumulative session snapshots and mislabeled their maximum
+as peak input. Those original usage totals are invalid and are not the table
+above. The frozen plan, original aggregate and all raw receipts remain intact.
+
+The v2 reporter corrects accounting offline from those same receipts. Task
+prompts, conditions, schedule, evidence scoring and outcomes did not change.
+The published aggregate pins the original aggregate and every source receipt by
+SHA-256, as well as the correction script. All eight corrected usage streams
+are complete and monotonic; context-window peak remains unknown. Full receipts
+stay in the operator's private evaluation directory.
+
+To reproduce the correction without another model call:
+
+```sh
+python scripts/eval/kg_context_trajectories.py report \
+  --run-dir /path/to/original-results --output /path/to/new-aggregate.json
+```
+
+The correction also applies to future runs. Regression controls check
+cumulative snapshots, separate cache counters, missing/decreasing usage, and
+preservation of task scores and original receipts during offline reporting.

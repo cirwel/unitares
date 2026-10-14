@@ -41,6 +41,7 @@ TASKS = ROOT / "tests/retrieval_eval/context_trajectories/tasks.json"
 MAX_TURNS = 8
 TURN_SECONDS = 60
 EPISODE_SECONDS = 240
+USAGE_REFERENCE = "https://www.antigravity.google/docs/cli/headless/"
 INSTRUCTIONS = """Complete the supplied task using a simulated, read-only KG.
 Return exactly one JSON object per turn. To request a simulated read, return
 {"tool":"search_shared_memory","arguments":{"query":"..."}} or
@@ -341,6 +342,33 @@ def parse_reply(text):
     return value
 
 
+def usage_metrics(turns):
+    """CLI result usage is cumulative across the conversation, including resumes.
+
+    Preserve the last observed snapshot on a missing receipt, marking it partial.
+    Counter deltas measure reported per-call usage, never context-window occupancy.
+    See USAGE_REFERENCE, 'Read the results'.
+    """
+    latest, previous, issues, input_deltas = {}, {}, [], []
+    for index, turn in enumerate(turns, 1):
+        usage = turn.get("raw", {}).get("usage")
+        if (not isinstance(usage, dict)
+                or not all(type(usage.get(k)) is int and usage[k] >= 0
+                           for k in ("input_tokens", "output_tokens"))
+                or any(type(v) is not int or v < 0 for v in usage.values())):
+            issues.append(f"turn {index}: missing or invalid cumulative usage")
+            continue
+        if any(usage.get(key, -1) < value for key, value in previous.items()):
+            issues.append(f"turn {index}: cumulative counter decreased or disappeared")
+        input_deltas.append(usage["input_tokens"] - previous.get("input_tokens", 0))
+        latest = dict(usage)
+        previous = latest
+    complete = bool(turns) and not issues
+    return {"usage": latest, "usage_complete": complete, "usage_issues": issues,
+            "peak_call_input_tokens": max(input_deltas) if complete else None,
+            "peak_context_tokens": None}
+
+
 async def episode(task, builder, conversation, checkpoint=lambda turns: None):
     fixture = Fixture(task, builder)
     prompt = INSTRUCTIONS + "\nTask: " + task["question"]
@@ -383,18 +411,8 @@ async def episode(task, builder, conversation, checkpoint=lambda turns: None):
         entry["tool_response"] = response
         checkpoint(turns)
         prompt = "Result of your preceding simulated read:\n" + encoded(response).decode() + "\nReturn your next JSON request or final answer."
-    usage = {}
-    for turn in turns:
-        agy.add_usage(usage, turn["raw"].get("usage"))
-    return {"termination": termination, "final": final, "turns": turns, "usage": usage,
+    return {"termination": termination, "final": final, "turns": turns, **usage_metrics(turns),
             "provider_turns": len(turns),
-            "peak_input_tokens": max((t["raw"].get("usage", {}).get("input_tokens") for t in turns
-                if isinstance(t["raw"].get("usage"), dict)
-                and type(t["raw"]["usage"].get("input_tokens")) is int), default=None),
-            "usage_complete": bool(turns) and all(
-                isinstance(t["raw"].get("usage"), dict)
-                and all(type(t["raw"]["usage"].get(key)) is int and t["raw"]["usage"][key] >= 0
-                        for key in ("input_tokens", "output_tokens")) for t in turns),
             "tool_calls": sum("tool" in t.get("reply", {}) for t in turns),
             "tool_errors": sum(t.get("tool_response", {}).get("success") is False for t in turns),
             "protocol_errors": sum("protocol_error" in t for t in turns),
@@ -403,17 +421,21 @@ async def episode(task, builder, conversation, checkpoint=lambda turns: None):
 
 
 def summarize(plan, records):
-    fields = ("termination", "usage", "usage_complete", "provider_turns", "peak_input_tokens",
+    fields = ("termination", "usage", "usage_complete", "usage_issues", "provider_turns",
+              "peak_call_input_tokens", "peak_context_tokens",
               "tool_calls", "tool_errors", "protocol_errors",
               "tool_response_bytes", "latency_ms", "answer_correct", "evidence_read", "citations_valid",
               "task_success", "notice_deliveries", "notice_acknowledged", "premature_ack_attempts")
     rows = [{"task": r["task"], "condition": r["condition"], **{k: r[k] for k in fields}} for r in records]
-    return {"schema": "kg-context-trajectories.aggregate.v1", "plan_sha256": digest(encoded(plan)),
+    return {"schema": "kg-context-trajectories.aggregate.v2", "plan_sha256": digest(encoded(plan)),
             "model_selected": plan["model_selected"], "effective_model_receipt": None,
+            "usage_semantics": "Last cumulative CLI session snapshot per episode; never sum resumed snapshots. "
+            "Counters remain separate. Peak call input is the largest input-counter delta; context peak is unavailable.",
+            "usage_reference": USAGE_REFERENCE,
             "planned_episodes": len(plan["schedule"]), "completed_episode_receipts": len(records), "rows": rows,
             "scope": "Synthetic sequential JSON-read simulation with fixed search results; production search "
             "serialization and unwrapped details handler, simulated change notices. Each episode uses a fresh "
-            "isolated persistent CLI conversation. Usage sums CLI-reported per-call counters, including hidden "
+            "isolated persistent CLI conversation. Usage retains CLI-reported cumulative counters, including hidden "
             "CLI instructions; no tokenizer estimate or native MCP-client claim. One pair per task, no retries "
             "or statistical equivalence claim. No live KG or existing adoption-pilot execution."}
 
@@ -422,6 +444,35 @@ def write_json(path, value):
     pending = path.with_suffix(path.suffix + ".pending")
     pending.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n")
     pending.replace(path)
+
+
+def report_existing(run_dir):
+    """Correct accounting offline; preserve every original receipt and task score."""
+    plan = json.loads((run_dir / "plan.json").read_text())
+    original = json.loads((run_dir / "aggregate.json").read_text())
+    records, receipt_hashes = [], {}
+    for index, scheduled in enumerate(plan["schedule"], 1):
+        path = run_dir / f"episode-{index:02}.json"
+        if not path.exists():
+            break
+        record = json.loads(path.read_text())
+        if any(record.get(key) != value for key, value in scheduled.items()):
+            raise ValueError("receipt does not match frozen schedule")
+        if record.get("termination") == "running":
+            raise ValueError("pending receipt: wait for execution to finish")
+        receipt_hashes[path.name] = digest(path.read_bytes())
+        record.update(usage_metrics(record["turns"]))
+        records.append(record)
+    if len(records) != original["completed_episode_receipts"]:
+        raise ValueError("receipt count does not match original aggregate")
+    return {**summarize(plan, records),
+            "transport_canary_passed": original["transport_canary_passed"],
+            "accounting_correction": {
+                "reason": "Original v1 summed cumulative session snapshots and mislabeled their maximum as peak input. "
+                "Offline v2 corrects usage only; no task, prompt, scorer, attempt or provider outcome changed or reran.",
+                "source_aggregate_sha256": digest((run_dir / "aggregate.json").read_bytes()),
+                "source_receipt_sha256": receipt_hashes,
+                "report_script_sha256": digest(Path(__file__).read_bytes())}}
 
 
 def transport_canary(model):
@@ -487,10 +538,18 @@ def main():
     execute.add_argument("--plan", type=Path, required=True)
     execute.add_argument("--output", type=Path, required=True)
     execute.add_argument("--execute-argon", action="store_true")
+    report = commands.add_parser("report", help="Correct usage from existing receipts without model calls")
+    report.add_argument("--run-dir", type=Path, required=True)
+    report.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.action == "freeze":
         with args.output.open("x") as stream:
             json.dump(freeze(args.model), stream, indent=2)
+            stream.write("\n")
+    elif args.action == "report":
+        result = report_existing(args.run_dir)
+        with args.output.open("x") as stream:
+            json.dump(result, stream, indent=2)
             stream.write("\n")
     elif not args.execute_argon:
         parser.error("run requires --execute-argon; this invokes the existing subscription CLI")
