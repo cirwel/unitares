@@ -1245,7 +1245,9 @@ Ask an advisory model, and list the hosts that serve one
 - **Timeout:** 5s
 - **Related:** `describe_inference_host`, `consult`, `call_model`, `delegate_inference`
 
-List the inference hosts this deployment has registered, with live readiness; for one known id use describe_inference_host.
+List configured inference hosts by default; include_unconfigured=true returns the full registered inventory.
+
+Configured hosts remain listed during outages or quota/auth cooldowns; inspect available and cooldown before calling. For any registered id, including an unconfigured host, use describe_inference_host.
 
 Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude, Codex and Antigravity adapters to delegate_inference. Those adapters are an operator extension (the agent orchestrator) that a default install does not run; the extensions field says whether this server has it. Listing works before onboarding; inference calls need a bound identity.
 

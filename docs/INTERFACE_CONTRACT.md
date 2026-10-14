@@ -591,8 +591,9 @@ Request `compact` for serialization diagnostics or `full` for canonical fields.
 ## 1.40.0 (2026-10-14)
 
 `list_inference_hosts` now defaults `include_unconfigured` to `false` in the
-advertised schema, handler and registry. Omitted arguments list configured hosts
-only, including when `provider_kind` filters the result. Configured hosts remain
+advertised schema, handler, registry and both Python SDK clients. Omitted
+arguments list configured hosts only, including when `provider_kind` filters
+the result. Configured hosts remain
 listed during outages or quota/auth cooldowns; callers must inspect `available`
 and `cooldown` before selecting a host.
 
@@ -605,5 +606,6 @@ The `list_inference_hosts` input-schema digest and aggregate surface digest
 change; output envelope shapes and other input-schema digests are unchanged.
 Clients relying on omission to return every registered host must send
 `include_unconfigured=true`. Refresh cached schemas so clients do not inject
-the previous `true` default. Explicit `false` and `true` retain their existing
-behavior.
+the previous `true` default. Older Python SDK clients serialize `true` on
+omission; upgrade or explicitly pass `include_unconfigured=False` to request
+configured hosts only. Explicit `false` and `true` retain their existing behavior.
