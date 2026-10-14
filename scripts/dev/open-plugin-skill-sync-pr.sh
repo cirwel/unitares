@@ -10,7 +10,7 @@
 # This script is the plumbing around sync-plugin-skills.sh, not a second copy
 # of it, and it is the ONE implementation both callers share:
 #   * .github/workflows/plugin-skill-sync.yml, on every push to master that
-#     touches skills/ (needs the PLUGIN_SYNC_TOKEN secret to push);
+#     touches skills/ (uses a plugin-scoped App token);
 #   * an operator's local deploy wrapper, after it deploys.
 # Both push the same automation branch, so they can never open two PRs.
 #
@@ -24,7 +24,8 @@
 # The branch always holds "the mirror at the latest unitares master", so
 # replacing it on every run is correct and there is never more than one PR.
 #
-# It never merges anything.
+# It never merges anything. The plugin's trusted Verified mirror delivery
+# workflow owns completion after canonical-content proof and successful CI.
 #
 # usage: open-plugin-skill-sync-pr.sh [--dry-run]
 #   --dry-run   report what would change; no commit, no push, no PR
@@ -206,7 +207,7 @@ BODY="$(printf '%s\n' \
   "- Freshness: $FRESH" \
   ${RULE_NOTE:+"- Attestation rule: $RULE_NOTE"} \
   "" \
-  "Opened automatically by \`scripts/dev/open-plugin-skill-sync-pr.sh\` in unitares. Later runs replace this branch with the newest unitares master, so this stays the only sync PR. Nothing outside \`skills/\` changes. Merging is left to the maintainer.")"
+  "Opened automatically by \`scripts/dev/open-plugin-skill-sync-pr.sh\` in unitares. Later runs replace this branch with the newest unitares master, so this stays the only sync PR. Nothing outside \`skills/\` changes. The plugin's Verified mirror delivery workflow checks canonical content and CI, then completes the merge under normal repository protections.")"
 
 # `.[].number`, not `.[0].number`: iterating yields nothing on an empty list,
 # so "no open PR" can never read as a PR called "null".
