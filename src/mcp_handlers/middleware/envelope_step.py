@@ -1210,7 +1210,7 @@ def _append_more_results(
         if discovery_id is None:
             continue
         row: Dict[str, Any] = {"discovery_id": discovery_id}
-        row.update(_lift(item, "type", "status", "imported_memory"))
+        row.update(_lift(item, "type", "status", "imported_memory", "resolution_notes"))
         summary = item.get("summary") or item.get("title")
         if isinstance(summary, str):
             row["summary"], _ = _summary_preview(summary, _SEARCH_MORE_SUMMARY_CHARS)
@@ -1268,6 +1268,7 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 "imported_memory",
                 "closure_class",
                 "closure_standard",
+                "resolution_notes",
             )
             # A superseded row names what replaced it, so "prefer the newer
             # entry" can be followed without a full-mode re-call. First id
@@ -2409,6 +2410,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
                 "imported_memory",
                 "closure_class",
                 "closure_standard",
+                "resolution_notes",
             ):
                 value = item.get(key)
                 if value is not None:
@@ -3124,6 +3126,7 @@ def build_experience_envelope(
     for key in (
         "low_confidence",
         "confidence_note",
+        "resolution_notes_hint",
         "search_degraded",
         "search_degraded_message",
     ):
