@@ -60,13 +60,13 @@ Every caller imports it. Two files use the format:
 ```yaml
 version: 1
 hosts:
-  external:cirwel/glm:                # operator-declared; reviewer-design id form
+  external:example/compat-claude:     # operator-declared; reviewer-design id form
     kind: cli
     adapter: claude_code               # how to run it and parse its output
-    model: glm-5.3
-    family: zhipu                      # family of the pinned model
-    env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" }
-    secrets: { ANTHROPIC_API_KEY: ZAI_API_KEY }   # names only; see 2.5
+    model: example-model
+    family: other:example              # family of the pinned model
+    env: { ANTHROPIC_BASE_URL: "https://anthropic-compatible.example/api" }
+    secrets: { ANTHROPIC_API_KEY: EXAMPLE_API_KEY }   # names only; see 2.5
     egress_class: public_only
     may_approve: false
   external:cirwel/vllm-lab:
@@ -335,3 +335,10 @@ after the four questions were put to him with recommendations).
    `pr_review` once the gate reads its repository file (step 5). GLM is declared
    in that file and runs where `ZAI_API_KEY` is set; elsewhere it is skipped as
    `unconfigured`.
+
+**Amendment (operator, 2026-10-15, later the same day):** GLM is phased out;
+the operator ended the trial and the subscription. Decisions 2 and 4 no longer
+apply to this deployment: no GLM host is declared, and `pr_review` keeps
+today's order. Decision 2's reasoning still describes how to classify any host
+whose retention terms are unstated. The section 2.1 example now uses a
+placeholder host.

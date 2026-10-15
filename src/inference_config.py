@@ -188,7 +188,7 @@ def _unknown_fields(found: Mapping[str, Any], allowed: set[str], where: str) -> 
 def _env_name(value: Any, where: str) -> str:
     if not isinstance(value, str) or not _ENV_NAME.match(value):
         raise InferenceConfigError(
-            where, "must be an environment variable NAME (e.g. ZAI_API_KEY), never a secret value")
+            where, "must be an environment variable NAME (e.g. EXAMPLE_API_KEY), never a secret value")
     return value
 
 
