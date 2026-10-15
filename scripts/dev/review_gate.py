@@ -885,6 +885,17 @@ class ReviewCycle:
                     and family not in self.families and len(self.families) < 2)
 
 
+def _changed_work(cycle: "ReviewCycle", key: str, head: str) -> bool:
+    """Positive evidence that the work under review differs from `cycle`'s:
+    both diff keys known and different, or, where the cycle has no key (a
+    native review), a different head commit. No evidence, no exemption."""
+    if key and cycle.key:
+        return key != cycle.key
+    if head and cycle.head and not cycle.key:
+        return not (head.startswith(cycle.head) or cycle.head.startswith(head))
+    return False
+
+
 @dataclass
 class CodexRounds:
     """Full review cycles across every revision, including an unfinished pair."""
@@ -906,7 +917,7 @@ class CodexRounds:
         serious problem. ``count`` stays the full ledger (grants key on it)."""
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
-    def exhausted(self, joining: bool, key: str = "") -> bool:
+    def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
         """No new full cycle without the operator: too many unproductive
         cycles, or a review that has not converged by the backstop."""
         if not ROUND_CAP_ENABLED:
@@ -921,7 +932,7 @@ class CodexRounds:
             prior_spent = self.spent - current
             prior_serious = len(self.cycles) >= 2 and self.cycles[-2].productive()
             return not (prior_serious or prior_spent < ROUND_CAP)
-        if self.cycles and self.cycles[-1].productive() and key != self.cycles[-1].key:
+        if self.cycles and self.cycles[-1].productive() and _changed_work(self.cycles[-1], key, head):
             # The fix of a serious finding earns a full review; re-reviewing
             # the same unchanged diff does not.
             return False
@@ -2852,7 +2863,7 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (rounds.exhausted(joining_cycle, key)
+                if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
                     print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
                           f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "

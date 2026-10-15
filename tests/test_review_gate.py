@@ -5017,7 +5017,7 @@ def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
     things, not review that keeps finding real defects."""
     rounds = _cycles_with(["P1"], ["P0", "P2"], ["P1"])
     assert rounds.count == 3 and rounds.spent == 0
-    assert not rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=False, key="fix-key")
 
 
 def test_clean_and_lesser_cycles_still_spend_the_cap():
@@ -5079,7 +5079,7 @@ def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
     full review without a grant (up to the backstop)."""
     rounds = _cycles_with([], ["P2"], [], ["P1"])
     assert rounds.spent == 3
-    assert not rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=False, key="fix-key")
     after_fix = _cycles_with([], ["P2"], [], ["P1"], [])
     assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
 
@@ -5110,3 +5110,12 @@ def test_the_exemption_is_for_the_fix_not_the_same_diff():
     rounds = _cycles_with([], [], [], ["P1"])
     assert not rounds.exhausted(joining=False, key="fix-key")
     assert rounds.exhausted(joining=False, key=rounds.cycles[-1].key)
+
+
+def test_a_keyless_native_cycle_needs_a_different_head_for_the_exemption():
+    rounds = _cycles_with([], [], [], ["P1"])
+    last = rounds.cycles[-1]
+    last.key = ""  # native reviews enter the ledger without a diff key
+    assert rounds.exhausted(joining=False, key="any-key", head=last.head)
+    assert not rounds.exhausted(joining=False, key="any-key", head="f" * 40)
+    assert rounds.exhausted(joining=False)  # no evidence of changed work
