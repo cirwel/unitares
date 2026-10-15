@@ -139,12 +139,29 @@ fi
 LOCAL_SNAME="attach-$$"
 TARGET="$SNAME@$HOST"
 
+# The cookie never goes on a command line: `--cookie` lands in beam.smp's argv,
+# where any process listing reads it. This client node instead runs with a
+# private HOME whose ~/.erlang.cookie holds it (mode 400, removed on exit).
+COOKIE_HOME=""
+cleanup_cookie_home() { [[ -n "$COOKIE_HOME" ]] && rm -rf "$COOKIE_HOME"; }
+trap cleanup_cookie_home EXIT
+with_cookie_home() {
+    COOKIE_HOME="$(mktemp -d)"
+    (umask 077; printf '%s' "$1" > "$COOKIE_HOME/.erlang.cookie")
+    chmod 400 "$COOKIE_HOME/.erlang.cookie"
+}
 args=(--sname "$LOCAL_SNAME")
-[[ -n "$COOKIE" ]] && args+=(--cookie "$COOKIE")
+# A service without its own cookie uses the default ~/.erlang.cookie, so the
+# real HOME stays in place for it.
+if [[ -n "$COOKIE" ]]; then
+    with_cookie_home "$COOKIE"
+    COOKIE=""
+fi
+run_home="${COOKIE_HOME:-$HOME}"
 
 if [[ -n "$EVAL" ]]; then
-    exec elixir "${args[@]}" --rpc-eval "$TARGET" "$EVAL"
+    HOME="$run_home" elixir "${args[@]}" --rpc-eval "$TARGET" "$EVAL"
 else
     echo "[beam-attach] attaching to $TARGET — Ctrl-\\ to detach (Ctrl-C twice kills the REMOTE node)" >&2
-    exec iex "${args[@]}" --remsh "$TARGET"
+    HOME="$run_home" iex "${args[@]}" --remsh "$TARGET"
 fi

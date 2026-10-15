@@ -64,14 +64,19 @@ mix deps.get >&2 || echo "[lease-plane] WARN: mix deps.get failed (offline?) —
 # listener to 127.0.0.1, matching the lease plane's localhost trust boundary.
 NODE_SNAME="${LEASE_PLANE_NODE_SNAME:-unitares-lease-plane}"
 
+# The cookie never goes on a command line: `elixir --cookie`, `-args_file` and
+# ERL_AFLAGS all end up in beam.smp's argv, where any process listing reads it.
+# It travels in the environment instead; NodeDistribution starts the named node
+# at boot, sets the cookie, and removes the variable before any child spawns.
 if [[ -n "${LEASE_PLANE_NODE_COOKIE:-}" ]]; then
+    export LEASE_PLANE_NODE_COOKIE
+    export LEASE_PLANE_NODE_SNAME="$NODE_SNAME"
     export ERL_EPMD_ADDRESS="127.0.0.1"
     exec elixir \
-        --sname "$NODE_SNAME" \
-        --cookie "$LEASE_PLANE_NODE_COOKIE" \
         --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
         -S mix run --no-halt
 else
+    unset LEASE_PLANE_NODE_COOKIE
     echo "[lease-plane] LEASE_PLANE_NODE_COOKIE unset — starting UNNAMED (hot-reload disabled; set the cookie in secrets.env and restart to enable)" >&2
     exec mix run --no-halt
 fi

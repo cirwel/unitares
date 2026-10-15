@@ -44,8 +44,9 @@ cd "$ORCHESTRATOR_DIR"
 # *named* + *cookied*, so an operator can attach a remote shell to the RUNNING
 # orchestrator:
 #
-#   iex --sname probe --cookie "$AGENT_ORCHESTRATOR_NODE_COOKIE" \
-#       --remsh agent-orchestrator@$(hostname -s)
+#   scripts/ops/beam-attach.sh orchestrator
+#
+# (it supplies the cookie through a private ~/.erlang.cookie, never argv)
 #
 # and from there inspect live state (AgentOrchestrator.list/0, :sys.get_state/1)
 # or attach a telemetry handler for a while and detach it again
@@ -61,14 +62,19 @@ cd "$ORCHESTRATOR_DIR"
 # boundary (the same boundary its bearer gate assumes).
 NODE_SNAME="${AGENT_ORCHESTRATOR_NODE_SNAME:-agent-orchestrator}"
 
+# The cookie never goes on a command line: `elixir --cookie`, `-args_file` and
+# ERL_AFLAGS all end up in beam.smp's argv, where any process listing reads it.
+# It travels in the environment instead; NodeDistribution starts the named node
+# at boot, sets the cookie, and removes the variable before any child spawns.
 if [[ -n "${AGENT_ORCHESTRATOR_NODE_COOKIE:-}" ]]; then
+    export AGENT_ORCHESTRATOR_NODE_COOKIE
+    export AGENT_ORCHESTRATOR_NODE_SNAME="$NODE_SNAME"
     export ERL_EPMD_ADDRESS="127.0.0.1"
     exec elixir \
-        --sname "$NODE_SNAME" \
-        --cookie "$AGENT_ORCHESTRATOR_NODE_COOKIE" \
         --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
         -S mix run --no-halt
 else
+    unset AGENT_ORCHESTRATOR_NODE_COOKIE
     echo "[agent-orchestrator] AGENT_ORCHESTRATOR_NODE_COOKIE unset — starting UNNAMED (live remote shell disabled; set the cookie in secrets.env and restart to enable)" >&2
     exec mix run --no-halt
 fi

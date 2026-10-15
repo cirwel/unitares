@@ -136,7 +136,19 @@ end)
 IO.puts("[hot-reload] reloaded #{length(mods)} module(s) on #{inspect(node)} — no restart")
 '
 
-HR_NODE="$TARGET_NODE" HR_MODE="$HR_MODE" HR_EBIN="$EBIN" exec elixir \
+# The cookie never goes on a command line: `--cookie` lands in beam.smp's argv,
+# where any process listing reads it. This client node instead runs with a
+# private HOME whose ~/.erlang.cookie holds it (mode 400, removed on exit).
+COOKIE_HOME=""
+cleanup_cookie_home() { [[ -n "$COOKIE_HOME" ]] && rm -rf "$COOKIE_HOME"; }
+trap cleanup_cookie_home EXIT
+with_cookie_home() {
+    COOKIE_HOME="$(mktemp -d)"
+    (umask 077; printf '%s' "$1" > "$COOKIE_HOME/.erlang.cookie")
+    chmod 400 "$COOKIE_HOME/.erlang.cookie"
+}
+with_cookie_home "$LEASE_PLANE_NODE_COOKIE"
+
+HOME="$COOKIE_HOME" HR_NODE="$TARGET_NODE" HR_MODE="$HR_MODE" HR_EBIN="$EBIN" elixir \
     --sname "hotreload$$" \
-    --cookie "$LEASE_PLANE_NODE_COOKIE" \
     -e "$CTRL" -- "${MODS[@]+"${MODS[@]}"}"
