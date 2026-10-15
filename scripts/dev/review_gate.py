@@ -930,7 +930,8 @@ class CodexRounds:
             # fewer than ROUND_CAP unproductive cycles came before it.
             current = 0 if (self.cycles and self.cycles[-1].productive()) else 1
             prior_spent = self.spent - current
-            prior_serious = len(self.cycles) >= 2 and self.cycles[-2].productive()
+            prior_serious = (len(self.cycles) >= 2 and self.cycles[-2].productive()
+                             and _changed_work(self.cycles[-2], self.cycles[-1].key, self.cycles[-1].head))
             return not (prior_serious or prior_spent < ROUND_CAP)
         if self.cycles and self.cycles[-1].productive() and _changed_work(self.cycles[-1], key, head):
             # The fix of a serious finding earns a full review; re-reviewing
@@ -1047,7 +1048,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        findings = findings_from_review_text(c.get("body", ""), rec.verdict)
+        findings = findings_from_review_text(c.get("body", ""), rec.verdict, rec.findings or 0)
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
                                    rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
@@ -1064,14 +1065,23 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     return count_review_cycles(list(runs.values()), unknown_history, answered_at)
 
 
-def findings_from_review_text(body: str, verdict: str) -> list[dict]:
+# A finding's title leads with its label, after list or markup characters
+# ("[P1] ...", "- [P1] ...", "1. **[P1] ...", "**<sub><sub>![P1 Badge](...)").
+# A label later in a line is prose (e.g. "verified the prior [P1] fix").
+FINDING_TITLE_RE = re.compile(
+    r"(?m)^[ \t>#*\-]*(?:\d+\.[ \t]*)?[ \t*]*(?:<sub>[ \t]*)*"
+    r"(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$")
+
+
+def findings_from_review_text(body: str, verdict: str, declared: int = 0) -> list[dict]:
     """The labelled findings in a review's text, one per title. A FINDINGS
     verdict with no labelled title yields one unlabelled finding, which the
-    budget and the cap treat as serious. Any other verdict has no findings,
-    whatever severity labels its reasoning mentions."""
+    budget and the cap treat as serious, and so does each finding the
+    record declares (``declared``) beyond the labelled titles found. Any
+    other verdict has no findings, whatever its reasoning mentions."""
     if verdict != "FINDINGS":
         return []
-    titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
+    titles = list(FINDING_TITLE_RE.finditer(body))
     findings = []
     for i, title in enumerate(titles):
         finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
@@ -1079,8 +1089,8 @@ def findings_from_review_text(body: str, verdict: str) -> list[dict]:
         if location:
             finding.update(path=location[1], line=int(location[2]))
         findings.append(finding)
-    if verdict == "FINDINGS" and not findings:
-        findings = [{"body": "unlabelled finding; full review required"}]
+    missing = max(declared - len(findings), 0 if findings else 1)
+    findings += [{"body": "unlabelled finding; full review required"}] * missing
     return findings
 
 
@@ -3692,7 +3702,10 @@ def round_note(rounds: CodexRounds | None) -> str:
     if rounds.spent != rounds.count:
         note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
                 f"backstop {ROUND_BACKSTOP})")
-    return note + (" (cap reached)" if rounds.exhausted(False) else "")
+    serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
+    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
+                                     or (rounds.spent >= ROUND_CAP and not serious_last))
+    return note + (" (cap reached)" if reached else "")
 
 
 def cmd_ci(args) -> int:

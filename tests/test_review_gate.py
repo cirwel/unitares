@@ -5119,3 +5119,22 @@ def test_a_keyless_native_cycle_needs_a_different_head_for_the_exemption():
     assert rounds.exhausted(joining=False, key="any-key", head=last.head)
     assert not rounds.exhausted(joining=False, key="any-key", head="f" * 40)
     assert rounds.exhausted(joining=False)  # no evidence of changed work
+
+
+def test_only_leading_labels_are_titles_and_declared_findings_count():
+    prose = "Verified the prior [P1] fix in a.py:3.\n[P2] Minor thing — b.py:4\n"
+    found = rg.findings_from_review_text(prose, "FINDINGS")
+    assert len(found) == 1 and found[0]["body"].startswith("[P2]")
+    for title in ("- [P1] x — a.py:1", "1. **[P1] x — a.py:1**",
+                  "**<sub><sub>![P1 Badge](u)</sub></sub>  x**"):
+        assert len(rg.findings_from_review_text(title, "FINDINGS")) == 1
+    # Two declared, one labelled: the other counts as unlabelled (serious).
+    two = rg.findings_from_review_text("[P3] nit — c.py:1\n", "FINDINGS", declared=2)
+    assert len(two) == 2 and "unlabelled" in two[1]["body"]
+
+
+def test_joining_after_a_serious_cycle_needs_changed_work_too():
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    rounds.cycles[-1].key = rounds.cycles[-2].key  # same diff as the serious cycle
+    rounds.cycles[-1].head = rounds.cycles[-2].head
+    assert rounds.exhausted(joining=True)
