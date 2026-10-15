@@ -306,8 +306,17 @@ def test_client_refuses_a_sandbox_other_than_read_only(monkeypatch):
 def test_an_unneutralisable_config_refuses_without_the_exec_fallback(monkeypatch):
     monkeypatch.setenv("HA_CLI", "/opt/x/codex")
     monkeypatch.setenv("HA_PROMPT", "hi")
-    monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: ["stubborn"])
+    monkeypatch.setattr(client, "confinement_verified", lambda cli: True)
+    monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: None)
+    listed = []
+
+    def stubborn(cli, overrides, cwd):
+        listed.append(cwd)
+        return ["stubborn"]
+
+    monkeypatch.setattr(client, "_enabled_mcp_servers", stubborn)
     assert client.main() == 1  # not FALLBACK_SAFE_EXIT
+    assert listed  # the refusal came from the MCP check, not an earlier one
 
 
 def test_an_npm_codex_launcher_grants_the_openai_scope(tmp_path):

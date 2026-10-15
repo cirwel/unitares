@@ -171,7 +171,12 @@ def test_codex_backend_uses_resolved_cli_and_quoted_prompt():
         captured["kwargs"] = kwargs
         return FakeProcess()
 
-    with patch.object(r, "resolve_host_cli", return_value="/opt/bin/codex"):
+    # The lane's preflight probes a real codex and enumerates its MCP servers;
+    # this test is about the spawn, so both are stubbed.
+    with patch.object(r, "resolve_host_cli", return_value="/opt/bin/codex"), \
+            patch.object(r, "codex_confinement_verified", return_value=True), \
+            patch.object(r, "codex_admin_config_conflict", return_value=None), \
+            patch.object(r, "codex_mcp_disable_overrides", return_value=[]):
         with patch("asyncio.create_subprocess_exec", side_effect=fake_spawn):
             text = asyncio.run(r.call_codex_reviewer("review this"))
 
