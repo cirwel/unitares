@@ -121,6 +121,78 @@ def agent_error(pairs, as_of):
     return (st.fmean(gaps), len(gaps)) if gaps else (None, 0)
 
 
+def _stats(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return "n=0"
+    def pct(p):
+        return xs[min(n - 1, int(p * (n - 1) + 0.5))]
+    sd = st.pstdev(xs) if n > 1 else 0.0
+    iqr = pct(0.75) - pct(0.25)
+    return (
+        f"n={n} mean={st.fmean(xs):.4f} sd={sd:.4f} "
+        f"p10={pct(.1):.4f} p50={pct(.5):.4f} p90={pct(.9):.4f} iqr={iqr:.4f}"
+    )
+
+
+def agent_unpooled_error(pairs, as_of=None, mode: str = "ece"):
+    """Unpooled per-agent error over pairs observed before ``as_of``.
+
+    Modes:
+      - ``ece``: sample-weighted binned calibration error
+        sum_b (n_b / n) * |mean(score_b) - mean(conf_b)| with no MIN_PER_BIN cliff.
+      - ``brier``: mean squared error mean((score - conf)**2).
+      - ``mae``: mean absolute error mean(|score - conf|).
+    """
+    prior = [r for r in pairs if as_of is None or r[0] < as_of]
+    n = len(prior)
+    if n == 0:
+        return None, 0
+    if mode == "mae":
+        return st.fmean(abs(r[2] - r[1]) for r in prior), n
+    if mode == "brier":
+        return st.fmean((r[2] - r[1]) ** 2 for r in prior), n
+    if mode == "ece":
+        by_bin = defaultdict(list)
+        for ts, conf, score in prior:
+            by_bin[_bin(conf)].append((conf, score))
+        ece = sum(
+            (len(rows) / n) * abs(st.fmean(s for _, s in rows) - st.fmean(c for c, _ in rows))
+            for rows in by_bin.values()
+        )
+        return ece, n
+    raise ValueError(f"unknown mode: {mode}")
+
+
+def agent_pooled_error(
+    pairs,
+    as_of=None,
+    *,
+    prior_error: float = 0.25,
+    k: float = 10.0,
+    mode: str = "ece",
+):
+    """Partial-pooling per-agent calibration error.
+
+    Replaces the fleet constant with shrinkage from ``prior_error`` (e_0) toward
+    the agent's verified-pair error ``e_agent`` using weight ``w = n / (n + k)``:
+
+        e_pool = (1 - w) * prior_error + w * e_agent
+
+    When ``n == 0``, ``w == 0`` and ``e_pool == prior_error`` (prior-only fallback).
+    Returns ``(e_pool, n, w, e_agent)``.
+    """
+    if k <= 0:
+        raise ValueError("k must be positive")
+    e_agent, n = agent_unpooled_error(pairs, as_of=as_of, mode=mode)
+    if n == 0 or e_agent is None:
+        return float(prior_error), 0, 0.0, None
+    w = n / (n + k)
+    e_pool = (1.0 - w) * float(prior_error) + w * e_agent
+    return e_pool, n, w, e_agent
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--snapshot")
@@ -150,25 +222,39 @@ def main() -> int:
         v.sort()
 
     pairs_by_id = defaultdict(list)
+    ext_pairs_by_id = defaultdict(list)
+    tool_pairs_by_id = defaultdict(list)
     unpaired = 0
     for o in inputs["verified"]:
         series = conf_by_id.get(o["id"], [])
         ts = _ts(o["ts"])
         k = bisect.bisect_left([t for t, _ in series], ts) - 1
         if k >= 0 and ts - series[k][0] <= PAIR_WINDOW:
-            pairs_by_id[o["id"]].append((ts, series[k][1], float(o["score"])))
+            pair = (ts, series[k][1], float(o["score"]))
+            pairs_by_id[o["id"]].append(pair)
+            if o.get("grade") == "externally_verified":
+                ext_pairs_by_id[o["id"]].append(pair)
+            elif o.get("grade") == "tool_observed":
+                tool_pairs_by_id[o["id"]].append(pair)
         else:
             unpaired += 1
     n_pairs = sum(len(v) for v in pairs_by_id.values())
     print(f"\n== Pairing verified outcomes with the identity's last stated confidence (<= 24 h before)")
     print(f"  verified outcomes: {len(inputs['verified'])}; paired: {n_pairs}; unpaired: {unpaired}")
     print(f"  identities with any pair: {len(pairs_by_id)}; pairs per identity {_q([len(v) for v in pairs_by_id.values()])}")
+    ext_gaps = [abs(s - c) for v in ext_pairs_by_id.values() for _, c, s in v]
+    tool_gaps = [abs(s - c) for v in tool_pairs_by_id.values() for _, c, s in v]
+    print(f"  by grade — externally_verified: {len(ext_gaps)} pairs across {len(ext_pairs_by_id)} identities, "
+          f"|y - c| {_q(ext_gaps)}")
+    print(f"  by grade — tool_observed (0.65 shape-graded): {len(tool_gaps)} pairs across {len(tool_pairs_by_id)} identities, "
+          f"|y - c| {_q(tool_gaps)}")
 
     rows = [r for r in inputs["snapshot"] if not r.get("synthetic") and (r.get("I") or {}).get("components")]
     covered = 0
     deltas = []
     by_id_obs = defaultdict(list)
     by_id_cf = defaultdict(list)
+    by_id_effw = defaultdict(list)
     errs = []
     fleet_vals = set()
     for r in rows:
@@ -191,6 +277,7 @@ def main() -> int:
             deltas.append(cf - obs)
         by_id_obs[r["id"]].append(obs)
         by_id_cf[r["id"]].append(cf)
+        by_id_effw[r["id"]].append(eff_w)
 
     print(f"\n== Substituting the per-agent error into persisted I observations (causal, as of each check-in)")
     if not rows:
@@ -211,8 +298,44 @@ def main() -> int:
     if sd_obs:
         print(f"    within-identity SD of I observation: {_q(sd_obs)}")
         print(f"    within-identity SD with the substituted term: {_q(sd_cf)}")
+
+    fleet_cal = next(iter(fleet_vals)) if fleet_vals else 0.852553423
+    fleet_err = 1.0 - fleet_cal
+    print(f"\n== Offline comparison: between-agent spread and level (#2818)")
+    for label, pmap in (
+        ("externally_verified only (admissible truth source)", ext_pairs_by_id),
+        ("all exported grades (externally_verified + tool_observed)", pairs_by_id),
+    ):
+        if not pmap:
+            continue
+        print(f"  -- Paired-identity corpus: {label} (identities={len(pmap)}, pairs={sum(len(v) for v in pmap.values())})")
+        print(f"     current fleet cal_I:                {_stats([fleet_cal for _ in pmap])}")
+        for mode in ("ece", "brier", "mae"):
+            unpooled = [1.0 - agent_unpooled_error(v, mode=mode)[0] for v in pmap.values()]
+            print(f"     unpooled 1 - {mode:<5s}:                 {_stats(unpooled)}")
+        for e0_name, e0 in (("neutral_0.25", 0.25), ("fleet_0.1474", fleet_err)):
+            for k_val in (5.0, 10.0, 20.0):
+                pooled_ece = [
+                    1.0 - agent_pooled_error(v, prior_error=e0, k=k_val, mode="ece")[0]
+                    for v in pmap.values()
+                ]
+                print(f"     pooled 1 - ece ({e0_name}, k={int(k_val):2d}): {_stats(pooled_ece)}")
+
+    id_means_obs = [st.fmean(v) for v in by_id_obs.values()]
+    id_means_prior075 = [
+        st.fmean([o + ew * (0.75 - fleet_cal) for o, ew in zip(by_id_obs[i], by_id_effw[i])])
+        for i in by_id_obs
+    ]
+    print(f"  -- Snapshot I level and spread across {len(by_id_obs)} identities ({len(rows)} rows):")
+    print(f"     per-identity mean I (current fleet cal_I={fleet_cal:.4f}): {_stats(id_means_obs)} "
+          f"(>=0.70: {sum(1 for x in id_means_obs if x >= 0.70)}/{len(id_means_obs)} = "
+          f"{sum(1 for x in id_means_obs if x >= 0.70) / len(id_means_obs):.1%})")
+    print(f"     per-identity mean I (neutral prior cal_I=0.7500): {_stats(id_means_prior075)} "
+          f"(>=0.70: {sum(1 for x in id_means_prior075 if x >= 0.70)}/{len(id_means_prior075)} = "
+          f"{sum(1 for x in id_means_prior075 if x >= 0.70) / len(id_means_prior075):.1%})")
     return 0
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
