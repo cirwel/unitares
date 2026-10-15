@@ -92,9 +92,10 @@ those inputs.
 
 ## Preservation and authority
 
-- The feature freeze through **2026-10-22** remains in place. Documentation,
-  offline verification, and permitted fixes proceed within its scope; this
-  priority change opens no new runtime feature work.
+- The feature freeze this plan was written under was lifted by the operator
+  on 2026-10-15. This priority change does not by itself authorize new runtime
+  feature work: new tools, actions, instruments and model channels stay
+  operator-reserved, and the scientific gates below are unchanged.
 - The [registered December 1 outcome read](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md)
   keeps its inputs, selection rules, thresholds, and reporting obligations.
   Do not run ad hoc live discrimination analyses or reinterpret this synthetic
