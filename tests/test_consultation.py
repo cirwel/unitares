@@ -2159,3 +2159,7 @@ async def test_skipped_and_family_reach_the_result(monkeypatch, hosts_file):
     assert parsed["skipped"][0]["host_id"] == "claude:host-adapter"
     assert parsed["skipped"][0]["reason"] == "disabled"
     assert parsed["diagnostics"]["family"] == "openai"
+
+
+def test_peer_table_view_still_matches_the_old_table():
+    assert co._THOROUGH_PEERS == _OLD_THOROUGH_PEERS

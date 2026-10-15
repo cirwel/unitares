@@ -129,6 +129,20 @@ _DEFAULT_THOROUGH_ORDER: tuple[str, ...] = (
 )
 
 
+# The default order per caller family, kept as a read-only view for readers of
+# the earlier peer table (open work such as #2792 asserts against it). It is
+# derived from _DEFAULT_THOROUGH_ORDER and the shared family vocabulary, and
+# routing never reads it: _thorough_plan does, so an operator's job applies.
+_THOROUGH_PEERS: dict[str | None, tuple[str, ...]] = {
+    family: tuple(
+        host_id for host_id in _DEFAULT_THOROUGH_ORDER
+        if inference_config.BUILTIN_DEFAULT_FAMILY[host_id] != family
+    )
+    for family in ("anthropic", "openai", "google")
+}
+_THOROUGH_PEERS[None] = _DEFAULT_THOROUGH_ORDER
+
+
 @dataclass(frozen=True, slots=True)
 class ThoroughPlan:
     """The consult.thorough order for one caller, before availability.
