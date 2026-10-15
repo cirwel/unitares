@@ -182,10 +182,13 @@ subscription lane cannot silently become metered (`:770-793`).
   unset today (`elixir/agent_orchestrator/config/config.exs:63`), so any command
   is allowed on the authenticated surface. An allowlist means little while every
   adapter launches through `/bin/sh -c` and the reviewer through the Python
-  interpreter, since both would have to be allowed. Step 4 therefore launches
-  declared `cli` hosts' binaries directly and sets the allowlist to those
-  binaries in the same change; a declared `cli` host can only name an existing
-  adapter.
+  interpreter, since both would have to be allowed. Step 4 therefore changes
+  every spawn path together: the builtin adapters and declared `cli` hosts
+  launch their binaries directly (the orchestrator already closes the child's
+  stdin, #1546, which was the main reason for the shell), and the allowlist
+  matches a command's leading arguments, not only its name, so the reviewer is
+  admitted only as `<interpreter> -m agents.dialectic_reviewer`. A declared `cli`
+  host can only name an existing adapter.
 
 ### 2.6 Health state stays with its runner
 
@@ -274,8 +277,8 @@ sets nothing.
    steps (cooldowns, independence, declared hosts) use this file;
    `UNITARES_DIALECTIC_REVIEWER_HOSTS` becomes an alias.
 4. **Declared hosts and self-hosting docs.** `openai_http` and `cli` hosts,
-   direct binary launch for declared `cli` hosts with the orchestrator allowlist
-   (2.5), secret resolution in the orchestrator, the install manual,
+   direct binary launch for every adapter (builtin and declared) with the
+   orchestrator allowlist matched on leading arguments (2.5), secret resolution in the orchestrator, the install manual,
    `.env.example` and Compose, with a minimal local-only example file and its
    JSON Schema.
 5. **The review gate reads its repository file** with `collect_families`;
@@ -297,7 +300,8 @@ sets nothing.
 - Step 3: the reviewer design's evidence list.
 - Step 4: a declared `cli` host answers end to end; its secret's value is
   absent from the spawn request, logs and provenance; a declared host does not
-  receive the operator's own keys; the allowlist refuses a command outside it.
+  receive the operator's own keys; the allowlist refuses a command outside it,
+  `/bin/sh` included, while every builtin adapter and the reviewer still run.
 - Step 5: a sensitive-path pull request collects two distinct families in list
   order; a second pass from one family does not count; `test_review_gate.py`
   stays green.
