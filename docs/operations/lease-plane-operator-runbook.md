@@ -140,10 +140,14 @@ The node is `unitares-lease-plane@<short-hostname>` and distribution is pinned
 to loopback, so attach from the same host:
 
 ```bash
-# Connect to the running BEAM node interactively (same cookie as the node)
-iex --sname operator --cookie "$LEASE_PLANE_NODE_COOKIE" \
-    --remsh "unitares-lease-plane@$(hostname -s)"
+# Connect to the running BEAM node interactively
+scripts/ops/beam-attach.sh lease-plane
 ```
+
+Do not pass the cookie with `--cookie`: it lands in `beam.smp`'s command line,
+where any process listing reads it, and node access is arbitrary code
+execution. `beam-attach.sh` gives the client a private `~/.erlang.cookie`
+instead, and the services read theirs from the environment at boot.
 
 Once attached, useful commands:
 
