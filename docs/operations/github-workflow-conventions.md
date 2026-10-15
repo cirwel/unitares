@@ -66,13 +66,13 @@ veto by removing the label.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - Before readiness, the owner classifies the PR body as `fix` or `capability`.
-  Through 2026-10-22 the freeze blocks new tools, actions, instruments and model
-  channels; fixes, friction reduction, tooling, tests and docs proceed. KG
-  decision `2026-10-13T09:17:42.808916+00:00` records the operator-delegated
-  wording (not operator-reviewed); this dated freeze pointer expires after
-  2026-10-22. A disagreeing reviewer comments, rather than holding a fix on the
-  freeze alone. Reserved auth, identity, scientific and governance-sensitive
-  gates are unchanged.
+  A capability that adds a tool, action, instrument or model channel is
+  reserved to the operator and stays a draft until the operator rules; fixes,
+  friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
+  freeze was lifted by the operator on 2026-10-15 (KG decision
+  `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
+  than holding a fix. Reserved auth, identity, scientific and
+  governance-sensitive gates are unchanged.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
   opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
   session's UNITARES identity: a later session finds the owner by it and can
@@ -373,7 +373,15 @@ fallback validation.
 #### Round cap
 
 Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
-gets three **full review cycles**. A cycle starts with its first completed
+gets three **full review cycles**. Operator direction, 2026-10-15, makes the
+budget context-based: a cycle that found a serious problem (a P0/P1 finding,
+or an unlabelled one) does not count toward the three, because the fix of a
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
+has stopped finding serious problems, not review that keeps finding them; a
+backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same
 revision. Repeating a family, requesting a third family, or changing the
 revision/diff starts another cycle. The second family can finish cycle three
@@ -607,7 +615,8 @@ operator's), the environment-independent path is a PR comment:
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
    The enabled [round cap](#round-cap) applies here too: after three full
-   cycles, stop requests and escalate unresolved findings. Ordinary minor
+   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
    cycle requires explicit operator authorization with a recorded reason.
@@ -981,7 +990,7 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review cycle 3 done | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

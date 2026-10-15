@@ -1432,3 +1432,188 @@ def test_candidate_pin_leaves_exploratory_reproduction_and_operator_reads_alone(
     matrix_module.validate_read_protocol(
         _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"), now=now
     )
+
+
+# ---- data boundary at the first instrument change (stop-rule amendment 2026-10-15) ----
+
+_WIRED_CUTOFF = "2026-12-01T16:00:00Z"
+_WIRED_CUTOFF_DT = datetime(2026, 12, 1, 16, 0, tzinfo=timezone.utc)
+
+
+def _wired_stop_rule_args(*extra):
+    """The fleet-ops wrapper's flags, byte-for-byte, plus test-only extras."""
+    return matrix_module.parse_args(
+        [
+            "--read-protocol", "registered",
+            "--read-id", STOP_RULE_READ_ID,
+            "--not-before", "2026-12-01T16:00:00Z",
+            "--acknowledge-contamination",
+            "--scopes", "task", "--windows", "365", "--leads", "0,30",
+            "--anchor-scope", "trusted",
+            "--exclude-harness-lanes", "beam",
+            "--fixture-rule", "registered",
+            "--as-of", _WIRED_CUTOFF,
+            "--uncertainty-resamples", "2000", "--selective-null-resamples", "400",
+            *extra,
+        ]
+    )
+
+
+def _with_instrument_change(monkeypatch, change_at):
+    entries = tuple(
+        dataclasses.replace(entry, instrument_change_at=change_at)
+        if entry.name == "eisv-outcome-grounding-stop-rule-v0"
+        else entry
+        for entry in matrix_module.REGISTERED_READ_MANIFEST
+    )
+    monkeypatch.setattr(matrix_module, "REGISTERED_READ_MANIFEST", entries)
+
+
+def test_stop_rule_entry_carries_the_boundary_rule():
+    # Deliberately silent on instrument_change_at: the amendment requires the
+    # first live-path change to record T in the real manifest, and that PR
+    # must pass this suite unmodified.
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    assert entry is not None
+    assert entry.data_boundary_rule == matrix_module.STOP_RULE_DATA_BOUNDARY_RULE
+    # The retry form shares the entry, and so the boundary rule.
+    assert matrix_module.registered_read_protocol(f"{STOP_RULE_READ_ID}-retry-1") is entry
+
+
+def test_no_instrument_change_leaves_the_wired_boundary_unchanged(monkeypatch):
+    _with_instrument_change(monkeypatch, None)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.registered == _WIRED_CUTOFF_DT
+    assert boundary.effective == _WIRED_CUTOFF_DT
+    assert boundary.clamped is False
+    assert boundary.instrument_change_at is None
+    assert boundary.rule == matrix_module.STOP_RULE_DATA_BOUNDARY_RULE
+
+
+def test_instrument_change_clamps_the_boundary_strictly_before_it(monkeypatch):
+    change_at = datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc)
+    _with_instrument_change(monkeypatch, change_at)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.registered == _WIRED_CUTOFF_DT
+    assert boundary.effective == change_at - timedelta(microseconds=1)
+    assert boundary.clamped is True
+    # fetch_rows admits `o.ts <= as_of`; at timestamptz's microsecond resolution
+    # that is `o.ts < T`. The equality case: an outcome AT T is excluded, one a
+    # microsecond earlier is admitted.
+    admits = lambda ts: ts <= boundary.effective  # noqa: E731 - mirrors the SQL predicate
+    assert not admits(change_at)
+    assert admits(change_at - timedelta(microseconds=1))
+    # The retry form is clamped the same way.
+    retry = matrix_module.effective_data_boundary(
+        matrix_module.parse_args(
+            ["--read-protocol", "registered", "--read-id", f"{STOP_RULE_READ_ID}-retry-1",
+             "--not-before", "2026-12-01T16:00:00Z", "--as-of", _WIRED_CUTOFF]
+        )
+    )
+    assert retry.effective == boundary.effective
+
+
+@pytest.mark.parametrize(
+    "change_at",
+    [
+        _WIRED_CUTOFF_DT + timedelta(days=3),
+        _WIRED_CUTOFF_DT + timedelta(microseconds=1),
+    ],
+)
+def test_instrument_change_after_the_registered_cutoff_is_a_no_op(monkeypatch, change_at):
+    _with_instrument_change(monkeypatch, change_at)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.effective == _WIRED_CUTOFF_DT
+    assert boundary.clamped is False
+    assert boundary.instrument_change_at == change_at
+
+
+def test_instrument_change_at_the_registered_cutoff_still_excludes_outcomes_at_it(monkeypatch):
+    _with_instrument_change(monkeypatch, _WIRED_CUTOFF_DT)
+    boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
+    assert boundary.effective == _WIRED_CUTOFF_DT - timedelta(microseconds=1)
+
+
+def test_instrument_change_reaches_no_other_protocol(monkeypatch):
+    _with_instrument_change(monkeypatch, datetime(2026, 3, 1, tzinfo=timezone.utc))
+    as_of = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    for args in (
+        _registered_args("operator-acme-day58-seed-0", "--uncertainty-seed", "0"),
+        matrix_module.parse_args(
+            ["--read-protocol", "reproduction", "--read-id", "eisv-outcome-grounding-2026-12-01-sensitivity",
+             "--acknowledge-contamination", "--as-of", "2026-06-01T00:00:00Z"]
+        ),
+    ):
+        boundary = matrix_module.effective_data_boundary(args)
+        assert boundary.effective == as_of
+        assert boundary.rule is None
+
+
+def test_manifest_rejects_a_naive_or_unruled_instrument_change():
+    entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        dataclasses.replace(entry, instrument_change_at=datetime(2026, 10, 20, 9, 30))
+    with pytest.raises(ValueError, match="data_boundary_rule"):
+        dataclasses.replace(
+            entry,
+            instrument_change_at=datetime(2026, 10, 20, tzinfo=timezone.utc),
+            data_boundary_rule=None,
+        )
+
+
+def test_instrument_change_does_not_trip_the_manifest_drift_refusal(monkeypatch, tmp_path):
+    """The candidate-tuple and dispersion pins compare only their own fields."""
+    _with_instrument_change(monkeypatch, datetime(2026, 10, 20, tzinfo=timezone.utc))
+    now = datetime(2026, 12, 1, 16, 5, tzinfo=timezone.utc)
+    matrix_module.validate_read_protocol(_wired_stop_rule_args(), now=now)
+
+
+@pytest.mark.parametrize("change_at", [None, datetime(2026, 10, 20, 9, 30, tzinfo=timezone.utc)])
+def test_receipt_and_report_show_both_boundaries(monkeypatch, tmp_path, change_at):
+    _with_instrument_change(monkeypatch, change_at)
+    seen: dict = {}
+
+    async def fake_build_matrix_from_db(_db_url, **kwargs):
+        seen["build"] = kwargs
+        return []
+
+    monkeypatch.setattr(matrix_module, "build_matrix_from_db", fake_build_matrix_from_db)
+    out = tmp_path / "out" / "matrix.md"
+    ledger = tmp_path / "ledger"
+    args = _wired_stop_rule_args(
+        "--db-url", "postgresql://unused", "--read-ledger-dir", str(ledger), "--output", str(out)
+    )
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 12, 1, 16, 5, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(matrix_module, "datetime", _Clock)
+    assert asyncio.run(matrix_module.main_async(args)) == 0
+
+    expected_effective = (
+        _WIRED_CUTOFF_DT if change_at is None else change_at - timedelta(microseconds=1)
+    )
+    assert seen["build"]["as_of"] == expected_effective
+
+    (receipt_path,) = list(ledger.glob("*.json"))
+    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert receipt["as_of"] == _WIRED_CUTOFF_DT.isoformat()
+    assert receipt["data_boundary"] == {
+        "registered_as_of": _WIRED_CUTOFF_DT.isoformat(),
+        "effective_as_of": expected_effective.isoformat(),
+        "instrument_change_at": change_at.isoformat() if change_at else None,
+        "rule": matrix_module.STOP_RULE_DATA_BOUNDARY_RULE,
+    }
+
+    report = out.read_text(encoding="utf-8")
+    assert f"Registered data boundary: `{_WIRED_CUTOFF_DT.isoformat()}` (--as-of)" in report
+    assert f"Effective data boundary: `{expected_effective.isoformat()}`" in report
+    assert f"Data boundary rule: `{matrix_module.STOP_RULE_DATA_BOUNDARY_RULE}`" in report
+    if change_at is None:
+        assert "Instrument change recorded: `none`" in report
+        assert "no instrument change is recorded" in report
+    else:
+        assert f"Instrument change recorded: `{change_at.isoformat()}`" in report
+        assert "strictly before the recorded instrument change" in report

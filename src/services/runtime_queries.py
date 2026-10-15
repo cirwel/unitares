@@ -419,7 +419,9 @@ async def get_governance_metrics_data(agent_id: str, arguments: Dict[str, Any], 
         theta = getattr(monitor.state, "unitaires_theta", None) or DEFAULT_THETA
 
         if unitares_state:
-            sat_diag = compute_saturation_diagnostics(unitares_state, theta)
+            from src.monitor_setpoint import setpoint_for_monitor
+            sat_diag = compute_saturation_diagnostics(
+                unitares_state, theta, s_setpoint=setpoint_for_monitor(monitor))
             standardized_metrics["saturation_diagnostics"] = {
                 # Provenance (trust-contract §2): these are properties of
                 # the ODE CONFIGURATION evaluated at the current state

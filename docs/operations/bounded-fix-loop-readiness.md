@@ -2,8 +2,11 @@
 
 Audit date: 2026-10-14. Classification: **fix / tooling / documentation**.
 This is an execution plan using existing workflows, not a scheduler, new tool,
-instrument, model channel, enrollment, or RSI actuator. The feature freeze
-continues through **2026-10-22 inclusive**. Its expiry alone authorizes nothing.
+instrument, model channel, enrollment, or RSI actuator. The feature freeze in
+force at the audit date was lifted by the operator on 2026-10-15 (#2816; KG
+decision `2026-10-15T06:03:44.876094+00:00`). The lift alone authorizes
+nothing here: new tools, actions, instruments and model channels stay
+operator-reserved.
 Deployment-specific evidence and classifications belong in the operator's
 private fleet repository, not in the public automation census example.
 
