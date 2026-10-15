@@ -27,6 +27,12 @@ staged authorization in [Authorization](#13-authorization) and the conditions of
 the standing governed review still govern *how* it is built. Recorded as an
 `architectural_decision` in the knowledge graph.
 
+**Amendment, 2026-10-15 (operator):** the preservation horizon in Sections 9 and
+12.1 no longer gates live-path changes. The
+[stop-rule amendment](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)
+moves the registered read's data boundary to the first instrument change
+instead; see the dated notes in Sections 9 and 12.1.
+
 ---
 
 ## 1. Problem
@@ -357,6 +363,9 @@ CI and on deployments whose data cannot enter the read. What is frozen is the
 registered instrument; the harness exists to show that anything landing later
 changed nothing in it.
 
+*Amended 2026-10-15:* this paragraph's wait is superseded by the [stop-rule amendment of 2026-10-15](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change); see
+the amendment note under Section 12.1.
+
 ## 8. Verification
 
 ### 8.1 Instrument-preservation contract (Stage 1 gate)
@@ -446,6 +455,15 @@ contract's tested-claims ledger.
   starts, the read's inputs are preserved as an immutable extract: source query
   revision, row extract and hash, labels, leads, and analysis environment. This
   preserves inspectability; it authorizes no re-run.
+
+  *Superseded for live-path changes, 2026-10-15 (operator).* The [stop-rule amendment of 2026-10-15](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)
+  replaces the preservation horizon above as the gate on live-path changes
+  with a data boundary: the read admits only outcomes strictly before T, the
+  first deployment of a change to the live EISV update path, and T is recorded
+  as `instrument_change_at` in `REGISTERED_READ_MANIFEST` by the PR that makes
+  that change. A live-path change is permitted once it records T. The
+  immutable extract requirement in this bullet is unchanged; the amendment adds
+  an archival snapshot at T.
 - **Selection is metadata, not a correction.** The read's report names the
   enforcement exposure, deployment dates, and censoring by pause for its cohort
   (Section 5.3).
@@ -615,6 +633,19 @@ recommendations, not an independently worded operator ruling on each item:
 | 5 | **Yes**, instrument `process_update` after the horizon, bumping `epoch`. |
 | 6 | **Final** when the read's report is merged and no correction is filed within 14 days. |
 | 7 | **Advisory by default for new installs; circuit breaker kept on the maintainer deployment**, decided separately after Stage 3. |
+
+*Amendment, 2026-10-15 (operator).* Decisions 1 and 6 above are superseded as
+gates on live-path changes by the [stop-rule amendment of 2026-10-15](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change). Live-path changes, including Stage 1
+and Stage 2 runtime code that reaches the read-feeding deployment, are
+permitted once their PR sets `instrument_change_at` on the stop-rule entry of
+`REGISTERED_READ_MANIFEST` to an instant no later than their deployment; the
+registered read then admits only outcomes before it. Flag, environment,
+configuration and dependency changes on that deployment count too, and the CI
+guard does not see them. The original text of decisions 1 and 6 stays as the
+record of what was decided on 2026-09-17. Decisions 2–5 and 7, Section 13's
+requirement of a new operator decision for Stages 3 and 4, and the Section 9
+immutable extract are unchanged. This note settles the stop-rule side only; it
+does not change the conditions of the standing governed review in Section 11.2.
 
 ## 13. Authorization
 

@@ -12,6 +12,11 @@ read ([`eisv-outcome-grounding-stop-rule-v0.md`](../registered/eisv-outcome-grou
 ([`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md),
 [`eisv-instrument-quality-2026-10-13.md`](../../plans/eisv-instrument-quality-2026-10-13.md)).
 Do not re-open supply into the fleet bins meanwhile.
+*Amended 2026-10-15:* the report-finality part of this gate is superseded by the
+[stop-rule amendment of 2026-10-15](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change):
+a live change to `I` or the bins may land once its PR records
+`instrument_change_at`, and the registered read then admits only outcomes before
+that instant. The other prerequisites in section 8 are unchanged.
 **Out of scope:** Outcome-prediction claims (`#1425`) and proper-scoring
 incentive design ([`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md),
 `#2605`).
@@ -376,6 +381,9 @@ Before any runtime change replaces `get_mean_calibration_error()` in
 1. **Preservation horizon gate:** Complete the registered `2026-12-01`
    outcome-grounding stop-rule read (`#1425`) and operator-declared report
    finality ([`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md)).
+   *Amended 2026-10-15:* superseded by the
+   [stop-rule amendment](../registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change):
+   the change records `instrument_change_at` in its own PR instead.
 2. **Verified source:** Establish the target-bound independent evidence channel
    in section 3.3. Dense check-in confidence and higher corroboration grades
    alone do not satisfy it. No new source or tool is authorized by this note.
