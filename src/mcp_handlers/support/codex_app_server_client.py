@@ -21,6 +21,71 @@ RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
 FALLBACK_SAFE_EXIT = 75
 _CLIENT_NAME = "unitares_host_adapter"
 
+# Codex's legacy ``read-only`` sandbox denies writes but reads the whole disk,
+# so a prompt (or text injected into one) could have the agent read the
+# operator's credentials and return them in its answer; that was verified on
+# 2026-10-15 with a canary file. Every UNITARES codex lane therefore runs with
+# LANE_CONFIG_OVERRIDES: a permission profile that denies reads everywhere
+# except the platform's minimal runtime paths and the directories holding the
+# codex binary (its sandbox helper re-executes it), with writes denied;
+# commands that inherit only the core environment variables; and no MCP
+# servers, hooks, plugins, apps, browser or computer use, whatever the
+# operator's own codex configuration enables.
+PERMISSION_PROFILE = "unitares_host"
+
+_DISABLED_FEATURES = (
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "in_app_browser",
+    "plugins",
+)
+
+
+def codex_readable_roots(cli: str) -> list[str]:
+    """Directories the sandboxed helper must read to re-execute ``cli``: the
+    one it is invoked from and, for a symlinked install, the real binary's."""
+    roots: list[str] = []
+    for directory in (
+        os.path.dirname(os.path.abspath(cli)),
+        os.path.dirname(os.path.realpath(cli)),
+    ):
+        if directory and directory not in roots:
+            roots.append(directory)
+    return roots
+
+
+def lane_config_overrides(cli: str) -> list[str]:
+    """The ``-c key=value`` overrides every codex lane runs with, in order.
+
+    Pass each as its own ``-c`` argument. They replace ``--sandbox read-only``,
+    which would select the legacy sandbox and ignore the profile. The list has
+    the same length for every ``cli``, so a shell template can name each slot."""
+    entries = {":root": "deny", ":minimal": "read"}
+    for root in codex_readable_roots(cli):
+        entries[root] = "read"
+    table = ", ".join(f"{json.dumps(k)}={json.dumps(v)}" for k, v in entries.items())
+    return [
+        f'default_permissions="{PERMISSION_PROFILE}"',
+        f"permissions.{PERMISSION_PROFILE}.filesystem={{{table}}}",
+        'shell_environment_policy.inherit="core"',
+        "mcp_servers={}",
+        "hooks={}",
+        *(f"features.{name}=false" for name in _DISABLED_FEATURES),
+    ]
+
+
+LANE_CONFIG_OVERRIDE_COUNT = len(lane_config_overrides("codex"))
+
+
+def lane_config_args(cli: str) -> list[str]:
+    """``lane_config_overrides`` as a flat ``-c`` argument list."""
+    args: list[str] = []
+    for override in lane_config_overrides(cli):
+        args.extend(["-c", override])
+    return args
+
 
 class AppServerClientError(RuntimeError):
     """Protocol failure carrying whether a second inference is still safe."""
@@ -282,7 +347,8 @@ def run_protocol(
             "approvalPolicy": "never",
             "cwd": cwd,
             "ephemeral": True,
-            "sandbox": sandbox,
+            # No "sandbox" here: it would select the legacy whole-disk-read
+            # sandbox over the permission profile the server was started with.
             "serviceName": _CLIENT_NAME,
         }
         if model:
@@ -346,10 +412,7 @@ def _spawn(cli: str) -> subprocess.Popen[str]:
             cli,
             "app-server",
             "--stdio",
-            "-c",
-            "mcp_servers={}",
-            "-c",
-            "hooks={}",
+            *lane_config_args(cli),
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -367,6 +430,11 @@ def main() -> int:
     if not cli or not prompt:
         print("Codex app-server client missing HA_CLI or HA_PROMPT", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
+    if sandbox != "read-only":
+        # The permission profile implements read-only only. Refuse rather than
+        # widen; the exec fallback refuses the same value.
+        print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
+        return 1
 
     process: subprocess.Popen[str] | None = None
     try:

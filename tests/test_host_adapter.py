@@ -632,7 +632,10 @@ def test_codex_model_request_is_passed_to_the_cli(monkeypatch):
     assert shell_command.count("--ignore-user-config") == 2
     assert shell_command.count("--ephemeral") == 2
     assert shell_command.count("--json") == 2
-    assert shell_command.count('--sandbox "$HA_SANDBOX"') == 2
+    # The deny-read profile, not the legacy whole-disk-read sandbox.
+    assert "--sandbox" not in shell_command
+    for index in range(1, ha.CODEX_LANE_OVERRIDE_COUNT + 1):
+        assert shell_command.count(f'-c "$HA_CODEX_C{index}"') == 2
     assert shell_command.count("--skip-git-repo-check") == 2
     assert '"$HA_PYTHON" "$HA_CODEX_APP_SERVER_CLIENT"' in shell_command
     assert 'app_server_status" -ne 75' in shell_command
@@ -895,3 +898,31 @@ def test_a_provider_cooldown_makes_the_host_unavailable_and_is_listed(monkeypatc
     assert hosts["codex:host-adapter"]["available"] is False
     assert hosts["codex:host-adapter"]["cooldown"]["reason"] == "quota"
     assert hosts["claude:host-adapter"]["cooldown"] is None
+
+
+def test_codex_spawn_env_carries_the_lane_overrides(monkeypatch):
+    """The exec fallback's -c slots are filled from the same list the
+    app-server client uses, so both paths run under the deny-read profile."""
+    from src.mcp_handlers.support.codex_app_server_client import lane_config_overrides
+
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [
+        _FakeResp(201, {"ok": True, "agent_id": "ag-codex-profile"}),
+        _FakeResp(200, {"result": {"exit_status": 0, "output": ["done"]}}),
+    ])
+
+    _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+
+    env = state["calls"][0][1]["json"]["env"]
+    expected = lane_config_overrides(env["HA_CLI"])
+    assert [env[f"HA_CODEX_C{i}"] for i in range(1, len(expected) + 1)] == expected
+
+
+def test_a_sandbox_other_than_read_only_is_refused_before_spawn(monkeypatch):
+    _enable(monkeypatch)
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5, sandbox="workspace-write"))
+    assert result["ok"] is False
+    assert result["dispatch_phase"] == "preflight"
+    assert "read-only" in result["error"]
+    assert state["calls"] == []
