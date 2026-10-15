@@ -190,6 +190,15 @@ def _validated_risk_only_hard_stop_provenance(
     counterfactual_risk = _finite_number(counterfactual.get("risk_score"))
     if counterfactual_risk != 0.0:
         return None
+    # The S setpoint the producer detrended the basin's HIGH bound by. A
+    # record written before it was recorded carries none and was classified
+    # with σ = 0; a present but non-numeric value fails closed.
+    if "s_setpoint" in observed:
+        s_setpoint = _finite_number(observed.get("s_setpoint"))
+        if s_setpoint is None:
+            return None
+    else:
+        s_setpoint = 0.0
     if (
         policy_threshold_values["basin_low_I"] != BASIN_LOW_I_CEIL
         or policy_threshold_values["basin_low_coherence"]
@@ -207,6 +216,7 @@ def _validated_risk_only_hard_stop_provenance(
         V=V,
         coherence=coherence,
         risk_score=risk,
+        s_setpoint=s_setpoint,
     )
     recomputed_counterfactual_basin = classify_basin(
         E=E,
@@ -215,6 +225,7 @@ def _validated_risk_only_hard_stop_provenance(
         V=V,
         coherence=coherence,
         risk_score=counterfactual_risk,
+        s_setpoint=s_setpoint,
     )
     expected_policy_conditions = {
         "void_active": observed.get("void_active") is True,

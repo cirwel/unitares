@@ -991,7 +991,13 @@ records its snapshot.
 
 | T (`instrument_change_at`) | Set by | Deployment record | Snapshot `snapshot_sha256` | Snapshot rows (outcomes / states / identities) | Exported at |
 |---|---|---|---|---|---|
-| none recorded | — | — | — | — | — |
+| `2026-10-15T13:45:00Z` | the basin setpoint repair (#2831, merge commit `f58810b34`, merged 2026-10-15T14:05:19Z; branch `claude/basin-setpoint-repair-1015`; contract rows 50–52) | The deploy checkout's reflog fast-forwarded to `f58810b34` at 2026-10-15T14:14:48Z; governance-mcp restarted at 14:14:53Z and `/health` reports `build_sha` `f58810b34`. The previous build `63e47dc56` contains no live-path change. The deployment followed T by 30 minutes, so it did not precede T. | `4988e1708353900e3dd4318398c0fd079a3c0ea89fddf11814afe0481b3f6036` | 194,341 / 98,888 / 4,981 | 2026-10-15T14:01:39Z: after T, 3 minutes 40 seconds before the merge and 13 minutes before the deployment. The export covers only rows before T, so its timing does not change which rows it holds. A row backfilled with a pre-T timestamp between the export and the read appears in the post-read reconciliation. |
+
+T for the first row is the instant of the setting PR's final commit, rounded
+down to the minute. Rationale: this is the first instrument change since
+registration, and its deployment can only follow the merge, so T precedes the
+deployment, which rule 3 above allows as conservative. T was fixed by that
+commit's time, not by any look at outcomes or at the read's data.
 
 ## What continues regardless
 

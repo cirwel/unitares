@@ -55,6 +55,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import uuid as uuid_mod
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -73,6 +74,7 @@ __all__ = [
     "RunRecord",
     "UnitaresRelayPlugin",
     "install",
+    "otel_ids",
     "substrate_summary",
 ]
 
@@ -205,6 +207,7 @@ class RunRecord:
     agent_uuid: str | None = None
     client_session_id: str | None = None
     parent_run: str | None = None
+    trace_root: str | None = None
     tool_calls: int = 0
     tool_failures: int = 0
     guardrail_rejections: int = 0
@@ -240,6 +243,25 @@ def substrate_summary(run: RunRecord, *, reason: str, status: str | None = None)
     if status:
         parts.append(f"run status {status}")
     return "; ".join(parts)
+
+
+def otel_ids(trace_root: str | None, scope_uuid: Any) -> dict[str, str]:
+    """W3C trace and span ids for a Relay scope, as Relay's own OTel export writes them.
+
+    Relay 0.8.4 derives both ids from its scope UUIDs: the trace id is the
+    outermost scope's UUID and the span id is the last eight bytes of the
+    scope's own UUID. Carrying them on an outcome lets an evaluator find the
+    span the outcome is about in any trace store that received Relay's spans,
+    without this server's tooling. The ids are derived, not observed: they are
+    right only while Relay keeps that mapping and while the run's root scope
+    is the trace's outermost scope. Non-UUID inputs yield no ids.
+    """
+    try:
+        trace = uuid_mod.UUID(str(trace_root)).hex
+        span = uuid_mod.UUID(str(scope_uuid)).hex[16:]
+    except ValueError:
+        return {}
+    return {"otel_trace_id": trace, "otel_span_id": span}
 
 
 def _complexity(run: RunRecord) -> float:
@@ -371,6 +393,7 @@ class RelayGovernanceExporter:
             self._runs[scope_uuid] = run
             self._run_of[scope_uuid] = scope_uuid
             parent = self._runs.get(parent_run) if parent_run else None
+        run.trace_root = (parent.trace_root if parent is not None else None) or scope_uuid
         try:
             run.client = self._client_factory()
             kwargs: dict[str, Any] = {
@@ -407,6 +430,7 @@ class RelayGovernanceExporter:
                 self._record_outcome(
                     run,
                     "task_failed",
+                    p.get("uuid"),
                     {
                         "kind": "tool_error",
                         "tool": name,
@@ -430,6 +454,7 @@ class RelayGovernanceExporter:
             self._record_outcome(
                 run,
                 "tool_rejected",
+                p.get("uuid"),
                 {
                     "kind": "guardrail_rejection",
                     "guardrail": p.get("name"),
@@ -457,9 +482,10 @@ class RelayGovernanceExporter:
         except Exception:  # noqa: BLE001
             logger.exception("[unitares/relay] check-in for run %r failed; policy unchanged", run.name)
 
-    def _record_outcome(self, run: RunRecord, outcome_type: str, detail: dict[str, Any]) -> None:
+    def _record_outcome(self, run: RunRecord, outcome_type: str, scope_uuid: Any, detail: dict[str, Any]) -> None:
         if not run.bound:
             return
+        detail = {**detail, **otel_ids(run.trace_root, scope_uuid)}
         try:
             run.client.call_tool(
                 "outcome_event",
@@ -478,7 +504,7 @@ class RelayGovernanceExporter:
         run.ended = True
         self._checkin(run, reason="run end", status=status)
         if status == "ERROR" and self.config.record_tool_failures:
-            self._record_outcome(run, "task_failed", {"kind": "run_error", "run": run.name})
+            self._record_outcome(run, "task_failed", run.scope_uuid, {"kind": "run_error", "run": run.name})
         close = getattr(run.client, "close", None)
         if callable(close):
             try:
