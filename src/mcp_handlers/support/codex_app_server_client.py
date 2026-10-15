@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
@@ -29,9 +30,11 @@ _CLIENT_NAME = "unitares_host_adapter"
 # except the platform's minimal runtime paths and the directories holding the
 # codex binary (its sandbox helper re-executes it), with writes denied;
 # commands that inherit only the core environment variables and nothing the
-# operator's shell_environment_policy sets; and no MCP
-# servers, hooks, plugins, apps, browser or computer use, whatever the
-# operator's own codex configuration enables.
+# operator's shell_environment_policy sets; and no hooks, plugins, apps,
+# browser or computer use, whatever the operator's own codex configuration
+# enables. A lane that loads the operator's config also disables each MCP
+# server it declares (user_mcp_server_overrides): ``-c`` deep-merges tables,
+# so ``mcp_servers={}`` would leave them all running.
 PERMISSION_PROFILE = "unitares_host"
 
 # What a command the agent runs may see; codex matches these as globs.
@@ -39,6 +42,7 @@ _COMMAND_ENV_NAMES = ("HOME", "LANG", "LC_*", "LOGNAME", "PATH", "SHELL", "TERM"
 
 _DISABLED_FEATURES = (
     "apps",
+    "hooks",
     "browser_use",
     "browser_use_external",
     "computer_use",
@@ -81,8 +85,6 @@ def lane_config_overrides(cli: str) -> list[str]:
         # environment.
         'shell_environment_policy.inherit="core"',
         f"shell_environment_policy.include_only={json.dumps(list(_COMMAND_ENV_NAMES))}",
-        "mcp_servers={}",
-        "hooks={}",
         *(f"features.{name}=false" for name in _DISABLED_FEATURES),
     ]
 
@@ -90,10 +92,37 @@ def lane_config_overrides(cli: str) -> list[str]:
 LANE_CONFIG_OVERRIDE_COUNT = len(lane_config_overrides("codex"))
 
 
-def lane_config_args(cli: str) -> list[str]:
-    """``lane_config_overrides`` as a flat ``-c`` argument list."""
+_SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def user_mcp_server_overrides(codex_home: str | None = None) -> list[str]:
+    """``mcp_servers.<name>.enabled=false`` for every MCP server the operator's
+    codex config declares. Needed by any lane that loads that config (the
+    app-server and the dialectic reviewer); ``codex exec --ignore-user-config``
+    does not. A config that cannot be read, or a server name a ``-c`` path
+    cannot address, raises: the lane fails rather than run with the server."""
+    home = codex_home or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    path = os.path.join(home, "config.toml")
+    if not os.path.exists(path):
+        return []
+    with open(path, "rb") as handle:
+        servers = tomllib.load(handle).get("mcp_servers") or {}
+    overrides = []
+    for name in sorted(servers):
+        if not _SERVER_NAME.fullmatch(name):
+            raise ValueError(f"cannot disable codex MCP server {name!r} through -c")
+        overrides.append(f"mcp_servers.{name}.enabled=false")
+    return overrides
+
+
+def lane_config_args(cli: str, *, include_user_mcp: bool = True) -> list[str]:
+    """The lane overrides as a flat ``-c`` argument list, plus the operator's
+    MCP servers switched off when the lane loads the operator's config."""
+    overrides = list(lane_config_overrides(cli))
+    if include_user_mcp:
+        overrides.extend(user_mcp_server_overrides())
     args: list[str] = []
-    for override in lane_config_overrides(cli):
+    for override in overrides:
         args.extend(["-c", override])
     return args
 
@@ -471,6 +500,12 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"Codex app-server unavailable: {exc}", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
+    except ValueError as exc:
+        # The operator's config could not be neutralised (see
+        # user_mcp_server_overrides). Not fallback-safe either: the exec
+        # fallback would run, and the lane should fail closed instead.
+        print(f"Codex lane refused: {exc}", file=sys.stderr)
+        return 1
     finally:
         if process is not None and process.poll() is None:
             process.terminate()

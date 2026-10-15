@@ -26,6 +26,7 @@ from src.mcp_handlers.support.antigravity_cli_client import (
 )
 from src.mcp_handlers.support.host_adapter import (
     codex_lane_config_overrides,  # noqa: F401 - re-exported for reviewer.py (component boundary)
+    codex_user_mcp_server_overrides,  # noqa: F401 - re-exported for reviewer.py (component boundary)
     extract_cli_result,
     resolve_host_cli,
 )

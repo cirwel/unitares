@@ -40,6 +40,7 @@ from . import host_availability
 from .codex_app_server_client import (
     LANE_CONFIG_OVERRIDE_COUNT as CODEX_LANE_OVERRIDE_COUNT,
     lane_config_overrides as codex_lane_config_overrides,
+    user_mcp_server_overrides as codex_user_mcp_server_overrides,  # noqa: F401 - for the dialectic reviewer
 )
 
 logger = logging.getLogger(__name__)

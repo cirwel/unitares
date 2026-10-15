@@ -213,8 +213,7 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     allowed = json.loads(policy[1].split("=", 1)[1])
     assert "HOME" in allowed and "PATH" in allowed
     assert not any("KEY" in n or "TOKEN" in n or "SECRET" in n or "*" == n for n in allowed)
-    assert "mcp_servers={}" in overrides and "hooks={}" in overrides
-    for feature in ("computer_use", "browser_use", "plugins", "apps"):
+    for feature in ("computer_use", "browser_use", "plugins", "apps", "hooks"):
         assert f"features.{feature}=false" in overrides
     assert not any("sandbox_mode" in o for o in overrides)
 
@@ -227,7 +226,9 @@ def test_lane_override_count_is_the_same_for_every_cli(tmp_path):
     assert len(client.lane_config_overrides("codex")) == client.LANE_CONFIG_OVERRIDE_COUNT
 
 
-def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch):
+def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch, tmp_path):
+    (tmp_path / "config.toml").write_text('[mcp_servers.helper]\ncommand = "x"\n')
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     seen = {}
 
     class _Proc:
@@ -242,7 +243,31 @@ def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch):
     argv = seen["argv"]
     assert argv[:3] == ["/opt/x/codex", "app-server", "--stdio"]
     assert argv[3:] == client.lane_config_args("/opt/x/codex")
+    assert "mcp_servers.helper.enabled=false" in argv
     assert "--sandbox" not in argv
+
+
+def test_every_mcp_server_in_the_operator_config_is_switched_off(tmp_path):
+    """``-c`` deep-merges tables, so ``mcp_servers={}`` leaves the operator's
+    servers running (verified with ``codex mcp list``); each one is disabled
+    by name instead."""
+    (tmp_path / "config.toml").write_text(
+        '[mcp_servers.computer-use]\ncommand = "a"\n[mcp_servers.node_repl]\ncommand = "b"\n'
+    )
+    assert client.user_mcp_server_overrides(str(tmp_path)) == [
+        "mcp_servers.computer-use.enabled=false",
+        "mcp_servers.node_repl.enabled=false",
+    ]
+    assert client.user_mcp_server_overrides(str(tmp_path / "missing")) == []
+
+
+def test_an_unaddressable_or_unreadable_config_fails_closed(tmp_path):
+    (tmp_path / "config.toml").write_text('[mcp_servers."has.dot"]\ncommand = "a"\n')
+    with pytest.raises(ValueError):
+        client.user_mcp_server_overrides(str(tmp_path))
+    (tmp_path / "config.toml").write_text("not = [valid")
+    with pytest.raises(ValueError):
+        client.user_mcp_server_overrides(str(tmp_path))
 
 
 def test_client_refuses_a_sandbox_other_than_read_only(monkeypatch):

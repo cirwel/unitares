@@ -50,6 +50,7 @@ from .host_backends import (
     call_claude_backend,
     call_openai_compat_backend,
     codex_lane_config_overrides,
+    codex_user_mcp_server_overrides,
     resolve_host_cli,
 )
 
@@ -697,10 +698,15 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     timeout_s = max(1.0, timeout_s)
     try:
         # The lane overrides replace --sandbox read-only, whose legacy sandbox
-        # reads the whole disk, and switch off MCP servers, hooks, plugins and
-        # browser/computer use. The operator's codex config still supplies the
-        # model and reasoning effort, as before.
-        overrides = codex_lane_config_overrides(cli_path)
+        # reads the whole disk, and switch off hooks, plugins and browser and
+        # computer use; this call loads the operator's codex config (for its
+        # model and reasoning effort), so each MCP server it declares is
+        # switched off too. A config that cannot be neutralised refuses the
+        # call, and the caller falls back.
+        try:
+            overrides = codex_lane_config_overrides(cli_path) + codex_user_mcp_server_overrides()
+        except ValueError:
+            return None
         slots = " ".join(f'-c "$DR_CODEX_C{i}"' for i in range(1, len(overrides) + 1))
         proc = await asyncio.create_subprocess_exec(
             "/bin/sh",
