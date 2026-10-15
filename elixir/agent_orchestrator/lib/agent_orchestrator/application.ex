@@ -41,6 +41,9 @@ defmodule AgentOrchestrator.Application do
 
   @impl true
   def start(_type, _args) do
+    # First, so the cookie variable is gone before any child can be spawned.
+    AgentOrchestrator.NodeDistribution.start_from_env()
+
     # Bearer for the control surface, sourced from env at boot. Absent → HTTPAuth
     # returns 503 on every request (fail closed, never silently open). Mirrors
     # the lease plane's posture; matters more here because POST /v1/agents spawns

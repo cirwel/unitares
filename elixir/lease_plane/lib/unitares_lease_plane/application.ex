@@ -41,6 +41,9 @@ defmodule UnitaresLeasePlane.Application do
   end
 
   defp start_full do
+    # First, so the cookie variable is gone before anything else runs.
+    UnitaresLeasePlane.NodeDistribution.start_from_env()
+
     # Bearer token must be sourced from env at boot. Fails closed (HTTPAuth
     # returns 503) if absent — never silently open.
     if token = System.get_env("LEASE_PLANE_BEARER_TOKEN") do
