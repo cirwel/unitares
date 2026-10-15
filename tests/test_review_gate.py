@@ -5044,3 +5044,30 @@ def test_the_round_note_says_when_serious_cycles_were_not_counted():
     rounds = _cycles_with(["P1"], [], ["P1"])
     assert rg.round_note(rounds) == (
         f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+
+
+def test_review_text_findings_keep_their_severity():
+    text = "Intro\n[P1] Broken thing — a.py:3\nDetails\n[P3] Nit — b.py:9\n"
+    found = rg.findings_from_review_text(text, "FINDINGS")
+    assert [f.get("path") for f in found] == ["a.py", "b.py"]
+    assert rg.findings_from_review_text("prose only", "FINDINGS") == [
+        {"body": "unlabelled finding; full review required"}]
+    assert rg.findings_from_review_text("VERDICT: CLEAN", "CLEAN") == []
+
+
+def test_an_unposted_local_p1_round_keeps_its_exemption(repo):
+    """A local review whose publication failed still found what it found: a
+    serious finding in its review text exempts its cycle, as when posted."""
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    for i, (status, text) in enumerate([('FINDINGS', '[P1] Broken — a.py:1\n'),
+                                        ('FINDINGS', 'prose only, no label\n'),
+                                        ('CLEAN', 'VERDICT: CLEAN\n')]):
+        run = repo / f'.git/local-reviews/pr-1-local{i}'
+        run.mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps({
+            'pr': 1, 'status': status, 'head': head, 'base': base,
+            'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 300 + i * 100}))
+        (run / 'review.txt').write_text(text)
+    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 3
+    assert rounds.spent == 1  # only the clean round spends

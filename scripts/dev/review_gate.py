@@ -1023,17 +1023,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        body = c.get("body", "")
-        titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
-        findings = []
-        for i, title in enumerate(titles):
-            finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
-            location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
-            if location:
-                finding.update(path=location[1], line=int(location[2]))
-            findings.append(finding)
-        if rec.verdict == "FINDINGS" and not findings:
-            findings = [{"body": "unlabelled finding; full review required"}]
+        findings = findings_from_review_text(c.get("body", ""), rec.verdict)
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
                                    rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
@@ -1048,6 +1038,23 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     if not runs:
         return CodexRounds(unknown_history=unknown_history)
     return count_review_cycles(list(runs.values()), unknown_history, answered_at)
+
+
+def findings_from_review_text(body: str, verdict: str) -> list[dict]:
+    """The labelled findings in a review's text, one per title. A FINDINGS
+    verdict with no labelled title yields one unlabelled finding, which the
+    budget and the cap treat as serious."""
+    titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
+    findings = []
+    for i, title in enumerate(titles):
+        finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
+        location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
+        if location:
+            finding.update(path=location[1], line=int(location[2]))
+        findings.append(finding)
+    if verdict == "FINDINGS" and not findings:
+        findings = [{"body": "unlabelled finding; full review required"}]
+    return findings
 
 
 def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
@@ -1115,7 +1122,15 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
-        runs.append((when, receipt['head'], [], key, family))
+        # Severity evidence for the budget: an unposted FINDINGS run whose text
+        # is missing counts as an unlabelled (serious) finding, like a posted
+        # FINDINGS record without labelled titles.
+        try:
+            text = (run / 'review.txt').read_text()
+        except OSError:
+            text = ''
+        findings = findings_from_review_text(text, receipt['status'])
+        runs.append((when, receipt['head'], findings, key, family))
     return count_review_cycles(runs, rounds.unknown_history)
 
 
