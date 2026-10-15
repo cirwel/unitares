@@ -764,12 +764,17 @@ class UNITARESMonitor:
         # default (UNITARES_S_SETPOINT defaults to "1") — when explicitly
         # disabled, s_setpoint stays 0.0 and the dynamics are unchanged. Kept
         # zero-cost on the disabled path (no class resolution unless enabled).
-        from config.governance_config import get_s_setpoint, s_setpoint_enabled
+        # σ comes from the one resolver Φ and the basin also use
+        # (setpoint_for_monitor), so a class that resolves to None reads the
+        # "default" σ in all three and a cached None is re-resolved rather than
+        # frozen at σ = 0 (contract row 51).
+        from config.governance_config import s_setpoint_enabled
+        from src.monitor_setpoint import setpoint_for_monitor
         s_setpoint = 0.0
         if s_setpoint_enabled():
             if not hasattr(self, "_resolved_agent_class"):
                 self._resolved_agent_class = self._resolve_agent_class()
-            s_setpoint = get_s_setpoint(self._resolved_agent_class)
+            s_setpoint = setpoint_for_monitor(self)
 
         self.state.unitaires_state = step_state(
             state=self.state.unitaires_state,
@@ -1065,8 +1070,18 @@ class UNITARESMonitor:
     
     def make_decision(self, risk_score: float, unitares_verdict: str = None,
                       response_tier: str = None, oscillation_state: 'OscillationState' = None,
-                      cirs_result: Dict = None) -> Dict:
-        """Makes autonomous governance decision using UNITARES verdict and CIRS response tier."""
+                      cirs_result: Dict = None,
+                      latest_risk_fast_trip: bool = True) -> Dict:
+        """Makes autonomous governance decision using UNITARES verdict and CIRS response tier.
+
+        The basin is classified on the ODE state with the same S setpoint σ
+        the dynamics and Φ use (contract rows 50-51). The σ is kept on the
+        monitor so the policy-evaluation inputs persist the value the decision
+        actually used.
+        """
+        from src.monitor_setpoint import setpoint_for_monitor
+        s_setpoint = setpoint_for_monitor(self)
+        self._last_basin_s_setpoint = s_setpoint
         return _make_decision(
             self.state,
             risk_score,
@@ -1074,6 +1089,8 @@ class UNITARESMonitor:
             response_tier,
             oscillation_state,
             cirs_result,
+            s_setpoint=s_setpoint,
+            latest_risk_fast_trip=latest_risk_fast_trip,
         )
     
     def simulate_update(self, agent_state: Dict, confidence: Optional[float] = None) -> Dict:
@@ -1573,6 +1590,10 @@ class UNITARESMonitor:
             response_tier=response_tier,
             oscillation_state=oscillation_state,
             cirs_result=cirs_result,
+            # Every risk_history entry is Φ-derived. When the behavioral
+            # assessment owns the verdict, Φ is telemetry and must not move
+            # the action through the F2 fast-trip (contract row 52).
+            latest_risk_fast_trip=(verdict_source != "behavioral_assessment"),
         )
 
         # Shadow-measure a two-sided recent behavioral-V deviation gate against
