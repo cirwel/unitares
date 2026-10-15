@@ -92,6 +92,11 @@ explains. Corpora that might one day answer the question better than organic
 telemetry are recorded under
 [Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
+Since the [2026-10-15 amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), the read's data boundary ends at the
+first deployed change to the live EISV update path
+(`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
+2026-12-01; the read is described as amended after interim exposure.
+
 The initial five-claim correction is recorded in
 [`ontology/falsification-inference-containment-2026-08-22.md`](ontology/falsification-inference-containment-2026-08-22.md).
 The systemic audit of all 45 tested-claim rows and the recurring-read protocol
@@ -205,11 +210,16 @@ form.
 
 | Artifact | What it does | Output / finding | Freshness |
 |---|---|---|---|
+| `scripts/analysis/eisv_read_input_snapshot.py` ✓ | Archives the rows the registered stop-rule read can touch before the instrument-change time T (`export`), and after the read counts backfilled, removed and changed rows against the live tables (`reconcile`) | Manifest with row counts and `snapshot_sha256`; reconciliation counts only. Joins no state to an outcome and computes no statistic; not EISV validation. Procedure: [stop-rule amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change) | new (2026-10-15); not yet run |
 | `scripts/analysis/ablation_negative_controls.py` ✓ | Synthetic known-safe/bad fixtures as red-team controls | JSONL fixtures; hardcoded "SYNTHETIC NEGATIVE CONTROL — not validation" | current |
 | `tests/test_risk_authority_ablation.py` ✓ | Three-arm synthetic restart contract: resolved-low/Φ-high, resolved-high/Φ-low, and Φ-only | Pytest authority, persistence, and recovery assertions; no live outcomes read and no live governance state mutated | current |
 | `scripts/diagnostics/dogfood_ablation_guard.py` ✓ | Silent operational guard: identity neutrality, BEAM/substrate lanes, matrix exclusion, and the synthetic risk-authority restart contract | Empty stdout = healthy; alerts only on regression | current; recurring Hermes job paused under the outcome-grounding stop rule |
 | `docs/operations/ablation-negative-controls.md` ✓ | Documents the negative-controls fixture (synthetic-only, never persisted) | "validates plumbing + containment, NOT EISV"; smoke `strict_bad:4` | current (Experimental) |
 | `docs/operations/ablation-initiates-finding-2026-06-16.md` ✓ | Finding: `strict_bad` 0→1 was **observed/classified, NOT prevented** | logged correction; not EISV validation | logged |
+| `docs/analysis/shadow-reads-2026-10-14.md` (#2807) ✓ | First 30-day reads of the coherence-gate shadow and the legacy-coherence identity shadow | **Both reads pooled `physical` and `behavioral` rows; re-split before citing.** The agent with 13,913 of the 29,882 eligible gate rows and the maximum \|z\| 2.938 is the single physical-sensor agent. Split over the same window: physical \|z\| p50 0.482, max 2.938; behavioral (66 agents, 15,969 rows) p50 0.051, max 1.594. Identity shadow, 32,100 eligible rows: physical 13,913 (1 agent; stability p50 0.9998, confidence delta p50 0.0002), behavioral 18,154 (195 agents; 0.9975, 0.0015), untagged 33. The pooled percentiles describe a mixture of two instruments | read 2026-10-14; split 2026-10-15 |
+| `eisv_telemetry.shadow_ablations.candidates.decision_self_loop_neutralized` (#1777), written at `src/mcp_handlers/updates/phases.py:1068-1083` | One-step E/I with `decision_history` neutralized, on check-ins where the server computes the behavioral sensor | **Written, never read; no promotion criterion.** No read script exists. The shadow lists closed-loop gain and basin counterfactuals as unmeasurable (contract ledger row 45) | written since #1777 |
+| `eisv_telemetry.shadow_ablations.candidates.regime_self_loop_neutralized` (#2759), written at `src/mcp_handlers/updates/phases.py:1084-1104` | One-step S with the regime-instability term held at 0.12 | **Written, never read; no promotion criterion.** Deployed in build `387ba244e`; rows persist from 2026-10-12. No read script exists; contract ledger row 46 rules out an S change before the 2026-12-01 read | written since 2026-10-12 |
+| `eisv_telemetry.shadow_ablations.candidates.legacy_coherence_neutralized.derived_confidence`, attached at `src/mcp_handlers/updates/phases.py:2005-2016` | Omitted-confidence fallback with the legacy coherence term held at its midpoint | **No descriptive read; no promotion criterion.** Its only planned read is the registered outcome-linked `scripts/analysis/legacy_coherence_dependency_shadow.py` ([contract](proposals/registered/legacy-coherence-dependency-ablation-v0.md)): v0 joined zero eligible outcomes, and no v0.1 read receipt was found on 2026-10-15. That contract declines to set a Brier promotion margin, so nothing defines when a confidence-formula change would be promoted | written; outcome read held under the stop rule |
 
 ## Dogfood
 

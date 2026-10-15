@@ -131,12 +131,25 @@ regeneration needs the operator decision recorded in the proposal (§12.1).
 Otherwise, regenerate only with a change that is meant to alter EISV behaviour,
 and say so in that change:
 
+*Amended 2026-10-15.* The horizon no longer gates live-path changes. Under the
+[stop-rule amendment](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change),
+a change that alters the golden file sets `instrument_change_at` on the
+stop-rule entry of `REGISTERED_READ_MANIFEST`
+(`scripts/analysis/eisv_ablation_matrix.py`) in the same PR, to a UTC instant no
+later than its deployment, cites the deployment record, and then regenerates.
+`test_a_changed_golden_file_requires_a_recorded_instrument_change` pins the
+sha256 of the golden file as registered and fails on any difference while that
+field is unset. It sees code paths only: flag, environment, configuration and
+dependency changes on the read-feeding deployment need the same record and are
+not caught here.
+
 ```bash
 python -m tests.eisv_preservation_driver --write-golden
 ```
 
 The driver removes configuration variables itself and stamps the `provenance`
-block. Nothing mechanical ties regeneration to that decision: the fixture path is
+block. Nothing mechanical ties regeneration to that decision (since 2026-10-15,
+the sha256 guard above ties it to a recorded `instrument_change_at`): the fixture path is
 listed in `.github/CODEOWNERS`, which only binds if code-owner review is required,
 and the inventory lists in the driver can be edited in the same change. Reviewers
 should treat any diff to the golden file or to `CLOCK_SOURCES`,
