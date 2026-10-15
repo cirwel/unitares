@@ -15,6 +15,15 @@ Do not re-open supply into the fleet bins meanwhile.
 **Out of scope:** Outcome-prediction claims (`#1425`) and proper-scoring
 incentive design ([`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md),
 `#2605`).
+**Design decision (`#2818`, 2026-10-15; made by agents on operator delegation,
+reversible):** no constant without a referent. Calibration is reported first as
+its own channel beside `I` (section 3.0). With no admissible evidence it reports
+`unavailable`; no prior value enters `I` or the channel (section 3.2). Pooling
+toward a prior is allowed only when that prior is estimated from preserved
+eligible evidence. Coupling between agents is measured separately, never added
+into another agent's state (section 3.4). Whether a verified calibration term
+re-enters `I` is a post-read choice that the section 6 comparison informs.
+Parent issue: `#2610`.
 
 ---
 
@@ -93,9 +102,25 @@ none is repaired by merely switching I's calibration source.
 
 ## 3. Design of the Per-Agent `I` Calibration Replacement
 
+### 3.0 Placement: Its Own Channel First
+
+Calibration resolves sparsely and late. Behavioral `I` is a per-check-in
+observation. Folding the first into the second forces a value onto every check-in,
+including those of agents with no evidence, and that forced value is how the fleet
+scalar homogenized `I`. The first deliverable is therefore a reported,
+measurement-only channel beside `I`. It carries `(value, coverage, n_verified_pairs,
+newest_pair_at, evidence_status)` and changes no `I` observation, weight, threshold
+or verdict. It is the target-bound successor to the `#2194` candidate.
+
+Rule 1 below describes the in-slot replacement as one option for after the read.
+Section 6 compares it with a calibration-free `I` (arm F) before anyone proposes
+either for live use. Two outside model families recommended the separate channel
+independently in the advisory consultation recorded on `#2818`. That
+recommendation is advice, not evidence.
+
 ### 3.1 Pooling Rule: Replace the Fleet Term via Partial Pooling
 
-**Rule 1 (Replace, do not blend):** `cal_I(a, t)` replaces `1.0 - calibration_error`
+**Rule 1 (Replace, do not blend; post-read option):** `cal_I(a, t)` replaces `1.0 - calibration_error`
 at the existing `calibration_accuracy` component slot (`0.50` base weight with
 outcomes, `0.60` without) in `_compute_I_components`
 ([`src/behavioral_sensor.py:839-844`](../../../src/behavioral_sensor.py)).
@@ -149,13 +174,20 @@ $$\text{cal\_I}(a, t) = \operatorname{clip}\bigl(1.0 - e_{\text{pool}}(a, t),\, 
 ### 3.2 Behavior When an Agent Has No Evidence ($n_a = 0$)
 
 When $n_a(t) = 0$:
-1. $w(0) = 0$, so $e_{\text{pool}}(a, t) = e_0$ and $\text{cal\_I}(a, t) = 1.0 - e_0$.
-2. The component derivation trace records explicit prior-only provenance rather
-   than masquerading as observed calibration:
+1. **The reported channel is `unavailable`.** Its value is null, with
+   `evidence_status = "unavailable"`, `default_reason = "no_verified_agent_pairs"`
+   and `n_verified_pairs = 0`. No prior value is reported and none enters `I`.
+   A shared prior given to every agent without evidence would bring back the
+   homogenization this note exists to remove.
+2. **Prior-only values exist only as a comparison arm.** In section 6, arms B
+   and C compute $1.0 - e_0$ at $n_a = 0$ so their effects on level and spread can
+   be measured. Those rows are labelled explicitly as prior-only rather than as
+   observed calibration:
    - `source = "agent_calibration_prior"` (vs `"agent_calibration_pooled"` when $n_a \ge 1$),
    - `observed = False`,
-   - `default_reason = "no_verified_agent_pairs"`,
-   - `evidence_status = "prior_only"`, `n_verified_pairs = 0`, `pooling_weight = 0.0`.
+   - `evidence_status = "prior_only"`, `pooling_weight = 0.0`.
+
+   A prior-only value is never published as an agent's calibration.
 3. **Prior provenance and missing prior:** For the verified-pair comparison,
    freeze a reference cohort before evaluation time `T0`, excluding the focal
    identity and known duplicate streams. Compute `e_0` as the equal-identity
@@ -220,6 +252,27 @@ be isolated from those consumers until each change is separately reviewed.
 The existing `compute_agent_calibration_candidate` remains a measurement-only,
 unweighted strategic-bin diagnostic with mixed proxy evidence; it is not this
 replacement.
+
+### 3.4 Coupling Between Agents Is Measured, Not Added
+
+Before 2026-08-02, while fleet bins were filling, an outcome recorded for one agent
+moved every agent's `I`. That was coupling with no scope: nobody declared it and
+nothing attributed it. Partial pooling is statistical sharing, not coordination.
+Where coordination between agents is the object of interest, measure it directly:
+
+- **Edges:** declared work relations only, where agent B consumes, reviews or
+  builds on agent A's output (a PR review, a dependent task, a dialectic pair).
+  Co-location and shared queue position are not edges.
+- **Quantity:** directed influence. Record B's target-bound forecast before and
+  after B receives a specified signal from A, then score both against the same
+  independently resolved outcome. Report forecast movement and the change in
+  score, with uncertainty, per edge.
+- **Limits:** this measures response to a signal. A causal benefit claim needs
+  controlled exposure. The result is reported as its own reading and never
+  written into either agent's E/I/S/V.
+
+Like section 3.3's supply, this is a dependency. The note specifies it and
+authorizes no tool or schema.
 
 ---
 
@@ -362,9 +415,13 @@ no pass/fail threshold or deployment authority is attached to them.
 4. **Paired arms.** A: deployed fleet term. B: frozen verified reference-only
    term. C: section 3.1 partial pooling. D: unpooled agent ECE on the same
    verified evidence. E: legacy unweighted eligible-bin arithmetic on that
-   evidence, including its five-sample/seven-day eligibility. B–A separates
-   reference/level change, C–B agent evidence, C–D pooling, and D–E weighting
-   and eligibility. For D/E show own coverage and common-support results.
+   evidence, including its five-sample/seven-day eligibility. F: calibration-free
+   `I`, a separately named candidate with the calibration slot removed and the
+   remaining base weights renormalized explicitly and recorded, so it cannot be
+   mistaken for the deployed `I`. Arm F is reported alongside the section 3.0
+   channel. B–A separates reference/level change, C–B agent evidence, C–D
+   pooling, D–E weighting and eligibility, and F–A what the fleet term
+   contributes. For D/E show own coverage and common-support results.
    Keep observed, prior-only and unavailable rows distinct. A deployed-value
    fallback may be displayed but is not evidence of candidate performance.
 5. **Levels and spread.** For the slot and raw I report equal-identity

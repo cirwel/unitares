@@ -1562,9 +1562,13 @@ snapshot's change from 54.7% to 19.5% with mean raw I >=0.70 is numerical
 threshold exposure, not a measured live basin reclassification: the basin
 classifier reads ODE state. It does not authorize threshold re-centering.
 
-The proposed replacement keeps diminishing pooling and explicit prior-only
-provenance, requires independently resolved target-bound pairs and a frozen
-verified reference prior, and returns unavailable when that prior is absent.
+The design reports calibration first as its own measurement-only channel beside
+I, and reports it `unavailable` when an agent has no admissible pairs; no prior
+value enters I or the channel. In-slot pooled replacement is a post-read option
+compared against a calibration-free I. That option keeps diminishing pooling,
+requires independently resolved target-bound pairs and a frozen verified
+reference prior, and labels prior-only rows as comparison output only. Coupling
+between agents is specified as a separate directed-influence measurement.
 Section 6 specifies the still-unrun paired comparison, including coverage,
 level/spread separation and replay limits. No live estimator, feeder, threshold,
 registered read or stop rule changes. Verified supply and preservation review
