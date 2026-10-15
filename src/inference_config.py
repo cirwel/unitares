@@ -25,6 +25,7 @@ import re
 import stat
 from pathlib import Path
 from typing import Any, Mapping
+from urllib.parse import urlsplit
 
 HOSTS_FILE_ENV = "UNITARES_INFERENCE_HOSTS_FILE"
 SUPPORTED_VERSION = 1
@@ -65,6 +66,13 @@ _KIND_FIELDS: Mapping[str, set[str]] = {
 }
 _DECLARED_ID = re.compile(r"^external:[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+# Variables that carry credentials belong in `secrets` (by name), never in `env`.
+_CREDENTIAL_VAR = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|COOKIE|BEARER)", re.I)
+# Values shaped like a credential, whatever variable they are given to.
+_CREDENTIAL_VALUE = re.compile(
+    r"sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[a-z]-|A[KS]IA[0-9A-Z]{16}"
+    r"|hf_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|-----BEGIN[A-Z ]*PRIVATE KEY-----"
+    r"|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
 _TOP_LEVEL = {"version", "hosts", "jobs"}
 
 
@@ -177,6 +185,20 @@ def _env_name(value: Any, where: str) -> str:
     return value
 
 
+def _check_url(url: Any, where: str) -> None:
+    if not isinstance(url, str) or any(c.isspace() for c in url):
+        raise InferenceConfigError(where, "required: an http(s) URL without spaces")
+    try:
+        parts = urlsplit(url)
+        parts.port  # raises ValueError on a malformed port
+    except ValueError as exc:
+        raise InferenceConfigError(where, f"not a valid URL ({exc})") from exc
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise InferenceConfigError(where, "required: an http(s) URL with a host")
+    if parts.username or parts.password:
+        raise InferenceConfigError(where, "must not carry credentials; use api_key_env")
+
+
 def _parse_host(host_id: str, raw: Any) -> HostEntry:
     where = f"hosts.{host_id}"
     body = _require_mapping(raw, where)
@@ -214,9 +236,7 @@ def _parse_host(host_id: str, raw: Any) -> HostEntry:
         if isinstance(t, bool) or not isinstance(t, (int, float)) or not 0 < t <= 3600:
             raise InferenceConfigError(f"{where}.timeout_s", "must be a number of seconds, 1 to 3600")
     if kind == "openai_http":
-        url = body.get("base_url")
-        if not isinstance(url, str) or not re.match(r"^https?://[^\s/]+", url):
-            raise InferenceConfigError(f"{where}.base_url", "required: an http(s) URL")
+        _check_url(body.get("base_url"), f"{where}.base_url")
         if "api_key_env" in body:
             _env_name(body["api_key_env"], f"{where}.api_key_env")
     else:
@@ -228,6 +248,9 @@ def _parse_host(host_id: str, raw: Any) -> HostEntry:
             _env_name(k, f"{where}.env")
             if not isinstance(v, str):
                 raise InferenceConfigError(f"{where}.env.{k}", "must be a string")
+            if _CREDENTIAL_VAR.search(k) or _CREDENTIAL_VALUE.search(v):
+                raise InferenceConfigError(
+                    f"{where}.env.{k}", "looks like a credential; put it under secrets, by variable name")
         secrets = _require_mapping(body.get("secrets", {}), f"{where}.secrets")
         for k, v in secrets.items():
             _env_name(k, f"{where}.secrets")
@@ -303,13 +326,17 @@ def load(environ: Mapping[str, str] | None = None) -> LoadResult:
     raw_path = ((os.environ if environ is None else environ).get(HOSTS_FILE_ENV) or "").strip()
     if not raw_path:
         return LoadResult("defaults", default_config())
-    path = Path(raw_path).expanduser()
+    try:
+        path = Path(raw_path).expanduser()
+    except (RuntimeError, ValueError) as exc:
+        return LoadResult("error", None, InferenceConfigError("file", f"path {raw_path!r} is not usable ({exc})"),
+                          path=raw_path)
     try:
         info = path.stat()
         # Permissions and owner are part of the key, so a chmod that fixes (or
         # breaks) the file takes effect without a restart.
         key = (str(path), info.st_size, info.st_mtime_ns, info.st_mode, info.st_uid)
-    except OSError:
+    except (OSError, ValueError):
         key = None
     if key is not None and _cache["key"] == key:
         return _cache["result"]

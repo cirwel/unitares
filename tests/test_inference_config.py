@@ -203,3 +203,35 @@ def test_unexpected_parser_failure_is_an_error_result(monkeypatch, tmp_path):
     monkeypatch.setattr(ic, "parse_text", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     result = ic.load({ic.HOSTS_FILE_ENV: str(p)})
     assert result.state == "error" and "RuntimeError" in str(result.error)
+
+
+_CLI = ("version: 1\nhosts:\n  external:acme/x: {{ kind: cli, adapter: claude_code, model: m, family: zhipu,"
+        " egress_class: public_only, env: {{ {env} }} }}\n")
+
+
+@pytest.mark.parametrize("env", [
+    "ANTHROPIC_API_KEY: plain-looking-value",          # credential variable name
+    "SOME_SETTING: " + "sk-" + "live1234567890abcd",   # credential-shaped value
+])
+def test_credentials_in_env_are_refused(env):
+    with pytest.raises(ic.InferenceConfigError) as exc:
+        ic.parse_text(_CLI.format(env=env))
+    assert "put it under secrets" in exc.value.problem
+
+
+@pytest.mark.parametrize("url", [
+    "https://host.invalid bad path", "https://host:99999/v1", "https:///v1", "ftp://host/v1",
+    "https://user:pass@host/v1",
+])
+def test_malformed_base_urls_are_refused(url):
+    text = ("version: 1\nhosts:\n  external:acme/x: { kind: openai_http, model: m, family: openai,"
+            f" egress_class: agent_work, base_url: '{url}' }}\n")
+    with pytest.raises(ic.InferenceConfigError) as exc:
+        ic.parse_text(text)
+    assert exc.value.where == "hosts.external:acme/x.base_url"
+
+
+@pytest.mark.parametrize("raw", ["~no-such-user-xyz/inference.yaml", "/tmp/bad\x00name.yaml"])
+def test_unusable_paths_return_an_error_result(raw):
+    result = ic.load({ic.HOSTS_FILE_ENV: raw})
+    assert result.state == "error"
