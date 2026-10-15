@@ -28,10 +28,13 @@ subprocess so no earlier test in the session can leak state into it)::
 
     python -m tests.eisv_preservation_driver
 
-Regenerating the golden file changes the pinned instrument. Before the
-registered 2026-12-01 read's preservation horizon that needs the operator
-decision recorded in ``docs/proposals/active/eisv-core-boundary-v0.md`` §12.1; after
-it, do it only with a change that is meant to alter EISV behaviour, and say so::
+Regenerating the golden file changes the pinned instrument. Do it only with a
+change that is meant to alter EISV behaviour, and say so. Under the stop-rule
+amendment of 2026-10-15 (which superseded the preservation horizon in
+``docs/proposals/active/eisv-core-boundary-v0.md`` §9/§12.1 for live-path
+changes), the same PR first sets ``instrument_change_at`` on the stop-rule entry
+of ``REGISTERED_READ_MANIFEST``; the preservation test refuses a changed golden
+file without it::
 
     python -m tests.eisv_preservation_driver --write-golden
 """

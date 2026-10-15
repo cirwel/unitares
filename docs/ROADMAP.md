@@ -13,6 +13,9 @@ a supported, visible instrument with an active research track. Its runtime
 dependency boundary, research priority, and intervention authority are separate
 decisions. The operator lifted the feature freeze on 2026-10-15; the
 registered study's instrument-preservation requirements remain in force.
+Since 2026-10-15 they gate live-path changes through a data boundary rather
+than a freeze: a change lands once its PR records the instrument-change time
+([stop-rule amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)).
 
 - **EISV instrument quality.** Start with the
   [instrument quality plan](plans/eisv-instrument-quality-2026-10-13.md):

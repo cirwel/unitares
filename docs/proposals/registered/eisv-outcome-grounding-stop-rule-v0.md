@@ -4,7 +4,8 @@ Status: proposed, 2026-07-31; evidence-scope correction, 2026-08-17;
 power-characterisation correction, 2026-08-23; condition 4 clarification
 and smallest-relevant-effect declaration, drafted 2026-09-23, effective at
 merge; reopening-clause clarification, drafted 2026-09-25, effective at merge,
-and its pre-data narrowing correction, 2026-09-25, effective at merge
+and its pre-data narrowing correction, 2026-09-25, effective at merge;
+data-boundary amendment (operator), 2026-10-15, effective at merge
 Scope: whether per-agent EISV / prior-state adds predictive signal for
 externally-verified bad outcomes over a previous-outcome baseline.
 Supersedes the open-ended framing in `eisv-grounding-next-move-v0.md` §"what
@@ -278,6 +279,11 @@ python3 scripts/analysis/eisv_ablation_matrix.py \
     --as-of "$READ_CUTOFF" \
     --uncertainty-resamples 2000 --selective-null-resamples 400
 ```
+
+(Amended 2026-10-15: the boundary the script applies is
+`min(READ_CUTOFF, T − 1 µs)`, where T is the first instrument change recorded in
+`REGISTERED_READ_MANIFEST`; the command is unchanged. See
+[the amendment](#amendment-2026-10-15-data-boundary-at-the-first-instrument-change).)
 
 (`--fixture-rule registered` added 2026-09-02: it names the fixture predicate
 the read was registered with, which the CLI already pins for registered reads,
@@ -796,6 +802,196 @@ candidate, or `REGISTERED_READ_MANIFEST` entry changes, and nothing here
 anticipates which branch the read takes. The operator attests this
 correction on merge as a narrowing of the clarification, under the same
 exemption as the block.
+
+## Amendment 2026-10-15: data boundary at the first instrument change
+
+Status: operator-authorized 2026-10-15, effective at merge. This section
+amends how the registered read bounds its data. It does not change the read
+date, the command, any PASS condition or threshold, the cohort definition, or
+the label definition. Nothing earlier in this document is deleted; the
+sections above stand as the record of what was registered and when.
+
+**Who decided.** The operator, on 2026-10-15. Having reviewed the options set
+out under *Consultation* below, the operator directed this amendment.
+
+**Why.** Until now the read was protected by freezing the instrument: the live
+EISV update path stayed unchanged until the read's report was final
+(`docs/proposals/active/eisv-core-boundary-v0.md` §9, and §12.1 decisions 1 and
+6: the report merged and no correction filed within 14 days, so about
+2026-12-15 at the earliest). That freeze holds known defects in the live path
+in place. Contract rows 50–54 (added by PR #2826) record several: the ODE basin
+pins the action, so about 91% of behavioral `safe` check-ins in a seven-day
+window became `guide`; a Φ-derived fast-trip still moves warmed agents' actions;
+the integrated V damping is not the δ the parameters file states; and the
+live behavioral observation lags one check-in. The freeze blocks every repair
+to them, and any other live-path change, for at least two more months. The
+read does not need the instrument frozen. It needs every input it reads to have
+been produced by the instrument it was registered against.
+
+**The rule.**
+
+1. **Effective boundary.** The registered read applies
+   `effective as-of = min(2026-12-01T16:00:00Z, T − 1 µs)`, where T is the
+   first instrument change defined in point 2. The boundary is strict: only
+   outcomes with `o.ts < T` are admitted. `fetch_rows` applies `o.ts <= as_of`
+   and `timestamptz` resolves to the microsecond, so `T − 1 µs` is exactly
+   `o.ts < T`; this was chosen over a second SQL predicate so the query text
+   the read registered is unchanged. A T later than the registered cutoff
+   changes nothing.
+2. **What T is.** The first deployment, after registration, of any change to
+   the live EISV update path. That includes code and estimator constants, and
+   equally deployment flags and environment (for example enabling
+   `UNITARES_GROUNDING_APPLY`, changing `UNITARES_SENSOR_COUPLING`,
+   `UNITARES_S_SETPOINT` or the class-calibration overlay), configuration
+   files, dependency changes that reach the path, and changes to inputs the
+   sensor reads (for example the auto-outcome emitter change deferred from
+   #2418 in the 2026-10-03 disclosure above, whose labels feed E and I).
+3. **Where T is recorded.** In `REGISTERED_READ_MANIFEST`, as
+   `instrument_change_at` on the `eisv-outcome-grounding-stop-rule-v0` entry
+   (`scripts/analysis/eisv_ablation_matrix.py`), set by the PR that first makes
+   such a change, to a UTC instant no later than that change's deployment. An
+   earlier value is conservative. That PR states its rationale for the
+   deployment timing and cites the deployment record that establishes it (the
+   deploy log entry, or the running `build_sha` and its restart time); once the
+   change is live, the deployer confirms in the PR that the deployment did not
+   precede T.
+4. **Why the boundary is enough.** The read is outcome-anchored. Each admitted
+   outcome joins the latest non-synthetic state with
+   `s.recorded_at <= o.ts − lead`, and the leads are 0 and 30 *minutes*. The
+   dispersion window (90 minutes) and the previous-outcome baseline also look
+   back from `o.ts`. So when every admitted outcome predates T, its prior
+   state, its dispersion window and its baseline all predate T as well: every
+   row has complete follow-up under the unchanged instrument. The cost is only
+   the outcomes between T and the original cutoff.
+5. **What is unchanged.** The run date and `--not-before 2026-12-01T16:00:00Z`;
+   the read id and its retry form; the registered command; the four PASS
+   conditions (`selective_p` ≤ 0.05, delta above the null p95,
+   `Bad clusters` ≥ 150, winner-name identity across leads); the pinned
+   candidate tuple and dispersion feature; `--windows 365`, `--leads 0,30`,
+   `--anchor-scope trusted`, the `registered` fixture rule and the label
+   definition; the unfilled smallest-relevant-effect slot. The fleet-ops wrapper
+   still passes `--as-of 2026-12-01T16:00:00Z`; the script applies the clamp
+   itself, and its receipt and report print the registered boundary, the
+   effective boundary, the recorded T and a reference to this section. The
+   pre-declared sensitivity cohort is a reproduction read the clamp does not
+   reach, so its `--as-of` takes the effective boundary the registered report
+   prints.
+
+**Enforcement, and what it does not see.** `tests/test_eisv_instrument_preservation.py`
+pins the sha256 of the golden trajectory file as registered and fails when that
+file differs while `instrument_change_at` is unset. It sees only what the golden
+trajectories pin: code paths under a hermetic driver with no deployment flags.
+**It does not catch a flag, plist or environment change, an overlay or other
+configuration change, or a dependency change.** For those the rule is
+procedural: whoever makes such a change on the deployment that feeds the read
+records T first, exactly as for code.
+
+**No outcome-driven timing.** T is fixed by an operational deployment decision,
+with its rationale recorded in the PR that sets it. Delaying a deployment, or
+choosing or moving T, on the basis of outcomes or of any look at the read's data
+is prohibited. Once a T is recorded and its change deployed, it is immutable; a
+later correction may only move it earlier, and is disclosed in this section.
+
+**Fallback for an unrecorded change.** If any change to the live update path
+deploys without T recorded (an emergency fix, or a deployment that bypassed the
+PR), T is set retroactively to the earliest such deployment's time as the
+deployment record establishes it, and the retroactive setting is disclosed here.
+If that time cannot be established, the read's report states that it is
+compromised for that reason. That disclosure is pre-declared here; the verdict
+rules are unchanged, so the read still takes the branch its conditions give, with
+the defect stated beside it.
+
+**Archival snapshot and reconciliation.** `audit.outcome_events` has no
+insert-time column, so a backfill, correction or recomputation that carries a
+pre-T timestamp cannot be told apart from an original row. `core.agent_state`
+was pruned automatically by `core.cleanup_old_agent_state` (90 days, keeping
+the latest row per identity) until migration 073 (`retention_keep_record`,
+applied to the reference deployment on 2026-10-08) removed every retention step
+from `audit.partition_maintenance()`. Automatic pruning has therefore stopped,
+but the function remains for deliberate manual use, so a state row the read
+could reach at T can still be deleted before the read date. Two steps close
+this:
+
+- (a) At the deployment that T records, the PR author or the deployer runs
+  `python3 scripts/analysis/eisv_read_input_snapshot.py export --boundary <T> --out <dir>`
+  against the deployment's database. It archives, in one read-only
+  transaction, the outcome rows in `[T − 366 d, T)`, every state row recorded
+  before T, and the identity mapping those rows use, with row counts and
+  sha256 digests in a manifest. The archive stays outside the repository. Its
+  `snapshot_sha256`, row counts and export time are recorded by PR in the
+  instrument-change record below. The export joins no state to an outcome and
+  computes no statistic.
+- (b) The 2026-12-01 read still runs as wired, against the live database. After
+  it, a pre-declared reconciliation,
+  `python3 scripts/analysis/eisv_read_input_snapshot.py reconcile --snapshot <dir>`,
+  reports per table the rows present live but absent from the snapshot
+  (backfills), the rows present in the snapshot but absent live (retention or
+  deletion) and the rows whose content changed, as counts. The read's report
+  discloses them. They do not change the verdict rule.
+
+**Exposure disclosure.** This amendment was made after interim exposure. The
+withdrawn all-scope trend series (2026-08-14 to 2026-08-17, `bad_clusters`
+159–188, anchor scope `all`) had been seen before it was drafted. Contract
+claim 4 records its withdrawal, and the 2026-08-23 deviation above records how
+it was exposed.
+T is fixed by a deployment decision, not by any result, and no read in the
+registered units (trusted anchors, task scope, 365-day window, leads 0 and 30)
+has been run. The 2026-12-01 read must be described as **amended after interim
+exposure**, not as an untouched confirmatory read.
+
+**Consequence.** Fewer outcomes are eligible, by as much as the time between T
+and the original cutoff. The `Bad clusters` ≥ 150 condition is not lowered. A
+shortfall fails condition 3 and takes the branch already declared for it:
+closure for insufficient eligible evidence, scientific inference
+`INCONCLUSIVE`, not a measured null.
+
+**Disclosures the read's report adds.**
+
+- The 365-day window now ends at the effective boundary, so both of its
+  endpoints move earlier with T. The deployment's record begins in about
+  November 2025. On 2026-10-15 the earliest `audit.outcome_events` row is from
+  2026-02-24 and the earliest surviving `core.agent_state` row from
+  2025-12-12, and state rows before July 2026 survive only thinly (a few
+  hundred a month) because of the automatic pruning that ran before
+  migration 073; those rows are gone and the amendment cannot restore them.
+  The report states the
+  coverage it actually had: the earliest admitted outcome, the earliest prior
+  state it joined, and the counts per month.
+- At lead 0 the joined state may be the check-in recorded at the outcome's own
+  timestamp, which is the simultaneity caveat lead 30 exists to control. This
+  amendment does not resolve it.
+- The chronology is kept whole: the withdrawn interim results, the deviation
+  and access disclosures above, and this amendment stay in this document.
+  Nothing is deleted.
+
+**What it supersedes.** The instrument-preservation horizon in
+`docs/proposals/active/eisv-core-boundary-v0.md` §9 and §12.1 (decision 1,
+"strict sequencing, no waiver", and decision 6, "final when the report is merged
+and no correction is filed within 14 days") as a gate on live-path changes. A
+live-path change is permitted once it records T under this rule. The boundary
+proposal's separate requirements (Stage 3 and Stage 4 decisions, and the
+immutable read extract) are not changed here.
+
+**Consultation.** Before the operator decided, the alternatives were weighed with
+two outside model families in an adversarial design review. The first proposed
+restricting the read to states whose 30-*day* follow-up predates T. That rested
+on a units error in the brief it was given: the leads are minutes, not days. The
+same consultant withdrew the recommendation once the units were corrected, and
+with minute leads the outcome-anchored boundary already gives complete
+follow-up. Withdrawing the read and registering a new one was considered and
+rejected: it is closer to the re-run loop this stop rule exists to end. The
+second family examined the corrected design, agreed that the outcome-anchored
+boundary gives temporal closure, and required the strict boundary, the archival
+snapshot and reconciliation, the deployment trail and fallback, the statement of
+what the CI guard cannot see, the ban on outcome-driven timing, and the read-time
+disclosures above. All are adopted here.
+
+**Instrument-change record.** Filled by the PR that sets T and by the PR that
+records its snapshot.
+
+| T (`instrument_change_at`) | Set by | Deployment record | Snapshot `snapshot_sha256` | Snapshot rows (outcomes / states / identities) | Exported at |
+|---|---|---|---|---|---|
+| none recorded | — | — | — | — | — |
 
 ## What continues regardless
 
