@@ -303,7 +303,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
 # 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
 # 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
-INTERFACE_CONTRACT_VERSION = "1.40.0"
+# 1.41.0 (2026-10-14): agent(action='resume') refuses a paused agent resuming itself with PAUSE_SELF_RESUME_REFUSED; a paused agent is resumed by an operator token, self_recovery, dialectic, a safety net or expiry. Nothing is added, removed, retyped or renamed.
+INTERFACE_CONTRACT_VERSION = "1.41.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

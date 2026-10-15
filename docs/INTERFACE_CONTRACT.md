@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.40.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -609,3 +609,13 @@ Clients relying on omission to return every registered host must send
 the previous `true` default. Older Python SDK clients serialize `true` on
 omission; upgrade or explicitly pass `include_unconfigured=False` to request
 configured hosts only. Explicit `false` and `true` retain their existing behavior.
+
+## 1.41.0 (2026-10-14)
+
+Authorization only. `agent(action="resume")` on a paused agent now needs a
+valid `X-Unitares-Operator` token; the agent itself gets
+`PAUSE_SELF_RESUME_REFUSED`, with the paused-write `recovery` block, where it
+used to succeed. Resuming from `waiting_input`, unsticking an active agent and
+every operator-token call are unchanged. Nothing is added, removed, retyped or
+renamed, and the description that says the rule is outside every input schema,
+so no input digest moves. Client action: a paused agent uses `self_recovery`.
