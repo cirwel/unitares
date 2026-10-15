@@ -284,13 +284,14 @@ runs with an isolated `HOME` (the antigravity client's pattern, without the
 keychain link), or with `claude --bare`, which never reads OAuth or the
 keychain, and with an isolated `CODEX_HOME` for the codex adapter.
 
-**Codex lanes are confined** (#2827, cirwel/dispatch_beam#87). Codex's legacy
-`--sandbox read-only` reads the whole disk, so every codex lane runs with a
+**Codex lanes must be confined first** (#2827, cirwel/dispatch_beam#87, open
+when this was written; step 4b depends on both). Codex's legacy
+`--sandbox read-only` reads the whole disk, so every codex lane must run with a
 deny-read permission profile, core-only command environment, no MCP servers,
 hooks, plugins, apps, browser or computer use, an empty working directory
 (or, for the council, the reviewed workspace minus `.env` files), and refuses
 to run when administrator codex configuration exists. A profile that launches
-codex must keep these.
+codex must keep these, and no profile launches codex until they have merged.
 
 **Where profiles come from.** The orchestrator reads
 `AGENT_ORCHESTRATOR_PROFILES_FILE` (JSON). It refuses a file, or a parent
@@ -426,7 +427,8 @@ sets nothing.
      spawn, output redaction, ceilings and `max_concurrent`, the profile
      request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` whenever a
      profiles file is configured, valid or not; `allow` only without one). No profiles file ships yet, so nothing changes.
-   - **4b. The clients, the generator and the callers.** The claude and
+   - **4b. The clients, the generator and the callers.** Depends on the
+     codex confinement (#2827, cirwel/dispatch_beam#87) having merged. The claude and
      council clients (the codex and antigravity clients exist); the
      reviewer reads its thesis, state, family, parent and host list from the
      server and the hosts file; the external reviewer host becomes a declared
