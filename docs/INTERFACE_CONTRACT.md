@@ -612,7 +612,33 @@ configured hosts only. Explicit `false` and `true` retain their existing behavio
 
 ## 1.41.0 (2026-10-15)
 
-consult and delegate_inference take host_id as a string checked against the registry instead of a fixed enum (every existing id is still accepted); consult's thorough lane reads its host order from the consult.thorough job in the operator's inference hosts file (default order unchanged), and results report the served host's family and the hosts it skipped with reason codes; discovery reports each host's family.
+`consult` and `delegate_inference` take `host_id` as a bounded string (1 to 128
+characters) instead of an enum. The handler checks it at runtime: `consult`
+accepts the hosts it can route (`ollama:local`, `hf:router` and the three
+host adapters), and `delegate_inference` keeps its registry check on
+`accepts_host_id_from`. Every id accepted before is still accepted; an unknown
+id is refused with the valid ids.
 
-<!-- Complete before readiness: affected outputs/descriptions, compatibility,
-     changed schema digests (or why none move), and client action. -->
+`consult`'s thorough lane takes its host order from the `consult.thorough` job
+in the operator's inference hosts file, or claude, codex, antigravity when no
+job is set, which is the order the per-family peer table gave. Results:
+
+- `family` (compact and full) names the served host's model family, and the
+  audit record's route carries it.
+- `skipped` lists the hosts passed over before the one that served, in order,
+  each with a closed reason code (`disabled`, `unconfigured`, `cooldown`,
+  `excluded_family`) and a sentence. It appears only when a host was skipped,
+  and never on `privacy="local"`, which contacts no thorough host.
+- New refusals: `INFERENCE_CONFIG_INVALID` (the hosts file does not load; the
+  standard lane is unaffected), `CONSULT_NO_ELIGIBLE_HOST` (every host in the
+  job was skipped; with `allow_degraded=true` the call answers locally
+  instead, contacting no thorough host), `CONSULT_HOST_NOT_IN_JOB` and
+  `CONSULT_HOST_DISABLED` for a pinned host. All are recorded.
+
+`list_inference_hosts` and `describe_inference_host` report each host's
+`family` (added in the step 1 change, recorded here).
+
+Compatibility: additive for callers. A client that cached the old enum will
+still send valid ids. Schema digests move for `consult` and
+`delegate_inference` (the `host_id` property lost its enum); no other digest
+moves. Client action: none required; read `skipped` and `family` where useful.
