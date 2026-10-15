@@ -1,5 +1,10 @@
 """The operator's ordered list of reviewer hosts. Pure.
 
+The dispatching server resolves the list from its inference hosts file
+(``dialectic_reviewer`` job, inference-hosts-config-v0 step 3) or from these
+settings, and forwards ``UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR`` when it cannot;
+that error fails closed like an invalid list.
+
 Design: docs/proposals/active/dialectic-reviewer-hosts-v0.md, sections 2.1
 and 2.2 (step 1).
 
@@ -148,7 +153,20 @@ def reviewer_host_plan(
             "UNITARES_DIALECTIC_CLAUDE_MODEL": os.environ.get("UNITARES_DIALECTIC_CLAUDE_MODEL", ""),
             "UNITARES_DIALECTIC_EXTERNAL_BASE_URL": os.environ.get("UNITARES_DIALECTIC_EXTERNAL_BASE_URL", ""),
             "UNITARES_DIALECTIC_EXTERNAL_MODEL": os.environ.get("UNITARES_DIALECTIC_EXTERNAL_MODEL", ""),
+            "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR": os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR", ""),
         }
+    # The dispatching server could not resolve a list it can stand behind (its
+    # inference hosts file does not load, or its dialectic_reviewer job leaves
+    # no host). Fail closed exactly like an invalid list: no host is called and
+    # the local floor answers without approval authority. An empty list would
+    # instead read as "no list" and restore the local reviewer's approval.
+    resolution_error = env.get("UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR", "").strip()
+    if resolution_error:
+        return HostPlan(
+            hosts=(), listed=True,
+            error=f"Reviewer host list could not be resolved: {resolution_error}",
+            raw="",
+        )
     raw_list = env.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "").strip()
     if raw_list:
         names = [part.strip().lower() for part in raw_list.split(",") if part.strip()]

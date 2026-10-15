@@ -42,6 +42,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from src import inference_config
 from src.local_inference_env import (
     classify_endpoint,
     default_local_model,
@@ -116,6 +117,10 @@ class InferenceHost:
     # The optional service this host needs beyond the default install, or None
     # for hosts the default install can reach (see inference_extensions()).
     extension: str | None = None
+    # The model family this host serves, from the shared vocabulary in
+    # src/inference_config.py (an operator file may set it). Descriptive only:
+    # nothing routes on it yet (inference-hosts-config-v0 step 2).
+    family: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -240,7 +245,7 @@ def _hf_token_present() -> bool:
     return bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN"))
 
 
-def _base_hosts() -> list[InferenceHost]:
+def _static_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
     hf_configured = _hf_token_present()
     hf_cooldown = host_availability.cooldown("hf:router")
@@ -388,6 +393,13 @@ def _base_hosts() -> list[InferenceHost]:
             ),
         ),
     ]
+
+
+
+def _base_hosts() -> list[InferenceHost]:
+    """The registry's hosts, each with its family from the shared vocabulary."""
+    return [replace(host, family=inference_config.host_family(host.host_id))
+            for host in _static_hosts()]
 
 
 def inference_extensions() -> dict[str, Any]:
