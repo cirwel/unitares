@@ -374,3 +374,49 @@ async def test_llm_unavailable_degrades_gracefully(server_patch):
     assert session.phase == DialecticPhase.ANTITHESIS
     assert data["awaiting_facilitation"] is True
     assert session.awaiting_facilitation is True
+
+
+@pytest.mark.asyncio
+async def test_unresolved_reviewer_hosts_never_let_the_synthetic_reviewer_approve(
+    server_patch, monkeypatch, tmp_path
+):
+    """inference-hosts-config-v0 step 3: when the server cannot resolve a
+    reviewer host list (here its inference hosts file does not load), the
+    in-process fallback must not run either, or a dispatch failure would hand
+    approval to the local reviewer. The session awaits facilitation instead."""
+    from src import inference_config
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    bad = tmp_path / "inference.yaml"
+    bad.write_text("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    bad.chmod(0o600)
+    monkeypatch.setenv(inference_config.HOSTS_FILE_ENV, str(bad))
+    inference_config._cache.update(key=None, result=None)
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        approve_anti = AsyncMock(return_value=_antithesis("refine"))
+        approve_syn = AsyncMock(return_value=_synthesis("RESUME"))
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=approve_anti))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=approve_syn))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit without re-reading the file",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+    inference_config._cache.update(key=None, result=None)
+
+    data = parse_result(result)
+    assert data.get("resolved") is not True
+    assert "synthetic_review" not in data
+    assert data["awaiting_facilitation"] is True
+    assert "does not load" in data["reviewer_hosts_error"]
+    approve_anti.assert_not_called()
+    approve_syn.assert_not_called()
+    assert session.phase != DialecticPhase.RESOLVED

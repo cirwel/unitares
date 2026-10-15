@@ -2545,6 +2545,18 @@ def _synthetic_review_approves(
     return True
 
 
+def _reviewer_hosts_unresolved() -> str:
+    """The server's reviewer-host resolution error, or "" (see
+    orchestrator_dispatch._reviewer_host_selection). Never raises: an
+    unexpected failure here counts as unresolved, so it fails closed."""
+    try:
+        from .orchestrator_dispatch import REVIEWER_HOSTS_ERROR_ENV, _reviewer_host_selection
+
+        return _reviewer_host_selection().get(REVIEWER_HOSTS_ERROR_ENV, "")
+    except Exception as exc:  # pragma: no cover - defensive
+        return f"reviewer host selection failed ({type(exc).__name__})"
+
+
 def _synthetic_reviewer_enabled() -> bool:
     """Whether submit_thesis auto-completes a no-live-reviewer session via the
     local synthetic reviewer instead of leaving it to hang at awaiting_facilitation.
@@ -3022,7 +3034,20 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # This is the one path that completes thesis → antithesis → synthesis
             # without a second live agent. Bounded so an overrun degrades to the
             # prior await-facilitation behaviour (thesis stays recorded above).
-            if session.reviewer_agent_id is None and _synthetic_reviewer_enabled():
+            # The server could not resolve a reviewer host list it can stand
+            # behind (inference hosts file does not load, or its selection
+            # leaves no callable host). The orchestrated child would fail
+            # closed on that; the in-process fallback must too, or a dispatch
+            # failure would hand approval to the local reviewer.
+            hosts_unresolved = _reviewer_hosts_unresolved()
+            if session.reviewer_agent_id is None and hosts_unresolved:
+                review_path_failure_reason = "reviewer_hosts_unresolved"
+                result["reviewer_hosts_error"] = hosts_unresolved
+            if (
+                session.reviewer_agent_id is None
+                and _synthetic_reviewer_enabled()
+                and not hosts_unresolved
+            ):
                 review_path_failure_reason = "synthetic_reviewer_unavailable"
                 thesis_dict = {
                     "root_cause": root_cause,
