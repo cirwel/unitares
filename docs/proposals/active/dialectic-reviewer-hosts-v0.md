@@ -51,7 +51,7 @@ reviewer. Adding the Z.ai GLM free tier, or a future provider such as Meta's,
 would be a sixth branch.
 
 **Independence is not checked.** `consult(effort='thorough')` never routes a
-caller to its own model family (`consultation.py:112-121`). The dialectic
+caller to its own model family (`consultation.py:122-127`). The dialectic
 reviewer has no such rule, and nothing tells it the paused agent's family: the
 dispatcher builds the reviewer's environment from the thesis and pause
 evidence (`orchestrator_dispatch.py:111-147`) and an allowlist of reviewer
@@ -161,13 +161,13 @@ accepted.
 
 **A closed vocabulary.** Families are `anthropic`, `openai`, `google`, `meta`,
 `zhipu`, `other:<slug>` or `unknown`. A host entry with no family is rejected
-at load. `consult`'s `_family_of` (`consultation.py:198`) and
-`_THOROUGH_PEERS` (`:112-121`), which today map a caller string to peer host
+at load. `consult`'s `_family_of` (`consultation.py:213`) and
+`_THOROUGH_PEERS` (`:122-127`), which today map a caller string to peer host
 ids, are restructured to read the same vocabulary, so the two lanes share one
 definition.
 
 **Family belongs to the model served, not the host.** Antigravity serves
-Claude and GPT-OSS models as well as Gemini (`consultation.py:211-219`), and
+Claude and GPT-OSS models as well as Gemini (`consultation.py:229-231`), and
 an aggregator such as `hf:router` serves whatever the request names. A host
 entry therefore declares its family per pinned model, and a host that can
 serve several families must pin one. Where a response reports `model_used`,
@@ -213,7 +213,7 @@ become an alias for one entry.
 
 A host that fails on quota or authentication records a cooldown through
 `host_availability.record_unavailable_async` (Redis key
-`unitares:host_cooldown:…`, `host_availability.py:82`), and the reviewer loads
+`unitares:host_cooldown:…`, `host_availability.py:85`), and the reviewer loads
 cooldowns at start with `load_from_redis()` (`:386`). A host cooling down is
 skipped without a call, which saves the full timeout on a quota known to be
 exhausted.
