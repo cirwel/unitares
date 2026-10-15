@@ -11,8 +11,8 @@ The operator prioritized EISV instrument repair and evaluation on 2026-10-13,
 while retaining the optional-module direction adopted on 2026-10-10. EISV stays
 a supported, visible instrument with an active research track. Its runtime
 dependency boundary, research priority, and intervention authority are separate
-decisions. The feature freeze through 2026-10-22 and the registered study's
-instrument-preservation requirements remain in force.
+decisions. The operator lifted the feature freeze on 2026-10-15; the
+registered study's instrument-preservation requirements remain in force.
 
 - **EISV instrument quality.** Start with the
   [instrument quality plan](plans/eisv-instrument-quality-2026-10-13.md):
