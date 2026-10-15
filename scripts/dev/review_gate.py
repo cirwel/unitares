@@ -85,7 +85,7 @@ import unicodedata
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 
@@ -1140,17 +1140,20 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
-        # Severity evidence for the budget: an unposted FINDINGS run whose text
-        # is missing counts as an unlabelled (serious) finding, like a posted
-        # FINDINGS record without labelled titles.
+        # Severity evidence for the budget only. Local severity can only exempt
+        # a cycle, so missing text is no evidence: the run spends its cycle.
         try:
             text = (run / 'review.txt').read_text()
         except OSError:
-            text = ''
-        findings = [{**f, "budget_only": True}
-                    for f in findings_from_review_text(text, receipt['status'])]
+            text = None
+        findings = [] if text is None else [
+            {**f, "budget_only": True} for f in findings_from_review_text(text, receipt['status'])]
         runs.append((when, receipt['head'], findings, key, family))
-    return count_review_cycles(runs, rounds.unknown_history, rounds.answered_at)
+    # Unposted runs change the spending ledger only. The round cmd_review
+    # answers (its head, findings and whether it was answered) stays the one
+    # the posted records describe.
+    recount = count_review_cycles(runs, rounds.unknown_history)
+    return dc_replace(rounds, count=recount.count, cycles=recount.cycles, runs=recount.runs)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:

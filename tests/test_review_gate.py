@@ -5096,11 +5096,25 @@ def test_local_severity_informs_the_budget_but_not_the_answered_round(repo):
         'pr': 1, 'status': 'FINDINGS', 'head': head, 'base': base,
         'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 100}))
     (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
-    prior = rg.CodexRounds(answered_at=GRANT_NOW - 50)
+    posted = [{"body": "[P2] posted finding — b.py:2"}]
+    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted,
+                           answered_since=True, answered_at=GRANT_NOW - 50)
     rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
     assert rounds.count == 1 and rounds.spent == 0
-    assert rounds.last_findings == []      # not a round cmd_review answers
-    assert rounds.answered_at == GRANT_NOW - 50 and rounds.answered_since
+    # The answered round stays the posted one, whatever the unposted run did.
+    assert rounds.last_findings == posted and rounds.last_head == "a" * 40
+    assert rounds.answered_since and rounds.answered_at == GRANT_NOW - 50
+
+
+def test_a_local_findings_run_without_its_text_spends_its_cycle(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    run = repo / '.git/local-reviews/pr-1-local-notext'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'pr': 1, 'status': 'FINDINGS', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 100}))
+    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 1 and rounds.spent == 1
 
 
 def test_the_second_family_finishes_a_cycle_the_exemption_opened():
