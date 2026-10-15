@@ -140,7 +140,9 @@ IO.puts("[hot-reload] reloaded #{length(mods)} module(s) on #{inspect(node)} —
 # where any process listing reads it. This client node instead runs with a
 # private HOME whose ~/.erlang.cookie holds it (mode 400, removed on exit).
 COOKIE_HOME=""
-cleanup_cookie_home() { [[ -n "$COOKIE_HOME" ]] && rm -rf "$COOKIE_HOME"; }
+# Always returns 0: under set -e a failing EXIT trap would replace the
+# client's exit status (no cookie directory exists for default-cookie services).
+cleanup_cookie_home() { if [[ -n "$COOKIE_HOME" ]]; then rm -rf "$COOKIE_HOME"; fi; return 0; }
 trap cleanup_cookie_home EXIT
 # A signal's default action would kill this shell before its EXIT trap runs:
 # Ctrl-\ (SIGQUIT, the documented way to detach an IEx shell) reaches the whole
