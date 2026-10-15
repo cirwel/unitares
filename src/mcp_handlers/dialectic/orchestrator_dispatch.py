@@ -31,6 +31,7 @@ from src.local_inference_env import (
     default_local_model,
     model_base_url,
 )
+from src import inference_config
 from src.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -51,6 +52,98 @@ _HOST_SELECTION_SETTINGS = (
     "UNITARES_DIALECTIC_REVIEWER_HOST",
     "UNITARES_DIALECTIC_EXTERNAL_BASE_URL",
 )
+
+# The reviewer reads this as an invalid host list: no host is called and the
+# local floor answers without approval authority. The server sets it when the
+# operator's inference hosts file does not load, or when the dialectic_reviewer
+# job leaves no host the reviewer can call (inference-hosts-config-v0 step 3).
+# Never left empty-by-accident: an empty list reads as "no list", which
+# restores the local reviewer's approval.
+REVIEWER_HOSTS_ERROR_ENV = "UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"
+
+# Builtin host ids the reviewer can call, and the names it accepts for them.
+_REVIEWER_BUILTINS = {
+    "codex:host-adapter": "codex:host-adapter",
+    "claude:host-adapter": "claude:host-adapter",
+    "antigravity:host-adapter": "antigravity:host-adapter",
+}
+# Reviewer-list names that correspond to a builtin, for the file's switch-off.
+_REVIEWER_NAME_TO_HOST = {
+    "codex": "codex:host-adapter", "codex:host-adapter": "codex:host-adapter",
+    "claude": "claude:host-adapter", "claude:host-adapter": "claude:host-adapter",
+    "antigravity": "antigravity:host-adapter", "agy": "antigravity:host-adapter",
+    "antigravity:host-adapter": "antigravity:host-adapter",
+}
+
+
+def _reviewer_host_selection() -> Dict[str, str]:
+    """The host-selection env the reviewer child gets, resolved by this server.
+
+    With a ``dialectic_reviewer`` job in the operator's inference hosts file,
+    the list is that job's order with hosts the reviewer cannot call (declared
+    hosts until the reviewer design's step 4, the local and HF lanes) or that
+    the file switches off removed. Without a job, the operator's
+    UNITARES_DIALECTIC_REVIEWER_HOSTS / _HOST apply as before, minus hosts the
+    file switches off. A file that does not load, or a selection that leaves no
+    host, becomes an explicit error so the reviewer fails closed.
+    """
+    loaded = inference_config.load()
+    if loaded.state == "error" or loaded.config is None:
+        return {
+            "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
+            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
+            REVIEWER_HOSTS_ERROR_ENV: f"the inference hosts file does not load ({loaded.error})",
+        }
+    config = loaded.config
+
+    def switched_off(host_id: str) -> bool:
+        entry = config.hosts.get(host_id)
+        return entry is not None and not entry.enabled
+
+    job = config.jobs.get("dialectic_reviewer")
+    if job is not None:
+        hosts = [h for h in job.prefer if h in _REVIEWER_BUILTINS and not switched_off(h)]
+        if not hosts:
+            return {
+                "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
+                "UNITARES_DIALECTIC_REVIEWER_HOST": "",
+                REVIEWER_HOSTS_ERROR_ENV: (
+                    "no host in the dialectic_reviewer job can review ("
+                    + ", ".join(job.prefer) + ")"
+                ),
+            }
+        return {
+            "UNITARES_DIALECTIC_REVIEWER_HOSTS": ",".join(_REVIEWER_BUILTINS[h] for h in hosts),
+            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
+            REVIEWER_HOSTS_ERROR_ENV: "",
+        }
+    hosts_raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
+    host_raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOST", "")
+    selection = {
+        "UNITARES_DIALECTIC_REVIEWER_HOSTS": hosts_raw,
+        "UNITARES_DIALECTIC_REVIEWER_HOST": host_raw,
+        REVIEWER_HOSTS_ERROR_ENV: "",
+    }
+    if hosts_raw.strip():
+        key = "UNITARES_DIALECTIC_REVIEWER_HOSTS"
+        names = [part.strip() for part in hosts_raw.split(",") if part.strip()]
+    else:
+        # The single-host setting names one host. Never split it: filtering a
+        # malformed "codex,local" down to "local" would turn a value the
+        # reviewer rejects into the floor with approval authority.
+        key = "UNITARES_DIALECTIC_REVIEWER_HOST"
+        names = [host_raw.strip()] if host_raw.strip() else []
+    kept = [n for n in names if not switched_off(_REVIEWER_NAME_TO_HOST.get(n.lower(), ""))]
+    if names and not kept:
+        selection.update({
+            "UNITARES_DIALECTIC_REVIEWER_HOSTS": "",
+            "UNITARES_DIALECTIC_REVIEWER_HOST": "",
+            REVIEWER_HOSTS_ERROR_ENV: "every listed reviewer host is switched off in the inference hosts file",
+        })
+    elif kept != names:
+        selection[key] = ",".join(kept)
+    return selection
+
 
 # Repo root: src/mcp_handlers/dialectic/orchestrator_dispatch.py -> repo
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -178,7 +271,7 @@ def _extra_host_budget_s() -> float:
     dialectic-reviewer-hosts-v0.md 2.7). Unknown names add nothing: the
     reviewer refuses such a list and calls no host.
     """
-    raw = os.environ.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
+    raw = _reviewer_host_selection()["UNITARES_DIALECTIC_REVIEWER_HOSTS"]
     names = [part.strip().lower() for part in raw.split(",") if part.strip()]
     extra = 0.0
     for name in names[1:3]:
@@ -297,6 +390,10 @@ def _build_spec(session_id: str, thesis: Dict[str, Any], parent_agent_id: Option
     # unset in host_list.
     for name in _HOST_SELECTION_SETTINGS:
         env[name] = os.environ.get(name, "")
+    # The reviewer list is this server's resolution of the operator's file and
+    # settings (always forwarded, the error included, so the daemon's values
+    # never stand in).
+    env.update(_reviewer_host_selection())
 
     # The classifier inputs are forwarded even when empty. The orchestrator
     # merges this env OVER its own inherited environment, so an omitted key
