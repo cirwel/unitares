@@ -13,9 +13,10 @@ defmodule UnitaresLeasePlane.NodeDistribution do
   distribution itself, sets the cookie, and removes the variable so no
   spawned child inherits it.
 
-  Between `Node.start/2` and `Node.set_cookie/1` the node briefly holds the
-  default cookie from `~/.erlang.cookie`. Only a process running as this user
-  can read that file, and such a process can read the secrets file anyway.
+  `start.sh` also starts epmd and passes a throwaway random `-setcookie`, so
+  `Node.start/2` neither depends on `~/.erlang.cookie` nor fails for want of
+  epmd. Between `Node.start/2` and `Node.set_cookie/1` the node holds that
+  throwaway; it is replaced before the application starts anything else.
   """
 
   require Logger

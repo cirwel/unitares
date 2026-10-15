@@ -66,12 +66,19 @@ NODE_SNAME="${AGENT_ORCHESTRATOR_NODE_SNAME:-agent-orchestrator}"
 # ERL_AFLAGS all end up in beam.smp's argv, where any process listing reads it.
 # It travels in the environment instead; NodeDistribution starts the named node
 # at boot, sets the cookie, and removes the variable before any child spawns.
+# Two things --sname used to do now happen here: epmd is started (Node.start
+# registers with a running epmd but never launches one), and a throwaway random
+# cookie is set so starting distribution never reads ~/.erlang.cookie. The
+# throwaway is visible in argv and stops working the moment NodeDistribution
+# sets the real cookie, before the application does anything else.
 if [[ -n "${AGENT_ORCHESTRATOR_NODE_COOKIE:-}" ]]; then
     export AGENT_ORCHESTRATOR_NODE_COOKIE
     export AGENT_ORCHESTRATOR_NODE_SNAME="$NODE_SNAME"
     export ERL_EPMD_ADDRESS="127.0.0.1"
+    epmd -daemon
+    THROWAWAY_COOKIE="t$(openssl rand -hex 16)"
     exec elixir \
-        --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
+        --erl "-setcookie $THROWAWAY_COOKIE -kernel inet_dist_use_interface {127,0,0,1}" \
         -S mix run --no-halt
 else
     unset AGENT_ORCHESTRATOR_NODE_COOKIE
