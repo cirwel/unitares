@@ -92,7 +92,7 @@ def test_tested_claim_headings_do_not_label_engineering_findings_refuted():
         ledger,
     )
 
-    assert len(entries) == 48  # rows 46-48: S regime loop, E and I referents (2026-10-12)
+    assert len(entries) == 49  # row 49: per-agent I calibration design & offline comparison (#2818, 2026-10-15)
     for number, entry in entries:
         first_paragraph = entry.split("\n\n", 1)[0]
         match = re.search(r"[→—]\s*\*\*(.*?)\*\*", first_paragraph, re.S)
