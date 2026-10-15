@@ -426,15 +426,20 @@ def _next_peer(request: ConsultRequest, tried: list[str]) -> str | None:
     walk = request.thorough_order or tuple((h, None) for h in request.thorough_peers)
     ids = [h for h, _ in walk]
     start = ids.index(tried[-1]) + 1 if tried and tried[-1] in ids else 0
+    passed: list[dict[str, str]] = []
     for host_id, static in walk[start:]:
         if host_id in tried:
             continue
         if static is not None:
-            _note_skip(request, static)
+            passed.append(static)
         elif host_adapter_available(host_id):
+            # Only hosts passed on the way to one that will be tried count;
+            # a scan that finds nothing leaves `skipped` unchanged.
+            for item in passed:
+                _note_skip(request, item)
             return host_id
         else:
-            _note_skip(request, _availability_skip(host_id))
+            passed.append(_availability_skip(host_id))
     return None
 
 

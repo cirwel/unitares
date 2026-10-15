@@ -2250,3 +2250,14 @@ async def test_family_reaches_the_compact_result(monkeypatch):
     parsed = _payload(await co.handle_consult(
         {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
     assert parsed["family"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_failover_with_no_next_host_records_nothing_after_the_last_tried(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    calls = _thorough_as(monkeypatch, caller=SessionSignals(), available={"claude:host-adapter"},
+                         results={"claude:host-adapter": _quota_failure()})
+    parsed = _payload(await co.handle_consult(
+        {"brief": "q", "effort": "thorough", "privacy": "cloud_allowed"}))
+    assert calls == ["claude:host-adapter"]
+    assert "skipped" not in parsed
