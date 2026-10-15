@@ -84,7 +84,8 @@ if [[ -n "${AGENT_ORCHESTRATOR_NODE_COOKIE:-}" ]]; then
     # A clean environment: epmd is long-lived and must not inherit anything the
     # secrets file put into this shell. Node.start registers with a running
     # epmd but never launches one, which --sname used to do.
-    env -i PATH="$PATH" ERL_EPMD_ADDRESS="$ERL_EPMD_ADDRESS" epmd -daemon
+    env -i PATH="$PATH" ERL_EPMD_ADDRESS="$ERL_EPMD_ADDRESS" \
+        ${ERL_EPMD_PORT:+ERL_EPMD_PORT="$ERL_EPMD_PORT"} epmd -daemon
 
     export MIX_HOME="${MIX_HOME:-$HOME/.mix}"
     export HEX_HOME="${HEX_HOME:-$HOME/.hex}"
