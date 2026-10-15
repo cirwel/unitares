@@ -49,9 +49,13 @@ Every caller imports it. Two files use the format:
 - **The review gate's repository file**, tracked in the repository, because the
   gate runs in developer checkouts and cloud sessions that cannot see the
   server's file or its Redis (`review_gate.py:70-90`, `:1783-1789`). It names
-  the `pr_review` job and replaces `review_providers.json` on the alias
-  schedule of `local-inference-one-endpoint-v0.md` 2.1.1. Each side keeps its
-  own health state (2.6).
+  the `pr_review` job, may declare the gate's own reviewer hosts in the same
+  schema (declared host ids are separate from the server's), and replaces
+  `review_providers.json` on the alias schedule of
+  `local-inference-one-endpoint-v0.md` 2.1.1. A host's credential comes from
+  the environment of the checkout running the gate; where it is absent, the
+  host is skipped as `unconfigured`. Each side keeps its own health state
+  (2.6).
 
 ```yaml
 version: 1
@@ -142,7 +146,8 @@ one, for a reason from a closed set: `disabled`, `unconfigured`, `cooldown`,
 chooses by cost, latency, quality or past verdicts, and a test asserts the
 order is never permuted. When every host is skipped, the job fails with each
 skip and its reason; it never widens to a host the operator did not list. Each
-job keeps the reviewer design's cap of three hosts.
+`first_answer` job keeps the reviewer design's cap of three hosts. A
+`collect_families` job may list four, because it needs more than one answer.
 
 **Excluded family:** `consult.thorough` excludes the caller's family and
 `dialectic_reviewer` the paused agent's. When that family is `unknown`, nothing
@@ -209,8 +214,10 @@ discovery tools stay hidden.
 UNITARES is single-operator; the design records enough for a later federation
 to interpret what happened, without claiming federation trust.
 
-- **Operator-scoped.** Only the operator's file declares hosts. A tool
-  argument, project file or peer server cannot add one, as Codex ignores
+- **Operator-scoped.** Only operator-controlled files declare hosts: the
+  server's operator file, and for the review gate alone, the tracked repository
+  file, which changes only through reviewed pull requests. A tool argument, an
+  untracked project file or a peer server cannot add one, as Codex ignores
   providers set in a project-local config.
 - **Recorded authority.** Every call's provenance records the host id, the
   operator principal, the credential's variable name and a digest of the
@@ -226,8 +233,8 @@ to interpret what happened, without claiming federation trust.
 
 A missing file means today's behavior. A file that does not load (bad syntax,
 unknown field, unknown family, a secret value where a variable name belongs, a
-duplicate id, a file writable by another user) makes every job it would
-configure refuse with a named error, and the doctor reports the line. The
+duplicate id, a job naming an id declared nowhere, a file writable by another
+user) makes every job it would configure refuse with a named error, and the doctor reports the line. The
 server does not fall back to the shipped defaults, which could re-enable a host
 the operator switched off. `unitares doctor --inference` prints the effective
 configuration, where it came from, and each job's candidate order with the skip
@@ -315,4 +322,6 @@ after the four questions were put to him with recommendations).
    pull request declares; an undeclared family counts as `unknown` and excludes
    nothing. The source is recorded with each review.
 4. **Job orders for this deployment:** today's orders, with GLM appended last to
-   `pr_review` once declared hosts exist (step 4).
+   `pr_review` once the gate reads its repository file (step 5). GLM is declared
+   in that file and runs where `ZAI_API_KEY` is set; elsewhere it is skipped as
+   `unconfigured`.
