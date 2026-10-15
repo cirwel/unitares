@@ -77,7 +77,9 @@ if [[ -n "${LEASE_PLANE_NODE_COOKIE:-}" ]]; then
     export LEASE_PLANE_NODE_COOKIE
     export LEASE_PLANE_NODE_SNAME="$NODE_SNAME"
     export ERL_EPMD_ADDRESS="127.0.0.1"
-    epmd -daemon
+    # A clean environment: epmd is long-lived and must not inherit the cookie
+    # or anything else the secrets file put into this shell.
+    env -i PATH="$PATH" ERL_EPMD_ADDRESS="$ERL_EPMD_ADDRESS" epmd -daemon
     THROWAWAY_COOKIE="t$(openssl rand -hex 16)"
     exec elixir \
         --erl "-setcookie $THROWAWAY_COOKIE -kernel inet_dist_use_interface {127,0,0,1}" \
