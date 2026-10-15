@@ -131,6 +131,7 @@ additions merge cleanly. -->
 | `UNITARES_IDENTITY_ANCHOR_TTL` | `''` | Anchor TTL in seconds (UNITARES_IDENTITY_ANCHOR_TTL) | src/mcp_handlers/identity/session.py |
 | `UNITARES_IDENTITY_STRICT` | varies: `'strict'` (config/governance_config.py:1633); `IDENTITY_STRICT_MODE` (config/governance_config.py:1642) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_INCLUDE_API_KEY_IN_RESPONSES` | `None (no reader fallback)` | Include onboarding guidance, API key hints, welcome message. | src/mcp_handlers/updates/enrichments.py |
+| `UNITARES_INFERENCE_HOSTS_FILE` | `None (no reader fallback)` | Load the operator's inference hosts file, or the shipped defaults when none is named | src/inference_config.py |
 | `UNITARES_INTEGRATOR` | `'rk4'` | Returns the ODE integration method | governance_core/parameters.py |
 | `UNITARES_IPUA_PIN_CHECK` | varies: `'strict'` (config/governance_config.py:1755); `IPUA_PIN_CHECK_MODE` (config/governance_config.py:1766) | Runtime accessor — respects env changes set after module load | config/governance_config.py |
 | `UNITARES_I_DYNAMICS` | `'linear'` | Returns the I-channel dynamics mode | governance_core/parameters.py |
