@@ -729,7 +729,11 @@ class UNITARESMonitor:
         # - UNITARES_PARAMS_JSON='{"beta_I": 0.05, ...}'
         active_params = get_active_params()
 
-        # Apply per-agent delta from adaptive governor
+        # Apply per-agent delta from adaptive governor. This REPLACES the
+        # profile's delta (parameters.py, 0.4): the governor starts at 0.25 and
+        # adapts within [0.15, 0.50], so with the governor enabled (the default)
+        # the profile value never reaches the integrated V dynamics
+        # (contract ledger row 53).
         if self.adaptive_governor is not None:
             from dataclasses import replace as dataclass_replace
             active_params = dataclass_replace(
@@ -779,11 +783,14 @@ class UNITARESMonitor:
             s_setpoint=s_setpoint,  # 0.0 unless UNITARES_S_SETPOINT enabled
         )
 
-        # Compare, don't couple: record model<->body divergence as a signal.
-        # The ODE above evolved as an independent predictor; the sensor EISV is
-        # the measured body. Their disagreement (cf. allostatic load) is recorded
-        # for observability rather than sprung away. Coupling is opt-in and
-        # flag-gated inside step_state (see sensor_coupling_enabled()). This is
+        # Record model<->body divergence as a signal. The sensor EISV is the
+        # measured body. Their disagreement (cf. allostatic load) is recorded for
+        # observability. Coupling is ON by default and flag-gated inside
+        # step_state (see sensor_coupling_enabled()); UNITARES_SENSOR_COUPLING
+        # can also restrict it per source (coupling_sensor above). Where the
+        # spring is on, the ODE above was pulled toward this same sensor, so the
+        # divergence is measured between a sprung pair, not against an
+        # independent predictor (contract ledger row 13). This is
         # OPTIONAL telemetry on the mandatory check-in path, so it is fail-open
         # (see _record_sensor_divergence) — the verdict is already decided above.
         self._record_sensor_divergence(sensor_eisv)
@@ -1871,7 +1878,7 @@ class UNITARESMonitor:
             'coherence_source': LEGACY_COHERENCE_SOURCE,
             'coherence_role': ODE_CONTROL_FEEDBACK_ROLE,
             'lambda1': float(self.state.lambda1),
-            'risk_score': float(risk_score),  # Governance/operational risk (70% phi-based + 30% traditional)
+            'risk_score': float(risk_score),  # Resolved risk the verdict used (behavioral when authoritative; otherwise phi-based, traditional weight 0.0)
             'risk_score_source': 'resolved',
             'phi_risk_latest': (
                 float(self.state.risk_history[-1])

@@ -2545,6 +2545,41 @@ def _synthetic_review_approves(
     return True
 
 
+# Reviewer-list names that mean the local floor, as the reviewer reads them
+# (agents/dialectic_reviewer/host_list.FLOOR_NAMES; a test pins the two).
+_REVIEWER_FLOOR_NAMES = frozenset({"local", "ollama", "ollama:local"})
+
+
+def _reviewer_fallback_block() -> tuple[str, str]:
+    """Why the in-process synthetic reviewer may not stand in, as (reason, detail),
+    or ("", "") when it may.
+
+    Mirrors the reviewer's own reading of the server's selection
+    (orchestrator_dispatch._reviewer_host_selection, then
+    host_list.reviewer_host_plan): with a resolution error, or with any listed
+    host, only a listed host's verdict may approve, and the local reviewer is
+    the floor, which may not. So a dispatch failure must leave the session
+    awaiting facilitation rather than hand approval to the local reviewer.
+    Never raises: an unexpected failure blocks, so it fails closed."""
+    try:
+        from .orchestrator_dispatch import REVIEWER_HOSTS_ERROR_ENV, _reviewer_host_selection
+
+        selection = _reviewer_host_selection()
+    except Exception as exc:  # pragma: no cover - defensive
+        return "reviewer_hosts_unresolved", f"reviewer host selection failed ({type(exc).__name__})"
+    error = selection.get(REVIEWER_HOSTS_ERROR_ENV, "").strip()
+    if error:
+        return "reviewer_hosts_unresolved", error
+    listed = selection.get("UNITARES_DIALECTIC_REVIEWER_HOSTS", "").strip()
+    if not listed:
+        legacy = selection.get("UNITARES_DIALECTIC_REVIEWER_HOST", "").strip()
+        if legacy.lower() not in _REVIEWER_FLOOR_NAMES:
+            listed = legacy
+    if listed:
+        return "reviewer_hosts_listed", listed
+    return "", ""
+
+
 def _synthetic_reviewer_enabled() -> bool:
     """Whether submit_thesis auto-completes a no-live-reviewer session via the
     local synthetic reviewer instead of leaving it to hang at awaiting_facilitation.
@@ -3022,7 +3057,22 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
             # This is the one path that completes thesis → antithesis → synthesis
             # without a second live agent. Bounded so an overrun degrades to the
             # prior await-facilitation behaviour (thesis stays recorded above).
-            if session.reviewer_agent_id is None and _synthetic_reviewer_enabled():
+            # With a reviewer host list (or one the server could not resolve),
+            # only a listed host may approve; the orchestrated child enforces
+            # that, and the in-process fallback must too, or a dispatch failure
+            # would hand approval to the local reviewer.
+            fallback_block, fallback_detail = _reviewer_fallback_block()
+            if session.reviewer_agent_id is None and fallback_block:
+                review_path_failure_reason = fallback_block
+                if fallback_block == "reviewer_hosts_unresolved":
+                    result["reviewer_hosts_error"] = fallback_detail
+                else:
+                    result["reviewer_hosts"] = fallback_detail
+            if (
+                session.reviewer_agent_id is None
+                and _synthetic_reviewer_enabled()
+                and not fallback_block
+            ):
                 review_path_failure_reason = "synthetic_reviewer_unavailable"
                 thesis_dict = {
                     "root_cause": root_cause,

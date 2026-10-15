@@ -130,7 +130,7 @@ def _no_consult():
     return SimpleNamespace(binding=None, cacheable=False, transport_key=None)
 
 
-async def _resolve(tool_name: str, signals: SessionSignals, resolve_result: dict):
+async def _resolve(tool_name: str, signals: SessionSignals, resolve_result: dict, arguments: dict | None = None):
     """The real identity step with the real derive_session_key; only storage
     (session lookup, sticky cache, pin, anchor, TTL) is stubbed."""
     from src.mcp_handlers.context import (
@@ -164,7 +164,7 @@ async def _resolve(tool_name: str, signals: SessionSignals, resolve_result: dict
             ))
             stack.enter_context(patch("src.db.get_db", MagicMock(return_value=db)))
             ctx = DispatchContext()
-            await resolve_identity(tool_name, {}, ctx)
+            await resolve_identity(tool_name, dict(arguments or {}), ctx)
             observed = {
                 "ctx": ctx,
                 "resolve": resolve,
@@ -265,6 +265,36 @@ async def test_header_naming_an_unknown_session_stays_unbound(read):
 @pytest.mark.parametrize("read", READS)
 async def test_other_transport_signals_are_not_read_proof(read, signals):
     seen = await _resolve(read, signals, _hit())
+
+    assert seen["resolve"].await_count == 0, f"{read} resolved on {seen['source']}"
+    assert seen["ctx"].bound_agent_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blank", ["", "   ", "---", "\t"])
+@pytest.mark.parametrize(
+    "signals",
+    [
+        pytest.param(_signals(x_session_id=None), id="fingerprint-only"),
+        pytest.param(_signals(mcp_session_id="conn-1"), id="mcp-session-id-wins"),
+        pytest.param(_signals(x_session_id=None, x_client_id="client-1"), id="x-client-id"),
+        pytest.param(_signals(x_session_id=None, oauth_client_id="oauth-1"), id="oauth-client-id"),
+    ],
+)
+@pytest.mark.parametrize("read", READS)
+async def test_a_client_session_id_that_names_nothing_is_not_read_proof(read, signals, blank):
+    """A client_session_id that normalizes to nothing must short-circuit
+    exactly as an absent one does: otherwise the read resolves on the
+    transport signals above, which are not read proof (a shared
+    Mcp-Session-Id or onboard pin can name a co-located agent).
+
+    The #945 check reads arguments["client_session_id"] by truthiness. That is
+    safe only because derive_session_key runs first and
+    normalize_client_session_id_argument pops an unusable id in place. This
+    pins that ordering (a 2026-10-13 agy review flagged the raw truthiness
+    check; the bypass does not reproduce for this reason).
+    """
+    seen = await _resolve(read, signals, _hit(), {"client_session_id": blank})
 
     assert seen["resolve"].await_count == 0, f"{read} resolved on {seen['source']}"
     assert seen["ctx"].bound_agent_id is None

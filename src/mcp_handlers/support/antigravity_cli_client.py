@@ -167,13 +167,21 @@ def stall(data: dict[str, Any], stderr: str) -> str | None:
 
 
 def add_usage(total: dict[str, Any], usage: Any) -> None:
-    """Sum one turn's integer usage fields into ``total``; a resumed call
-    spends every turn's tokens, not only the last one's."""
+    """Keep the latest reported cumulative session snapshot, including resumes.
+
+    The helper retains its legacy signature for callers. CLI result counters
+    already include earlier turns; summing snapshots counts those turns again.
+    See https://www.antigravity.google/docs/cli/headless/.
+    Keep each counter separate. Missing usable usage leaves the last observed
+    receipt in place, not an invented zero or a claim of complete accounting.
+    """
     if not isinstance(usage, dict):
         return
-    for key, value in usage.items():
-        if isinstance(value, int) and not isinstance(value, bool):
-            total[key] = total.get(key, 0) + value
+    counters = {key: value for key, value in usage.items()
+                if type(value) is int and value >= 0}
+    if counters:
+        total.clear()
+        total.update(counters)
 
 
 def _run(cmd: list[str], *, cwd: str, env: dict[str, str], timeout_s: float

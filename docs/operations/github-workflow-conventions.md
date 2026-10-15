@@ -66,19 +66,19 @@ veto by removing the label.
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
 - Before readiness, the owner classifies the PR body as `fix` or `capability`.
-  Through 2026-10-22 the freeze blocks new tools, actions, instruments and model
-  channels; fixes, friction reduction, tooling, tests and docs proceed. KG
-  decision `2026-10-13T09:17:42.808916+00:00` records the operator-delegated
-  wording (not operator-reviewed); this dated freeze pointer expires after
-  2026-10-22. A disagreeing reviewer comments, rather than holding a fix on the
-  freeze alone. Reserved auth, identity, scientific and governance-sensitive
-  gates are unchanged.
+  A capability that adds a tool, action, instrument or model channel is
+  reserved to the operator and stays a draft until the operator rules; fixes,
+  friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
+  freeze was lifted by the operator on 2026-10-15 (KG decision
+  `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
+  than holding a fix. Reserved auth, identity, scientific and
+  governance-sensitive gates are unchanged.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
-  opened it.** End every PR body with the harness session link when available,
-  then `UNITARES agent: <uuid>`. Session links stay out of commit messages and
-  committed files; the scope guard is unchanged. This is the operator-delegated
-  wording in KG decision `2026-10-13T09:24:42.365405+00:00`, not an assertion
-  that the operator reviewed its text. Do not push commits to another session's PR branch, even to
+  opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
+  session's UNITARES identity: a later session finds the owner by it and can
+  check it against the server. A harness session link may sit beside it; the
+  guard that refused session links in bodies, commits and files was removed on
+  2026-10-14 at the operator's direction. Do not push commits to another session's PR branch, even to
   fix something small. The `claude/` prefix does not tell sessions apart, and
   neither does the commit author reliably: local sessions commit as the
   operator, web sessions as `Claude`, and two web sessions look identical.

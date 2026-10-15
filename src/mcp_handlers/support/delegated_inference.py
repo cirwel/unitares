@@ -15,6 +15,7 @@ from ..context import get_context_resolved_agent_id
 from ..decorators import mcp_tool
 from ..utils import error_response, require_argument, success_response
 from . import host_availability
+from src import inference_config
 from .host_adapter import (
     HOST_ADAPTER_EXTENSION,
     HOST_ADAPTER_EXTENSION_NOTE,
@@ -215,6 +216,34 @@ async def run_delegated_inference(
                     "local lane. " + HOST_ADAPTER_EXTENSION_NOTE
                 ),
                 "related_tools": ["consult", "call_model", "list_inference_hosts"],
+            },
+        )
+
+    loaded = inference_config.load()
+    if loaded.state == "error":
+        return InferenceOutcome.failed(
+            "The inference hosts file does not load, so delegated inference refuses",
+            code="INFERENCE_CONFIG_INVALID",
+            category="system_error",
+            details={"error": str(loaded.error)},
+            recovery={
+                "action": (
+                    f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
+                    "the doctor's inference_hosts_file check names the line or field."
+                ),
+                "related_tools": ["list_inference_hosts"],
+            },
+        )
+    entry = loaded.config.hosts.get(host_id) if loaded.config is not None else None
+    if entry is not None and not entry.enabled:
+        return InferenceOutcome.failed(
+            f"Inference host '{host_id}' is switched off in the inference hosts file",
+            code="INFERENCE_HOST_UNAVAILABLE",
+            category="system_error",
+            details={"host": host},
+            recovery={
+                "action": "Choose another host, or enable it in the inference hosts file",
+                "related_tools": ["list_inference_hosts"],
             },
         )
 

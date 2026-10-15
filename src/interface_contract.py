@@ -303,7 +303,8 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
 # 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
 # 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
-INTERFACE_CONTRACT_VERSION = "1.40.0"
+# 1.41.0 (2026-10-15): consult and delegate_inference take host_id as a bounded string checked at runtime (every existing id still accepted); consult's thorough lane follows the consult.thorough job (default order unchanged); results report the served host's family and the hosts skipped before it, with reason codes.
+INTERFACE_CONTRACT_VERSION = "1.41.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

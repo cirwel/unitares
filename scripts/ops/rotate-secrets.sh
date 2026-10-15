@@ -3,10 +3,14 @@
 #
 # Rotation steps:
 #   1. Generate new secret values (32 bytes, base64url).
-#   2. Write them into the installed LaunchAgent plists that reference them.
-#   3. Surgical-strip each anchor in ~/.unitares/anchors/:
+#   2. Write them into the operator secrets file, for the keys it defines.
+#      Jobs that launch through the secrets wrapper (with-cirwel-secrets)
+#      hold no value in their plist and read this file when they start.
+#   3. Write them into the installed LaunchAgent plists that reference them.
+#   4. Surgical-strip each anchor in ~/.unitares/anchors/:
 #        drop continuity_token + client_session_id, keep agent_uuid.
-#   4. Bounce the governance-mcp launchd service.
+#   5. Bounce the governance-mcp launchd service, and name the other
+#      wrapped jobs that need a reload to pick up the new values.
 #
 # Residents wake on their normal cadence and resume via PATH 0 UUID-direct
 # identity lookup (shipped 2026-04-17). They do NOT fresh-onboard and do
@@ -29,6 +33,7 @@ OPS_DIR="$(cd "$(dirname "$0")" && pwd)"
 SENTINEL_PLIST_TOOL="${UNITARES_SENTINEL_PLIST_TOOL:-$OPS_DIR/sentinel-plist.py}"
 PLIST_BUDDY="${UNITARES_PLIST_BUDDY:-/usr/libexec/PlistBuddy}"
 LAUNCHCTL="${UNITARES_LAUNCHCTL:-launchctl}"
+ROTATED_KEYS_RE='UNITARES_(CONTINUITY_TOKEN_SECRET|HTTP_API_TOKEN)'
 
 log()  { printf '\033[1;34m[rotate]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[rotate]\033[0m %s\n' "$*" >&2; }
@@ -65,11 +70,34 @@ fi
 
 log "backup dir: ${BACKUP_DIR}"
 mkdir -p "${BACKUP_DIR}"
+chmod 700 "${BACKUP_DIR}"
 cp -a "${ANCHOR_DIR}" "${BACKUP_DIR}/anchors"
 
 # --- Generate new secrets ---
 new_continuity_secret="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
 new_http_api_token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+# --- Write into the secrets files, before any plist ---
+# Every file a reader may use: the wrapper's and the one start.sh sources
+# (sentinel-plist.py secrets-files). The Sentinel step below confirms a wrapped
+# Sentinel will start with the new bearer, so this must come first. A key a
+# file does not define is skipped there.
+# Captured first (not read from a process substitution) so a failing lookup
+# stops the rotation under set -e.
+secrets_files="$(python3 "${SENTINEL_PLIST_TOOL}" secrets-files)"
+backed_up=0
+while IFS= read -r secrets_file; do
+  [[ -n "${secrets_file}" ]] || continue
+  backed_up=$((backed_up + 1))
+  cp -p "${secrets_file}" "${BACKUP_DIR}/secrets-${backed_up}.env"
+  log "backed up ${secrets_file} as secrets-${backed_up}.env"
+done <<< "${secrets_files}"
+if (( backed_up > 0 )); then
+  printf '%s' "${new_continuity_secret}" | \
+    python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_CONTINUITY_TOKEN_SECRET
+  printf '%s' "${new_http_api_token}" | \
+    python3 "${SENTINEL_PLIST_TOOL}" set-secret --key UNITARES_HTTP_API_TOKEN
+fi
 
 # --- Write into installed com.unitares.*.plist files ---
 log "rotating secrets in LaunchAgents plists..."
@@ -113,6 +141,20 @@ done
 log "restarting governance-mcp..."
 "${LAUNCHCTL}" unload "${GOVERNANCE_PLIST}" 2>/dev/null || true
 "${LAUNCHCTL}" load   "${GOVERNANCE_PLIST}"
+
+# Wrapped jobs read the secrets file only when they start; a long-running one
+# keeps the old value until it is reloaded. Names only: grep -q never prints.
+wrapped=()
+for plist in "${LAUNCHAGENTS_DIR}"/*.plist; do
+  [[ -e "$plist" && "$plist" != "${GOVERNANCE_PLIST}" ]] || continue
+  if grep -q "with-cirwel-secrets" "$plist" && grep -q -E "${ROTATED_KEYS_RE}" "$plist"; then
+    wrapped+=("$(basename "$plist" .plist)")
+  fi
+done
+if (( ${#wrapped[@]} > 0 )); then
+  warn "these wrapped jobs take a rotated key from a secrets file at launch;"
+  warn "reload the long-running ones: ${wrapped[*]}"
+fi
 
 log "rotation complete. backup at ${BACKUP_DIR}"
 log "residents will re-auth via PATH 0 on their next cycle."

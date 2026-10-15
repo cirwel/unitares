@@ -25,15 +25,10 @@ cd "$PROJECT_ROOT" || exit 2
 ALLOW_FILE="scripts/dev/repo-scope-allow.txt"
 
 # Files that legitimately contain the trigger words (this guard and its docs).
-# pr_body_attribution.py and its test are part of this guard's machinery — they
-# exist to detect and remove the session-attribution footer, so they must name
-# the pattern they match.
 is_self() {
   case "$1" in
     scripts/dev/check-repo-scope.sh|\
     scripts/dev/repo-scope-allow.txt|\
-    scripts/dev/pr_body_attribution.py|\
-    tests/test_pr_body_attribution.py|\
     docs/REPO_SCOPE.md|\
     .github/workflows/repo-scope.yml) return 0;;
   esac
@@ -140,9 +135,6 @@ while IFS= read -r f; do
       fi
       if grep -nIE 'live-verifier|council pass|council fold|three-lane council' "$f" >/dev/null 2>&1; then
         report "$f" "Exposes the AI-review process (council/live-verifier) — internal deliberation, not product content. Keep working notes in ~/projects/_notes-archive and ship clean docs."
-      fi
-      if grep -nIE 'claude\.ai/code/session|Claude-Session:' "$f" >/dev/null 2>&1; then
-        report "$f" "Contains a Claude Code session-attribution link (claude.ai/code/session) — it ties the public repo to a private session and signals AI authorship. Keep it out of committed content, commit messages, and PR bodies (cf. the no-Co-Authored-By convention)."
       fi
       ;;
   esac

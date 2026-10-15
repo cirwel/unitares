@@ -543,7 +543,12 @@ def test_availability_probe_reaches_an_ipv6_endpoint(monkeypatch):
 
     from src.mcp_handlers.support import inference_registry
 
-    listener = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+    try:
+        listener = _socket.socket(_socket.AF_INET6, _socket.SOCK_STREAM)
+    except OSError:
+        # A kernel built without IPv6 (some containers) refuses the family
+        # itself, before bind; that is the same "no IPv6 loopback" case.
+        pytest.skip("no IPv6 loopback on this host")
     try:
         listener.bind(("::1", 0))
     except OSError:
