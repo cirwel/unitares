@@ -142,6 +142,13 @@ IO.puts("[hot-reload] reloaded #{length(mods)} module(s) on #{inspect(node)} —
 COOKIE_HOME=""
 cleanup_cookie_home() { [[ -n "$COOKIE_HOME" ]] && rm -rf "$COOKIE_HOME"; }
 trap cleanup_cookie_home EXIT
+# A signal's default action would kill this shell before its EXIT trap runs:
+# Ctrl-\ (SIGQUIT, the documented way to detach an IEx shell) reaches the whole
+# foreground group. A handler is reset to the default in the client after
+# exec, so the client still gets the signal; this shell runs the cleanup once
+# the client has exited.
+trap 'cleanup_cookie_home' QUIT
+trap 'cleanup_cookie_home; exit 130' INT TERM HUP
 with_cookie_home() {
     COOKIE_HOME="$(mktemp -d)"
     (umask 077; printf '%s' "$1" > "$COOKIE_HOME/.erlang.cookie")
