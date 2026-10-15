@@ -214,16 +214,17 @@ defines. A profile fixes everything a caller could use to change what runs:
 | `lineage` | `none`, or `caller` (the governed path's `parent_agent_uuid` and `spawn_reason`) |
 | `server_url`, `lease` | fixed, or absent |
 | `max_runtime_ms`, `max_output_lines` | ceilings; a request may ask for less, never more |
-| `max_concurrent` | how many children of this profile may run at once |
+| `max_concurrent`, `max_per_hour` | how many children of this profile may run at once, and start per hour |
 
 The environment is built in one order: remove everything not inherited, set
 the fixed values, resolve the secrets, add the caller's variables, then add
 the orchestrator's own provisioned variables. A caller variable may never name
-a fixed, secret or provisioned variable. Variables the launching shell itself
+an inherited, fixed, secret or provisioned variable. Variables the launching shell itself
 adds (`PWD`, `SHLVL`, `_`) are allowed in the child.
 
 **Requests are a closed schema:** `{"profile": "...", "vars": {...},
-"max_runtime_ms": n}` plus the existing `Idempotency-Key` header, and
+"max_runtime_ms": n, "max_output_lines": n}` (both optional, both at most the
+profile's ceiling) plus the existing `Idempotency-Key` header, and
 `lineage` only where the profile accepts it. Any other field is refused by
 name. An unknown variable, a missing required one, or a value over its limit
 or outside its pattern is refused with the variable's name and never its
@@ -268,8 +269,11 @@ reviewer's launch adds `-s`, so user-site `.pth` files do not load.
 
 **Secrets bind to profiles, not requests.** A caller chooses among profiles;
 it cannot point a profile's secret elsewhere. Every `env.secrets` source is
-checked when the profiles load and again at spawn: an unset or empty source
-refuses the spawn by name, never runs without it. The orchestrator redacts the
+checked when the profiles load and again at spawn. A profile whose source is
+unset or empty is reported `unconfigured` on `/v1/health` and refuses its own
+spawns by name; the other profiles load normally, and a job lists the host as
+skipped `unconfigured`, as for any host without its credential. A profile
+never runs without its secret. The orchestrator redacts the
 resolved values of a child's secrets from the output it captures and returns.
 Requests now carry no secrets, so neither does the lease plane's
 governed-effect payload, which carries the request; that plane's credential
@@ -304,14 +308,18 @@ when the file's digest changes, so regenerating it needs no restart (a
 restart kills running reviewers, which can live for hours).
 
 `scripts/ops/orchestrator-profiles.py` writes the file, and
-`scripts/start.sh` runs it before boot. It reads files only: the server's
-installation (interpreter, repository root, which must be the deploy tree,
-never a worktree agents edit), the inference hosts file, and the resolved CLI
-paths, pinning each CLI's symlink rather than its target (claude's
+`scripts/start.sh` runs it before boot. It reads files only, never its own
+process environment: the server's installation (interpreter, repository root,
+which must be the deploy tree, never a worktree agents edit), the inference
+hosts file, the server's environment file (the one its service manager or
+Compose loads; on this deployment `scripts/ops/governance-mcp.env` with its
+overlay), which carries the governance URL, the local model endpoint, the
+classifier settings and the CLI-path overrides the reviewer profile pins, and
+the resolved CLI paths, pinning each CLI's symlink rather than its target (claude's
 auto-update replaces the target). The reviewer's external host moves into the
-hosts file as a declared `openai_http` host, and the
-`UNITARES_DIALECTIC_EXTERNAL_*` variables become aliases for it, so the
-generator never depends on the server's process environment. Declared `cli`
+hosts file as a declared `openai_http` host; the
+`UNITARES_DIALECTIC_EXTERNAL_*` settings remain readable as aliases, from the
+server's environment file, until the alias schedule removes them. Declared `cli`
 hosts become generated profiles. The doctor compares the loaded profiles'
 digest, reported on `/v1/health`, with a fresh generation; the server refuses
 to dispatch while they differ, because a stale profile is a stale egress
@@ -321,18 +329,29 @@ policy.
 defaults to `deny` whenever `AGENT_ORCHESTRATOR_PROFILES_FILE` is set, whether
 or not the file exists or validates, and to `allow` only when it is unset: a
 missing or broken profiles file must never reopen raw spawning, so it leaves
-the orchestrator spawning nothing until it is fixed. The mode is shown on
-`/v1/health`, and the doctor warns on an explicit `allow` beside a profiles
-file. The basename `cmd_allowlist` stays as a guard on raw spawns during
+the orchestrator spawning nothing until it is fixed. Migration therefore runs
+with an explicit, temporary `AGENT_ORCHESTRATOR_RAW_SPAWN=allow` set by the
+operator beside the profiles file, so callers not yet moved keep working; the
+mode is shown on `/v1/health`, and the doctor warns while that explicit
+`allow` stands. The basename `cmd_allowlist` stays as a guard on raw spawns during
 migration and is retired with them. A server or dispatch_beam configured for
 profiles never falls back to a raw spawn or to running a lane in-process when
 a profile spawn is refused; the refusal is the result.
 
 **One bearer, all profiles.** Any holder of the orchestrator's token may start
-any profile, including the reviewer. That is bounded by the reviewer taking
-only a session id (starting it is equivalent to requesting the review the
-session already needs), by `max_concurrent`, and by each profile's ceilings.
-Scoping profiles to separate tokens per caller is left for later.
+any profile. What that leaves, profile by profile:
+- the reviewer takes only a session id, so starting it is equivalent to
+  requesting the review the session already needs;
+- a host or council lane answers a prompt the holder writes, within its
+  confinement: for a council lane that is read access to repositories under
+  the profile's roots, returned in the answer;
+- a declared or metered host spends the operator's quota or credit on the
+  holder's prompts, bounded by `max_concurrent`, `max_per_hour` and the fixed
+  or enumerated model.
+These are accepted for a single-operator installation whose token lives in its
+secrets file; scoping profiles to separate per-caller tokens is left for
+later, and an operator who exposes metered hosts should keep their limits
+low.
 
 ### 2.6 Health state stays with its runner
 
@@ -435,10 +454,13 @@ sets nothing.
      `openai_http` host with environment aliases; the generator, run by
      `start.sh`; the host adapters, the reviewer dispatch and the lease
      plane's governed path (`governed_spawn.py` and `orchestrator_spec`
-     together) send `{profile, vars}`; the doctor's digest check. Deploy
-     order: orchestrator and lease plane before the server. dispatch_beam's
-     council moves in its own pull request, with its direct fallback removed.
-     Writing the profiles file is what turns raw spawns to `deny`.
+     together) send `{profile, vars}`; the doctor's digest check. Rollout:
+     (1) the operator deploys the orchestrator and lease plane with the
+     profiles file and an explicit, temporary
+     `AGENT_ORCHESTRATOR_RAW_SPAWN=allow`; (2) the server and dispatch_beam
+     (its council in its own pull request, with its direct fallback removed)
+     move to profiles; (3) once every caller sends profiles, the operator
+     removes the explicit `allow`, and raw spawns are denied.
    - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
      non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
      removed. An effect proposed before the migration and replayed later is
