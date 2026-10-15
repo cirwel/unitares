@@ -124,8 +124,15 @@ def _reviewer_host_selection() -> Dict[str, str]:
         "UNITARES_DIALECTIC_REVIEWER_HOST": host_raw,
         REVIEWER_HOSTS_ERROR_ENV: "",
     }
-    key = "UNITARES_DIALECTIC_REVIEWER_HOSTS" if hosts_raw.strip() else "UNITARES_DIALECTIC_REVIEWER_HOST"
-    names = [part.strip() for part in selection[key].split(",") if part.strip()]
+    if hosts_raw.strip():
+        key = "UNITARES_DIALECTIC_REVIEWER_HOSTS"
+        names = [part.strip() for part in hosts_raw.split(",") if part.strip()]
+    else:
+        # The single-host setting names one host. Never split it: filtering a
+        # malformed "codex,local" down to "local" would turn a value the
+        # reviewer rejects into the floor with approval authority.
+        key = "UNITARES_DIALECTIC_REVIEWER_HOST"
+        names = [host_raw.strip()] if host_raw.strip() else []
     kept = [n for n in names if not switched_off(_REVIEWER_NAME_TO_HOST.get(n.lower(), ""))]
     if names and not kept:
         selection.update({

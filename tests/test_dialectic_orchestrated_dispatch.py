@@ -497,6 +497,19 @@ def test_without_a_job_the_file_still_switches_hosts_off(monkeypatch, _hosts_fil
     assert "switched off" in env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"]
 
 
+@pytest.mark.parametrize("hosts,host", [("", "codex,local"), ("codex,local", ""), ("", "codex, ollama")])
+def test_switching_a_host_off_never_leaves_the_floor_with_authority(monkeypatch, _hosts_file, hosts, host):
+    """Filtering must not turn a setting the reviewer rejects (or a list) into
+    the floor alone, which the reviewer would read as "no list" and let approve."""
+    from agents.dialectic_reviewer.host_list import reviewer_host_plan
+
+    _hosts_file("version: 1\nhosts:\n  codex:host-adapter: { enabled: false }\n")
+    env = _selection(monkeypatch, hosts=hosts, host=host)
+    plan = reviewer_host_plan(env, local_base_url="http://127.0.0.1:11434")
+    assert plan.listed is True
+    assert plan.error
+
+
 def test_runtime_cap_follows_the_resolved_list(monkeypatch, _hosts_file):
     from src.mcp_handlers.dialectic import orchestrator_dispatch as od
 
