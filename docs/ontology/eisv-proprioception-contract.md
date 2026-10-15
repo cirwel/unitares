@@ -1541,6 +1541,27 @@ estimator's eligibility for no identity at any check-in in the window; the
 telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
 
+**49. "Fleet calibration enters only I, and per-agent scoping alone supplies
+verified calibration"** → **IMPLEMENTATION MISMATCH** (source audit,
+2026-10-15, `baabaf8b6`; [#2818](https://github.com/cirwel/unitares/issues/2818)).
+The [scope audit and replacement design](../proposals/active/per-agent-i-calibration-v0.md)
+traces two additional fleet inputs: `monitor_drift.compute_calibration_error`
+reads tactical bins without an agent key, and `GovernanceMonitor.update_dynamics`
+uses strategic overconfidence as ODE `noise_S`. Drift reaches behavioral S on
+the next check-in; ODE S is a separate channel with legacy feedback paths.
+Source inspection establishes those dependencies, not their current effect
+sizes or a fresh deployment freeze. Continuity clipping, fixed defaults,
+agent-local policy/regime loops and optional cohort priors are separately
+inventoried. `TOOL_OBSERVED` can grade caller-described payload shapes, so its
+weight and a forecast registry binding do not establish outcome truth. Row 48's
+24-hour confidence join remains exploratory coverage evidence, not verified
+forecast/outcome binding. The proposed replacement uses a frozen verified prior
+with diminishing per-bin pooling, labels no-evidence agents `prior_only`, and
+specifies paired offline level/spread comparisons. **Replacement efficacy is
+UNTESTED; comparison not run.** No live source, supply gate, predictor, registered
+read or stop rule changes; verified supply and preservation review remain
+prerequisites.
+
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 
 Added 2026-09-25 after an adversarial design review of a critique that the
