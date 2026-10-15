@@ -868,6 +868,11 @@ withdrawn cohort with the current trusted default. The single 2026-12-01 read
 defined in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` is the only
 confirmatory outcome read. Until then, the question is unresolved, not negative.
 
+*Amended 2026-10-15.* Under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), that read's data
+boundary ends at the first deployed change to the live EISV update path, if one
+lands before 2026-12-01, and the read is described as amended after interim
+exposure, not as an untouched confirmatory read.
+
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
 CONSTRUCTION.** E/I/S are hard-clipped in `src/behavioral_state.py` and S is
 floored in `src/behavioral_sensor.py`, so boundedness is not a finding. Do not
@@ -1420,6 +1425,8 @@ it). **Correction:** a governed fallback-owned `risk_pause` was delivered on
 
 **36.** "The S-setpoint recenter leaves verdict/risk invariant." — **EARNED at rest; IMPLEMENTATION MISMATCH in the cold-start window.** `src/monitor_setpoint.py:15-23,53-61` asserts invariance under the attractor move; the detrend is ungated by warmup on the hot path (`src/monitor_phi.py:26-28`) while the phi window evaluates at bootstrap S=0.2 (`governance_core/dynamics.py:70`), never the legacy rest ≈0.091. Default-class σ = 0.2364 − 0.091 = 0.1454 (`config:971,1101`, `:1178-1188`), weights all 0.5 (`governance_core/parameters.py:101-105`): phi(prior) 0.15 → 0.2227, credit +0.0727; pause corridor d² 0.30 → 0.4454 (+48.5%), ‖ΔEta‖ 0.548 → 0.667. Direction lenient for all five classes (every healthy_S > 0.091); the +0.073 magnitude is default-class only (σ ranges 0.0988 ephemeral → 0.2626 engaged_ephemeral). Keyed to a thin-N constant, self-flagged at `config:953` ("too thin to re-measure") and `:971` (N=16 in the 06-27 window). The 08-02 event does **not** discriminate the two bases (I and S unobserved; both fit the 0.180 credit).
 
+*Amended 2026-10-15 (basin setpoint repair, branch `claude/basin-setpoint-repair-1015`).* The invariance claim now covers the decision-path basin as well as verdict and risk: `classify_basin` evaluates the HIGH S bound on S − σ with the same σ Φ is detrended by, and one resolver (`setpoint_for_monitor`) supplies σ to the ODE, Φ and the basin (rows 50–51). Equivalently, the raw S bound of HIGH is now 0.25 + σ: 0.349 (ephemeral), 0.369 (embodied), 0.378 (resident_persistent), 0.395 (default), 0.513 (engaged_ephemeral). The cold-start caveat above carries over unchanged: the detrend is ungated by warmup, so a young monitor whose ODE S has not relaxed to its rest is read as if it had, and any S in (0.25, 0.25 + σ] passes the bound whatever raised it. At rest the invariance holds for S only; Stage A also moves the I rest (row 50), which the detrend does not touch.
+
 **37.** "The permanent −0.02 Consistency offset is verdict-driving pre-warmup." — **PATH BOUND** for fresh agents; EARNED as telemetry bias (amends wave-1 row 21). `decision_consistency` stays 0.8 because `src/monitor_drift.py:90` always passes `decision=None` (`governance_core/ethical_drift.py:185,245`), so `stability_dev=0.2` ramped by `update_count/5` (`:375-381`) contributes 0 at update 1 and −0.0008 at update 2, reaching the full −0.02 only at count ≥5 — while behavioral confidence `update_count/10` (`src/behavioral_state.py:38,280-285`) takes verdict authority at update 3 (`src/governance_monitor.py:1306`). The windows are disjoint. Live payloads: update-1 component 0.0, update-2 exactly 0.04 = 0.2·(1/5). Residual corner: a persisted drift baseline at count ≥5 (`src/mcp_handlers/updates/phases.py:1322-1330`) against a reset behavioral state.
 
 **38.** "`adversarial_rho` can escalate a bootstrapping agent." — **PATH BOUND** (answers wave question (a)). ρ is hard-coded 0.0 while `_prev_E/I/S/V` are None (`src/governance_monitor.py:748-758`); those attributes are process-transient (`:234-237`), absent from `GovernanceState` persistence and the restore path (`:370-390`), so update 1 *and* the first check-in after any monitor re-instantiation score ar=0 — silently blanking the component for warmed agents once per process lifetime. At update 2 ar can reach 0.15 but the whole assessment is discarded at confidence 0.2 (`:1306`). Live on 3568f987: check-in 1 ar 0.0 (behavioral 0.0/safe vs final 0.696/caution); check-in 2 ar 0.15 (behavioral 0.1733/safe discarded, final 0.794/high-risk); check-in 3 final == behavioral == 0.2337. Qualifier: the "pure phi risk in updates 1-2" statement assumes the behavioral clock and ODE history advance in lockstep — the backward-compat restore (`:374-376`) can break that, making velocity_risk live during behavioral updates 1-2 (unobserved live).
@@ -1512,6 +1519,10 @@ counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
 verdict→`decision_e` feedback paths and both want one deliberate decision rather
 than two patches.
 
+*Amended 2026-10-15.* The first wake condition ("the 12-01 read has run") is
+superseded by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant. The second condition (a preregistered recursive
+replay or prospective shadow) and the sequencing rule above are unchanged.
+
 **46. "S's regime-instability term measures how much the runtime is switching"**
 (contract *The split*, S row: "How much is the runtime moving and switching") →
 **IMPLEMENTATION MISMATCH.** At rest the term mostly measures S itself.
@@ -1547,6 +1558,9 @@ decisions of history):
 `eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`, S with the term
 held at its observed fleet level (0.12), measurement only.
 
+*Amended 2026-10-15.* "Do not change S before the 2026-12-01 read" is superseded
+by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
+
 **47. "E is externally referenced: decision outcomes, tool errors and outcome
 success are world facts"** (contract *The split*, E row) → **IMPLEMENTATION
 MISMATCH**, with a dated **DEPLOYMENT SNAPSHOT** of its size. `decision_history`
@@ -1569,6 +1583,9 @@ select `verification_source`), so the external share was measured from
 observation. The
 existing wake for `decision_e` applies; nothing changes before the 2026-12-01
 read.
+
+*Amended 2026-10-15.* The wake is now the one in row 45's amended note; see the
+[stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change).
 
 **48. "I's calibration term reflects current calibration"** → **IMPLEMENTATION
 MISMATCH.** Row 2 established that every agent receives the same fleet scalar on
@@ -1594,6 +1611,9 @@ the identity's last stated confidence within 24 hours, over lifetime data) paire
 estimator's eligibility for no identity at any check-in in the window; the
 telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
+
+*Amended 2026-10-15.* A predictor change for the 2026-12-01 read is now governed
+by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
 
 **49. "Replacing I's fleet calibration scalar with a partially pooled per-agent
 term restores meaningful between-agent calibration spread"** → **UNTESTED
@@ -1686,6 +1706,12 @@ un-detrended ODE S against the fixed 0.25, so raising the S rest moves agents
 into BOUNDARY, and so to `guide`, while verdict and risk stay put. `guide`
 then enters `decision_history` and E (rows 45, 47).
 
+*Repaired 2026-10-15 (A1; branch `claude/basin-setpoint-repair-1015`, recording T in the [stop-rule amendment](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change)).* `classify_basin` takes `s_setpoint` and evaluates the HIGH S conjunct on S − σ; LOW has no S term. `make_decision` passes the monitor's σ, and the hard-stop provenance's risk-neutral counterfactual and the cold-start guard's recomputation use the same σ (the provenance records it; a record without one is recomputed with σ = 0). The ODE S handed to the classifier is unchanged, so row 45's guard and sequencing rule still hold: the basin reads the ODE state and no behavioral EISV reaches it. σ is persisted as `policy_evaluation.inputs.s_setpoint`, so a later replay needs no label fold.
+
+Expected direct effect, from a **one-step** replay of the persisted classifier inputs over the 14 days to 2026-10-15 12:38Z (each row re-decided once with the repair; no recursion through later check-ins): behavioral `safe` → `approve` 9.5% → 28.9% (n = 9,088 rows, 209 identities); rows without `sensor_eisv_source` 87.0% → 97.7% (n = 914); physical unchanged at 0 (n = 6,547). The status-quo replay reproduced 16,549 of 16,549 persisted basins and actions. The repair can only relax HIGH and remove a guide, so in that replay it creates no LOW basin and no pause. The one-step replay does not measure the closed loop: `approve` scores 1.0 against `guide`'s 0.7 in `decision_e` (row 45), so the changed action mix feeds behavioral E on later check-ins. The golden trajectories show that path (warmup scenario: behavioral E up to +0.084 and V up to +0.079 over 20 check-ins after the first changed action).
+
+What remains. Rows that stay BOUNDARY fail I ≥ 0.7 (in this row's seven-day window, 2,617 of the 3,585 behavioral BOUNDARY rows also failed I, and every physical row did). Stage A lowers the ODE I rest as well as raising the S rest, because dI/dt carries −k·S: the direct shift is k·σ/(γ_I + k_anchor) with the behavioral anchor, ≈ 0.054 at the default σ under the active profile (k = 0.1, γ_I = 0.169, k_anchor = 0.1; 0.037–0.098 across classes), and k·σ/γ_I ≈ 0.086 without it. The offline red-team panel's noise-free, unanchored rest shows a total I drop of 0.07–0.18 by class once the coherence feedback is included, and engaged_ephemeral's rest leaves HIGH on E and I (check A3 of `scripts/analysis/eisv_stage_a_redteam.py`, which now classifies with the live `classify_basin`, flags it). Under `UNITARES_SENSOR_COUPLING=behavioral_only` the physical ODE has no anchor, so physical rows stay BOUNDARY. That I-rest defect is separate and is **not** repaired here.
+
 **51. "Φ detrends S by exactly the σ the ODE rests at"** (`src/monitor_setpoint.py`,
 `setpoint_for_monitor` docstring) → **IMPLEMENTATION MISMATCH; no exposure
 found in the window by the persisted-label fold.** `_resolve_agent_class`
@@ -1708,6 +1734,8 @@ roster (`classify_by_label_and_tags`) gives 5 roster residents, 120
 `engaged_ephemeral` and 90 `ephemeral`, and no `default`. The cache-miss path
 was not measured.
 
+*Repaired 2026-10-15 (C; same change as row 50).* `update_dynamics` takes σ from `setpoint_for_monitor`, the resolver Φ and the basin use, so a class that resolves to `None` reads the `default` σ in the ODE, Φ and the basin alike, and a cached `None` is re-resolved on each check-in instead of freezing σ = 0 for the monitor's life. The hermetic preservation driver's agents resolve to `None`, so the golden trajectories show the effect: ODE S up by as much as 0.046 and Φ down by as much as 0.117, which removes the Φ credit described above; risk moves by up to 0.15, the size of `adversarial_rho`'s 0-or-0.15 step (row 31; not traced per step); no golden verdict changes. Live reach is bounded by the exposure above: the label fold found no `default` identity in its window, and the cache-miss path is still unmeasured. For an exposed agent in cold start, where Φ owns the verdict, Φ is lower than before by about the credit it should never have had.
+
 **52. "With Φ demoted to telemetry (`UNITARES_PHI_TELEMETRY_ONLY=1`), Φ no
 longer moves a warmed agent's action"** → **IMPLEMENTATION MISMATCH**, with a
 dated **DEPLOYMENT SNAPSHOT** of its reach. `compute_phi_and_risk` calls
@@ -1725,6 +1753,8 @@ persisted as `policy_evaluation.inputs.risk_score_latest`. It was ≥ 0.70 on al
 3,240 physical rows and on 1,776 of 3,585 behavioral BOUNDARY rows, where the
 basin had already chosen `guide`, so its reach is bounded by row 50.
 
+*Repaired 2026-10-15 (D; same change as row 50).* `make_decision` takes `latest_risk_fast_trip`, and the monitor passes False when `classify_verdict_driver` names `behavioral_assessment` as the verdict's owner, so the Φ-derived latest risk no longer moves a warmed agent's action. The trip stays on in Φ cold start (`phi_cold_start`), on the Φ floor (`phi_floor`, with `UNITARES_PHI_TELEMETRY_ONLY` off) and under an independent verification override. It only ever upgraded `approve` to `guide`, so turning it off weakens no pause. `risk_score_latest` is still persisted as telemetry. With row 50's repair the basin no longer pre-empts it, which is why both land in one change.
+
 **53. "The ODE damps V at δ = 0.4"** (`governance_core/parameters.py:45`,
 "reverted from 0.25 — caused coherence spiral") → **IMPLEMENTATION MISMATCH.**
 With `ADAPTIVE_GOVERNOR_ENABLED = True` (`config/governance_config.py:436`)
@@ -1739,6 +1769,8 @@ PID on V variance, decays back toward 0.25 when stable, and is clamped to
 the integrated V dynamics on the check-in path. Code paths that read the
 profile directly, such as the stability check of row 17, still use 0.4. Live
 per-monitor δ values were not read.
+
+*Disposition 2026-10-15: no code change.* The adaptive governor is the deliberate V-damping mechanism: it sets δ per monitor by PID on V variance within [0.15, 0.50] and decays toward its own 0.25 design value, and the 0.4 revert was never what the check-in path integrated. Making the profile δ live would remove that mechanism, a separate decision the basin setpoint repair does not take. What stays wrong is documentation: `parameters.py`'s δ = 0.4 with its revert comment, and the governor's `delta_default` comment ("matches parameters.py"), describe a value the check-in path does not use, and row 17's stability check still reads the profile δ.
 
 **54. "A check-in's behavioral observation reflects that check-in's drift and
 continuity"** → **IMPLEMENTATION MISMATCH: A ONE-CHECK-IN LAG ON THE LIVE
@@ -1819,6 +1851,8 @@ notes. **Any live-path change from that work waits for the 2026-12-01 report:**
 baselines, weights, verdict inputs, or thresholds. The reason is the one behind
 the `decision_e` park above. Changing a predictor before the read contaminates
 the registered series.
+
+*Amended 2026-10-15.* Superseded by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
 
 **Supply is thin (inference).** The 2026-09-23 relational calibration
 instrument-supply read

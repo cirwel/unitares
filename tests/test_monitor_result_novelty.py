@@ -157,6 +157,9 @@ def test_build_result_exposes_policy_and_unapplied_enforcement_layers():
             "phi": 0.24,
             "risk_score": 0.72,
             "risk_score_latest": None,
+            # The S setpoint σ the basin was detrended by; this stub monitor
+            # never ran make_decision, so none is recorded.
+            "s_setpoint": None,
             "verdict": "high-risk",
             "verdict_source": None,
             "void_active": False,

@@ -85,7 +85,7 @@ import unicodedata
 import time
 import urllib.parse
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as dc_replace
 from datetime import datetime
 from pathlib import Path
 
@@ -111,7 +111,18 @@ NATIVE_WAIT_S = 600
 # Full review cycles per PR. A cycle holds at most two distinct model families
 # on the same revision/diff; rerunning a family or changing the work starts
 # another cycle. Coverage remains separate from this spending budget.
+#
+# A cycle that found a serious problem (a P0/P1 or unlabelled finding) does
+# not count against ROUND_CAP, and the fix of a serious finding earns a full
+# review however many earlier cycles there were (CodexRounds.exhausted). The
+# cap exists to stop review that has stopped finding serious problems. A round
+# of lesser findings is answered by targeted fix verification either way
+# (capped_review in cmd_review).
+# Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
+# should be context based". ROUND_BACKSTOP bounds a review that never
+# converges.
 ROUND_CAP = 3
+ROUND_BACKSTOP = 10
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -858,6 +869,12 @@ class ReviewCycle:
     head: str
     key: str
     families: set[str | None] = field(default_factory=set)
+    findings: list[dict] = field(default_factory=list)
+
+    def productive(self) -> bool:
+        """It found a serious problem: a P0/P1 finding, or an unlabelled one
+        (a local review can report data loss in prose), as last_severe reads."""
+        return any(_title_is_serious(f) for f in self.findings)
 
     def accepts(self, head: str, key: str, family: str | None) -> bool:
         same_head = (len(self.head) >= 7 and len(head) >= 7
@@ -865,6 +882,26 @@ class ReviewCycle:
         return bool(same_head and (not self.key or not key or self.key == key)
                     and family and None not in self.families
                     and family not in self.families and len(self.families) < 2)
+
+
+def _title_is_serious(finding: dict) -> bool:
+    """A finding's severity is its title's: the first non-empty line. A P0/P1
+    there, or no label at all, is serious; a label in the explanation below
+    (e.g. "the earlier [P1] issue was fixed") is not."""
+    lines = [line for line in (finding.get("body") or "").splitlines() if line.strip()]
+    title = lines[0] if lines else ""
+    return bool(SEVERE_BADGE_RE.search(title)) or not SEVERITY_LABEL_RE.search(title)
+
+
+def _changed_work(cycle: "ReviewCycle", key: str, head: str) -> bool:
+    """Positive evidence that the work under review differs from `cycle`'s:
+    both diff keys known and different, or, where the cycle has no key (a
+    native review), a different head commit. No evidence, no exemption."""
+    if key and cycle.key:
+        return key != cycle.key
+    if head and cycle.head and not cycle.key:
+        return not (head.startswith(cycle.head) or cycle.head.startswith(head))
+    return False
 
 
 @dataclass
@@ -881,6 +918,34 @@ class CodexRounds:
 
     def can_join(self, head: str, key: str, family: str | None) -> bool:
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
+
+    @property
+    def spent(self) -> int:
+        """Cycles that count against ROUND_CAP: all but those that found a
+        serious problem. ``count`` stays the full ledger (grants key on it)."""
+        return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
+
+    def exhausted(self, joining: bool, key: str = "", head: str = "") -> bool:
+        """No new full cycle without the operator: too many unproductive
+        cycles, or a review that has not converged by the backstop."""
+        if not ROUND_CAP_ENABLED:
+            return False
+        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
+            return True
+        if joining:
+            # Finishing a cycle (its second family) costs nothing when starting
+            # it did not need the operator: the cycle before it was serious, or
+            # fewer than ROUND_CAP unproductive cycles came before it.
+            current = 0 if (self.cycles and self.cycles[-1].productive()) else 1
+            prior_spent = self.spent - current
+            prior_serious = (len(self.cycles) >= 2 and self.cycles[-2].productive()
+                             and _changed_work(self.cycles[-2], self.cycles[-1].key, self.cycles[-1].head))
+            return not (prior_serious or prior_spent < ROUND_CAP)
+        if self.cycles and self.cycles[-1].productive() and _changed_work(self.cycles[-1], key, head):
+            # The fix of a serious finding earns a full review; re-reviewing
+            # the same unchanged diff does not.
+            return False
+        return self.spent >= ROUND_CAP
 
     @property
     def last_severe(self) -> bool:
@@ -991,17 +1056,7 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
             seen(rec.head, c.get("created_at", ""), [], rec.original_key or rec.key)
             continue
         identity = f"{rec.reviewer}:{rec.head}:{rec.base}:{rec.review_id or rec.key}"
-        body = c.get("body", "")
-        titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
-        findings = []
-        for i, title in enumerate(titles):
-            finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
-            location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
-            if location:
-                finding.update(path=location[1], line=int(location[2]))
-            findings.append(finding)
-        if rec.verdict == "FINDINGS" and not findings:
-            findings = [{"body": "unlabelled finding; full review required"}]
+        findings = findings_from_review_text(c.get("body", ""), rec.verdict, rec.findings or 0)
         runs.setdefault(identity, (timestamp(c.get("created_at", "")), rec.head, findings,
                                    rec.original_key or rec.key, record_family(rec)))
     unknown_history |= bool(completed_without_evidence - runs.keys())
@@ -1018,6 +1073,35 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
     return count_review_cycles(list(runs.values()), unknown_history, answered_at)
 
 
+# A finding's title leads with its label, after list or markup characters
+# ("[P1] ...", "- [P1] ...", "1. **[P1] ...", "**<sub><sub>![P1 Badge](...)").
+# A label later in a line is prose (e.g. "verified the prior [P1] fix").
+FINDING_TITLE_RE = re.compile(
+    r"(?m)^[ \t>#*\-]*(?:\d+\.[ \t]*)?[ \t*]*(?:<sub>[ \t]*)*"
+    r"(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$")
+
+
+def findings_from_review_text(body: str, verdict: str, declared: int = 0) -> list[dict]:
+    """The labelled findings in a review's text, one per title. A FINDINGS
+    verdict with no labelled title yields one unlabelled finding, which the
+    budget and the cap treat as serious, and so does each finding the
+    record declares (``declared``) beyond the labelled titles found. Any
+    other verdict has no findings, whatever its reasoning mentions."""
+    if verdict != "FINDINGS":
+        return []
+    titles = list(FINDING_TITLE_RE.finditer(body))
+    findings = []
+    for i, title in enumerate(titles):
+        finding = {"body": body[title.start():titles[i + 1].start() if i + 1 < len(titles) else len(body)]}
+        location = re.search(r"([^\s`\[\]()<>]+):(\d+)", title.group())
+        if location:
+            finding.update(path=location[1], line=int(location[2]))
+        findings.append(finding)
+    missing = max(declared - len(findings), 0 if findings else 1)
+    findings += [{"body": "unlabelled finding; full review required"}] * missing
+    return findings
+
+
 def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None]],
                         unknown_history: bool = False, answered_at: float = 0) -> CodexRounds:
     """Share spending accounting with the local reviewer, never coverage."""
@@ -1031,6 +1115,7 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
             findings = []
         cycle = cycles[-1]
         cycle.families.add(family)
+        cycle.findings.extend(run_findings)
         cycle.key = cycle.key or key
         if len(last) > len(cycle.head):
             cycle.head = last
@@ -1082,8 +1167,14 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
+        # No severity from unposted runs: only a posted record, with its
+        # provenance, can exempt a cycle from the cap, so these always spend.
         runs.append((when, receipt['head'], [], key, family))
-    return count_review_cycles(runs, rounds.unknown_history)
+    # Unposted runs change the spending ledger only. The round cmd_review
+    # answers (its head, findings and whether it was answered) stays the one
+    # the posted records describe.
+    recount = count_review_cycles(runs, rounds.unknown_history)
+    return dc_replace(rounds, count=recount.count, cycles=recount.cycles, runs=recount.runs)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:
@@ -2790,10 +2881,11 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (ROUND_CAP_ENABLED and (rounds.count > ROUND_CAP or
-                        (rounds.count == ROUND_CAP and not joining_cycle))
+                if (rounds.exhausted(joining_cycle, key, head)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
-                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                    print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
+                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
@@ -3615,7 +3707,13 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not ROUND_CAP_ENABLED:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
-    return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
+    if rounds.spent != rounds.count:
+        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
+                f"backstop {ROUND_BACKSTOP})")
+    serious_last = bool(rounds.cycles and rounds.cycles[-1].productive())
+    reached = ROUND_CAP_ENABLED and (rounds.count >= ROUND_BACKSTOP
+                                     or (rounds.spent >= ROUND_CAP and not serious_last))
+    return note + (" (cap reached)" if reached else "")
 
 
 def cmd_ci(args) -> int:
