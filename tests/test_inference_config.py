@@ -235,3 +235,16 @@ def test_malformed_base_urls_are_refused(url):
 def test_unusable_paths_return_an_error_result(raw):
     result = ic.load({ic.HOSTS_FILE_ENV: raw})
     assert result.state == "error"
+
+
+@pytest.mark.parametrize("env", ["CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192'", "API_TIMEOUT_MS: '3000000'",
+                                 "ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic'"])
+def test_ordinary_settings_in_env_are_allowed(env):
+    cfg = ic.parse_text(_CLI.format(env=env))
+    assert "external:acme/x" in cfg.hosts
+
+
+@pytest.mark.parametrize("env", ["ANTHROPIC_AUTH_TOKEN: x", "OPENAI_APIKEY: x", "GH_PAT: x"])
+def test_credential_variable_names_are_refused(env):
+    with pytest.raises(ic.InferenceConfigError):
+        ic.parse_text(_CLI.format(env=env))

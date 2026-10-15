@@ -67,7 +67,13 @@ _KIND_FIELDS: Mapping[str, set[str]] = {
 _DECLARED_ID = re.compile(r"^external:[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,63}$")
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
 # Variables that carry credentials belong in `secrets` (by name), never in `env`.
-_CREDENTIAL_VAR = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|CREDENTIAL|COOKIE|BEARER)", re.I)
+_CREDENTIAL_SEGMENTS = frozenset({"KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "AUTH",
+                                  "CREDENTIAL", "CREDENTIALS", "COOKIE", "BEARER", "PAT"})
+
+
+def _is_credential_var(name: str) -> bool:
+    """Whole underscore-separated segments: ANTHROPIC_AUTH_TOKEN yes, MAX_OUTPUT_TOKENS no."""
+    return any(seg in _CREDENTIAL_SEGMENTS for seg in name.upper().split("_"))
 # Values shaped like a credential, whatever variable they are given to.
 _CREDENTIAL_VALUE = re.compile(
     r"sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_|xox[a-z]-|A[KS]IA[0-9A-Z]{16}"
@@ -248,7 +254,7 @@ def _parse_host(host_id: str, raw: Any) -> HostEntry:
             _env_name(k, f"{where}.env")
             if not isinstance(v, str):
                 raise InferenceConfigError(f"{where}.env.{k}", "must be a string")
-            if _CREDENTIAL_VAR.search(k) or _CREDENTIAL_VALUE.search(v):
+            if _is_credential_var(k) or _CREDENTIAL_VALUE.search(v):
                 raise InferenceConfigError(
                     f"{where}.env.{k}", "looks like a credential; put it under secrets, by variable name")
         secrets = _require_mapping(body.get("secrets", {}), f"{where}.secrets")
