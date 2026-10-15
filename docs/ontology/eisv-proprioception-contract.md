@@ -1541,6 +1541,39 @@ estimator's eligibility for no identity at any check-in in the window; the
 telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
 
+**49. "Replacing I's fleet calibration scalar with a partially pooled per-agent
+term restores meaningful between-agent calibration spread"** → **UNTESTED
+ON VERIFIED FORECAST/OUTCOME PAIRS; EXPLORATORY LEGACY-PAIR COMPARISON.**
+The [#2818 audit and design](../proposals/active/eisv-per-agent-i-calibration-v0.md)
+identifies additional fleet inputs: tactical calibration feeds drift and then
+behavioral S; strategic calibration supplies legacy ODE `noise_S`. Its source
+audit at `baabaf8b6` separates those from agent-local histories, clipping,
+defaults, derived confidence and optional cohort priors. Dated frozen-input
+findings in earlier rows are not new deployment measurements.
+
+The prior exploratory read grouped 444 temporal pairs labelled
+`externally_verified` across 53 identities. It reported component SD 0.0484
+at `e_0=0.25, k=10` and 0.0399 at `e_0=0.1474, k=10`, compared with a constant
+fleet component. Those are arithmetic sensitivity results on legacy pairs;
+a stored grade and the most recent confidence within 24 hours do not prove
+independent outcome truth, target binding or pre-execution commitment. The
+comparison does not establish replacement efficacy. Likewise, the 318-identity
+snapshot's change from 54.7% to 19.5% with mean raw I >=0.70 is numerical
+threshold exposure, not a measured live basin reclassification: the basin
+classifier reads ODE state. It does not authorize threshold re-centering.
+
+The design reports calibration first as its own measurement-only channel beside
+I, and reports it `unavailable` when an agent has no admissible pairs; no prior
+value enters I or the channel. In-slot pooled replacement is a post-read option
+compared against a calibration-free I. That option keeps diminishing pooling,
+requires independently resolved target-bound pairs and a frozen verified
+reference prior, and labels prior-only rows as comparison output only. Coupling
+between agents is specified as a separate directed-influence measurement.
+Section 6 specifies the still-unrun paired comparison, including coverage,
+level/spread separation and replay limits. No live estimator, feeder, threshold,
+registered read or stop rule changes. Verified supply and preservation review
+remain prerequisites, including after the 2026-12-01 calendar date.
+
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 
 Added 2026-09-25 after an adversarial design review of a critique that the

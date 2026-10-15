@@ -90,6 +90,7 @@ Files here are capped at 800 lines. Files already longer are listed with their c
 | [`phi-effort-overflag-test-v0.md`](phi-effort-overflag-test-v0.md) | **Active** · Unregistered test design (2026-10-03): whether Φ's cold-start verdict over-flags hard work or correctly flags harder, failure-prone work. Operator choices unset; no outcome rows queried before the registered 2026-12-01 read. Also records the open cold-start-prior options |
 | [`eisv-incremental-value-ablation-v1.md`](../eisv-incremental-value-ablation-v1.md) | **Active** · Draft preregistration (protocol 0.3.1); no cohort enrolled and no experiment scheduled |
 | [`legacy-coherence-identity-ablation-v0.md`](legacy-coherence-identity-ablation-v0.md) | **Built (partial)** · Measurement-only. The shadow is computed on every check-in (`compute_legacy_coherence_identity_shadow`); the aggregation read is not done |
+| [`eisv-per-agent-i-calibration-v0.md`](eisv-per-agent-i-calibration-v0.md) | **Active** · Proposed replacement and source audit (#2818, 2026-10-15). Historical temporal-pair arithmetic is exploratory; independent target-bound evidence and the specified offline comparison remain prerequisites. No live estimator, supply or threshold change |
 | [`independent-operator-cohort-enrollments.md`](independent-operator-cohort-enrollments.md) | **Active** · Append-only enrollment ledger for the cohort protocol; entries are added by PR and never edited |
 
 ## Effect authorization design
