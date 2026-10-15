@@ -874,8 +874,7 @@ class ReviewCycle:
     def productive(self) -> bool:
         """It found a serious problem: a P0/P1 finding, or an unlabelled one
         (a local review can report data loss in prose), as last_severe reads."""
-        return any(SEVERE_BADGE_RE.search(f.get("body") or "")
-                   or not SEVERITY_LABEL_RE.search(f.get("body") or "") for f in self.findings)
+        return any(_title_is_serious(f) for f in self.findings)
 
     def accepts(self, head: str, key: str, family: str | None) -> bool:
         same_head = (len(self.head) >= 7 and len(head) >= 7
@@ -883,6 +882,15 @@ class ReviewCycle:
         return bool(same_head and (not self.key or not key or self.key == key)
                     and family and None not in self.families
                     and family not in self.families and len(self.families) < 2)
+
+
+def _title_is_serious(finding: dict) -> bool:
+    """A finding's severity is its title's: the first non-empty line. A P0/P1
+    there, or no label at all, is serious; a label in the explanation below
+    (e.g. "the earlier [P1] issue was fixed") is not."""
+    lines = [line for line in (finding.get("body") or "").splitlines() if line.strip()]
+    title = lines[0] if lines else ""
+    return bool(SEVERE_BADGE_RE.search(title)) or not SEVERITY_LABEL_RE.search(title)
 
 
 def _changed_work(cycle: "ReviewCycle", key: str, head: str) -> bool:

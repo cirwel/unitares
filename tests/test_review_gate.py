@@ -5138,3 +5138,12 @@ def test_joining_after_a_serious_cycle_needs_changed_work_too():
     rounds.cycles[-1].key = rounds.cycles[-2].key  # same diff as the serious cycle
     rounds.cycles[-1].head = rounds.cycles[-2].head
     assert rounds.exhausted(joining=True)
+
+
+def test_severity_comes_from_the_title_not_the_explanation():
+    """A [P2] whose explanation mentions an earlier [P1] is not serious."""
+    runs = [(1000.0 + i, f"{i:x}" * 40,
+             [{"body": "[P2] Minor — a.py:1\nThe earlier [P1] issue was fixed."}], f"k{i}", "openai")
+            for i in range(3)]
+    rounds = rg.count_review_cycles(runs)
+    assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")
