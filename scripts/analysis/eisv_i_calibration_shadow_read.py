@@ -303,7 +303,7 @@ def main() -> int:
     fleet_err = 1.0 - fleet_cal
     print(f"\n== Offline comparison: between-agent spread and level (#2818)")
     for label, pmap in (
-        ("externally_verified only (admissible truth source)", ext_pairs_by_id),
+        ("externally_verified grade only (exploratory temporal pairs; truth/binding not established)", ext_pairs_by_id),
         ("all exported grades (externally_verified + tool_observed)", pairs_by_id),
     ):
         if not pmap:

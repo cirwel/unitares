@@ -1,6 +1,8 @@
 # Per-Agent EISV `I` Calibration Term and Cross-Channel Homogenization Audit (v0)
 
-**Status:** Active design note and offline comparison (`#2818`), 2026-10-15.
+**Status:** Proposed design and exploratory legacy-pair comparison (`#2818`), 2026-10-15.
+Verified-pair replacement efficacy is untested; section 6 specifies the required
+comparison. Historical tables below are retained, not newly measured here.
 Documentation and offline analysis only. This document changes no live
 predictor, weight, threshold, database write, or calibration bin feeder.
 **Preservation gate:** The deployed `I` estimator and legacy fleet calibration
@@ -31,7 +33,7 @@ weight when `>= 3` recent outcomes carry a finite score, `0.60` otherwise;
 `0.10` `unique_tools_ratio` blends at `:179-200`). On the live check-in path,
 `calibration_error` is supplied by `get_mean_calibration_error()`
 ([`src/mcp_handlers/updates/context.py:99-157`](../../../src/mcp_handlers/updates/context.py)),
-which takes no `agent_id` and averages `calibration_checker.compute_calibration_metrics()`
+whose deployed return averages `calibration_checker.compute_calibration_metrics()`
 over fleet-wide strategic bins with `count >= 5`.
 
 Two distinct defects compound on this path:
@@ -40,12 +42,15 @@ Two distinct defects compound on this path:
    fleet strategic bins were actively receiving samples (prior to `2026-08-02`),
    `get_mean_calibration_error()` returned a single fleet-wide scalar on every
    check-in. Injecting a fleet scalar at `36%–43%` effective weight into a
-   per-agent channel compresses between-agent variance by construction.
+   per-agent channel leaves less weight for agent-specific information. At
+   equal weights a common additive constant changes neither ranks nor absolute
+   spread; dilution concerns the remaining weights. Different outcome branches,
+   optional blends and observation times need not preserve rank.
 2. **Frozen upstream supply (ledger rows 15, 48):** After `#1445` (`2026-08-02`)
    excluded server-scraped confidence (`prev_confidence_fallback` and
    `audit_trail_fallback`) from training calibration, the fleet strategic bins
    froze at `282` samples (`calibration_error = 0.147446577`, `cal_I = 0.852553423`).
-    across all `18,021` non-synthetic `I` observations (`318` identities) in the
+   Across all `18,021` non-synthetic `I` observations (`318` identities) in the
    30-day window ending `2026-10-12`, `cal_I` had **zero** within-agent and
    **zero** between-agent variance.
 
@@ -53,31 +58,42 @@ Two distinct defects compound on this path:
 
 ## 2. Audit of Per-Agent Channels for Fleet-Scoped or Frozen Inputs
 
-Criterion 1 of `#2818` requires auditing all per-agent channels beyond
-`coherence` (`C(V_ODE)`, pinned near `0.49` with between-agent SD `0.0032`
-after `69ee5a799` demoted ODE `V`; ledger row 1) for fleet-scoped or frozen
-inputs. Table 1 lists every per-agent channel carrying a fleet-scoped,
-frozen, or quasi-frozen input on `master`.
+Source inspection at `baabaf8b6692432a5d047823a70efe14664971ad` covers
+the behavioral sensor and its suppliers and consumers. Caller-supplied physical
+sensors bypass that construction; their hardware producers are outside scope.
+Dated deployment findings in earlier ledger rows are not fresh measurements.
 
-| Per-agent channel | Input / component | Code path | Scope & runtime status | Per-agent homogenization impact |
-|---|---|---|---|---|
-| **Behavioral `I`** (`raw_I`, `state.I`) | `cal_I = 1.0 - calibration_error` (`0.50` / `0.60` base weight; `0.360` / `0.432` effective) | `src/behavioral_sensor.py:839-844`; fed by `get_mean_calibration_error()` in `src/mcp_handlers/updates/context.py:99-157` (fallback in `src/governance_monitor.py:1295-1311` uses `drift_vector.calibration_deviation`) | **Fleet-scoped + frozen** since `2026-08-02` at `calibration_error = 0.1474` (`cal_I = 0.8526`, 282 strategic samples; ledger rows 2, 15, 48) | Injects a constant `+0.3069` (with outcomes) to `+0.3683` (without outcomes) into every agent's raw `I` observation; between-agent SD of `cal_I` is `0.0000`. |
-| **Behavioral `I`** (`raw_I`, `state.I`) | `coh_I = _coherence_trend(coherence_history)` (`0.30` / `0.40` base weight; `0.216` / `0.288` effective) | `src/behavioral_sensor.py:846-848, 916-940`; fed by `monitor.state.coherence_history` (`C(V_ODE)`) in `src/mcp_handlers/updates/phases.py:944` | **Quasi-frozen** (`C(V_ODE)` restricted to `[0.455, 0.499]`; ledger row 1) | Split-half trend sits near the `0.60` neutral midpoint (`0.50 + diff * 5.0`), contributing `~0.13–0.17` with negligible per-agent spread. Together with `cal_I`, `57.6%–72.0%` of raw `I` weight is frozen or quasi-frozen. |
-| **Ethical drift `Δη`** (`drift_vector`) | Pillar 1: `calibration_deviation` | `src/monitor_drift.py:19-46, 113-117` (`compute_calibration_error`) $\to$ `governance_core/ethical_drift.py:356-367` | **Fleet-scoped + frozen** since `2026-08-02` at `0.2414` (worst fleet tactical bin `0.9–1.0`, 277 samples; ledger row 15b) | Because `compute_calibration_error()` returns a non-`None` fleet scalar on every check-in, the per-agent fallback in `ethical_drift.py:362-366` (`\|current_confidence - baseline.baseline_confidence\|`) is **permanently bypassed**. Every warmed agent gets `0.2414` (`×0.3` on `"exploration"`/`"introspection"`, floored by `0.3 * min(0.5, state_velocity)`). |
-| **Ethical drift `Δη`** (`drift_vector`) | Pillar 4: `stability_deviation` | `src/monitor_drift.py:116` (`decision=None`) $\to$ `governance_core/ethical_drift.py:345-350, 412-415` | **Agent-keyed but frozen** at `0.20` for all post-warmup (`update_count >= 5`) agents (`1,037/1,037` DB rows have `recent_decisions = []`; ledger rows 21, 37) | Hardcoding `decision=None` leaves `decision_consistency = 0.8` forever, so `stability_deviation = 1.0 - 0.8 = 0.20` for every warmed agent. |
-| **Ethical drift `Δη`** (`drift_vector`) | Pillar 3: `coherence_deviation` | `src/monitor_drift.py:72-86` (`control_feedback(V_ODE)`) $\to$ `governance_core/ethical_drift.py:390-405` | **Quasi-frozen** baseline gap (`C(V_ODE)` pinned near `0.49`), dominated by `0.5 * min(0.5, state_velocity)` floor | Eliminates genuine coherence-drop signal in `Δη`; only the `state_velocity` floor moves. |
-| **Behavioral `S`** (`raw_S`, `state.S`) | `drift_s = min(1.0, drift_norm * 1.5)` (`0.40` base weight; `~0.32` effective) | `src/behavioral_sensor.py:953-958`; fed by `monitor._last_drift_vector.norm` (`src/mcp_handlers/updates/phases.py:946-948`) | **Propagated fleet + frozen floor** from `Δη` pillars 1 and 4 | For any warmed non-exploratory agent, $\lVert\Delta\eta\rVert \ge \sqrt{0.2414^2 + 0.20^2} = 0.3135$, pinning `drift_s >= 0.4702` (`>= 0.1881` raw `S` before blends). |
-| **ODE `S`** (`monitor.state.S`, diagnostic) | `noise_S = calibration_penalty` and resident `s_setpoint` | `src/governance_monitor.py:742-769` $\to$ `governance_core/dynamics.py:156-162`; `config/governance_config.py:976-985` | **Fleet-scoped + frozen** `calibration_penalty = 0.0483` (fleet strategic bins `count >= 2`); **config-frozen** `s_setpoint = 0.0` when `UNITARES_CLASS_CALIBRATION` is unset (ledger rows 15a, 23) | Injects identical entropy drift (`0.0483`) into every agent's ODE `dS/dt` and pulls named residents toward `S* = 0.0`. |
-| **Behavioral `E`** (`raw_E`, `state.E`) | `coh_e` (`legacy_coherence_level`, `0.25`/`0.30` base weight; `0.17` effective) and `continuity_E_input` (`0.20` blend; `0.17` effective) | `src/behavioral_sensor.py:706-709, 807-820, 178`; `src/dual_log/continuity.py:212-218` | **Quasi-frozen** `coh_e` (`0.578 ± 0.006`, ledger row 20) and **clip-pinned** `continuity_E_input = 0.30` (divides `response_tokens` by inter-check-in wall-clock idle gap) | Roughly `34%` of raw `E`'s effective weight (`0.17` `coh_e` + `0.17` `continuity_E_input`) sits at near-constant values across agents (ledger rows 20, 47). |
-| **Omitted-confidence fallback** | `derive_confidence(state)` | `src/confidence.py:197-238` | **Quasi-frozen + fleet-coupled** (`0.55 * state.coherence + 0.35 * state.I + 0.10 * (1 - state.S) - 0.20 * S`) | Narrowly pins server-derived confidence when callers omit `confidence`; also polluted `audit.events.confidence` before `#1445`. |
-| **Self-relative z-score denominator** | `BehavioralEISV.deviation(component)` | `src/behavioral_state.py:65-112, 325-335` (`MIN_MEANINGFUL_EISV_STD = 0.05`) | **Shared constant floor** (`0.05`) triggered by upstream homogenization + EMA smoothing (`alpha_I = 0.08`) | Binds on `69/72` (`95.8%`) baselined agents on `I`, `33/72` on `S`, `8/72` on `E`, `9/72` on `V` (ledger row 19), replacing individual Welford `std` with a shared `0.05` denominator. |
-| **Other constant per-agent surfaces** | `metrics['stability']`, `AdaptiveGovernor`, `trajectory_identity` | `src/mcp_handlers/support/research.py:22-40`; `governance_core/adaptive_governor.py`; `src/trajectory_identity.py` | **Constant / saturated** across agents (ledger rows 6–9, 17, 18) | `alpha_estimate = 0.101128` for all agents; `AdaptiveGovernor` saturates at `tau = 0.2519, beta = 0.799` (`445/445`); `stability_score` p50 `0.9996` (`92.8% >= 0.99`). |
+All paths below are relative to the repository root. Symbols, rather than line
+numbers, identify the inspected implementation at the pinned commit.
+
+| Channel / consumer | Scope and constant risk | Source and consequence |
+|---|---|---|
+| I: `calibration_accuracy` | Fleet strategic bins; frozen in the cited window. Missing error defaults to 0.75. | `src/mcp_handlers/updates/context.py:get_mean_calibration_error`; `src/behavioral_sensor.py:_compute_I_components`. This is the term to replace. |
+| Drift calibration → behavioral S | **Additional fleet input:** worst positive tactical confidence/accuracy gap among bins with at least 10 samples. No agent argument. | `src/monitor_drift.py:compute_calibration_error` / `compute_drift_vector` pass it to `governance_core/ethical_drift.py:compute_ethical_drift`. Warmup, task context and velocity can modify the component; the previous drift norm supplies 40% of S's base. Fleet scope is verified; a frozen/nonzero deployed value is not established here. |
+| ODE S forcing | **Additional fleet input:** maximum damped positive strategic gap, bins with at least two samples; full sample weight at five. | `src/governance_monitor.py:update_dynamics` passes `calibration_penalty` as `noise_S` to `step_state`. This is ODE forcing, not a direct addition to behavioral S. It can propagate through legacy control feedback; magnitude and downstream effects need replay. |
+| E/I coherence; drift coherence | Agent-local ODE state transformed into legacy directional feedback, not fleet calibration itself; narrow-range or default signals can compress variation. | `_compute_E_components`, `_coherence_trend` and `compute_drift_vector` consume `C(V_ODE)` level/trend/deviation. Coherence fallback is 0.6 in the sensor; trend needs four history entries. Existing coherence ablations remain separate. |
+| E: decision history | Agent-local policy outputs with a shared fixed score map. A repeated verdict produces a stable component. | `_compute_E_components` scores the last ten verdicts, with 0.35/0.40 base weight. This is a feedback loop, not an independent outcome or a fleet aggregate (ledger rows 45/47). |
+| S: regime instability | Agent-local regime history, potentially a self-loop through the state it labels. Fewer than two entries defaults to 0.1. | `_compute_S_components` / `_regime_instability`; 35% base weight. The fleet-measured 0.12 neutral value belongs only to the existing shadow, not live S (ledger row 46). |
+| Continuity activity → E | Per-agent text/cadence, but can clip to a shared 0.3 floor. | `src/dual_log/continuity.py:compute_continuity_metrics` divides token rate across the whole check-in gap by 200, then clips. Its `E_input_clipped` canary records saturation. No new clipping-frequency estimate is claimed. |
+| Complexity divergence → E/I/S | Per-agent report/text comparison; omitted reports and fixed templates can make it constant. It is not the calibration singleton. | `derive_complexity` / `compute_continuity_metrics`; `I_input = 1 - divergence`. Sensor defaults use divergence 0.15 for E and 0.1 for S; continuity's missing-report branch uses 0.2. These are distinct stages. `self_complexity_defaulted` and `continuity_degenerate` describe coverage. |
+| Drift stability → S / ODE | **Fixed default on this call path:** `decision=None` leaves fresh baseline decision consistency at 0.8, hence stability deviation 0.2 before modifiers. | `compute_drift_vector`, `AgentBaseline.update`, `compute_ethical_drift`. Restored baselines need separate inspection; this does not assert every historical row is 0.2. Ledger row 37 describes earlier measurements. Missing tactical evidence instead uses agent-relative confidence changes, not zero error. |
+| Outcome success (E), score consistency (I) | Query is agent-scoped, last 20 / 24h. Identical outcome scores yield maximal consistency even when all outcomes are bad. | `phases.py` calls `get_recent_outcomes(agent_id=...)`; `_compute_I_components` uses variance, not correctness. Current provenance filtering and its supply gates remain unchanged. |
+| Tool errors (E), velocity (S), diversity (I) | Agent-scoped one-hour statistics, even though the tracker is a singleton. Constant success or sparse usage can limit variation. | `phases.py` calls `get_usage_stats(agent_id=..., window_hours=1)`. With no calls, optional blends are absent; that is not an observed zero error rate. |
+| Behavioral V | Agent-local EMA of raw `E_obs - I_obs`; inherits I's shared input. | `src/behavioral_state.py:BehavioralState.update`. Sensor `_compute_V_components` is diagnostic and is not this V's producer. Replacing I therefore also changes V and its baseline over time. |
+| Omitted confidence | Derived from the agent state using shared weights, including 55% legacy coherence. It can inherit upstream shared inputs; no new frequency or saturation claim is made. | `src/confidence.py:derive_confidence`. A derived fallback is not the agent's forecast. |
+| Baselines and common constants | Welford state is keyed by agent, not fleet; common bootstrap values, EMA settings, variance floors and fixed policy bands are shared design constants. Optional cohort seeds are an explicit cross-agent dependency. | `src/agent_behavioral_baseline.py:get_agent_behavioral_baseline`, `_maybe_seed_cohort_prior`; `src/behavioral_state.py`. Cohort prior is off by default; observe mode does not seed, apply mode does. No live flag read was made. |
+| ODE rest target / downstream status | Class-scoped fixed S setpoints and common risk bands are not current per-agent evidence. | `src/monitor_setpoint.py`, `config/governance_config.py:get_s_setpoint`, `src/health_thresholds.py`. Record configuration in a future replay; do not interpret these constants as frozen measurements. |
+
+**Audit conclusion:** fleet strategic I is not the only shared input. Tactical
+drift and strategic ODE entropy forcing must be named in the preservation
+inventory. Clipping, fixed defaults and self-loops are different mechanisms;
+none is repaired by merely switching I's calibration source.
 
 ---
 
 ## 3. Design of the Per-Agent `I` Calibration Replacement
 
-### 3.1 Pooling Rule: Replace the Fleet Term via Empirical-Bayes Partial Pooling
+### 3.1 Pooling Rule: Replace the Fleet Term via Partial Pooling
 
 **Rule 1 (Replace, do not blend):** `cal_I(a, t)` replaces `1.0 - calibration_error`
 at the existing `calibration_accuracy` component slot (`0.50` base weight with
@@ -102,8 +118,8 @@ $$e_{\text{agent}}(a, t) = \sum_{b:\, n_{a,b}(t) \ge 1} \frac{n_{a,b}(t)}{n_a(t)
 
 where $\bar{y}_{a,b}(t)$ and $\bar{c}_{a,b}(t)$ are the mean verified outcome
 score and mean stated confidence in bin $b$. Shrink $e_{\text{agent}}(a, t)$
-toward a prior error $e_0 \in (0, 1)$ with pseudocount $k > 0$ (candidate
-default $k = 10$):
+toward a prior error $e_0 \in (0, 1)$ with pseudocount $k > 0$ (exploratory
+setting $k = 10$, not an approved live default):
 
 $$w(n_a) = \frac{n_a}{n_a + k}, \qquad e_{\text{pool}}(a, t) = \bigl(1 - w(n_a)\bigr)\, e_0 + w(n_a)\, e_{\text{agent}}(a, t)$$
 
@@ -140,90 +156,79 @@ When $n_a(t) = 0$:
    - `observed = False`,
    - `default_reason = "no_verified_agent_pairs"`,
    - `evidence_status = "prior_only"`, `n_verified_pairs = 0`, `pooling_weight = 0.0`.
-3. **Choice of prior $e_0$ and threshold coupling (`BASIN_I_HEALTHY = 0.70`):**
-   - `_compute_I_components` ([`src/behavioral_sensor.py:842`](../../../src/behavioral_sensor.py))
-     already defines `0.75` (`e_0 = 0.25`) as the neutral midpoint when
-     `calibration_error is None`.
-   - However, `BASIN_I_HEALTHY = 0.70` ([`config/governance_config.py:725`](../../../config/governance_config.py))
-     was tuned while the frozen fleet scalar `cal_I = 0.8526` (`e_0 = 0.1474`)
-     was injecting `+0.3069` (`0.36 * 0.8526`) into every check-in. As shown in
-     Section 4.3, shifting no-evidence agents from `0.8526` to `0.7500` lowers
-     per-identity mean `I` across `snapshot.jsonl` (`n = 318`) by `-0.0387`
-     (from `mean = 0.7012, p50 = 0.7062` to `mean = 0.6625, p50 = 0.6689`) and
-     drops the share of identities with mean `I >= 0.70` from `54.7%` (`174/318`)
-     to `19.5%` (`62/318`).
-   - Therefore, any future live cutover must **either** (a) set $e_0$ to the
-     verified-pair population ECE prior ($\bar{e}_{\text{ece,pop}} \approx 0.1621 \implies \text{cal\_I}_0 \approx 0.8379$,
-     computed strictly over admissible verified pairs, never from legacy fleet
-     bins) **or** (b) re-center `BASIN_I_HEALTHY` by the exact prior delta
-     `eff_w * (0.75 - 0.8526) ≈ -0.037` in the same gated change.
+3. **Prior provenance and missing prior:** For the verified-pair comparison,
+   freeze a reference cohort before evaluation time `T0`, excluding the focal
+   identity and known duplicate streams. Compute `e_0` as the equal-identity
+   mean of reference identities' sample-weighted binned ECE for the same event
+   family. Record cohort counts, cutoff, exclusions and artifact hashes. Keep
+   this prior fixed for the whole evaluation; later agents' outcomes cannot
+   change it. If no eligible reference exists, return a null candidate with
+   `prior_unavailable`, not zero error or the legacy fleet scalar. No-evidence
+   `prior_only` rows remain unassessed. Differences between leave-identity-out
+   priors are composition effects, not current agent evidence.
+4. **Historical sensitivity settings:** Section 4's `e_0 = 0.25` is the
+   existing missing-error fallback; `e_0 = 0.1474` reproduces the historical
+   fleet level. Neither is established as a verified population prior. Its
+   `0.1621` mean comes from exploratory temporal pairs and is not eligible
+   reference evidence under section 3.3.
+5. **Threshold exposure:** Level shifts must be reported separately from
+   spread. They do not mandate re-centering `BASIN_I_HEALTHY`, prove its tuning
+   history, or establish actual basin changes: the snapshot is a behavioral I
+   observation, while the deployed basin classifier reads ODE state. Any
+   future estimator or threshold choice needs separate preservation review.
 
 ### 3.3 Verified-Outcome and Pre-Committed Forecast Requirements
 
-A pair $(c_i, y_i)$ is admissible into $\mathcal{P}_a(t)$ if and only if **both**
-sides of the pair satisfy independent provenance checks:
+The replacement estimates calibration for a declared binary event family,
+not generic competence, integrity, or an incentive for honest reporting.
+A command-exit forecast is one possible family; do not mix it silently with
+PR acceptance, internal trajectory scores or soft task labels.
 
-1. **Pre-committed agent forecast ($c_i$):**
-   - Must come from either:
-     - a prediction registered before execution (`prediction_source == "registry"`
-       with server-recorded mint timestamp $t_{\text{mint}} < t_{\text{outcome}}$), or
-     - the same identity's most recent check-in explicit self-report
-       (`eisv_telemetry.self_report.confidence_reported`, persisted on
-       `core.agent_state` since `#2741`, commit `ba1a90438`) within a bounded
-       causal window ($0 < t_{\text{outcome}} - t_{\text{checkin}} \le 24\text{ h}$).
-   - **Exclusions:**
-     - Post-hoc confidence passed on `record_result` at outcome time
-       (`prediction_source == "argument"`, `argument_fallback`, or
-       `missing_prediction` / `ttl_expired_fallback` with an argument; Finding F1
-       in [`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md)),
-     - Server-derived confidence (`derive_confidence` in `src/confidence.py:197-238`)
-       leaking via `prev_confidence_fallback` or `audit_trail_fallback`
-       (`src/db/mixins/audit.py:263-306`),
-     - Clamped identity-assurance values (`phases.py:849-853`) where the post-clamp
-       number is not the agent's stated claim (`#2603`).
+Each admitted pair must have:
 
-2. **Server-established outcome truth ($y_i$):**
-   - Must carry `corroboration_grade == "externally_verified"`
-     (`evidence_weight >= 0.85`, produced by `SERVER_SET_TOOL_TRIGGERS` or a
-     server-verified execution receipt outside the agent's MCP tool call) and
-     `not calibration_excluded` (excluding `shadow_write` and validation fixtures).
-   - **Why `TOOL_OBSERVED` (`0.65`) and registry binding alone are insufficient:**
-     Public `record_result` calls are capped at `TOOL_OBSERVED` (`0.65`,
-     [`src/outcome_corroboration.py:408-430`](../../../src/outcome_corroboration.py)),
-     which checks only that the caller-supplied `detail` dictionary contains
-     structured keys (`exit_code`, `command`, `files`, `tests`) — it grades
-     **caller-described payload shape, not execution truth**. In the preserved
-     2026-10-12 corpus (Section 4.1), `tool_observed` pairs (`n = 218`) exhibit
-     less than one-third the error (`mean |y - c| = 0.0922, p50 = 0.0400`) of
-     `externally_verified` pairs (`n = 444, mean |y - c| = 0.2881, p50 = 0.2000`)
-     because the same agent chooses both the confidence and the outcome report.
-   - **Host trust-boundary caveat:** As documented in
-     [`forecast-bound-calibration-mirror-v0.md`](forecast-bound-calibration-mirror-v0.md)
-     §2 (C2) and §7 (F5), `external_signal` rows posted by the local harness hook
-     (`outcome-tracker.sh` $\to$ `POST /v1/harness/outcome`) share an OS user
-     with local agents and withhold induced test failures. They are exogenous to
-     the MCP self-report path (suitable for proprioceptive estimation under a
-     non-adversarial local harness), not an adversarial-proof oracle.
+1. A durable forecast id, accountable process identity, original probability
+   `p` in [0,1], explicit event/execution target and event-family version.
+   Commitment must be verifiably before execution starts or the outcome becomes
+   knowable, not merely before an outcome POST reaches the server.
+2. A server-validated binary result `y`, established by an authenticated,
+   independent resolver outside the forecaster's write authority. For command
+   exits, require an execution nonce, full command/environment identity, start
+   and finish evidence and exit status. Remote CI is a possible source only
+   after its identity, run/artifact binding and trust boundary are reviewed.
+3. Exactly one canonical resolution per forecast/execution, atomic and durable;
+   duplicates, conflicting labels, post-hoc probabilities and unresolved or
+   expired forecasts are separately counted. Unresolved forecasts have no
+   invented success/failure label. Report resolution coverage and selection bias.
+4. Availability timestamps and provenance sufficient for an as-of replay. A
+   later correction cannot silently rewrite an earlier estimator input.
 
-3. **Decoupling from the shared 3-consumer gate in `outcome_events.py:643-702`:**
-   Today, a single `if` block in
-   [`src/mcp_handlers/observability/outcome_events.py:643-702`](../../../src/mcp_handlers/observability/outcome_events.py)
-   gates three consumers at `evidence_weight >= 0.65 and not calibration_excluded`:
-   - `calibration_checker.record_prediction` (fleet strategic `bins` + `bins_by_agent`),
-   - `calibration_checker.record_tactical_decision` (fleet tactical `tactical_bins`, read by `monitor_drift.py`),
-   - `sequential_calibration_tracker.record_exogenous_tactical_outcome`.
-   The per-agent `I` calibration estimator must read its own verified-pair store
-   (keyed on `identity_id` and gated on `externally_verified` + pre-committed
-   forecast) rather than changing `_MIN_TACTICAL_EVIDENCE_WEIGHT` or re-opening
-   supply into the legacy fleet strategic/tactical bins.
+This source is a **dependency, not an existing verified supply guarantee**.
+`src/outcome_corroboration.py:tool_observation_triggers` accepts caller-described
+return codes and payload shapes for `TOOL_OBSERVED`. A grade or weight >=0.65
+alone does not prove truth. Registry binding alone does not prove truth either.
+The [forecast-bound proposal](forecast-bound-calibration-mirror-v0.md), C2 and
+section 5, explains the shared-OS-user producer problem. Reusing its proposed
+receipts requires independent authorization and trust-boundary work; this note
+does not reopen its incentive proposal or authorize a new tool.
+
+The current outcome-event gate in
+`src/mcp_handlers/observability/outcome_events.py` feeds strategic bins,
+tactical bins for hard-exogenous types, and (when eligible) the sequential
+tracker. **Do not loosen or repoint that gate, backfill its bins, or reopen
+fleet supply to implement this design.** A future verified-pair dataset must
+be isolated from those consumers until each change is separately reviewed.
+The existing `compute_agent_calibration_candidate` remains a measurement-only,
+unweighted strategic-bin diagnostic with mixed proxy evidence; it is not this
+replacement.
 
 ---
 
 ## 4. Offline Comparison of Between-Agent Spread and Level on Preserved Data
 
-Criterion 3 of `#2818` requires specifying and running an offline comparison of
-between-agent spread and level under the current and proposed terms on preserved
-data before any live change.
+Criterion 3 of `#2818` requires specifying an offline comparison, to be run
+before any live change. This section retains the earlier exploratory arithmetic
+on historical temporal pairs. It does not satisfy the verified-pair contract
+in section 3.3; the required comparison protocol is specified in section 6.
 
 The comparison is implemented in
 [`scripts/analysis/eisv_i_calibration_shadow_read.py`](../../../scripts/analysis/eisv_i_calibration_shadow_read.py)
@@ -244,12 +249,13 @@ and run against the frozen, SHA-256-verified `2026-10-12` evaluation dataset in
 Pairing each outcome in `verified_outcomes.jsonl` with the same identity's most
 recent stated confidence within the preceding `24 h` yields `662` pairs across
 `113` identities (`n = 113, mean = 5.8584, p10 = 1.0000, p50 = 4.0000, p90 = 12.0000`
-pairs per identity). Stratifying by `corroboration_grade` confirms why
-`tool_observed` (`0.65`) must be excluded:
+pairs per identity). Stratifying by stored `corroboration_grade` describes these two selected
+corpora; their error difference does not establish why they differ or prove
+either corpus independently verified:
 
 | Outcome grade | Paired rows (`n`) | Identities | Pairwise $\|y - c\|$ mean | Pairwise $\|y - c\|$ p10 | Pairwise $\|y - c\|$ p50 | Pairwise $\|y - c\|$ p90 |
 |---|---:|---:|---:|---:|---:|---:|
-| `externally_verified` (admissible) | `444` | `53` | `0.2881` | `0.1000` | `0.2000` | `0.7000` |
+| `externally_verified` (stored grade only) | `444` | `53` | `0.2881` | `0.1000` | `0.2000` | `0.7000` |
 | `tool_observed` (`0.65` shape-graded) | `218` | `60` | `0.0922` | `0.0100` | `0.0400` | `0.1800` |
 
 ### 4.2 Per-Identity Calibration Component (`cal_I`) Level and Between-Agent Spread
@@ -262,7 +268,7 @@ and across all `113` paired identities (`662` pairs).
 | Estimator variant | Corpus (`n` identities) | Mean `cal_I` | Between-agent SD | p10 | p50 | p90 | IQR |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **Current deployed fleet `cal_I`** | `externally_verified` (`n = 53`) | `0.8526` | **`0.0000`** | `0.8526` | `0.8526` | `0.8526` | **`0.0000`** |
-| **Deployed `#2194` candidate** (`>=5/bin`, `<=7d` causal on `snapshot.jsonl`) | `snapshot.jsonl` (`n = 0 / 318`) | — | — | — | — | — | — |
+| **Measurement-only `#2194` candidate** (`>=5/bin`, `<=7d` causal on `snapshot.jsonl`) | `snapshot.jsonl` (`n = 0 / 318`) | — | — | — | — | — | — |
 | Unpooled $1 - e_{\text{ece}}(a)$ | `externally_verified` (`n = 53`) | `0.8379` | `0.1075` | `0.7000` | `0.8500` | `0.9676` | `0.1945` |
 | Unpooled $1 - e_{\text{brier}}(a)$ | `externally_verified` (`n = 53`) | `0.8734` | `0.0850` | `0.7620` | `0.8951` | `0.9775` | `0.1147` |
 | Unpooled $1 - e_{\text{mae}}(a)$ | `externally_verified` (`n = 53`) | `0.7083` | `0.1098` | `0.5769` | `0.7000` | `0.8568` | `0.1333` |
@@ -276,38 +282,36 @@ and across all `113` paired identities (`662` pairs).
 
 **Key readout from Table 2:**
 - Replacing the fleet constant (`between-agent SD = 0.0000, IQR = 0.0000`) with
-  partial pooling over `externally_verified` pairs restores a between-agent
+  partial pooling over legacy pairs labelled `externally_verified` produces a between-agent
   `cal_I` SD of **`0.0399–0.0630`** (`IQR = 0.0533–0.0966` for $k \in \{5, 10\}$),
   translating at `eff_w = 0.3600` to **`0.0144–0.0227`** of direct between-agent
   `I` spread from the calibration component alone while shrinking single-pair
-  noise toward the prior.
-- Why `snapshot.jsonl` (`2026-09-14` to `2026-10-12`) has `0` causally prior
-  `externally_verified` pairs: check-in `detail.confidence` stopped being
-  emitted on `2026-09-13`, and check-in `self_report.confidence_reported` only
-  began persisting on `core.agent_state` on `2026-10-12` (`#2741`, commit
-  `ba1a90438`). Between `2026-10-12` and `2026-10-15`, `core.agent_state` has
-  already accumulated `2,715` check-ins with `confidence_reported` across `35`
-  identities, which will supply causal check-in-to-outcome pairs for the next
-  offline read after the `2026-12-01` horizon.
+  variation toward the prior. Greater spread alone is not measurement validity.
+  This is a component-only scaling, not the SD of full I, whose other terms
+  covary with calibration and whose effective weights differ by row.
+- The earlier read reported no eligible legacy candidate substitution in the
+  snapshot window. That eligibility failure is not proof of zero temporal pairs
+  under a different estimator, and denser confidence capture does not establish
+  prospective target-bound forecasts. The revised verified-pair comparison
+  must first audit coverage under section 3.3 rather than inherit the old count.
 
 ### 4.3 Snapshot `I` Level and Threshold Coupling Across All `318` Identities
 
-On `snapshot.jsonl` (`18,021` `I` observations across `318` identities), where
-identities have $n_a = 0$ causal `externally_verified` pairs inside the
-`2026-09-14..2026-10-12` capture gap, every identity evaluates at the
-no-evidence prior $1 - e_0$:
+On `snapshot.jsonl` (`18,021` I observations across `318` identities), the
+following is an explicit **all-prior sensitivity**: substitute the same prior
+for every row while holding the other inputs fixed. It does not estimate the
+proposed verified-pair model's actual coverage or trajectory.
 
 | Calibration term on `snapshot.jsonl` (`318` identities, `18,021` rows) | Per-identity `I` mean | Per-identity `I` SD | p10 | p50 | p90 | IQR | Identities with mean `I >= 0.70` (`BASIN_I_HEALTHY`) | Rows with `I >= 0.70` |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | **Current fleet `cal_I = 0.8526` ($e_0 = 0.1474$)** | `0.7012` | `0.0489` | `0.6284` | `0.7062` | `0.7605` | `0.0641` | `174 / 318` (**`54.7%`**) | `10,299 / 18,021` (**`57.1%`**) |
 | **Neutral no-evidence prior `cal_I = 0.7500` ($e_0 = 0.2500$)** | `0.6625` | `0.0481` | `0.5915` | `0.6689` | `0.7229` | `0.0678` | `62 / 318` (**`19.5%`**) | `5,321 / 18,021` (**`29.5%`**) |
 
-This confirms that `BASIN_I_HEALTHY = 0.70` is coupled to the `+0.3069` level
-offset of the frozen `0.8526` fleet constant: dropping the prior from `0.8526`
-to `0.7500` without re-centering `BASIN_I_HEALTHY` (or using the verified-pair
-population ECE prior `1 - 0.1621 = 0.8379`) would push `35.2%` of the fleet
-(`112 / 318` identities) below the healthy `I` basin boundary purely from a
-prior shift.
+These are fixed-input raw-I level comparisons against the numeric reference
+0.70. They are not live basin classifications or a count of false pauses.
+The snapshot's 112/318 shift is a threshold-exposure diagnostic, not authority
+to move a threshold. The prior/reference choice and recursive downstream
+behavior require separate evaluation and preservation disposition.
 
 ---
 
@@ -319,14 +323,65 @@ Before any runtime change replaces `get_mean_calibration_error()` in
 1. **Preservation horizon gate:** Complete the registered `2026-12-01`
    outcome-grounding stop-rule read (`#1425`) and operator-declared report
    finality ([`eisv-core-boundary-v0.md`](eisv-core-boundary-v0.md)).
-2. **Post-`#2741` causal pair read:** Re-run
-   `scripts/analysis/eisv_i_calibration_shadow_read.py` on an export window
-   starting after `2026-10-12` (`ba1a90438`) so `checkin_self_report` supplies
-   causal pre-committed forecasts on `core.agent_state` for `externally_verified`
-   outcomes.
-3. **Level & basin-boundary alignment:** Align $(e_0, \text{BASIN\_I\_HEALTHY})$
-   so the no-evidence prior does not induce a spurious `35%` healthy-basin
-   reclassification.
-4. **3-consumer gate separation:** Keep the per-agent `I` calibration store
-   strictly separate from the shared `0.65` gate in `outcome_events.py:643-702`
-   and do not re-open supply into the legacy fleet bins.
+2. **Verified source:** Establish the target-bound independent evidence channel
+   in section 3.3. Dense check-in confidence and higher corroboration grades
+   alone do not satisfy it. No new source or tool is authorized by this note.
+3. **Offline evaluation:** Complete section 6 on preserved eligible evidence,
+   report missing coverage and level shifts, and review downstream exposure.
+   Do not automatically re-center thresholds to retain a historical population.
+4. **Consumer separation:** Leave the shared strategic/tactical/sequential
+   supply gate and legacy bins unchanged. Any future change to those consumers
+   requires separate review.
+
+## 6. Verified-pair offline comparison protocol (not run)
+
+This is an exploratory measurement comparison, not a rerun of #1425 or an
+individuality-v3 test. No live query, new experiment or predictor change is
+implemented here. The exploratory choices below are stated before their use;
+no pass/fail threshold or deployment authority is attached to them.
+
+1. **Freeze inputs.** Preserve section 4's artifacts unchanged. Create a
+   separate manifest for eligible verified pairs: input hashes, audited source
+   commit, source/target schemas, producer trust evidence, ordering fields,
+   exclusions and resolution coverage. Count unresolved, expired, duplicate,
+   conflicting and corrected records separately; never invent missing labels.
+   If the required provenance is absent, report the comparison unavailable.
+2. **Freeze the model.** Before computing contrasts, pin `T0`, evaluation end,
+   reference cohort, event family, identity/duplicate grouping, five bins from
+   section 3.1 and `k = 10`. Use only pre-`T0` reference evidence for `e_0`
+   (section 3.2). The primary window is lifetime evidence, matching section 3.1,
+   available before each check-in; record newest-evidence age. Report `k = 5, 20`
+   and 30/90-day trailing resolution windows as sensitivities, not as a search
+   for the largest spread. Finite windows can revert to prior-only as evidence
+   ages out; label expiry counts. Do not silently refresh the prior.
+3. **Recover deployed observations.** Reconstruct persisted raw I from its
+   components and ordered blends; report parity residuals and missing records.
+   Keep original 0.50/0.60 branch, other terms, clipping and optional blends.
+   Restrict the comparison to the server-generated behavioral path. Do not
+   change tactical drift, ODE forcing or outcome consistency at the same time.
+4. **Paired arms.** A: deployed fleet term. B: frozen verified reference-only
+   term. C: section 3.1 partial pooling. D: unpooled agent ECE on the same
+   verified evidence. E: legacy unweighted eligible-bin arithmetic on that
+   evidence, including its five-sample/seven-day eligibility. B–A separates
+   reference/level change, C–B agent evidence, C–D pooling, and D–E weighting
+   and eligibility. For D/E show own coverage and common-support results.
+   Keep observed, prior-only and unavailable rows distinct. A deployed-value
+   fallback may be displayed but is not evidence of candidate performance.
+5. **Levels and spread.** For the slot and raw I report equal-identity
+   distributions of identity means (SD, IQR, p10/p50/p90), paired mean shifts,
+   within-identity SD and row-weighted versions. Stratify by event family,
+   evidence counts (0, 1–4, 5–19, 20+), prior weight, outcome branch, optional
+   blends and calendar coverage. Compare overlapping-time support as well as
+   full-window means. Rank changes are descriptive. More spread is not by
+   itself evidence of better calibration or a meaningful agent difference.
+6. **Downstream limits.** Immediate replacement measures a fixed-input raw-I
+   delta. A separate chronological replay may apply unchanged BehavioralState
+   I/V EMA and baseline equations from identical preserved initial states;
+   missing initial states/inputs make that replay unavailable. Holding future
+   inputs fixed does not simulate changed verdicts, histories, outcomes or ODE
+   feedback. Raw-I distances from 0.70 cannot be reported as live basin flips.
+7. **Publish and review.** Publish the manifest, unavailable strata and results
+   in the ledger and evaluation index. Independently review evidence adequacy,
+   distribution shifts and preservation constraints before proposing a live
+   change. The calendar date alone does not release the predictor. No
+   outcome-validity or incentive-compatibility claim follows from these arms.

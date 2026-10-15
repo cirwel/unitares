@@ -1542,60 +1542,33 @@ telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
 
 **49. "Replacing I's fleet calibration scalar with a partially pooled per-agent
-term restores between-agent calibration spread without a per-bin sample cliff"**
-(`#2818`, [`../proposals/active/eisv-per-agent-i-calibration-v0.md`](../proposals/active/eisv-per-agent-i-calibration-v0.md))
-→ **OFFLINE DESIGN AND PRESERVED-DATA COMPARISON COMPLETE; LIVE PREDICTOR HELD
-UNTIL POST-`2026-12-01` READ.**
-1. *Why row 48's `#2194` per-agent candidate had zero eligible check-ins:*
-   (a) `#1445` (`2026-08-02`) excluded server-scraped confidence
-   (`prev_confidence_fallback` and `audit_trail_fallback`) from training
-   calibration, freezing the fleet strategic bins at `282` samples before
-   `#2194` (`2026-09-13`) added `bins_by_agent`; and (b) `#2194`'s step gate
-   (`MIN_PER_BIN = 5` inside a single confidence bin with newest pair `<= 7 d`)
-   discards all sparse pairs even when paired offline (`0 / 18,021` check-ins
-   in `snapshot.jsonl`, and `19 / 53` `externally_verified` identities dropped
-   even without a staleness cutoff).
-2. *Cross-channel homogenization audit:* Beyond `coherence` (`C(V_ODE)`, row 1),
-   per-agent channels carrying fleet-scoped or frozen inputs are: behavioral `I`
-   (`cal_I = 0.8526` fleet-scoped + frozen at `0.360`/`0.432` effective weight;
-   `coh_I` quasi-frozen at `0.216`/`0.288`), ethical drift `Δη`
-   (`calibration_deviation = 0.2414` from the fleet tactical `0.9–1.0` bin in
-   `src/monitor_drift.py:19-46`, which permanently bypasses the per-agent
-   baseline confidence fallback in `governance_core/ethical_drift.py:362-366`;
-   `stability_deviation = 0.20` frozen by `decision=None`, rows 21, 37;
-   `coherence_deviation` quasi-frozen), behavioral `S` (`drift_s >= 0.4702`
-   shared floor inherited from `Δη` on warmed non-exploratory check-ins), ODE
-   `S` (`noise_S = 0.0483` fleet strategic penalty + config-dependent
-   `s_setpoint = 0.0`, rows 15a, 23), behavioral `E` (`coh_e` quasi-frozen +
-   `continuity_E_input` clip-pinned at `0.30`, rows 20, 47),
-   `derive_confidence` (`55%` `coherence`), and `BehavioralEISV.deviation`
-   (`MIN_MEANINGFUL_EISV_STD = 0.05` floor binding on `69/72` baselined agents
-   for `I`, row 19).
-3. *Replacement rule and offline comparison (`scripts/analysis/eisv_i_calibration_shadow_read.py`
-   on the preserved 2026-10-12 dataset):* Replace (never blend) the fleet scalar
-   with partial pooling over sample-weighted binned ECE,
-   $e_{\text{pool}}(a, t) = (1 - w(n_a)) e_0 + w(n_a) e_{\text{ece}}(a, t)$ with
-   $w(n_a) = n_a / (n_a + k)$, gated strictly on `externally_verified` outcomes
-   paired with pre-committed forecasts (registry mint or prior check-in
-   `self_report.confidence_reported`, decoupled from the shared `0.65`
-   3-consumer gate in `outcome_events.py:643-702`). `tool_observed` (`0.65`
-   caller-described shape grading) is excluded: on the preserved pairs,
-   `tool_observed` (`n = 218` across `60` identities) has mean
-   $|y - c| = 0.0922$ (`p10 = 0.0100, p50 = 0.0400, p90 = 0.1800`) versus
-   `externally_verified` (`n = 444` across `53` identities) at mean
-   $|y - c| = 0.2881$ (`p10 = 0.1000, p50 = 0.2000, p90 = 0.7000`). Across the
-   `53` `externally_verified` identities (`444` pairs; pairs per identity
-   `n = 53, mean = 8.3774, p50 = 7.0000`), between-agent `cal_I` SD rises from
-   `0.0000` (`mean = 0.8526, p50 = 0.8526, iqr = 0.0000`) to `0.0484` at
-   $(e_0 = 0.25, k = 10)$ (`n = 53, mean = 0.7898, p10 = 0.7350, p50 = 0.7833, p90 = 0.8476, iqr = 0.0768`)
-   and `0.0399` at $(e_0 = 0.1474, k = 10)$ (`n = 53, mean = 0.8527, p10 = 0.8090, p50 = 0.8523, p90 = 0.9017, iqr = 0.0533`).
-   Across all `318` snapshot identities (`18,021` rows), shifting the
-   no-evidence ($n_a = 0$) prior from `0.8526` to `0.7500` lowers per-identity
-   mean `I` from `0.7012` (`p50 = 0.7062, sd = 0.0489`, `174/318 = 54.7%`
-   $\ge 0.70$) to `0.6625` (`p50 = 0.6689, sd = 0.0481`, `62/318 = 19.5%`
-   $\ge 0.70$), establishing that $(e_0, \text{BASIN\_I\_HEALTHY})$ must be
-   aligned together when any live change is made after `2026-12-01`.
+term restores meaningful between-agent calibration spread"** → **UNTESTED
+ON VERIFIED FORECAST/OUTCOME PAIRS; EXPLORATORY LEGACY-PAIR COMPARISON.**
+The [#2818 audit and design](../proposals/active/eisv-per-agent-i-calibration-v0.md)
+identifies additional fleet inputs: tactical calibration feeds drift and then
+behavioral S; strategic calibration supplies legacy ODE `noise_S`. Its source
+audit at `baabaf8b6` separates those from agent-local histories, clipping,
+defaults, derived confidence and optional cohort priors. Dated frozen-input
+findings in earlier rows are not new deployment measurements.
 
+The prior exploratory read grouped 444 temporal pairs labelled
+`externally_verified` across 53 identities. It reported component SD 0.0484
+at `e_0=0.25, k=10` and 0.0399 at `e_0=0.1474, k=10`, compared with a constant
+fleet component. Those are arithmetic sensitivity results on legacy pairs;
+a stored grade and the most recent confidence within 24 hours do not prove
+independent outcome truth, target binding or pre-execution commitment. The
+comparison does not establish replacement efficacy. Likewise, the 318-identity
+snapshot's change from 54.7% to 19.5% with mean raw I >=0.70 is numerical
+threshold exposure, not a measured live basin reclassification: the basin
+classifier reads ODE state. It does not authorize threshold re-centering.
+
+The proposed replacement keeps diminishing pooling and explicit prior-only
+provenance, requires independently resolved target-bound pairs and a frozen
+verified reference prior, and returns unavailable when that prior is absent.
+Section 6 specifies the still-unrun paired comparison, including coverage,
+level/spread separation and replay limits. No live estimator, feeder, threshold,
+registered read or stop rule changes. Verified supply and preservation review
+remain prerequisites, including after the 2026-12-01 calendar date.
 
 ### Fitted and learned estimators — which bucket they sit in (2026-09-25)
 
