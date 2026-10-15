@@ -111,7 +111,17 @@ NATIVE_WAIT_S = 600
 # Full review cycles per PR. A cycle holds at most two distinct model families
 # on the same revision/diff; rerunning a family or changing the work starts
 # another cycle. Coverage remains separate from this spending budget.
+#
+# A cycle that found a serious problem (a P0/P1 or unlabelled finding) does
+# not count against ROUND_CAP: the fix of a serious finding earns a full
+# review, however many earlier cycles there were. The cap exists to stop
+# review that has stopped finding serious things; past it, a round of lesser
+# findings is still answered by targeted fix verification (capped()).
+# Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
+# should be context based". ROUND_BACKSTOP bounds a review that never
+# converges.
 ROUND_CAP = 3
+ROUND_BACKSTOP = 10
 # Operator 2026-09-30: bounded full reviews across all sources; reaching a
 # budget never turns missing coverage or unresolved findings into approval.
 ROUND_CAP_ENABLED = True
@@ -858,6 +868,13 @@ class ReviewCycle:
     head: str
     key: str
     families: set[str | None] = field(default_factory=set)
+    findings: list[dict] = field(default_factory=list)
+
+    def productive(self) -> bool:
+        """It found a serious problem: a P0/P1 finding, or an unlabelled one
+        (a local review can report data loss in prose), as last_severe reads."""
+        return any(SEVERE_BADGE_RE.search(f.get("body") or "")
+                   or not SEVERITY_LABEL_RE.search(f.get("body") or "") for f in self.findings)
 
     def accepts(self, head: str, key: str, family: str | None) -> bool:
         same_head = (len(self.head) >= 7 and len(head) >= 7
@@ -883,6 +900,21 @@ class CodexRounds:
         return bool(self.cycles and self.cycles[-1].accepts(head, key, family))
 
     @property
+    def spent(self) -> int:
+        """Cycles that count against ROUND_CAP: all but those that found a
+        serious problem. ``count`` stays the full ledger (grants key on it)."""
+        return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
+
+    def exhausted(self, joining: bool) -> bool:
+        """No new full cycle without the operator: too many unproductive
+        cycles, or a review that has not converged by the backstop."""
+        if not ROUND_CAP_ENABLED:
+            return False
+        over = (self.spent > ROUND_CAP or (self.spent == ROUND_CAP and not joining)
+                or self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining))
+        return over
+
+    @property
     def last_severe(self) -> bool:
         # Unlabelled counts as severe: a local review can report data loss in
         # prose, and the cap must never route that fix around a full run.
@@ -897,7 +929,7 @@ class CodexRounds:
         """
         # Once the round is answered (disposed, or fixes verified once), a
         # push may be new work, and new work gets a full review (PR #2401).
-        return (ROUND_CAP_ENABLED and self.count >= ROUND_CAP
+        return (ROUND_CAP_ENABLED and self.spent >= ROUND_CAP
                 and bool(self.last_findings)
                 and not self.last_severe and not self.answered_since)
 
@@ -1031,6 +1063,7 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
             findings = []
         cycle = cycles[-1]
         cycle.families.add(family)
+        cycle.findings.extend(run_findings)
         cycle.key = cycle.key or key
         if len(last) > len(cycle.head):
             cycle.head = last
@@ -2790,10 +2823,11 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (ROUND_CAP_ENABLED and (rounds.count > ROUND_CAP or
-                        (rounds.count == ROUND_CAP and not joining_cycle))
+                if (rounds.exhausted(joining_cycle)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
-                    print("[review] full-review cycle budget exhausted; escalate unresolved issues. "
+                    print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
+                          f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
+                          "escalate unresolved issues. "
                           "An operator may use --authorize-full-review REASON or delegate one cycle with a scoped comment.")
                     print(cycle_grant_instructions(head, key, rounds))
                     return UNREVIEWED
@@ -3615,7 +3649,10 @@ def round_note(rounds: CodexRounds | None) -> str:
     if not ROUND_CAP_ENABLED:
         return f" · review cycle {rounds.count}"
     note = f" · review cycle {rounds.count} of {ROUND_CAP}"
-    return note + (" (cap reached)" if rounds.count >= ROUND_CAP else "")
+    if rounds.spent != rounds.count:
+        note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
+                f"backstop {ROUND_BACKSTOP})")
+    return note + (" (cap reached)" if rounds.spent >= ROUND_CAP or rounds.count >= ROUND_BACKSTOP else "")
 
 
 def cmd_ci(args) -> int:

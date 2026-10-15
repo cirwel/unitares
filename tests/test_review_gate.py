@@ -5001,3 +5001,46 @@ def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, dis
     # Runtime carry provenance can never be supplied in a posted marker.
     emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
     assert emitted.original_key == ''
+
+
+def _cycles_with(*severities):
+    """One full cycle per entry: a list of severity labels ([] means clean)."""
+    runs = []
+    for i, labels in enumerate(severities):
+        findings = [{"body": f"[{label}] finding {i}.{j}"} for j, label in enumerate(labels)]
+        runs.append((1000.0 + i, f"{i:x}" * 40, findings, f"key{i}", "openai"))
+    return rg.count_review_cycles(runs)
+
+
+def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
+    """Operator 2026-10-15: the cap stops review that has stopped finding
+    things, not review that keeps finding real defects."""
+    rounds = _cycles_with(["P1"], ["P0", "P2"], ["P1"])
+    assert rounds.count == 3 and rounds.spent == 0
+    assert not rounds.exhausted(joining=False)
+
+
+def test_clean_and_lesser_cycles_still_spend_the_cap():
+    rounds = _cycles_with([], ["P2"], ["P3", "P2"], ["P1"])
+    assert rounds.count == 4 and rounds.spent == 3
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)  # the second family may finish a cycle
+
+
+def test_an_unlabelled_finding_counts_as_serious():
+    rounds = _cycles_with(["P2"], ["P2"])
+    rounds.cycles[0].findings.append({"body": "data loss described in prose"})
+    assert rounds.spent == 1
+
+
+def test_the_backstop_bounds_a_review_that_never_converges():
+    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+    assert rounds.spent == 0
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)
+
+
+def test_the_round_note_says_when_serious_cycles_were_not_counted():
+    rounds = _cycles_with(["P1"], [], ["P1"])
+    assert rg.round_note(rounds) == (
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
