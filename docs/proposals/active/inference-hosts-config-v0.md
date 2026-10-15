@@ -163,32 +163,173 @@ antigravity takes that model's family. The local lane
 is not a job: `consult.standard` and `call_model` keep the one primary endpoint
 and one optional fallback of the one-endpoint design.
 
-### 2.5 Secrets and the spawn path
+### 2.5 Secrets and the spawn path: named launch profiles
 
-Today the server sends each spawn to the orchestrator as JSON, with the
-environment as a string map (`host_adapter.py:730-797`), and the adapter blanks
-`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `OPENAI_API_KEY` so a
-subscription lane cannot silently become metered (`:770-793`).
+*Rewritten 2026-10-15 (decision 7.5), then revised after an adversarial design
+review the same day. The first text proposed an allowlist matched on a
+command's leading arguments; it would not have bounded a caller holding the
+bearer token.*
 
-- **Values never cross the wire.** The spawn request names secrets; the
-  orchestrator resolves each name from its own environment when it starts the
-  child, as `local-inference-one-endpoint-v0.md` 2.6 requires. Step 4's
-  evidence is "absent from the spawn request", not only "absent from logs".
-- **Scrub, then set.** The adapter blanks every credential variable first, then
-  sets only the names the host declares. A declared host cannot inherit the
-  operator's own keys.
-- **The prompt stays in `HA_PROMPT`.** No prompt file.
-- **The orchestrator allows only adapter binaries.** Its command allowlist is
-  unset today (`elixir/agent_orchestrator/config/config.exs:63`), so any command
-  is allowed on the authenticated surface. An allowlist means little while every
-  adapter launches through `/bin/sh -c` and the reviewer through the Python
-  interpreter, since both would have to be allowed. Step 4 therefore changes
-  every spawn path together: the builtin adapters and declared `cli` hosts
-  launch their binaries directly (the orchestrator already closes the child's
-  stdin, #1546, which was the main reason for the shell), and the allowlist
-  matches a command's leading arguments, not only its name, so the reviewer is
-  admitted only as `<interpreter> -m agents.dialectic_reviewer`. A declared `cli`
-  host can only name an existing adapter.
+**Threat model.** Profiles defend against two callers: a relay that passes on
+input an attacker influenced (the governance server, the lease plane,
+dispatch_beam), and a holder of the orchestrator's bearer token alone (a
+leaked token, or a sandboxed agent that can reach localhost but cannot execute
+code). They do not bound a process running as the operator's user, which can
+read the secrets file and run anything directly, nor a holder of the node's
+Erlang cookie, which gives code execution inside the orchestrator. The cookie
+is kept off every command line (#2825); `AgentOrchestrator.run/1` stays
+unrestricted because only code inside the VM can call it.
+
+**What a caller controls today.** `POST /v1/agents` (`http_router.ex`
+`build_spec`) takes `cmd`, `args`, `env`, `cd`, `stdin`, `lease`, `lineage`,
+`server_url`, `client_session_id`, `max_output_lines` and `max_runtime_ms`.
+The orchestrator merges `env` over its own environment, which includes every
+exported line of the secrets file, applies `cd` unchecked, and turns `lineage`,
+`server_url` and `client_session_id` into child variables. The three host
+adapters launch through `/bin/sh -c`; the reviewer launches as
+`python -m agents.dialectic_reviewer` with a forwarded server environment
+that includes `UNITARES_MCP_BEARER_TOKEN`, the CLI paths, the local model
+endpoint and the classifier settings; dispatch_beam's council lanes launch
+`claude` and `codex` directly with the prompt in `argv`. A command allowlist,
+even one matched on leading arguments, leaves the bearer holder able to run
+code through an allowed command (`HOME`, `NODE_OPTIONS` or `PYTHONPATH` in
+`env`; a `cd` holding the caller's package or project configuration; an
+appended flag; a CLI path variable) and to route any secret in the
+orchestrator's environment to a host of its choosing (the reviewer's external
+endpoint and the *name* of its key variable are both caller-supplied, and
+`UNITARES_GOVERNANCE_URL` receives the MCP bearer token).
+
+**Profiles.** The orchestrator spawns only named profiles the operator
+defines. A profile fixes everything a caller could use to change what runs:
+
+| Field | Meaning |
+|---|---|
+| `cmd` | absolute path of the executable |
+| `args` | the complete argument list; no placeholders |
+| `cd` | a fixed absolute path |
+| `env.inherit` | names copied from the orchestrator's environment (default `HOME`, `PATH`, `LANG`, `TMPDIR`); every other inherited variable is removed |
+| `env.set` | fixed values, including `USER` (launchd strips it) and the blanked credential variables of today's adapters |
+| `env.secrets` | child variable name → orchestrator variable name, resolved when the child starts |
+| `vars` | the variable names a caller may supply, each with a byte limit, an optional pattern, and `required` |
+| `lineage` | `none`, or `caller` (the governed path's `parent_agent_uuid` and `spawn_reason`) |
+| `server_url`, `lease` | fixed, or absent |
+| `max_runtime_ms`, `max_output_lines` | ceilings; a request may ask for less, never more |
+| `max_concurrent` | how many children of this profile may run at once |
+
+The environment is built in one order: remove everything not inherited, set
+the fixed values, resolve the secrets, add the caller's variables, then add
+the orchestrator's own provisioned variables. A caller variable may never name
+a fixed, secret or provisioned variable. Variables the launching shell itself
+adds (`PWD`, `SHLVL`, `_`) are allowed in the child.
+
+**Requests are a closed schema:** `{"profile": "...", "vars": {...},
+"max_runtime_ms": n}` plus the existing `Idempotency-Key` header, and
+`lineage` only where the profile accepts it. Any other field is refused by
+name. An unknown variable, a missing required one, or a value over its limit
+or outside its pattern is refused with the variable's name and never its
+value. Model variables use `^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$` (no
+leading `-`); for a metered host the profile fixes the model or enumerates the
+allowed ones, since spending is the operator's decision. Every refusal happens
+before an idempotency reservation; the reservation digest for a profile
+request covers the profile name, the sorted variables, the effective ceilings
+and a digest of the profile's non-secret fields, so a secret rotation does not
+turn a retry into a conflict, and raw requests keep today's digest unchanged.
+
+**Every profile runs a client, and the client owns the prompt.** No profile
+takes a prompt or a model in its arguments. Each runs a small stdlib-only
+client with the interpreter's isolated mode (`-I`, which ignores `PYTHON*`
+variables and the working directory): the existing codex app-server and
+antigravity clients, a new `claude_cli_client.py`, and council clients for
+dispatch_beam's lanes. The client reads the prompt and options from the
+profile's variables, validates them, and starts the CLI with the prompt on
+standard input where the CLI reads it there (`claude -p`, `codex exec -`);
+`agy` takes it as one argument behind a fixed guard prefix. A caller
+directory, where a lane needs one (the council reviews a repository), is a
+variable the client resolves with `realpath` and accepts only under roots the
+profile fixes; the orchestrator itself never takes `cd` from a caller. The
+orchestrator therefore needs no way to write a child's standard input (Erlang
+ports cannot half-close it), and the earlier `stdin_var` field is dropped.
+Environment variables are not secret from other processes of the same user
+(`ps -E`); they are used because they are not parsed as options.
+
+**The dialectic reviewer takes one variable: the session id.** It fetches the
+thesis, the paused agent's state and family, and its parent from the session
+record (`dialectic get`), and resolves its host list from the
+`dialectic_reviewer` job itself, reading the inference hosts file the profile
+names. A caller that could supply the thesis, the paused agent's state or the
+host list could have a reviewer with its own identity file a verdict on a real
+session from invented evidence, misstate the family the reviewer must exclude,
+or pick a metered host. Everything the reviewer sends a secret to, or reads a
+policy from, is fixed in the profile: the governance URL and MCP bearer token,
+the CLI paths, the local model endpoint, the classifier settings
+(`UNITARES_MODEL_LOCAL_HOSTS`, `UNITARES_MODEL_PRIVACY`,
+`UNITARES_TRUSTED_NETWORKS`), and each external host's base URL and key. The
+reviewer's launch adds `-s`, so user-site `.pth` files do not load.
+
+**Secrets bind to profiles, not requests.** A caller chooses among profiles;
+it cannot point a profile's secret elsewhere. Every `env.secrets` source is
+checked when the profiles load and again at spawn: an unset or empty source
+refuses the spawn by name, never runs without it. The orchestrator redacts the
+resolved values of a child's secrets from the output it captures and returns.
+Requests now carry no secrets, so neither does the lease plane's
+governed-effect payload, which carries the request; that plane's credential
+check reads only top-level keys, so a bearer inside `env` passes it today (no
+persisted copy was found on 2026-10-15).
+
+**Declared `cli` hosts do not see the operator's logins.** A `claude_code`
+host whose `ANTHROPIC_BASE_URL` is a third party, running with the operator's
+`HOME`, falls back to the operator's subscription login when its bound key is
+empty, and sends it to that URL. A declared `cli` host's profile therefore
+runs with an isolated `HOME` (the antigravity client's pattern, without the
+keychain link), or with `claude --bare`, which never reads OAuth or the
+keychain, and with an isolated `CODEX_HOME` for the codex adapter.
+
+**Codex lanes are confined** (#2827, cirwel/dispatch_beam#87). Codex's legacy
+`--sandbox read-only` reads the whole disk, so every codex lane runs with a
+deny-read permission profile, core-only command environment, no MCP servers,
+hooks, plugins, apps, browser or computer use, an empty working directory
+(or, for the council, the reviewed workspace minus `.env` files), and refuses
+to run when administrator codex configuration exists. A profile that launches
+codex must keep these.
+
+**Where profiles come from.** The orchestrator reads
+`AGENT_ORCHESTRATOR_PROFILES_FILE` (JSON). It refuses a file, or a parent
+directory, that another user owns or can write. Without the file, profile
+spawns are off and raw spawns behave as today. A file that does not validate
+at boot disables profile spawns, with the reason on the authenticated
+`/v1/health`; a replacement that does not validate while running leaves the
+last good set in force and reports the error there. The orchestrator reloads
+when the file's digest changes, so regenerating it needs no restart (a
+restart kills running reviewers, which can live for hours).
+
+`scripts/ops/orchestrator-profiles.py` writes the file, and
+`scripts/start.sh` runs it before boot. It reads files only: the server's
+installation (interpreter, repository root, which must be the deploy tree,
+never a worktree agents edit), the inference hosts file, and the resolved CLI
+paths, pinning each CLI's symlink rather than its target (claude's
+auto-update replaces the target). The reviewer's external host moves into the
+hosts file as a declared `openai_http` host, and the
+`UNITARES_DIALECTIC_EXTERNAL_*` variables become aliases for it, so the
+generator never depends on the server's process environment. Declared `cli`
+hosts become generated profiles. The doctor compares the loaded profiles'
+digest, reported on `/v1/health`, with a fresh generation; the server refuses
+to dispatch while they differ, because a stale profile is a stale egress
+policy.
+
+**Raw spawns.** `AGENT_ORCHESTRATOR_RAW_SPAWN` is `allow` or `deny`. It
+defaults to `deny` whenever a valid profiles file is loaded and to `allow`
+only without one, so the protection is not left for a later switch; the mode
+is shown on `/v1/health` and the doctor warns on `allow` beside a profiles
+file. The basename `cmd_allowlist` stays as a guard on raw spawns during
+migration and is retired with them. A server or dispatch_beam configured for
+profiles never falls back to a raw spawn or to running a lane in-process when
+a profile spawn is refused; the refusal is the result.
+
+**One bearer, all profiles.** Any holder of the orchestrator's token may start
+any profile, including the reviewer. That is bounded by the reviewer taking
+only a session id (starting it is equivalent to requesting the review the
+session already needs), by `max_concurrent`, and by each profile's ceilings.
+Scoping profiles to separate tokens per caller is left for later.
 
 ### 2.6 Health state stays with its runner
 
@@ -276,11 +417,34 @@ sets nothing.
 3. **The reviewer reads `dialectic_reviewer`.** The reviewer design's remaining
    steps (cooldowns, independence, declared hosts) use this file;
    `UNITARES_DIALECTIC_REVIEWER_HOSTS` becomes an alias.
-4. **Declared hosts and self-hosting docs.** `openai_http` and `cli` hosts,
-   direct binary launch for every adapter (builtin and declared) with the
-   orchestrator allowlist matched on leading arguments (2.5), secret resolution in the orchestrator, the install manual,
-   `.env.example` and Compose, with a minimal local-only example file and its
-   JSON Schema.
+4. **Launch profiles, declared hosts and self-hosting docs** (2.5), in parts:
+   - **4a. The orchestrator spawns profiles.** The profiles file, its
+     validation and digest reload, the closed request schema, environment
+     building in the stated order, `env.secrets` checked at load and at
+     spawn, output redaction, ceilings and `max_concurrent`, the profile
+     request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` with a loaded
+     file, `allow` without). No profiles file ships yet, so nothing changes.
+   - **4b. The clients, the generator and the callers.** The claude and
+     council clients (the codex and antigravity clients exist); the
+     reviewer reads its thesis, state, family, parent and host list from the
+     server and the hosts file; the external reviewer host becomes a declared
+     `openai_http` host with environment aliases; the generator, run by
+     `start.sh`; the host adapters, the reviewer dispatch and the lease
+     plane's governed path (`governed_spawn.py` and `orchestrator_spec`
+     together) send `{profile, vars}`; the doctor's digest check. Deploy
+     order: orchestrator and lease plane before the server. dispatch_beam's
+     council moves in its own pull request, with its direct fallback removed.
+     Writing the profiles file is what turns raw spawns to `deny`.
+   - **4c. Raw spawns retire:** after a soak with per-profile spawn counts
+     non-zero and fallback counts zero, `cmd_allowlist` and the raw path are
+     removed. An effect proposed before the migration and replayed later is
+     refused, not run as a raw spawn.
+   - **4d. Declared hosts.** `openai_http` and `cli` hosts; each declared
+     `cli` host becomes a generated profile with its secrets bound, an
+     isolated `HOME` or `--bare`, and an isolated `CODEX_HOME`.
+   - **4e. Self-hosting docs:** the install manual, `.env.example` and
+     Compose, a minimal local-only example file, and the JSON Schemas for
+     both files.
 5. **The review gate reads its repository file** with `collect_families`;
    `review_providers.json` becomes an alias on the one-endpoint design's
    schedule. `review_providers.json` is named in the shared contract in both
@@ -298,10 +462,30 @@ sets nothing.
   `test_delegated_inference.py`, `test_model_inference.py`,
   `test_local_model_privacy.py`, `test_interface_contract.py`.
 - Step 3: the reviewer design's evidence list.
-- Step 4: a declared `cli` host answers end to end; its secret's value is
-  absent from the spawn request, logs and provenance; a declared host does not
-  receive the operator's own keys; the allowlist refuses a command outside it,
-  `/bin/sh` included, while every builtin adapter and the reviewer still run.
+- Step 4:
+  - each shipped profile still runs (every host adapter, the reviewer on the
+    direct and governed paths, both council lanes), in CI against shims and
+    in one operator-run live check;
+  - a request with any field outside the closed schema is refused by name,
+    one test per field; with raw spawns denied, any `cmd` request is refused,
+    `/bin/sh` included;
+  - a caller variable cannot set an unlisted, fixed, secret or provisioned
+    name; an inherited variable not in `env.inherit` is absent from the
+    child; a missing secret refuses the spawn;
+  - a secret's value is absent from the request, the response (redacted
+    output), logs, telemetry, the lease plane's payload and provenance;
+  - the reviewer, given a real session id and nothing else, reviews the
+    session's own thesis; a host list or thesis supplied by the caller has
+    no route into it;
+  - a council directory outside the profile's roots is refused after
+    resolving symlinks; a prompt that begins with `--` reaches the model as
+    text;
+  - a profile request replays and conflicts under the same idempotency
+    rules as today, and a raw request's digest is unchanged;
+  - a declared `cli` host answers end to end and receives neither the
+    operator's keys nor the operator's logins;
+  - after migration, per-profile spawn counts are non-zero and in-process
+    fallback counts are zero.
 - Step 5: a sensitive-path pull request collects two distinct families in list
   order; a second pass from one family does not count; `test_review_gate.py`
   stays green.
@@ -312,6 +496,17 @@ sets nothing.
   each may receive.
 - **Contract change.** `host_id` loses its enum in the published schema;
   strict clients may have cached it.
+- **Profiles drift from the server's settings.** A profile pins what a secret
+  is sent to, so a stale file is a stale egress policy. `start.sh`
+  regenerates it, the orchestrator reloads on a digest change, and the server
+  refuses to dispatch while the doctor's comparison differs.
+- **Migration breaks a caller.** A refused profile request names the profile
+  and the field, and callers configured for profiles do not fall back, so a
+  broken caller fails visibly; the per-profile counters show it.
+- **What profiles do not bound.** The operator's own user, the node cookie,
+  and what a launched agent does with a prompt within its profile (2.5,
+  threat model). A codex lane's answer is bounded by its confinement, not by
+  the profile.
 - **Data leaving the machine.** A host whose retention is unknown is declared
   `public_only`. For pull requests, what counts as public follows the
   repository's visibility, not this repository's.
@@ -335,6 +530,13 @@ after the four questions were put to him with recommendations).
    `pr_review` once the gate reads its repository file (step 5). GLM is declared
    in that file and runs where `ZAI_API_KEY` is set; elsewhere it is skipped as
    `unconfigured`.
+
+5. **Step 4 builds named launch profiles** (2.5), chosen by the operator on
+   2026-10-15 from three options put to him: profiles, the leading-argument
+   allowlist as first written, or direct launch with the bearer token as the
+   only boundary. Profiles were chosen because the allowlist would not bound
+   a caller holding the token. Recorded in the knowledge graph as
+   `2026-10-15T10:29:57.051370+00:00`.
 
 **Amendment (operator, 2026-10-15, later the same day):** GLM is phased out;
 the operator ended the trial and the subscription. Decisions 2 and 4 no longer
