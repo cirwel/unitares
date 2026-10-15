@@ -5,9 +5,10 @@ Procedure owner: ``docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0
 *Amendment 2026-10-15: data boundary at the first instrument change*. When the
 first change to the live EISV update path deploys, the registered read's data
 boundary moves to that instant T. ``audit.outcome_events`` has no insert-time
-column and ``core.agent_state`` is subject to retention, so neither a backfill
-carrying a pre-T timestamp nor a retention deletion can be detected from the
-live tables alone. This tool closes that gap with two subcommands:
+column, and ``core.agent_state`` rows can still be removed by a manual
+``core.cleanup_old_agent_state`` (automatic pruning stopped with migration 073),
+so neither a backfill carrying a pre-T timestamp nor a deletion can be detected
+from the live tables alone. This tool closes that gap with two subcommands:
 
 ``export``
     Run once, at or after T (at the deployment that T records). Writes, under

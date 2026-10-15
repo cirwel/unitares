@@ -1469,16 +1469,19 @@ def _with_instrument_change(monkeypatch, change_at):
     monkeypatch.setattr(matrix_module, "REGISTERED_READ_MANIFEST", entries)
 
 
-def test_stop_rule_entry_records_no_instrument_change_yet():
+def test_stop_rule_entry_carries_the_boundary_rule():
+    # Deliberately silent on instrument_change_at: the amendment requires the
+    # first live-path change to record T in the real manifest, and that PR
+    # must pass this suite unmodified.
     entry = matrix_module.registered_read_protocol(STOP_RULE_READ_ID)
     assert entry is not None
-    assert entry.instrument_change_at is None
     assert entry.data_boundary_rule == matrix_module.STOP_RULE_DATA_BOUNDARY_RULE
     # The retry form shares the entry, and so the boundary rule.
     assert matrix_module.registered_read_protocol(f"{STOP_RULE_READ_ID}-retry-1") is entry
 
 
-def test_no_instrument_change_leaves_the_wired_boundary_unchanged():
+def test_no_instrument_change_leaves_the_wired_boundary_unchanged(monkeypatch):
+    _with_instrument_change(monkeypatch, None)
     boundary = matrix_module.effective_data_boundary(_wired_stop_rule_args())
     assert boundary.registered == _WIRED_CUTOFF_DT
     assert boundary.effective == _WIRED_CUTOFF_DT

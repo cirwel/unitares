@@ -904,9 +904,13 @@ the defect stated beside it.
 **Archival snapshot and reconciliation.** `audit.outcome_events` has no
 insert-time column, so a backfill, correction or recomputation that carries a
 pre-T timestamp cannot be told apart from an original row. `core.agent_state`
-is pruned by `core.cleanup_old_agent_state` (90 days by default, keeping the
-latest row per identity), so state rows the read could reach at T can be gone
-by the read date. Two steps close this:
+was pruned automatically by `core.cleanup_old_agent_state` (90 days, keeping
+the latest row per identity) until migration 073 (`retention_keep_record`,
+applied to the reference deployment on 2026-10-08) removed every retention step
+from `audit.partition_maintenance()`. Automatic pruning has therefore stopped,
+but the function remains for deliberate manual use, so a state row the read
+could reach at T can still be deleted before the read date. Two steps close
+this:
 
 - (a) At the deployment that T records, the PR author or the deployer runs
   `python3 scripts/analysis/eisv_read_input_snapshot.py export --boundary <T> --out <dir>`
@@ -948,7 +952,9 @@ closure for insufficient eligible evidence, scientific inference
   November 2025. On 2026-10-15 the earliest `audit.outcome_events` row is from
   2026-02-24 and the earliest surviving `core.agent_state` row from
   2025-12-12, and state rows before July 2026 survive only thinly (a few
-  hundred a month) because of the pruning above. The report states the
+  hundred a month) because of the automatic pruning that ran before
+  migration 073; those rows are gone and the amendment cannot restore them.
+  The report states the
   coverage it actually had: the earliest admitted outcome, the earliest prior
   state it joined, and the counts per month.
 - At lead 0 the joined state may be the check-in recorded at the outcome's own
