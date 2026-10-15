@@ -38,8 +38,10 @@ from .host_adapter import (
     host_adapter_disabled_hosts,
     host_adapter_lane_configured,
 )
+from . import host_availability
 from .inference_outcome import InferenceFailure, InferenceOutcome
 from .inference_registry import sha256_text
+from src import inference_config
 from src.local_inference_env import ENDPOINT_NOT_LOCAL
 from .model_inference import (
     CallModelRequest,
@@ -115,16 +117,90 @@ _STANDARD_HOST_ROUTES = {
 }
 _SELECTABLE_HOST_ROUTES = {**_STANDARD_HOST_ROUTES, **_THOROUGH_HOST_ROUTES}
 
-# Model family -> the thorough hosts that family is sent to, in preference
-# order for automatic routing. It excludes the caller family; an unknown caller may
-# get any of them. Claude stays first wherever it is eligible, which keeps the
-# pre-Antigravity default for unknown callers.
+# The consult.thorough job's order when the operator's inference hosts file
+# does not set one (docs/proposals/active/inference-hosts-config-v0.md 2.4).
+# The caller's own family is excluded from it, so every caller family gets the
+# order the earlier per-family peer table gave: Claude first wherever it is
+# eligible, which keeps the pre-Antigravity default for unknown callers.
+_DEFAULT_THOROUGH_ORDER: tuple[str, ...] = (
+    "claude:host-adapter",
+    "codex:host-adapter",
+    "antigravity:host-adapter",
+)
+
+
+# The default order per caller family, kept as a read-only view for readers of
+# the earlier peer table (open work such as #2792 asserts against it). It is
+# derived from _DEFAULT_THOROUGH_ORDER and the shared family vocabulary, and
+# routing never reads it: _thorough_plan does, so an operator's job applies.
 _THOROUGH_PEERS: dict[str | None, tuple[str, ...]] = {
-    "anthropic": ("codex:host-adapter", "antigravity:host-adapter"),
-    "openai": ("claude:host-adapter", "antigravity:host-adapter"),
-    "google": ("claude:host-adapter", "codex:host-adapter"),
-    None: ("claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"),
+    family: tuple(
+        host_id for host_id in _DEFAULT_THOROUGH_ORDER
+        if inference_config.BUILTIN_DEFAULT_FAMILY[host_id] != family
+    )
+    for family in ("anthropic", "openai", "google")
 }
+_THOROUGH_PEERS[None] = _DEFAULT_THOROUGH_ORDER
+
+
+@dataclass(frozen=True, slots=True)
+class ThoroughPlan:
+    """The consult.thorough order for one caller, before availability.
+
+    ``peers`` keeps the operator's order with only static skips removed
+    (``skipped``): a host the file switches off, the caller's own family, or a
+    host the thorough lane cannot call. The system may only shorten the list,
+    never add to or reorder it. ``config_error`` is set when the operator's
+    file does not load; the job then refuses rather than falling back.
+    """
+
+    peers: tuple[str, ...]
+    skipped: tuple[dict[str, str], ...]
+    config_error: str | None = None
+    job_configured: bool = False
+    # Every host in the operator's order with its static skip, or None when it
+    # is a peer; the walk that reports `skipped` follows this, in order.
+    order: tuple[tuple[str, dict[str, str] | None], ...] = ()
+
+
+def _skip(host_id: str, reason: str, detail: str) -> dict[str, str]:
+    return {"host_id": host_id, "reason": reason, "detail": detail}
+
+
+def _thorough_plan(caller_family: str | None) -> ThoroughPlan:
+    loaded = inference_config.load()
+    if loaded.state == "error" or loaded.config is None:
+        return ThoroughPlan((), (), config_error=str(loaded.error))
+    config = loaded.config
+    job = config.jobs.get("consult.thorough")
+    order = job.prefer if job is not None else _DEFAULT_THOROUGH_ORDER
+    walk: list[tuple[str, dict[str, str] | None]] = []
+    for host_id in order:
+        entry = config.hosts.get(host_id)
+        static: dict[str, str] | None = None
+        if host_id not in _THOROUGH_HOST_ROUTES:
+            detail = ("declared hosts are not callable from consult yet"
+                      if entry is not None and entry.kind != "builtin"
+                      else "not a thorough-lane host")
+            static = _skip(host_id, "unconfigured", detail)
+        elif entry is not None and not entry.enabled:
+            static = _skip(host_id, "disabled", "switched off in the inference hosts file")
+        elif caller_family is not None and entry is not None and entry.family == caller_family:
+            static = _skip(host_id, "excluded_family", f"same family as the caller ({caller_family})")
+        walk.append((host_id, static))
+    return ThoroughPlan(
+        peers=tuple(h for h, static in walk if static is None),
+        skipped=tuple(static for _, static in walk if static is not None),
+        job_configured=job is not None,
+        order=tuple(walk),
+    )
+
+
+def _availability_skip(host_id: str) -> dict[str, str]:
+    cooling = host_availability.cooldown(host_id)
+    if cooling is not None:
+        return _skip(host_id, "cooldown", "provider cooling down after a quota or auth failure")
+    return _skip(host_id, "unconfigured", "not available on this server (flag, CLI or orchestrator)")
 
 _SAFE_PROVENANCE_FIELDS = (
     "host_id",
@@ -173,6 +249,20 @@ class ConsultRequest:
     # handler sees them on every path, cancellation included, and the audit
     # record names each host the brief reached.
     failover_trace: list[dict[str, str]] = field(default_factory=list, compare=False)
+    # Hosts the thorough lane passed over, in the operator's order, before the
+    # one that served (failover hops add to it): each with a closed reason code
+    # (inference_config.SKIP_REASONS) and a sentence. Shared across
+    # dataclasses.replace copies, like failover_trace.
+    skipped: list[dict[str, str]] = field(default_factory=list, compare=False)
+    # The job's walk (host, static skip or None), for failover to report hosts
+    # it passes; empty for pinned hosts and direct callers.
+    thorough_order: tuple[tuple[str, dict[str, str] | None], ...] = ()
+    # Every host in the job was skipped: refuse, or degrade when permitted,
+    # without contacting any host.
+    thorough_blocked: bool = False
+    # A policy refusal decided before routing (code, message, recovery); the
+    # router returns it so it is recorded like every other routed refusal.
+    policy_refusal: tuple[str, str, str] | None = None
     consultation_id: str = field(default_factory=lambda: str(uuid4()))
 
 
@@ -262,16 +352,40 @@ def _thorough_host_for_caller() -> str:
     selects between already-authorized peers; the public consult schema
     exposes no host control.
     """
-    peers = _THOROUGH_PEERS[_caller_family()]
-    for host_id in peers:
-        if host_adapter_available(host_id):
-            return host_id
-    disabled = host_adapter_disabled_hosts()
-    return next((host_id for host_id in peers if host_id not in disabled), peers[0])
+    chosen, _ = _thorough_choice(_thorough_plan(_caller_family()))
+    # No eligible host: the handler refuses or degrades before any call, so this
+    # name is never contacted; it only keeps the request well-formed.
+    return chosen or _DEFAULT_THOROUGH_ORDER[0]
 
 
 def _thorough_peers_for_caller() -> tuple[str, ...]:
-    return _THOROUGH_PEERS[_caller_family()]
+    return _thorough_plan(_caller_family()).peers
+
+
+def _thorough_choice(plan: ThoroughPlan) -> tuple[str | None, tuple[dict[str, str], ...]]:
+    """The first available peer, and the hosts passed over before it, in order.
+
+    When none is available the first peer the operator has not switched off is
+    returned, so the failure names a route that setup can fix (a switched-off
+    host is named only when every peer is switched off); the skips are then the
+    hosts before that one. With no eligible peer at all, None and every skip.
+    """
+    if not plan.peers:
+        return None, plan.skipped
+    walk = plan.order or tuple((h, None) for h in plan.peers)
+    passed: list[dict[str, str]] = []
+    for host_id, static in walk:
+        if static is not None:
+            passed.append(static)
+        elif host_adapter_available(host_id):
+            return host_id, tuple(passed)
+        else:
+            passed.append(_availability_skip(host_id))
+    disabled = host_adapter_disabled_hosts()
+    chosen = next((h for h in plan.peers if h not in disabled), plan.peers[0])
+    index = [h for h, _ in walk].index(chosen)
+    before = {h for h, _ in walk[:index]}
+    return chosen, tuple(s for s in passed if s["host_id"] in before)
 
 
 #: Failures that prove the chosen provider could not serve the call and that
@@ -302,10 +416,30 @@ def _failover_reason(failure: InferenceFailure) -> str | None:
     return None
 
 
+def _note_skip(request: ConsultRequest, item: dict[str, str]) -> None:
+    if all(existing["host_id"] != item["host_id"] for existing in request.skipped):
+        request.skipped.append(item)
+
+
 def _next_peer(request: ConsultRequest, tried: list[str]) -> str | None:
-    for host_id in request.thorough_peers:
-        if host_id not in tried and host_adapter_available(host_id):
+    """The next available host after the last one tried, recording what it passes."""
+    walk = request.thorough_order or tuple((h, None) for h in request.thorough_peers)
+    ids = [h for h, _ in walk]
+    start = ids.index(tried[-1]) + 1 if tried and tried[-1] in ids else 0
+    passed: list[dict[str, str]] = []
+    for host_id, static in walk[start:]:
+        if host_id in tried:
+            continue
+        if static is not None:
+            passed.append(static)
+        elif host_adapter_available(host_id):
+            # Only hosts passed on the way to one that will be tried count;
+            # a scan that finds nothing leaves `skipped` unchanged.
+            for item in passed:
+                _note_skip(request, item)
             return host_id
+        else:
+            passed.append(_availability_skip(host_id))
     return None
 
 
@@ -350,6 +484,12 @@ def _safe_provenance(
             safe[key] = value[:500]
         elif isinstance(value, (int, float, bool)):
             safe[key] = value
+    # The served host's model family from the shared vocabulary (the operator
+    # file may set it); declared, not inferred from what the backend says.
+    if isinstance(safe.get("host_id"), str):
+        family = inference_config.host_family(safe["host_id"])
+        if family is not None:
+            safe["family"] = family
     # Attribution is the dispatch-resolved caller, never a backend assertion.
     safe["requester_uuid"] = requester_uuid
     safe["accountability_class"] = "tool_evidence"
@@ -794,6 +934,8 @@ def _success(
     })
     if degradation is not None:
         data["degradation"] = degradation
+    if provenance.get("family"):
+        data["family"] = provenance["family"]
     if external_processing:
         data["cost"] = {
             "class": provenance.get("cost_class", "unknown"),
@@ -894,6 +1036,17 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 request, thorough_host_id=request.host_id, thorough_peers=(),
             )
 
+    if request.policy_refusal is not None:
+        code, message, recovery = request.policy_refusal
+        return _failed(
+            request,
+            message=message,
+            code=code,
+            category="system_error" if code == "INFERENCE_CONFIG_INVALID" else "validation_error",
+            recovery_action=recovery,
+            failure_details={"reason": code.lower()},
+        )
+
     if request.effort == "standard":
         outcome = await _guarded_inference(
             "standard",
@@ -973,6 +1126,55 @@ async def run_consultation(request: ConsultRequest) -> ConsultationOutcome:
                 diagnostics={
                     "fallback": _failure_diagnostics(fallback_failure),
                 },
+            )
+        return _success(
+            request,
+            local_outcome,
+            delivered_effort="standard",
+            delivery_policy="standard_local",
+            degradation=degradation,
+            brief_hash=brief_hash,
+            prompt_hash=prompt_hash,
+        )
+
+    if request.thorough_blocked:
+        # Every host in the consult.thorough job was skipped. No host is
+        # contacted: refuse, or answer locally when the caller permitted it.
+        if not request.allow_degraded:
+            return _failed(
+                request,
+                message="No host in the consult.thorough job is eligible for this caller",
+                code="CONSULT_NO_ELIGIBLE_HOST",
+                category="system_error",
+                recovery_action=(
+                    "Read skipped for each host's reason; the operator can add or enable "
+                    "a host of another family in the inference hosts file, or pass "
+                    "allow_degraded=true for a standard local answer."
+                ),
+                failure_details={"skipped": [dict(item) for item in request.skipped]},
+            )
+        degradation = {
+            "occurred": True,
+            "reason_code": "CONSULT_NO_ELIGIBLE_HOST",
+            "fallback_from": "thorough",
+            "fallback_to": "standard_local",
+        }
+        local_outcome = await _guarded_inference(
+            "standard",
+            lambda: _run_standard(request, prompt, force_local=True),
+        )
+        if not local_outcome.ok:
+            fallback_failure = local_outcome.failure
+            assert fallback_failure is not None
+            return _failed(
+                request,
+                message="No thorough host was eligible and the standard local fallback failed",
+                code="CONSULT_FALLBACK_FAILED",
+                category=fallback_failure.category,
+                recovery_action=_recovery_for_upstream(fallback_failure, lane="standard"),
+                failure_details={"fallback": _safe_failure(fallback_failure)},
+                degradation=degradation,
+                diagnostics={"fallback": _failure_diagnostics(fallback_failure)},
             )
         return _success(
             request,
@@ -1073,6 +1275,8 @@ def _with_failover(request: ConsultRequest, outcome: ConsultationOutcome) -> Con
     degraded fallback and cancellation alike."""
     if request.failover_trace:
         outcome.data["failover"] = [dict(hop) for hop in request.failover_trace]
+    if request.skipped:
+        outcome.data["skipped"] = [dict(item) for item in request.skipped]
     return outcome
 
 
@@ -1117,6 +1321,7 @@ _RECORD_ROUTE_FIELDS = (
     "tokens_used",
     "model_reporting_status",
     "model_reroutes",
+    "family",
 )
 _IDENTIFIER_SHAPE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 # Codes and categories are snake_case constants (upstream failure codes are
@@ -1209,7 +1414,12 @@ def _consultation_record(
             "constructed_prompt": _keyed_hash(key, _constructed_prompt(request)),
         }
         record["hashes"] = hashes
-    if request.effort == "thorough" and request.privacy == "cloud_allowed":
+    if (
+        request.effort == "thorough"
+        and request.privacy == "cloud_allowed"
+        and not request.thorough_blocked
+        and request.policy_refusal is None
+    ):
         # Only when the thorough lane can be attempted: under privacy='local'
         # the call is refused or degraded before any host is contacted, and
         # naming one would read as the brief having gone there.
@@ -1219,6 +1429,8 @@ def _consultation_record(
             # answered, failed last, or (cancelled) may still be running.
             record["request"]["thorough_host_id"] = request.failover_trace[-1]["to_host_id"]
             record["failover"] = [dict(hop) for hop in request.failover_trace]
+    if request.skipped:
+        record["skipped"] = [dict(item) for item in request.skipped]
     for field_name in ("delivery", "degradation", "failure"):
         if data.get(field_name) is not None:
             record[field_name] = _record_value(data[field_name], key)
@@ -1297,24 +1509,68 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     effort = str(arguments.get(
         "effort", "thorough" if selected_host in _THOROUGH_HOST_ROUTES else "standard",
     ))
+    privacy = str(arguments.get("privacy", "local"))
+    thorough_fields: dict[str, Any] = {}
+    if effort == "thorough" and selected_host is None:
+        thorough_fields = {
+            "thorough_host_id": _thorough_host_for_caller(),
+            "thorough_peers": _thorough_peers_for_caller(),
+        }
+    # The consult.thorough job applies only where the thorough lane can run:
+    # privacy='local' never contacts a thorough host, so it neither reports
+    # skips nor refuses on the operator's hosts file.
+    policy_refusal: tuple[str, str, str] | None = None
+    if effort == "thorough" and privacy == "cloud_allowed":
+        loaded = inference_config.load()
+        if loaded.state == "error" or loaded.config is None:
+            policy_refusal = (
+                "INFERENCE_CONFIG_INVALID",
+                "The inference hosts file does not load, so the thorough lane refuses: "
+                f"{loaded.error}",
+                f"The operator fixes the file named by {inference_config.HOSTS_FILE_ENV}; "
+                "the doctor's inference_hosts_file check names the line or field. "
+                "Standard effort still works.",
+            )
+        elif selected_host is None:
+            plan = _thorough_plan(_caller_family())
+            chosen = thorough_fields["thorough_host_id"]
+            _, skipped = _thorough_choice(plan)
+            thorough_fields.update(
+                thorough_order=plan.order,
+                thorough_blocked=not plan.peers,
+                # When every host is skipped, `chosen` is a placeholder that is
+                # never contacted; keep every skip.
+                skipped=[dict(item) for item in skipped
+                         if not plan.peers or item["host_id"] != chosen],
+            )
+        elif selected_host in _THOROUGH_HOST_ROUTES:
+            job = loaded.config.jobs.get("consult.thorough")
+            entry = loaded.config.hosts.get(selected_host)
+            if job is not None and selected_host not in job.prefer:
+                policy_refusal = (
+                    "CONSULT_HOST_NOT_IN_JOB",
+                    f"{selected_host} is not in the consult.thorough job's list "
+                    f"({', '.join(job.prefer)})",
+                    "Pin a host the consult.thorough job lists, or omit host_id.",
+                )
+            elif entry is not None and not entry.enabled:
+                policy_refusal = (
+                    "CONSULT_HOST_DISABLED",
+                    f"{selected_host} is switched off in the inference hosts file",
+                    "Pin another host, or omit host_id for automatic routing.",
+                )
     request = ConsultRequest(
         brief=brief_text,
         requester_uuid=requester_uuid,
         purpose=str(arguments.get("purpose", "answer")),
         effort=effort,
-        privacy=str(arguments.get("privacy", "local")),
+        privacy=privacy,
         allow_degraded=coerce_bool(arguments.get("allow_degraded"), default=False),
         response_mode=str(arguments.get("response_mode", "compact")),
         host_id=selected_host,
         # Only a thorough consult delegates; a standard one never probes hosts.
-        **(
-            {
-                "thorough_host_id": _thorough_host_for_caller(),
-                "thorough_peers": _thorough_peers_for_caller(),
-            }
-            if effort == "thorough" and selected_host is None
-            else {}
-        ),
+        **thorough_fields,
+        policy_refusal=policy_refusal,
         **(
             {"thorough_host_id": selected_host}
             if selected_host in _THOROUGH_HOST_ROUTES
@@ -1379,7 +1635,11 @@ async def handle_consult(arguments: Dict[str, Any]) -> Sequence[TextContent]:
             message="Unknown consultation host",
             code="INFERENCE_HOST_NOT_FOUND",
             category="validation_error",
-            recovery_action="Choose a host listed by list_inference_hosts that accepts consult.",
+            recovery_action=(
+                "Choose a host listed by list_inference_hosts that accepts consult: "
+                + ", ".join(_SELECTABLE_HOST_ROUTES)
+            ),
+            failure_details={"valid_host_ids": list(_SELECTABLE_HOST_ROUTES)},
         )
     else:
         try:
