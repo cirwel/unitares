@@ -231,8 +231,8 @@ value. Model variables use `^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,127}$` (no
 leading `-`); for a metered host the profile fixes the model or enumerates the
 allowed ones, since spending is the operator's decision. Every refusal happens
 before an idempotency reservation; the reservation digest for a profile
-request covers the profile name, the sorted variables, the effective ceilings
-and a digest of the profile's non-secret fields, so a secret rotation does not
+request covers the profile name, the sorted variables, the effective ceilings,
+the effective lineage and a digest of the profile's non-secret fields, so a secret rotation does not
 turn a retry into a conflict, and raw requests keep today's digest unchanged.
 
 **Every profile runs a client, and the client owns the prompt.** No profile
@@ -317,9 +317,11 @@ to dispatch while they differ, because a stale profile is a stale egress
 policy.
 
 **Raw spawns.** `AGENT_ORCHESTRATOR_RAW_SPAWN` is `allow` or `deny`. It
-defaults to `deny` whenever a valid profiles file is loaded and to `allow`
-only without one, so the protection is not left for a later switch; the mode
-is shown on `/v1/health` and the doctor warns on `allow` beside a profiles
+defaults to `deny` whenever `AGENT_ORCHESTRATOR_PROFILES_FILE` is set, whether
+or not the file exists or validates, and to `allow` only when it is unset: a
+missing or broken profiles file must never reopen raw spawning, so it leaves
+the orchestrator spawning nothing until it is fixed. The mode is shown on
+`/v1/health`, and the doctor warns on an explicit `allow` beside a profiles
 file. The basename `cmd_allowlist` stays as a guard on raw spawns during
 migration and is retired with them. A server or dispatch_beam configured for
 profiles never falls back to a raw spawn or to running a lane in-process when
@@ -422,8 +424,8 @@ sets nothing.
      validation and digest reload, the closed request schema, environment
      building in the stated order, `env.secrets` checked at load and at
      spawn, output redaction, ceilings and `max_concurrent`, the profile
-     request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` with a loaded
-     file, `allow` without). No profiles file ships yet, so nothing changes.
+     request digest, and `AGENT_ORCHESTRATOR_RAW_SPAWN` (`deny` whenever a
+     profiles file is configured, valid or not; `allow` only without one). No profiles file ships yet, so nothing changes.
    - **4b. The clients, the generator and the callers.** The claude and
      council clients (the codex and antigravity clients exist); the
      reviewer reads its thesis, state, family, parent and host list from the
@@ -481,7 +483,10 @@ sets nothing.
     resolving symlinks; a prompt that begins with `--` reaches the model as
     text;
   - a profile request replays and conflicts under the same idempotency
-    rules as today, and a raw request's digest is unchanged;
+    rules as today, including a conflict when only its lineage differs, and
+    a raw request's digest is unchanged;
+  - with a profiles file configured but missing or invalid, a raw request is
+    refused;
   - a declared `cli` host answers end to end and receives neither the
     operator's keys nor the operator's logins;
   - after migration, per-profile spawn counts are non-zero and in-process
