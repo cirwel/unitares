@@ -1,11 +1,12 @@
 # Inference hosts and jobs from one operator file (v0)
 
-Status: Proposed, design-only. Merging this document does not by itself
-authorize the build. It extends `dialectic-reviewer-hosts-v0.md` from the
+Status: Accepted 2026-10-15. The operator's decisions are in section 7, and he
+authorized building from step 1 ("proceed all"). Each step still ships as its
+own pull request with the evidence in section 5. It extends `dialectic-reviewer-hosts-v0.md` from the
 dialectic reviewer to the other inference jobs, and it leaves the local lane
-exactly as `local-inference-one-endpoint-v0.md` defines it. Section 7 lists
-the decisions this design needs from the operator, including two that would
-widen the reviewer design.
+exactly as `local-inference-one-endpoint-v0.md` defines it. Section 7 records
+the operator's decisions of 2026-10-15, including one that widens the reviewer
+design.
 
 Date: 2026-10-15
 
@@ -146,7 +147,7 @@ job keeps the reviewer design's cap of three hosts.
 **Excluded family:** `consult.thorough` excludes the caller's family and
 `dialectic_reviewer` the paused agent's. When that family is `unknown`, nothing
 is excluded and the result records `independence: unverified`. `pr_review`
-has no exclusion today and gains none here (question 7.3).
+has no exclusion today and gains one here (decision 7.3).
 
 **The shipped defaults reproduce today's order.** `consult.thorough` defaults
 to claude, codex, antigravity with the caller's family excluded, which matches
@@ -290,25 +291,28 @@ sets nothing.
 
 ## 6. Risks
 
-- **Wider reach for declared hosts** if questions 7.1 and 7.2 are answered yes.
-  `egress_class` bounds what each may receive.
+- **Wider reach for declared hosts** (decision 7.1). `egress_class` bounds what
+  each may receive.
 - **Contract change.** `host_id` loses its enum in the published schema;
   strict clients may have cached it.
 - **Data leaving the machine.** A host whose retention is unknown is declared
   `public_only`. For pull requests, what counts as public follows the
   repository's visibility, not this repository's.
 
-## 7. Open questions for the operator
+## 7. Decisions (operator, 2026-10-15)
 
-1. **Declared hosts beyond the reviewer.** The reviewer design keeps declared
-   hosts reachable from its list only. Should `consult.thorough` and
-   `pr_review` also accept them? Recommended: yes, bounded by `egress_class`.
-2. **GLM's egress class.** Z.ai's terms do not state prompt retention, and its
-   servers are under PRC jurisdiction. Recommended: `public_only`, which keeps
-   it to public pull request review.
-3. **Excluding the author's family from `pr_review`.** The gate has no such rule
-   today, and pull requests are opened by one shared GitHub App, so the author's
-   family can only come from what the pull request declares. Adopt it with that
-   declared source, or leave `pr_review` without exclusion. Recommended: adopt
-   it, record the source, and treat an undeclared family as `unknown`.
-4. **This deployment's job orders,** once declared hosts exist.
+The operator accepted each recommendation below ("proceed all", 2026-10-15,
+after the four questions were put to him with recommendations).
+
+1. **Declared hosts beyond the reviewer: yes.** `consult.thorough` and
+   `pr_review` may list declared hosts, bounded by `egress_class`. This widens
+   `dialectic-reviewer-hosts-v0.md` 2.4, which kept declared hosts reachable from
+   the reviewer list only.
+2. **GLM's egress class: `public_only`.** Z.ai's terms do not state prompt
+   retention, and its servers are under PRC jurisdiction, so GLM receives only
+   content that is already public, such as review of this public repository.
+3. **The author's family is excluded from `pr_review`,** taken from the family the
+   pull request declares; an undeclared family counts as `unknown` and excludes
+   nothing. The source is recorded with each review.
+4. **Job orders for this deployment:** today's orders, with GLM appended last to
+   `pr_review` once declared hosts exist (step 4).
