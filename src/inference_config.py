@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
+import ipaddress
 import os
 import re
 import stat
@@ -191,6 +192,18 @@ def _env_name(value: Any, where: str) -> str:
     return value
 
 
+_DNS_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+
+
+def _valid_hostname(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        pass
+    return len(host) <= 253 and all(_DNS_LABEL.match(label) for label in host.lower().rstrip(".").split("."))
+
+
 def _check_url(url: Any, where: str) -> None:
     if not isinstance(url, str) or any(c.isspace() for c in url):
         raise InferenceConfigError(where, "required: an http(s) URL without spaces")
@@ -201,6 +214,8 @@ def _check_url(url: Any, where: str) -> None:
         raise InferenceConfigError(where, f"not a valid URL ({exc})") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise InferenceConfigError(where, "required: an http(s) URL with a host")
+    if not _valid_hostname(parts.hostname):
+        raise InferenceConfigError(where, f"host {parts.hostname!r} is not a valid name or address")
     if parts.username or parts.password:
         raise InferenceConfigError(where, "must not carry credentials; use api_key_env")
 

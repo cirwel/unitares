@@ -221,7 +221,7 @@ def test_credentials_in_env_are_refused(env):
 
 @pytest.mark.parametrize("url", [
     "https://host.invalid bad path", "https://host:99999/v1", "https:///v1", "ftp://host/v1",
-    "https://user:pass@host/v1",
+    "https://user:pass@host/v1", "https://%/v1", "https://bad_host!/v1", "https://-lead.example/v1",
 ])
 def test_malformed_base_urls_are_refused(url):
     text = ("version: 1\nhosts:\n  external:acme/x: { kind: openai_http, model: m, family: openai,"
@@ -248,3 +248,11 @@ def test_ordinary_settings_in_env_are_allowed(env):
 def test_credential_variable_names_are_refused(env):
     with pytest.raises(ic.InferenceConfigError):
         ic.parse_text(_CLI.format(env=env))
+
+
+@pytest.mark.parametrize("url", ["https://vllm.lab.internal/v1", "http://10.0.0.5:8000/v1", "http://[::1]:11434/v1",
+                                 "https://api.z.ai/api/anthropic"])
+def test_valid_base_urls_load(url):
+    text = ("version: 1\nhosts:\n  external:acme/x: { kind: openai_http, model: m, family: openai,"
+            f" egress_class: agent_work, base_url: '{url}' }}\n")
+    assert "external:acme/x" in ic.parse_text(text).hosts
