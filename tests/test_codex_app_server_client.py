@@ -204,7 +204,15 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     assert '":root"="deny"' in table and '":minimal"="read"' in table
     assert f'"{link_dir}"="read"' in table
     assert f'"{real_bin.resolve()}"="read"' in table
-    assert 'shell_environment_policy.inherit="core"' in overrides
+    policy = [o for o in overrides if o.startswith("shell_environment_policy")]
+    # -c deep-merges tables, so an operator's ``set`` survives any table given
+    # here; the ``include_only`` list (lists replace, and it applies after
+    # ``set``) is what keeps injected variables away from the agent's commands.
+    assert policy[0] == 'shell_environment_policy.inherit="core"'
+    assert policy[1].startswith("shell_environment_policy.include_only=")
+    allowed = json.loads(policy[1].split("=", 1)[1])
+    assert "HOME" in allowed and "PATH" in allowed
+    assert not any("KEY" in n or "TOKEN" in n or "SECRET" in n or "*" == n for n in allowed)
     assert "mcp_servers={}" in overrides and "hooks={}" in overrides
     for feature in ("computer_use", "browser_use", "plugins", "apps"):
         assert f"features.{feature}=false" in overrides

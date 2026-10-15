@@ -25,13 +25,17 @@ _CLIENT_NAME = "unitares_host_adapter"
 # so a prompt (or text injected into one) could have the agent read the
 # operator's credentials and return them in its answer; that was verified on
 # 2026-10-15 with a canary file. Every UNITARES codex lane therefore runs with
-# LANE_CONFIG_OVERRIDES: a permission profile that denies reads everywhere
+# lane_config_overrides(): a permission profile that denies reads everywhere
 # except the platform's minimal runtime paths and the directories holding the
 # codex binary (its sandbox helper re-executes it), with writes denied;
-# commands that inherit only the core environment variables; and no MCP
+# commands that inherit only the core environment variables and nothing the
+# operator's shell_environment_policy sets; and no MCP
 # servers, hooks, plugins, apps, browser or computer use, whatever the
 # operator's own codex configuration enables.
 PERMISSION_PROFILE = "unitares_host"
+
+# What a command the agent runs may see; codex matches these as globs.
+_COMMAND_ENV_NAMES = ("HOME", "LANG", "LC_*", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER")
 
 _DISABLED_FEATURES = (
     "apps",
@@ -69,7 +73,14 @@ def lane_config_overrides(cli: str) -> list[str]:
     return [
         f'default_permissions="{PERMISSION_PROFILE}"',
         f"permissions.{PERMISSION_PROFILE}.filesystem={{{table}}}",
+        # ``-c`` deep-merges tables into the operator's config, so an operator
+        # ``shell_environment_policy.set`` would survive any table given here
+        # and inject its variables into every command the agent runs (verified
+        # 2026-10-15). Lists replace rather than merge, and ``include_only`` is
+        # applied after ``set``, so this allow-list is what bounds the agent's
+        # environment.
         'shell_environment_policy.inherit="core"',
+        f"shell_environment_policy.include_only={json.dumps(list(_COMMAND_ENV_NAMES))}",
         "mcp_servers={}",
         "hooks={}",
         *(f"features.{name}=false" for name in _DISABLED_FEATURES),
