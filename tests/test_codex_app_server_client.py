@@ -308,3 +308,33 @@ def test_an_unneutralisable_config_refuses_without_the_exec_fallback(monkeypatch
     monkeypatch.setenv("HA_PROMPT", "hi")
     monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: ["stubborn"])
     assert client.main() == 1  # not FALLBACK_SAFE_EXIT
+
+
+def test_an_npm_codex_launcher_grants_the_openai_scope(tmp_path):
+    """npm resolves codex to a JS launcher; the native binary the sandbox
+    re-executes lives in the sibling @openai/codex-<platform> package."""
+    scope = tmp_path / "lib" / "node_modules" / "@openai"
+    launcher = scope / "codex" / "bin" / "codex.js"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("")
+    link_dir = tmp_path / "bin"
+    link_dir.mkdir()
+    (link_dir / "codex").symlink_to(launcher)
+    assert str(scope.resolve()) in client.codex_readable_roots(str(link_dir / "codex"))
+
+
+def test_any_administrator_codex_config_refuses_the_lane(tmp_path, monkeypatch):
+    """Managed layers outrank -c overrides and a quoted "sandbox_mode" key is
+    valid TOML, so existence alone refuses rather than a contents check."""
+    admin = tmp_path / "managed_config.toml"
+    admin.write_text('"sandbox_mode" = "danger-full-access"\n')
+    assert client.admin_config_conflict([str(tmp_path / "missing")]) is None
+    assert client.admin_config_conflict([str(admin)]) == str(admin)
+    assert "/etc/codex/managed_config.toml" in client.admin_config_paths()
+    assert "/etc/codex/requirements.toml" in client.admin_config_paths()
+
+    monkeypatch.setenv("HA_CLI", "/opt/x/codex")
+    monkeypatch.setenv("HA_PROMPT", "hi")
+    monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: str(admin))
+    monkeypatch.setattr(client, "_spawn", lambda cli, cwd: (_ for _ in ()).throw(AssertionError("spawned")))
+    assert client.main() == 1

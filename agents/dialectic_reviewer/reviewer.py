@@ -50,6 +50,7 @@ from .host_backends import (
     call_antigravity_backend,
     call_claude_backend,
     call_openai_compat_backend,
+    codex_admin_config_conflict,
     codex_lane_config_overrides,
     codex_lane_workdir,
     codex_mcp_disable_overrides,
@@ -698,6 +699,10 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     except (TypeError, ValueError):
         timeout_s = 420.0
     timeout_s = max(1.0, timeout_s)
+    # Administrator codex configuration can override the lane's profile; the
+    # lane refuses rather than check its contents (see admin_config_conflict).
+    if codex_admin_config_conflict():
+        return None
     # The run happens in a fresh empty directory outside any repository, so no
     # project codex configuration or instructions load; it is removed after.
     workdir = codex_lane_workdir()

@@ -61,15 +61,53 @@ _DISABLED_FEATURES = (
 
 def codex_readable_roots(cli: str) -> list[str]:
     """Directories the sandboxed helper must read to re-execute ``cli``: the
-    one it is invoked from and, for a symlinked install, the real binary's."""
+    one it is invoked from and, for a symlinked install, the real binary's.
+
+    An npm install resolves ``codex`` to a JavaScript launcher, while the
+    native executable the sandbox re-executes ships in a sibling platform
+    package (``@openai/codex-<platform>``), so the ``@openai`` scope is added."""
+    real = os.path.realpath(cli)
+    candidates = [os.path.dirname(os.path.abspath(cli)), os.path.dirname(real)]
+    if os.path.splitext(real)[1] in (".js", ".mjs", ".cjs"):
+        parts = real.split(os.sep)
+        if "@openai" in parts:
+            index = len(parts) - 1 - parts[::-1].index("@openai")
+            candidates.append(os.sep.join(parts[: index + 1]))
     roots: list[str] = []
-    for directory in (
-        os.path.dirname(os.path.abspath(cli)),
-        os.path.dirname(os.path.realpath(cli)),
-    ):
+    for directory in candidates:
         if directory and directory not in roots:
             roots.append(directory)
     return roots
+
+
+def admin_config_paths() -> list[str]:
+    """Codex configuration that loads whatever a lane passes: managed layers
+    take precedence over ``-c`` overrides, a legacy ``sandbox_mode`` in the
+    system file overrides a permission profile, and requirements can make
+    codex fall back from a requested value. Locations:
+    https://developers.openai.com/codex/enterprise/managed-configuration"""
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    user = os.environ.get("USER", "")
+    return [
+        "/etc/codex/config.toml",
+        "/etc/codex/managed_config.toml",
+        "/etc/codex/requirements.toml",
+        os.path.join(home, "managed_config.toml"),
+        # macOS MDM managed preferences (config_toml_base64 / requirements_toml_base64).
+        "/Library/Managed Preferences/com.openai.codex.plist",
+        f"/Library/Managed Preferences/{user}/com.openai.codex.plist",
+    ]
+
+
+def admin_config_conflict(paths: list[str] | None = None) -> str | None:
+    """The first administrator codex configuration that exists, or None. A
+    self-hosted machine does not normally have one, and checking contents
+    would mean parsing TOML and MDM payloads exactly; a parser gap would be a
+    confinement gap, so existence alone refuses the lane."""
+    for path in admin_config_paths() if paths is None else paths:
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def new_profile_name() -> str:
@@ -504,6 +542,14 @@ def main() -> int:
         # The permission profile implements read-only only. Refuse rather than
         # widen; the exec fallback refuses the same value.
         print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
+        return 1
+    conflict = admin_config_conflict()
+    if conflict:
+        print(
+            f"Codex lane refused: {conflict} is administrator codex configuration "
+            "that can override the lane's permission profile",
+            file=sys.stderr,
+        )
         return 1
 
     process: subprocess.Popen[str] | None = None

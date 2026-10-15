@@ -39,6 +39,7 @@ import logging
 from . import host_availability
 from .codex_app_server_client import (
     LANE_CONFIG_OVERRIDE_COUNT as CODEX_LANE_OVERRIDE_COUNT,
+    admin_config_conflict as codex_admin_config_conflict,
     lane_config_overrides as codex_lane_config_overrides,
     lane_workdir as codex_lane_workdir,  # noqa: F401 - for the dialectic reviewer
     mcp_disable_overrides as codex_mcp_disable_overrides,  # noqa: F401 - for the dialectic reviewer
@@ -720,6 +721,18 @@ async def invoke_host_adapter(
             "dispatch_phase": dispatch_phase,
             "error": f"host adapters run read-only only, not sandbox={sandbox!r}",
         }
+    if host_id == "codex:host-adapter":
+        conflict = codex_admin_config_conflict()
+        if conflict:
+            return {
+                "ok": False,
+                "host_id": host_id,
+                "dispatch_phase": dispatch_phase,
+                "error": (
+                    f"{conflict} is administrator codex configuration that can override "
+                    "the lane's permission profile; the codex lane refuses to run"
+                ),
+            }
     spec_def = _HOST_COMMANDS.get(host_id)
     if spec_def is None:
         return {

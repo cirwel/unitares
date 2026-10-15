@@ -936,3 +936,13 @@ def test_codex_exec_fallback_runs_in_an_empty_directory_it_removes():
     assert shell_command.count('mktemp -d "${TMPDIR:-/tmp}/unitares-codex-lane-XXXXXX"') == 2
     assert shell_command.count('cd "$ha_dir" || exit 1') == 2
     assert shell_command.count('rmdir "$ha_dir"') == 2
+
+
+def test_codex_refuses_when_administrator_config_exists(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(ha, "codex_admin_config_conflict", lambda: "/etc/codex/managed_config.toml")
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+    assert result["ok"] is False and result["dispatch_phase"] == "preflight"
+    assert "/etc/codex/managed_config.toml" in result["error"]
+    assert state["calls"] == []

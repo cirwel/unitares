@@ -65,3 +65,13 @@ def test_reviewer_codex_call_refuses_a_config_it_cannot_neutralise(monkeypatch):
     monkeypatch.setattr(reviewer, "codex_mcp_disable_overrides", refuse)
     monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
     assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+
+
+def test_reviewer_codex_call_refuses_under_administrator_config(monkeypatch):
+    async def fake_exec(*argv, **kwargs):
+        raise AssertionError("codex must not be launched")
+
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_admin_config_conflict", lambda: "/etc/codex/config.toml")
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
