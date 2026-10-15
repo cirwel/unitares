@@ -1,26 +1,20 @@
 defmodule UnitaresLeasePlane.NodeDistributionTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias UnitaresLeasePlane.NodeDistribution
 
-  test "no cookie means an unnamed node" do
+  test "no real-home variable means an unnamed node" do
     assert NodeDistribution.plan(%{}) == :unnamed
-    assert NodeDistribution.plan(%{"LEASE_PLANE_NODE_COOKIE" => ""}) == :unnamed
+    assert NodeDistribution.plan(%{"LEASE_PLANE_NODE_REAL_HOME" => ""}) == :unnamed
   end
 
-  test "a cookie names the node, with the default or the configured sname" do
-    assert NodeDistribution.plan(%{"LEASE_PLANE_NODE_COOKIE" => "c1"}) ==
-             {:named, "unitares-lease-plane", "c1"}
+  test "a real-home variable names the node, with the default or the configured sname" do
+    assert NodeDistribution.plan(%{"LEASE_PLANE_NODE_REAL_HOME" => "/home/op"}) ==
+             {:named, "unitares-lease-plane", "/home/op"}
 
     assert NodeDistribution.plan(%{
-             "LEASE_PLANE_NODE_COOKIE" => "c1",
+             "LEASE_PLANE_NODE_REAL_HOME" => "/home/op",
              "LEASE_PLANE_NODE_SNAME" => "other"
-           }) == {:named, "other", "c1"}
-  end
-
-  test "the cookie variable is removed from the environment" do
-    System.put_env("LEASE_PLANE_NODE_COOKIE", "")
-    NodeDistribution.start_from_env()
-    assert System.get_env("LEASE_PLANE_NODE_COOKIE") == nil
+           }) == {:named, "other", "/home/op"}
   end
 end

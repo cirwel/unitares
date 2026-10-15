@@ -64,26 +64,36 @@ NODE_SNAME="${AGENT_ORCHESTRATOR_NODE_SNAME:-agent-orchestrator}"
 
 # The cookie never goes on a command line: `elixir --cookie`, `-args_file` and
 # ERL_AFLAGS all end up in beam.smp's argv, where any process listing reads it.
-# It travels in the environment instead; NodeDistribution starts the named node
-# at boot, sets the cookie, and removes the variable before any child spawns.
-# Two things --sname used to do now happen here: epmd is started (Node.start
-# registers with a running epmd but never launches one), and a throwaway random
-# cookie is set so starting distribution never reads ~/.erlang.cookie. The
-# throwaway is visible in argv and stops working the moment NodeDistribution
-# sets the real cookie, before the application does anything else.
+# Erlang reads .erlang.cookie from the VM's boot-time HOME when distribution
+# starts, so the cookie goes into a private file (dir 0700, file 0400) and the
+# VM boots with HOME pointing there. NodeDistribution restores the real HOME
+# (passed in AGENT_ORCHESTRATOR_NODE_REAL_HOME) before anything else runs, then starts the
+# named node; children inherit the real HOME. MIX_HOME and HEX_HOME are pinned
+# so mix still finds its archives and cache during boot.
 if [[ -n "${AGENT_ORCHESTRATOR_NODE_COOKIE:-}" ]]; then
-    export AGENT_ORCHESTRATOR_NODE_COOKIE
-    export AGENT_ORCHESTRATOR_NODE_SNAME="$NODE_SNAME"
+    COOKIE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}/unitares/beam/agent-orchestrator"
+    mkdir -p "$COOKIE_HOME"
+    chmod 700 "$COOKIE_HOME"
+    COOKIE_FILE="$COOKIE_HOME/.erlang.cookie"
+    [[ -f "$COOKIE_FILE" ]] && chmod 600 "$COOKIE_FILE"
+    (umask 077; printf '%s' "$AGENT_ORCHESTRATOR_NODE_COOKIE" > "$COOKIE_FILE")
+    chmod 400 "$COOKIE_FILE"
+    unset AGENT_ORCHESTRATOR_NODE_COOKIE
+
     export ERL_EPMD_ADDRESS="127.0.0.1"
-    # A clean environment: epmd is long-lived and must not inherit the cookie
-    # or anything else the secrets file put into this shell.
+    # A clean environment: epmd is long-lived and must not inherit anything the
+    # secrets file put into this shell. Node.start registers with a running
+    # epmd but never launches one, which --sname used to do.
     env -i PATH="$PATH" ERL_EPMD_ADDRESS="$ERL_EPMD_ADDRESS" epmd -daemon
-    THROWAWAY_COOKIE="t$(openssl rand -hex 16)"
-    exec elixir \
-        --erl "-setcookie $THROWAWAY_COOKIE -kernel inet_dist_use_interface {127,0,0,1}" \
+
+    export MIX_HOME="${MIX_HOME:-$HOME/.mix}"
+    export HEX_HOME="${HEX_HOME:-$HOME/.hex}"
+    export AGENT_ORCHESTRATOR_NODE_SNAME="$NODE_SNAME"
+    export AGENT_ORCHESTRATOR_NODE_REAL_HOME="$HOME"
+    HOME="$COOKIE_HOME" exec elixir \
+        --erl "-kernel inet_dist_use_interface {127,0,0,1}" \
         -S mix run --no-halt
 else
-    unset AGENT_ORCHESTRATOR_NODE_COOKIE
     echo "[agent-orchestrator] AGENT_ORCHESTRATOR_NODE_COOKIE unset — starting UNNAMED (live remote shell disabled; set the cookie in secrets.env and restart to enable)" >&2
     exec mix run --no-halt
 fi
