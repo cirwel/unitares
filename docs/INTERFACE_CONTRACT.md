@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.40.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -609,3 +609,10 @@ Clients relying on omission to return every registered host must send
 the previous `true` default. Older Python SDK clients serialize `true` on
 omission; upgrade or explicitly pass `include_unconfigured=False` to request
 configured hosts only. Explicit `false` and `true` retain their existing behavior.
+
+## 1.41.0 (2026-10-15)
+
+consult and delegate_inference take host_id as a string checked against the registry instead of a fixed enum (every existing id is still accepted); consult's thorough lane reads its host order from the consult.thorough job in the operator's inference hosts file (default order unchanged), and results report the served host's family and the hosts it skipped with reason codes; discovery reports each host's family.
+
+<!-- Complete before readiness: affected outputs/descriptions, compatibility,
+     changed schema digests (or why none move), and client action. -->

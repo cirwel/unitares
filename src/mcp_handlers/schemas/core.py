@@ -890,10 +890,10 @@ class DelegateInferenceParams(AgentIdentityMixin):
         max_length=100_000,
         description="Prompt to send to the operator-authorized strong model.",
     )
-    host_id: Literal[
-        "claude:host-adapter", "codex:host-adapter", "antigravity:host-adapter"
-    ] = Field(
+    host_id: str = Field(
         "claude:host-adapter",
+        min_length=1,
+        max_length=128,
         description=(
             "Long-running host adapter to invoke. All three subscription-CLI "
             "adapters are reachable here; each is opt-in and unavailable "
@@ -934,13 +934,13 @@ class ConsultParams(AgentIdentityMixin):
 
     model_config = ConfigDict(extra="forbid")
 
-    host_id: Optional[Literal[
-        "ollama:local", "hf:router", "claude:host-adapter",
-        "codex:host-adapter", "antigravity:host-adapter",
-    ]] = Field(
+    host_id: Optional[str] = Field(
         None,
+        min_length=1,
+        max_length=128,
         description=(
-            "Pin an existing advisory host; omitted means automatic routing. "
+            "Pin an existing advisory host (an id from list_inference_hosts that "
+            "accepts consult); omitted means automatic routing. "
             "Omitted effort follows the host: standard for Ollama/HF, thorough for CLI. External "
             "hosts require cloud_allowed; allow_degraded must be false. No peer "
             "or local fallback occurs when a host is pinned."
