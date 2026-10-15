@@ -5055,23 +5055,19 @@ def test_review_text_findings_keep_their_severity():
     assert rg.findings_from_review_text("VERDICT: CLEAN", "CLEAN") == []
 
 
-def test_an_unposted_local_p1_round_keeps_its_exemption(repo):
-    """A local review whose publication failed still found what it found: a
-    serious finding in its review text exempts its cycle, as when posted."""
+def test_unposted_local_runs_always_spend_their_cycle(repo):
+    """Only a posted record, with its provenance, can exempt a cycle: an
+    unposted local run spends whatever its review said."""
     head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    for i, (status, text) in enumerate([('FINDINGS', '[P1] Broken — a.py:1\n'),
-                                        ('FINDINGS', 'prose only, no label\n'),
-                                        ('CLEAN', 'VERDICT: CLEAN\n')]):
+    for i, status in enumerate(['FINDINGS', 'CLEAN']):
         run = repo / f'.git/local-reviews/pr-1-local{i}'
         run.mkdir(parents=True)
         (run / 'manifest.json').write_text(json.dumps({
             'pr': 1, 'status': status, 'head': head, 'base': base,
             'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 300 + i * 100}))
-        (run / 'review.txt').write_text(text)
+        (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
     rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
-    assert rounds.count == 3
-    assert rounds.spent == 1  # only the clean round spends
-
+    assert rounds.count == 2 and rounds.spent == 2
 
 def test_a_clean_review_mentioning_labels_has_no_findings():
     text = "Verified the prior [P1] fix in a.py:3; no [P2] issues remain.\nVERDICT: CLEAN"
@@ -5088,34 +5084,18 @@ def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
     assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
 
 
-def test_local_severity_informs_the_budget_but_not_the_answered_round(repo):
+def test_a_recount_keeps_the_posted_round_cmd_review_answers(repo):
     head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    run = repo / '.git/local-reviews/pr-1-local-sev'
+    run = repo / '.git/local-reviews/pr-1-local-late'
     run.mkdir(parents=True)
     (run / 'manifest.json').write_text(json.dumps({
-        'pr': 1, 'status': 'FINDINGS', 'head': head, 'base': base,
-        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 100}))
-    (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
+        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 10}))
     posted = [{"body": "[P2] posted finding — b.py:2"}]
-    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted,
-                           answered_since=True, answered_at=GRANT_NOW - 50)
+    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted, answered_since=True)
     rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
-    assert rounds.count == 1 and rounds.spent == 0
-    # The answered round stays the posted one, whatever the unposted run did.
-    assert rounds.last_findings == posted and rounds.last_head == "a" * 40
-    assert rounds.answered_since and rounds.answered_at == GRANT_NOW - 50
-
-
-def test_a_local_findings_run_without_its_text_spends_its_cycle(repo):
-    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
-    run = repo / '.git/local-reviews/pr-1-local-notext'
-    run.mkdir(parents=True)
-    (run / 'manifest.json').write_text(json.dumps({
-        'pr': 1, 'status': 'FINDINGS', 'head': head, 'base': base,
-        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 100}))
-    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
-    assert rounds.count == 1 and rounds.spent == 1
-
+    assert rounds.count == 1
+    assert rounds.last_findings == posted and rounds.last_head == "a" * 40 and rounds.answered_since
 
 def test_the_second_family_finishes_a_cycle_the_exemption_opened():
     """A serious cycle (here past the cap) earns its fix review; that review
@@ -5124,3 +5104,9 @@ def test_the_second_family_finishes_a_cycle_the_exemption_opened():
     assert rounds.spent == 4
     assert not rounds.exhausted(joining=True)
     assert rounds.exhausted(joining=False)
+
+
+def test_the_exemption_is_for_the_fix_not_the_same_diff():
+    rounds = _cycles_with([], [], [], ["P1"])
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    assert rounds.exhausted(joining=False, key=rounds.cycles[-1].key)

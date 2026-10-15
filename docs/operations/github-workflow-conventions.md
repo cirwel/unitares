@@ -376,8 +376,10 @@ Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
 gets three **full review cycles**. Operator direction, 2026-10-15, makes the
 budget context-based: a cycle that found a serious problem (a P0/P1 finding,
 or an unlabelled one) does not count toward the three, because the fix of a
-serious finding earns a full review however many cycles came before. Clean
-cycles and cycles with only lesser findings count. The cap stops review that
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
 has stopped finding serious problems, not review that keeps finding them; a
 backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
 full review and can include one other, distinct model family on the same

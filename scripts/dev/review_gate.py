@@ -893,7 +893,6 @@ class CodexRounds:
     last_findings: list[dict] = field(default_factory=list)  # inline comments
     unknown_history: bool = False  # legacy completed reviews without head/base/scope
     answered_since: bool = False  # a disposition or fix verification answered the last round
-    answered_at: float = 0.0  # when, so a recount (local_budget_rounds) keeps it
     cycles: list[ReviewCycle] = field(default_factory=list)
     # Spending evidence only, also used to include unposted local reviews.
     runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
@@ -907,7 +906,7 @@ class CodexRounds:
         serious problem. ``count`` stays the full ledger (grants key on it)."""
         return max(0, self.count - sum(1 for cycle in self.cycles if cycle.productive()))
 
-    def exhausted(self, joining: bool) -> bool:
+    def exhausted(self, joining: bool, key: str = "") -> bool:
         """No new full cycle without the operator: too many unproductive
         cycles, or a review that has not converged by the backstop."""
         if not ROUND_CAP_ENABLED:
@@ -922,8 +921,10 @@ class CodexRounds:
             prior_spent = self.spent - current
             prior_serious = len(self.cycles) >= 2 and self.cycles[-2].productive()
             return not (prior_serious or prior_spent < ROUND_CAP)
-        if self.cycles and self.cycles[-1].productive():
-            return False  # the fix of a serious finding earns a full review
+        if self.cycles and self.cycles[-1].productive() and key != self.cycles[-1].key:
+            # The fix of a serious finding earns a full review; re-reviewing
+            # the same unchanged diff does not.
+            return False
         return self.spent >= ROUND_CAP
 
     @property
@@ -1089,12 +1090,9 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
         cycle.key = cycle.key or key
         if len(last) > len(cycle.head):
             cycle.head = last
-        # Severity read from an unposted local run informs the budget only; it
-        # never makes that run's findings the round cmd_review answers.
-        findings.extend(f for f in run_findings if not f.get("budget_only"))
+        findings.extend(run_findings)
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
-                       answered_since=answered_at > last_at, answered_at=answered_at,
-                       cycles=cycles, runs=runs)
+                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
 
 
 def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
@@ -1140,15 +1138,9 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             raise ValueError(f"Local review history incomplete at {run}: cannot resolve recorded "
                              f"Git objects; restore the history before reviewing ({exc})") from exc
         family = model_family(receipt.get('architecture') or receipt.get('model', ''))
-        # Severity evidence for the budget only. Local severity can only exempt
-        # a cycle, so missing text is no evidence: the run spends its cycle.
-        try:
-            text = (run / 'review.txt').read_text()
-        except OSError:
-            text = None
-        findings = [] if text is None else [
-            {**f, "budget_only": True} for f in findings_from_review_text(text, receipt['status'])]
-        runs.append((when, receipt['head'], findings, key, family))
+        # No severity from unposted runs: only a posted record, with its
+        # provenance, can exempt a cycle from the cap, so these always spend.
+        runs.append((when, receipt['head'], [], key, family))
     # Unposted runs change the spending ledger only. The round cmd_review
     # answers (its head, findings and whether it was answered) stays the one
     # the posted records describe.
@@ -2860,7 +2852,7 @@ def cmd_review(args) -> int:
                     print("[review] UNREVIEWED: legacy full-review history lacks provenance; no count reset. "
                           "Escalate or explicitly authorize an additional full review with a reason.")
                     return UNREVIEWED
-                if (rounds.exhausted(joining_cycle)
+                if (rounds.exhausted(joining_cycle, key)
                         and not grant_id and not getattr(args, "authorize_full_review", None)):
                     print(f"[review] full-review cycle budget exhausted ({rounds.spent} cycles without "
                           f"a P0/P1 finding; {rounds.count} in all, backstop {ROUND_BACKSTOP}); "
@@ -3689,7 +3681,7 @@ def round_note(rounds: CodexRounds | None) -> str:
     if rounds.spent != rounds.count:
         note = (f" · review cycle {rounds.count} ({rounds.spent} of {ROUND_CAP} without a P0/P1, "
                 f"backstop {ROUND_BACKSTOP})")
-    return note + (" (cap reached)" if rounds.spent >= ROUND_CAP or rounds.count >= ROUND_BACKSTOP else "")
+    return note + (" (cap reached)" if rounds.exhausted(False) else "")
 
 
 def cmd_ci(args) -> int:

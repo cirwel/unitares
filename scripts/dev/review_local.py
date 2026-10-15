@@ -314,7 +314,7 @@ def main(argv=None) -> int:
             if hasattr(rounds, 'exhausted'):
                 # The gate's own rule: cycles that found a serious problem do
                 # not spend the cap (operator 2026-10-15), with a backstop.
-                over = rounds.exhausted(joining)
+                over = rounds.exhausted(joining, key)
             else:  # an older gate checkout without the context-based budget
                 over = gate.ROUND_CAP_ENABLED and (
                     rounds.count > gate.ROUND_CAP or (rounds.count == gate.ROUND_CAP and not joining))
