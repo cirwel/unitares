@@ -51,6 +51,7 @@ from .host_backends import (
     call_claude_backend,
     call_openai_compat_backend,
     codex_admin_config_conflict,
+    codex_confinement_verified,
     codex_lane_config_overrides,
     codex_lane_workdir,
     codex_mcp_disable_overrides,
@@ -703,6 +704,14 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     # lane refuses rather than check its contents (see admin_config_conflict).
     if codex_admin_config_conflict():
         return None
+    # Off the event loop: the probe runs `codex sandbox` twice.
+    try:
+        if not await asyncio.wait_for(
+            asyncio.to_thread(codex_confinement_verified, cli_path), timeout=60
+        ):
+            return None
+    except Exception:  # noqa: BLE001 - an unverifiable lane falls back locally
+        return None
     # The run happens in a fresh empty directory outside any repository, so no
     # project codex configuration or instructions load; it is removed after.
     workdir = codex_lane_workdir()
@@ -723,7 +732,13 @@ async def _run_codex_review(
         # still enables is switched off by name; if one cannot be, the call is
         # refused and the caller falls back.
         base = codex_lane_config_overrides(cli_path)
-        overrides = base + codex_mcp_disable_overrides(cli_path, base, workdir)
+        # Off the event loop and inside this call's budget: the enumeration
+        # runs `codex mcp list` twice, and a stalled one must not block the
+        # reviewer's own deadlines.
+        overrides = base + await asyncio.wait_for(
+            asyncio.to_thread(codex_mcp_disable_overrides, cli_path, base, workdir),
+            timeout=min(60.0, timeout_s),
+        )
         slots = " ".join(f'-c "$DR_CODEX_C{i}"' for i in range(1, len(overrides) + 1))
         proc = await asyncio.create_subprocess_exec(
             "/bin/sh",

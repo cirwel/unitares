@@ -338,3 +338,38 @@ def test_any_administrator_codex_config_refuses_the_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: str(admin))
     monkeypatch.setattr(client, "_spawn", lambda cli, cwd: (_ for _ in ()).throw(AssertionError("spawned")))
     assert client.main() == 1
+
+
+def _fake_codex(tmp_path, body):
+    cli = tmp_path / "codex"
+    cli.write_text("#!/bin/sh\n" + body)
+    cli.chmod(0o755)
+    return str(cli)
+
+
+def test_a_codex_that_ignores_the_profile_is_not_verified(tmp_path, monkeypatch):
+    """An older codex can accept the overrides and confine nothing; the probe
+    sees it read the file and refuses."""
+    monkeypatch.setattr(client, "_CONFINEMENT_VERIFIED", {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # "sandbox": skip arguments up to "--", then run the command unconfined.
+    cli = _fake_codex(tmp_path, 'while [ "$1" != "--" ]; do shift; done; shift; exec "$@"\n')
+    assert client.confinement_verified(cli) is False
+
+
+def test_a_codex_without_a_sandbox_command_is_not_verified(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_CONFINEMENT_VERIFIED", {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cli = _fake_codex(tmp_path, 'echo "unknown command" >&2; exit 2\n')
+    assert client.confinement_verified(cli) is False
+
+
+def test_a_confining_codex_is_verified_and_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_CONFINEMENT_VERIFIED", {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    # Runs `true`, refuses to read anything: what enforcement looks like.
+    cli = _fake_codex(tmp_path, 'while [ "$1" != "--" ]; do shift; done; shift\n'
+                                '[ "$1" = "/usr/bin/true" ] && exit 0\n'
+                                'echo "Operation not permitted" >&2; exit 1\n')
+    assert client.confinement_verified(cli) is True
+    assert len(client._CONFINEMENT_VERIFIED) == 1

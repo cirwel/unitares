@@ -177,6 +177,56 @@ def mcp_disable_overrides(cli: str, overrides: list[str], cwd: str) -> list[str]
     return disables
 
 
+_CONFINEMENT_VERIFIED: dict[tuple[str, float], bool] = {}
+
+
+def confinement_verified(cli: str) -> bool:
+    """Whether this codex actually enforces the lane's permission profile.
+
+    The confinement rests on configuration keys an older codex may silently
+    ignore, so before a lane runs, ``codex sandbox`` (no model call) must fail
+    to read a probe file outside the profile's readable paths and must still
+    run a harmless command under the same overrides. A codex that cannot run
+    the probe at all is unverified too. Cached per resolved binary and mtime,
+    so an upgrade is probed again."""
+    real = os.path.realpath(cli)
+    try:
+        stamp = (real, os.stat(real).st_mtime)
+    except OSError:
+        return False
+    if stamp in _CONFINEMENT_VERIFIED:
+        return _CONFINEMENT_VERIFIED[stamp]
+    # Under the home directory, which the profile denies (":root" deny); the
+    # temporary directory may be readable through ":minimal".
+    base = os.path.expanduser("~/.local/state/unitares")
+    verified = False
+    probe_dir = None
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        probe_dir = tempfile.mkdtemp(prefix="codex-probe-", dir=base)
+        token = "unitares-confinement-probe-" + secrets.token_hex(8)
+        probe = os.path.join(probe_dir, "probe.txt")
+        with open(probe, "w") as handle:
+            handle.write(token)
+        overrides: list[str] = []
+        for override in lane_config_overrides(cli):
+            overrides.extend(["-c", override])
+        run = [cli, "sandbox", *overrides, "--"]
+        harmless = subprocess.run(run + ["/usr/bin/true"], capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=20)
+        reading = subprocess.run(run + ["/bin/cat", probe], capture_output=True, text=True,
+                                 stdin=subprocess.DEVNULL, timeout=20)
+        verified = (harmless.returncode == 0 and reading.returncode != 0
+                    and token not in reading.stdout + reading.stderr)
+    except (OSError, subprocess.SubprocessError):
+        verified = False
+    finally:
+        if probe_dir:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+    _CONFINEMENT_VERIFIED[stamp] = verified
+    return verified
+
+
 def lane_workdir() -> str:
     """A fresh, empty, private working directory outside any repository, so no
     project configuration or instructions load. The caller removes it."""
@@ -542,6 +592,10 @@ def main() -> int:
         # The permission profile implements read-only only. Refuse rather than
         # widen; the exec fallback refuses the same value.
         print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
+        return 1
+    if not confinement_verified(cli):
+        print("Codex lane refused: this codex does not enforce the lane's permission "
+              "profile (codex sandbox probe)", file=sys.stderr)
         return 1
     conflict = admin_config_conflict()
     if conflict:

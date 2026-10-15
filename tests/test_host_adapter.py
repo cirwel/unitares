@@ -222,6 +222,12 @@ class _FakeResp:
         return self._payload
 
 
+@pytest.fixture(autouse=True)
+def _codex_confinement_verified(monkeypatch):
+    """The real probe runs `codex sandbox`; tests use fake CLI paths."""
+    monkeypatch.setattr(ha, "codex_confinement_verified", lambda cli: True)
+
+
 def _patch_httpx(monkeypatch, responses):
     """Patch httpx.AsyncClient so successive .post() calls (spawn, then await)
     return `responses` in order, across the two AsyncClient instantiations."""
@@ -945,4 +951,14 @@ def test_codex_refuses_when_administrator_config_exists(monkeypatch):
     result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
     assert result["ok"] is False and result["dispatch_phase"] == "preflight"
     assert "/etc/codex/managed_config.toml" in result["error"]
+    assert state["calls"] == []
+
+
+def test_codex_refuses_when_the_cli_does_not_enforce_the_profile(monkeypatch):
+    _enable(monkeypatch)
+    monkeypatch.setattr(ha, "codex_confinement_verified", lambda cli: False)
+    state = _patch_httpx(monkeypatch, [])
+    result = _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
+    assert result["ok"] is False and result["dispatch_phase"] == "preflight"
+    assert "does not enforce" in result["error"]
     assert state["calls"] == []

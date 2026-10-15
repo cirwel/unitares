@@ -25,6 +25,7 @@ error; it never raises into a handler.
 
 from __future__ import annotations
 
+import asyncio
 import getpass
 import json
 import os
@@ -40,6 +41,7 @@ from . import host_availability
 from .codex_app_server_client import (
     LANE_CONFIG_OVERRIDE_COUNT as CODEX_LANE_OVERRIDE_COUNT,
     admin_config_conflict as codex_admin_config_conflict,
+    confinement_verified as codex_confinement_verified,
     lane_config_overrides as codex_lane_config_overrides,
     lane_workdir as codex_lane_workdir,  # noqa: F401 - for the dialectic reviewer
     mcp_disable_overrides as codex_mcp_disable_overrides,  # noqa: F401 - for the dialectic reviewer
@@ -765,6 +767,18 @@ async def invoke_host_adapter(
             "host_id": host_id,
             "dispatch_phase": dispatch_phase,
             "error": f"CLI '{cli}' not found or not executable; set {override}",
+        }
+    if host_id == "codex:host-adapter" and not await asyncio.to_thread(
+        codex_confinement_verified, cli_path
+    ):
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": (
+                "this codex does not enforce the lane's permission profile "
+                "(codex sandbox probe); the codex lane refuses to run"
+            ),
         }
     bearer = os.environ.get("AGENT_ORCHESTRATOR_BEARER_TOKEN")
     if not bearer:

@@ -10,8 +10,15 @@ from __future__ import annotations
 import asyncio
 import os
 
+import pytest
+
 from agents.dialectic_reviewer import reviewer
 from src.mcp_handlers.support.codex_app_server_client import lane_config_overrides
+
+
+@pytest.fixture(autouse=True)
+def _confinement_verified(monkeypatch):
+    monkeypatch.setattr(reviewer, "codex_confinement_verified", lambda cli: True)
 
 
 class _Proc:
@@ -73,5 +80,15 @@ def test_reviewer_codex_call_refuses_under_administrator_config(monkeypatch):
 
     monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
     monkeypatch.setattr(reviewer, "codex_admin_config_conflict", lambda: "/etc/codex/config.toml")
+    monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
+    assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
+
+
+def test_reviewer_codex_call_refuses_an_unconfining_cli(monkeypatch):
+    async def fake_exec(*argv, **kwargs):
+        raise AssertionError("codex must not be launched")
+
+    monkeypatch.setattr(reviewer, "resolve_host_cli", lambda host_id: "/opt/x/codex")
+    monkeypatch.setattr(reviewer, "codex_confinement_verified", lambda cli: False)
     monkeypatch.setattr(reviewer.asyncio, "create_subprocess_exec", fake_exec)
     assert asyncio.run(reviewer.call_codex_reviewer("review this")) is None
