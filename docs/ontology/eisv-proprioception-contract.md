@@ -868,6 +868,11 @@ withdrawn cohort with the current trusted default. The single 2026-12-01 read
 defined in `docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md` is the only
 confirmatory outcome read. Until then, the question is unresolved, not negative.
 
+*Amended 2026-10-15.* Under the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), that read's data
+boundary ends at the first deployed change to the live EISV update path, if one
+lands before 2026-12-01, and the read is described as amended after interim
+exposure, not as an untouched confirmatory read.
+
 **5. "Bounded and mean-reverting, not a random walk"** → **partly TRUE BY
 CONSTRUCTION.** E/I/S are hard-clipped in `src/behavioral_state.py` and S is
 floored in `src/behavioral_sensor.py`, so boundedness is not a finding. Do not
@@ -1458,6 +1463,10 @@ counterfactuals. Relates to the "pause-scores-0.5" do-not above: both are
 verdict→`decision_e` feedback paths and both want one deliberate decision rather
 than two patches.
 
+*Amended 2026-10-15.* The first wake condition ("the 12-01 read has run") is
+superseded by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant. The second condition (a preregistered recursive
+replay or prospective shadow) and the sequencing rule above are unchanged.
+
 **46. "S's regime-instability term measures how much the runtime is switching"**
 (contract *The split*, S row: "How much is the runtime moving and switching") →
 **IMPLEMENTATION MISMATCH.** At rest the term mostly measures S itself.
@@ -1493,6 +1502,9 @@ decisions of history):
 `eisv_telemetry.shadow_ablations.regime_self_loop_neutralized`, S with the term
 held at its observed fleet level (0.12), measurement only.
 
+*Amended 2026-10-15.* "Do not change S before the 2026-12-01 read" is superseded
+by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
+
 **47. "E is externally referenced: decision outcomes, tool errors and outcome
 success are world facts"** (contract *The split*, E row) → **IMPLEMENTATION
 MISMATCH**, with a dated **DEPLOYMENT SNAPSHOT** of its size. `decision_history`
@@ -1515,6 +1527,9 @@ select `verification_source`), so the external share was measured from
 observation. The
 existing wake for `decision_e` applies; nothing changes before the 2026-12-01
 read.
+
+*Amended 2026-10-15.* The wake is now the one in row 45's amended note; see the
+[stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change).
 
 **48. "I's calibration term reflects current calibration"** → **IMPLEMENTATION
 MISMATCH.** Row 2 established that every agent receives the same fleet scalar on
@@ -1540,6 +1555,9 @@ the identity's last stated confidence within 24 hours, over lifetime data) paire
 estimator's eligibility for no identity at any check-in in the window; the
 telemetry envelope now records each check-in's stated confidence
 (`self_report`, measurement only) so the pairing has a dense source.
+
+*Amended 2026-10-15.* A predictor change for the 2026-12-01 read is now governed
+by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
 
 **49. "Replacing I's fleet calibration scalar with a partially pooled per-agent
 term restores meaningful between-agent calibration spread"** → **UNTESTED
@@ -1634,6 +1652,8 @@ notes. **Any live-path change from that work waits for the 2026-12-01 report:**
 baselines, weights, verdict inputs, or thresholds. The reason is the one behind
 the `decision_e` park above. Changing a predictor before the read contaminates
 the registered series.
+
+*Amended 2026-10-15.* Superseded by the [stop-rule amendment of 2026-10-15](../proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change): a live-path change no longer waits for the read. It may land once its PR records `instrument_change_at` in `REGISTERED_READ_MANIFEST`, and the read then admits only outcomes before that instant.
 
 **Supply is thin (inference).** The 2026-09-23 relational calibration
 instrument-supply read

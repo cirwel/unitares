@@ -92,6 +92,11 @@ explains. Corpora that might one day answer the question better than organic
 telemetry are recorded under
 [Candidate corpora](#candidate-corpora--not-yet-evaluated) — recorded, not run.
 
+Since the [2026-10-15 amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change), the read's data boundary ends at the
+first deployed change to the live EISV update path
+(`instrument_change_at` in `REGISTERED_READ_MANIFEST`) when that precedes
+2026-12-01; the read is described as amended after interim exposure.
+
 The initial five-claim correction is recorded in
 [`ontology/falsification-inference-containment-2026-08-22.md`](ontology/falsification-inference-containment-2026-08-22.md).
 The systemic audit of all 45 tested-claim rows and the recurring-read protocol
@@ -205,6 +210,7 @@ form.
 
 | Artifact | What it does | Output / finding | Freshness |
 |---|---|---|---|
+| `scripts/analysis/eisv_read_input_snapshot.py` ✓ | Archives the rows the registered stop-rule read can touch before the instrument-change time T (`export`), and after the read counts backfilled, removed and changed rows against the live tables (`reconcile`) | Manifest with row counts and `snapshot_sha256`; reconciliation counts only. Joins no state to an outcome and computes no statistic; not EISV validation. Procedure: [stop-rule amendment](proposals/registered/eisv-outcome-grounding-stop-rule-v0.md#amendment-2026-10-15-data-boundary-at-the-first-instrument-change) | new (2026-10-15); not yet run |
 | `scripts/analysis/ablation_negative_controls.py` ✓ | Synthetic known-safe/bad fixtures as red-team controls | JSONL fixtures; hardcoded "SYNTHETIC NEGATIVE CONTROL — not validation" | current |
 | `tests/test_risk_authority_ablation.py` ✓ | Three-arm synthetic restart contract: resolved-low/Φ-high, resolved-high/Φ-low, and Φ-only | Pytest authority, persistence, and recovery assertions; no live outcomes read and no live governance state mutated | current |
 | `scripts/diagnostics/dogfood_ablation_guard.py` ✓ | Silent operational guard: identity neutrality, BEAM/substrate lanes, matrix exclusion, and the synthetic risk-authority restart contract | Empty stdout = healthy; alerts only on regression | current; recurring Hermes job paused under the outcome-grounding stop rule |
