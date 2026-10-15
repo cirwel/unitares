@@ -179,8 +179,9 @@ def _derivatives(
     )
 
     # Sensor anchoring: spring coupling to observed sensor state.
-    # Only reached when coupling is opt-in enabled — compute_dynamics passes
-    # sensor_eisv=None here by default (compare, don't couple).
+    # Reached whenever compute_dynamics passes a sensor. Coupling is ON by
+    # default (parameters.sensor_coupling_enabled); disabling it makes
+    # compute_dynamics pass sensor_eisv=None here (compare, don't couple).
     if sensor_eisv is not None:
         E_range = params.E_max - params.E_min
         S_range = params.S_max - params.S_min
