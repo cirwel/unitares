@@ -135,7 +135,8 @@ def _derivatives(
             this signature's 0.0 is the disabled-path value, not the deployed one.
             The E and I equations read S through the same detrend, ``S - σ``,
             so moving the S rest by σ leaves the E, I and V rests where σ = 0
-            puts them (contract row 50).
+            puts them (contract row 50), while S - σ stays clear of S's floor;
+            the floor and its barrier are entropy's own bound and read raw S.
 
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple

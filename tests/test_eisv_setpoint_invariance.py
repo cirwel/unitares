@@ -6,7 +6,8 @@ the E and I equations and the regime fallback, and a fresh monitor's S seed sits
 setpoint on and the same monitor run with it off agree on everything but S,
 which differs by σ, check-in for check-in.
 
-Left out on purpose: the sensor scenarios, because the spring pulls ODE S toward
+The claim holds while S - σ stays clear of S's floor; the last two tests pin
+where it ends. Left out on purpose: the sensor scenarios, because the spring pulls ODE S toward
 a measured S that the setpoint does not shift (the gap Stage A closes); and the
 derived-confidence formula, which still reads raw S and is not exercised here
 because every sensor-free scenario reports its confidence (contract row 50 says
@@ -96,3 +97,44 @@ def test_regime_fallback_detrends_level_but_not_the_S_delta():
             assert on == off, (S_now, S_prev, V, on, off)
             seen.add(off)
     assert {"DIVERGENCE", "CONVERGENCE"} <= seen
+
+
+def _noise_free_rest(complexity, sigma, steps=5000, dt=0.05):
+    from governance_core.dynamics import DEFAULT_STATE, State, step_state
+    from governance_core.parameters import DEFAULT_THETA, get_active_params
+
+    params = get_active_params()
+    s = State(E=DEFAULT_STATE.E, I=DEFAULT_STATE.I, S=DEFAULT_STATE.S + sigma, V=DEFAULT_STATE.V)
+    for _ in range(steps):
+        s = step_state(state=s, theta=DEFAULT_THETA, delta_eta=[], dt=dt, noise_S=0.0,
+                       params=params, complexity=complexity, sensor_eisv=None,
+                       s_setpoint=sigma)
+    return s, params
+
+
+@pytest.mark.parametrize("complexity", [0.4, 0.5, 0.7])
+def test_invariance_holds_while_S_stays_clear_of_its_floor(complexity):
+    sigma = get_s_setpoint("default")
+    off, params = _noise_free_rest(complexity, 0.0)
+    on, _ = _noise_free_rest(complexity, sigma)
+    assert off.S >= params.S_min + params.barrier_margin
+    for field in ("E", "I", "V"):
+        assert getattr(on, field) == pytest.approx(getattr(off, field), abs=1e-6), field
+    assert on.S - off.S == pytest.approx(sigma, abs=1e-6)
+
+
+def test_invariance_ends_at_the_S_floor():
+    """The bound of the claim, pinned. S's floor (S_min, its soft barrier and the
+    complexity floor) is entropy's own and stays on raw S. Where the setpoint-off
+    S rest falls inside the barrier margin (noise-free, low complexity), the off
+    run is held up by the floor while the shifted run's S - σ may go below it, so
+    the shifted run rests with higher E and I. Recentring the floor on σ would
+    forbid ODE S under σ and fight the sensor spring toward a measured S that is
+    calmer than healthy; Φ's detrend is unclamped below σ for the same reason
+    (Stage A.2). Live exposure is recorded in contract row 50."""
+    sigma = get_s_setpoint("default")
+    off, params = _noise_free_rest(0.15, 0.0)
+    on, _ = _noise_free_rest(0.15, sigma)
+    assert off.S < params.S_min + params.barrier_margin
+    assert on.S - sigma < off.S
+    assert on.I > off.I and on.E > off.E
