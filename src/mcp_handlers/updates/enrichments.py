@@ -1056,7 +1056,9 @@ def enrich_saturation_diagnostics(ctx: UpdateContext) -> None:
         theta = getattr(monitor.state, 'unitaires_theta', None) or DEFAULT_THETA
 
         if unitares_state:
-            sat_diag = compute_saturation_diagnostics(unitares_state, theta)
+            from src.monitor_setpoint import setpoint_for_monitor
+            sat_diag = compute_saturation_diagnostics(
+                unitares_state, theta, s_setpoint=setpoint_for_monitor(monitor))
             ctx.response_data['saturation_diagnostics'] = {
                 'sat_margin': sat_diag['sat_margin'],
                 'dynamics_mode': sat_diag['dynamics_mode'],
