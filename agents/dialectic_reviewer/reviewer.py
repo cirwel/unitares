@@ -35,6 +35,9 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Optional
 
 from src.identity.lineage_semantics import LineageSpawnReason
+from src.mcp_handlers.support.codex_app_server_client import (
+    lane_config_overrides as codex_lane_config_overrides,
+)
 from src.local_inference_env import (
     no_redirect_http_client,
     EndpointNotLocalError,
@@ -695,12 +698,23 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
         timeout_s = 420.0
     timeout_s = max(1.0, timeout_s)
     try:
+        # The lane overrides replace --sandbox read-only, whose legacy sandbox
+        # reads the whole disk, and switch off MCP servers, hooks, plugins and
+        # browser/computer use. The operator's codex config still supplies the
+        # model and reasoning effort, as before.
+        overrides = codex_lane_config_overrides(cli_path)
+        slots = " ".join(f'-c "$DR_CODEX_C{i}"' for i in range(1, len(overrides) + 1))
         proc = await asyncio.create_subprocess_exec(
             "/bin/sh",
             "-c",
-            'exec "$DR_CLI" exec --sandbox read-only --skip-git-repo-check '
-            '"$DR_PROMPT" </dev/null',
-            env={**os.environ, "DR_CLI": cli_path, "DR_PROMPT": prompt},
+            f'exec "$DR_CLI" exec --ephemeral {slots} '
+            '--skip-git-repo-check "$DR_PROMPT" </dev/null',
+            env={
+                **os.environ,
+                "DR_CLI": cli_path,
+                "DR_PROMPT": prompt,
+                **{f"DR_CODEX_C{i}": value for i, value in enumerate(overrides, start=1)},
+            },
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )

@@ -141,9 +141,11 @@ def test_protocol_reports_effective_model_reroute_and_usage():
         "approvalPolicy": "never",
         "cwd": "/repo",
         "ephemeral": True,
-        "sandbox": "read-only",
         "serviceName": "unitares_host_adapter",
     }
+    # No "sandbox": it would select codex's legacy whole-disk-read sandbox over
+    # the lane's deny-read permission profile.
+    assert "sandbox" not in requests[2]["params"]
 
 
 def test_protocol_failure_before_turn_is_fallback_safe():
@@ -179,3 +181,65 @@ def test_protocol_failure_after_turn_request_is_not_retried():
         )
 
     assert exc_info.value.fallback_safe is False
+
+
+def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
+    """The legacy read-only sandbox reads the whole disk (a canary in the home
+    directory was returned in an answer, 2026-10-15). Every lane selects a
+    profile that denies reads except the runtime minimum and codex's own
+    binary directories, and switches off tools a read-only lane never needs."""
+    real_bin = tmp_path / "cask" / "1.0" / "bin"
+    real_bin.mkdir(parents=True)
+    real = real_bin / "codex"
+    real.write_text("")
+    link_dir = tmp_path / "bin"
+    link_dir.mkdir()
+    link = link_dir / "codex"
+    link.symlink_to(real)
+
+    overrides = client.lane_config_overrides(str(link))
+    assert overrides[0] == f'default_permissions="{client.PERMISSION_PROFILE}"'
+    table = overrides[1]
+    assert table.startswith(f"permissions.{client.PERMISSION_PROFILE}.filesystem={{")
+    assert '":root"="deny"' in table and '":minimal"="read"' in table
+    assert f'"{link_dir}"="read"' in table
+    assert f'"{real_bin.resolve()}"="read"' in table
+    assert 'shell_environment_policy.inherit="core"' in overrides
+    assert "mcp_servers={}" in overrides and "hooks={}" in overrides
+    for feature in ("computer_use", "browser_use", "plugins", "apps"):
+        assert f"features.{feature}=false" in overrides
+    assert not any("sandbox_mode" in o for o in overrides)
+
+
+def test_lane_override_count_is_the_same_for_every_cli(tmp_path):
+    """Shell templates name each override slot, so the count must not vary."""
+    plain = tmp_path / "codex"
+    plain.write_text("")
+    assert len(client.lane_config_overrides(str(plain))) == client.LANE_CONFIG_OVERRIDE_COUNT
+    assert len(client.lane_config_overrides("codex")) == client.LANE_CONFIG_OVERRIDE_COUNT
+
+
+def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch):
+    seen = {}
+
+    class _Proc:
+        stdin = stdout = None
+
+    def fake_popen(argv, **kwargs):
+        seen["argv"] = argv
+        return _Proc()
+
+    monkeypatch.setattr(client.subprocess, "Popen", fake_popen)
+    client._spawn("/opt/x/codex")
+    argv = seen["argv"]
+    assert argv[:3] == ["/opt/x/codex", "app-server", "--stdio"]
+    assert argv[3:] == client.lane_config_args("/opt/x/codex")
+    assert "--sandbox" not in argv
+
+
+def test_client_refuses_a_sandbox_other_than_read_only(monkeypatch):
+    monkeypatch.setenv("HA_CLI", "/opt/x/codex")
+    monkeypatch.setenv("HA_PROMPT", "hi")
+    monkeypatch.setenv("HA_SANDBOX", "workspace-write")
+    monkeypatch.setattr(client, "_spawn", lambda cli: (_ for _ in ()).throw(AssertionError("spawned")))
+    assert client.main() == 1

@@ -37,17 +37,29 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from . import host_availability
+from .codex_app_server_client import (
+    LANE_CONFIG_OVERRIDE_COUNT as CODEX_LANE_OVERRIDE_COUNT,
+    lane_config_overrides as codex_lane_config_overrides,
+)
 
 logger = logging.getLogger(__name__)
 
 
+# No ``--sandbox``: it selects codex's legacy read-only sandbox, which reads the
+# whole disk. The ``-c`` overrides select the deny-read permission profile and
+# switch off tools a read-only lane has no use for
+# (codex_app_server_client.lane_config_overrides).
+_CODEX_PERMISSION_ARGS = "".join(
+    f'-c "$HA_CODEX_C{index}" ' for index in range(1, CODEX_LANE_OVERRIDE_COUNT + 1)
+)
+
 _CODEX_EXEC_COMMAND = (
     'if [ -n "$HA_MODEL" ]; then '
     'exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
+    f'{_CODEX_PERMISSION_ARGS}--skip-git-repo-check '
     '-m "$HA_MODEL" "$HA_PROMPT" </dev/null; '
     'else exec "$HA_CLI" exec --ignore-user-config --ephemeral --json '
-    '--sandbox "$HA_SANDBOX" --skip-git-repo-check '
+    f'{_CODEX_PERMISSION_ARGS}--skip-git-repo-check '
     '"$HA_PROMPT" </dev/null; fi'
 )
 
@@ -685,6 +697,15 @@ async def invoke_host_adapter(
     # is the classic distributed-systems lost-ack case: the orchestrator may
     # have accepted the child even when this client never receives its id.
     dispatch_phase = "preflight"
+    if sandbox != "read-only":
+        # Every host lane runs read-only; codex's permission profile implements
+        # nothing else, so refuse rather than widen.
+        return {
+            "ok": False,
+            "host_id": host_id,
+            "dispatch_phase": dispatch_phase,
+            "error": f"host adapters run read-only only, not sandbox={sandbox!r}",
+        }
     spec_def = _HOST_COMMANDS.get(host_id)
     if spec_def is None:
         return {
@@ -795,6 +816,11 @@ async def invoke_host_adapter(
         "lease": False,  # read-only advisor lane, no presence/lineage
         "max_runtime_ms": int(timeout_s * 1000) + 30_000,  # orchestrator backstop
     }
+    if host_id == "codex:host-adapter":
+        # The exec fallback's -c overrides; the app-server client computes the
+        # same list itself from HA_CLI.
+        for index, override in enumerate(codex_lane_config_overrides(cli_path), start=1):
+            spec["env"][f"HA_CODEX_C{index}"] = override
     if cd:
         spec["cd"] = cd
 
