@@ -128,6 +128,15 @@ def test_the_sequencing_guard_fires_without_a_recorded_change(monkeypatch, tmp_p
     changed = tmp_path / "golden.json"
     changed.write_bytes(driver.GOLDEN_PATH.read_bytes() + b"\n")
     monkeypatch.setattr(driver, "GOLDEN_PATH", changed)
+    # The manifest records T since the first instrument change (2026-10-15),
+    # so the unrecorded state is constructed here rather than read from it.
+    unrecorded = tuple(
+        dataclasses.replace(e, instrument_change_at=None)
+        if e.name == "eisv-outcome-grounding-stop-rule-v0"
+        else e
+        for e in matrix.REGISTERED_READ_MANIFEST
+    )
+    monkeypatch.setattr(matrix, "REGISTERED_READ_MANIFEST", unrecorded)
     with pytest.raises(AssertionError, match="records no instrument_change_at"):
         test_a_changed_golden_file_requires_a_recorded_instrument_change()
 
@@ -139,19 +148,6 @@ def test_the_sequencing_guard_fires_without_a_recorded_change(monkeypatch, tmp_p
     )
     monkeypatch.setattr(matrix, "REGISTERED_READ_MANIFEST", recorded)
     test_a_changed_golden_file_requires_a_recorded_instrument_change()
-
-
-def test_registered_instrument_pin_matches_the_golden_file_today():
-    """Holds until the first recorded instrument change; then delete this test
-    in the PR that sets instrument_change_at (the guard above stays)."""
-    import hashlib
-
-    from scripts.analysis.eisv_ablation_matrix import registered_read_protocol
-
-    entry = registered_read_protocol("eisv-outcome-grounding-2026-12-01")
-    if entry is not None and entry.instrument_change_at is not None:
-        pytest.skip("an instrument change is recorded; the golden file may differ")
-    assert hashlib.sha256(driver.GOLDEN_PATH.read_bytes()).hexdigest() == REGISTERED_INSTRUMENT_GOLDEN_SHA256
 
 
 def test_golden_covers_the_scenarios_the_contract_names():

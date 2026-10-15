@@ -181,11 +181,14 @@ REGISTERED_READ_MANIFEST: tuple[RegisteredReadProtocol, ...] = (
         ),
         dispersion_feature="prior_s_disp",
         # Amendment 2026-10-15 (operator): the data boundary moves to the
-        # first instrument change. None: no change to the live EISV update
-        # path has deployed since registration. The PR that first makes one
-        # sets this; tests/test_eisv_instrument_preservation.py refuses a
-        # changed golden trajectory file while it is None.
-        instrument_change_at=None,
+        # first instrument change. Set by the basin setpoint repair (contract
+        # rows 50-52; branch claude/basin-setpoint-repair-1015) to its final
+        # commit's instant rounded down to the minute: the first change to the
+        # live EISV update path since registration. Its deployment follows the
+        # merge, so this precedes the deployment (conservative). Immutable once
+        # that change is deployed; a correction may only move it earlier, with
+        # disclosure in the amendment's instrument-change record.
+        instrument_change_at=datetime(2026, 10, 15, 13, 25, tzinfo=timezone.utc),
         data_boundary_rule=STOP_RULE_DATA_BOUNDARY_RULE,
     ),
     RegisteredReadProtocol(

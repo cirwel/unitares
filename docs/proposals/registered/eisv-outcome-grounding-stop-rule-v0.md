@@ -991,7 +991,13 @@ records its snapshot.
 
 | T (`instrument_change_at`) | Set by | Deployment record | Snapshot `snapshot_sha256` | Snapshot rows (outcomes / states / identities) | Exported at |
 |---|---|---|---|---|---|
-| none recorded | — | — | — | — | — |
+| `2026-10-15T13:25:00Z` | the basin setpoint repair (branch `claude/basin-setpoint-repair-1015`; contract rows 50–52) | pending: the deployer cites the deploy log entry or the running `build_sha` and its restart time, and confirms the deployment did not precede T | pending: exported at deploy | pending | pending |
+
+T for the first row is the instant of the setting PR's final commit, rounded
+down to the minute. Rationale: this is the first instrument change since
+registration, and its deployment can only follow the merge, so T precedes the
+deployment, which rule 3 above allows as conservative. T was fixed by that
+commit's time, not by any look at outcomes or at the read's data.
 
 ## What continues regardless
 

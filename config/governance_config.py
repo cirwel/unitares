@@ -87,7 +87,8 @@ BASIN_BOUNDARY = BasinRegion(name="boundary")
 
 
 def classify_basin(E: float, I: float, S: float, V: float,
-                   coherence: float, risk_score: float) -> str:
+                   coherence: float, risk_score: float,
+                   s_setpoint: float = 0.0) -> str:
     """Classify current state into a basin region.
 
     Returns "high", "low", or "boundary".
@@ -96,6 +97,15 @@ def classify_basin(E: float, I: float, S: float, V: float,
       1. LOW — any single critical breach
       2. HIGH — all dimensions within healthy bounds
       3. BOUNDARY — everything else (transitional)
+
+    ``s_setpoint`` is the Stage A S setpoint σ the ODE rests at
+    (``src.monitor_setpoint.setpoint_for_monitor``). The HIGH region's S bound
+    is evaluated on ``S - s_setpoint``, the same detrend Φ applies
+    (``phi_eval_state``), so moving the S attractor up by σ moves neither the
+    verdict nor the basin. LOW has no S term. ``S`` itself is never altered:
+    callers pass the ODE state they were handed and σ separately. The default
+    0.0 is the un-detrended classifier (setpoint off, or a caller that has no
+    σ, such as a display surface or a historical record without one).
     """
     # Coerce None → 0.0 for defensive callers
     if risk_score is None:
@@ -110,7 +120,7 @@ def classify_basin(E: float, I: float, S: float, V: float,
         return "low"
 
     # HIGH: conjunctive — all bounds must hold
-    if BASIN_HIGH.contains(E, I, S, V, coherence, risk_score):
+    if BASIN_HIGH.contains(E, I, S - s_setpoint, V, coherence, risk_score):
         return "high"
 
     # BOUNDARY: neither high nor low
