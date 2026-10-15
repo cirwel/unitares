@@ -180,8 +180,12 @@ subscription lane cannot silently become metered (`:770-793`).
 - **The prompt stays in `HA_PROMPT`.** No prompt file.
 - **The orchestrator allows only adapter binaries.** Its command allowlist is
   unset today (`elixir/agent_orchestrator/config/config.exs:63`), so any command
-  is allowed on the authenticated surface. Step 1 sets it to the binaries the
-  adapters use, and a declared `cli` host can only name one of those adapters.
+  is allowed on the authenticated surface. An allowlist means little while every
+  adapter launches through `/bin/sh -c` and the reviewer through the Python
+  interpreter, since both would have to be allowed. Step 4 therefore launches
+  declared `cli` hosts' binaries directly and sets the allowlist to those
+  binaries in the same change; a declared `cli` host can only name an existing
+  adapter.
 
 ### 2.6 Health state stays with its runner
 
@@ -234,11 +238,11 @@ to interpret what happened, without claiming federation trust.
 A missing file means today's behavior. A file that does not load (bad syntax,
 unknown field, unknown family, a secret value where a variable name belongs, a
 duplicate id, a job naming an id declared nowhere, a file writable by another
-user) makes every job it would configure refuse with a named error, and the doctor reports the line. The
-server does not fall back to the shipped defaults, which could re-enable a host
-the operator switched off. `unitares doctor --inference` prints the effective
-configuration, where it came from, and each job's candidate order with the skip
-reasons as of now.
+user) makes every job it would configure refuse with a named error, and the
+doctor reports the line or field at fault. The server does not fall back to the
+shipped defaults, which could re-enable a host the operator switched off. The
+doctor's `inference_hosts_file` check prints the effective configuration, where
+it came from, and each job's host order.
 
 ## 3. Non-goals
 
@@ -254,11 +258,12 @@ reasons as of now.
 Each step is its own pull request and preserves behavior for an install that
 sets nothing.
 
-1. **Vocabulary, parser, doctor, and the orchestrator allowlist.** The parser
-   with fail-closed validation, the `doctor --inference` view, and the
-   allowlist set to the adapter binaries. The registry reads families from the
-   vocabulary; `list_inference_hosts` gains fields additively, and a parity test
-   compares the existing keys.
+1. **Vocabulary, parser and doctor.** The parser with fail-closed validation and
+   the doctor's `inference_hosts_file` check. The registry reads families from
+   the vocabulary; `list_inference_hosts` gains `family` additively (the other
+   new fields arrive with the routing that honours them, so discovery never
+   shows a setting routing ignores), and a parity test compares the existing
+   keys.
 2. **`consult` and `delegate_inference` read the `consult.thorough` job.**
    `host_id` becomes a checked string: a minor contract bump, since every old
    id is still accepted (`docs/INTERFACE_CONTRACT.md:111-115`), with
@@ -269,8 +274,10 @@ sets nothing.
    steps (cooldowns, independence, declared hosts) use this file;
    `UNITARES_DIALECTIC_REVIEWER_HOSTS` becomes an alias.
 4. **Declared hosts and self-hosting docs.** `openai_http` and `cli` hosts,
-   secret resolution in the orchestrator, the install manual, `.env.example`
-   and Compose, with a minimal local-only example file and its JSON Schema.
+   direct binary launch for declared `cli` hosts with the orchestrator allowlist
+   (2.5), secret resolution in the orchestrator, the install manual,
+   `.env.example` and Compose, with a minimal local-only example file and its
+   JSON Schema.
 5. **The review gate reads its repository file** with `collect_families`;
    `review_providers.json` becomes an alias on the one-endpoint design's
    schedule. `review_providers.json` is named in the shared contract in both
@@ -278,9 +285,8 @@ sets nothing.
 
 ## 5. Evidence required before each step ships
 
-- Step 1: a file with each listed error is refused with its line; a missing
-  file changes nothing; the allowlist refuses a command outside it; the parity
-  test passes.
+- Step 1: a file with each listed error is refused with its line or field; a
+  missing file changes nothing; the parity test passes.
 - Step 2: for each caller family including `unknown`, the default order matches
   `_THOROUGH_PEERS`; a Claude-family caller's call skips claude and says so;
   with every host cooling down, the call fails with all reasons and calls
@@ -291,7 +297,7 @@ sets nothing.
 - Step 3: the reviewer design's evidence list.
 - Step 4: a declared `cli` host answers end to end; its secret's value is
   absent from the spawn request, logs and provenance; a declared host does not
-  receive the operator's own keys.
+  receive the operator's own keys; the allowlist refuses a command outside it.
 - Step 5: a sensitive-path pull request collects two distinct families in list
   order; a second pass from one family does not count; `test_review_gate.py`
   stays green.
