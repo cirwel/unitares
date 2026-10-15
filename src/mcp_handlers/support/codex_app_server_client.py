@@ -8,11 +8,15 @@ turn request is sent.  Only the former are safe to retry through ``codex exec``.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
+import secrets
+import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
@@ -20,6 +24,242 @@ from typing import Any, TextIO
 RESULT_SCHEMA = "unitares.codex_app_server_result.v1"
 FALLBACK_SAFE_EXIT = 75
 _CLIENT_NAME = "unitares_host_adapter"
+
+# Codex's legacy ``read-only`` sandbox denies writes but reads the whole disk,
+# so a prompt (or text injected into one) could have the agent read the
+# operator's credentials and return them in its answer; that was verified on
+# 2026-10-15 with a canary file. Every UNITARES codex lane therefore runs:
+#
+# - with lane_config_overrides(): a permission profile that denies reads
+#   everywhere except the platform's minimal runtime paths and the directories
+#   holding the codex binary (its sandbox helper re-executes it), with writes
+#   denied; commands that see only an allow-list of core environment
+#   variables; and no hooks, plugins, apps, browser or computer use;
+# - in an empty private working directory (lane_workdir()), so no project
+#   ``.codex/config.toml`` or project instructions can load;
+# - with every MCP server the loaded configuration still enables switched off
+#   by name (mcp_disable_overrides()), refusing to run if any stays enabled.
+#
+# ``-c`` deep-merges tables into whatever configuration codex loads, which is
+# why none of this is done with a table: ``mcp_servers={}`` and ``hooks={}``
+# removed nothing, and a fixed profile name could be pre-populated by the
+# operator's config with grants of its own, so each launch takes a fresh one.
+PERMISSION_PROFILE_PREFIX = "unitares_lane_"
+
+# What a command the agent runs may see; codex matches these as globs.
+_COMMAND_ENV_NAMES = ("HOME", "LANG", "LC_*", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER")
+
+_DISABLED_FEATURES = (
+    "apps",
+    "hooks",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "in_app_browser",
+    "plugins",
+)
+
+
+def codex_readable_roots(cli: str) -> list[str]:
+    """Directories the sandboxed helper must read to re-execute ``cli``: the
+    one it is invoked from and, for a symlinked install, the real binary's.
+
+    An npm install resolves ``codex`` to a JavaScript launcher, while the
+    native executable the sandbox re-executes ships in a sibling platform
+    package (``@openai/codex-<platform>``), so the ``@openai`` scope is added."""
+    real = os.path.realpath(cli)
+    candidates = [os.path.dirname(os.path.abspath(cli)), os.path.dirname(real)]
+    if os.path.splitext(real)[1] in (".js", ".mjs", ".cjs"):
+        parts = real.split(os.sep)
+        if "@openai" in parts:
+            index = len(parts) - 1 - parts[::-1].index("@openai")
+            candidates.append(os.sep.join(parts[: index + 1]))
+    roots: list[str] = []
+    for directory in candidates:
+        if directory and directory not in roots:
+            roots.append(directory)
+    return roots
+
+
+def admin_config_paths() -> list[str]:
+    """Codex configuration that loads whatever a lane passes: managed layers
+    take precedence over ``-c`` overrides, a legacy ``sandbox_mode`` in the
+    system file overrides a permission profile, and requirements can make
+    codex fall back from a requested value. Locations:
+    https://developers.openai.com/codex/enterprise/managed-configuration"""
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    try:
+        user = os.environ.get("USER") or getpass.getuser()
+    except Exception:  # noqa: BLE001 - no name: the per-user path is skipped below
+        user = ""
+    paths = [
+        "/etc/codex/config.toml",
+        "/etc/codex/managed_config.toml",
+        "/etc/codex/requirements.toml",
+        os.path.join(home, "managed_config.toml"),
+        # macOS MDM managed preferences (config_toml_base64 / requirements_toml_base64).
+        "/Library/Managed Preferences/com.openai.codex.plist",
+    ]
+    if user:
+        paths.append(f"/Library/Managed Preferences/{user}/com.openai.codex.plist")
+    return paths
+
+
+def admin_config_conflict(paths: list[str] | None = None) -> str | None:
+    """The first administrator codex configuration that exists, or None. A
+    self-hosted machine does not normally have one, and checking contents
+    would mean parsing TOML and MDM payloads exactly; a parser gap would be a
+    confinement gap, so existence alone refuses the lane."""
+    for path in admin_config_paths() if paths is None else paths:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def new_profile_name() -> str:
+    """A permission-profile name no configuration can have pre-populated."""
+    return PERMISSION_PROFILE_PREFIX + secrets.token_hex(8)
+
+
+def lane_config_overrides(cli: str, profile: str | None = None) -> list[str]:
+    """The ``-c key=value`` overrides every codex lane runs with, in order.
+
+    Pass each as its own ``-c`` argument. They replace ``--sandbox read-only``,
+    which would select the legacy sandbox and ignore the profile. The list has
+    the same length for every ``cli``, so a shell template can name each slot.
+    ``profile`` defaults to a fresh name (``new_profile_name``)."""
+    profile = profile or new_profile_name()
+    entries = {":root": "deny", ":minimal": "read"}
+    for root in codex_readable_roots(cli):
+        entries[root] = "read"
+    table = ", ".join(f"{json.dumps(k)}={json.dumps(v)}" for k, v in entries.items())
+    return [
+        f'default_permissions="{profile}"',
+        f"permissions.{profile}.filesystem={{{table}}}",
+        # Lists replace rather than merge, and ``include_only`` applies after
+        # an operator's ``shell_environment_policy.set``, so this allow-list is
+        # what bounds the agent's environment (an ``inherit`` alone left a
+        # configured ``set`` variable reaching commands; verified 2026-10-15).
+        'shell_environment_policy.inherit="core"',
+        f"shell_environment_policy.include_only={json.dumps(list(_COMMAND_ENV_NAMES))}",
+        *(f"features.{name}=false" for name in _DISABLED_FEATURES),
+    ]
+
+
+LANE_CONFIG_OVERRIDE_COUNT = len(lane_config_overrides("codex", "x"))
+
+_SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def _enabled_mcp_servers(cli: str, overrides: list[str], cwd: str) -> list[str]:
+    args = [cli, "mcp", "list", "--json"]
+    for override in overrides:
+        args.extend(["-c", override])
+    try:
+        proc = subprocess.run(
+            args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Fail closed: the lane refuses rather than falling back to exec.
+        raise ValueError(f"codex mcp list could not run: {exc}") from exc
+    if proc.returncode != 0:
+        raise ValueError(f"codex mcp list exited {proc.returncode}")
+    servers = json.loads(proc.stdout)
+    if not isinstance(servers, list):
+        raise ValueError("codex mcp list returned no server list")
+    return [str(s.get("name")) for s in servers if isinstance(s, dict) and s.get("enabled")]
+
+
+def mcp_disable_overrides(cli: str, overrides: list[str], cwd: str) -> list[str]:
+    """``mcp_servers.<name>.enabled=false`` for every MCP server the loaded
+    configuration still enables under ``overrides``, as codex itself reports
+    them. Raises ValueError if the list cannot be read, a name cannot be
+    addressed through ``-c``, or any server is still enabled afterwards: the
+    lane fails rather than run with a server."""
+    disables = []
+    for name in _enabled_mcp_servers(cli, overrides, cwd):
+        if not _SERVER_NAME.fullmatch(name):
+            raise ValueError(f"cannot disable codex MCP server {name!r} through -c")
+        disables.append(f"mcp_servers.{name}.enabled=false")
+    still = _enabled_mcp_servers(cli, overrides + disables, cwd)
+    if still:
+        raise ValueError(f"codex MCP servers still enabled: {', '.join(still)}")
+    return disables
+
+
+_CONFINEMENT_VERIFIED: dict[tuple[str, float], bool] = {}
+
+
+def confinement_verified(cli: str) -> bool:
+    """Whether this codex actually enforces the lane's permission profile.
+
+    The confinement rests on configuration keys an older codex may silently
+    ignore, so before a lane runs, ``codex sandbox`` (no model call) must fail
+    to read a probe file outside the profile's readable paths and must still
+    run a harmless command under the same overrides. A codex that cannot run
+    the probe at all is unverified too. A success is cached per process,
+    resolved binary and mtime, so an upgrade is probed again; the per-call
+    app-server client is a fresh process and probes each time (~0.1s)."""
+    real = os.path.realpath(cli)
+    try:
+        stamp = (real, os.stat(real).st_mtime)
+    except OSError:
+        return False
+    if stamp in _CONFINEMENT_VERIFIED:
+        return _CONFINEMENT_VERIFIED[stamp]
+    # Under the home directory, which the profile denies (":root" deny); the
+    # temporary directory may be readable through ":minimal".
+    base = os.path.expanduser("~/.local/state/unitares")
+    verified = False
+    probe_dir = None
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        probe_dir = tempfile.mkdtemp(prefix="codex-probe-", dir=base)
+        token = "unitares-confinement-probe-" + secrets.token_hex(8)
+        probe = os.path.join(probe_dir, "probe.txt")
+        with open(probe, "w") as handle:
+            handle.write(token)
+        overrides: list[str] = []
+        for override in lane_config_overrides(cli):
+            overrides.extend(["-c", override])
+        run = [cli, "sandbox", *overrides, "--"]
+        # In an empty directory, as the lane itself runs, so no project
+        # configuration in the caller's directory affects the probe.
+        workdir = os.path.join(probe_dir, "work")
+        os.mkdir(workdir, 0o700)
+        harmless = subprocess.run(run + ["/usr/bin/true"], capture_output=True, text=True,
+                                  cwd=workdir, stdin=subprocess.DEVNULL, timeout=20)
+        reading = subprocess.run(run + ["/bin/cat", probe], capture_output=True, text=True,
+                                 cwd=workdir, stdin=subprocess.DEVNULL, timeout=20)
+        verified = (harmless.returncode == 0 and reading.returncode != 0
+                    and token not in reading.stdout + reading.stderr)
+    except (OSError, subprocess.SubprocessError):
+        verified = False
+    finally:
+        if probe_dir:
+            shutil.rmtree(probe_dir, ignore_errors=True)
+    if verified:
+        # Only a success is cached: a failure may be transient (a timeout),
+        # and the next call probes again.
+        _CONFINEMENT_VERIFIED[stamp] = True
+    return verified
+
+
+def lane_workdir() -> str:
+    """A fresh, empty, private working directory outside any repository, so no
+    project configuration or instructions load. The caller removes it."""
+    return tempfile.mkdtemp(prefix="unitares-codex-lane-")
+
+
+def lane_config_args(cli: str, cwd: str) -> list[str]:
+    """The full ``-c`` argument list for a lane that loads the operator's
+    configuration (the app-server, the dialectic reviewer), run in ``cwd``."""
+    overrides = lane_config_overrides(cli)
+    overrides += mcp_disable_overrides(cli, overrides, cwd)
+    args: list[str] = []
+    for override in overrides:
+        args.extend(["-c", override])
+    return args
 
 
 class AppServerClientError(RuntimeError):
@@ -282,7 +522,8 @@ def run_protocol(
             "approvalPolicy": "never",
             "cwd": cwd,
             "ephemeral": True,
-            "sandbox": sandbox,
+            # No "sandbox" here: it would select the legacy whole-disk-read
+            # sandbox over the permission profile the server was started with.
             "serviceName": _CLIENT_NAME,
         }
         if model:
@@ -340,17 +581,15 @@ def run_protocol(
         ) from exc
 
 
-def _spawn(cli: str) -> subprocess.Popen[str]:
+def _spawn(cli: str, cwd: str) -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             cli,
             "app-server",
             "--stdio",
-            "-c",
-            "mcp_servers={}",
-            "-c",
-            "hooks={}",
+            *lane_config_args(cli, cwd),
         ],
+        cwd=cwd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -367,10 +606,28 @@ def main() -> int:
     if not cli or not prompt:
         print("Codex app-server client missing HA_CLI or HA_PROMPT", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
+    if sandbox != "read-only":
+        # The permission profile implements read-only only. Refuse rather than
+        # widen; the exec fallback refuses the same value.
+        print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
+        return 1
+    conflict = admin_config_conflict()
+    if conflict:
+        print(
+            f"Codex lane refused: {conflict} is administrator codex configuration "
+            "that can override the lane's permission profile",
+            file=sys.stderr,
+        )
+        return 1
+    if not confinement_verified(cli):
+        print("Codex lane refused: this codex does not enforce the lane's permission "
+              "profile (codex sandbox probe)", file=sys.stderr)
+        return 1
 
     process: subprocess.Popen[str] | None = None
+    workdir = lane_workdir()
     try:
-        process = _spawn(cli)
+        process = _spawn(cli, workdir)
         if process.stdin is None or process.stdout is None:
             raise AppServerClientError(
                 "Codex app-server pipes unavailable",
@@ -382,7 +639,7 @@ def main() -> int:
             prompt=prompt,
             model=model,
             sandbox=sandbox,
-            cwd=os.getcwd(),
+            cwd=workdir,
         )
         print(json.dumps(result, separators=(",", ":")), flush=True)
         return 0 if result["finish_reason"] == "completed" and result["text"] else 1
@@ -392,6 +649,12 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"Codex app-server unavailable: {exc}", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
+    except ValueError as exc:
+        # The loaded configuration could not be neutralised (see
+        # mcp_disable_overrides). Not fallback-safe either: the lane fails
+        # closed instead of retrying through exec.
+        print(f"Codex lane refused: {exc}", file=sys.stderr)
+        return 1
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
@@ -400,6 +663,7 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 if __name__ == "__main__":
