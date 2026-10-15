@@ -197,10 +197,10 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     link = link_dir / "codex"
     link.symlink_to(real)
 
-    overrides = client.lane_config_overrides(str(link))
-    assert overrides[0] == f'default_permissions="{client.PERMISSION_PROFILE}"'
+    overrides = client.lane_config_overrides(str(link), "unitares_lane_test")
+    assert overrides[0] == 'default_permissions="unitares_lane_test"'
     table = overrides[1]
-    assert table.startswith(f"permissions.{client.PERMISSION_PROFILE}.filesystem={{")
+    assert table.startswith("permissions.unitares_lane_test.filesystem={")
     assert '":root"="deny"' in table and '":minimal"="read"' in table
     assert f'"{link_dir}"="read"' in table
     assert f'"{real_bin.resolve()}"="read"' in table
@@ -209,13 +209,21 @@ def test_lane_overrides_deny_reads_outside_runtime_and_codex_paths(tmp_path):
     # here; the ``include_only`` list (lists replace, and it applies after
     # ``set``) is what keeps injected variables away from the agent's commands.
     assert policy[0] == 'shell_environment_policy.inherit="core"'
-    assert policy[1].startswith("shell_environment_policy.include_only=")
     allowed = json.loads(policy[1].split("=", 1)[1])
     assert "HOME" in allowed and "PATH" in allowed
-    assert not any("KEY" in n or "TOKEN" in n or "SECRET" in n or "*" == n for n in allowed)
+    assert not any("KEY" in n or "TOKEN" in n or "SECRET" in n or n == "*" for n in allowed)
     for feature in ("computer_use", "browser_use", "plugins", "apps", "hooks"):
         assert f"features.{feature}=false" in overrides
-    assert not any("sandbox_mode" in o for o in overrides)
+    assert not any("sandbox_mode" in o or o.endswith("={}") for o in overrides)
+
+
+def test_each_launch_takes_a_fresh_profile_name():
+    """A fixed name could be pre-populated by the operator's config with grants
+    of its own, which -c's deep merge would keep alongside the denials."""
+    first = client.lane_config_overrides("/opt/x/codex")[0]
+    second = client.lane_config_overrides("/opt/x/codex")[0]
+    assert first.startswith(f'default_permissions="{client.PERMISSION_PROFILE_PREFIX}')
+    assert first != second
 
 
 def test_lane_override_count_is_the_same_for_every_cli(tmp_path):
@@ -226,9 +234,34 @@ def test_lane_override_count_is_the_same_for_every_cli(tmp_path):
     assert len(client.lane_config_overrides("codex")) == client.LANE_CONFIG_OVERRIDE_COUNT
 
 
-def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch, tmp_path):
-    (tmp_path / "config.toml").write_text('[mcp_servers.helper]\ncommand = "x"\n')
-    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+def test_every_enabled_mcp_server_is_switched_off_by_name(monkeypatch):
+    """``-c`` deep-merges tables, so ``mcp_servers={}`` leaves the operator's
+    servers running (verified with ``codex mcp list``); each server the loaded
+    configuration still enables is disabled by name and the result re-checked."""
+    calls = []
+
+    def fake_enabled(cli, overrides, cwd):
+        calls.append(list(overrides))
+        return [] if any(o.endswith(".enabled=false") for o in overrides) else ["node_repl", "computer-use"]
+
+    monkeypatch.setattr(client, "_enabled_mcp_servers", fake_enabled)
+    assert client.mcp_disable_overrides("/opt/x/codex", ["base"], "/w") == [
+        "mcp_servers.node_repl.enabled=false",
+        "mcp_servers.computer-use.enabled=false",
+    ]
+    assert len(calls) == 2
+
+
+def test_a_server_that_stays_enabled_or_cannot_be_named_fails_closed(monkeypatch):
+    monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: ["stubborn"])
+    with pytest.raises(ValueError, match="still enabled"):
+        client.mcp_disable_overrides("/opt/x/codex", [], "/w")
+    monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: ["has.dot"])
+    with pytest.raises(ValueError, match="cannot disable"):
+        client.mcp_disable_overrides("/opt/x/codex", [], "/w")
+
+
+def test_app_server_runs_in_the_workdir_with_the_lane_arguments(monkeypatch, tmp_path):
     seen = {}
 
     class _Proc:
@@ -236,43 +269,42 @@ def test_app_server_is_spawned_with_the_lane_overrides(monkeypatch, tmp_path):
 
     def fake_popen(argv, **kwargs):
         seen["argv"] = argv
+        seen["cwd"] = kwargs.get("cwd")
         return _Proc()
 
+    monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: [] if any(
+        o.endswith(".enabled=false") for o in overrides) else ["helper"])
     monkeypatch.setattr(client.subprocess, "Popen", fake_popen)
-    client._spawn("/opt/x/codex")
+    client._spawn("/opt/x/codex", str(tmp_path))
     argv = seen["argv"]
     assert argv[:3] == ["/opt/x/codex", "app-server", "--stdio"]
-    assert argv[3:] == client.lane_config_args("/opt/x/codex")
     assert "mcp_servers.helper.enabled=false" in argv
+    assert any(a.startswith('default_permissions="unitares_lane_') for a in argv)
     assert "--sandbox" not in argv
+    assert seen["cwd"] == str(tmp_path)
 
 
-def test_every_mcp_server_in_the_operator_config_is_switched_off(tmp_path):
-    """``-c`` deep-merges tables, so ``mcp_servers={}`` leaves the operator's
-    servers running (verified with ``codex mcp list``); each one is disabled
-    by name instead."""
-    (tmp_path / "config.toml").write_text(
-        '[mcp_servers.computer-use]\ncommand = "a"\n[mcp_servers.node_repl]\ncommand = "b"\n'
-    )
-    assert client.user_mcp_server_overrides(str(tmp_path)) == [
-        "mcp_servers.computer-use.enabled=false",
-        "mcp_servers.node_repl.enabled=false",
-    ]
-    assert client.user_mcp_server_overrides(str(tmp_path / "missing")) == []
-
-
-def test_an_unaddressable_or_unreadable_config_fails_closed(tmp_path):
-    (tmp_path / "config.toml").write_text('[mcp_servers."has.dot"]\ncommand = "a"\n')
-    with pytest.raises(ValueError):
-        client.user_mcp_server_overrides(str(tmp_path))
-    (tmp_path / "config.toml").write_text("not = [valid")
-    with pytest.raises(ValueError):
-        client.user_mcp_server_overrides(str(tmp_path))
+def test_lane_workdir_is_empty_and_outside_the_repository():
+    workdir = client.lane_workdir()
+    try:
+        import os
+        assert os.listdir(workdir) == []
+        assert not os.path.abspath(workdir).startswith(os.path.abspath("."))
+    finally:
+        import shutil
+        shutil.rmtree(workdir)
 
 
 def test_client_refuses_a_sandbox_other_than_read_only(monkeypatch):
     monkeypatch.setenv("HA_CLI", "/opt/x/codex")
     monkeypatch.setenv("HA_PROMPT", "hi")
     monkeypatch.setenv("HA_SANDBOX", "workspace-write")
-    monkeypatch.setattr(client, "_spawn", lambda cli: (_ for _ in ()).throw(AssertionError("spawned")))
+    monkeypatch.setattr(client, "_spawn", lambda cli, cwd: (_ for _ in ()).throw(AssertionError("spawned")))
     assert client.main() == 1
+
+
+def test_an_unneutralisable_config_refuses_without_the_exec_fallback(monkeypatch):
+    monkeypatch.setenv("HA_CLI", "/opt/x/codex")
+    monkeypatch.setenv("HA_PROMPT", "hi")
+    monkeypatch.setattr(client, "_enabled_mcp_servers", lambda cli, overrides, cwd: ["stubborn"])
+    assert client.main() == 1  # not FALLBACK_SAFE_EXIT

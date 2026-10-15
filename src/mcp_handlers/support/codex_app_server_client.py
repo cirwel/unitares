@@ -11,9 +11,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
+import shutil
 import subprocess
 import sys
-import tomllib
+import tempfile
 from dataclasses import dataclass, field
 from typing import Any, TextIO
 
@@ -25,17 +27,23 @@ _CLIENT_NAME = "unitares_host_adapter"
 # Codex's legacy ``read-only`` sandbox denies writes but reads the whole disk,
 # so a prompt (or text injected into one) could have the agent read the
 # operator's credentials and return them in its answer; that was verified on
-# 2026-10-15 with a canary file. Every UNITARES codex lane therefore runs with
-# lane_config_overrides(): a permission profile that denies reads everywhere
-# except the platform's minimal runtime paths and the directories holding the
-# codex binary (its sandbox helper re-executes it), with writes denied;
-# commands that inherit only the core environment variables and nothing the
-# operator's shell_environment_policy sets; and no hooks, plugins, apps,
-# browser or computer use, whatever the operator's own codex configuration
-# enables. A lane that loads the operator's config also disables each MCP
-# server it declares (user_mcp_server_overrides): ``-c`` deep-merges tables,
-# so ``mcp_servers={}`` would leave them all running.
-PERMISSION_PROFILE = "unitares_host"
+# 2026-10-15 with a canary file. Every UNITARES codex lane therefore runs:
+#
+# - with lane_config_overrides(): a permission profile that denies reads
+#   everywhere except the platform's minimal runtime paths and the directories
+#   holding the codex binary (its sandbox helper re-executes it), with writes
+#   denied; commands that see only an allow-list of core environment
+#   variables; and no hooks, plugins, apps, browser or computer use;
+# - in an empty private working directory (lane_workdir()), so no project
+#   ``.codex/config.toml`` or project instructions can load;
+# - with every MCP server the loaded configuration still enables switched off
+#   by name (mcp_disable_overrides()), refusing to run if any stays enabled.
+#
+# ``-c`` deep-merges tables into whatever configuration codex loads, which is
+# why none of this is done with a table: ``mcp_servers={}`` and ``hooks={}``
+# removed nothing, and a fixed profile name could be pre-populated by the
+# operator's config with grants of its own, so each launch takes a fresh one.
+PERMISSION_PROFILE_PREFIX = "unitares_lane_"
 
 # What a command the agent runs may see; codex matches these as globs.
 _COMMAND_ENV_NAMES = ("HOME", "LANG", "LC_*", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER")
@@ -64,63 +72,84 @@ def codex_readable_roots(cli: str) -> list[str]:
     return roots
 
 
-def lane_config_overrides(cli: str) -> list[str]:
+def new_profile_name() -> str:
+    """A permission-profile name no configuration can have pre-populated."""
+    return PERMISSION_PROFILE_PREFIX + secrets.token_hex(8)
+
+
+def lane_config_overrides(cli: str, profile: str | None = None) -> list[str]:
     """The ``-c key=value`` overrides every codex lane runs with, in order.
 
     Pass each as its own ``-c`` argument. They replace ``--sandbox read-only``,
     which would select the legacy sandbox and ignore the profile. The list has
-    the same length for every ``cli``, so a shell template can name each slot."""
+    the same length for every ``cli``, so a shell template can name each slot.
+    ``profile`` defaults to a fresh name (``new_profile_name``)."""
+    profile = profile or new_profile_name()
     entries = {":root": "deny", ":minimal": "read"}
     for root in codex_readable_roots(cli):
         entries[root] = "read"
     table = ", ".join(f"{json.dumps(k)}={json.dumps(v)}" for k, v in entries.items())
     return [
-        f'default_permissions="{PERMISSION_PROFILE}"',
-        f"permissions.{PERMISSION_PROFILE}.filesystem={{{table}}}",
-        # ``-c`` deep-merges tables into the operator's config, so an operator
-        # ``shell_environment_policy.set`` would survive any table given here
-        # and inject its variables into every command the agent runs (verified
-        # 2026-10-15). Lists replace rather than merge, and ``include_only`` is
-        # applied after ``set``, so this allow-list is what bounds the agent's
-        # environment.
+        f'default_permissions="{profile}"',
+        f"permissions.{profile}.filesystem={{{table}}}",
+        # Lists replace rather than merge, and ``include_only`` applies after
+        # an operator's ``shell_environment_policy.set``, so this allow-list is
+        # what bounds the agent's environment (an ``inherit`` alone left a
+        # configured ``set`` variable reaching commands; verified 2026-10-15).
         'shell_environment_policy.inherit="core"',
         f"shell_environment_policy.include_only={json.dumps(list(_COMMAND_ENV_NAMES))}",
         *(f"features.{name}=false" for name in _DISABLED_FEATURES),
     ]
 
 
-LANE_CONFIG_OVERRIDE_COUNT = len(lane_config_overrides("codex"))
-
+LANE_CONFIG_OVERRIDE_COUNT = len(lane_config_overrides("codex", "x"))
 
 _SERVER_NAME = re.compile(r"[A-Za-z0-9_-]+")
 
 
-def user_mcp_server_overrides(codex_home: str | None = None) -> list[str]:
-    """``mcp_servers.<name>.enabled=false`` for every MCP server the operator's
-    codex config declares. Needed by any lane that loads that config (the
-    app-server and the dialectic reviewer); ``codex exec --ignore-user-config``
-    does not. A config that cannot be read, or a server name a ``-c`` path
-    cannot address, raises: the lane fails rather than run with the server."""
-    home = codex_home or os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    path = os.path.join(home, "config.toml")
-    if not os.path.exists(path):
-        return []
-    with open(path, "rb") as handle:
-        servers = tomllib.load(handle).get("mcp_servers") or {}
-    overrides = []
-    for name in sorted(servers):
+def _enabled_mcp_servers(cli: str, overrides: list[str], cwd: str) -> list[str]:
+    args = [cli, "mcp", "list", "--json"]
+    for override in overrides:
+        args.extend(["-c", override])
+    proc = subprocess.run(
+        args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30
+    )
+    if proc.returncode != 0:
+        raise ValueError(f"codex mcp list exited {proc.returncode}")
+    servers = json.loads(proc.stdout)
+    if not isinstance(servers, list):
+        raise ValueError("codex mcp list returned no server list")
+    return [str(s.get("name")) for s in servers if isinstance(s, dict) and s.get("enabled")]
+
+
+def mcp_disable_overrides(cli: str, overrides: list[str], cwd: str) -> list[str]:
+    """``mcp_servers.<name>.enabled=false`` for every MCP server the loaded
+    configuration still enables under ``overrides``, as codex itself reports
+    them. Raises ValueError if the list cannot be read, a name cannot be
+    addressed through ``-c``, or any server is still enabled afterwards: the
+    lane fails rather than run with a server."""
+    disables = []
+    for name in _enabled_mcp_servers(cli, overrides, cwd):
         if not _SERVER_NAME.fullmatch(name):
             raise ValueError(f"cannot disable codex MCP server {name!r} through -c")
-        overrides.append(f"mcp_servers.{name}.enabled=false")
-    return overrides
+        disables.append(f"mcp_servers.{name}.enabled=false")
+    still = _enabled_mcp_servers(cli, overrides + disables, cwd)
+    if still:
+        raise ValueError(f"codex MCP servers still enabled: {', '.join(still)}")
+    return disables
 
 
-def lane_config_args(cli: str, *, include_user_mcp: bool = True) -> list[str]:
-    """The lane overrides as a flat ``-c`` argument list, plus the operator's
-    MCP servers switched off when the lane loads the operator's config."""
-    overrides = list(lane_config_overrides(cli))
-    if include_user_mcp:
-        overrides.extend(user_mcp_server_overrides())
+def lane_workdir() -> str:
+    """A fresh, empty, private working directory outside any repository, so no
+    project configuration or instructions load. The caller removes it."""
+    return tempfile.mkdtemp(prefix="unitares-codex-lane-")
+
+
+def lane_config_args(cli: str, cwd: str) -> list[str]:
+    """The full ``-c`` argument list for a lane that loads the operator's
+    configuration (the app-server, the dialectic reviewer), run in ``cwd``."""
+    overrides = lane_config_overrides(cli)
+    overrides += mcp_disable_overrides(cli, overrides, cwd)
     args: list[str] = []
     for override in overrides:
         args.extend(["-c", override])
@@ -446,14 +475,15 @@ def run_protocol(
         ) from exc
 
 
-def _spawn(cli: str) -> subprocess.Popen[str]:
+def _spawn(cli: str, cwd: str) -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             cli,
             "app-server",
             "--stdio",
-            *lane_config_args(cli),
+            *lane_config_args(cli, cwd),
         ],
+        cwd=cwd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,
@@ -477,8 +507,9 @@ def main() -> int:
         return 1
 
     process: subprocess.Popen[str] | None = None
+    workdir = lane_workdir()
     try:
-        process = _spawn(cli)
+        process = _spawn(cli, workdir)
         if process.stdin is None or process.stdout is None:
             raise AppServerClientError(
                 "Codex app-server pipes unavailable",
@@ -490,7 +521,7 @@ def main() -> int:
             prompt=prompt,
             model=model,
             sandbox=sandbox,
-            cwd=os.getcwd(),
+            cwd=workdir,
         )
         print(json.dumps(result, separators=(",", ":")), flush=True)
         return 0 if result["finish_reason"] == "completed" and result["text"] else 1
@@ -501,9 +532,9 @@ def main() -> int:
         print(f"Codex app-server unavailable: {exc}", file=sys.stderr)
         return FALLBACK_SAFE_EXIT
     except ValueError as exc:
-        # The operator's config could not be neutralised (see
-        # user_mcp_server_overrides). Not fallback-safe either: the exec
-        # fallback would run, and the lane should fail closed instead.
+        # The loaded configuration could not be neutralised (see
+        # mcp_disable_overrides). Not fallback-safe either: the lane fails
+        # closed instead of retrying through exec.
         print(f"Codex lane refused: {exc}", file=sys.stderr)
         return 1
     finally:
@@ -514,6 +545,7 @@ def main() -> int:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=2)
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 if __name__ == "__main__":

@@ -914,7 +914,8 @@ def test_codex_spawn_env_carries_the_lane_overrides(monkeypatch):
     _run(ha.invoke_host_adapter("codex:host-adapter", "hi", timeout_s=5))
 
     env = state["calls"][0][1]["json"]["env"]
-    expected = lane_config_overrides(env["HA_CLI"])
+    profile = env["HA_CODEX_C1"].split('"')[1]
+    expected = lane_config_overrides(env["HA_CLI"], profile)
     assert [env[f"HA_CODEX_C{i}"] for i in range(1, len(expected) + 1)] == expected
 
 
@@ -926,3 +927,12 @@ def test_a_sandbox_other_than_read_only_is_refused_before_spawn(monkeypatch):
     assert result["dispatch_phase"] == "preflight"
     assert "read-only" in result["error"]
     assert state["calls"] == []
+
+
+def test_codex_exec_fallback_runs_in_an_empty_directory_it_removes():
+    """No project .codex/config.toml or instructions can load from an empty
+    directory outside any repository."""
+    shell_command = ha._HOST_COMMANDS["codex:host-adapter"][1]
+    assert shell_command.count('mktemp -d "${TMPDIR:-/tmp}/unitares-codex-lane-XXXXXX"') == 2
+    assert shell_command.count('cd "$ha_dir" || exit 1') == 2
+    assert shell_command.count('rmdir "$ha_dir"') == 2

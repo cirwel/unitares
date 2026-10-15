@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Optional
@@ -50,7 +51,8 @@ from .host_backends import (
     call_claude_backend,
     call_openai_compat_backend,
     codex_lane_config_overrides,
-    codex_user_mcp_server_overrides,
+    codex_lane_workdir,
+    codex_mcp_disable_overrides,
     resolve_host_cli,
 )
 
@@ -696,17 +698,27 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
     except (TypeError, ValueError):
         timeout_s = 420.0
     timeout_s = max(1.0, timeout_s)
+    # The run happens in a fresh empty directory outside any repository, so no
+    # project codex configuration or instructions load; it is removed after.
+    workdir = codex_lane_workdir()
+    try:
+        return await _run_codex_review(cli_path, prompt, workdir, timeout_s)
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+async def _run_codex_review(
+    cli_path: str, prompt: str, workdir: str, timeout_s: float
+) -> Optional[str]:
     try:
         # The lane overrides replace --sandbox read-only, whose legacy sandbox
         # reads the whole disk, and switch off hooks, plugins and browser and
-        # computer use; this call loads the operator's codex config (for its
-        # model and reasoning effort), so each MCP server it declares is
-        # switched off too. A config that cannot be neutralised refuses the
-        # call, and the caller falls back.
-        try:
-            overrides = codex_lane_config_overrides(cli_path) + codex_user_mcp_server_overrides()
-        except ValueError:
-            return None
+        # computer use. This call loads the operator's codex config (for its
+        # model and reasoning effort), so every MCP server that configuration
+        # still enables is switched off by name; if one cannot be, the call is
+        # refused and the caller falls back.
+        base = codex_lane_config_overrides(cli_path)
+        overrides = base + codex_mcp_disable_overrides(cli_path, base, workdir)
         slots = " ".join(f'-c "$DR_CODEX_C{i}"' for i in range(1, len(overrides) + 1))
         proc = await asyncio.create_subprocess_exec(
             "/bin/sh",
@@ -719,6 +731,7 @@ async def call_codex_reviewer(prompt: str) -> Optional[str]:
                 "DR_PROMPT": prompt,
                 **{f"DR_CODEX_C{i}": value for i, value in enumerate(overrides, start=1)},
             },
+            cwd=workdir,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
