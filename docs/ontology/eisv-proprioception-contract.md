@@ -1639,10 +1639,13 @@ and are never pooled here; rows without the tag are reported apart.
 `core.agent_state` is subject to retention, so the counts are dated snapshots,
 not reproducible exports.
 
-These rows are descriptive and authorize **no repair before the 2026-12-01
-registered read**. Each mechanism feeds the action, the ODE, or a predictor
-inside that read's preservation horizon
-(`docs/proposals/active/eisv-core-boundary-v0.md` §9, §12.1). A later repair
+These rows are descriptive and authorize **no repair by themselves**. Each
+mechanism feeds the action, the ODE, or a predictor of the 2026-12-01
+registered read, so a repair is a change to the live update path and follows
+whatever rule governs such changes for that read: the preservation horizon
+(`docs/proposals/active/eisv-core-boundary-v0.md` §9, §12.1), or, where the
+registered stop rule has been amended to replace it, the amendment's
+data-boundary rule (`docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md`). A repair
 follows the same-change sequencing rules already in this contract: the
 coherence-unfreeze rule, and row 45's rule for anything that feeds behavioral
 EISV to `classify_basin`.
