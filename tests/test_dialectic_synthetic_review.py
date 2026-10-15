@@ -420,3 +420,79 @@ async def test_unresolved_reviewer_hosts_never_let_the_synthetic_reviewer_approv
     approve_anti.assert_not_called()
     approve_syn.assert_not_called()
     assert session.phase != DialecticPhase.RESOLVED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env_name,value", [
+    ("UNITARES_DIALECTIC_REVIEWER_HOST", "codex"),
+    ("UNITARES_DIALECTIC_REVIEWER_HOSTS", "codex,claude"),
+])
+async def test_a_listed_reviewer_host_keeps_the_synthetic_reviewer_from_approving(
+    server_patch, monkeypatch, env_name, value
+):
+    """With a reviewer host list, only a listed host's verdict may approve (the
+    reviewer's own rule, host_list.HostPlan.listed). When dispatch to that
+    reviewer fails, the in-process fallback is the local floor, so it must not
+    resolve the session either: the session awaits facilitation."""
+    from src import inference_config
+    from src.mcp_handlers.dialectic.handlers import handle_submit_thesis, ACTIVE_SESSIONS
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOST", raising=False)
+    monkeypatch.setenv(env_name, value)
+    inference_config._cache.update(key=None, result=None)
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        approve_anti = AsyncMock(return_value=_antithesis("refine"))
+        approve_syn = AsyncMock(return_value=_synthesis("RESUME"))
+        stack.enter_context(patch(f"{LLM}.generate_antithesis", new=approve_anti))
+        stack.enter_context(patch(f"{LLM}.generate_synthesis", new=approve_syn))
+        result = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit without re-reading the file",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+    inference_config._cache.update(key=None, result=None)
+
+    data = parse_result(result)
+    assert data.get("resolved") is not True
+    assert "synthetic_review" not in data
+    assert data["awaiting_facilitation"] is True
+    assert data["reviewer_hosts"] == value
+    approve_anti.assert_not_called()
+    approve_syn.assert_not_called()
+    assert session.phase != DialecticPhase.RESOLVED
+
+
+@pytest.mark.parametrize("value", ["", "local", "Ollama", "ollama:local"])
+def test_no_list_or_the_floor_by_name_leaves_the_synthetic_reviewer_its_authority(
+    monkeypatch, value
+):
+    """No list (or the floor named as the single host) is the old behaviour:
+    the local reviewer keeps approval authority, as host_list reads it."""
+    from src import inference_config
+    from src.mcp_handlers.dialectic.handlers import _reviewer_fallback_block
+
+    monkeypatch.delenv(inference_config.HOSTS_FILE_ENV, raising=False)
+    monkeypatch.delenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", raising=False)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", value)
+    inference_config._cache.update(key=None, result=None)
+    try:
+        assert _reviewer_fallback_block() == ("", "")
+    finally:
+        inference_config._cache.update(key=None, result=None)
+
+
+def test_the_server_reads_floor_names_as_the_reviewer_does():
+    from agents.dialectic_reviewer.host_list import FLOOR_NAMES
+    from src.mcp_handlers.dialectic.handlers import _REVIEWER_FLOOR_NAMES
+
+    assert _REVIEWER_FLOOR_NAMES == FLOOR_NAMES
