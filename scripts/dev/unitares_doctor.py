@@ -3690,6 +3690,33 @@ def _local_inference_env(repo_root: Path):
         return None
 
 
+def check_inference_hosts_file(repo_root: Path) -> CheckResult:
+    """Does the operator's inference hosts file load, and what would it configure?
+
+    SKIPs when no file is named (the shipped defaults apply). A named file that
+    does not load FAILs with the line or field at fault: the jobs it would
+    configure refuse until it loads (inference-hosts-config-v0 2.9). The detail
+    lists the effective hosts and job orders.
+    """
+    name, mode = "inference_hosts_file", "local"
+    try:
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from src import inference_config
+    except Exception as e:
+        return CheckResult(name, mode, Status.SKIP, f"src/inference_config.py could not be loaded ({e})")
+    result = inference_config.load()
+    detail = "\n".join(inference_config.describe(result))
+    if result.state == "defaults":
+        return CheckResult(
+            name, mode, Status.SKIP,
+            f"no inference hosts file named ({inference_config.HOSTS_FILE_ENV}); built-in defaults apply",
+            detail)
+    if result.state == "error":
+        return CheckResult(name, mode, Status.FAIL, f"inference hosts file does not load: {result.error}", detail)
+    return CheckResult(name, mode, Status.PASS, f"inference hosts file loads ({result.path})", detail)
+
+
 def check_model_endpoint(repo_root: Path, timeout: float = 3.0) -> CheckResult:
     """Does the configured model endpoint answer ``GET {base}/models`` and list
     the configured model?
@@ -3839,6 +3866,7 @@ def build_checks(
         Check("anchor_directory", "local", check_anchor_dir),
         Check("secrets_file", "local", check_secrets_file),
         Check("model_endpoint", "local", lambda: check_model_endpoint(repo_root)),
+        Check("inference_hosts_file", "local", lambda: check_inference_hosts_file(repo_root)),
         *_model_alias_checks(repo_root),
         Check("http_listening", "operator", check_http_listening),
         Check("http_health", "operator", check_http_health),
