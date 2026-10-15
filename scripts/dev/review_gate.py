@@ -914,9 +914,17 @@ class CodexRounds:
             return False
         if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
             return True
-        if not joining and self.cycles and self.cycles[-1].productive():
+        if joining:
+            # Finishing a cycle (its second family) costs nothing when starting
+            # it did not need the operator: the cycle before it was serious, or
+            # fewer than ROUND_CAP unproductive cycles came before it.
+            current = 0 if (self.cycles and self.cycles[-1].productive()) else 1
+            prior_spent = self.spent - current
+            prior_serious = len(self.cycles) >= 2 and self.cycles[-2].productive()
+            return not (prior_serious or prior_spent < ROUND_CAP)
+        if self.cycles and self.cycles[-1].productive():
             return False  # the fix of a serious finding earns a full review
-        return self.spent > ROUND_CAP or (self.spent == ROUND_CAP and not joining)
+        return self.spent >= ROUND_CAP
 
     @property
     def last_severe(self) -> bool:

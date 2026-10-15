@@ -5101,3 +5101,12 @@ def test_local_severity_informs_the_budget_but_not_the_answered_round(repo):
     assert rounds.count == 1 and rounds.spent == 0
     assert rounds.last_findings == []      # not a round cmd_review answers
     assert rounds.answered_at == GRANT_NOW - 50 and rounds.answered_since
+
+
+def test_the_second_family_finishes_a_cycle_the_exemption_opened():
+    """A serious cycle (here past the cap) earns its fix review; that review
+    coming back clean must not stop the second family finishing the cycle."""
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    assert rounds.spent == 4
+    assert not rounds.exhausted(joining=True)
+    assert rounds.exhausted(joining=False)
