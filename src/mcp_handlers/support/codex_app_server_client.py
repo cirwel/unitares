@@ -8,6 +8,7 @@ turn request is sent.  Only the former are safe to retry through ``codex exec``.
 
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import re
@@ -87,16 +88,21 @@ def admin_config_paths() -> list[str]:
     codex fall back from a requested value. Locations:
     https://developers.openai.com/codex/enterprise/managed-configuration"""
     home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
-    user = os.environ.get("USER", "")
-    return [
+    try:
+        user = os.environ.get("USER") or getpass.getuser()
+    except Exception:  # noqa: BLE001 - no name: the per-user path is skipped below
+        user = ""
+    paths = [
         "/etc/codex/config.toml",
         "/etc/codex/managed_config.toml",
         "/etc/codex/requirements.toml",
         os.path.join(home, "managed_config.toml"),
         # macOS MDM managed preferences (config_toml_base64 / requirements_toml_base64).
         "/Library/Managed Preferences/com.openai.codex.plist",
-        f"/Library/Managed Preferences/{user}/com.openai.codex.plist",
     ]
+    if user:
+        paths.append(f"/Library/Managed Preferences/{user}/com.openai.codex.plist")
+    return paths
 
 
 def admin_config_conflict(paths: list[str] | None = None) -> str | None:
@@ -149,9 +155,13 @@ def _enabled_mcp_servers(cli: str, overrides: list[str], cwd: str) -> list[str]:
     args = [cli, "mcp", "list", "--json"]
     for override in overrides:
         args.extend(["-c", override])
-    proc = subprocess.run(
-        args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30
-    )
+    try:
+        proc = subprocess.run(
+            args, cwd=cwd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=30
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        # Fail closed: the lane refuses rather than falling back to exec.
+        raise ValueError(f"codex mcp list could not run: {exc}") from exc
     if proc.returncode != 0:
         raise ValueError(f"codex mcp list exited {proc.returncode}")
     servers = json.loads(proc.stdout)
@@ -187,8 +197,9 @@ def confinement_verified(cli: str) -> bool:
     ignore, so before a lane runs, ``codex sandbox`` (no model call) must fail
     to read a probe file outside the profile's readable paths and must still
     run a harmless command under the same overrides. A codex that cannot run
-    the probe at all is unverified too. Cached per resolved binary and mtime,
-    so an upgrade is probed again."""
+    the probe at all is unverified too. A success is cached per process,
+    resolved binary and mtime, so an upgrade is probed again; the per-call
+    app-server client is a fresh process and probes each time (~0.1s)."""
     real = os.path.realpath(cli)
     try:
         stamp = (real, os.stat(real).st_mtime)
@@ -212,10 +223,14 @@ def confinement_verified(cli: str) -> bool:
         for override in lane_config_overrides(cli):
             overrides.extend(["-c", override])
         run = [cli, "sandbox", *overrides, "--"]
+        # In an empty directory, as the lane itself runs, so no project
+        # configuration in the caller's directory affects the probe.
+        workdir = os.path.join(probe_dir, "work")
+        os.mkdir(workdir, 0o700)
         harmless = subprocess.run(run + ["/usr/bin/true"], capture_output=True, text=True,
-                                  stdin=subprocess.DEVNULL, timeout=20)
+                                  cwd=workdir, stdin=subprocess.DEVNULL, timeout=20)
         reading = subprocess.run(run + ["/bin/cat", probe], capture_output=True, text=True,
-                                 stdin=subprocess.DEVNULL, timeout=20)
+                                 cwd=workdir, stdin=subprocess.DEVNULL, timeout=20)
         verified = (harmless.returncode == 0 and reading.returncode != 0
                     and token not in reading.stdout + reading.stderr)
     except (OSError, subprocess.SubprocessError):
@@ -223,7 +238,10 @@ def confinement_verified(cli: str) -> bool:
     finally:
         if probe_dir:
             shutil.rmtree(probe_dir, ignore_errors=True)
-    _CONFINEMENT_VERIFIED[stamp] = verified
+    if verified:
+        # Only a success is cached: a failure may be transient (a timeout),
+        # and the next call probes again.
+        _CONFINEMENT_VERIFIED[stamp] = True
     return verified
 
 
@@ -593,10 +611,6 @@ def main() -> int:
         # widen; the exec fallback refuses the same value.
         print(f"Codex host lane supports only the read-only sandbox, not {sandbox!r}", file=sys.stderr)
         return 1
-    if not confinement_verified(cli):
-        print("Codex lane refused: this codex does not enforce the lane's permission "
-              "profile (codex sandbox probe)", file=sys.stderr)
-        return 1
     conflict = admin_config_conflict()
     if conflict:
         print(
@@ -604,6 +618,10 @@ def main() -> int:
             "that can override the lane's permission profile",
             file=sys.stderr,
         )
+        return 1
+    if not confinement_verified(cli):
+        print("Codex lane refused: this codex does not enforce the lane's permission "
+              "profile (codex sandbox probe)", file=sys.stderr)
         return 1
 
     process: subprocess.Popen[str] | None = None

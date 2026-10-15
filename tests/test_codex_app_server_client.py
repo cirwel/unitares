@@ -345,6 +345,9 @@ def test_any_administrator_codex_config_refuses_the_lane(tmp_path, monkeypatch):
     monkeypatch.setenv("HA_CLI", "/opt/x/codex")
     monkeypatch.setenv("HA_PROMPT", "hi")
     monkeypatch.setattr(client, "admin_config_conflict", lambda paths=None: str(admin))
+    # Refused by the admin check itself: neither the probe nor a spawn runs.
+    monkeypatch.setattr(client, "confinement_verified",
+                        lambda cli: (_ for _ in ()).throw(AssertionError("probed first")))
     monkeypatch.setattr(client, "_spawn", lambda cli, cwd: (_ for _ in ()).throw(AssertionError("spawned")))
     assert client.main() == 1
 
@@ -382,3 +385,40 @@ def test_a_confining_codex_is_verified_and_cached(tmp_path, monkeypatch):
                                 'echo "Operation not permitted" >&2; exit 1\n')
     assert client.confinement_verified(cli) is True
     assert len(client._CONFINEMENT_VERIFIED) == 1
+
+
+def test_the_per_user_mdm_path_survives_an_unset_user(monkeypatch):
+    monkeypatch.delenv("USER", raising=False)
+    monkeypatch.setattr(client.getpass, "getuser", lambda: "svcuser")
+    assert "/Library/Managed Preferences/svcuser/com.openai.codex.plist" in client.admin_config_paths()
+
+
+def test_a_stalled_mcp_listing_refuses_rather_than_falls_back(monkeypatch):
+    def stall(*a, **k):
+        raise client.subprocess.TimeoutExpired("codex", 30)
+
+    monkeypatch.setattr(client.subprocess, "run", stall)
+    with pytest.raises(ValueError, match="could not run"):
+        client._enabled_mcp_servers("/opt/x/codex", [], "/w")
+
+
+def test_a_failed_probe_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_CONFINEMENT_VERIFIED", {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    cli = _fake_codex(tmp_path, 'echo "unknown command" >&2; exit 2\n')
+    assert client.confinement_verified(cli) is False
+    assert client._CONFINEMENT_VERIFIED == {}
+
+
+def test_the_probe_runs_in_an_empty_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr(client, "_CONFINEMENT_VERIFIED", {})
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    seen = tmp_path / "cwd.txt"
+    cli = _fake_codex(tmp_path, f'pwd >> "{seen}"; ls -A >> "{seen}"; '
+                                'while [ "$1" != "--" ]; do shift; done; shift\n'
+                                '[ "$1" = "/usr/bin/true" ] && exit 0\nexit 1\n')
+    monkeypatch.chdir(tmp_path)
+    assert client.confinement_verified(cli) is True
+    lines = seen.read_text().splitlines()
+    assert lines and all(l.endswith("/work") for l in lines if l.startswith("/"))
+    assert not [l for l in lines if not l.startswith("/")]  # nothing listed: empty
