@@ -424,3 +424,83 @@ def test_the_server_persists_every_provenance_key_the_reviewer_writes():
 
     missing = set(reviewer._PERSISTED_PROVENANCE_KEYS) - set(handlers._REVIEWER_PROVENANCE_KEYS)
     assert not missing, missing
+
+
+# ---- inference-hosts-config-v0 step 3: the server resolves the reviewer list ---- #
+import pytest as _pytest
+
+from src import inference_config as _ic
+
+
+@_pytest.fixture
+def _hosts_file(monkeypatch, tmp_path):
+    _ic._cache.update(key=None, result=None)
+
+    def write(text):
+        p = tmp_path / "inference.yaml"
+        p.write_text(text)
+        p.chmod(0o600)
+        monkeypatch.setenv(_ic.HOSTS_FILE_ENV, str(p))
+        _ic._cache.update(key=None, result=None)
+
+    yield write
+    _ic._cache.update(key=None, result=None)
+
+
+def _selection(monkeypatch, hosts="", host=""):
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", hosts)
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOST", host)
+    return od._build_spec("sess", {"root_cause": "r"}, None)["env"]
+
+
+def test_without_a_file_the_operator_settings_pass_through(monkeypatch):
+    monkeypatch.delenv(_ic.HOSTS_FILE_ENV, raising=False)
+    _ic._cache.update(key=None, result=None)
+    env = _selection(monkeypatch, hosts="codex,antigravity")
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == "codex,antigravity"
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"] == ""
+
+
+def test_the_dialectic_reviewer_job_sets_the_list(monkeypatch, _hosts_file):
+    _hosts_file("version: 1\nhosts:\n  claude:host-adapter: { enabled: false }\n"
+                "jobs:\n  dialectic_reviewer: { prefer: [claude:host-adapter, antigravity:host-adapter, codex:host-adapter] }\n")
+    env = _selection(monkeypatch, hosts="claude")  # the job wins over the setting
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == "antigravity:host-adapter,codex:host-adapter"
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOST"] == ""
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"] == ""
+
+
+def test_a_job_with_no_callable_host_fails_closed(monkeypatch, _hosts_file):
+    _hosts_file("version: 1\nhosts:\n  codex:host-adapter: { enabled: false }\n"
+                "  external:acme/glm: { kind: cli, adapter: claude_code, model: glm-5.3, family: zhipu,"
+                " egress_class: public_only }\n"
+                "jobs:\n  dialectic_reviewer: { prefer: [codex:host-adapter, external:acme/glm] }\n")
+    env = _selection(monkeypatch)
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == ""
+    assert "no host in the dialectic_reviewer job" in env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"]
+
+
+def test_a_broken_file_fails_closed(monkeypatch, _hosts_file):
+    _hosts_file("version: 1\njobs:\n  summarize: { prefer: [ollama:local] }\n")
+    env = _selection(monkeypatch, hosts="codex")
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == ""
+    assert "does not load" in env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"]
+
+
+def test_without_a_job_the_file_still_switches_hosts_off(monkeypatch, _hosts_file):
+    _hosts_file("version: 1\nhosts:\n  codex:host-adapter: { enabled: false }\n")
+    assert _selection(monkeypatch, hosts="codex,antigravity")["UNITARES_DIALECTIC_REVIEWER_HOSTS"] == "antigravity"
+    env = _selection(monkeypatch, host="codex")
+    assert env["UNITARES_DIALECTIC_REVIEWER_HOST"] == ""
+    assert "switched off" in env["UNITARES_DIALECTIC_REVIEWER_HOSTS_ERROR"]
+
+
+def test_runtime_cap_follows_the_resolved_list(monkeypatch, _hosts_file):
+    from src.mcp_handlers.dialectic import orchestrator_dispatch as od
+
+    _hosts_file("version: 1\njobs:\n  dialectic_reviewer: { prefer: [codex:host-adapter, claude:host-adapter] }\n")
+    monkeypatch.setenv("UNITARES_DIALECTIC_REVIEWER_HOSTS", "")
+    monkeypatch.delenv("UNITARES_DIALECTIC_CLAUDE_TIMEOUT_S", raising=False)
+    assert od._extra_host_budget_s() == 420.0
