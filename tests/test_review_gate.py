@@ -5001,3 +5001,149 @@ def test_completed_followup_survives_proven_base_merge(carry_repo, tampered, dis
     # Runtime carry provenance can never be supplied in a posted marker.
     emitted = rg.parse_record(rg.render_body(fix, 'test', 'complete reasoning'))
     assert emitted.original_key == ''
+
+
+def _cycles_with(*severities):
+    """One full cycle per entry: a list of severity labels ([] means clean)."""
+    runs = []
+    for i, labels in enumerate(severities):
+        findings = [{"body": f"[{label}] finding {i}.{j}"} for j, label in enumerate(labels)]
+        runs.append((1000.0 + i, f"{i:x}" * 40, findings, f"key{i}", "openai"))
+    return rg.count_review_cycles(runs)
+
+
+def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
+    """Operator 2026-10-15: the cap stops review that has stopped finding
+    things, not review that keeps finding real defects."""
+    rounds = _cycles_with(["P1"], ["P0", "P2"], ["P1"])
+    assert rounds.count == 3 and rounds.spent == 0
+    assert not rounds.exhausted(joining=False, key="fix-key")
+
+
+def test_clean_and_lesser_cycles_still_spend_the_cap():
+    rounds = _cycles_with(["P1"], [], ["P2"], ["P3", "P2"])
+    assert rounds.count == 4 and rounds.spent == 3
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)  # the second family may finish a cycle
+
+
+def test_an_unlabelled_finding_counts_as_serious():
+    rounds = _cycles_with(["P2"], ["P2"])
+    rounds.cycles[0].findings.append({"body": "data loss described in prose"})
+    assert rounds.spent == 1
+
+
+def test_the_backstop_bounds_a_review_that_never_converges():
+    rounds = _cycles_with(*([["P1"]] * rg.ROUND_BACKSTOP))
+    assert rounds.spent == 0
+    assert rounds.exhausted(joining=False)
+    assert not rounds.exhausted(joining=True)
+
+
+def test_the_round_note_says_when_serious_cycles_were_not_counted():
+    rounds = _cycles_with(["P1"], [], ["P1"])
+    assert rg.round_note(rounds) == (
+        f" · review cycle 3 (1 of {rg.ROUND_CAP} without a P0/P1, backstop {rg.ROUND_BACKSTOP})")
+
+
+def test_review_text_findings_keep_their_severity():
+    text = "Intro\n[P1] Broken thing — a.py:3\nDetails\n[P3] Nit — b.py:9\n"
+    found = rg.findings_from_review_text(text, "FINDINGS")
+    assert [f.get("path") for f in found] == ["a.py", "b.py"]
+    assert rg.findings_from_review_text("prose only", "FINDINGS") == [
+        {"body": "unlabelled finding; full review required"}]
+    assert rg.findings_from_review_text("VERDICT: CLEAN", "CLEAN") == []
+
+
+def test_unposted_local_runs_always_spend_their_cycle(repo):
+    """Only a posted record, with its provenance, can exempt a cycle: an
+    unposted local run spends whatever its review said."""
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    for i, status in enumerate(['FINDINGS', 'CLEAN']):
+        run = repo / f'.git/local-reviews/pr-1-local{i}'
+        run.mkdir(parents=True)
+        (run / 'manifest.json').write_text(json.dumps({
+            'pr': 1, 'status': status, 'head': head, 'base': base,
+            'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 300 + i * 100}))
+        (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
+    rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 2 and rounds.spent == 2
+
+def test_a_clean_review_mentioning_labels_has_no_findings():
+    text = "Verified the prior [P1] fix in a.py:3; no [P2] issues remain.\nVERDICT: CLEAN"
+    assert rg.findings_from_review_text(text, "CLEAN") == []
+
+
+def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
+    """Three unproductive cycles, then one that found a P1: its fix gets a
+    full review without a grant (up to the backstop)."""
+    rounds = _cycles_with([], ["P2"], [], ["P1"])
+    assert rounds.spent == 3
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    after_fix = _cycles_with([], ["P2"], [], ["P1"], [])
+    assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
+
+
+def test_a_recount_keeps_the_posted_round_cmd_review_answers(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    run = repo / '.git/local-reviews/pr-1-local-late'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'pr': 1, 'status': 'CLEAN', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 10}))
+    posted = [{"body": "[P2] posted finding — b.py:2"}]
+    prior = rg.CodexRounds(last_head="a" * 40, last_findings=posted, answered_since=True)
+    rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 1
+    assert rounds.last_findings == posted and rounds.last_head == "a" * 40 and rounds.answered_since
+
+def test_the_second_family_finishes_a_cycle_the_exemption_opened():
+    """A serious cycle (here past the cap) earns its fix review; that review
+    coming back clean must not stop the second family finishing the cycle."""
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    assert rounds.spent == 4
+    assert not rounds.exhausted(joining=True)
+    assert rounds.exhausted(joining=False)
+
+
+def test_the_exemption_is_for_the_fix_not_the_same_diff():
+    rounds = _cycles_with([], [], [], ["P1"])
+    assert not rounds.exhausted(joining=False, key="fix-key")
+    assert rounds.exhausted(joining=False, key=rounds.cycles[-1].key)
+
+
+def test_a_keyless_native_cycle_needs_a_different_head_for_the_exemption():
+    rounds = _cycles_with([], [], [], ["P1"])
+    last = rounds.cycles[-1]
+    last.key = ""  # native reviews enter the ledger without a diff key
+    assert rounds.exhausted(joining=False, key="any-key", head=last.head)
+    assert not rounds.exhausted(joining=False, key="any-key", head="f" * 40)
+    assert rounds.exhausted(joining=False)  # no evidence of changed work
+
+
+def test_only_leading_labels_are_titles_and_declared_findings_count():
+    prose = "Verified the prior [P1] fix in a.py:3.\n[P2] Minor thing — b.py:4\n"
+    found = rg.findings_from_review_text(prose, "FINDINGS")
+    assert len(found) == 1 and found[0]["body"].startswith("[P2]")
+    for title in ("- [P1] x — a.py:1", "1. **[P1] x — a.py:1**",
+                  "**<sub><sub>![P1 Badge](u)</sub></sub>  x**"):
+        assert len(rg.findings_from_review_text(title, "FINDINGS")) == 1
+    # Two declared, one labelled: the other counts as unlabelled (serious).
+    two = rg.findings_from_review_text("[P3] nit — c.py:1\n", "FINDINGS", declared=2)
+    assert len(two) == 2 and "unlabelled" in two[1]["body"]
+
+
+def test_joining_after_a_serious_cycle_needs_changed_work_too():
+    rounds = _cycles_with([], [], [], ["P1"], [])
+    rounds.cycles[-1].key = rounds.cycles[-2].key  # same diff as the serious cycle
+    rounds.cycles[-1].head = rounds.cycles[-2].head
+    assert rounds.exhausted(joining=True)
+
+
+def test_severity_comes_from_the_title_not_the_explanation():
+    """A [P2] whose explanation mentions an earlier [P1] is not serious."""
+    runs = [(1000.0 + i, f"{i:x}" * 40,
+             [{"body": "[P2] Minor — a.py:1\nThe earlier [P1] issue was fixed."}], f"k{i}", "openai")
+            for i in range(3)]
+    rounds = rg.count_review_cycles(runs)
+    assert rounds.spent == 3 and rounds.exhausted(joining=False, key="new")
