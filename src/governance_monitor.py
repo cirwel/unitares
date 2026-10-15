@@ -375,11 +375,15 @@ class UNITARESMonitor:
     
     def _initialize_fresh_state(self):
         """Initialize fresh state with default values"""
-        # Initialize UNITARES Phase-3 state and theta
+        # Initialize UNITARES Phase-3 state and theta. The S seed sits σ above
+        # the σ = 0 seed, as the S rest does, so S - σ (what Φ, the basin and the
+        # E and I equations read) starts where it does with the setpoint off and
+        # the cold-start transient moves by σ in S alone (contract row 50).
+        from src.monitor_setpoint import setpoint_for_monitor
         self.state.unitaires_state = State(**{
             'E': DEFAULT_STATE.E,
             'I': DEFAULT_STATE.I,
-            'S': DEFAULT_STATE.S,
+            'S': DEFAULT_STATE.S + setpoint_for_monitor(self),
             'V': DEFAULT_STATE.V
         })
         self.state.unitaires_theta = Theta(**{
@@ -609,7 +613,9 @@ class UNITARESMonitor:
 
     def detect_regime(self) -> str:
         """Detect current operational regime based on state and history."""
-        return _detect_regime(self.state, behavioral=self._behavioral_state)
+        from src.monitor_setpoint import setpoint_for_monitor
+        return _detect_regime(self.state, behavioral=self._behavioral_state,
+                              s_setpoint=setpoint_for_monitor(self))
     
     def _record_sensor_divergence(self, sensor_eisv) -> None:
         """Record model<->body EISV divergence as an observability signal.

@@ -133,6 +133,10 @@ def _derivatives(
             measured-healthy operating point (see config.get_s_setpoint).
             Gated by UNITARES_S_SETPOINT at the call site, which defaults ON;
             this signature's 0.0 is the disabled-path value, not the deployed one.
+            The E and I equations read S through the same detrend, ``S - σ``,
+            so moving the S rest by σ leaves the E, I and V rests where σ = 0
+            puts them (contract row 50), while S - σ stays clear of S's floor;
+            the floor and its barrier are entropy's own bound and read raw S.
 
     Returns:
         (dE_dt, dI_dt, dS_dt, dV_dt) tuple
@@ -146,15 +150,21 @@ def _derivatives(
 
     E, I, S, V = state.E, state.I, state.S, state.V
 
-    # E dynamics: Ė = α(I - E) - βₑES + γₑ‖Δη‖²
+    # S as the E and I equations read it: entropy above the setpoint σ, the
+    # detrend Φ and the basin apply. With σ = 0 this is S itself. Reading raw S
+    # here lowered the I rest by k·σ/(γ_I + k_anchor) and the E rest with it
+    # once σ went live.
+    S_excess = S - s_setpoint
+
+    # E dynamics: Ė = α(I - E) - βₑE(S - σ) + γₑ‖Δη‖²
     dE_dt = (
         params.alpha * (I - E)
-        - params.beta_E * E * S
+        - params.beta_E * E * S_excess
         + params.gamma_E * d_eta_sq
     )
 
     # I dynamics
-    A = params.beta_I * C - params.k * S
+    A = params.beta_I * C - params.k * S_excess
     from .parameters import get_i_dynamics_mode
     i_mode = get_i_dynamics_mode()
     if i_mode == "linear":
@@ -568,21 +578,24 @@ def compute_saturation_diagnostics(
     state: State,
     theta: Theta,
     params: Optional[DynamicsParams] = None,
+    s_setpoint: float = 0.0,
 ) -> dict:
     """
     Compute I-channel saturation diagnostics.
-    
+
     This is the "pressure gauge" for understanding boundary saturation behavior.
     Critical for monitoring system stability and validating dynamics mode choice.
-    
+
     Args:
         state: Current UNITARES state
         theta: Control parameters
         params: Dynamics parameters (uses DEFAULT_PARAMS if None)
-    
+        s_setpoint: The S setpoint σ the dynamics run with, so the forcing term
+            reads S - σ as dI/dt does. 0.0 is the un-detrended form.
+
     Returns:
         dict with:
-        - A: Forcing term (β_I·C - k·S)
+        - A: Forcing term (β_I·C - k·(S - σ))
         - gamma_over_4: Maximum logistic damping (γ_I/4)
         - sat_margin: A - γ_I/4 (positive = push-to-boundary in logistic mode)
         - I_equilibrium_linear: Predicted equilibrium under linear damping (A/γ_I)
@@ -600,7 +613,7 @@ def compute_saturation_diagnostics(
     C = control_feedback(state.V, theta, params)
     
     # Forcing term (isolated input)
-    A = params.beta_I * C - params.k * state.S
+    A = params.beta_I * C - params.k * (state.S - s_setpoint)
     
     # Logistic damping maximum
     gamma_over_4 = params.gamma_I / 4.0

@@ -7,13 +7,19 @@ Thresholds calibrated against observed agent distributions (2026-03-16):
 """
 
 
-def detect_regime(state, behavioral=None) -> str:
+def detect_regime(state, behavioral=None, s_setpoint: float = 0.0) -> str:
     """
     Detect current operational regime based on EISV state and history.
 
     Prefers behavioral EISV values when available and confident (>= 0.3),
     falls back to ODE state otherwise. Persistence counter stays on
     the GovernanceState object (metadata, not EISV).
+
+    ``s_setpoint`` is the S setpoint σ the ODE runs with. The ODE fallback
+    reads ``S - σ`` against the absolute S thresholds, the detrend Φ and the
+    basin apply, because the ODE's S rest sits σ above where those thresholds
+    were set (contract row 50). Behavioral S is a measurement and is not
+    detrended.
 
     Regimes:
     - STABLE: I high, S low (requires 3 consecutive steps)
@@ -36,12 +42,16 @@ def detect_regime(state, behavioral=None) -> str:
         V = abs(behavioral.V)
         s_hist = behavioral.S_history
         i_hist = behavioral.I_history
+        s_offset = 0.0
     else:
         I = state.I
-        S = state.S
+        S = state.S - s_setpoint
         V = abs(state.V)
         s_hist = getattr(state, 'S_history', [])
         i_hist = getattr(state, 'I_history', [])
+        # S_history holds raw ODE S; detrend it by the same σ so dS stays a
+        # difference of like quantities.
+        s_offset = s_setpoint
 
     eps_S = 0.002
     eps_I = 0.002
@@ -60,7 +70,7 @@ def detect_regime(state, behavioral=None) -> str:
         return "EXPLORATION"
 
     try:
-        dS = S - s_hist[-2]
+        dS = S - (s_hist[-2] - s_offset)
         dI = I - i_hist[-2]
     except (IndexError, AttributeError):
         return "EXPLORATION"
