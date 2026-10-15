@@ -173,3 +173,33 @@ def test_doctor_check_skips_passes_and_fails(monkeypatch, tmp_path):
     monkeypatch.setenv(ic.HOSTS_FILE_ENV, str(bad))
     failed = doctor.check_inference_hosts_file(root)
     assert failed.status == doctor.Status.FAIL and "jobs.summarize" in failed.message
+
+
+@pytest.mark.parametrize("text,where", [
+    ("version: 1\nhosts:\n  [a, b]: {}\n", "line 3"),
+    ("version: 1\njobs:\n  42: value\n", "line 3"),
+])
+def test_non_string_mapping_keys_fail_closed(text, where, tmp_path):
+    with pytest.raises(ic.InferenceConfigError) as exc:
+        ic.parse_text(text)
+    assert exc.value.where == where and "must be a string" in exc.value.problem
+    result = ic.load({ic.HOSTS_FILE_ENV: str(_write(tmp_path, text))})
+    assert result.state == "error"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX permissions")
+def test_chmod_fix_takes_effect_without_restart(tmp_path):
+    p = _write(tmp_path, VALID, mode=0o666)
+    env = {ic.HOSTS_FILE_ENV: str(p)}
+    assert ic.load(env).state == "error"
+    p.chmod(0o600)
+    assert ic.load(env).state == "loaded"
+    p.chmod(0o666)
+    assert ic.load(env).state == "error"
+
+
+def test_unexpected_parser_failure_is_an_error_result(monkeypatch, tmp_path):
+    p = _write(tmp_path, VALID)
+    monkeypatch.setattr(ic, "parse_text", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    result = ic.load({ic.HOSTS_FILE_ENV: str(p)})
+    assert result.state == "error" and "RuntimeError" in str(result.error)

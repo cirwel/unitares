@@ -136,6 +136,9 @@ def _yaml_load(text: str) -> Any:
         seen: dict[Any, Any] = {}
         for key_node, value_node in node.value:
             key = loader.construct_object(key_node, deep=deep)
+            if not isinstance(key, str):
+                raise InferenceConfigError(
+                    f"line {key_node.start_mark.line + 1}", f"mapping key {key!r} must be a string")
             if key in seen:
                 raise InferenceConfigError(
                     f"line {key_node.start_mark.line + 1}", f"duplicate key {key!r}")
@@ -303,7 +306,9 @@ def load(environ: Mapping[str, str] | None = None) -> LoadResult:
     path = Path(raw_path).expanduser()
     try:
         info = path.stat()
-        key = (str(path), info.st_size, info.st_mtime_ns)
+        # Permissions and owner are part of the key, so a chmod that fixes (or
+        # breaks) the file takes effect without a restart.
+        key = (str(path), info.st_size, info.st_mtime_ns, info.st_mode, info.st_uid)
     except OSError:
         key = None
     if key is not None and _cache["key"] == key:
@@ -316,6 +321,10 @@ def load(environ: Mapping[str, str] | None = None) -> LoadResult:
         result = LoadResult("error", None, exc, path=str(path))
     except (OSError, UnicodeDecodeError) as exc:
         result = LoadResult("error", None, InferenceConfigError("file", f"unreadable ({exc})"), path=str(path))
+    except Exception as exc:  # fail closed on anything the validators did not anticipate
+        result = LoadResult("error", None,
+                            InferenceConfigError("file", f"could not be validated ({type(exc).__name__}: {exc})"),
+                            path=str(path))
     if key is not None:
         _cache.update(key=key, result=result)
     return result
