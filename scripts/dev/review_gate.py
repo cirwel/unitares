@@ -113,10 +113,11 @@ NATIVE_WAIT_S = 600
 # another cycle. Coverage remains separate from this spending budget.
 #
 # A cycle that found a serious problem (a P0/P1 or unlabelled finding) does
-# not count against ROUND_CAP: the fix of a serious finding earns a full
-# review, however many earlier cycles there were. The cap exists to stop
-# review that has stopped finding serious things; past it, a round of lesser
-# findings is still answered by targeted fix verification (capped()).
+# not count against ROUND_CAP, and the fix of a serious finding earns a full
+# review however many earlier cycles there were (CodexRounds.exhausted). The
+# cap exists to stop review that has stopped finding serious problems. A round
+# of lesser findings is answered by targeted fix verification either way
+# (capped_review in cmd_review).
 # Operator 2026-10-15: "it was bounded cuz it was unbounded; I think it
 # should be context based". ROUND_BACKSTOP bounds a review that never
 # converges.
@@ -892,6 +893,7 @@ class CodexRounds:
     last_findings: list[dict] = field(default_factory=list)  # inline comments
     unknown_history: bool = False  # legacy completed reviews without head/base/scope
     answered_since: bool = False  # a disposition or fix verification answered the last round
+    answered_at: float = 0.0  # when, so a recount (local_budget_rounds) keeps it
     cycles: list[ReviewCycle] = field(default_factory=list)
     # Spending evidence only, also used to include unposted local reviews.
     runs: list[tuple[float, str, list[dict], str, str | None]] = field(default_factory=list)
@@ -910,9 +912,11 @@ class CodexRounds:
         cycles, or a review that has not converged by the backstop."""
         if not ROUND_CAP_ENABLED:
             return False
-        over = (self.spent > ROUND_CAP or (self.spent == ROUND_CAP and not joining)
-                or self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining))
-        return over
+        if self.count > ROUND_BACKSTOP or (self.count == ROUND_BACKSTOP and not joining):
+            return True
+        if not joining and self.cycles and self.cycles[-1].productive():
+            return False  # the fix of a serious finding earns a full review
+        return self.spent > ROUND_CAP or (self.spent == ROUND_CAP and not joining)
 
     @property
     def last_severe(self) -> bool:
@@ -929,7 +933,7 @@ class CodexRounds:
         """
         # Once the round is answered (disposed, or fixes verified once), a
         # push may be new work, and new work gets a full review (PR #2401).
-        return (ROUND_CAP_ENABLED and self.spent >= ROUND_CAP
+        return (ROUND_CAP_ENABLED and self.count >= ROUND_CAP
                 and bool(self.last_findings)
                 and not self.last_severe and not self.answered_since)
 
@@ -1043,7 +1047,10 @@ def codex_rounds(comments: list[dict], reviews: list[dict], inline: list[dict],
 def findings_from_review_text(body: str, verdict: str) -> list[dict]:
     """The labelled findings in a review's text, one per title. A FINDINGS
     verdict with no labelled title yields one unlabelled finding, which the
-    budget and the cap treat as serious."""
+    budget and the cap treat as serious. Any other verdict has no findings,
+    whatever severity labels its reasoning mentions."""
+    if verdict != "FINDINGS":
+        return []
     titles = list(re.finditer(r"(?m)^.*(?:\[P[0-3]\]|!\[P[0-3] Badge\]).*$", body))
     findings = []
     for i, title in enumerate(titles):
@@ -1074,9 +1081,12 @@ def count_review_cycles(runs: list[tuple[float, str, list[dict], str, str | None
         cycle.key = cycle.key or key
         if len(last) > len(cycle.head):
             cycle.head = last
-        findings.extend(run_findings)
+        # Severity read from an unposted local run informs the budget only; it
+        # never makes that run's findings the round cmd_review answers.
+        findings.extend(f for f in run_findings if not f.get("budget_only"))
     return CodexRounds(len(cycles), last, findings, unknown_history=unknown_history,
-                       answered_since=answered_at > last_at, cycles=cycles, runs=runs)
+                       answered_since=answered_at > last_at, answered_at=answered_at,
+                       cycles=cycles, runs=runs)
 
 
 def local_completed_rounds(cache: Path, pr: int, posted_ids: set[str]) -> int:
@@ -1129,9 +1139,10 @@ def local_budget_rounds(rounds, cache: Path, pr: int, posted_ids: set[str]):
             text = (run / 'review.txt').read_text()
         except OSError:
             text = ''
-        findings = findings_from_review_text(text, receipt['status'])
+        findings = [{**f, "budget_only": True}
+                    for f in findings_from_review_text(text, receipt['status'])]
         runs.append((when, receipt['head'], findings, key, family))
-    return count_review_cycles(runs, rounds.unknown_history)
+    return count_review_cycles(runs, rounds.unknown_history, rounds.answered_at)
 
 
 def review_budget(rounds: CodexRounds, pr: int, comments: list[dict]) -> CodexRounds:

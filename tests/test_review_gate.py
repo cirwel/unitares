@@ -5021,7 +5021,7 @@ def test_cycles_that_found_a_serious_problem_do_not_spend_the_cap():
 
 
 def test_clean_and_lesser_cycles_still_spend_the_cap():
-    rounds = _cycles_with([], ["P2"], ["P3", "P2"], ["P1"])
+    rounds = _cycles_with(["P1"], [], ["P2"], ["P3", "P2"])
     assert rounds.count == 4 and rounds.spent == 3
     assert rounds.exhausted(joining=False)
     assert not rounds.exhausted(joining=True)  # the second family may finish a cycle
@@ -5071,3 +5071,33 @@ def test_an_unposted_local_p1_round_keeps_its_exemption(repo):
     rounds = rg.local_budget_rounds(rg.CodexRounds(), repo / '.git/local-reviews', 1, set())
     assert rounds.count == 3
     assert rounds.spent == 1  # only the clean round spends
+
+
+def test_a_clean_review_mentioning_labels_has_no_findings():
+    text = "Verified the prior [P1] fix in a.py:3; no [P2] issues remain.\nVERDICT: CLEAN"
+    assert rg.findings_from_review_text(text, "CLEAN") == []
+
+
+def test_a_serious_cycle_after_the_cap_still_earns_the_fix_review():
+    """Three unproductive cycles, then one that found a P1: its fix gets a
+    full review without a grant (up to the backstop)."""
+    rounds = _cycles_with([], ["P2"], [], ["P1"])
+    assert rounds.spent == 3
+    assert not rounds.exhausted(joining=False)
+    after_fix = _cycles_with([], ["P2"], [], ["P1"], [])
+    assert after_fix.exhausted(joining=False)  # the fix came back clean: the cap applies
+
+
+def test_local_severity_informs_the_budget_but_not_the_answered_round(repo):
+    head, base = _git(repo, 'rev-parse', 'HEAD'), _git(repo, 'rev-parse', 'master')
+    run = repo / '.git/local-reviews/pr-1-local-sev'
+    run.mkdir(parents=True)
+    (run / 'manifest.json').write_text(json.dumps({
+        'pr': 1, 'status': 'FINDINGS', 'head': head, 'base': base,
+        'model': 'gpt-x', 'architecture': 'gpt', 'started_at': GRANT_NOW - 100}))
+    (run / 'review.txt').write_text('[P1] Broken — a.py:1\n')
+    prior = rg.CodexRounds(answered_at=GRANT_NOW - 50)
+    rounds = rg.local_budget_rounds(prior, repo / '.git/local-reviews', 1, set())
+    assert rounds.count == 1 and rounds.spent == 0
+    assert rounds.last_findings == []      # not a round cmd_review answers
+    assert rounds.answered_at == GRANT_NOW - 50 and rounds.answered_since
