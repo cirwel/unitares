@@ -217,11 +217,17 @@ def test_era_windows_inside_one_era(registry):
 
 
 def test_live_registry_splits_the_2026_10_15_changes():
-    crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-17"))
+    crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-16T02:00"))
     assert [b.id for b in crossed if b.effective_at is not None] == ["A1", "I1"]
     # The stop-rule T opens A1's ambiguous interval.
     a1 = next(b for b in crossed if b.id == "A1")
     assert a1.interval == (_t("2026-10-15T13:45"), _t("2026-10-15T14:14:53"))
+
+
+def test_live_registry_times_rk1_from_its_deploy_restart():
+    crossed = eisv_eras.boundaries_crossed(_t("2026-10-16T02:00"), _t("2026-10-17"))
+    assert [b.id for b in crossed] == ["RK1"]
+    assert crossed[0].interval == (_t("2026-10-16T02:59:50"), _t("2026-10-16T02:59:50"))
 
 
 # ---------------------------------------------------------------------------
