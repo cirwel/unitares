@@ -65,3 +65,15 @@ def test_a_crossing_window_is_refused_before_any_query(gfa, monkeypatch, capsys)
     monkeypatch.setattr(gfa, "_query", no_db)
     assert gfa.main([]) == 2
     assert capsys.readouterr().err.startswith("refused:")
+
+
+def test_analysis_never_pools_sensor_classes(gfa, capsys):
+    row = dict(e=0.8, i=0.8, s=0.1, v=0.0, risk=0.1, coh_ung=0.6, coh_grd=0.6,
+               label="agent-x", age_h=1.0)
+    rows = [dict(row, sensor_class="physical")] * 3 + [dict(row, sensor_class="behavioral")] * 2
+    gfa.analyze(rows, window_h=24.0, min_near=300, min_flips=10)
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if "agent-x" in line and line[:1] != " "]
+    assert len(lines) == 2
+    assert any(line.startswith("behavioral") and "   2 " in line for line in lines)
+    assert any(line.startswith("physical") and "   3 " in line for line in lines)
