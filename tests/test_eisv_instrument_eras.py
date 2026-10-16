@@ -516,6 +516,12 @@ def test_current_era_window_start_for_the_live_registry():
         start, start + timedelta(days=1), stamp_filtered=stamp_era is not None) == []
 
 
+def test_basin_read_default_start_matches_the_registry():
+    from scripts.analysis import basin_conjunct_binding_read as read
+
+    assert read.current_era_start() == eisv_eras.current_era_window_start()[0]
+
+
 def test_current_era_window_start_timed_and_untimed(tmp_path):
     timed = _write_registry(tmp_path, [_entry("X1", "2026-01-10T00:00:00Z")])
     assert eisv_eras.current_era_window_start(timed) == (_t("2026-01-10"), None)

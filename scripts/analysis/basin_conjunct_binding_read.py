@@ -294,5 +294,11 @@ def main(argv=None) -> int:
     return asyncio.run(run(args.db_url, start, end, crossed, args.allow_cross_era, stamp_era))
 
 
+
+def current_era_start() -> datetime:
+    """Where the default read starts (see ``eisv_eras.current_era_window_start``)."""
+    return eisv_eras.current_era_window_start()[0]
+
+
 if __name__ == "__main__":
     sys.exit(main())
