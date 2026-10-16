@@ -121,13 +121,19 @@ def current_era_id(path: Path = REGISTRY_PATH) -> str:
 
 
 def boundaries_crossed(
-    start: datetime, end: datetime, *, path: Path = REGISTRY_PATH
+    start: datetime,
+    end: datetime,
+    *,
+    stamp_filtered: bool = False,
+    path: Path = REGISTRY_PATH,
 ) -> list[Boundary]:
     """Splitting boundaries that a window ``[start, end)`` does not lie wholly on one side of.
 
     A boundary with no recorded time (a maths change recorded only by the row
     stamp) counts as crossed when the window reaches past the latest timed
-    boundary, since a time window cannot tell where it falls.
+    boundary, since a time window cannot tell where it falls. A caller that
+    keeps only rows stamped with one era passes ``stamp_filtered=True``: the
+    stamp, not the time, then separates the untimed boundaries.
     """
     start, end = _utc(start), _utc(end)
     if end <= start:
@@ -142,6 +148,8 @@ def boundaries_crossed(
         if not boundary.splits:
             continue
         if boundary.interval is None:
+            if stamp_filtered:
+                continue
             if latest_timed is None or end > latest_timed:
                 crossed.append(boundary)
             continue
@@ -158,6 +166,7 @@ def require_single_era(
     end: datetime,
     *,
     allow_cross: Optional[str] = None,
+    stamp_filtered: bool = False,
     path: Path = REGISTRY_PATH,
 ) -> list[Boundary]:
     """Refuse a window that spans an instrument change, unless a reason is given.
@@ -166,7 +175,7 @@ def require_single_era(
     A reason lets the read run; it does not make a pooled number valid, so
     callers should report the crossed ids next to any result.
     """
-    crossed = boundaries_crossed(start, end, path=path)
+    crossed = boundaries_crossed(start, end, stamp_filtered=stamp_filtered, path=path)
     if crossed and not (allow_cross and allow_cross.strip()):
         listed = ", ".join(
             f"{b.id} ({b.effective_at.isoformat() if b.effective_at else 'stamp only'}: {b.summary})"
@@ -233,6 +242,25 @@ def require_single_instrument(
             (),
         )
     return ids
+
+
+def current_era_window_start(path: Path = REGISTRY_PATH) -> tuple[datetime, Optional[str]]:
+    """Where a default "current era" read starts, and the stamp era to filter on.
+
+    For a timed current era: its interval end and ``None``. For an untimed one
+    (recorded only by the stamp, typically before its deploy time is written
+    down): the latest timed boundary's interval end, and the era id, so the
+    caller keeps only rows stamped with it.
+    """
+    current = current_era_id(path)
+    boundaries = load_boundaries(path)
+    entry = next(b for b in boundaries if b.id == current)
+    if entry.interval is not None:
+        return entry.interval[1], None
+    timed = [b.interval[1] for b in boundaries if b.splits and b.interval is not None]
+    if not timed:
+        raise ValueError("era registry has no timed splitting entry")
+    return max(timed), current
 
 
 def is_settled(stamp: Optional[Mapping[str, Any]], min_updates: int = DEFAULT_SETTLED_UPDATES) -> bool:
