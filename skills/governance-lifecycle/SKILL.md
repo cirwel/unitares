@@ -24,6 +24,7 @@ source_files:
   - unitares/src/governance_monitor.py
   - unitares/src/monitor_calibration.py
   - unitares/src/mcp_handlers/updates/enrichments.py
+  - unitares/src/dialectic_reviewed_work.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   - unitares/src/mcp_handlers/lifecycle/self_recovery.py
   - unitares/src/mcp_handlers/lifecycle/recovery_policy.py
@@ -51,7 +52,7 @@ source_files:
 ## Don't Panic: six rules
 
 Mostly Harmless Guide to the normal agent path, verified against interface
-contract `1.41.0` on 2026-10-15.
+contract `1.42.0` on 2026-10-15.
 
 1. **Keep process identity honest.** Call `start_session(force_new=true)` once
    per process; reuse its `client_session_id` only within that process. Restarts
@@ -99,6 +100,11 @@ The core lifecycle should use primary task-verb tools. Each is implemented by a 
 | Update a durable finding | `update_finding(discovery_id=..., ...)` | `knowledge(action="update")` |
 
 Use the primary workflow tools by default. Use raw implementation names only for older servers, compatibility code, or when you explicitly need the unwrapped handler response. `start_session(force_new=true)` is a process-start operation, not a per-turn continuation primitive. `request_review` reuses its `issue_description` as the thesis by default, so a lone review brief is actionable in one call. Pass explicit `reasoning`/`root_cause` to distinguish the position from the subject, or `use_brief_as_thesis=false` for the neutral two-call flow. Raw `dialectic(action="request")` remains two-call unless thesis fields or `use_brief_as_thesis=true` are supplied. Session reads carry plain-language `whose_move`/`next_call` guidance, plus `wait_assessment` for whether a wait is yet unusual — `too_early` there means unremarkable, never that the reviewer is known alive.
+
+For a proxy-filed review of another UNITARES agent's work, pass the known
+author UUIDs in `reviewed_work_author_agent_ids`; the server treats the list as
+an unverified conflict declaration and recuses those agents from independent
+review. Omit it when authorship is unknown rather than sending an empty list.
 
 ### Response shapes
 

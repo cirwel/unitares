@@ -35,11 +35,22 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   require Logger
 
   @inflight_states ~w(reserved paused_agent_applied both_agents_applied reverting)
+  @reviewed_work_authorship_key "_dialectic_reviewed_work_authorship"
+  @reviewed_work_authorship_schema "unitares.dialectic-reviewed-work-authorship.v1"
+  @max_reviewed_work_author_agent_ids 32
+  @canonical_agent_uuid ~r/\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/
+  # PostgreSQL's POSIX regex engine does not understand Elixir's \A / \z
+  # anchors. Keep the two representations explicit so a valid declaration
+  # reaches the guarded UPDATE instead of raising `invalid escape \ sequence`.
+  @sql_canonical_agent_uuid "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
   @type claim_ok :: {:ok, %{saga_id: String.t(), origin: :new | :idempotent}}
   @type claim_err ::
           {:error, :session_not_found}
           | {:error, {:session_terminal, String.t()}}
+          | {:error, :session_identity_mismatch}
+          | {:error, :invalid_review_authorship}
+          | {:error, :reviewer_recused}
           | {:error, :saga_in_flight}
           | {:error, term()}
 
@@ -60,19 +71,29 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     * `{:error, :saga_in_flight}` — a different in-flight saga holds the session
   """
   @spec claim(map()) :: claim_ok() | claim_err()
-  def claim(%{
-        session_id: session_id,
-        paused_agent_id: paused_agent_id,
-        reviewer_agent_id: reviewer_agent_id,
-        resolution_payload: payload
-      })
+  def claim(
+        %{
+          session_id: session_id,
+          paused_agent_id: paused_agent_id,
+          reviewer_agent_id: reviewer_agent_id,
+          resolution_payload: payload
+        } = params
+      )
       when is_binary(session_id) and is_binary(paused_agent_id) and
              is_binary(reviewer_agent_id) and is_map(payload) do
     hash = payload_hash(payload)
     json = Jason.encode!(payload)
+    status = Map.get(params, :status, "resolved")
 
     Postgrex.transaction(DB, fn conn ->
-      with {:ok, _phase} <- guard_session_phase(conn, session_id),
+      with {:ok, _phase} <-
+             guard_session_phase(
+               conn,
+               session_id,
+               paused_agent_id,
+               reviewer_agent_id,
+               status
+             ),
            :ok <- reclaim_stale_reserved(conn, session_id),
            {:ok, result} <-
              insert_reserved(conn, session_id, paused_agent_id, reviewer_agent_id, json, hash) do
@@ -168,16 +189,18 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       Map.get(p, :trigger_source)
     ]
 
-    case Postgrex.query(DB, sql, args) do
-      {:ok, %{rows: [[_sid]]}} ->
-        UnitaresLeasePlane.DialecticLivenessSupervisor.ensure_started(sid)
-        {:ok, :created}
+    with :ok <- validate_reviewer_authorship(p, paused, Map.get(p, :reviewer_agent_id)) do
+      case Postgrex.query(DB, sql, args) do
+        {:ok, %{rows: [[_sid]]}} ->
+          UnitaresLeasePlane.DialecticLivenessSupervisor.ensure_started(sid)
+          {:ok, :created}
 
-      {:ok, %{rows: []}} ->
-        {:ok, :exists}
+        {:ok, %{rows: []}} ->
+          {:ok, :exists}
 
-      {:error, e} ->
-        {:error, e}
+        {:error, e} ->
+          {:error, e}
+      end
     end
   end
 
@@ -260,17 +283,65 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   already-terminal session; missing session -> :session_not_found; otherwise :ok.
   """
   @spec update_reviewer(String.t(), String.t()) ::
-          :ok | {:error, :invalid_reviewer | :session_not_found | :session_terminal | term()}
+          :ok
+          | {:error,
+             :invalid_reviewer
+             | :invalid_review_authorship
+             | :reviewer_recused
+             | :session_not_found
+             | :session_terminal
+             | term()}
   def update_reviewer(session_id, reviewer)
       when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 do
     sql = """
     UPDATE core.dialectic_sessions
     SET reviewer_agent_id = $2, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+      AND (
+        paused_agent_state_json IS NULL
+        OR NOT (paused_agent_state_json ? '#{@reviewed_work_authorship_key}')
+        OR (
+          jsonb_typeof(paused_agent_state_json -> '#{@reviewed_work_authorship_key}') = 'object'
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},schema}' = $3
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},status}' = 'declared'
+          AND paused_agent_state_json #> '{#{@reviewed_work_authorship_key},authorship_verified}' = 'false'::jsonb
+          AND jsonb_typeof(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},declared_by_agent_id}') = 'string'
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},declared_by_agent_id}' ~ $4
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},declared_by_agent_id}' = paused_agent_id
+          AND CASE
+            WHEN jsonb_typeof(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') = 'array'
+            THEN
+              jsonb_array_length(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') BETWEEN 1 AND $5
+              AND NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') AS author(value)
+                WHERE jsonb_typeof(author.value) <> 'string'
+                   OR (author.value #>> '{}') !~ $4
+              )
+              AND jsonb_array_length(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') = (
+                SELECT count(DISTINCT author.value #>> '{}')
+                FROM jsonb_array_elements(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') AS author(value)
+              )
+              AND (
+                $2 = paused_agent_id
+                OR NOT (
+                  paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}' ? $2
+                )
+              )
+            ELSE FALSE
+          END
+        )
+      )
     RETURNING session_id
     """
 
-    case Postgrex.query(DB, sql, [session_id, reviewer]) do
+    case Postgrex.query(DB, sql, [
+           session_id,
+           reviewer,
+           @reviewed_work_authorship_schema,
+           @sql_canonical_agent_uuid,
+           @max_reviewed_work_author_agent_ids
+         ]) do
       {:ok, %{num_rows: 1}} ->
         :ok
 
@@ -286,12 +357,26 @@ defmodule UnitaresLeasePlane.DialecticSaga do
         # §11 criterion-10 reassignment count with reassignments that never
         # happened — the same over-count #1804 fixed on the Python write tail,
         # still open here. Existence is not a write.
-        case Postgrex.query(DB, "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1", [
-               session_id
-             ]) do
-          {:ok, %{num_rows: 1}} -> {:error, :session_terminal}
-          {:ok, %{num_rows: 0}} -> {:error, :session_not_found}
-          {:error, e} -> {:error, e}
+        case Postgrex.query(
+               DB,
+               "SELECT status, paused_agent_id, paused_agent_state_json FROM core.dialectic_sessions WHERE session_id = $1",
+               [session_id]
+             ) do
+          {:ok, %{rows: [[status, _paused, _state]]}}
+          when status in ~w(resolved failed escalated) ->
+            {:error, :session_terminal}
+
+          {:ok, %{rows: [[_status, paused, state]]}} ->
+            case validate_reviewer_authorship_state(state, paused, reviewer) do
+              :ok -> {:error, :reviewer_write_refused}
+              error -> error
+            end
+
+          {:ok, %{num_rows: 0}} ->
+            {:error, :session_not_found}
+
+          {:error, e} ->
+            {:error, e}
         end
 
       {:error, e} ->
@@ -301,12 +386,82 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   def update_reviewer(_session_id, _reviewer), do: {:error, :invalid_reviewer}
 
+  defp validate_reviewer_authorship(params, paused, reviewer) do
+    validate_reviewer_authorship_state(Map.get(params, :paused_agent_state), paused, reviewer)
+  end
+
+  defp validate_reviewer_authorship_state(state, paused, reviewer) when is_map(state) do
+    case Map.fetch(state, @reviewed_work_authorship_key) do
+      :error ->
+        :ok
+
+      {:ok,
+       %{
+         "schema" => @reviewed_work_authorship_schema,
+         "status" => "declared",
+         "authorship_verified" => false,
+         "reviewed_work_author_agent_ids" => author_ids,
+         "declared_by_agent_id" => declared_by
+       }}
+      when is_list(author_ids) and author_ids != [] and is_binary(declared_by) ->
+        valid_authors =
+          length(author_ids) <= @max_reviewed_work_author_agent_ids and
+            Enum.all?(author_ids, &canonical_agent_uuid?/1) and
+            Enum.uniq(author_ids) == author_ids
+
+        if valid_authors and canonical_agent_uuid?(declared_by) and declared_by == paused do
+          if is_nil(reviewer) or reviewer == paused or reviewer not in author_ids,
+            do: :ok,
+            else: {:error, :reviewer_recused}
+        else
+          {:error, :invalid_review_authorship}
+        end
+
+      {:ok, _malformed} ->
+        {:error, :invalid_review_authorship}
+    end
+  end
+
+  defp validate_reviewer_authorship_state(nil, _paused, _reviewer), do: :ok
+
+  defp validate_reviewer_authorship_state(_malformed, _paused, _reviewer),
+    do: {:error, :invalid_review_authorship}
+
+  defp canonical_agent_uuid?(value) when is_binary(value),
+    do: Regex.match?(@canonical_agent_uuid, value)
+
+  defp canonical_agent_uuid?(_value), do: false
+
   defp do_resolve(params, session_id, payload, status) do
     case claim(params) do
       {:ok, %{saga_id: saga_id, origin: origin}} ->
-        with :ok <- commit_session_row(session_id, payload, status),
-             :ok <- commit(saga_id) do
-          {:ok, %{status: status, saga_id: saga_id, origin: origin}}
+        case commit_session_row(
+               session_id,
+               payload,
+               status,
+               Map.get(params, :paused_agent_id),
+               Map.get(params, :reviewer_agent_id)
+             ) do
+          :written ->
+            with :ok <- commit(saga_id) do
+              {:ok, %{status: status, saga_id: saga_id, origin: origin}}
+            end
+
+          {:already_terminal, existing_status} ->
+            # The row became terminal after claim but before commit. Commit the
+            # losing saga so it releases the in-flight slot, then report the
+            # actual winner; never attribute the requested status to this call.
+            with :ok <- commit(saga_id) do
+              {:ok,
+               %{
+                 status: existing_status,
+                 saga_id: saga_id,
+                 origin: :already_terminal
+               }}
+            end
+
+          error ->
+            error
         end
 
       {:error, {:session_terminal, existing}} ->
@@ -321,19 +476,99 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   # Guarded terminal write of the session row — BEAM is the sole writer for both
   # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
   # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
-  defp commit_session_row(session_id, payload, status) do
+  defp commit_session_row(session_id, payload, status, paused_agent_id, reviewer_agent_id) do
     sql = """
     UPDATE core.dialectic_sessions
     SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
+      AND paused_agent_id = $4
+      AND reviewer_agent_id = $5
+      AND (
+        $2 <> 'resolved'
+        OR paused_agent_state_json IS NULL
+        OR NOT (paused_agent_state_json ? '#{@reviewed_work_authorship_key}')
+        OR (
+          jsonb_typeof(paused_agent_state_json -> '#{@reviewed_work_authorship_key}') = 'object'
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},schema}' = $6
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},status}' = 'declared'
+          AND paused_agent_state_json #> '{#{@reviewed_work_authorship_key},authorship_verified}' = 'false'::jsonb
+          AND jsonb_typeof(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},declared_by_agent_id}') = 'string'
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},declared_by_agent_id}' ~ $7
+          AND paused_agent_state_json #>> '{#{@reviewed_work_authorship_key},declared_by_agent_id}' = paused_agent_id
+          AND CASE
+            WHEN jsonb_typeof(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') = 'array'
+            THEN
+              jsonb_array_length(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') BETWEEN 1 AND $8
+              AND NOT EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') AS author(value)
+                WHERE jsonb_typeof(author.value) <> 'string'
+                   OR (author.value #>> '{}') !~ $7
+              )
+              AND jsonb_array_length(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') = (
+                SELECT count(DISTINCT author.value #>> '{}')
+                FROM jsonb_array_elements(paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}') AS author(value)
+              )
+              AND (
+                reviewer_agent_id = paused_agent_id
+                OR NOT (
+                  paused_agent_state_json #> '{#{@reviewed_work_authorship_key},reviewed_work_author_agent_ids}' ? reviewer_agent_id
+                )
+              )
+            ELSE FALSE
+          END
+        )
+      )
     RETURNING session_id
     """
 
-    case Postgrex.query(DB, sql, [session_id, status, Jason.encode!(payload)]) do
-      {:ok, %{num_rows: 1}} -> :ok
-      # Already terminal (raced/idempotent) — saga still commits; not an error.
-      {:ok, %{num_rows: 0}} -> :ok
-      {:error, e} -> {:error, e}
+    case Postgrex.query(DB, sql, [
+           session_id,
+           status,
+           Jason.encode!(payload),
+           paused_agent_id,
+           reviewer_agent_id,
+           @reviewed_work_authorship_schema,
+           @sql_canonical_agent_uuid,
+           @max_reviewed_work_author_agent_ids
+         ]) do
+      {:ok, %{num_rows: 1}} ->
+        :written
+
+      {:ok, %{num_rows: 0}} ->
+        case Postgrex.query(
+               DB,
+               "SELECT status, paused_agent_id, reviewer_agent_id, paused_agent_state_json FROM core.dialectic_sessions WHERE session_id = $1",
+               [session_id]
+             ) do
+          {:ok, %{rows: [[existing, _paused, _reviewer, _state]]}}
+          when existing in @terminal_statuses ->
+            # Already terminal (raced/idempotent). The caller commits the
+            # losing saga but must report the live winner, not its request.
+            {:already_terminal, existing}
+
+          {:ok, %{rows: [[_existing, stored_paused, stored_reviewer, state]]}} ->
+            case validate_resolution_authority(
+                   status,
+                   stored_paused,
+                   stored_reviewer,
+                   state,
+                   paused_agent_id,
+                   reviewer_agent_id
+                 ) do
+              :ok -> {:error, :session_write_refused}
+              error -> error
+            end
+
+          {:ok, %{rows: []}} ->
+            {:error, :session_not_found}
+
+          {:error, e} ->
+            {:error, e}
+        end
+
+      {:error, e} ->
+        {:error, e}
     end
   end
 
@@ -551,21 +786,60 @@ defmodule UnitaresLeasePlane.DialecticSaga do
 
   # ---------- internals ----------
 
-  defp guard_session_phase(conn, session_id) do
-    sql = "SELECT status FROM core.dialectic_sessions WHERE session_id = $1"
+  defp guard_session_phase(
+         conn,
+         session_id,
+         paused_agent_id,
+         reviewer_agent_id,
+         requested_status
+       ) do
+    sql =
+      "SELECT status, paused_agent_id, reviewer_agent_id, paused_agent_state_json " <>
+        "FROM core.dialectic_sessions WHERE session_id = $1"
 
     case Postgrex.query(conn, sql, [session_id]) do
-      {:ok, %{rows: [[status]]}} when status in ["resolved", "failed"] ->
+      {:ok, %{rows: [[status, _paused, _reviewer, _state]]}}
+      when status in ["resolved", "failed"] ->
         {:error, {:session_terminal, status}}
 
-      {:ok, %{rows: [[_status]]}} ->
-        {:ok, :claimable}
+      {:ok, %{rows: [[_status, stored_paused, stored_reviewer, state]]}} ->
+        case validate_resolution_authority(
+               requested_status,
+               stored_paused,
+               stored_reviewer,
+               state,
+               paused_agent_id,
+               reviewer_agent_id
+             ) do
+          :ok -> {:ok, :claimable}
+          error -> error
+        end
 
       {:ok, %{rows: []}} ->
         {:error, :session_not_found}
 
       {:error, e} ->
         {:error, e}
+    end
+  end
+
+  defp validate_resolution_authority(
+         requested_status,
+         stored_paused,
+         stored_reviewer,
+         state,
+         paused_agent_id,
+         reviewer_agent_id
+       ) do
+    cond do
+      stored_paused != paused_agent_id or stored_reviewer != reviewer_agent_id ->
+        {:error, :session_identity_mismatch}
+
+      requested_status == "resolved" ->
+        validate_reviewer_authorship_state(state, stored_paused, stored_reviewer)
+
+      true ->
+        :ok
     end
   end
 

@@ -6,10 +6,11 @@ lease plane (`POST /v1/dialectic/resolve`), which owns the cross-runtime saga
 slot and is the sole writer of the terminal `core.dialectic_sessions` row.
 
 Fail-safe by construction: this returns ``None`` — telling the caller to use the
-Python ``pg_resolve_session`` path — whenever the flag is off, the lease plane
-is not configured, a required field is missing, or BEAM is unreachable / returns
-non-OK. It never raises. A resolution therefore never hangs or is lost because
-of BEAM; the Python B-4 guard protects the row in either path.
+Python persistence path — whenever the flag is off, the lease plane is not
+configured, a required field is missing, or BEAM is unreachable / returns an
+ordinary non-OK response.  A typed policy refusal is authoritative and raises
+``BeamDialecticPolicyRefusal`` instead of falling through to a second writer.
+The Python B-4 guards protect every ordinary fallback path.
 """
 
 import asyncio
@@ -36,6 +37,28 @@ _TRUTHY = {"1", "true", "yes", "on"}
 # encodes the atom as this string: body `{"ok": true, "status": "<existing>",
 # "saga_id": null, "origin": "already_terminal", ...}`.
 ALREADY_TERMINAL_ORIGIN = "already_terminal"
+_AUTHORSHIP_POLICY_REFUSALS = {
+    "reviewer_recused",
+    "invalid_review_authorship",
+    "session_identity_mismatch",
+}
+
+
+class BeamDialecticPolicyRefusal(RuntimeError):
+    """BEAM authoritatively refused a dialectic write on governance policy."""
+
+    def __init__(self, error_code: str, *, operation: str):
+        self.error_code = error_code
+        self.operation = operation
+        super().__init__(f"{operation} refused by BEAM policy: {error_code}")
+
+
+def _raise_authorship_policy_refusal(
+    status: int, body: Any, *, operation: str
+) -> None:
+    error_code = body.get("error") if isinstance(body, dict) else None
+    if status == 409 and error_code in _AUTHORSHIP_POLICY_REFUSALS:
+        raise BeamDialecticPolicyRefusal(error_code, operation=operation)
 
 
 async def _already_terminal_reason(session_id: str) -> Dict[str, Any]:
@@ -76,7 +99,8 @@ async def beam_create_session(
 
     Returns the BEAM result on success, or ``None`` to fall back to the Python
     `create_session_async` path (flag off / no bearer / missing ids / BEAM
-    unreachable / non-OK). Never raises. Gated by the same
+    unreachable / ordinary non-OK). Raises ``BeamDialecticPolicyRefusal`` for
+    an authoritative authorship-policy refusal. Gated by the same
     UNITARES_DIALECTIC_BEAM_RESOLUTION flag as the resolve routing.
     """
     if not beam_resolution_enabled():
@@ -124,9 +148,10 @@ async def beam_create_session(
                         http_status=status)
             return body
 
-        logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
         rec.respond(outcome="not_written", http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
+        _raise_authorship_policy_refusal(status, body, operation="create_session")
+        logger.warning(f"[BEAM_CREATE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python")
         return None
 
 
@@ -206,7 +231,8 @@ async def beam_update_phase(
 async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
     """Assign/reassign a reviewer via BEAM (sole writer of reviewer_agent_id).
     Returns the BEAM result on success, or ``None`` to fall back to the Python
-    `pg_update_reviewer` path. Never raises.
+    `pg_update_reviewer` path. Raises ``BeamDialecticPolicyRefusal`` for an
+    authoritative authorship-policy refusal.
     """
     if not beam_resolution_enabled():
         return None
@@ -244,9 +270,10 @@ async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]
         if status == 200 and isinstance(body, dict) and body.get("ok"):
             rec.respond(outcome="written", http_status=status)
             return body
-        logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
         rec.respond(outcome="not_written", http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
+        _raise_authorship_policy_refusal(status, body, operation="update_reviewer")
+        logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
         return None
 
 
@@ -336,11 +363,12 @@ async def beam_resolve(
             rec.respond(**fields)
             return body
 
+        rec.respond(outcome="not_written", http_status=status,
+                    error=body.get("error") if isinstance(body, dict) else None)
+        _raise_authorship_policy_refusal(status, body, operation="resolve_session")
         # 409 saga_in_flight / 404 / 503 / malformed -> fall back to the Python
         # path, whose B-4 guard still prevents an overwrite.
         logger.warning(
             f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )
-        rec.respond(outcome="not_written", http_status=status,
-                    error=body.get("error") if isinstance(body, dict) else None)
         return None

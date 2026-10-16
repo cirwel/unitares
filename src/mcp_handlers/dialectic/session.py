@@ -18,6 +18,7 @@ from src.dialectic_protocol import (
     coerce_signature_version,
     describe_attestation,
 )
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.db.acquire_compat import compatible_acquire
 from src.logging_utils import get_logger
 
@@ -502,7 +503,7 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                        paused_agent_id, reviewer_agent_id, topic,
                        created_at, resolution_json, reason, trigger_source,
                        awaiting_facilitation, synthesis_round,
-                       max_synthesis_rounds
+                       max_synthesis_rounds, paused_agent_state_json
                 FROM core.dialectic_sessions WHERE session_id = $1
             """, session_id)
             if not row:
@@ -536,6 +537,10 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                 ),
                 "message_count": len(msg_rows),
                 "transcript": [],
+                "reviewed_work_authorship": read_reviewed_work_authorship(
+                    row.get("paused_agent_state_json"),
+                    expected_declared_by_agent_id=row["paused_agent_id"],
+                ).as_dict(),
             }
 
             res = row["resolution_json"]
@@ -650,6 +655,7 @@ async def list_all_sessions(
                     ds.awaiting_facilitation,
                     ds.synthesis_round,
                     ds.max_synthesis_rounds,
+                    ds.paused_agent_state_json,
                     -- The paused agent's LABEL, not just its uuid. The
                     -- test_/demo_ filter below keys on paused_agent_id, which
                     -- is a uuid, so the scheduled probe families
@@ -718,6 +724,10 @@ async def list_all_sessions(
                     "max_synthesis_rounds": int(
                         row.get("max_synthesis_rounds") or 5
                     ),
+                    "reviewed_work_authorship": read_reviewed_work_authorship(
+                        row.get("paused_agent_state_json"),
+                        expected_declared_by_agent_id=row["paused_agent_id"],
+                    ).as_dict(),
                 }
 
                 # Parse resolution if present

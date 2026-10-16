@@ -14,11 +14,47 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
   import LeaseTestHelpers
 
   defp claim_params(session_id, payload \\ %{"verdict" => "resume", "conditions" => ["monitor"]}) do
+    {paused_agent_id, reviewer_agent_id} =
+      case Postgrex.query(
+             DB,
+             "SELECT paused_agent_id, reviewer_agent_id FROM core.dialectic_sessions WHERE session_id = $1",
+             [session_id]
+           ) do
+        {:ok, %{rows: [[paused, nil]]}} ->
+          reviewer = "test_reviewer_agent"
+
+          Postgrex.query!(
+            DB,
+            "UPDATE core.dialectic_sessions SET reviewer_agent_id = $2 WHERE session_id = $1",
+            [session_id, reviewer]
+          )
+
+          {paused, reviewer}
+
+        {:ok, %{rows: [[paused, reviewer]]}} ->
+          {paused, reviewer}
+
+        _ ->
+          {"test_paused_agent", "test_reviewer_agent"}
+      end
+
     %{
       session_id: session_id,
-      paused_agent_id: "test_paused_agent",
-      reviewer_agent_id: "test_reviewer_agent",
+      paused_agent_id: paused_agent_id,
+      reviewer_agent_id: reviewer_agent_id,
       resolution_payload: payload
+    }
+  end
+
+  defp reviewed_work_authorship(author, declared_by) do
+    %{
+      "_dialectic_reviewed_work_authorship" => %{
+        "schema" => "unitares.dialectic-reviewed-work-authorship.v1",
+        "status" => "declared",
+        "reviewed_work_author_agent_ids" => [author],
+        "declared_by_agent_id" => declared_by,
+        "authorship_verified" => false
+      }
     }
   end
 
@@ -116,6 +152,59 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
                DialecticSaga.resolve(claim_params(session_id))
     end
 
+    test "reports the actual terminal winner when the row changes after claim" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      params = claim_params(session_id)
+
+      # Seed the idempotent claim. The resolver can repeat it without needing a
+      # third database connection while the test holds the session row lock.
+      assert {:ok, %{origin: :new}} = DialecticSaga.claim(params)
+      parent = self()
+
+      locker =
+        Task.async(fn ->
+          Postgrex.transaction(DB, fn conn ->
+            Postgrex.query!(
+              conn,
+              "SELECT session_id FROM core.dialectic_sessions WHERE session_id = $1 FOR UPDATE",
+              [session_id]
+            )
+
+            send(parent, {:session_row_locked, self()})
+
+            receive do
+              :terminalize ->
+                Postgrex.query!(
+                  conn,
+                  "UPDATE core.dialectic_sessions SET status = 'failed', phase = 'failed' WHERE session_id = $1",
+                  [session_id]
+                )
+            after
+              2_000 -> raise "timed out waiting to terminalize locked dialectic row"
+            end
+          end)
+        end)
+
+      assert_receive {:session_row_locked, locker_pid}, 1_000
+      resolver = Task.async(fn -> DialecticSaga.resolve(params) end)
+
+      # The second pool connection can replay the claim, then blocks on the
+      # terminal UPDATE behind the row lock. If it unexpectedly finishes here,
+      # the test did not exercise the post-claim race it is meant to pin.
+      Process.sleep(50)
+      assert Task.yield(resolver, 0) == nil
+
+      send(locker_pid, :terminalize)
+      assert {:ok, _} = Task.await(locker, 2_000)
+
+      assert {:ok, %{status: "failed", saga_id: saga_id, origin: :already_terminal}} =
+               Task.await(resolver, 2_000)
+
+      assert saga_state(saga_id) == "pg_committed"
+      assert session_status(session_id) == "failed"
+    end
+
     test "commits a failed terminal transition when status=failed" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -127,6 +216,63 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
 
       assert session_status(session_id) == "failed"
       assert saga_state(saga_id) == "pg_committed"
+    end
+
+    test "refuses caller participant ids that do not match the stored session" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      params = Map.put(claim_params(session_id), :reviewer_agent_id, "wrong-reviewer")
+
+      assert {:error, :session_identity_mismatch} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "active"
+    end
+
+    test "refuses a declared work author as resolved-session authority" do
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: proxy,
+          reviewer_agent_id: author
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(author, proxy))]
+      )
+
+      assert {:error, :reviewer_recused} =
+               DialecticSaga.resolve(claim_params(session_id))
+
+      assert session_status(session_id) == "active"
+    end
+
+    test "failed liveness close remains available with a recused reviewer" do
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: proxy,
+          reviewer_agent_id: author
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(author, proxy))]
+      )
+
+      params = Map.put(claim_params(session_id), :status, "failed")
+      assert {:ok, %{status: "failed"}} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "failed"
     end
 
     test "rejects an invalid status" do
@@ -145,13 +291,20 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       payload = %{"verdict" => "resume", "conditions" => ["monitor"]}
+
       assert {:ok, %{status: "resolved", saga_id: saga_id}} =
                DialecticSaga.resolve(claim_params(session_id, payload))
 
       assert jsonb_typeof("core.dialectic_sessions", "resolution_json", "session_id", session_id) ==
                "object"
 
-      assert jsonb_field("core.dialectic_sessions", "resolution_json", "verdict", "session_id", session_id) ==
+      assert jsonb_field(
+               "core.dialectic_sessions",
+               "resolution_json",
+               "verdict",
+               "session_id",
+               session_id
+             ) ==
                "resume"
 
       # Same invariant on the saga's own copy of the payload.
@@ -349,6 +502,94 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert {:error, :invalid_reviewer} = DialecticSaga.update_reviewer("x", "")
     end
 
+    test "refuses a declared work author and permits an independent peer" do
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+      peer = "33333333-3333-4333-8333-333333333333"
+
+      session_id =
+        insert_dialectic_session(
+          phase: "antithesis",
+          status: "active",
+          paused_agent_id: proxy
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(author, proxy))]
+      )
+
+      assert {:error, :reviewer_recused} =
+               DialecticSaga.update_reviewer(session_id, author)
+
+      assert session_reviewer(session_id) == nil
+      assert :ok = DialecticSaga.update_reviewer(session_id, peer)
+      assert session_reviewer(session_id) == peer
+    end
+
+    test "fails closed on malformed reserved authorship metadata" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = '{\"_dialectic_reviewed_work_authorship\": {\"status\": \"declared\"}}'::jsonb WHERE session_id = $1",
+        [session_id]
+      )
+
+      assert {:error, :invalid_review_authorship} =
+               DialecticSaga.update_reviewer(session_id, "independent-peer")
+
+      malformed_values = %{
+        "_dialectic_reviewed_work_authorship" => %{
+          "schema" => "unitares.dialectic-reviewed-work-authorship.v1",
+          "status" => "declared",
+          "reviewed_work_author_agent_ids" => [7],
+          "declared_by_agent_id" => "11111111-1111-4111-8111-111111111111",
+          "authorship_verified" => false
+        }
+      }
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(malformed_values)]
+      )
+
+      assert {:error, :invalid_review_authorship} =
+               DialecticSaga.update_reviewer(
+                 session_id,
+                 "33333333-3333-4333-8333-333333333333"
+               )
+    end
+
+    test "fails closed when declaration provenance names another agent" do
+      paused = "11111111-1111-4111-8111-111111111111"
+      other = "22222222-2222-4222-8222-222222222222"
+      peer = "33333333-3333-4333-8333-333333333333"
+
+      session_id =
+        insert_dialectic_session(
+          phase: "antithesis",
+          status: "active",
+          paused_agent_id: paused
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(other, other))]
+      )
+
+      assert {:error, :invalid_review_authorship} =
+               DialecticSaga.update_reviewer(session_id, peer)
+    end
+
     test "missing session -> :session_not_found" do
       assert {:error, :session_not_found} =
                DialecticSaga.update_reviewer("test_elixir_nope_rev", "rev-1")
@@ -368,6 +609,7 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
         on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
         assert :ok = DialecticSaga.update_reviewer(session_id, "rev-before")
+
         {:ok, _} =
           Postgrex.query(
             UnitaresLeasePlane.DB,
@@ -416,6 +658,43 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert {:error, :invalid_params} = DialecticSaga.create_session(%{session_id: "x"})
     end
 
+    test "refuses creation with a declared work author as reviewer" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:error, :reviewer_recused} =
+               DialecticSaga.create_session(%{
+                 session_id: sid,
+                 paused_agent_id: proxy,
+                 reviewer_agent_id: author,
+                 paused_agent_state: reviewed_work_authorship(author, proxy)
+               })
+
+      assert %{rows: []} =
+               Postgrex.query!(
+                 DB,
+                 "SELECT 1 FROM core.dialectic_sessions WHERE session_id = $1",
+                 [sid]
+               )
+    end
+
+    test "malformed authorship is rejected even for explicit self-review" do
+      sid = "test_elixir_create_" <> Integer.to_string(System.unique_integer([:positive]))
+      paused = "11111111-1111-4111-8111-111111111111"
+      other = "22222222-2222-4222-8222-222222222222"
+      on_exit(fn -> cleanup_dialectic_session(sid) end)
+
+      assert {:error, :invalid_review_authorship} =
+               DialecticSaga.create_session(%{
+                 session_id: sid,
+                 paused_agent_id: paused,
+                 reviewer_agent_id: paused,
+                 paused_agent_state: reviewed_work_authorship(other, other)
+               })
+    end
+
     # Same double-encoding regression as resolve/1, on the creation path. This
     # column carries the paused agent's EISV snapshot; stored as a jsonb string
     # it reads back as NULL for every key, which is how 56 rows of real state
@@ -434,7 +713,13 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert jsonb_typeof("core.dialectic_sessions", "paused_agent_state_json", "session_id", sid) ==
                "object"
 
-      assert jsonb_field("core.dialectic_sessions", "paused_agent_state_json", "E", "session_id", sid) ==
+      assert jsonb_field(
+               "core.dialectic_sessions",
+               "paused_agent_state_json",
+               "E",
+               "session_id",
+               sid
+             ) ==
                "0.7"
     end
   end

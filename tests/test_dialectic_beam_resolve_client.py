@@ -3,8 +3,9 @@ Tests for the BEAM dialectic-resolve client (dialectic-on-BEAM Slice 1.2).
 
 The client must be fail-safe: it returns None (caller falls back to the Python
 pg_resolve_session path) whenever the flag is off, the lease plane is not
-configured, a required field is missing, or BEAM returns non-OK — and must never
-raise.
+configured, a required field is missing, or BEAM returns an ordinary non-OK.
+Authoritative governance-policy refusals raise rather than fall back to a
+second writer.
 """
 
 import sys
@@ -129,6 +130,17 @@ async def test_create_non_ok_falls_back(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_authorship_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "reviewer_recused"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_create_session("s1", "p", {"reviewer_agent_id": "r"})
+    assert exc.value.error_code == "reviewer_recused"
+
+
+@pytest.mark.asyncio
 async def test_update_phase_disabled_returns_none(monkeypatch):
     monkeypatch.delenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", raising=False)
     assert await brc.beam_update_phase("s1", "antithesis") is None
@@ -174,6 +186,28 @@ async def test_update_reviewer_blank_returns_none(monkeypatch):
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     # missing reviewer -> short-circuits to None (no HTTP)
     assert await brc.beam_update_reviewer("s1", None) is None
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_authorship_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "invalid_review_authorship"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_update_reviewer("s1", "rev")
+    assert exc.value.error_code == "invalid_review_authorship"
+
+
+@pytest.mark.asyncio
+async def test_resolve_identity_policy_refusal_never_falls_back(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    body = {"ok": False, "error": "session_identity_mismatch"}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
+        with pytest.raises(brc.BeamDialecticPolicyRefusal) as exc:
+            await brc.beam_resolve("s1", "p", "r", {"action": "resume"})
+    assert exc.value.error_code == "session_identity_mismatch"
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,1 @@
+- Interface contract 1.42.0: Dialectic review requests accept requester-declared author-agent UUIDs and recuse those authors from independent reviewer selection, assignment, and verdict paths.

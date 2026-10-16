@@ -64,6 +64,18 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   defp parsed(conn), do: Jason.decode!(conn.resp_body)
 
+  defp reviewed_work_authorship(author, declared_by) do
+    %{
+      "_dialectic_reviewed_work_authorship" => %{
+        "schema" => "unitares.dialectic-reviewed-work-authorship.v1",
+        "status" => "declared",
+        "reviewed_work_author_agent_ids" => [author],
+        "declared_by_agent_id" => declared_by,
+        "authorship_verified" => false
+      }
+    }
+  end
+
   describe "/v1/dialectic/phase" do
     test "advances a non-terminal phase (200)" do
       session_id = insert_dialectic_session(phase: "thesis", status: "active")
@@ -118,7 +130,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
   describe "/v1/dialectic/presence" do
     test "lists live sessions; resolved ones drop off" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       live =
@@ -155,7 +167,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "resolves a synthesis session and commits row + saga" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       resp =
@@ -174,7 +186,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "second resolve of a resolved session is idempotent (200, already_terminal)" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       body = %{
@@ -191,7 +203,7 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
 
     test "status=failed commits a failed terminal transition" do
-      session_id = insert_dialectic_session()
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
       on_exit(fn -> cleanup_dialectic_session(session_id) end)
 
       resp =
@@ -205,6 +217,52 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert resp.status == 200
       assert parsed(resp)["status"] == "failed"
+    end
+
+    test "recused reviewer -> 409 reviewer_recused" do
+      proxy = "11111111-1111-4111-8111-111111111111"
+      author = "22222222-2222-4222-8222-222222222222"
+
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: proxy,
+          reviewer_agent_id: author
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(reviewed_work_authorship(author, proxy))]
+      )
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: proxy,
+          reviewer_agent_id: author,
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "reviewer_recused"
+    end
+
+    test "caller participant mismatch -> 409 session_identity_mismatch" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "wrong",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_identity_mismatch"
     end
 
     test "invalid status → 422 schema_invalid" do

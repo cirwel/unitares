@@ -17,6 +17,7 @@ from time import monotonic
 from typing import Awaitable, Callable, Dict, Any, List, Optional
 
 from src.dialectic_protocol import DialecticPhase
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.dialectic_session_writes import (
     attempt_id_scope,
     record_emit_failure,
@@ -493,6 +494,23 @@ def _decoded_messages(messages: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _reviewer_authorship_conflict_in_row(row: Dict[str, Any]) -> bool:
+    """Whether a stored reviewer cannot supply independent authority.
+
+    Legacy rows can predate the assignment guards, and a malformed reserved
+    marker must fail closed.  The sweeper is an effect owner, so it rechecks
+    the persisted row rather than trusting the candidate list it read earlier.
+    """
+    reviewer_agent_id = row.get("reviewer_agent_id")
+    paused_agent_id = row.get("paused_agent_id")
+    if not reviewer_agent_id or reviewer_agent_id == paused_agent_id:
+        return False
+    declaration = read_reviewed_work_authorship(row)
+    return declaration.is_invalid or declaration.recuses(
+        reviewer_agent_id, paused_agent_id=paused_agent_id
+    )
+
+
 async def _close_standing_rejections(
     counts: _CycleCounts,
     details: List[Dict[str, Any]],
@@ -530,6 +548,7 @@ async def _close_standing_rejections(
         and s.get("reviewer_agent_id")
         and s.get("paused_agent_id")
         and s.get("reviewer_agent_id") != s.get("paused_agent_id")
+        and not _reviewer_authorship_conflict_in_row(s)
     ]
     if not candidates:
         return closed
@@ -553,12 +572,21 @@ async def _close_standing_rejections(
             # is heavy and imports this module.
             from .handlers import _has_orchestrated_reviewer_budget
             row = dict(await get_session_async(session_id) or {})
+            fresh_paused_agent_id = row.get("paused_agent_id")
+            fresh_reviewer_agent_id = row.get("reviewer_agent_id")
+            if (
+                not fresh_paused_agent_id
+                or not fresh_reviewer_agent_id
+                or fresh_reviewer_agent_id == fresh_paused_agent_id
+                or _reviewer_authorship_conflict_in_row(row)
+            ):
+                continue
             messages = _decoded_messages(row.get("messages"))
             row["messages"] = messages
             payload = assess_rejection_stands(
                 messages,
-                paused_agent_id=paused_agent_id,
-                reviewer_agent_id=reviewer_agent_id,
+                paused_agent_id=fresh_paused_agent_id,
+                reviewer_agent_id=fresh_reviewer_agent_id,
                 # From the re-read row, not the candidate list: a clear that
                 # landed between the two reads must stop the close.
                 awaiting_facilitation=bool(row.get("awaiting_facilitation")),
@@ -591,7 +619,7 @@ async def _close_standing_rejections(
                     session_id, payload, "failed", winner=winner,
                     expected_phase=row.get("phase"),
                     expected_updated_at=row.get("updated_at"),
-                    expected_reviewer=reviewer_agent_id,
+                    expected_reviewer=fresh_reviewer_agent_id,
                     # Answering the request and ending the session are one
                     # statement, so the terminal row cannot keep asking for a
                     # human.
@@ -612,7 +640,7 @@ async def _close_standing_rejections(
         counts.resolved_count += 1
         details.append({
             "session_id": session_id,
-            "paused_agent_id": paused_agent_id,
+            "paused_agent_id": fresh_paused_agent_id,
             "phase": session.get("phase"),
             "action": "failed",
             "reason": REJECTION_STANDS,
@@ -708,6 +736,7 @@ async def _auto_resolve_stuck_sessions(
             reviewer_agent_id = session.get("reviewer_agent_id")
             phase = session.get("phase")
             awaiting_facilitation = bool(session.get("awaiting_facilitation"))
+            reviewed_work_authorship = read_reviewed_work_authorship(session)
 
             if not session_id:
                 c.invalid_session_count += 1
@@ -749,16 +778,30 @@ async def _auto_resolve_stuck_sessions(
                 # the in-memory cache; if not, the next iteration sees it.
                 await mcp_server.load_metadata_async()
                 reviewer_meta = mcp_server.agent_metadata.get(reviewer_agent_id)
-                reviewer_gone = not reviewer_meta or getattr(reviewer_meta, 'status', None) == "paused"
+                reviewer_gone = (
+                    not reviewer_meta
+                    or getattr(reviewer_meta, 'status', None) == "paused"
+                    or reviewed_work_authorship.recuses(
+                        reviewer_agent_id, paused_agent_id=paused_agent_id
+                    )
+                )
 
                 if reviewer_gone:
                     # Try auto re-assignment
                     from .reviewer import select_reviewer
                     try:
-                        new_reviewer = await select_reviewer(
-                            paused_agent_id=paused_agent_id,
-                            metadata=mcp_server.agent_metadata,
-                            exclude_agent_ids=[paused_agent_id, reviewer_agent_id],
+                        new_reviewer = (
+                            None
+                            if reviewed_work_authorship.is_invalid
+                            else await select_reviewer(
+                                paused_agent_id=paused_agent_id,
+                                metadata=mcp_server.agent_metadata,
+                                exclude_agent_ids=[
+                                    paused_agent_id,
+                                    reviewer_agent_id,
+                                    *reviewed_work_authorship.author_agent_ids,
+                                ],
+                            )
                         )
                     except Exception as e:
                         logger.warning(f"Auto re-selection failed for {session_id[:16]}: {e}")

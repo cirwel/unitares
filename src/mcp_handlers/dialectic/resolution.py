@@ -9,6 +9,7 @@ from typing import Dict, Any
 from datetime import datetime
 
 from src.dialectic_protocol import DialecticSession, Resolution
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.logging_utils import get_logger
 from ..support.condition_parser import parse_condition, apply_condition
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
@@ -43,7 +44,68 @@ async def agent_pause_is_live(agent_id: str) -> bool:
     return bool(meta is not None and getattr(meta, "status", None) == "paused")
 
 
-async def execute_resolution(session: DialecticSession, resolution: Resolution) -> Dict[str, Any]:
+async def record_resolution_outcome(
+    session: DialecticSession,
+    resolution: Resolution,
+    execution_result: Dict[str, Any],
+) -> None:
+    """Record a successfully persisted dialectic resolution outcome.
+
+    The terminal session row is the effect owner.  Callers that still need to
+    perform that write pass ``record_outcome=False`` to ``execute_resolution``
+    and invoke this helper only after the write succeeds, so a CAS refusal or
+    already-terminal answer cannot manufacture a successful outcome event.
+    """
+    applied_conditions = execution_result.get("applied_conditions") or []
+    try:
+        applied_count = sum(
+            1
+            for condition in applied_conditions
+            if isinstance(condition, dict) and condition.get("status") == "applied"
+        )
+        await _record_outcome_event_inline({
+            # In-process emitter, computed server-side from session protocol
+            # state -- vouched so its server-observed provenance is honoured,
+            # up to what that provenance itself asserts.
+            "_trusted_ingestion": True,
+            "agent_id": session.paused_agent_id,
+            "outcome_type": "dialectic_resolved",
+            "is_bad": False,
+            "outcome_score": 1.0,
+            "decision_action": "proceed",
+            # Dialectic resolution is computed server-side from session
+            # protocol state (conditions applied, synthesis convergence),
+            # not the agent's claim of resolution. Architect council
+            # 2026-05-19 flagged dialectic as peer-mediated and not a clean
+            # fit for the v1 enum; classify as server_observation pending v2.
+            "verification_source": "server_observation",
+            "detail": {
+                "dialectic_session_id": session.session_id,
+                "session_type": getattr(session, "session_type", None),
+                "root_cause": resolution.root_cause,
+                "conditions": resolution.conditions,
+                "conditions_applied": applied_count,
+                "conditions_total": len(applied_conditions),
+                "synthesis_round": session.synthesis_round,
+                "resolution_hash": resolution.hash(),
+                "discovery_id": session.discovery_id,
+                "status_changed": bool(execution_result.get("status_changed")),
+            },
+        })
+    except Exception as exc:
+        logger.warning(
+            "outcome_event emit on dialectic_resolved failed for session %s: %s",
+            session.session_id,
+            exc,
+        )
+
+
+async def execute_resolution(
+    session: DialecticSession,
+    resolution: Resolution,
+    *,
+    record_outcome: bool = True,
+) -> Dict[str, Any]:
     """
     Execute the resolution: resume agent with agreed conditions.
     
@@ -104,6 +166,39 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
             "warning": (
                 "Reviewer and paused agent are the same identity; a self-review "
                 "cannot authorize its own resume. No action taken."
+            ),
+        }
+
+    reviewed_work_authorship = read_reviewed_work_authorship(
+        getattr(session, "paused_agent_state", {}),
+        expected_declared_by_agent_id=agent_id,
+    )
+    if reviewed_work_authorship.is_invalid:
+        logger.warning(
+            "Refusing resume for %s: reviewed-work authorship metadata is malformed",
+            agent_id,
+        )
+        return {
+            "success": False,
+            "refused": "review_authorship_invalid",
+            "warning": (
+                "Reviewed-work authorship metadata is malformed, so independent "
+                "review authority cannot be established. No action taken."
+            ),
+        }
+    if reviewed_work_authorship.recuses(
+        session.reviewer_agent_id, paused_agent_id=agent_id
+    ):
+        logger.warning(
+            "Refusing resume for %s: assigned reviewer authored the reviewed work",
+            agent_id,
+        )
+        return {
+            "success": False,
+            "refused": "reviewer_author_conflict",
+            "warning": (
+                "The assigned reviewer is a declared author of the reviewed work "
+                "and cannot independently authorize this resume. No action taken."
             ),
         }
     
@@ -209,7 +304,8 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
         "agent_id": agent_id,
         "new_status": meta.status,
         "applied_conditions": applied_conditions,
-        "resolution_hash": resolution.hash()
+        "resolution_hash": resolution.hash(),
+        "status_changed": status_changed,
     }
 
     # Add discovery update info if present
@@ -219,51 +315,9 @@ async def execute_resolution(session: DialecticSession, resolution: Resolution) 
         if discovery_updated:
             result["discovery_status"] = "resolved" if resolution.action == "resume" else "open"
 
-    # Emit outcome_event so downstream calibration / back-tests can correlate
-    # resumption with subsequent agent state. dialectic_resolved is neutral
-    # (process succeeded); whether conditions hold up is a separate later test.
-    # Failure isolation: emit failure must not break resolution execution.
-    try:
-        applied_count = sum(
-            1 for c in applied_conditions
-            if isinstance(c, dict) and c.get("status") == "applied"
-        )
-        await _record_outcome_event_inline({
-            # In-process emitter, computed server-side from session protocol
-            # state -- vouched so its server-observed provenance is honoured,
-            # up to what that provenance itself asserts.
-            "_trusted_ingestion": True,
-            "agent_id": agent_id,
-            "outcome_type": "dialectic_resolved",
-            "is_bad": False,
-            "outcome_score": 1.0,
-            "decision_action": "proceed",
-            # Dialectic resolution is computed server-side from session
-            # protocol state (conditions applied, synthesis convergence),
-            # not the agent's claim of resolution. Architect council
-            # 2026-05-19 flagged dialectic as peer-mediated and not a clean
-            # fit for the v1 enum; classifying as server_observation pending
-            # the v2 taxonomy redesign (see project_outcome-verification-
-            # taxonomy-redesign in memory) which would introduce a
-            # peer_attested value.
-            "verification_source": "server_observation",
-            "detail": {
-                "dialectic_session_id": session.session_id,
-                "session_type": getattr(session, "session_type", None),
-                "root_cause": resolution.root_cause,
-                "conditions": resolution.conditions,
-                "conditions_applied": applied_count,
-                "conditions_total": len(applied_conditions),
-                "synthesis_round": session.synthesis_round,
-                "resolution_hash": resolution.hash(),
-                "discovery_id": session.discovery_id,
-                "status_changed": status_changed,
-            },
-        })
-    except Exception as e:
-        logger.warning(
-            f"outcome_event emit on dialectic_resolved failed for "
-            f"session {session.session_id}: {e}"
-        )
+    # Direct callers retain the historical behavior. The synthesis handler
+    # defers this until its terminal effect-owner write succeeds.
+    if record_outcome:
+        await record_resolution_outcome(session, resolution, result)
 
     return result

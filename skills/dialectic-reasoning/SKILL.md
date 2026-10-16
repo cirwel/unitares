@@ -8,6 +8,7 @@ last_verified: "2026-09-23"
 freshness_days: 28
 source_files:
   - unitares/src/dialectic_protocol.py
+  - unitares/src/dialectic_reviewed_work.py
   - unitares/src/mcp_handlers/dialectic/handlers.py
   # Added 2026-09-14: participant resolution and the same-bound-caller gate
   # for thesis, antithesis, and synthesis live here.
@@ -82,6 +83,18 @@ position should be distinct from the subject. Pass `use_brief_as_thesis=false`
 for a neutral request that deliberately waits for a later thesis. The raw
 `dialectic(action="request")` path preserves that two-call default unless you
 pass thesis fields or `use_brief_as_thesis=true`.
+
+When you file the request as a proxy for work authored by another UNITARES
+agent, pass every known author UUID in
+`reviewed_work_author_agent_ids=["<canonical-agent-uuid>"]`. The declaration is
+requester-supplied, not proof of authorship, and it can only remove authority:
+those agents cannot be selected, claim the open slot, be assigned or reassigned,
+or provide the independent verdict. Omit the field when authorship is unknown;
+an explicit empty list is refused. The session response reports
+`reviewed_work_authorship.status` as `declared`, `not_supplied`, or `invalid`.
+A malformed stored marker fails closed for independent assignment. Explicit
+self-review remains visibly self-review and never counts as an independent
+seat.
 
 For a session already waiting in the thesis phase, reuse what the server saved
 instead of copying it back:
@@ -290,7 +303,7 @@ before concluding it is late. Use
 latest timeout/facilitation state; note that `check_timeout` is a write (it can
 auto-reassign or flip the phase) and is silently ignored for an unbound caller. An open reviewer slot in the antithesis phase
 is an invitation, not a stall — an eligible agent other than the paused agent
-may claim it.
+may claim it, unless that agent was declared as an author of the reviewed work.
 
 ## Facilitation and Reviewer Recovery
 

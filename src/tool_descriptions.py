@@ -192,7 +192,7 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "Request governed, on-record judgment through the dialectic lifecycle. "
         "The response identifies the actual reviewer path and provenance. This "
         "is categorically different from consult, which returns advisory model "
-        "evidence only."
+        "evidence only. For proxy filing, declare author UUIDs to recuse them."
     ),
     "dialectic": (
         "Open and advance governed, on-record peer review sessions. To OPEN a "

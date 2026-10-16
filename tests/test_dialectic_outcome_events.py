@@ -63,6 +63,27 @@ def _patch_targets(emit_mock):
 
 class TestExecuteResolutionEmitsOutcomeEvent:
     @pytest.mark.asyncio
+    async def test_deferred_outcome_waits_for_terminal_effect_owner(self):
+        emit = AsyncMock(return_value={"outcome_id": "evt-deferred"})
+        session = _session()
+        resolution = _resolution()
+
+        _, _, p_module, p_storage = _patch_targets(emit)
+        with p_module, p_storage:
+            from src.mcp_handlers.dialectic.resolution import (
+                execute_resolution,
+                record_resolution_outcome,
+            )
+
+            execution = await execute_resolution(
+                session, resolution, record_outcome=False
+            )
+            emit.assert_not_awaited()
+            await record_resolution_outcome(session, resolution, execution)
+
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_emits_dialectic_resolved_with_session_id_in_detail(self):
         emit = AsyncMock(return_value={"outcome_id": "evt-1"})
         session = _session(synthesis_round=2)

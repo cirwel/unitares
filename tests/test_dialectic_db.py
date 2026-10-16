@@ -265,6 +265,60 @@ class TestCreateSession:
         assert call_args[0][13] is None  # paused_agent_state_json (None state)
 
     @pytest.mark.asyncio
+    async def test_create_session_refuses_declared_author_as_reviewer(self, db):
+        """The Python effect owner must defend create even if a handler is bypassed."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        author = "22222222-2222-4222-8222-222222222222"
+        proxy = "11111111-1111-4111-8111-111111111111"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([author], declared_by_agent_id=proxy),
+        )
+
+        with pytest.raises(ValueError, match="reviewer_recused"):
+            await instance.create_session(
+                session_id="sess-conflict",
+                paused_agent_id=proxy,
+                reviewer_agent_id=author,
+                paused_agent_state=state,
+            )
+
+        conn.fetchrow.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_create_session_refuses_declarer_mismatch_even_for_self_review(
+        self, db
+    ):
+        """Malformed server-owned provenance never gets a self-review bypass."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        paused = "11111111-1111-4111-8111-111111111111"
+        other = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([other], declared_by_agent_id=other),
+        )
+
+        with pytest.raises(ValueError, match="malformed"):
+            await instance.create_session(
+                session_id="sess-bad-declarer",
+                paused_agent_id=paused,
+                reviewer_agent_id=paused,
+                paused_agent_state=state,
+            )
+
+        conn.fetchrow.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_create_session_duplicate_key(self, db):
         """create_session returns created=False on duplicate key."""
         instance, pool, conn = db
@@ -715,7 +769,41 @@ class TestUpdateSessionReviewer:
         await instance.update_session_reviewer("sess-001", "reviewer-B")
         sql = conn.fetchrow.call_args_list[0][0][0]
         assert "NOT IN ('resolved', 'failed')" in sql
+        assert "_dialectic_reviewed_work_authorship" in sql
+        assert "reviewed_work_author_agent_ids" in sql
+        assert conn.fetchrow.call_args_list[0][0][3] == (
+            "unitares.dialectic-reviewed-work-authorship.v1"
+        )
         assert instance.TERMINAL_WRITE_GUARD == ("resolved", "failed")
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_refuses_declared_author(self, db):
+        """The fallback writer enforces the same recusal as the BEAM writer."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        author = "22222222-2222-4222-8222-222222222222"
+        proxy = "11111111-1111-4111-8111-111111111111"
+        state = embed_reviewed_work_authorship(
+            {},
+            declaration_for_request([author], declared_by_agent_id=proxy),
+        )
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            {
+                "status": "active",
+                "paused_agent_id": proxy,
+                "paused_agent_state_json": state,
+                "reason": None,
+            },
+        ])
+
+        assert await instance.update_session_reviewer(
+            "sess-conflict", author
+        ) is False
 
     @pytest.mark.asyncio
     async def test_update_session_reviewer_refused_on_terminal(self, db):
@@ -954,6 +1042,42 @@ class TestResolveSession:
         call_args = conn.fetchrow.call_args_list[0][0]
         assert call_args[1] == "failed"   # status
         assert call_args[2] == "failed"   # phase matches status (no longer hardcoded 'resolved')
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_refuses_declared_author_authority(self, db):
+        """The terminal effect owner enforces authorship without the handler."""
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+
+        instance, pool, conn = db
+        paused = "11111111-1111-4111-8111-111111111111"
+        author = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {}, declaration_for_request([author], declared_by_agent_id=paused)
+        )
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            {
+                "status": "active",
+                "paused_agent_id": paused,
+                "reviewer_agent_id": author,
+                "paused_agent_state_json": state,
+            },
+        ])
+        detail = {}
+
+        result = await instance.resolve_session(
+            "sess-recused", {"action": "resume"}, detail=detail
+        )
+
+        assert result is False
+        assert detail["written"] is False
+        assert detail["refused"] == "reviewer_recused"
+        sql = conn.fetchrow.await_args_list[0].args[0]
+        assert "reviewed_work_author_agent_ids" in sql
+        assert "declared_by_agent_id" in sql
 
     @pytest.mark.asyncio
     async def test_compare_and_set_predicates_are_added_only_when_passed(self, db):

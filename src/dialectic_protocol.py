@@ -163,6 +163,8 @@ import hashlib
 import hmac
 import numpy as np
 
+from src.dialectic_reviewed_work import read_reviewed_work_authorship
+
 
 class DialecticPhase(Enum):
     """
@@ -661,6 +663,13 @@ class DialecticSession:
         self.paused_agent_id = paused_agent_id
         self.reviewer_agent_id = reviewer_agent_id
         self.paused_agent_state = paused_agent_state or {}  # Optional for exploration sessions
+        # The marker is requester-declared, not verified authorship.  It lives
+        # in the existing pause-state JSON so both persistence backends retain
+        # it without a schema migration.
+        self.reviewed_work_authorship = read_reviewed_work_authorship(
+            self.paused_agent_state,
+            expected_declared_by_agent_id=paused_agent_id,
+        )
         self.discovery_id = discovery_id  # Optional: Link to discovery being disputed/corrected
         self.dispute_type = dispute_type  # Optional: "dispute", "correction", "verification", None (recovery)
         self.session_type = session_type  # "review", "recovery", "dispute", or "exploration"
@@ -753,6 +762,18 @@ class DialecticSession:
 
         Requires reasoning. If no reviewer assigned, submitter becomes reviewer.
         """
+        if self.reviewed_work_authorship.recuses(
+            message.agent_id, paused_agent_id=self.paused_agent_id
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Declared author of the reviewed work cannot serve as its "
+                    "independent reviewer"
+                ),
+                "error_code": "REVIEWER_AUTHOR_CONFLICT",
+            }
+
         # Auto-assign reviewer if none set
         if self.reviewer_agent_id is None:
             if message.agent_id == self.paused_agent_id:
@@ -791,6 +812,20 @@ class DialecticSession:
         Returns:
             Status dict with convergence info
         """
+        if self.reviewed_work_authorship.recuses(
+            self.reviewer_agent_id, paused_agent_id=self.paused_agent_id
+        ):
+            return {
+                "success": False,
+                "converged": False,
+                "blocked": "reviewer_author_conflict",
+                "error": (
+                    "The assigned reviewer is a declared author of the reviewed "
+                    "work. Reassign an independent reviewer before synthesis."
+                ),
+                "phase": self.phase.value,
+            }
+
         is_participant = message.agent_id in [self.paused_agent_id, self.reviewer_agent_id]
 
         # Verify phase
@@ -1505,6 +1540,7 @@ class DialecticSession:
             "session_type": getattr(self, 'session_type', 'recovery'),  # New: session type
             "topic": getattr(self, 'topic', None),  # New: exploration topic
             "paused_agent_state": self.paused_agent_state,  # Include state for reconstruction
+            "reviewed_work_authorship": self.reviewed_work_authorship.as_dict(),
             "awaiting_facilitation": getattr(self, 'awaiting_facilitation', False),
             "reason": getattr(self, 'reason', None),
             "trigger_source": getattr(self, 'trigger_source', None),

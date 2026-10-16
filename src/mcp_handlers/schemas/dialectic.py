@@ -9,6 +9,10 @@ class RequestDialecticReviewParams(AgentIdentityMixin):
     issue_description: str = Field(
         ..., description="Description of the issue or current state"
     )
+    reviewed_work_author_agent_ids: Optional[List[str]] = Field(
+        default=None,
+        description="Declared author UUIDs to recuse from independent review; not verified",
+    )
 
 class GetDialecticSessionParams(AgentIdentityMixin):
     """
@@ -192,6 +196,7 @@ class DialecticParams(AgentIdentityMixin):
         "request": (
                 "issue_description", "reason", "use_brief_as_thesis",
                 "reasoning", "root_cause", "proposed_conditions",
+                "reviewed_work_author_agent_ids",
         ),
         "thesis": (
                 "session_id", "position", "reasoning", "root_cause",
@@ -239,6 +244,20 @@ class DialecticParams(AgentIdentityMixin):
     check_timeout: Optional[bool] = Field(None, description="Check reviewer/session timeouts for action=get")
     # Write action fields
     issue_description: Optional[str] = Field(None, description="Issue description (action=request/quick)")
+    reviewed_work_author_agent_ids: Optional[List[str]] = Field(
+        None,
+        description=(
+            "For action=request, canonical registered-agent UUIDs whose authored "
+            "work is being reviewed. This requester declaration is not proof of "
+            "authorship; it only recuses those agents from independent review. "
+            "Omit when unspecified (an explicit empty list is refused)."
+        ),
+        json_schema_extra={
+            "brief": (
+                "Author-agent UUIDs recused from independent review; requester-declared."
+            )
+        },
+    )
     position: Optional[str] = Field(None, description="Current position or proposed decision (for action=quick)")
     decision: Optional[Literal["proceed", "defer", "escalate", "block", "unknown"]] = Field(None, description="Decision label (for action=quick)")
     root_cause: Optional[str] = Field(None, description="Root cause analysis (for action=thesis/synthesis/consult)")

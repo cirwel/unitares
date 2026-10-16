@@ -474,7 +474,8 @@ ROW_STAMP = datetime(2026, 10, 11, 9, 0, tzinfo=timezone.utc)
 def _session_row(messages, awaiting=True):
     """What get_session_async returns: the row's columns plus its messages."""
     return {"session_id": "s" * 16, "phase": "synthesis", "updated_at": ROW_STAMP,
-            "reviewer_agent_id": REVIEWER, "awaiting_facilitation": awaiting,
+            "paused_agent_id": PAUSED, "reviewer_agent_id": REVIEWER,
+            "awaiting_facilitation": awaiting,
             "messages": messages}
 
 
@@ -490,6 +491,87 @@ def _sweeper_io():
 
 
 class TestSweeper:
+    @pytest.mark.asyncio
+    async def test_declared_author_candidate_never_closes_rejection(
+        self, _sweeper_io,
+    ):
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+        from src.mcp_handlers.dialectic.auto_resolve import (
+            _auto_resolve_stuck_sessions,
+        )
+
+        paused = "11111111-1111-4111-8111-111111111111"
+        author = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {}, declaration_for_request([author], declared_by_agent_id=paused)
+        )
+        candidate = _row()
+        candidate.update({
+            "paused_agent_id": paused,
+            "reviewer_agent_id": author,
+            "paused_agent_state_json": state,
+        })
+        read = AsyncMock()
+        write = AsyncMock()
+        with patch(
+            f"{AUTO_RESOLVE}.get_active_sessions_async",
+            new_callable=AsyncMock,
+            return_value=[candidate],
+        ), patch(f"{AUTO_RESOLVE}.get_session_async", read), patch(
+            f"{AUTO_RESOLVE}.resolve_session_async", write
+        ):
+            result = await _auto_resolve_stuck_sessions()
+
+        read.assert_not_awaited()
+        write.assert_not_awaited()
+        assert result["resolved_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_fresh_authorship_conflict_stops_close_after_candidate_read(
+        self, _sweeper_io,
+    ):
+        from src.dialectic_reviewed_work import (
+            declaration_for_request,
+            embed_reviewed_work_authorship,
+        )
+        from src.mcp_handlers.dialectic.auto_resolve import (
+            _auto_resolve_stuck_sessions,
+        )
+
+        paused = "11111111-1111-4111-8111-111111111111"
+        author = "22222222-2222-4222-8222-222222222222"
+        state = embed_reviewed_work_authorship(
+            {}, declaration_for_request([author], declared_by_agent_id=paused)
+        )
+        candidate = _row()
+        candidate.update({
+            "paused_agent_id": paused,
+            "reviewer_agent_id": author,
+        })
+        fresh = _session_row(_messages())
+        fresh.update({
+            "paused_agent_id": paused,
+            "reviewer_agent_id": author,
+            "paused_agent_state": state,
+        })
+        write = AsyncMock()
+        with patch(
+            f"{AUTO_RESOLVE}.get_active_sessions_async",
+            new_callable=AsyncMock,
+            return_value=[candidate],
+        ), patch(
+            f"{AUTO_RESOLVE}.get_session_async",
+            new_callable=AsyncMock,
+            return_value=fresh,
+        ), patch(f"{AUTO_RESOLVE}.resolve_session_async", write):
+            result = await _auto_resolve_stuck_sessions()
+
+        write.assert_not_awaited()
+        assert result["resolved_count"] == 0
+
     @pytest.mark.asyncio
     async def test_reviewer_never_answered_a_timely_reply_closes_after_lifetime(
         self, _sweeper_io,

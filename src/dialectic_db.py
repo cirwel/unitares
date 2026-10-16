@@ -25,6 +25,13 @@ from src.dialectic_session_writes import (
     written_outcome,
 )
 from src.dialectic_protocol import DialecticPhase
+from src.dialectic_reviewed_work import (
+    CANONICAL_AGENT_UUID_PATTERN,
+    MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS,
+    REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+    REVIEWED_WORK_AUTHORSHIP_STATE_KEY,
+    read_reviewed_work_authorship,
+)
 from src.db.acquire_compat import compatible_acquire
 
 logger = get_logger(__name__)
@@ -105,6 +112,20 @@ class DialecticDB:
         detail: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Create a new dialectic session."""
+        reviewed_work_authorship = read_reviewed_work_authorship(
+            paused_agent_state,
+            expected_declared_by_agent_id=paused_agent_id,
+        )
+        if reviewed_work_authorship.is_invalid:
+            raise ValueError(
+                "reviewed-work authorship metadata is malformed"
+            )
+        if reviewed_work_authorship.recuses(
+            reviewer_agent_id, paused_agent_id=paused_agent_id
+        ):
+            raise ValueError(
+                "reviewer_recused: declared author cannot review authored work"
+            )
         await self._ensure_pool()
         async with self._pool.acquire() as conn:
             try:
@@ -304,7 +325,8 @@ class DialecticDB:
     # (when it wrote a resolution), on the same connection, immediately after
     # the refusal, so the attribution cannot race a later reopen.
     _REFUSAL_WINNER_SQL = (
-        "SELECT status, resolution_json->>'reason' AS reason "
+        "SELECT status, paused_agent_id, resolution_json->>'reason' AS reason, "
+        "paused_agent_state_json "
         "FROM core.dialectic_sessions WHERE session_id = $1"
     )
 
@@ -384,8 +406,44 @@ class DialecticDB:
                 SET reviewer_agent_id = $1, updated_at = now()
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
+                  AND (
+                    paused_agent_state_json IS NULL
+                    OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
+                    OR (
+                      jsonb_typeof(paused_agent_state_json -> '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}') = 'object'
+                      AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},schema}}' = $3
+                      AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},status}}' = 'declared'
+                      AND paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},authorship_verified}}' = 'false'::jsonb
+                      AND jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}') = 'string'
+                      AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' ~ $4
+                      AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' = paused_agent_id
+                      AND CASE
+                        WHEN jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = 'array'
+                        THEN
+                          jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') BETWEEN 1 AND $5
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                            WHERE jsonb_typeof(author.value) <> 'string'
+                               OR (author.value #>> '{{}}') !~ $4
+                          )
+                          AND jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = (
+                            SELECT count(DISTINCT author.value #>> '{{}}')
+                            FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                          )
+                          AND (
+                            $1 = paused_agent_id
+                            OR NOT (
+                              paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}' ? $1
+                            )
+                          )
+                        ELSE FALSE
+                      END
+                    )
+                  )
                 RETURNING {self._EFFECT_TS}
-            """, reviewer_agent_id, session_id)
+            """, reviewer_agent_id, session_id, REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+                CANONICAL_AGENT_UUID_PATTERN, MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS)
             self._record_effect(detail, row)
             if row is not None:
                 return True
@@ -393,6 +451,18 @@ class DialecticDB:
             self._record_winner(winner, existing)
             if existing is None:
                 logger.warning(f"update_session_reviewer: {session_id[:16]}... not found")
+            elif read_reviewed_work_authorship(existing).recuses(
+                reviewer_agent_id,
+                paused_agent_id=(
+                    existing.get("paused_agent_id")
+                    if hasattr(existing, "get")
+                    else None
+                ),
+            ):
+                logger.warning(
+                    f"update_session_reviewer: {session_id[:16]}... reviewer "
+                    "refused by reviewed-work authorship policy"
+                )
             else:
                 logger.warning(
                     f"update_session_reviewer: {session_id[:16]}... is terminal as "
@@ -612,12 +682,57 @@ class DialecticDB:
         if expected_reviewer is not _UNSET:
             args.append(expected_reviewer)
             cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
+        authority_guard = ""
+        if status == "resolved":
+            args.extend([
+                REVIEWED_WORK_AUTHORSHIP_SCHEMA,
+                CANONICAL_AGENT_UUID_PATTERN,
+                MAX_REVIEWED_WORK_AUTHOR_AGENT_IDS,
+            ])
+            schema_arg, uuid_arg, max_arg = range(len(args) - 2, len(args) + 1)
+            authority_guard = f"""
+              AND (
+                paused_agent_state_json IS NULL
+                OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
+                OR (
+                  jsonb_typeof(paused_agent_state_json -> '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}') = 'object'
+                  AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},schema}}' = ${schema_arg}
+                  AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},status}}' = 'declared'
+                  AND paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},authorship_verified}}' = 'false'::jsonb
+                  AND jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}') = 'string'
+                  AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' ~ ${uuid_arg}
+                  AND paused_agent_state_json #>> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},declared_by_agent_id}}' = paused_agent_id
+                  AND CASE
+                    WHEN jsonb_typeof(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = 'array'
+                    THEN
+                      jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') BETWEEN 1 AND ${max_arg}
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                        WHERE jsonb_typeof(author.value) <> 'string'
+                           OR (author.value #>> '{{}}') !~ ${uuid_arg}
+                      )
+                      AND jsonb_array_length(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') = (
+                        SELECT count(DISTINCT author.value #>> '{{}}')
+                        FROM jsonb_array_elements(paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}') AS author(value)
+                      )
+                      AND (
+                        reviewer_agent_id = paused_agent_id
+                        OR NOT (
+                          paused_agent_state_json #> '{{{REVIEWED_WORK_AUTHORSHIP_STATE_KEY},reviewed_work_author_agent_ids}}' ? reviewer_agent_id
+                        )
+                      )
+                    ELSE FALSE
+                  END
+                )
+              )
+            """
         clear = ", awaiting_facilitation = false" if clear_facilitation else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET status = $1, phase = $2, resolution_json = $3, updated_at = now(){clear}
-                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}
+                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}{authority_guard}
                 RETURNING session_id, {self._EFFECT_TS}
             """, *args)
             if row is not None:
@@ -626,7 +741,9 @@ class DialecticDB:
                 return True
             # No row written: inspect why (idempotent replay vs conflict vs missing).
             existing = await conn.fetchrow(
-                "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                """SELECT status, paused_agent_id, reviewer_agent_id,
+                          paused_agent_state_json
+                   FROM core.dialectic_sessions WHERE session_id = $1""",
                 session_id,
             )
             if detail is not None:
@@ -641,6 +758,25 @@ class DialecticDB:
                     "(idempotent no-op, overwrite prevented)"
                 )
                 return True
+            if status == "resolved" and existing["status"] not in (
+                "resolved", "failed"
+            ):
+                authorship = read_reviewed_work_authorship(existing)
+                if authorship.is_invalid or authorship.recuses(
+                    existing.get("reviewer_agent_id"),
+                    paused_agent_id=existing.get("paused_agent_id"),
+                ):
+                    if detail is not None:
+                        detail["refused"] = (
+                            "invalid_review_authorship"
+                            if authorship.is_invalid
+                            else "reviewer_recused"
+                        )
+                    logger.warning(
+                        "resolve_session: %s reviewed-work authority refused",
+                        session_id[:16],
+                    )
+                    return False
             if existing["status"] not in ("resolved", "failed"):
                 logger.info(
                     f"resolve_session: {session_id[:16]}... moved since the caller "

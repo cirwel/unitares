@@ -73,8 +73,10 @@ def _common_patches():
         patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=None)),
         patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
         patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
+        patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)),
+        patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)),
         patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
-        patch(f"{DIALECTIC}.pg_resolve_session", new=AsyncMock()),
+        patch(f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=True)),
         patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
@@ -123,6 +125,170 @@ async def test_thesis_with_open_slot_resolves_via_synthetic_reviewer(server_patc
     assert session.phase == DialecticPhase.RESOLVED
     # The synthetic reviewer claimed the open slot.
     assert session.reviewer_agent_id == "llm-synthetic-reviewer"
+
+
+@pytest.mark.asyncio
+async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
+    """The DB authority guard must see the same reviewer as the protocol."""
+    from src.mcp_handlers.dialectic.handlers import _run_synthetic_review
+
+    proxy = "11111111-1111-4111-8111-111111111111"
+    author = "22222222-2222-4222-8222-222222222222"
+    session = DialecticSession(
+        paused_agent_id=proxy,
+        reviewer_agent_id=None,
+        session_type="review",
+        paused_agent_state={
+            "_dialectic_reviewed_work_authorship": {
+                "schema": "unitares.dialectic-reviewed-work-authorship.v1",
+                "status": "declared",
+                "reviewed_work_author_agent_ids": [author],
+                "declared_by_agent_id": proxy,
+                "authorship_verified": False,
+            }
+        },
+    )
+    session.phase = DialecticPhase.ANTITHESIS
+    update_reviewer = AsyncMock(return_value=True)
+    resolve_row = AsyncMock(return_value=True)
+
+    with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
+        f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{LLM}.generate_antithesis",
+        new=AsyncMock(return_value=_antithesis("refine")),
+    ), patch(
+        f"{LLM}.generate_synthesis",
+        new=AsyncMock(return_value=_synthesis("RESUME")),
+    ), patch(
+        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
+    ), patch(
+        f"{DIALECTIC}.pg_update_reviewer", new=update_reviewer
+    ), patch(
+        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_resolve_session", new=resolve_row
+    ), patch(
+        f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()
+    ):
+        result = await _run_synthetic_review(
+            session,
+            {"root_cause": "rc", "proposed_conditions": ["c"]},
+            proxy,
+        )
+
+    update_reviewer.assert_awaited_once_with(
+        session.session_id, "llm-synthetic-reviewer"
+    )
+    resolve_row.assert_awaited_once()
+    assert result["resolved"] is True
+
+
+@pytest.mark.asyncio
+async def test_synthetic_terminal_write_refusal_is_not_reported_as_resolved():
+    """A false effect-owner write leaves synthesis open and emits no success."""
+    from src.mcp_handlers.dialectic.handlers import _run_synthetic_review
+
+    session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+    emit = AsyncMock()
+
+    with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
+        f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{LLM}.generate_antithesis",
+        new=AsyncMock(return_value=_antithesis("refine")),
+    ), patch(
+        f"{LLM}.generate_synthesis",
+        new=AsyncMock(return_value=_synthesis("RESUME")),
+    ), patch(
+        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
+    ), patch(
+        f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=False)
+    ), patch(
+        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ):
+        result = await _run_synthetic_review(
+            session,
+            {"root_cause": "rc", "proposed_conditions": ["c"]},
+            "agent-paused",
+        )
+
+    assert result["resolved"] is False
+    assert session.phase == DialecticPhase.SYNTHESIS
+    assert session.resolution is None
+    assert "dialectic_resolved" not in [
+        call.args[0] for call in emit.await_args_list
+    ]
+
+
+@pytest.mark.asyncio
+async def test_llm_assisted_terminal_write_refusal_requires_facilitation():
+    """The one-shot synthetic writer also treats PostgreSQL as effect owner."""
+    from src.mcp_handlers.dialectic.handlers import handle_llm_assisted_dialectic
+
+    server = MagicMock()
+    server.agent_metadata = {"agent-paused": MagicMock(status="active")}
+    server.monitors = {}
+    emit = AsyncMock()
+    update_facilitation = AsyncMock()
+    graph = MagicMock()
+    graph.add_discovery = AsyncMock()
+    full_dialectic = {
+        "success": True,
+        "recommendation": "RESUME",
+        "antithesis": _antithesis("refine"),
+        "synthesis": _synthesis("RESUME"),
+    }
+
+    with patch(f"{DIALECTIC}.mcp_server", server), patch(
+        f"{DIALECTIC}.require_registered_agent",
+        return_value=("agent-paused", None),
+    ), patch(
+        f"{DIALECTIC}.resolve_agent_uuid", return_value="agent-paused"
+    ), patch(
+        f"{LLM}.local_endpoint_refusal", return_value=None
+    ), patch(
+        f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{LLM}.run_full_dialectic", new=AsyncMock(return_value=full_dialectic)
+    ), patch(
+        f"{DIALECTIC}.pg_create_session", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_add_message", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
+    ), patch(
+        f"{DIALECTIC}.pg_update_awaiting_facilitation",
+        new=update_facilitation,
+    ), patch(
+        f"{DIALECTIC}.pg_resolve_session", new=AsyncMock(return_value=False)
+    ), patch(
+        f"{DIALECTIC}._emit_dialectic_event", new=emit
+    ), patch(
+        "src.knowledge_graph.get_knowledge_graph",
+        new=AsyncMock(return_value=graph),
+    ):
+        response = await handle_llm_assisted_dialectic({
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before retrying"],
+        })
+
+    data = parse_result(response)
+    assert data["resolved"] is False
+    assert data["awaiting_facilitation"] is True
+    update_facilitation.assert_awaited_once()
+    event_types = [call.args[0] for call in emit.await_args_list]
+    assert "dialectic_resolved" not in event_types
+    assert "dialectic_facilitation_needed" in event_types
 
 
 @pytest.mark.asyncio

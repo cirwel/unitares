@@ -24,6 +24,14 @@ from src.dialectic_protocol import (
     DialecticMessage,
     DialecticPhase,
 )
+from src.dialectic_reviewed_work import (
+    ReviewedWorkAuthorship,
+    ReviewedWorkAuthorshipError,
+    declaration_for_request,
+    embed_reviewed_work_authorship,
+    parse_reviewed_work_author_agent_ids,
+    read_reviewed_work_authorship,
+)
 from src.coherence_provenance import coherence_role_for_source
 from ..utils import success_response, error_response, require_registered_agent
 from ..decorators import mcp_tool
@@ -147,14 +155,28 @@ from .calibration import (
     update_calibration_from_dialectic_disagreement,
     backfill_calibration_from_historical_sessions,  # noqa: F401 — re-exported; tests patch via this module
 )
-from .resolution import agent_pause_is_live, execute_resolution
+from .resolution import (
+    agent_pause_is_live,
+    execute_resolution,
+    record_resolution_outcome,
+)
 from .beam_resolve_client import (
+    ALREADY_TERMINAL_ORIGIN,
+    BeamDialecticPolicyRefusal,
     beam_resolve,
     beam_create_session,
     beam_update_phase,
     beam_update_reviewer,
 )
 from .reviewer import select_reviewer, is_agent_in_active_session
+
+
+def _beam_policy_error_code(exc: BeamDialecticPolicyRefusal) -> str:
+    return {
+        "reviewer_recused": "REVIEWER_AUTHOR_CONFLICT",
+        "invalid_review_authorship": "REVIEW_AUTHORSHIP_METADATA_INVALID",
+        "session_identity_mismatch": "DIALECTIC_SESSION_IDENTITY_MISMATCH",
+    }.get(exc.error_code, "DIALECTIC_POLICY_REFUSED")
 
 # Import PostgreSQL async functions for dialectic session storage
 from src.dialectic_db import (
@@ -289,6 +311,12 @@ async def check_reviewer_stuck(session: DialecticSession) -> bool:
     reviewer_id = session.reviewer_agent_id
     if not reviewer_id:
         return False  # No reviewer assigned yet — not stuck, just unassigned
+
+    # A legacy/corrupt assignment that violates the stored authorship boundary
+    # is immediately repairable.  Waiting for a liveness timeout would describe
+    # a live but unauthorized reviewer as merely slow.
+    if _reviewer_authorship_conflict(session, reviewer_id):
+        return True
 
     # Wave 2 audit: force=True dropped per PR #350 precedent. The reviewer's
     # status (paused/active) is updated via the regular lifecycle write paths
@@ -708,6 +736,10 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     if paused_agent_id == "unknown":  # session.py sentinel for a NULL column
         paused_agent_id = None
     reviewer_agent_id = session_data.get("reviewer_agent_id") or session_data.get("reviewer")
+    reviewed_work_authorship = read_reviewed_work_authorship(session_data)
+    reviewer_author_conflict = reviewed_work_authorship.recuses(
+        reviewer_agent_id, paused_agent_id=paused_agent_id
+    )
     phase = str(session_data.get("phase") or "").lower()
     session_id = session_data.get("session_id") or "<session_id>"
     session_type = session_data.get("session_type") or "review"
@@ -721,7 +753,9 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         and _reviewer_verdict_pending_in_session_data(session_data)
     )
     independent_reviewer_can_revise = bool(
-        reviewer_agent_id and reviewer_agent_id != paused_agent_id
+        reviewer_agent_id
+        and reviewer_agent_id != paused_agent_id
+        and not reviewer_author_conflict
     )
     # A self-reviewed session that has been routed to facilitation: the paused
     # agent's own agreeing synthesis was recorded and refused as non-authorizing
@@ -761,6 +795,10 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     elif current_agent_id:
         if current_agent_id == paused_agent_id:
             current_agent_role = "paused_agent"
+        elif reviewed_work_authorship.recuses(
+            current_agent_id, paused_agent_id=paused_agent_id
+        ):
+            current_agent_role = "reviewed_work_author"
         elif reviewer_agent_id and current_agent_id == reviewer_agent_id:
             current_agent_role = "reviewer"
         else:
@@ -784,7 +822,15 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         required_role = "reviewer"
         required_agent_id = reviewer_agent_id
         required_agent_label = _agent_label(reviewer_agent_id)
-        if reviewer_agent_id:
+        if reviewer_agent_id and reviewer_author_conflict:
+            required_role = "reviewer_or_operator"
+            allowed_agent_ids = []
+            recommended_action = (
+                "The assigned reviewer is recused from independent review because "
+                "it is a declared author of the reviewed work (or the declaration "
+                "is malformed). Reassign an independent reviewer."
+            )
+        elif reviewer_agent_id:
             allowed_agent_ids = [reviewer_agent_id]
             recommended_action = (
                 f"Reviewer '{_agent_display(reviewer_agent_id)}' should submit antithesis."
@@ -795,13 +841,35 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
                     "`take_over_if_requested=true` or use `dialectic(action='reassign')`."
                 )
         else:
-            if current_agent_id and current_agent_id != paused_agent_id:
+            if (
+                current_agent_id
+                and current_agent_id != paused_agent_id
+                and not reviewed_work_authorship.recuses(
+                    current_agent_id, paused_agent_id=paused_agent_id
+                )
+            ):
                 allowed_agent_ids = [current_agent_id]
-            recommended_action = (
-                "Any eligible reviewer may claim this session by submitting antithesis."
-            )
+            if reviewed_work_authorship.is_invalid:
+                recommended_action = (
+                    "Reviewed-work authorship metadata is malformed. The reviewer "
+                    "slot fails closed until an operator repairs or replaces the session."
+                )
+            else:
+                recommended_action = (
+                    "Any eligible reviewer who is not a declared work author may "
+                    "claim this session by submitting antithesis."
+                )
     elif phase == "synthesis":
-        if reviewer_verdict_pending:
+        if reviewer_author_conflict:
+            required_role = "reviewer_or_operator"
+            required_agent_id = reviewer_agent_id
+            required_agent_label = _agent_label(reviewer_agent_id)
+            allowed_agent_ids = []
+            recommended_action = (
+                "The assigned reviewer is recused from independent review. Reassign "
+                "an independent reviewer before synthesis can resolve this session."
+            )
+        elif reviewer_verdict_pending:
             required_role = "reviewer"
             required_agent_id = reviewer_agent_id
             required_agent_label = _agent_label(reviewer_agent_id)
@@ -864,14 +932,25 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         required_role = "reviewer_or_operator"
         required_agent_id = reviewer_agent_id
         required_agent_label = _agent_label(reviewer_agent_id)
-        allowed_agent_ids = [reviewer_agent_id] if reviewer_agent_id else []
+        allowed_agent_ids = (
+            [reviewer_agent_id]
+            if reviewer_agent_id and not reviewer_author_conflict
+            else []
+        )
         if operator_caller and current_agent_id:
             allowed_agent_ids.append(current_agent_id)
-        recommended_action = (
-            "This failed session still carries an unanswered facilitation request. "
-            "An operator should assign a replacement reviewer, or the current "
-            "independent reviewer may hand the session off; reassignment revives it."
-        )
+        if reviewer_author_conflict:
+            recommended_action = (
+                "This failed session has a recused reviewer and an unanswered "
+                "facilitation request. Only an operator may assign an independent "
+                "replacement; reassignment revives it."
+            )
+        else:
+            recommended_action = (
+                "This failed session still carries an unanswered facilitation request. "
+                "An operator should assign a replacement reviewer, or the current "
+                "independent reviewer may hand the session off; reassignment revives it."
+            )
     elif phase in {"resolved", "failed", "escalated", "quorum_voting"}:
         required_role = "none"
         recommended_action = (
@@ -882,11 +961,17 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     if current_agent_id is None:
         current_agent_can_submit = None
     elif phase == "antithesis" and reviewer_agent_id is None:
-        current_agent_can_submit = current_agent_id != paused_agent_id
+        current_agent_can_submit = bool(
+            current_agent_id != paused_agent_id
+            and not reviewed_work_authorship.recuses(
+                current_agent_id, paused_agent_id=paused_agent_id
+            )
+        )
     elif phase == "failed" and awaiting_facilitation:
         current_agent_can_submit = operator_caller or (
             current_agent_id == reviewer_agent_id
             and current_agent_id != paused_agent_id
+            and not reviewer_author_conflict
         )
     else:
         current_agent_can_submit = current_agent_id in allowed_agent_ids
@@ -928,11 +1013,34 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         else:
             whose_move = "the paused agent's — their thesis is owed"
     elif phase == "antithesis":
-        if reviewer_agent_id is None:
+        if reviewer_author_conflict:
+            if current_agent_role == "operator":
+                whose_move = "YOURS — reassign the recused reviewer"
+                next_call = (
+                    f"dialectic(action='reassign', session_id='{session_id}', "
+                    "reason='Assigned reviewer authored the reviewed work')"
+                )
+            elif current_agent_id == reviewer_agent_id:
+                whose_move = (
+                    "NOT YOURS — you are recused as an author of the reviewed work; "
+                    "hand off or ask an operator to reassign"
+                )
+            else:
+                whose_move = "an operator's — the recused reviewer must be reassigned"
+        elif reviewer_agent_id is None:
             if current_agent_role == "paused_agent":
                 whose_move = (
                     "a reviewer's — the slot is open; no identified reviewer "
                     "obligation or wait budget is established"
+                )
+            elif current_agent_role == "reviewed_work_author":
+                whose_move = (
+                    "NOT YOURS — you are a declared author of the reviewed work "
+                    "and cannot claim its independent-review slot"
+                )
+            elif reviewed_work_authorship.is_invalid:
+                whose_move = (
+                    "an operator's — malformed authorship metadata blocks reviewer assignment"
                 )
             else:
                 whose_move = "a reviewer's — the slot is OPEN, you may claim it"
@@ -948,6 +1056,19 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             )
         else:
             whose_move = "the reviewer's — their antithesis is owed"
+    elif phase == "synthesis" and reviewer_author_conflict:
+        if current_agent_role == "operator":
+            whose_move = "YOURS — reassign the recused reviewer before synthesis"
+            next_call = (
+                f"dialectic(action='reassign', session_id='{session_id}', "
+                "reason='Assigned reviewer authored the reviewed work')"
+            )
+        elif current_agent_id == reviewer_agent_id:
+            whose_move = (
+                "NOT YOURS — your authorship conflict prevents an independent verdict"
+            )
+        else:
+            whose_move = "an operator's — an independent reviewer must be assigned"
     elif phase == "synthesis" and reviewer_verdict_pending:
         if current_agent_role == "reviewer":
             whose_move = "YOURS — your first synthesis verdict is owed"
@@ -1065,6 +1186,7 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         elif (
             current_agent_role == "reviewer"
             and reviewer_agent_id != paused_agent_id
+            and not reviewer_author_conflict
         ):
             whose_move = "YOURS — hand this session to a replacement reviewer"
             next_call = reassign_call
@@ -1072,6 +1194,8 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
             whose_move = (
                 "NOT YOURS — wait for the reviewer or an operator to reassign/facilitate"
             )
+        elif reviewer_author_conflict:
+            whose_move = "an operator's — the recused reviewer must be replaced"
         else:
             whose_move = (
                 "an operator's or the current reviewer's — reassignment revives this session"
@@ -1091,9 +1215,41 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         "current_agent_role": current_agent_role,
         "current_agent_can_submit": current_agent_can_submit,
         "reviewer_verdict_pending": reviewer_verdict_pending,
+        "reviewed_work_authorship": reviewed_work_authorship.as_dict(),
+        "reviewer_author_conflict": reviewer_author_conflict,
         "recommended_action": recommended_action,
         "wait_assessment": wait,
     }
+
+
+def _reviewer_authorship_conflict(
+    session: DialecticSession, candidate_id: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """Return a typed reason when a candidate cannot be independent."""
+    declaration = getattr(
+        session,
+        "reviewed_work_authorship",
+        read_reviewed_work_authorship(
+            getattr(session, "paused_agent_state", {})
+        ),
+    )
+    if candidate_id == session.paused_agent_id:
+        # Explicit self-review has its own non-independent semantics and never
+        # counts as a peer review.
+        return None
+    if declaration.is_invalid:
+        return (
+            "REVIEW_AUTHORSHIP_METADATA_INVALID",
+            "Reviewed-work authorship metadata is malformed; reviewer assignment fails closed.",
+        )
+    if declaration.recuses(
+        candidate_id, paused_agent_id=session.paused_agent_id
+    ):
+        return (
+            "REVIEWER_AUTHOR_CONFLICT",
+            "A declared author of the reviewed work cannot serve as its independent reviewer.",
+        )
+    return None
 
 
 async def _validate_explicit_reviewer_candidate(
@@ -1126,6 +1282,19 @@ async def _validate_explicit_reviewer_candidate(
             error_category="validation_error",
         )]
 
+    authorship_conflict = _reviewer_authorship_conflict(session, candidate_id)
+    if authorship_conflict:
+        error_code, message = authorship_conflict
+        return [error_response(
+            message,
+            error_code=error_code,
+            error_category="governance_refusal",
+            recovery={
+                "action": "Assign an agent who did not author the reviewed work.",
+                "related_tools": ["dialectic", "request_review"],
+            },
+        )]
+
     return None
 
 
@@ -1155,6 +1324,7 @@ def _reviewer_reassignment_actor(session: DialecticSession) -> Optional[str]:
         current_agent_id
         and current_agent_id == session.reviewer_agent_id
         and current_agent_id != session.paused_agent_id
+        and not _reviewer_authorship_conflict(session, current_agent_id)
     ):
         return "current_reviewer"
     return None
@@ -1169,8 +1339,15 @@ async def _apply_reviewer_reassignment(
     strict_persistence: bool = False,
 ) -> Dict[str, Any]:
     """Update the reviewer assignment in memory and persistence layers."""
+    authorship_conflict = _reviewer_authorship_conflict(session, new_reviewer_id)
+    if authorship_conflict:
+        error_code, message = authorship_conflict
+        raise RuntimeError(f"{error_code}: {message}")
+
     old_reviewer_id = session.reviewer_agent_id
     was_awaiting = bool(getattr(session, "awaiting_facilitation", False))
+    old_phase = session.phase
+    old_transcript_length = len(session.transcript)
     was_terminal = session.phase in (DialecticPhase.RESOLVED, DialecticPhase.FAILED)
     session.reviewer_agent_id = new_reviewer_id
     session.awaiting_facilitation = False
@@ -1268,7 +1445,17 @@ async def _apply_reviewer_reassignment(
             reasoning=reasoning,
         )
         persisted = True
+    except BeamDialecticPolicyRefusal:
+        session.reviewer_agent_id = old_reviewer_id
+        session.awaiting_facilitation = was_awaiting
+        session.phase = old_phase
+        del session.transcript[old_transcript_length:]
+        raise
     except Exception as e:
+        session.reviewer_agent_id = old_reviewer_id
+        session.awaiting_facilitation = was_awaiting
+        session.phase = old_phase
+        del session.transcript[old_transcript_length:]
         logger.error(f"Failed to persist reviewer reassignment: {e}")
         if strict_persistence:
             raise
@@ -1300,6 +1487,7 @@ async def _apply_reviewer_reassignment(
         "new_reviewer_id": new_reviewer_id,
         "reason": reason,
         "reasoning": reasoning,
+        "persisted": persisted,
     }
 
 
@@ -1462,6 +1650,59 @@ def _recorded_trigger_source(arguments: Dict[str, Any]) -> str:
     return "manual"
 
 
+async def _requested_reviewed_work_authorship(
+    arguments: Dict[str, Any], *, declared_by_agent_id: str
+) -> tuple[Optional[ReviewedWorkAuthorship], Optional[Sequence[TextContent]]]:
+    """Validate the requester's author-recusal declaration.
+
+    This is a conflict declaration, not an authorship attestation.  UUID-only
+    lookup avoids first-match label/public-id ambiguity, and every accepted ID
+    must already be registered.  The field can only shrink the eligible
+    reviewer pool.
+    """
+    raw = arguments.get("reviewed_work_author_agent_ids")
+    try:
+        author_ids = parse_reviewed_work_author_agent_ids(raw)
+    except ReviewedWorkAuthorshipError as exc:
+        return None, [error_response(
+            str(exc),
+            error_code="REVIEW_AUTHOR_DECLARATION_INVALID",
+            error_category="validation_error",
+            recovery={
+                "action": (
+                    "Pass canonical UUIDs of registered agents whose authored "
+                    "work is being reviewed, or omit the field when unspecified."
+                ),
+                "related_tools": ["identity", "agent", "request_review"],
+            },
+            arguments=arguments,
+        )]
+
+    if author_ids:
+        await mcp_server.load_metadata_async()
+        missing = [
+            author_id
+            for author_id in author_ids
+            if author_id not in mcp_server.agent_metadata
+        ]
+        if missing:
+            return None, [error_response(
+                "Every reviewed-work author must be a registered UNITARES agent UUID.",
+                error_code="REVIEW_AUTHOR_NOT_FOUND",
+                error_category="validation_error",
+                recovery={
+                    "action": "Correct or remove the unregistered author UUIDs.",
+                    "unregistered_agent_ids": missing,
+                    "related_tools": ["agent", "identity"],
+                },
+                arguments=arguments,
+            )]
+
+    return declaration_for_request(
+        author_ids, declared_by_agent_id=declared_by_agent_id
+    ), None
+
+
 # register=False: this name is a `dialectic` alias, and resolve_alias rewrites it
 # before handler lookup -- see the "one name, one home" note in tool_stability.py.
 @mcp_tool("request_dialectic_review", timeout=REQUEST_REVIEW_TIMEOUT, register=False)
@@ -1551,6 +1792,15 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             arguments=arguments
         )]
 
+    reviewed_work_authorship, authorship_error = (
+        await _requested_reviewed_work_authorship(
+            arguments, declared_by_agent_id=agent_uuid
+        )
+    )
+    if authorship_error:
+        return authorship_error
+    assert reviewed_work_authorship is not None
+
     # Pydantic `model_dump()` materializes Optional fields as an explicit None
     # (schemas/dialectic.py + middleware/params_step.py), so `.get(k, default)`
     # returns the stored None, never the default. Use `or`-chains.
@@ -1586,6 +1836,10 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         for key in ("client_session_id", "api_key", "session_type", "trigger_source"):
             if key in arguments:
                 llm_args[key] = arguments[key]
+        if reviewed_work_authorship.is_declared:
+            llm_args["reviewed_work_author_agent_ids"] = list(
+                reviewed_work_authorship.author_agent_ids
+            )
         return await handle_llm_assisted_dialectic(llm_args)
 
     # Capture the exact decision-time evidence bundle. Never substitute the
@@ -1601,6 +1855,11 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             "selection": "last_completed_governance_update_at_session_open",
             "limitation": "Governance evidence capture failed at session open.",
         }
+    # Overwrite the reserved key only after evidence capture; callers never get
+    # a path to inject server-owned review metadata through observed state.
+    paused_agent_state = embed_reviewed_work_authorship(
+        paused_agent_state, reviewed_work_authorship
+    )
 
     # Reviewer selection
     auto_open_reviewer_slot = False
@@ -1615,6 +1874,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             reviewer_agent_id = await select_reviewer(
                 paused_agent_id=agent_uuid,
                 metadata=mcp_server.agent_metadata,
+                exclude_agent_ids=list(
+                    reviewed_work_authorship.author_agent_ids
+                ),
             )
         except Exception as e:
             logger.warning(f"Auto reviewer selection failed: {e}")
@@ -1690,6 +1952,21 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
                 trigger_source=trigger_source,
             )
         logger.info(f"Dialectic session {session.session_id} persisted to PostgreSQL")
+    except BeamDialecticPolicyRefusal as e:
+        error_code = _beam_policy_error_code(e)
+        return [error_response(
+            str(e),
+            error_code=error_code,
+            error_category="governance_refusal",
+            recovery={
+                "action": (
+                    "Use a registered independent reviewer and a valid "
+                    "reviewed-work authorship declaration."
+                ),
+                "related_tools": ["dialectic", "request_review"],
+            },
+            arguments=arguments,
+        )]
     except Exception as e:
         logger.error(f"Dialectic session create FAILED: {e}")
         return [error_response(
@@ -1767,6 +2044,9 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
             # own error/recovery text stands.
             return thesis_result
         payload.setdefault("session_id", session.session_id)
+        payload.setdefault(
+            "reviewed_work_authorship", reviewed_work_authorship.as_dict()
+        )
         payload["one_call_review"] = True
         if use_brief_as_thesis:
             payload["thesis_source"] = "issue_description"
@@ -1813,6 +2093,7 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         "session_type": session.session_type,
         "reason": session.reason,
         "trigger_source": session.trigger_source,
+        "reviewed_work_authorship": reviewed_work_authorship.as_dict(),
         "note": note,
         "whose_move": "YOURS — your thesis is owed; the saved brief can be reused",
         "next_call": _saved_brief_thesis_call(
@@ -1886,21 +2167,29 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                     old_reviewer = session.reviewer_agent_id
 
                     # Attempt auto re-assignment
-                    exclude = [session.paused_agent_id]
+                    declaration = session.reviewed_work_authorship
+                    exclude = [
+                        session.paused_agent_id,
+                        *declaration.author_agent_ids,
+                    ]
                     if old_reviewer:
                         exclude.append(old_reviewer)
                     try:
-                        new_reviewer = await select_reviewer(
-                            paused_agent_id=session.paused_agent_id,
-                            metadata=mcp_server.agent_metadata,
-                            exclude_agent_ids=exclude,
+                        new_reviewer = (
+                            None
+                            if declaration.is_invalid
+                            else await select_reviewer(
+                                paused_agent_id=session.paused_agent_id,
+                                metadata=mcp_server.agent_metadata,
+                                exclude_agent_ids=exclude,
+                            )
                         )
                     except Exception:
                         new_reviewer = None
 
                     if new_reviewer:
                         try:
-                            await _apply_reviewer_reassignment(
+                            reassignment = await _apply_reviewer_reassignment(
                                 session_id,
                                 session,
                                 new_reviewer,
@@ -1908,18 +2197,23 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                             )
                         except Exception as e:
                             logger.error(f"Failed to persist reviewer reassignment: {e}")
-                        logger.info(f"[DIALECTIC] Auto-reassigned reviewer for {session_id[:16]}: {old_reviewer} -> {new_reviewer}")
-                        result = session.to_dict()
-                        result["success"] = True
-                        result["reviewer_reassigned"] = True
-                        result["old_reviewer_id"] = old_reviewer
-                        result["recovery"] = get_reviewer_reassigned_recovery(
-                            old_reviewer,
-                            new_reviewer,
-                            reason="Previous reviewer did not respond within the antithesis timeout.",
-                        )
-                        result.update(_build_dialectic_actionability(result))
-                        return success_response(result)
+                            new_reviewer = None
+                        else:
+                            if not reassignment.get("persisted"):
+                                new_reviewer = None
+                            else:
+                                logger.info(f"[DIALECTIC] Auto-reassigned reviewer for {session_id[:16]}: {old_reviewer} -> {new_reviewer}")
+                                result = session.to_dict()
+                                result["success"] = True
+                                result["reviewer_reassigned"] = True
+                                result["old_reviewer_id"] = old_reviewer
+                                result["recovery"] = get_reviewer_reassigned_recovery(
+                                    old_reviewer,
+                                    new_reviewer,
+                                    reason="Previous reviewer did not respond within the antithesis timeout.",
+                                )
+                                result.update(_build_dialectic_actionability(result))
+                                return success_response(result)
 
                     # No replacement found — mark awaiting facilitation (not FAILED yet)
                     if not getattr(session, 'awaiting_facilitation', False):
@@ -2009,6 +2303,11 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
                 if session.paused_agent_id == agent_id or session.reviewer_agent_id == agent_id:
                     if not any(s.get('session_id') == sid for s in matching_sessions):
                         matching_sessions.append(session.to_dict())
+
+            for matched in matching_sessions:
+                matched["reviewed_work_authorship"] = (
+                    read_reviewed_work_authorship(matched).as_dict()
+                )
 
             if not matching_sessions:
                 return [error_response(
@@ -2706,13 +3005,64 @@ async def _run_synthetic_review(
         reasoning=anti_reasoning,
         concerns=anti_concerns,
     )
+    previous_reviewer_id = session.reviewer_agent_id
+    previous_phase = session.phase
+    previous_synthesis_round = session.synthesis_round
+    previous_transcript_length = len(session.transcript)
+
+    def restore_before_antithesis() -> None:
+        session.reviewer_agent_id = previous_reviewer_id
+        session.phase = previous_phase
+        session.synthesis_round = previous_synthesis_round
+        del session.transcript[previous_transcript_length:]
+
     anti_result = session.submit_antithesis(anti_msg)
     if not anti_result.get("success"):
+        restore_before_antithesis()
         logger.warning(
             "[DIALECTIC] Synthetic antithesis rejected by protocol: %s",
             anti_result.get("error"),
         )
         return None
+
+    # submit_antithesis claims an open reviewer slot in memory. Persist that
+    # effect before writing any transcript row: terminal resolution now binds
+    # to the stored reviewer identity, and reporting success while PostgreSQL
+    # still has reviewer=NULL would make the guarded terminal write refuse.
+    if previous_reviewer_id is None:
+        try:
+            persisted = True
+            if await beam_update_reviewer(
+                session.session_id, SYNTHETIC_REVIEWER_ID
+            ) is None:
+                with session_write_via(
+                    "python_fallback", site="synthetic_first_responder"
+                ):
+                    persisted = await pg_update_reviewer(
+                        session.session_id, SYNTHETIC_REVIEWER_ID
+                    )
+            if not persisted:
+                restore_before_antithesis()
+                logger.warning(
+                    "[DIALECTIC] Synthetic reviewer assignment was refused; "
+                    "session left for facilitation"
+                )
+                return None
+        except BeamDialecticPolicyRefusal as exc:
+            restore_before_antithesis()
+            logger.warning(
+                "[DIALECTIC] Synthetic reviewer assignment refused by policy: %s",
+                exc.error_code,
+            )
+            return None
+        except Exception as exc:
+            restore_before_antithesis()
+            logger.warning(
+                "[DIALECTIC] Could not persist synthetic reviewer assignment: %s",
+                type(exc).__name__,
+            )
+            return None
+
     await pg_add_message(
         session_id=session.session_id,
         agent_id=SYNTHETIC_REVIEWER_ID,
@@ -2794,11 +3144,28 @@ async def _run_synthetic_review(
                 status="resolved",
             )
             discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
-            session.awaiting_facilitation = False
-            resolved = True
-            await _emit_dialectic_event("dialectic_resolved", session, action="resume")
+            if written:
+                session.awaiting_facilitation = False
+                resolved = True
+                await _emit_dialectic_event(
+                    "dialectic_resolved", session, action="resume"
+                )
+            else:
+                # The DB is the effect owner. A stale/malformed declaration or
+                # participant race may refuse the terminal write after local
+                # protocol convergence; keep the recorded synthesis answerable
+                # and never announce a resolution that did not persist.
+                session.phase = DialecticPhase.SYNTHESIS
+                session.resolution = None
+                logger.warning(
+                    "[DIALECTIC] Synthetic terminal write was refused; session "
+                    "%s left in synthesis for facilitation",
+                    session.session_id,
+                )
         except Exception as e:
             discard_receipt_unless_written(session.resolution, written=False, had_receipt=False)
+            session.phase = DialecticPhase.SYNTHESIS
+            session.resolution = None
             logger.warning("[DIALECTIC] Synthetic resolution finalize failed: %s", e)
 
     return {
@@ -3203,6 +3570,24 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                     recovery=session_not_found_recovery(),
                 )]
 
+        # This must sit outside the best-effort active-session/cooldown block
+        # below.  A declared work author is a hard conflict, not an eligibility
+        # lookup that may fail open; reject before the protocol can claim the
+        # reviewer slot or append a message.
+        authorship_conflict = _reviewer_authorship_conflict(session, agent_id)
+        if authorship_conflict:
+            error_code, message = authorship_conflict
+            return [error_response(
+                message,
+                error_code=error_code,
+                error_category="governance_refusal",
+                recovery={
+                    "action": "Use an independent reviewer who did not author the reviewed work.",
+                    "related_tools": ["dialectic", "request_review"],
+                },
+                arguments=arguments,
+            )]
+
         judgment_formed = _judgment_was_formed(arguments.get("judgment_formed"))
 
         if not judgment_formed and session.phase != DialecticPhase.ANTITHESIS:
@@ -3272,6 +3657,14 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                         reason=takeover_reason,
                         strict_persistence=True,
                     )
+                except BeamDialecticPolicyRefusal as e:
+                    error_code = _beam_policy_error_code(e)
+                    return [error_response(
+                        str(e),
+                        error_code=error_code,
+                        error_category="governance_refusal",
+                        arguments=arguments,
+                    )]
                 except Exception as e:
                     return [error_response(f"Reviewer takeover failed during persistence: {e}")]
 
@@ -3376,7 +3769,19 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
 
         # Submit to session
         _prev_phase = session.phase.value
+        _prev_reviewer_id = session.reviewer_agent_id
+        _prev_synthesis_round = session.synthesis_round
+        _prev_transcript_length = len(session.transcript)
         result = session.submit_antithesis(message, api_key)
+
+        def _restore_pre_antithesis_state() -> None:
+            session.reviewer_agent_id = _prev_reviewer_id
+            session.phase = DialecticPhase(_prev_phase)
+            session.synthesis_round = _prev_synthesis_round
+            del session.transcript[_prev_transcript_length:]
+
+        if not result["success"]:
+            _restore_pre_antithesis_state()
 
         if result["success"]:
             result["next_step"] = next_step_negotiate_synthesis()
@@ -3392,18 +3797,45 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
                         result["reviewer_auto_assigned"] = True
                         logger.info("Reviewer auto-assigned for dialectic session")
                     else:
-                        # Guarded UPDATE refused — the session went terminal
-                        # concurrently; don't claim an assignment the row
-                        # doesn't carry.
-                        logger.warning(
-                            "Reviewer auto-assign refused (session terminal); "
-                            "not persisted"
-                        )
+                        _restore_pre_antithesis_state()
+                        return [error_response(
+                            "Reviewer assignment was refused by the persisted session state; no antithesis was recorded.",
+                            error_code="REVIEWER_ASSIGNMENT_REFUSED",
+                            error_category="governance_refusal",
+                            recovery={
+                                "action": (
+                                    "Reload the session. If the reviewer is recused, "
+                                    "ask an operator to assign an independent reviewer."
+                                ),
+                                "related_tools": ["dialectic"],
+                            },
+                            arguments=arguments,
+                        )]
+                except BeamDialecticPolicyRefusal as e:
+                    _restore_pre_antithesis_state()
+                    error_code = _beam_policy_error_code(e)
+                    return [error_response(
+                        str(e),
+                        error_code=error_code,
+                        error_category="governance_refusal",
+                        recovery={
+                            "action": "Ask an operator to assign an independent reviewer.",
+                            "related_tools": ["dialectic"],
+                        },
+                        arguments=arguments,
+                    )]
                 except Exception as e:
+                    _restore_pre_antithesis_state()
                     logger.warning(
                         "Could not persist reviewer assignment to PostgreSQL: %s",
                         type(e).__name__,
                     )
+                    return [error_response(
+                        "Could not persist the reviewer assignment; no antithesis was recorded.",
+                        error_code="REVIEWER_ASSIGNMENT_WRITE_FAILED",
+                        error_category="system_error",
+                        arguments=arguments,
+                    )]
             elif reviewer_takeover:
                 result["reviewer_takeover"] = reviewer_takeover
 
@@ -3521,7 +3953,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         f"Session '{session_id}' not found",
                         recovery=session_not_found_recovery(),
                     )]
-    
+
             # Participant-set eligibility gate. The caller is already bound and
             # submitting as itself (require_bound_caller above); this restricts
             # which bound identities may synthesize at all: the paused agent and
@@ -3545,6 +3977,28 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         "Only the paused agent or the assigned reviewer "
                         "may submit synthesis."
                     ),
+                )]
+
+            # A legacy or externally-written row may already carry a reviewer
+            # who is recused by the stored reviewed-work declaration. Refuse
+            # after authenticating participant membership, but before abstention
+            # events, protocol mutation, or persistence. This ordering keeps an
+            # unrelated bound caller from learning protected session metadata
+            # while ensuring a conflicted reviewer has no synthesis authority.
+            authorship_conflict = _reviewer_authorship_conflict(
+                session, session.reviewer_agent_id
+            )
+            if authorship_conflict:
+                error_code, message = authorship_conflict
+                return [error_response(
+                    message,
+                    error_code=error_code,
+                    error_category="governance_refusal",
+                    recovery={
+                        "action": "Ask an operator to assign an independent reviewer.",
+                        "related_tools": ["dialectic"],
+                    },
+                    arguments=arguments,
                 )]
 
             if (
@@ -3676,6 +4130,25 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         "next_call": (
                             f"dialectic(action='get', session_id='{session_id}')"
                         ),
+                        "related_tools": ["dialectic"],
+                    },
+                    arguments=arguments,
+                )]
+
+            if result.get("blocked") == "reviewer_author_conflict":
+                conflict = _reviewer_authorship_conflict(
+                    session, session.reviewer_agent_id
+                )
+                error_code, message = conflict or (
+                    "REVIEWER_AUTHOR_CONFLICT",
+                    "The assigned reviewer cannot supply independent review authority.",
+                )
+                return [error_response(
+                    message,
+                    error_code=error_code,
+                    error_category="governance_refusal",
+                    recovery={
+                        "action": "Ask an operator to assign an independent reviewer.",
                         "related_tools": ["dialectic"],
                     },
                     arguments=arguments,
@@ -3859,7 +4332,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     attach_attestation(result)
     
                     try:
-                        execution_result = await execute_resolution(session, resolution)
+                        execution_result = await execute_resolution(
+                            session, resolution, record_outcome=False
+                        )
                         result["execution"] = execution_result
                         if execution_result.get("success"):
                             result["next_step"] = next_step_resumed()
@@ -3885,27 +4360,49 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                         # application, no resume calibration, and no
                         # dialectic_resolved outcome" (session
                         # cfb3f0085a4d5c06, 2026-08-26).
-                        if execution_result.get("refused") == "self_review_not_authorizing":
+                        authority_refusal = execution_result.get("refused")
+                        if authority_refusal in {
+                            "self_review_not_authorizing",
+                            "review_authorship_invalid",
+                            "reviewer_author_conflict",
+                        }:
                             session.phase = DialecticPhase.SYNTHESIS
                             result["action"] = "facilitation_required"
                             result["success"] = False
                             result["converged"] = False
-                            result["blocked"] = "self_review_not_authorizing"
+                            result["blocked"] = authority_refusal
                             await _set_awaiting_facilitation(
-                                session, True, reason="self_review_not_authorizing"
+                                session, True, reason=authority_refusal
                             )
                             try:
                                 await save_session(session)
                             except Exception as e:
                                 logger.warning(
                                     f"Could not re-save session after a refused "
-                                    f"self-authorized resume: {e}"
+                                    f"unauthorized resume: {e}"
                                 )
+                            refusal_code = {
+                                "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
+                                "review_authorship_invalid": "REVIEW_AUTHORSHIP_METADATA_INVALID",
+                                "reviewer_author_conflict": "REVIEWER_AUTHOR_CONFLICT",
+                            }[authority_refusal]
+                            refusal_message = {
+                                "self_review_not_authorizing": (
+                                    "A self-review cannot release your own pause."
+                                ),
+                                "review_authorship_invalid": (
+                                    "Malformed reviewed-work authorship metadata cannot "
+                                    "authorize a resume."
+                                ),
+                                "reviewer_author_conflict": (
+                                    "A declared author of the reviewed work cannot "
+                                    "authorize its resume as an independent reviewer."
+                                ),
+                            }[authority_refusal]
                             return [error_response(
-                                "A self-review cannot release your own pause. The "
-                                "synthesis is recorded; resuming requires an "
-                                "independent reviewer or an operator.",
-                                error_code="SELF_REVIEW_NOT_AUTHORIZING",
+                                f"{refusal_message} The synthesis is recorded; "
+                                "resuming requires an independent reviewer or an operator.",
+                                error_code=refusal_code,
                                 error_category="governance_refusal",
                                 details={
                                     "session_id": session_id,
@@ -3945,18 +4442,86 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 reviewer_agent_id=session.reviewer_agent_id,
                                 resolution=sealed,
                             )
-                            written = beam_result is not None
+                            already_terminal = bool(
+                                isinstance(beam_result, dict)
+                                and beam_result.get("origin")
+                                == ALREADY_TERMINAL_ORIGIN
+                            )
+                            written = beam_result is not None and not already_terminal
                             if beam_result is None:
+                                winner: Dict[str, Any] = {}
                                 with session_write_via("python_fallback", site="converged_resolution"):
-                                    written = bool(await pg_resolve_session(session_id=session_id, resolution=sealed, status="resolved"))
+                                    written = bool(await pg_resolve_session(
+                                        session_id=session_id,
+                                        resolution=sealed,
+                                        status="resolved",
+                                        expected_phase=DialecticPhase.SYNTHESIS.value,
+                                        expected_reviewer=session.reviewer_agent_id,
+                                        winner=winner,
+                                    ))
+                            if not written:
+                                discard_receipt_unless_written(
+                                    resolution, written=False, had_receipt=False
+                                )
+                                ACTIVE_SESSIONS.pop(session_id, None)
+                                return [error_response(
+                                    "The persisted session refused the terminal resolution; no resolved outcome was recorded.",
+                                    error_code="SESSION_RESOLUTION_WRITE_REFUSED",
+                                    error_category="governance_refusal",
+                                    recovery={
+                                        "action": (
+                                            "Reload the session and resolve any reviewer "
+                                            "authorship or concurrent-state conflict."
+                                        ),
+                                        "related_tools": ["dialectic"],
+                                    },
+                                    arguments=arguments,
+                                )]
                             discard_receipt_unless_written(resolution, written=written, had_receipt=False)
                             result["resolution"] = resolution.to_dict()
                             attach_attestation(result)
+                            await record_resolution_outcome(
+                                session, resolution, execution_result
+                            )
+                        except BeamDialecticPolicyRefusal as e:
+                            discard_receipt_unless_written(
+                                resolution, written=False, had_receipt=False
+                            )
+                            session.phase = DialecticPhase.SYNTHESIS
+                            result["success"] = False
+                            result["converged"] = False
+                            result["blocked"] = e.error_code
+                            await _set_awaiting_facilitation(
+                                session, True, reason=e.error_code
+                            )
+                            return [error_response(
+                                str(e),
+                                error_code=_beam_policy_error_code(e),
+                                error_category="governance_refusal",
+                                recovery={
+                                    "action": "Ask an operator to assign an independent reviewer.",
+                                    "related_tools": ["dialectic"],
+                                },
+                                arguments=arguments,
+                            )]
                         except Exception as e:
                             discard_receipt_unless_written(resolution, written=False, had_receipt=False)
-                            result["resolution"] = resolution.to_dict()
-                            attach_attestation(result)
                             logger.warning(f"Could not resolve session in PostgreSQL: {e}")
+                            ACTIVE_SESSIONS.pop(session_id, None)
+                            return [error_response(
+                                "The terminal resolution could not be persisted; no "
+                                "resolved outcome was recorded.",
+                                error_code="SESSION_RESOLUTION_WRITE_FAILED",
+                                error_category="system_error",
+                                recovery={
+                                    "action": (
+                                        "Reload the session before retrying or ask an "
+                                        "operator to reconcile its current reviewer."
+                                    ),
+                                    "related_tools": ["dialectic"],
+                                },
+                                arguments=arguments,
+                            )]
                     except Exception as e:
                         # Execution failed - mark FAILED, not resolved
                         session.phase = DialecticPhase.FAILED
@@ -4182,7 +4747,18 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
         # Wave 2 audit: force=True dropped per PR #350 precedent. Reviewer
         # selection scans the in-memory fleet; cache is fresh enough.
         await mcp_server.load_metadata_async()
-        exclude = [session.paused_agent_id]
+        declaration = session.reviewed_work_authorship
+        if declaration.is_invalid:
+            return [error_response(
+                "Reviewed-work authorship metadata is malformed; reviewer assignment fails closed.",
+                error_code="REVIEW_AUTHORSHIP_METADATA_INVALID",
+                error_category="governance_refusal",
+                recovery=get_awaiting_facilitation_recovery(session_id),
+            )]
+        exclude = [
+            session.paused_agent_id,
+            *declaration.author_agent_ids,
+        ]
         if old_reviewer_id:
             exclude.append(old_reviewer_id)
         try:
@@ -4211,6 +4787,14 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
             reason=reason,
             strict_persistence=True,
         )
+    except BeamDialecticPolicyRefusal as e:
+        error_code = _beam_policy_error_code(e)
+        return [error_response(
+            str(e),
+            error_code=error_code,
+            error_category="governance_refusal",
+            recovery=get_awaiting_facilitation_recovery(session_id),
+        )]
     except Exception as e:
         logger.error(f"Failed to persist reviewer reassignment: {e}")
         return [error_response(f"Reassignment failed during persistence: {e}")]
@@ -4275,6 +4859,15 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
 
     agent_uuid = resolve_agent_uuid(arguments, agent_id)
 
+    reviewed_work_authorship, authorship_error = (
+        await _requested_reviewed_work_authorship(
+            arguments, declared_by_agent_id=agent_uuid
+        )
+    )
+    if authorship_error:
+        return authorship_error
+    assert reviewed_work_authorship is not None
+
     # The thesis goes to the local model, so it is privacy='local' by nature:
     # refused before any request when the endpoint does not classify local.
     refusal = local_endpoint_refusal()
@@ -4334,6 +4927,9 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     pause_evidence = _capture_pause_evidence(
         getattr(mcp_server, "monitors", {}).get(agent_uuid)
     )
+    pause_evidence = embed_reviewed_work_authorship(
+        pause_evidence, reviewed_work_authorship
+    )
     agent_state = _snapshot_agent_state(agent_uuid)
 
     # Run full dialectic
@@ -4367,6 +4963,9 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
 
     # Persist as a proper dialectic session via the DialecticSession protocol
     session_id = None
+    session = None
+    persisted_resolution = False
+    awaiting_facilitation = False
     try:
         from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg
         trigger_source = _recorded_trigger_source(arguments)
@@ -4485,21 +5084,42 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
                 status="resolved",
             )
             discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
-            logger.info(f"LLM dialectic session {session_id} resolved via protocol")
-            await _emit_dialectic_event("dialectic_resolved", session, action="resume")
+            if written:
+                persisted_resolution = True
+                logger.info(
+                    f"LLM dialectic session {session_id} resolved via protocol"
+                )
+                await _emit_dialectic_event(
+                    "dialectic_resolved", session, action="resume"
+                )
+            else:
+                session.phase = DialecticPhase.SYNTHESIS
+                session.resolution = None
+                awaiting_facilitation = True
+                logger.warning(
+                    "LLM dialectic session %s terminal write was refused; "
+                    "left unresolved for facilitation",
+                    session_id,
+                )
+                await _set_awaiting_facilitation(
+                    session,
+                    True,
+                    reason="resolution_write_refused",
+                )
         else:
-            session.awaiting_facilitation = True
+            awaiting_facilitation = True
             logger.info(
                 f"LLM dialectic session {session_id}: reviewer did not approve "
                 f"(recommendation={recommendation}); left unresolved for facilitation"
             )
-            await _emit_dialectic_event(
-                "dialectic_facilitation_needed", session, reason="reviewer_did_not_approve"
+            await _set_awaiting_facilitation(
+                session, True, reason="reviewer_did_not_approve"
             )
         # Store in ACTIVE_SESSIONS regardless so the verdict is recorded.
         ACTIVE_SESSIONS[session_id] = session
     except Exception as e:
         discard_receipt_unless_written(getattr(session, "resolution", None), written=False, had_receipt=False)
+        awaiting_facilitation = True
         logger.warning(f"Could not persist LLM dialectic session: {e}")
 
     response_data = {
@@ -4507,6 +5127,9 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         "message": f"Dialectic complete. Recommendation: {recommendation}",
         "recommendation": recommendation,
         "session_id": session_id,
+        "resolved": persisted_resolution,
+        "awaiting_facilitation": awaiting_facilitation,
+        "reviewed_work_authorship": reviewed_work_authorship.as_dict(),
         "thesis": {
             "root_cause": thesis["root_cause"],
             "proposed_conditions": thesis["proposed_conditions"]

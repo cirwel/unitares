@@ -332,6 +332,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           {:ok, :exists} ->
             json(conn, 200, %{ok: true, session_id: params.session_id, created: false})
 
+          {:error, :reviewer_recused} ->
+            json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+          {:error, :invalid_review_authorship} ->
+            json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
           {:error, _} ->
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
         end
@@ -396,6 +402,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
         {:error, :session_terminal} ->
           json(conn, 409, %{ok: false, error: "session_terminal"})
 
+        {:error, :reviewer_recused} ->
+          json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+        {:error, :invalid_review_authorship} ->
+          json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
         {:error, _} ->
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
       end
@@ -432,6 +444,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
           {:error, :session_not_found} ->
             json(conn, 404, %{ok: false, error: "session_not_found"})
+
+          {:error, :reviewer_recused} ->
+            json(conn, 409, %{ok: false, error: "reviewer_recused"})
+
+          {:error, :invalid_review_authorship} ->
+            json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
+          {:error, :session_identity_mismatch} ->
+            json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
 
           {:error, _other} ->
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})

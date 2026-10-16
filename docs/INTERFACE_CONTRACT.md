@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.42.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -642,3 +642,33 @@ Compatibility: additive for callers. A client that cached the old enum will
 still send valid ids. Schema digests move for `consult` and
 `delegate_inference` (the `host_id` property lost its enum); no other digest
 moves. Client action: none required; read `skipped` and `family` where useful.
+
+## 1.42.0 (2026-10-15)
+
+Dialectic review requests accept requester-declared author-agent UUIDs and
+recuse those authors from independent reviewer selection, assignment, and
+verdict paths. `request_review` and `dialectic(action="request")` accept
+`reviewed_work_author_agent_ids`, a bounded list of canonical registered-agent
+UUIDs. The server records the declaration with `authorship_verified: false` and
+returns its status as `reviewed_work_authorship`; omission remains
+`not_supplied`, while an explicit empty list is refused.
+
+The declaration only removes authority. Declared authors cannot be selected,
+claim an open slot, be assigned or reassigned, or supply the independent
+antithesis/synthesis verdict. A malformed stored declaration fails closed for
+independent assignment. Explicit self-review remains represented as self-review
+and never becomes independent merely because the marker is absent or malformed.
+
+Compatibility: additive for callers that omit the field, and deliberately
+restrictive only when a requester declares a conflict. The `request_review`
+input digest moves from
+`4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3` to
+`ae8be28e05c46629397841f2de565ef0a2a4c0021b7c99e8c1924ef53dadeca0`;
+the `dialectic` input digest moves from
+`246dcb660edf3c967844d3f0f7b24665030757e0278065ff123241e46f1b0b50` to
+`ec607ddb729cdb154e8f106dd01eb9ac7a4812a591a0881a9f122cbb1467fade`.
+The full-surface digest moves from
+`7f0ac6c61c9b5a94363b246ae965e440f41a0ffbe858b713b84f824d21a3931b` to
+`7d75e01378a4ec451d78a0246d5a286f5cd8b5fedcd67b5150794589a2d4a0f6`.
+Client action: proxy requesters should pass every known UNITARES author UUID;
+ordinary self-filed review requests require no change.

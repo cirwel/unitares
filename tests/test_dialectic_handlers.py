@@ -1401,6 +1401,146 @@ class TestHandleSubmitSynthesis:
         assert data.get("action") == "resume"
 
     @pytest.mark.asyncio
+    async def test_convergence_python_fallback_cas_binds_reviewer(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """A reassignment race refuses the terminal write and success event."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = Resolution(
+            action="resume",
+            conditions=["Lower threshold"],
+            root_cause="Agreed cause",
+            reasoning="Agreed reasoning",
+            signature_a="",
+            signature_b="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            signature_version=3,
+        )
+        resolve_row = AsyncMock(return_value=False)
+        record_outcome = AsyncMock()
+        emitted = []
+
+        async def _emit(event_type, _session, **_kwargs):
+            emitted.append(event_type)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}.execute_resolution",
+            new=AsyncMock(return_value={"success": True}),
+        ), patch(
+            f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
+        ), patch(
+            f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
+        ), patch(
+            f"{DIALECTIC}.pg_resolve_session", new=resolve_row
+        ), patch(
+            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "SESSION_RESOLUTION_WRITE_REFUSED"
+        assert resolve_row.await_args.kwargs["expected_phase"] == "synthesis"
+        assert resolve_row.await_args.kwargs["expected_reviewer"] == "agent-reviewer"
+        assert resolve_row.await_args.kwargs["winner"] == {
+            # The mock does not fill the real writer's winner record.
+        }
+        record_outcome.assert_not_awaited()
+        assert "dialectic_resolved" not in emitted
+
+    @pytest.mark.asyncio
+    async def test_beam_already_terminal_is_not_this_calls_resolution(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """A BEAM idempotency read must not manufacture another success."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = Resolution(
+            action="resume",
+            conditions=["Lower threshold"],
+            root_cause="Agreed cause",
+            reasoning="Agreed reasoning",
+            signature_a="",
+            signature_b="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            signature_version=3,
+        )
+        pg_resolve = AsyncMock()
+        record_outcome = AsyncMock()
+        emitted = []
+
+        async def _emit(event_type, _session, **_kwargs):
+            emitted.append(event_type)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}.execute_resolution",
+            new=AsyncMock(return_value={"success": True}),
+        ), patch(
+            f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
+        ), patch(
+            f"{DIALECTIC}.beam_resolve",
+            new=AsyncMock(return_value={
+                "ok": True,
+                "status": "resolved",
+                "origin": "already_terminal",
+                "saga_id": None,
+            }),
+        ), patch(
+            f"{DIALECTIC}.pg_resolve_session", new=pg_resolve
+        ), patch(
+            f"{DIALECTIC}._emit_dialectic_event", new=_emit
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "SESSION_RESOLUTION_WRITE_REFUSED"
+        pg_resolve.assert_not_awaited()
+        record_outcome.assert_not_awaited()
+        assert "dialectic_resolved" not in emitted
+
+    @pytest.mark.asyncio
     async def test_self_review_cannot_release_a_live_pause(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_pg_resolve_session, mock_context_agent,
