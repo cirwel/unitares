@@ -334,10 +334,20 @@ class TestSearchHandlerNewestFirst:
             tags=["source-claude-memory"],
         )
         await seeded_db.kg_add_discovery(imported)
+        window = (NOW - timedelta(days=1)).isoformat()
+
+        # Read on its own terms, the lane keeps strict time order.
         payload = await _search(
-            seeded_db, created_after=(NOW - timedelta(days=1)).isoformat(), limit=10
+            seeded_db, created_after=window, limit=10, authority_mode="all"
         )
         assert _ids(payload)[0] == imported.id
+        assert payload["sort_by"] == "created_at"
+
+        # By default a queryless listing omits unpromoted imported memory and
+        # says so; what remains is still newest first.
+        payload = await _search(seeded_db, created_after=window, limit=10)
+        assert _ids(payload) == [NEWEST_UNRELATED.id, NEW_WEAK.id]
+        assert payload["imported_omitted"] == 1
         assert payload["sort_by"] == "created_at"
 
     @pytest.mark.asyncio
