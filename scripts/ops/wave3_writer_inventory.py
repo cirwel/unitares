@@ -87,7 +87,7 @@ SQL_WRITERS: Dict[Tuple[str, str], Dict[str, object]] = {
     (SAGA_EX, "update_reviewer"): {
         "columns": ("reviewer_agent_id", "updated_at"), "observed_via": _OBSERVED_VIA_BEAM},
     (SAGA_EX, "guarded_terminal_update_sql"): {
-        "columns": ("status", "phase", "updated_at"),
+        "columns": ("status", "phase", "updated_at", "awaiting_facilitation"),
         "observed_via": (
             f"{_OBSERVED_VIA_BEAM} (resolve; SQL is executed by commit_session_row); "
             "BEAM liveness commits are saga rows with reason liveness_timeout, "
@@ -124,8 +124,12 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
         "writer": "request reassignment: reopen, BEAM update_reviewer, Python fallback",
     },
     (HANDLERS, "handle_submit_thesis"): {
-        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async"),
-        "writer": "thesis: message, phase advance (BEAM, Python fallback)",
+        "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
+                  "mark_awaiting_facilitation_async"),
+        "writer": (
+            "thesis: message, phase advance (BEAM, Python fallback), and a guarded "
+            "facilitation request after a timed-out synthetic reviewer"
+        ),
     },
     (HANDLERS, "handle_submit_antithesis"): {
         "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",

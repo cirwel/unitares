@@ -233,11 +233,15 @@ async def beam_update_reviewer(
     reviewer_agent_id: Optional[str],
     *,
     claim_if_unassigned: bool = False,
+    detail: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Assign/reassign a reviewer via BEAM (sole writer of reviewer_agent_id).
     Returns the BEAM result on success, or ``None`` to fall back to the Python
     `pg_update_reviewer` path. Raises ``BeamDialecticPolicyRefusal`` for an
-    authoritative authorship-policy refusal.
+    authoritative authorship-policy refusal. ``detail["commit_unknown"]``
+    distinguishes a response failure that may have followed the reviewer CAS
+    from a definitive non-write, so a first responder can use exact readback
+    instead of mistaking its own committed claim for a competing reviewer.
     """
     if not beam_resolution_enabled():
         return None
@@ -252,7 +256,10 @@ async def beam_update_reviewer(
     except Exception:  # pragma: no cover
         return None
 
+    post_started = False
+
     def _post():
+        nonlocal post_started
         payload = {
             "session_id": session_id,
             "reviewer_agent_id": reviewer_agent_id,
@@ -260,6 +267,7 @@ async def beam_update_reviewer(
         if claim_if_unassigned:
             payload["claim_if_unassigned"] = True
         with httpx.Client(timeout=5.0) as client:
+            post_started = True
             resp = client.post(
                 f"{base_url}/v1/dialectic/reviewer",
                 headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
@@ -276,14 +284,21 @@ async def beam_update_reviewer(
         except Exception as e:
             logger.warning(f"[BEAM_REVIEWER] call failed for {session_id[:16]}, falling back: {e}")
             rec.respond(outcome="no_response", error=type(e).__name__)
+            if post_started and detail is not None:
+                detail["commit_unknown"] = True
             return None
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
             rec.respond(outcome="written", http_status=status)
             return body
-        rec.respond(outcome="not_written", http_status=status,
+        commit_unknown = status >= 500 or 200 <= status < 300
+        rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
+                    http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
         _raise_authorship_policy_refusal(status, body, operation="update_reviewer")
+        if commit_unknown and detail is not None:
+            detail["commit_unknown"] = True
+            detail["http_status"] = status
         logger.warning(f"[BEAM_REVIEWER] non-OK ({status}) for {session_id[:16]}: {body}; falling back")
         return None
 

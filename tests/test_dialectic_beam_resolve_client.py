@@ -258,6 +258,37 @@ async def test_update_reviewer_authorship_policy_refusal_never_falls_back(monkey
 
 
 @pytest.mark.asyncio
+async def test_update_reviewer_lost_response_marks_commit_unknown(monkeypatch):
+    """A response decode failure can follow a committed reviewer CAS."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = RuntimeError("response body lost")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1", "rev", claim_if_unassigned=True, detail=detail
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_503_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
+        out = await brc.beam_update_reviewer("s1", "rev", detail=detail)
+
+    assert out is None
+    assert detail == {"commit_unknown": True, "http_status": 503}
+
+
+@pytest.mark.asyncio
 async def test_resolve_identity_policy_refusal_never_falls_back(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")

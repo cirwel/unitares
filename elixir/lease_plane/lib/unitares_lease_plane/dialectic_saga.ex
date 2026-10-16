@@ -585,7 +585,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   defp guarded_terminal_update_sql(returning_columns) do
     """
     UPDATE core.dialectic_sessions
-    SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb, updated_at = now()
+    SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb,
+        awaiting_facilitation = false, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
       AND ($2 <> 'resolved' OR phase = 'synthesis')
       AND paused_agent_id = $4

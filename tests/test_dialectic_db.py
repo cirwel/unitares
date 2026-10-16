@@ -975,8 +975,8 @@ class TestMarkAwaitingFacilitation:
         assert "updated_at" not in sql  # no CAS args passed: no predicate either
 
     @pytest.mark.asyncio
-    async def test_compare_and_set_on_observed_phase_and_updated_at(self, db):
-        """#2367: the write lands only if phase/updated_at still match the sweep's read.
+    async def test_compare_and_set_on_observed_phase_updated_at_and_reviewer(self, db):
+        """The write lands only if every supplied observation still matches.
 
         The CAS READS `updated_at` in the WHERE clause; the SET clause must
         still never write it.
@@ -986,14 +986,17 @@ class TestMarkAwaitingFacilitation:
         ts = object()
 
         assert await instance.mark_awaiting_facilitation(
-            "sess-001", expected_phase="synthesis", expected_updated_at=ts) is True
+            "sess-001", expected_phase="synthesis", expected_updated_at=ts,
+            expected_reviewer="reviewer-a",
+        ) is True
 
         call = conn.fetchrow.call_args_list[0][0]
         sql = " ".join(call[0].split())
         assert "SET awaiting_facilitation = true WHERE" in sql
         assert "AND phase IS NOT DISTINCT FROM $2" in sql
         assert "AND updated_at IS NOT DISTINCT FROM $3" in sql
-        assert call[1:] == ("sess-001", "synthesis", ts)
+        assert "AND reviewer_agent_id IS NOT DISTINCT FROM $4" in sql
+        assert call[1:] == ("sess-001", "synthesis", ts, "reviewer-a")
 
     @pytest.mark.asyncio
     async def test_compare_and_set_refused_when_row_moved(self, db):
@@ -1118,10 +1121,10 @@ class TestResolveSession:
         await instance.resolve_session("sess-001", {"x": 1})
         sql = conn.fetchrow.call_args_list[0][0][0]
         assert "IS NOT DISTINCT FROM" not in sql
-        assert "awaiting_facilitation" not in sql
+        assert "awaiting_facilitation = false" in sql
 
     @pytest.mark.asyncio
-    async def test_clear_facilitation_is_part_of_the_terminal_statement(self, db):
+    async def test_clear_facilitation_is_part_of_every_terminal_statement(self, db):
         instance, pool, conn = db
         conn.fetchrow = AsyncMock(return_value={"session_id": "sess-001"})
 

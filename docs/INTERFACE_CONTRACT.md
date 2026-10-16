@@ -671,6 +671,11 @@ is idempotent and emits no second downstream signal. The durable effect row is
 authoritative; outcome, calibration and lifecycle telemetry after application
 are best-effort and cannot make an applied effect replayable.
 
+Operators can enumerate every non-applied row without mutating it with
+`python3 scripts/ops/dialectic_resolution_effects.py`; the state-specific
+procedure and the limits of `mark_applied` are documented in
+`docs/operations/dialectic-resolution-effects.md`.
+
 Compatibility: additive for callers that omit the authorship field or never
 use the recovery action, and deliberately restrictive only when a requester
 declares a conflict. Existing dialectic calls retain their action and parameter

@@ -1199,6 +1199,96 @@ class TestHandleSubmitAntithesis:
         assert session.phase == DialecticPhase.ANTITHESIS
 
     @pytest.mark.asyncio
+    async def test_first_responder_recovers_its_lost_beam_claim_response(
+        self, mock_server, mock_context_agent,
+    ):
+        """A committed BEAM claim is not misread as a competing reviewer."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        add_message = AsyncMock()
+        fallback_claim = AsyncMock(return_value=False)
+        readback = AsyncMock(return_value={
+            "reviewer": "agent-active",
+            "phase": "antithesis",
+            "message_count": 0,
+        })
+
+        async def ambiguous_beam_claim(*_args, detail=None, **_kwargs):
+            detail["commit_unknown"] = True
+            return None
+
+        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                   new=AsyncMock(return_value=False)), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                   new=AsyncMock(return_value=False)), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=ambiguous_beam_claim), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=fallback_claim), \
+             patch(f"{DIALECTIC}.load_session_as_dict", new=readback), \
+             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
+             patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_update_phase", new_callable=AsyncMock), \
+             patch(f"{DIALECTIC}.save_session", new_callable=AsyncMock), \
+             mock_context_agent:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": "Independent counter-perspective.",
+                "concerns": ["Independent concern"],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["reviewer_auto_assigned"] is True
+        fallback_claim.assert_awaited_once()
+        readback.assert_awaited_once_with(session.session_id)
+        add_message.assert_awaited_once()
+        assert session.reviewer_agent_id == "agent-active"
+        assert session.phase == DialecticPhase.SYNTHESIS
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_claim_readback_rejects_same_agent_after_progress(
+        self, mock_server, mock_context_agent,
+    ):
+        """Same identity is insufficient once phase or transcript has moved."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+
+        async def ambiguous_beam_claim(*_args, detail=None, **_kwargs):
+            detail["commit_unknown"] = True
+            return None
+
+        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                   new=AsyncMock(return_value=False)), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                   new=AsyncMock(return_value=False)), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=ambiguous_beam_claim), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=False)), \
+             patch(f"{DIALECTIC}.load_session_as_dict", new=AsyncMock(return_value={
+                 "reviewer": "agent-active",
+                 "phase": "synthesis",
+                 "message_count": 1,
+             })), \
+             patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock) as add_message, \
+             mock_context_agent:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": "Independent counter-perspective.",
+                "concerns": ["Independent concern"],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "REVIEWER_ASSIGNMENT_REFUSED"
+        add_message.assert_not_awaited()
+        assert session.reviewer_agent_id is None
+        assert session.phase == DialecticPhase.ANTITHESIS
+
+    @pytest.mark.asyncio
     async def test_a_self_review_claim_does_not_clear_the_request(
         self, mock_server, mock_context_agent,
     ):

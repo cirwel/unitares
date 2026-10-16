@@ -186,6 +186,27 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
       assert saga_state(saga_id) == "pg_committed"
     end
 
+    test "terminal commit clears a standing facilitation request atomically" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        DB,
+        "UPDATE core.dialectic_sessions SET awaiting_facilitation = true WHERE session_id = $1",
+        [session_id]
+      )
+
+      assert {:ok, %{status: "resolved"}} =
+               DialecticSaga.resolve(claim_params(session_id))
+
+      assert %{rows: [[false]]} =
+               Postgrex.query!(
+                 DB,
+                 "SELECT awaiting_facilitation FROM core.dialectic_sessions WHERE session_id = $1",
+                 [session_id]
+               )
+    end
+
     test "legacy protocol commits terminal state without creating an effect row" do
       session_id = insert_dialectic_session()
       on_exit(fn -> cleanup_dialectic_session(session_id) end)

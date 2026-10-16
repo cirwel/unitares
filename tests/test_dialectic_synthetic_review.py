@@ -7,6 +7,8 @@ awaiting_facilitation. These tests pin that completion, the multi-agent
 preservation (a real reviewer is never pre-empted), and the env opt-out.
 """
 
+import asyncio
+
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -319,6 +321,121 @@ async def test_aborted_synthetic_claim_is_routed_to_facilitation(server_patch):
     assert "claimed the session but did not finish" in data["note"]
     assert session.awaiting_facilitation is True
     facilitation.assert_awaited_once_with(session.session_id, True)
+
+
+@pytest.mark.asyncio
+async def test_timed_out_synthetic_claim_is_guarded_into_facilitation(server_patch):
+    """Timeout recovery flags only the live phase and reviewer it re-read."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    mark = AsyncMock(return_value=True)
+    emit = AsyncMock()
+
+    async def _timeout_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise asyncio.TimeoutError
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+        )
+        stack.enter_context(patch(
+            f"{DIALECTIC}.load_session_as_dict",
+            new=AsyncMock(return_value={
+                "status": "active",
+                "phase": "antithesis",
+                "reviewer": SYNTHETIC_REVIEWER_ID,
+                "resolution_effect_state": None,
+            }),
+        ))
+        stack.enter_context(patch(
+            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        ))
+        stack.enter_context(patch(f"{DIALECTIC}._emit_dialectic_event", new=emit))
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is True
+    assert data["reviewer_agent_id"] == SYNTHETIC_REVIEWER_ID
+    assert data["awaiting_facilitation"] is True
+    assert data["terminal_state_unknown"] is False
+    mark.assert_awaited_once_with(
+        session.session_id,
+        expected_phase="antithesis",
+        expected_reviewer=SYNTHETIC_REVIEWER_ID,
+    )
+    assert session.awaiting_facilitation is True
+    assert any(
+        call.args[0] == "dialectic_facilitation_needed"
+        for call in emit.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_timed_out_synthetic_terminal_readback_is_not_flagged(server_patch):
+    """A terminal winner routes its durable effect and never asks for review."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    mark = AsyncMock()
+
+    async def _timeout_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise asyncio.TimeoutError
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_timeout_after_claim)
+        )
+        stack.enter_context(patch(
+            f"{DIALECTIC}.load_session_as_dict",
+            new=AsyncMock(return_value={
+                "status": "resolved",
+                "phase": "resolved",
+                "reviewer": SYNTHETIC_REVIEWER_ID,
+                "resolution_effect_state": "pending",
+            }),
+        ))
+        stack.enter_context(patch(
+            f"{DIALECTIC}.pg_mark_awaiting_facilitation", new=mark
+        ))
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["terminal_committed"] is True
+    assert data["effect_pending"] is True
+    assert data["resolution_effect_state"] == "pending"
+    assert data["awaiting_facilitation"] is False
+    mark.assert_not_awaited()
 
 
 @pytest.mark.asyncio

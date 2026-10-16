@@ -184,6 +184,7 @@ from src.dialectic_db import (
     create_session_async as pg_create_session,
     update_session_phase_async as pg_update_phase,
     update_session_reviewer_async as pg_update_reviewer,
+    mark_awaiting_facilitation_async as pg_mark_awaiting_facilitation,
     update_session_awaiting_facilitation_async as pg_update_awaiting_facilitation,
     reopen_session_async as pg_reopen_session,
     add_message_async as pg_add_message,
@@ -291,6 +292,43 @@ async def _set_awaiting_facilitation(
         await _emit_dialectic_event(
             "dialectic_facilitation_needed", session, reason=reason
         )
+
+
+async def _confirm_ambiguous_reviewer_claim(
+    session_id: str,
+    reviewer_agent_id: str,
+    *,
+    expected_phase: str,
+    expected_message_count: int,
+) -> bool:
+    """Confirm only the exact reviewer CAS whose BEAM response was lost.
+
+    The BEAM reviewer endpoint can commit and then lose its HTTP response.  A
+    Python NULL-to-reviewer fallback then correctly writes zero rows, which is
+    otherwise indistinguishable from a competing reviewer winning.  Read back
+    the complete boundary the caller observed: same reviewer, unchanged phase,
+    and no new transcript message.  That last pair prevents a concurrent retry
+    by the same identity from claiming ownership of work it did not perform.
+    """
+    try:
+        persisted = await load_session_as_dict(session_id)
+    except Exception as exc:
+        logger.warning(
+            "Could not confirm ambiguous reviewer assignment for %s: %s",
+            session_id[:16],
+            type(exc).__name__,
+        )
+        return False
+    if not persisted:
+        return False
+    persisted_reviewer = persisted.get("reviewer")
+    if persisted_reviewer is None:
+        persisted_reviewer = persisted.get("reviewer_agent_id")
+    return bool(
+        persisted_reviewer == reviewer_agent_id
+        and str(persisted.get("phase") or "") == expected_phase
+        and int(persisted.get("message_count") or 0) == expected_message_count
+    )
 
 
 @dataclass(frozen=True)
@@ -3531,10 +3569,12 @@ async def _run_synthetic_review(
     if previous_reviewer_id is None:
         try:
             persisted = True
+            beam_claim_detail: Dict[str, Any] = {}
             if await beam_update_reviewer(
                 session.session_id,
                 SYNTHETIC_REVIEWER_ID,
                 claim_if_unassigned=True,
+                detail=beam_claim_detail,
             ) is None:
                 with session_write_via(
                     "python_fallback", site="synthetic_first_responder"
@@ -3543,6 +3583,16 @@ async def _run_synthetic_review(
                         session.session_id,
                         SYNTHETIC_REVIEWER_ID,
                         claim_if_unassigned=True,
+                    )
+                if (
+                    not persisted
+                    and beam_claim_detail.get("commit_unknown") is True
+                ):
+                    persisted = await _confirm_ambiguous_reviewer_claim(
+                        session.session_id,
+                        SYNTHETIC_REVIEWER_ID,
+                        expected_phase=previous_phase.value,
+                        expected_message_count=previous_transcript_length,
                     )
             if not persisted:
                 restore_before_antithesis()
@@ -4013,20 +4063,87 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
 
                 if review is None and synthetic_abort_reason == "synthetic_reviewer_timeout":
                     # wait_for cancellation can race an executor-backed BEAM
-                    # request that commits after the coroutine exits. Do not
-                    # write a contradictory facilitation flag or tell the user
-                    # to submit antithesis. The terminal CTE queues an effect if
-                    # it commits; a later get exposes the exact state.
-                    persisted = await load_session_as_dict(session_id)
+                    # request that commits after the coroutine exits. Re-read
+                    # first, then mark only that same live phase/reviewer with
+                    # a guarded CAS. Every terminal writer clears the flag in
+                    # its own statement, so a late commit cannot strand a
+                    # resolved row as still awaiting a human.
+                    try:
+                        persisted = await load_session_as_dict(session_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "Could not reload timed-out synthetic review %s: %s",
+                            session_id[:16],
+                            type(exc).__name__,
+                        )
+                        persisted = None
                     persisted_phase = str(
                         (persisted or {}).get("phase") or ""
                     ).lower()
+                    persisted_status = str(
+                        (persisted or {}).get("status") or ""
+                    ).lower()
+                    persisted_reviewer = (persisted or {}).get("reviewer")
                     effect_state = (persisted or {}).get(
                         "resolution_effect_state"
                     )
+                    terminal = (
+                        persisted_phase in {"resolved", "failed"}
+                        or persisted_status in {"resolved", "failed"}
+                    )
+                    facilitation_written = False
+                    if (
+                        persisted
+                        and not terminal
+                        and persisted_phase
+                        and persisted_reviewer in {None, SYNTHETIC_REVIEWER_ID}
+                    ):
+                        try:
+                            facilitation_written = bool(
+                                await pg_mark_awaiting_facilitation(
+                                    session_id,
+                                    expected_phase=persisted_phase,
+                                    expected_reviewer=persisted_reviewer,
+                                )
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not guard facilitation after synthetic "
+                                "timeout for %s: %s",
+                                session_id[:16],
+                                type(exc).__name__,
+                            )
+                        if facilitation_written:
+                            session.reviewer_agent_id = persisted_reviewer
+                            session.awaiting_facilitation = True
+                            await _emit_dialectic_event(
+                                "dialectic_facilitation_needed",
+                                session,
+                                reason=synthetic_abort_reason,
+                            )
+
+                    if persisted_phase == "resolved":
+                        next_step = (
+                            "The terminal decision committed. An operator should "
+                            "inspect its durable effect with "
+                            "dialectic(action='reconcile_effect', "
+                            f"session_id='{session_id}')."
+                        )
+                    elif facilitation_written:
+                        next_step = (
+                            "The timed-out review is marked for facilitation. "
+                            "Assign an independent reviewer or facilitate the "
+                            "recorded partial review as operator."
+                        )
+                    else:
+                        next_step = (
+                            "Reload this session before acting. Do not submit "
+                            "another antithesis while the timed-out write may "
+                            "still finish."
+                        )
                     result.update({
                         "synthetic_review": True,
-                        "reviewer_agent_id": SYNTHETIC_REVIEWER_ID,
+                        "reviewer_agent_id": persisted_reviewer,
                         "terminal_committed": (
                             True if persisted_phase == "resolved" else None
                         ),
@@ -4034,13 +4151,10 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                             "pending", "applying", "unknown_partial"
                         },
                         "resolution_effect_state": effect_state,
-                        "terminal_state_unknown": persisted_phase != "resolved",
-                        "next_step": (
-                            "Reload this session. If it is resolved, an operator "
-                            "should run dialectic(action='reconcile_effect', "
-                            f"session_id='{session_id}'). Do not submit another "
-                            "antithesis while the timed-out terminal write may still finish."
-                        ),
+                        "awaiting_facilitation": facilitation_written,
+                        "terminal_state_unknown": not terminal
+                        and not facilitation_written,
+                        "next_step": next_step,
                     })
                     return success_response(result)
 
@@ -4411,14 +4525,28 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             if original_reviewer_id is None and session.reviewer_agent_id == agent_id:
                 try:
                     persisted = True
+                    beam_claim_detail: Dict[str, Any] = {}
                     if await beam_update_reviewer(
-                        session_id, agent_id, claim_if_unassigned=True
+                        session_id,
+                        agent_id,
+                        claim_if_unassigned=True,
+                        detail=beam_claim_detail,
                     ) is None:
                         with session_write_via("python_fallback", site="first_responder"):
                             persisted = await pg_update_reviewer(
                                 session_id,
                                 agent_id,
                                 claim_if_unassigned=True,
+                            )
+                        if (
+                            not persisted
+                            and beam_claim_detail.get("commit_unknown") is True
+                        ):
+                            persisted = await _confirm_ambiguous_reviewer_claim(
+                                session_id,
+                                agent_id,
+                                expected_phase=_prev_phase,
+                                expected_message_count=_prev_transcript_length,
                             )
                     if persisted:
                         result["reviewer_auto_assigned"] = True

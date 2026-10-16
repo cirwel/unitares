@@ -547,6 +547,7 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
             result = {
                 "session_id": row["session_id"],
                 "phase": row["phase"] or row["status"] or "unknown",
+                "status": row["status"] or "unknown",
                 "session_type": row["session_type"] or "unknown",
                 "paused_agent": row["paused_agent_id"] or "unknown",
                 "reviewer": row["reviewer_agent_id"],

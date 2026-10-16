@@ -551,6 +551,7 @@ class DialecticDB:
         *,
         expected_phase: Any = _UNSET,
         expected_updated_at: Any = _UNSET,
+        expected_reviewer: Any = _UNSET,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -581,10 +582,10 @@ class DialecticDB:
         `update_session_awaiting_facilitation`, which does bump — it is a
         caller-driven transition on a live session, not a sweep observation.
 
-        Compare-and-set (#2367): when ``expected_phase`` and/or
-        ``expected_updated_at`` are passed (the values the sweeper read), the
-        write lands only if the row still matches them, so a participant
-        message or phase move between the sweeper's read and this write
+        Compare-and-set (#2367): when ``expected_phase``,
+        ``expected_updated_at`` and/or ``expected_reviewer`` are passed (the
+        values the caller read), the write lands only if the row still matches
+        them, so a participant message, phase move, or reviewer replacement
         refuses it instead of flagging a session that is no longer stalled.
         The CAS only READS `updated_at`; the SET clause still never writes it.
         Omitted arguments add no predicate.
@@ -601,6 +602,9 @@ class DialecticDB:
         if expected_updated_at is not _UNSET:
             args.append(expected_updated_at)
             cas += f" AND updated_at IS NOT DISTINCT FROM ${len(args)}"
+        if expected_reviewer is not _UNSET:
+            args.append(expected_reviewer)
+            cas += f" AND reviewer_agent_id IS NOT DISTINCT FROM ${len(args)}"
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
@@ -691,8 +695,10 @@ class DialecticDB:
         the session on stale state. Omitted arguments add no predicate.
 
         ``clear_facilitation`` also sets ``awaiting_facilitation = false`` in
-        the same statement, so a close that answers a facilitation request
-        cannot leave the request standing on the terminal row.
+        the same statement. It is retained for call compatibility; every
+        terminal write now clears the flag because a terminal session cannot
+        still be awaiting a reviewer, including when a timed-out caller races
+        the commit.
         """
         await self._ensure_pool()
         # Phase should match status - don't hardcode 'resolved' when status is 'failed'
@@ -753,7 +759,7 @@ class DialecticDB:
                 )
               )
             """
-        clear = ", awaiting_facilitation = false" if clear_facilitation else ""
+        clear = ", awaiting_facilitation = false"
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 WITH terminal AS (
@@ -1792,6 +1798,7 @@ async def mark_awaiting_facilitation_async(
     *,
     expected_phase: Any = _UNSET,
     expected_updated_at: Any = _UNSET,
+    expected_reviewer: Any = _UNSET,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
@@ -1800,7 +1807,9 @@ async def mark_awaiting_facilitation_async(
         db = await get_dialectic_db()
         return await _recorded_write(rec, lambda d: db.mark_awaiting_facilitation(
             session_id, expected_phase=expected_phase,
-            expected_updated_at=expected_updated_at, winner=winner, detail=d), winner=winner)
+            expected_updated_at=expected_updated_at,
+            expected_reviewer=expected_reviewer,
+            winner=winner, detail=d), winner=winner)
 
 
 async def update_session_awaiting_facilitation_async(session_id: str, awaiting: bool) -> bool:
