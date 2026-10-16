@@ -139,7 +139,7 @@ def test_global_bound_covers_custom_box_overlap_and_sensor(mode, monkeypatch):
     )
     theta = replace(DEFAULT_THETA, C1=1.5, eta2=0.45)
     dt = 0.4
-    h = dt / d._integration_substeps(params, theta, dt, True)
+    h = dt / d._integration_substeps(params, theta, dt, True, 0.2)
     rng = np.random.default_rng(12)
     lo = np.array([params.E_min, params.I_min, params.S_min, params.V_min])
     hi = np.array([params.E_max, params.I_max, params.S_max, params.V_max])
@@ -167,6 +167,61 @@ def test_global_bound_covers_custom_box_overlap_and_sensor(mode, monkeypatch):
             ]
         )
         assert h * np.linalg.norm(jacobian, ord=np.inf) <= 1
+
+
+def _jacobian_inf_norm(state, theta, params, s_setpoint):
+    def rhs(values):
+        return np.array(
+            d._derivatives(d.State(*values), 0.0, theta, params, 0.0, 0.5, None, s_setpoint)
+        )
+
+    return np.linalg.norm(
+        np.column_stack(
+            [(rhs(state + delta) - rhs(state - delta)) / 2e-6 for delta in np.eye(4) * 1e-6]
+        ),
+        ord=np.inf,
+    )
+
+
+@pytest.mark.parametrize("s_setpoint", [0.0, 0.2, 0.9, -0.5])
+def test_bound_covers_the_shifted_s_term(s_setpoint):
+    """The E row reads S - σ (#2834), so the bound must too.
+
+    Counterexample from adversarial design review: with this box and σ = 0.9
+    the raw-S bound chose two substeps while h·L reached 4.45 at S = 0.01.
+    """
+    params = DynamicsParams(
+        E_min=0.0, E_max=0.1, I_min=0.0, I_max=1.0, S_min=0.001, S_max=0.1,
+        V_min=-1.0, V_max=1.0, alpha=0.0, beta_E=100.0, barrier_strength=0.0,
+        barrier_margin=0.0,
+    )
+    dt = 0.1
+    h = dt / d._integration_substeps(params, DEFAULT_THETA, dt, False, s_setpoint)
+    rng = np.random.default_rng(7)
+    lo = np.array([params.E_min, params.I_min, params.S_min, params.V_min])
+    hi = np.array([params.E_max, params.I_max, params.S_max, params.V_max])
+    states = list(rng.uniform(lo + 1e-5, hi - 1e-5, size=(20, 4)))
+    states.append(np.array([0.05, 0.5, 0.01, 0.0]))
+    for state in states:
+        assert h * _jacobian_inf_norm(state, DEFAULT_THETA, params, s_setpoint) <= 1
+
+
+def test_compute_dynamics_passes_the_setpoint_to_the_bound(monkeypatch):
+    seen = []
+    real = d._integration_substeps
+
+    def spy(*args):
+        seen.append(args)
+        return real(*args)
+
+    monkeypatch.setattr(d, "_integration_substeps", spy)
+    d.compute_dynamics(d.DEFAULT_STATE, [], DEFAULT_THETA, get_active_params(), s_setpoint=0.3)
+    assert seen and seen[0][4] == 0.3
+
+
+def test_rejects_a_non_finite_setpoint():
+    with pytest.raises(ValueError, match="s_setpoint must be finite"):
+        d._integration_substeps(get_active_params(), DEFAULT_THETA, 0.1, False, math.nan)
 
 
 def test_projects_initial_state_before_first_derivative():

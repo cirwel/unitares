@@ -303,6 +303,7 @@ def _integrate_rk4(
 
 def _integration_substeps(
     params: DynamicsParams, theta: Theta, dt: float, sensor_coupled: bool,
+    s_setpoint: float = 0.0,
 ) -> int:
     """Resolve the fastest frozen-input slope over the entire state box.
 
@@ -310,6 +311,10 @@ def _integration_substeps(
     n=ceil(dt*L) keeps h*L <= 1, resolving stiff cubic barriers even when
     the starting point is outside their active margin. This is a numerical
     stiffness safeguard, not a nonlinear contraction certificate.
+
+    ``s_setpoint`` must be the σ the derivatives run with: dE carries
+    -β_E·E·(S - σ), so the E row's ∂/∂E term is bounded by max|S - σ| over
+    the box, not by max|S|.
     """
     from .parameters import get_i_dynamics_mode
 
@@ -324,6 +329,8 @@ def _integration_substeps(
     widths = [hi - lo for lo, hi in bounds]
     if any(width <= 0 or not math.isfinite(width) for width in widths):
         raise ValueError("state bounds must have positive finite widths")
+    if not math.isfinite(s_setpoint):
+        raise ValueError("s_setpoint must be finite")
     margin = params.barrier_margin
     if not math.isfinite(margin) or margin < 0:
         raise ValueError("barrier_margin must be finite and nonnegative")
@@ -337,7 +344,7 @@ def _integration_substeps(
         for m, width in zip(margins, widths)
     ]
     e_abs = max(abs(params.E_min), abs(params.E_max))
-    s_abs = max(abs(params.S_min), abs(params.S_max))
+    s_abs = max(abs(params.S_min - s_setpoint), abs(params.S_max - s_setpoint))
     i_slope = abs(params.gamma_I)
     if get_i_dynamics_mode() != "linear":
         i_slope *= max(abs(1 - 2*params.I_min), abs(1 - 2*params.I_max))
@@ -433,7 +440,9 @@ def compute_dynamics(
     # Select integrator
     integrator = get_integrator_mode()
 
-    steps = _integration_substeps(params, theta, dt, coupling_sensor is not None)
+    steps = _integration_substeps(
+        params, theta, dt, coupling_sensor is not None, s_setpoint,
+    )
     step_dt = dt / steps
     # Apply the same box at the first derivative evaluation as at later
     # stages, so the global slope bound also covers out-of-range inputs.
