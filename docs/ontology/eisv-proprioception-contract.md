@@ -704,6 +704,41 @@ Red-team data is useful, but only if labeled as red-team data. It answers "can
 we detect this frozen failure mode?" It does not answer "does EISV generally
 judge agents correctly in production?"
 
+### Comparing rows across instrument changes (2026-10-16)
+
+The EISV maths changes often, and the `epoch` column cannot mark it: every
+runtime read of state, history, baselines and calibration filters on
+`epoch = CURRENT_EPOCH`, so a bump resets every agent. It has been 3 since
+2026-04-27 and none of Stage A, #2831 or #2834 moved it. Instead:
+
+- `config/eisv_instrument_eras.json` lists each known change with its best
+  effective time, how that time is known (deploy restart, deploy reflog, epoch
+  row, first row carrying a new key, merge), and the interval in which it may
+  have gone live. Rows inside that interval belong to neither side. Times before
+  2026-08-27 are mostly merge or first-seen times; several flag changes left no
+  time at all and carry an approximate one.
+- Every row written from 2026-10-16 carries `state_json.eisv_instrument`: the
+  era, a hash of the effective configuration (dynamics parameters, flags,
+  class-calibration tables, resident roster, decision thresholds), the build
+  sha, and `updates_since_change`, the monitor's check-ins since its instrument
+  last changed, with `carried_from` naming the previous instrument. A monitor
+  restored across a change carries ODE state integrated under the old maths and
+  relaxed for 10–15 minutes after #2834, so those rows are a transient.
+- `src/eisv_eras.py` holds the read side: `require_single_era` refuses a window
+  that crosses a change unless the caller gives a reason, `era_windows` splits a
+  window for per-era reporting, and `is_settled` drops the restore transient.
+  `scripts/analysis/basin_conjunct_binding_read.py` is the first reader wired
+  to it; the others are not yet.
+
+There is no per-field exemption. A change that only touches the basin or the
+action still moves behavioral E, I and V on later check-ins, because the action
+feeds behavioral E through `decision_e` and the behavioral observations are
+partly built from ODE state (row 13). A change appends a registry entry; a
+change to the golden trajectories without one fails
+`tests/test_eisv_instrument_eras.py`. Report each era separately with n,
+identity count and p50. A recomputation of older rows under current maths is a
+labelled estimate, not extra sample.
+
 ## Tested claims — ledger
 
 Added 2026-07-29. This section exists because the doctrine above was already

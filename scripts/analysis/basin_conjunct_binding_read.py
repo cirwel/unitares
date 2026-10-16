@@ -27,8 +27,13 @@ What it prints (Markdown):
   6. Share of BOUNDARY rows whose agent-visible primary E sits below 0.6 while
      the deciding ODE E does not -- the penalty that is shown but never decides.
 
+The window defaults to the current EISV instrument era (src/eisv_eras.py). A
+window that crosses an instrument change is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
+
 Usage:
-  python3 scripts/analysis/basin_conjunct_binding_read.py --window-days 60
+  python3 scripts/analysis/basin_conjunct_binding_read.py
+  python3 scripts/analysis/basin_conjunct_binding_read.py --window-days 60 --allow-cross-era "why"
   GOVERNANCE_DATABASE_URL=postgresql://... python3 scripts/analysis/basin_conjunct_binding_read.py
 
 Historical reference read (2026-08-21): the old completeness predicate admitted
@@ -42,8 +47,13 @@ import argparse
 import asyncio
 import os
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import asyncpg
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
 
 DEFAULT_DB_URL = "postgresql://localhost:5432/governance"
 
@@ -67,7 +77,7 @@ WITH rows AS (
     s.state_json->'eisv_telemetry'->'policy_evaluation'->'inputs'->>'basin' AS basin,
     s.state_json->'eisv_telemetry'->'policy_evaluation'->>'sub_action' AS sub
   FROM core.agent_state s
-  WHERE s.recorded_at >= now() - ($1::int * INTERVAL '1 day')
+  WHERE s.recorded_at >= $1::timestamptz AND s.recorded_at < $2::timestamptz
     AND s.synthetic = false
     AND s.state_json ? 'eisv_telemetry'
 ), eligible AS (
@@ -159,19 +169,23 @@ def _table(headers, rows) -> str:
     return "\n".join(out)
 
 
-async def run(db_url: str, window_days: int) -> int:
+async def run(db_url: str, start: datetime, end: datetime, crossed=()) -> int:
     conn = await asyncpg.connect(db_url)
     try:
-        completeness = await conn.fetch(Q_COMPLETENESS, window_days)
-        agreement = await conn.fetch(Q_AGREEMENT, window_days)
-        margin = await conn.fetch(Q_E_MARGIN, window_days)
-        failing = await conn.fetch(Q_FAILING_SETS, window_days)
-        sub = await conn.fetch(Q_SUB_BY_BASIN, window_days)
-        shown = await conn.fetchrow(Q_SHOWN_NOT_DECIDING, window_days)
+        completeness = await conn.fetch(Q_COMPLETENESS, start, end)
+        agreement = await conn.fetch(Q_AGREEMENT, start, end)
+        margin = await conn.fetch(Q_E_MARGIN, start, end)
+        failing = await conn.fetch(Q_FAILING_SETS, start, end)
+        sub = await conn.fetch(Q_SUB_BY_BASIN, start, end)
+        shown = await conn.fetchrow(Q_SHOWN_NOT_DECIDING, start, end)
     finally:
         await conn.close()
 
-    print(f"# Basin conjunct binding read — last {window_days} days\n")
+    print(f"# Basin conjunct binding read — {start.isoformat()} to {end.isoformat()}\n")
+    if crossed:
+        print("**Pooled across EISV instrument changes** (allowed by --allow-cross-era): "
+              + ", ".join(b.id for b in crossed) + ". Rows on either side of a change "
+              "come from different instruments.\n")
     print("Verdict-path inputs = `eisv_telemetry.measurement.ode.values` + "
           "`measurement.coherence.value` + `policy_evaluation.inputs.risk_score`; "
           "persisted basin = `policy_evaluation.inputs.basin`.\n")
@@ -229,11 +243,36 @@ async def run(db_url: str, window_days: int) -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--window-days", type=int, default=60)
+    ap.add_argument("--window-days", type=int, default=None,
+                    help="default: since the current instrument era began")
+    ap.add_argument("--allow-cross-era", metavar="REASON", default=None,
+                    help="run even if the window crosses an EISV instrument change")
     ap.add_argument("--db-url",
                     default=os.environ.get("GOVERNANCE_DATABASE_URL", DEFAULT_DB_URL))
     args = ap.parse_args(argv)
-    return asyncio.run(run(args.db_url, args.window_days))
+    end = datetime.now(timezone.utc)
+    if args.window_days is None:
+        start = current_era_start()
+    else:
+        start = end - timedelta(days=args.window_days)
+    try:
+        crossed = eisv_eras.require_single_era(start, end, allow_cross=args.allow_cross_era)
+    except eisv_eras.EraCrossingError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    return asyncio.run(run(args.db_url, start, end, crossed))
+
+
+def current_era_start() -> datetime:
+    """When the current era's change had certainly taken effect."""
+    current = eisv_eras.current_era_id()
+    boundary = next(b for b in eisv_eras.load_boundaries() if b.id == current)
+    if boundary.interval is None:
+        raise SystemExit(
+            f"era {current} has no recorded time; filter rows on "
+            "state_json.eisv_instrument.era instead of a time window"
+        )
+    return boundary.interval[1]
 
 
 if __name__ == "__main__":
