@@ -2416,11 +2416,14 @@ class TestHandleSubmitSynthesis:
         mock_result = {"success": True, "converged": True, "phase": "resolved"}
         mock_resolution = MagicMock()
         mock_resolution.to_dict.return_value = {"action": "block"}
+        calibration = AsyncMock()
 
         with patch(f"{DIALECTIC}.load_session", new_callable=AsyncMock, return_value=session), \
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(False, "Bypass safety check")), \
+             patch(f"{DIALECTIC}.update_calibration_from_dialectic_disagreement",
+                   new=calibration), \
              mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
              mock_pg_resolve_session, mock_context_agent:
             result = await handle_submit_synthesis({
@@ -2434,6 +2437,7 @@ class TestHandleSubmitSynthesis:
         data = parse_result(result)
         assert data.get("action") == "block"
         assert "safety" in data.get("reason", "").lower()
+        calibration.assert_awaited_once_with(session)
 
     # ------------------------------------------------------------------
     # Participant-set eligibility gate (security)

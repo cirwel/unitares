@@ -5377,16 +5377,15 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # Update calibration from dialectic outcome
                 if newly_applied_resolution_effect:
                     try:
-                        skip_resume_calibration = bool(
-                            execution_result.get("superseded")
-                            or execution_result.get("reason")
-                            == "legacy_unbound_session"
-                        )
-                        if (
-                            result.get("action") == "resume"
-                            and not skip_resume_calibration
-                        ):
-                            await update_calibration_from_dialectic(session)
+                        if result.get("action") == "resume":
+                            applied_execution = result.get("execution") or {}
+                            skip_resume_calibration = bool(
+                                applied_execution.get("superseded")
+                                or applied_execution.get("reason")
+                                == "legacy_unbound_session"
+                            )
+                            if not skip_resume_calibration:
+                                await update_calibration_from_dialectic(session)
                         elif not is_safe:
                             await update_calibration_from_dialectic_disagreement(session)
                     except Exception as cal_e:
