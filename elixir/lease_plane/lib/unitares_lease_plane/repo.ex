@@ -334,6 +334,53 @@ defmodule UnitaresLeasePlane.Repo do
     end
   end
 
+  # ---------- effect custody freshness ----------
+
+  @doc """
+  Re-read the exact leases acquired for an effect before dispatching it.
+
+  A replacement lease, even for the same surface and holder, does not restore
+  an earlier effect's custody. Expiry uses the database wall clock (including
+  the boundary itself), independently of whether the reaper has run.
+
+  This is a freshness check, NOT a lock held across a filesystem operation.
+  Revocation after this read still requires executor-side fencing to exclude.
+  Experiment and limits: `docs/operations/effect-custody-recheck.md`.
+  """
+  @spec check_effect_custody([map()]) :: :ok | {:error, atom()}
+  def check_effect_custody([_ | _] = leases) do
+    Enum.reduce_while(leases, :ok, fn lease, :ok ->
+      case check_effect_lease(lease) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  def check_effect_custody(_), do: {:error, :custody_unavailable}
+
+  defp check_effect_lease(%{
+         lease_id: id,
+         surface_id: surface,
+         holder_agent_uuid: holder
+       }) do
+    sql = """
+    SELECT released_at IS NULL, expires_at > clock_timestamp()
+    FROM lease_plane.surface_leases
+    WHERE lease_id = $1 AND surface_id = $2 AND holder_agent_uuid = $3
+    """
+
+    case Postgrex.query(DB, sql, [uuid_to_binary(id), surface, uuid_to_binary(holder)]) do
+      {:ok, %{rows: [[true, true]]}} -> :ok
+      {:ok, %{rows: [[true, false]]}} -> {:error, :custody_expired}
+      {:ok, %{rows: [[false, _]]}} -> {:error, :revoked}
+      {:ok, %{rows: []}} -> {:error, :revoked}
+      _ -> {:error, :custody_unavailable}
+    end
+  end
+
+  defp check_effect_lease(_), do: {:error, :custody_unavailable}
+
   # ---------- identity attestation replay ledger ----------
 
   @doc """

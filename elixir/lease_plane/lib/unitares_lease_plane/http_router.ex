@@ -258,7 +258,15 @@ defmodule UnitaresLeasePlane.HTTPRouter do
           reason: "a required surface is currently leased by another holder"
         })
 
-      {:error, reason} when reason in [:lease_acquire_failed, :idempotency_lookup_failed] ->
+      {:error, reason} when reason in [:revoked, :custody_expired] ->
+        json(conn, 409, %{
+          ok: false,
+          error: Atom.to_string(reason),
+          reason: "the effect lost its acquired lease before dispatch; nothing was written"
+        })
+
+      {:error, reason}
+      when reason in [:lease_acquire_failed, :idempotency_lookup_failed, :custody_unavailable] ->
         json(conn, 503, %{
           ok: false,
           error: Atom.to_string(reason),

@@ -1,0 +1,1 @@
+- **Governed effects:** Recheck the exact acquired file-write leases after the governance veto, refusing released, replaced or expired custody before executor dispatch and recording the refusal. This narrows the stale-custody window; it does not make lease validation and filesystem mutation atomic.

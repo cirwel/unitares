@@ -10,6 +10,18 @@ defmodule UnitaresLeasePlane.BlockGovernanceVeto do
   def verify_identity_tier(_env), do: {:ok, "strong"}
 end
 
+defmodule UnitaresLeasePlane.CustodyChangeGovernanceVeto do
+  @moduledoc false
+  # Deterministic interleaving: the lease was acquired, but execution has not
+  # started. Model a release/expiry while the external veto call is in flight.
+  def check(env) do
+    Process.get(:change_effect_custody).(env)
+    :allow
+  end
+
+  def verify_identity_tier(_env), do: {:ok, "strong"}
+end
+
 defmodule UnitaresLeasePlane.FailingEffectFileOps do
   @moduledoc false
   # The commit write fails, and so does the restore: the effect quarantines.
@@ -759,6 +771,116 @@ defmodule UnitaresLeasePlane.GovernedEffectTest do
   end
 
   describe "file_write lease custody is returned on completion" do
+    for {change, expected} <- [
+          {:release, :revoked},
+          {:expire, :custody_expired},
+          {:replace, :revoked}
+        ] do
+      @tag :tmp_dir
+      @tag :custody_revocation
+      @tag custody_change: change, custody_expected: expected
+      test "#{change} during the veto refuses execution and preserves the target", %{
+        tmp_dir: dir,
+        custody_change: change,
+        custody_expected: expected
+      } do
+        path = Path.join(dir, "custody.txt")
+        File.write!(path, "original\n")
+        surface = canonical("file://#{path}")
+        key = tracked_key()
+        on_exit(fn -> LeaseTestHelpers.cleanup_surface(surface) end)
+        set_file_write_flags(true)
+
+        Process.put(:change_effect_custody, fn _env ->
+          {:ok, lease} = UnitaresLeasePlane.Repo.status(surface)
+          Process.put(:original_effect_lease_id, lease.lease_id)
+
+          case change do
+            :expire ->
+              Postgrex.query!(
+                UnitaresLeasePlane.DB,
+                "UPDATE lease_plane.surface_leases " <>
+                  "SET expires_at = clock_timestamp() - interval '1 second' " <>
+                  "WHERE lease_id::text = $1",
+                [lease.lease_id]
+              )
+
+            change ->
+              :ok = UnitaresLeasePlane.Repo.release(lease.lease_id, "forced")
+
+              if change == :replace do
+                # Even the SAME principal's new lease cannot revive the old
+                # effect's custody, or be released by that effect's cleanup.
+                {:ok, replacement, :new} =
+                  UnitaresLeasePlane.Repo.acquire(%{
+                    surface_id: surface,
+                    holder_agent_uuid: lease.holder_agent_uuid,
+                    holder_kind: "remote_heartbeat",
+                    ttl_s: 300
+                  })
+
+                Process.put(:replacement_effect_lease_id, replacement.lease_id)
+              end
+          end
+        end)
+
+        Application.put_env(
+          :lease_plane,
+          :governance_veto_client,
+          UnitaresLeasePlane.CustodyChangeGovernanceVeto
+        )
+
+        body =
+          base(%{
+            "idempotency_key" => key,
+            "custody_mode" => "execute",
+            "surface" => surface,
+            "required_leases" => [%{"surface" => surface, "ttl_s" => 300}],
+            "payload" => %{"path" => path, "content" => "unauthorized\n"},
+            "proposer" => %{"agent_uuid" => "00000000-0000-0000-0000-0000000000ab"}
+          })
+
+        put_test_env(:bearer_token, "custody-regression-bearer")
+
+        conn =
+          Plug.Test.conn(:post, "/v1/effects", Jason.encode!(body))
+          |> Plug.Conn.put_req_header("content-type", "application/json")
+          |> Plug.Conn.put_req_header("authorization", "Bearer custody-regression-bearer")
+          |> UnitaresLeasePlane.HTTPRouter.call(UnitaresLeasePlane.HTTPRouter.init([]))
+
+        assert conn.status == 409
+        assert Jason.decode!(conn.resp_body)["error"] == Atom.to_string(expected)
+
+        assert File.read!(path) == "original\n"
+        assert [row] = execute_rows(key)
+        assert row["status"] == Atom.to_string(expected)
+        assert row["lease_ids"] == [Process.get(:original_effect_lease_id)]
+
+        assert %{rows: [[0]]} =
+                 Postgrex.query!(
+                   UnitaresLeasePlane.DB,
+                   "SELECT count(*) FROM effects.payloads WHERE idempotency_key = $1",
+                   [key]
+                 )
+
+        if change == :replace do
+          assert {:ok, replacement} = UnitaresLeasePlane.Repo.status(surface)
+          assert replacement.lease_id == Process.get(:replacement_effect_lease_id)
+        else
+          # A refusal must not poison the idempotency key: a later request
+          # obtains fresh custody and goes through the veto again.
+          Application.put_env(
+            :lease_plane,
+            :governance_veto_client,
+            UnitaresLeasePlane.AllowGovernanceVeto
+          )
+
+          assert {:ok, _} = GovernedEffect.handle(body)
+          assert File.read!(path) == "unauthorized\n"
+        end
+      end
+    end
+
     # release_all used a release_reason the surface_leases CHECK constraint
     # rejects, and discarded the error: every governed file_write left its
     # leases active until the TTL reaper labelled them reaped_remote_ttl.
