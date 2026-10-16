@@ -1671,10 +1671,9 @@ class TestHandleSubmitSynthesis:
         chatgpt-codex_fb8d5918) named the window: "an agent observed active for
         reflection could become paused before execute_resolution and then be
         resumed by its own verdict." Here the handler check sees an ACTIVE agent
-        and the terminal CAS wins before the runtime effect. The transition
-        owner still refuses the effect; that mismatch is exposed and routed for
-        reconciliation rather than relabeling the durable decision or emitting
-        a successful outcome.
+        and the precommit recheck sees the new live pause. The synthesis stays
+        nonterminal and answerable; neither the terminal CAS nor the runtime
+        effect runs.
         """
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
@@ -1685,6 +1684,8 @@ class TestHandleSubmitSynthesis:
         mock_resolution = MagicMock()
         mock_resolution.to_dict.return_value = {"action": "resume", "conditions": []}
         resolve_row = AsyncMock()
+        execute = AsyncMock(return_value={"success": True})
+        pause_live = AsyncMock(side_effect=[False, True])
         emitted = []
 
         async def _emit(event_type, _session, **kw):
@@ -1694,12 +1695,8 @@ class TestHandleSubmitSynthesis:
              patch.object(session, "submit_synthesis", return_value=mock_result), \
              patch.object(session, "finalize_resolution", return_value=mock_resolution), \
              patch.object(session, "check_hard_limits", return_value=(True, None)), \
-             patch(f"{DIALECTIC}.agent_pause_is_live", new_callable=AsyncMock,
-                   return_value=False), \
-             patch(f"{DIALECTIC}.execute_resolution", new_callable=AsyncMock,
-                   return_value={"success": False,
-                                 "refused": "self_review_not_authorizing",
-                                 "warning": "..."}), \
+             patch(f"{DIALECTIC}.agent_pause_is_live", new=pause_live), \
+             patch(f"{DIALECTIC}.execute_resolution", new=execute), \
              patch(f"{DIALECTIC}._emit_dialectic_event", new=_emit), \
              patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.pg_resolve_session", resolve_row), \
@@ -1718,12 +1715,13 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is False
         assert data["error_code"] == "SELF_REVIEW_NOT_AUTHORIZING"
         # error_response flattens `details` into the payload.
-        assert data["detected_at"] == "resume_transition"
-        assert data["terminal_committed"] is True
-        assert data["effect_pending"] is True
-        resolve_row.assert_awaited_once()
+        assert data["detected_at"] == "precommit_authority_recheck"
+        assert data["terminal_committed"] is False
+        assert pause_live.await_count == 2
+        resolve_row.assert_not_awaited()
+        execute.assert_not_awaited()
         assert "dialectic_resolved" not in emitted
-        assert session.phase == DialecticPhase.RESOLVED
+        assert session.phase == DialecticPhase.SYNTHESIS
         assert session.awaiting_facilitation is True
 
     @pytest.mark.asyncio

@@ -330,6 +330,39 @@ async def _commit_converged_resolution(
     return written
 
 
+async def _precommit_resolution_authority_refusal(
+    session: DialecticSession,
+) -> Optional[str]:
+    """Recheck the authority facts that can change before the terminal CAS.
+
+    The earlier handler guard gives a useful response, but an active reflection
+    can become a live pause while synthesis is being persisted.  This check is
+    deliberately adjacent to the effect-owner write: if the session is now a
+    self-authorized resume, it stays nonterminal and answerable.  Stored
+    authorship policy remains duplicated in the database guard as the final
+    cross-process boundary.
+    """
+    agent_id = session.paused_agent_id
+    if (
+        session.reviewer_agent_id
+        and session.reviewer_agent_id == agent_id
+        and await agent_pause_is_live(agent_id)
+    ):
+        return "self_review_not_authorizing"
+
+    authorship = read_reviewed_work_authorship(
+        getattr(session, "paused_agent_state", {}),
+        expected_declared_by_agent_id=agent_id,
+    )
+    if authorship.is_invalid:
+        return "review_authorship_invalid"
+    if authorship.recuses(
+        session.reviewer_agent_id, paused_agent_id=agent_id
+    ):
+        return "reviewer_author_conflict"
+    return None
+
+
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
     """
     Check if the assigned reviewer is unavailable when it owes a response.
@@ -4406,6 +4439,66 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     # stale/reassigned reviewer cannot mutate runtime state and
                     # only afterwards learn that another writer won.
                     try:
+                        authority_refusal = (
+                            await _precommit_resolution_authority_refusal(session)
+                        )
+                        if authority_refusal:
+                            session.phase = DialecticPhase.SYNTHESIS
+                            result["action"] = "facilitation_required"
+                            result["success"] = False
+                            result["converged"] = False
+                            result["blocked"] = authority_refusal
+                            await _set_awaiting_facilitation(
+                                session, True, reason=authority_refusal
+                            )
+                            await save_session(session)
+                            refusal_code = {
+                                "self_review_not_authorizing": (
+                                    "SELF_REVIEW_NOT_AUTHORIZING"
+                                ),
+                                "review_authorship_invalid": (
+                                    "REVIEW_AUTHORSHIP_METADATA_INVALID"
+                                ),
+                                "reviewer_author_conflict": (
+                                    "REVIEWER_AUTHOR_CONFLICT"
+                                ),
+                            }[authority_refusal]
+                            refusal_message = {
+                                "self_review_not_authorizing": (
+                                    "A self-review cannot release your own pause."
+                                ),
+                                "review_authorship_invalid": (
+                                    "Malformed reviewed-work authorship metadata "
+                                    "cannot authorize a resume."
+                                ),
+                                "reviewer_author_conflict": (
+                                    "A declared author of the reviewed work cannot "
+                                    "authorize its resume as an independent reviewer."
+                                ),
+                            }[authority_refusal]
+                            return [error_response(
+                                f"{refusal_message} The synthesis is recorded; "
+                                "resuming requires an independent reviewer or an operator.",
+                                error_code=refusal_code,
+                                error_category="governance_refusal",
+                                details={
+                                    "session_id": session_id,
+                                    "reviewer_agent_id": session.reviewer_agent_id,
+                                    "paused_agent_id": session.paused_agent_id,
+                                    "awaiting_facilitation": True,
+                                    "terminal_committed": False,
+                                    "detected_at": "precommit_authority_recheck",
+                                },
+                                recovery={
+                                    "action": (
+                                        "Assign an independent reviewer or ask an "
+                                        "operator to facilitate the open synthesis."
+                                    ),
+                                    "related_tools": ["dialectic", "identity"],
+                                },
+                                arguments=arguments,
+                            )]
+
                         written = await _commit_converged_resolution(
                             session, resolution
                         )
