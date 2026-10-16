@@ -336,6 +336,51 @@ def check_window(
     return lines
 
 
+CROSSING_REPORT_SCHEMA = "eisv.era_crossing.v1"
+
+
+def crossing_report(
+    start: datetime, end: datetime, *, path: Path = REGISTRY_PATH
+) -> dict[str, Any]:
+    """Which instrument changes a window spans, for a reader that must not refuse.
+
+    Scheduled checks and served reports keep running across a maths change, so
+    instead of ``require_single_era`` they attach this and say their figures
+    pool instruments. Time-based only: a served route cannot see stamped ids
+    without its own query.
+    """
+    crossed = boundaries_crossed(start, end, path=path)
+    return {
+        "schema": CROSSING_REPORT_SCHEMA,
+        "window_start": _utc(start).isoformat(),
+        "window_end": _utc(end).isoformat(),
+        "current_era": current_era_id(path),
+        "pooled_across_changes": bool(crossed),
+        "crossed": [
+            {
+                "id": b.id,
+                "kind": b.kind,
+                "effective_at": b.effective_at.isoformat() if b.effective_at else None,
+                "summary": b.summary,
+            }
+            for b in crossed
+        ],
+    }
+
+
+def crossing_note(report: Mapping[str, Any]) -> str:
+    """One sentence for a human-readable report; empty inside one era."""
+    crossed = report.get("crossed") or []
+    if not crossed:
+        return ""
+    ids = ", ".join(entry["id"] for entry in crossed)
+    return (
+        f"The window spans EISV instrument change(s) {ids} "
+        "(config/eisv_instrument_eras.json), so these figures pool rows from "
+        "different instruments."
+    )
+
+
 def is_settled(stamp: Optional[Mapping[str, Any]], min_updates: int = DEFAULT_SETTLED_UPDATES) -> bool:
     """Whether a stamped row is past the restore transient of its instrument.
 

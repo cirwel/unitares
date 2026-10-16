@@ -139,6 +139,10 @@ async def test_query_combines_state_contracts_and_clustered_calibration():
     assert report["success"] is True
     assert report["schema"] == EISV_TELEMETRY_HEALTH_SCHEMA
     assert report["window_days"] == 30
+    eras = report["eisv_instrument_eras"]
+    assert eras["schema"] == "eisv.era_crossing.v1"
+    assert isinstance(eras["pooled_across_changes"], bool)
+    assert eras["pooled_across_changes"] == bool(eras["crossed"])
     assert report["calibration"]["with_envelope"] == 1
     assert [item["surface"] for item in report["risk_vocabularies"]] == [
         "behavioral_verdict",
@@ -244,3 +248,16 @@ def test_scraped_only_rows_are_counted_and_kept_only_under_the_corrected_rule():
         )
     ]
     assert build_calibration_summary(never_excluded, min_bin_clusters=1, min_cohort_clusters=10)["scraped_only_rows"] == 0
+
+
+def test_era_crossing_never_fails_the_report(monkeypatch):
+    import src.eisv_eras as eras
+    from src.eisv_telemetry_health import _era_crossing
+
+    def boom(*_a, **_k):
+        raise OSError("registry unreadable")
+
+    monkeypatch.setattr(eras, "crossing_report", boom)
+    report = _era_crossing(30)
+    assert report["schema"] == "eisv.era_crossing.v1"
+    assert report["error"].startswith("OSError")

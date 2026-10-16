@@ -741,8 +741,12 @@ runtime read of state, history, baselines and calibration filters on
   The registered-read path (`eisv_skeptic_report.fetch_rows`, the ablation
   matrix, the input snapshot, the prospective cohort) is deliberately not wired:
   it has its own boundary at T and changing it would change the 12-01 read.
-  Not yet wired: the class-anchor regeneration, the doctor's 7-day checks, the
-  telemetry-health route, and all-time trajectory reads.
+  Readers that run on a schedule or serve live traffic annotate instead of
+  refusing (`crossing_report`, `crossing_note`): the doctor's
+  `signal_degeneracy` check names the crossed changes in its detail, and
+  `/v1` telemetry-health returns them under `eisv_instrument_eras`. Both are
+  time-based only. Not yet wired: the class-anchor regeneration and all-time
+  trajectory reads.
 
 There is no per-field exemption. A change that only touches the basin or the
 action still moves behavioral E, I and V on later check-ins, because the action

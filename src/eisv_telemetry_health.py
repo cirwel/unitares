@@ -9,7 +9,7 @@ paths and it does not reinterpret EISV as an outcome judgment.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import json
 import math
 from typing import Any
@@ -746,6 +746,23 @@ def _normalize_json(value: Any) -> dict[str, Any]:
     raise TypeError("telemetry health query did not return a JSON object")
 
 
+def _era_crossing(window_days: int) -> dict[str, Any]:
+    """Instrument changes inside the report window (time-based, never raises).
+
+    The aggregates above pool every row in the window, so a window that spans
+    a maths change mixes instruments; the report says so instead of refusing.
+    """
+    try:
+        from src import eisv_eras
+
+        end = datetime.now(timezone.utc)
+        report = eisv_eras.crossing_report(end - timedelta(days=window_days), end)
+        report["note"] = eisv_eras.crossing_note(report)
+        return report
+    except Exception as exc:  # the registry is provenance; never fail the route on it
+        return {"schema": "eisv.era_crossing.v1", "error": f"{type(exc).__name__}: {exc}"}
+
+
 async def query_eisv_telemetry_health(
     conn: Any,
     *,
@@ -773,6 +790,7 @@ async def query_eisv_telemetry_health(
             for vocabulary in RISK_VOCABULARIES
         ],
         "calibration": build_calibration_summary(outcome_rows),
+        "eisv_instrument_eras": _era_crossing(window_days),
         "semantics": {
             "measurement": "EISV is a proprioceptive estimate, not an outcome judgment.",
             "contract_checks": "Cross-field serialization invariants, not quality scores.",
