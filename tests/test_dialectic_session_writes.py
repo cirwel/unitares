@@ -453,6 +453,43 @@ class TestNoOpsAreNotWrites:
         assert response["existing_status"] == "resolved"
 
     @pytest.mark.asyncio
+    async def test_resolve_winner_carries_terminal_snapshot_without_audit_leak(
+        self, captured, fake_db
+    ):
+        resolution = {"action": "resume", "conditions": ["monitor"]}
+
+        async def idempotent(session_id, candidate, status, detail=None, **expected):
+            detail.update(
+                written=False,
+                existing_status="resolved",
+                existing_phase="resolved",
+                existing_paused_agent_id="paused-A",
+                existing_reviewer_agent_id="reviewer-B",
+                existing_resolution=resolution,
+            )
+            return True
+
+        fake_db.resolve_session = AsyncMock(side_effect=idempotent)
+        winner = {}
+
+        assert await dialectic_db.resolve_session_async(
+            "s1", resolution, "resolved", winner=winner
+        ) is False
+        assert winner == {
+            "effect_ts": None,
+            "winner_status": "resolved",
+            "winner_reason": None,
+            "row_missing": False,
+            "winner_phase": "resolved",
+            "winner_paused_agent_id": "paused-A",
+            "winner_reviewer_agent_id": "reviewer-B",
+            "winner_resolution": resolution,
+        }
+        _attempt, response = _pair(captured)
+        assert response["outcome"] == "no_op"
+        assert "winner_resolution" not in response
+
+    @pytest.mark.asyncio
     async def test_a_duplicate_create_is_not_written(self, captured, fake_db):
         fake_db.create_session = AsyncMock(
             return_value={"session_id": "s1", "created": False, "error": "already_exists"})

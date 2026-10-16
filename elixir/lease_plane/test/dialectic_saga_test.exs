@@ -58,6 +58,50 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     }
   end
 
+  defp effect_resolution do
+    %{
+      "action" => "resume",
+      "conditions" => ["monitor"],
+      "root_cause" => "independent review",
+      "reasoning" => "the parties agreed",
+      "signature_a" => "",
+      "signature_b" => "",
+      "timestamp" => "2026-10-16T00:00:00+00:00",
+      "signature_version" => 3
+    }
+  end
+
+  defp put_pause_binding(session_id, effect_required, pause_token) do
+    Postgrex.query!(
+      DB,
+      "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+      [
+        session_id,
+        Jason.encode!(%{
+          "pause_effect_required" => effect_required,
+          "pause_token" => pause_token
+        })
+      ]
+    )
+  end
+
+  defp resolution_effect(session_id) do
+    case Postgrex.query!(
+           DB,
+           """
+           SELECT effect_required, pause_token, state,
+                  COALESCE((execution_result_json->>'no_op')::boolean, false),
+                  resolution_payload_json->>'action'
+           FROM coordination.dialectic_resolution_effects
+           WHERE session_id = $1
+           """,
+           [session_id]
+         ).rows do
+      [row] -> row
+      [] -> nil
+    end
+  end
+
   test "claim reserves a fresh saga for a non-terminal session" do
     session_id = insert_dialectic_session()
     on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -140,6 +184,78 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
 
       assert session_status(session_id) == "resolved"
       assert saga_state(saga_id) == "pg_committed"
+    end
+
+    test "legacy protocol commits terminal state without creating an effect row" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, "pause-legacy")
+
+      assert {:ok, %{status: "resolved"}} =
+               DialecticSaga.resolve(claim_params(session_id, effect_resolution()))
+
+      assert session_status(session_id) == "resolved"
+      assert resolution_effect(session_id) == nil
+    end
+
+    test "v1 protocol atomically creates a pending effect for the bound pause" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, "pause-v1")
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "resolved"
+      assert resolution_effect(session_id) == [true, "pause-v1", "pending", false, "resume"]
+    end
+
+    test "v1 protocol records an applied no-op when no pause existed at open" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, false, nil)
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(params)
+      assert resolution_effect(session_id) == [false, nil, "applied", true, "resume"]
+    end
+
+    test "v1 protocol rolls back terminal state when a required pause token is missing" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, nil)
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:error, %Postgrex.Error{}} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "active"
+      assert resolution_effect(session_id) == nil
+    end
+
+    test "v1 failed transition has no runtime effect" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+      put_pause_binding(session_id, true, nil)
+
+      params =
+        session_id
+        |> claim_params(%{"reason" => "safety"})
+        |> Map.put(:effect_protocol, "v1")
+        |> Map.put(:status, "failed")
+
+      assert {:ok, %{status: "failed"}} = DialecticSaga.resolve(params)
+      assert session_status(session_id) == "failed"
+      assert resolution_effect(session_id) == nil
     end
 
     test "refuses a resolved transition unless the live row is still in synthesis" do

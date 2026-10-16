@@ -1,0 +1,39 @@
+{
+  "schema": "unitares.skill_attestation.v1",
+  "skill": "governance-lifecycle",
+  "verified_at": "2026-10-16T09:40:47Z",
+  "verified_date": "2026-10-16",
+  "verifier": "Codex 269e26df: re-checked pause-expiry, durable resume ownership, reconciliation, and recovery-tool guidance against the final handlers and identity DAO",
+  "source_digests": {
+    "unitares/commands/closeout.md": "abd5ddd6c2f17dc4",
+    "unitares/src/agent_storage.py": "04befb49f8a892b0",
+    "unitares/src/db/mixins/identity.py": "c8a60882f89638b2",
+    "unitares/src/dialectic_reviewed_work.py": "d8cf8219b402600f",
+    "unitares/src/governance_monitor.py": "b5b880745cc2273c",
+    "unitares/src/interface_contract.py": "2d395048762f3cb2",
+    "unitares/src/mcp_handlers/admin/handlers.py": "38902490f809ae60",
+    "unitares/src/mcp_handlers/core.py": "74e0dc06dc37264a",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "9deaa88113b886b7",
+    "unitares/src/mcp_handlers/identity/handlers.py": "4a49fc5f10d53cce",
+    "unitares/src/mcp_handlers/introspection/tool_introspection.py": "2695884adf7a029b",
+    "unitares/src/mcp_handlers/lifecycle/recovery_policy.py": "3d108c675fb24421",
+    "unitares/src/mcp_handlers/lifecycle/self_recovery.py": "1ee178b6f547c2be",
+    "unitares/src/mcp_handlers/middleware/envelope_step.py": "c4d9c5e361675554",
+    "unitares/src/mcp_handlers/middleware/identity_step.py": "1818f867ac4aabf2",
+    "unitares/src/mcp_handlers/support/agent_auth.py": "32ff869a5aa64f89",
+    "unitares/src/mcp_handlers/support/pause_ttl.py": "0514964ffc19107f",
+    "unitares/src/mcp_handlers/tool_stability.py": "e80cdc5e28bc6bc0",
+    "unitares/src/mcp_handlers/updates/enrichments.py": "55b32ed9d147ccc0",
+    "unitares/src/mcp_handlers/updates/phases.py": "65d0d9415481c3bf",
+    "unitares/src/monitor_calibration.py": "c99375f368dd98aa",
+    "unitares/src/schema_brief.py": "401bbce563c30439",
+    "unitares/src/tool_mode_listing.py": "7f50ce631689ce55",
+    "unitares/src/tool_modes.py": "2a604180b001fd9d"
+  },
+  "skill_digest": "21e3b166fc33c245",
+  "superseded_digests": {
+    "unitares/src/mcp_handlers/dialectic/handlers.py": [
+      "1fb6b00ae2801e39"
+    ]
+  }
+}

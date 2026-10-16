@@ -234,6 +234,13 @@ async def test_proxy_request_excludes_author_and_persists_declaration():
     ) as create_session, patch(
         "src.mcp_handlers.dialectic.handlers._emit_dialectic_event",
         new=AsyncMock(),
+    ), patch(
+        "src.agent_storage.read_authoritative_pause_binding",
+        new=AsyncMock(return_value={
+            "pause_effect_required": False,
+            "pause_token": None,
+            "status": "active",
+        }),
     ):
         response = await handle_request_dialectic_review({
             "agent_id": PROXY,

@@ -2,7 +2,7 @@
 
 dialectic-on-BEAM Slice 1.2. When ``UNITARES_DIALECTIC_BEAM_RESOLUTION`` is on,
 the Python convergence path hands the finished resolution payload to the BEAM
-lease plane (`POST /v1/dialectic/resolve`), which owns the cross-runtime saga
+lease plane (`POST /v1/dialectic/resolve-with-effect`), which owns the cross-runtime saga
 slot and is the sole writer of the terminal `core.dialectic_sessions` row.
 
 Fail-safe by construction: this returns ``None`` — telling the caller to use the
@@ -294,13 +294,17 @@ async def beam_resolve(
     reviewer_agent_id: Optional[str],
     resolution: Dict[str, Any],
     status: str = "resolved",
+    *,
+    detail: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Commit a terminal dialectic transition via BEAM.
 
     ``status`` is "resolved" or "failed" — BEAM is the sole writer of the
     session row for both. Returns the BEAM result dict on success (row written
     + saga committed BEAM-side), or ``None`` to signal the caller to fall back
-    to the Python path. Never raises.
+    to the Python path. ``detail["commit_unknown"]`` distinguishes a response
+    failure that may have followed the row commit from an early/definitive
+    non-write. Governance-policy refusals still raise.
     """
     if not beam_resolution_enabled():
         return None
@@ -329,10 +333,14 @@ async def beam_resolve(
     except Exception:  # pragma: no cover - httpx always present in this deploy
         return None
 
+    post_started = False
+
     def _post():
+        nonlocal post_started
         with httpx.Client(timeout=5.0) as client:
+            post_started = True
             resp = client.post(
-                f"{base_url}/v1/dialectic/resolve",
+                f"{base_url}/v1/dialectic/resolve-with-effect",
                 headers={
                     "Authorization": f"Bearer {bearer}",
                     "Content-Type": "application/json",
@@ -355,6 +363,12 @@ async def beam_resolve(
         except Exception as e:
             logger.warning(f"[BEAM_RESOLVE] call failed for {session_id[:16]}, falling back to Python: {e}")
             rec.respond(outcome="no_response", error=type(e).__name__)
+            if post_started and detail is not None:
+                # Once Client.post() is entered, a timeout, response decode
+                # failure, or transport teardown cannot prove the server did
+                # not commit before the response was lost. Exact PostgreSQL
+                # readback decides whether the caller must route reconciliation.
+                detail["commit_unknown"] = True
             return None
 
         if status == 200 and isinstance(body, dict) and body.get("ok"):
@@ -374,11 +388,20 @@ async def beam_resolve(
             rec.respond(**fields)
             return body
 
-        rec.respond(outcome="not_written", http_status=status,
+        commit_unknown = status >= 500 or 200 <= status < 300
+        rec.respond(outcome=("commit_unknown" if commit_unknown else "not_written"),
+                    http_status=status,
                     error=body.get("error") if isinstance(body, dict) else None)
         _raise_authorship_policy_refusal(status, body, operation="resolve_session")
-        # 409 saga_in_flight / 404 / 503 / malformed -> fall back to the Python
-        # path, whose B-4 guard still prevents an overwrite.
+        if commit_unknown and detail is not None:
+            # A 5xx can be returned after commit_session_row succeeded but saga
+            # finalization failed. A malformed/negative 2xx is equally
+            # ambiguous. 4xx policy/conflict responses are definitive.
+            detail["commit_unknown"] = True
+            detail["http_status"] = status
+        # Every non-OK falls back to the Python path, whose B-4 guard prevents
+        # an overwrite. The detail above keeps 5xx/malformed-2xx distinguishable
+        # from definitive 4xx refusals for exact-readback reconciliation.
         logger.warning(
             f"[BEAM_RESOLVE] non-OK ({status}) for {session_id[:16]}: {body}; falling back to Python"
         )

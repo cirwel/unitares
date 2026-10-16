@@ -13,16 +13,16 @@ gate-traversal, letting the categorizer re-evaluate. A genuinely
 degraded agent re-pauses on the next cycle via the normal
 circuit-breaker path. A sleep-wake artifact resumes clean.
 
-All callers share `_pause_is_stale` for the decision and
-`_apply_in_memory_expire` for the mutation, so behavior is identical
-across all the pause gates in the system. Audit visibility via
-`audit_logger.log_pause_auto_expired` happens in both sync and async
-entry points.
+All callers share `_pause_is_stale` for the decision and the same token-fenced
+durable resume. The cache is published active only after both durable status
+copies and the pause token commit atomically. Audit visibility via
+`audit_logger.log_pause_auto_expired` follows that commit.
 
-The async entry point awaits persistence; the sync entry point
-fire-and-forget schedules it on the running loop (or AuditLogger's
-captured main loop) using the same pattern as
-`src/coordination_failure_emit.py:_schedule_coordination_events_dual_write`.
+The async entry point can await the commit and continue the current request.
+The sync entry point schedules the same transaction on the running loop (or
+AuditLogger's captured main loop) and keeps the current request blocked; the
+next retry observes the committed active cache. A synchronous gate must never
+grant operation while its durable resume is still in flight.
 """
 
 from __future__ import annotations
@@ -117,6 +117,89 @@ def _emit_audit(agent_uuid: str, original_paused_at: Optional[str]) -> None:
 # ─── Async entry point (process_agent_update path) ─────────────────────
 
 
+async def _expire_pause_durably(
+    agent_uuid: str,
+    meta: Any,
+    original_paused_at: Optional[str],
+    *,
+    sync_path: bool = False,
+) -> bool:
+    """Consume one exact stale pause, then publish the committed cache state."""
+    if not isinstance(original_paused_at, str) or not original_paused_at.strip():
+        return False
+
+    lifecycle_event = {
+        "event": "pause_auto_expired",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "reason": (
+            f"pause from {original_paused_at} aged out"
+            + (" (sync path)" if sync_path else "")
+        ),
+        "pause_token": original_paused_at,
+    }
+    try:
+        from src import agent_storage
+
+        resume = await agent_storage.resume_agent_if_pause_token(
+            agent_uuid,
+            expected_pause_token=original_paused_at,
+            dialectic_condition_additions=[],
+            lifecycle_event=lifecycle_event,
+        )
+    except Exception as exc:  # noqa: BLE001 — a failed commit stays paused
+        logger.warning(
+            "[pause-ttl] durable pause expiry failed; keeping cache paused: %r",
+            exc,
+        )
+        return False
+
+    if not resume.get("applied"):
+        # A concurrent durable transition won. Reconcile only facts the locked
+        # read proved; never clear a newer pause generation from stale cache.
+        if resume.get("reason") == "pause_generation_superseded":
+            agent_status = resume.get("agent_status")
+            identity_status = resume.get("identity_status")
+            current_token = resume.get("current_pause_token")
+            if agent_status == identity_status == "active" and current_token is None:
+                if (
+                    getattr(meta, "status", None) == "paused"
+                    and getattr(meta, "paused_at", None) == original_paused_at
+                ):
+                    meta.status = "active"
+                    meta.paused_at = None
+                return True
+            if (
+                agent_status == identity_status == "paused"
+                and isinstance(current_token, str)
+                and current_token.strip()
+                and getattr(meta, "paused_at", None) == original_paused_at
+            ):
+                meta.paused_at = current_token
+        logger.warning(
+            "[pause-ttl] durable pause expiry refused (%s); keeping cache paused",
+            resume.get("reason") or "unknown",
+        )
+        return False
+
+    logger.warning(
+        "[pause-ttl] auto-expired stale pause (paused_at=%s); categorizer will "
+        "re-evaluate%s",
+        original_paused_at,
+        " (sync path)" if sync_path else "",
+    )
+    _emit_audit(agent_uuid, original_paused_at)
+    if (
+        getattr(meta, "status", None) == "paused"
+        and getattr(meta, "paused_at", None) == original_paused_at
+    ):
+        _apply_in_memory_expire(meta)
+        return True
+    # Another process published a newer cache pause while the transaction was
+    # in flight. The old durable generation did expire, but this traversal must
+    # still respect the newer local pause.
+    return getattr(meta, "status", None) != "paused"
+
+
 async def maybe_auto_expire_pause_async(agent_uuid: str, meta: Any) -> bool:
     """Auto-expire a stale pause; await persistence. Returns True if expired.
 
@@ -128,37 +211,8 @@ async def maybe_auto_expire_pause_async(agent_uuid: str, meta: Any) -> bool:
     if not _pause_is_stale(meta.paused_at):
         return False
 
-    original_paused_at = _apply_in_memory_expire(meta)
-    logger.warning(
-        "[pause-ttl] auto-expired stale pause (paused_at=%s); "
-        "categorizer will re-evaluate",
-        original_paused_at,
-    )
-    _emit_audit(agent_uuid, original_paused_at)
-
-    try:
-        from src import agent_storage
-        await agent_storage.persist_runtime_state(
-            agent_uuid,
-            paused_at=None,
-            append_lifecycle_event={
-                "event": "pause_auto_expired",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "reason": f"pause from {original_paused_at} aged out",
-            },
-        )
-    except Exception as exc:  # noqa: BLE001 — persistence is non-fatal
-        # In-memory flip already lets this gate through. If persistence
-        # fails, the next load_metadata_async(force=True) may re-hydrate
-        # paused_at; this code path will fire again on the next stale
-        # check-in, producing one extra audit row per check-in until
-        # persistence succeeds.
-        logger.warning(
-            "[pause-ttl] persist_runtime_state(pause_auto_expired) failed "
-            "after in-memory expiry: %r",
-            exc,
-        )
-    return True
+    original_paused_at = meta.paused_at
+    return await _expire_pause_durably(agent_uuid, meta, original_paused_at)
 
 
 # ─── Sync entry point (check_agent_can_operate path) ───────────────────
@@ -170,40 +224,50 @@ async def maybe_auto_expire_pause_async(agent_uuid: str, meta: Any) -> bool:
 # helper are themselves invoked from a wide variety of contexts (sync
 # tools, REST endpoints, MCP handlers).
 _inflight_persistence_tasks: "set[asyncio.Task]" = set()
+_inflight_expiry_by_agent: "dict[str, asyncio.Task]" = {}
 
 
-def _spawn_persistence_task(loop: asyncio.AbstractEventLoop, coro: Any) -> None:
-    """Spawn coro on `loop` and pin a strong ref until it completes."""
-    task = loop.create_task(coro, name="pause_ttl_fire_and_forget_persist")
+def _spawn_persistence_task(
+    loop: asyncio.AbstractEventLoop,
+    agent_uuid: str,
+    coro_factory: Any,
+) -> None:
+    """Spawn one expiry per agent and pin a strong ref until it completes."""
+    existing = _inflight_expiry_by_agent.get(agent_uuid)
+    if existing is not None and not existing.done():
+        return
+    task = loop.create_task(
+        coro_factory(), name="pause_ttl_fire_and_forget_persist"
+    )
     _inflight_persistence_tasks.add(task)
-    task.add_done_callback(_inflight_persistence_tasks.discard)
+
+    def _discard(completed: asyncio.Task) -> None:
+        _inflight_persistence_tasks.discard(completed)
+        if _inflight_expiry_by_agent.get(agent_uuid) is completed:
+            _inflight_expiry_by_agent.pop(agent_uuid, None)
+
+    _inflight_expiry_by_agent[agent_uuid] = task
+    task.add_done_callback(_discard)
 
 
 def _schedule_persistence_fire_and_forget(
-    agent_uuid: str, original_paused_at: Optional[str]
+    agent_uuid: str,
+    meta: Any,
+    original_paused_at: Optional[str],
 ) -> None:
     """Schedule the persistence coroutine on the best-available loop.
 
     Mirrors `src/coordination_failure_emit.py:_schedule_coordination_events_dual_write`.
     """
     try:
-        from src import agent_storage
-
         def _coro_factory():
-            return agent_storage.persist_runtime_state(
-                agent_uuid,
-                paused_at=None,
-                append_lifecycle_event={
-                    "event": "pause_auto_expired",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "reason": f"pause from {original_paused_at} aged out "
-                              f"(sync path)",
-                },
+            return _expire_pause_durably(
+                agent_uuid, meta, original_paused_at, sync_path=True
             )
 
         try:
             loop = asyncio.get_running_loop()
-            _spawn_persistence_task(loop, _coro_factory())
+            _spawn_persistence_task(loop, agent_uuid, _coro_factory)
             return
         except RuntimeError:
             pass
@@ -217,7 +281,9 @@ def _schedule_persistence_fire_and_forget(
 
         if captured_loop is not None and captured_loop.is_running():
             def _spawn_on_main():
-                _spawn_persistence_task(captured_loop, _coro_factory())
+                _spawn_persistence_task(
+                    captured_loop, agent_uuid, _coro_factory
+                )
             captured_loop.call_soon_threadsafe(_spawn_on_main)
     except Exception as exc:  # noqa: BLE001
         logger.debug("[pause-ttl] persistence schedule failed: %r", exc)
@@ -322,8 +388,10 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
             expires_at = None
     if expires_at:
         re_evaluation = (
-            f"After {expires_at} the next check-in or new shared-memory entry is let "
-            "through and the pause lifts. " + _post_gap_repause_text()
+            f"After {expires_at} the next check-in durably resumes the agent before "
+            "it is accepted. A new shared-memory entry starts the same durable "
+            "resume, but that entry remains refused; resubmit it after the pause "
+            "lifts. " + _post_gap_repause_text()
         )
     else:
         re_evaluation = "No re-evaluation time is recorded for this pause."
@@ -356,7 +424,7 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
 
 
 def maybe_auto_expire_pause_sync(agent_uuid: str, meta: Any) -> bool:
-    """Sync variant: in-memory flip is synchronous, persistence is scheduled.
+    """Sync variant: schedule durable expiry and keep this traversal blocked.
 
     Returns True if the pause was expired; False if it should still
     block. Callers should check the return value before returning the
@@ -365,12 +433,11 @@ def maybe_auto_expire_pause_sync(agent_uuid: str, meta: Any) -> bool:
     if not _pause_is_stale(meta.paused_at):
         return False
 
-    original_paused_at = _apply_in_memory_expire(meta)
-    logger.warning(
-        "[pause-ttl] auto-expired stale pause (paused_at=%s); "
-        "categorizer will re-evaluate (sync path)",
-        original_paused_at,
+    original_paused_at = meta.paused_at
+    _schedule_persistence_fire_and_forget(
+        agent_uuid, meta, original_paused_at
     )
-    _emit_audit(agent_uuid, original_paused_at)
-    _schedule_persistence_fire_and_forget(agent_uuid, original_paused_at)
-    return True
+    # A synchronous caller cannot wait for the status/token transaction, so it
+    # must not operate yet. The scheduled task publishes the cache only after
+    # commit; the next retry will then return through the ordinary active path.
+    return False

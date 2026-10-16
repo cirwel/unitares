@@ -439,8 +439,23 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # the Python side by UNITARES_DIALECTIC_BEAM_RESOLUTION (default off), so this
   # endpoint is dormant until an operator flips the flag.
   post "/v1/dialectic/resolve" do
+    resolve_dialectic(conn, nil)
+  end
+
+  # Versioned opt-in for the durable runtime-effect protocol.  New Python calls
+  # only this path; an old BEAM returns 404 before touching the session, so the
+  # caller can safely use its own atomic PostgreSQL writer.  The legacy path
+  # above intentionally stays terminal-only for old Python, which still owns
+  # and directly applies the effect after the response.
+  post "/v1/dialectic/resolve-with-effect" do
+    resolve_dialectic(conn, "v1")
+  end
+
+  defp resolve_dialectic(conn, effect_protocol) do
     case extract_resolve_params(conn.body_params) do
       {:ok, params} ->
+        params = Map.put(params, :effect_protocol, effect_protocol)
+
         case UnitaresLeasePlane.DialecticSaga.resolve(params) do
           {:ok, result} ->
             json(conn, 200, Map.put(result, :ok, true))

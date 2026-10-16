@@ -1352,7 +1352,11 @@ class DialecticSession:
         # unchanged; v3 says the emptiness is by design.
         resolution = Resolution(
             action=ResolutionAction.RESUME.value,
-            conditions=merged["conditions"],
+            # Persist exactly the normalized shape the read path reconstructs.
+            # Otherwise a response-loss replay compares the terminal payload
+            # (with whitespace) to a reloaded Resolution (without it) and
+            # falsely reports an effect conflict.
+            conditions=canonical_conditions(merged["conditions"]),
             root_cause=merged["root_cause"],
             reasoning=merged["reasoning"],
             signature_a="",

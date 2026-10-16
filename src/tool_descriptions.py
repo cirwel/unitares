@@ -200,7 +200,8 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "For advice outside a governed-review session, use consult; audit metadata and inference accounting still apply. get and "
         "list serve unbound callers; every other action needs a bound "
         "identity, quick fails without issue_description, and thesis, "
-        "antithesis, synthesis and reassign each need a session_id the "
+        "antithesis, synthesis, reassign and reconcile_effect each need a "
+        "session_id the "
         "schema does not mark required. request refuses "
         "with SESSION_EXISTS while your agent already has an active session. "
         "For a bound caller get with check_timeout=true becomes a write that "
@@ -215,7 +216,10 @@ _INFERENCE_DESCRIPTION_OVERRIDES = {
         "one-call alias for request. The separate consult tool advises "
         "without opening a record; dialectic(action='consult') is different: "
         "it files an outside verdict on an existing session as a "
-        "non-authoritative transcript record."
+        "non-authoritative transcript record. reconcile_effect is an "
+        "operator-only recovery action: it may apply a still-pending durable "
+        "terminal effect, but it never automatically replays an applying or "
+        "unknown-partial effect."
     ),
 }
 

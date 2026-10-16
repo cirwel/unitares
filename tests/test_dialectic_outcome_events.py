@@ -134,7 +134,7 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         storage.persist_runtime_state.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_conditions_applied_count_excludes_failed(self):
+    async def test_failed_condition_prevents_resume_and_outcome_event(self):
         emit = AsyncMock(return_value={"outcome_id": "evt-2"})
         session = _session()
         resolution = _resolution(conditions=["c1", "c2", "c3"])
@@ -149,11 +149,12 @@ class TestExecuteResolutionEmitsOutcomeEvent:
         with p_module, p_storage, \
              patch.object(resolution_mod, "parse_condition", side_effect=lambda c: {"raw": c}), \
              patch.object(resolution_mod, "apply_condition", side_effect=fake_apply):
-            await resolution_mod.execute_resolution(session, resolution)
+            result = await resolution_mod.execute_resolution(session, resolution)
 
-        detail = emit.await_args.args[0]["detail"]
-        assert detail["conditions_total"] == 3
-        assert detail["conditions_applied"] == 2  # c2 failed
+        assert result["success"] is False
+        assert result["status_changed"] is False
+        assert result["applied_conditions"][1]["status"] == "failed"
+        emit.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_conditions_applied_count_excludes_retired(self):

@@ -400,42 +400,87 @@ async def process_update_authenticated_async(
 
         # Enforce pause decisions (circuit breaker)
         if decision_action == 'pause' and meta is not None:
-            meta.status = "paused"
-            meta.paused_at = now
             decision_reason = result.get('decision', {}).get('reason', 'Circuit breaker triggered')
+            actuation_id = str(uuid4())
+            pause_event = {
+                "event": "paused",
+                "timestamp": now,
+                "reason": decision_reason,
+                "actuation_id": actuation_id,
+            }
+            durable_pause_applied = False
+            reused_pause_generation = False
+            cache_pause_token = now
+            pause_persistence_error = None
+            try:
+                from src import agent_storage
+                pause_result = await agent_storage.pause_agent_with_token(
+                    agent_id,
+                    pause_token=now,
+                    lifecycle_event=pause_event,
+                )
+                durable_pause_applied = bool(pause_result.get("applied"))
+                if not durable_pause_applied:
+                    pause_persistence_error = (
+                        pause_result.get("reason") or "pause_write_refused"
+                    )
+                    existing_token = pause_result.get("current_pause_token")
+                    if (
+                        pause_persistence_error
+                        == "already_paused_different_generation"
+                        and isinstance(existing_token, str)
+                        and existing_token.strip()
+                    ):
+                        # A stale cache reached the actuator after another
+                        # process already committed the pause. Reuse that
+                        # generation; publishing ``now`` would invent an
+                        # uncommitted token and make recovery fail closed.
+                        durable_pause_applied = True
+                        reused_pause_generation = True
+                        cache_pause_token = existing_token
+                        pause_persistence_error = None
+            except Exception as e:
+                pause_persistence_error = type(e).__name__
+                logger.warning(
+                    "pause_agent_with_token failed for %s...: %s",
+                    agent_id[:8],
+                    e,
+                )
+
+            # Preserve the historical fail-safe local circuit breaker if the
+            # database is unavailable, but never auto-resolve that degraded
+            # pause: no session may be bound to a generation that was not
+            # committed durably.  The request handler detects cache/durable
+            # disagreement and refuses rather than minting an active no-op.
+            meta.status = "paused"
+            meta.paused_at = cache_pause_token
             actuation_id = mark_circuit_breaker_enforcement_applied(
                 result,
                 actor="agent_loop_detection",
-                effect="agent_metadata.status=paused",
+                effect=(
+                    "durable_pause_generation_already_present"
+                    if reused_pause_generation
+                    else "durable_agent_status_and_pause_generation"
+                    if durable_pause_applied
+                    else "in_memory_pause_only"
+                ),
+                actuation_id=actuation_id,
                 applied_at=now,
             )
-            meta.add_lifecycle_event(
-                "paused",
-                decision_reason,
-                actuation_id=actuation_id,
-            )
+            result["enforcement"]["durable"] = durable_pause_applied
+            if reused_pause_generation:
+                result["enforcement"]["reused_pause_generation"] = True
+            if pause_persistence_error:
+                result["enforcement"]["persistence_error"] = (
+                    pause_persistence_error
+                )
+            if not reused_pause_generation:
+                meta.add_lifecycle_event(
+                    "paused",
+                    decision_reason,
+                    actuation_id=actuation_id,
+                )
             logger.warning(f"⚠️  Circuit breaker triggered for agent '{agent_id}': {decision_reason}")
-
-            # P011: persist paused_at + the lifecycle event so they survive
-            # the next load_metadata_async(force=True). Without this, the
-            # agent record shows paused_at=null and lifecycle_events=[]
-            # despite the pause having actually fired.
-            try:
-                from src import agent_storage
-                await agent_storage.persist_runtime_state(
-                    agent_id,
-                    paused_at=now,
-                    append_lifecycle_event={
-                        "event": "paused",
-                        "timestamp": now,
-                        "reason": decision_reason,
-                        "actuation_id": actuation_id,
-                    },
-                )
-            except Exception as e:
-                logger.warning(
-                    f"persist_runtime_state(paused) failed for {agent_id[:8]}...: {e}"
-                )
 
             # Telemetry: record governance pause timestamp
             _governance_pause_timestamps.append(datetime.now(timezone.utc))
@@ -458,12 +503,18 @@ async def process_update_authenticated_async(
 
             try:
                 auto_recovery = os.getenv("UNITARES_AUTO_DIALECTIC_RECOVERY", "1").strip().lower() not in ("0", "false", "no")
-                if auto_recovery:
+                if auto_recovery and durable_pause_applied:
                     task = loop.create_task(_auto_initiate_dialectic_recovery(agent_id, decision_reason))
                     _background_tasks.add(task)
                     task.add_done_callback(_background_tasks.discard)
                     result["auto_recovery_initiated"] = True
                     result["auto_recovery_note"] = "Dialectic recovery auto-initiated (self-governance mode)"
+                elif auto_recovery:
+                    result["auto_recovery_initiated"] = False
+                    result["auto_recovery_note"] = (
+                        "Dialectic recovery not started because the pause "
+                        "generation was not committed durably."
+                    )
             except Exception as e:
                 logger.warning(f"Could not auto-initiate dialectic recovery: {e}")
 

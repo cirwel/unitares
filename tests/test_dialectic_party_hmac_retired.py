@@ -277,6 +277,10 @@ async def test_peer_review_synthesis_path_mints_nothing():
         paused_agent_id="agent-paused",
         reviewer_agent_id="agent-reviewer",
         dispute_type="verification",
+        paused_agent_state={
+            "pause_effect_required": True,
+            "pause_token": "pause-test",
+        },
     )
     session.phase = DialecticPhase.SYNTHESIS
     session.synthesis_round = 1
@@ -349,6 +353,10 @@ async def test_synthetic_reviewer_path_mints_nothing():
 
     session = DialecticSession(
         paused_agent_id="agent-paused", reviewer_agent_id=None, session_type="recovery",
+        paused_agent_state={
+            "pause_effect_required": True,
+            "pause_token": "pause-test",
+        },
     )
     session.phase = DialecticPhase.THESIS
     ACTIVE_SESSIONS[session.session_id] = session
@@ -364,6 +372,9 @@ async def test_synthetic_reviewer_path_mints_nothing():
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
+            patch(f"{DIALECTIC}.execute_resolution", new=AsyncMock(
+                return_value={"success": True, "applied_conditions": []}
+            )),
             patch(f"{DIALECTIC}.save_session", new=AsyncMock()),
             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
             patch(f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)),
@@ -414,7 +425,18 @@ async def test_llm_assisted_path_mints_nothing():
             patch(f"{DIALECTIC}.pg_add_message", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_update_phase", new=AsyncMock()),
             patch(f"{DIALECTIC}.pg_resolve_session", new=pg_resolve),
+            patch(f"{DIALECTIC}.execute_resolution", new=AsyncMock(
+                return_value={"success": True, "applied_conditions": []}
+            )),
             patch(f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()),
+            patch(
+                "src.agent_storage.read_authoritative_pause_binding",
+                new=AsyncMock(return_value={
+                    "pause_effect_required": True,
+                    "pause_token": "pause-test",
+                    "status": "paused",
+                }),
+            ),
         ):
             stack.enter_context(p)
         await handle_llm_assisted_dialectic({

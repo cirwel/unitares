@@ -465,7 +465,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
                payload,
                status,
                Map.get(params, :paused_agent_id),
-               Map.get(params, :reviewer_agent_id)
+               Map.get(params, :reviewer_agent_id),
+               Map.get(params, :effect_protocol)
              ) do
           :written ->
             with :ok <- commit(saga_id) do
@@ -501,8 +502,88 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   # Guarded terminal write of the session row — BEAM is the sole writer for both
   # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
   # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
-  defp commit_session_row(session_id, payload, status, paused_agent_id, reviewer_agent_id) do
+  # A resolved write and its Python runtime-effect handoff are one PostgreSQL
+  # statement on the versioned route. The legacy route must remain a genuinely
+  # separate query: PostgreSQL resolves every relation while parsing a query,
+  # so a conditional CTE that merely skips the INSERT would still break a new
+  # BEAM deployed before migration 075. This lives in the writer rather than a
+  # migration trigger so schema-before-code deploys and application rollbacks
+  # remain compatible with the old writer, which applies the runtime effect
+  # directly.
+  defp commit_session_row(
+         session_id,
+         payload,
+         status,
+         paused_agent_id,
+         reviewer_agent_id,
+         "v1"
+       ) do
     sql = """
+    WITH terminal AS (
+      #{guarded_terminal_update_sql("session_id, paused_agent_id, reviewer_agent_id, paused_agent_state_json, resolution_json")}
+    ), prepared AS (
+      SELECT terminal.*,
+             COALESCE(
+               paused_agent_state_json->'pause_effect_required' = 'true'::jsonb,
+               true
+             ) AS effect_required
+      FROM terminal
+    ), enqueued AS (
+      INSERT INTO coordination.dialectic_resolution_effects
+        (session_id, paused_agent_id, reviewer_agent_id, effect_required,
+         pause_token, resolution_payload_json, state,
+         execution_result_json, applied_at)
+      SELECT session_id, paused_agent_id, reviewer_agent_id,
+             effect_required, paused_agent_state_json->>'pause_token',
+             resolution_json,
+             CASE WHEN effect_required THEN 'pending' ELSE 'applied' END,
+             CASE WHEN effect_required THEN NULL ELSE
+               jsonb_build_object(
+                 'success', true,
+                 'no_op', true,
+                 'reason', 'active_at_session_open'
+               )
+             END,
+             CASE WHEN effect_required THEN NULL ELSE clock_timestamp() END
+      FROM prepared
+      WHERE $2 = 'resolved'
+      RETURNING session_id
+    )
+    SELECT terminal.session_id
+    FROM terminal
+    LEFT JOIN enqueued USING (session_id)
+    """
+
+    run_terminal_commit_query(
+      sql,
+      session_id,
+      payload,
+      status,
+      paused_agent_id,
+      reviewer_agent_id
+    )
+  end
+
+  defp commit_session_row(
+         session_id,
+         payload,
+         status,
+         paused_agent_id,
+         reviewer_agent_id,
+         _legacy_protocol
+       ) do
+    run_terminal_commit_query(
+      guarded_terminal_update_sql("session_id"),
+      session_id,
+      payload,
+      status,
+      paused_agent_id,
+      reviewer_agent_id
+    )
+  end
+
+  defp guarded_terminal_update_sql(returning_columns) do
+    """
     UPDATE core.dialectic_sessions
     SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
@@ -545,9 +626,18 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           END
         )
       )
-    RETURNING session_id
+    RETURNING #{returning_columns}
     """
+  end
 
+  defp run_terminal_commit_query(
+         sql,
+         session_id,
+         payload,
+         status,
+         paused_agent_id,
+         reviewer_agent_id
+       ) do
     case Postgrex.query(DB, sql, [
            session_id,
            status,

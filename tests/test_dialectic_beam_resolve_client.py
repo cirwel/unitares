@@ -62,9 +62,30 @@ async def test_success_returns_body(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "true")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     body = {"ok": True, "status": "resolved", "saga_id": "abc", "origin": "new"}
-    with patch.dict(sys.modules, {"httpx": _fake_httpx(200, body)}):
+    fake = _fake_httpx(200, body)
+    with patch.dict(sys.modules, {"httpx": fake}):
         out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
     assert out == body
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v1/dialectic/resolve-with-effect")
+
+
+@pytest.mark.asyncio
+async def test_missing_effect_route_is_definitive_fallback(monkeypatch):
+    """A pre-protocol BEAM returns 404 without touching the session row."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(
+        sys.modules,
+        {"httpx": _fake_httpx(404, {"ok": False, "error": "not_found"})},
+    ):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {}
 
 
 @pytest.mark.asyncio
@@ -72,9 +93,27 @@ async def test_saga_in_flight_falls_back_to_none(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
     body = {"ok": False, "error": "saga_in_flight"}
+    detail = {}
     with patch.dict(sys.modules, {"httpx": _fake_httpx(409, body)}):
-        out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail
+        )
     assert out is None
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_postcommit_503_marks_commit_unknown(monkeypatch):
+    """The row can commit before saga finalization returns a 5xx."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    with patch.dict(sys.modules, {"httpx": _fake_httpx(503, {"ok": False})}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail
+        )
+    assert out is None
+    assert detail == {"commit_unknown": True, "http_status": 503}
 
 
 @pytest.mark.asyncio
@@ -236,8 +275,32 @@ async def test_transport_error_falls_back_to_none(monkeypatch):
     boom = MagicMock()
     boom.Client.side_effect = RuntimeError("connection refused")
     with patch.dict(sys.modules, {"httpx": boom}):
-        out = await brc.beam_resolve("s1", "p", "r", {"verdict": "resume"})
+        detail = {}
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail
+        )
     assert out is None
+    # Client construction failed before post() was entered, so there is no
+    # ambiguous server-side commit to reconcile.
+    assert detail == {}
+
+
+@pytest.mark.asyncio
+async def test_response_decode_failure_after_post_marks_commit_unknown(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True})
+    response = fake.Client.return_value.__enter__.return_value.post.return_value
+    response.json.side_effect = ValueError("truncated JSON")
+    detail = {}
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_resolve(
+            "s1", "p", "r", {"verdict": "resume"}, detail=detail
+        )
+
+    assert out is None
+    assert detail == {"commit_unknown": True}
 
 
 # --- synthesis_round on the phase wire (2026-08-16) -------------------------

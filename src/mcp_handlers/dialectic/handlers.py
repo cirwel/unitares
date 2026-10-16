@@ -7,9 +7,11 @@ Implements MCP tools for peer-review dialectic resolution of circuit breaker sta
 from typing import Dict, Any, Sequence, Optional, List
 from mcp.types import TextContent
 import asyncio
+from dataclasses import dataclass
 import json
 import math
 import os
+import uuid
 from numbers import Real
 import re
 from datetime import datetime, timedelta, timezone
@@ -187,6 +189,12 @@ from src.dialectic_db import (
     add_message_async as pg_add_message,
     add_bounded_message_async as pg_add_bounded_message,
     resolve_session_async as pg_resolve_session,
+    claim_resolution_effect_async as pg_claim_resolution_effect,
+    complete_resolution_effect_async as pg_complete_resolution_effect,
+    fail_resolution_effect_async as pg_fail_resolution_effect,
+    get_resolution_effect_async as pg_get_resolution_effect,
+    acknowledge_resolution_effect_async as pg_acknowledge_resolution_effect,
+    quarantine_resolution_effect_async as pg_quarantine_resolution_effect,
     get_all_sessions_by_agent_async as pg_get_all_sessions_by_agent,
 )
 
@@ -285,49 +293,334 @@ async def _set_awaiting_facilitation(
         )
 
 
+@dataclass(frozen=True)
+class _ResolutionCommitResult:
+    """Terminal-decision ownership after the BEAM/Python write attempt."""
+
+    terminal_committed: bool
+    commit_unknown: bool
+    origin: str
+
+
+@dataclass(frozen=True)
+class _ResolutionEffectResult:
+    """Outcome of claiming and applying a durable resolution effect."""
+
+    state: str
+    claimed: bool
+    execution_result: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+
 async def _commit_converged_resolution(
     session: DialecticSession,
     resolution: Resolution,
-) -> bool:
+) -> _ResolutionCommitResult:
     """Win the terminal session-row transition before applying runtime effects.
 
     The reviewer/phase compare-and-set is the authority boundary for a
     synthesis.  A losing or stale reviewer must not apply conditions or resume
     the paused agent and only then discover that another writer won.  BEAM owns
     the terminal write when enabled; the Python fallback carries the same CAS.
-    ``False`` includes an already-terminal BEAM answer because this invocation
-    performed no write and therefore owns no effects.
+    Every successful terminal write atomically queues a durable runtime effect.
+    An exact terminal readback after an ambiguous BEAM response therefore
+    confirms both a decision and a recoverable handoff without guessing which
+    request should execute it. An explicit already-terminal BEAM answer remains
+    a refusal because this invocation performed no write.
     """
+    paused_state = getattr(session, "paused_agent_state", {}) or {}
+    effect_required = paused_state.get("pause_effect_required")
+    pause_token = paused_state.get("pause_token")
+    if not isinstance(effect_required, bool):
+        # A session opened before the generation-binding protocol cannot be
+        # retroactively attached to the agent's current pause: that may be a
+        # newer generation. Leave it nonterminal for explicit facilitation.
+        return _ResolutionCommitResult(
+            False, False, "pause_effect_binding_missing"
+        )
+    if (
+        effect_required
+        and not (isinstance(pause_token, str) and pause_token.strip())
+    ) or (not effect_required and pause_token is not None):
+        return _ResolutionCommitResult(
+            False, False, "pause_effect_binding_invalid"
+        )
+
     sealed = seal_resolution_for_persistence(
         session, resolution, status="resolved"
     )
+    beam_detail: Dict[str, Any] = {}
     beam_result = await beam_resolve(
         session_id=session.session_id,
         paused_agent_id=session.paused_agent_id,
         reviewer_agent_id=session.reviewer_agent_id,
         resolution=sealed,
+        detail=beam_detail,
     )
     already_terminal = bool(
         isinstance(beam_result, dict)
         and beam_result.get("origin") == ALREADY_TERMINAL_ORIGIN
     )
-    written = beam_result is not None and not already_terminal
+    if beam_result is not None:
+        if already_terminal:
+            return _ResolutionCommitResult(False, False, "refused")
+        return _ResolutionCommitResult(True, False, "beam_ack")
+
+    written = False
+    winner: Dict[str, Any] = {}
     if beam_result is None:
-        winner: Dict[str, Any] = {}
         with session_write_via(
             "python_fallback", site="converged_resolution"
         ):
-            written = bool(
-                await pg_resolve_session(
-                    session_id=session.session_id,
-                    resolution=sealed,
-                    status="resolved",
-                    expected_phase=DialecticPhase.SYNTHESIS.value,
-                    expected_reviewer=session.reviewer_agent_id,
-                    winner=winner,
+            try:
+                written = bool(
+                    await pg_resolve_session(
+                        session_id=session.session_id,
+                        resolution=sealed,
+                        status="resolved",
+                        expected_phase=DialecticPhase.SYNTHESIS.value,
+                        expected_reviewer=session.reviewer_agent_id,
+                        winner=winner,
+                    )
+                )
+            except Exception:
+                if beam_detail.get("commit_unknown") is True:
+                    return _ResolutionCommitResult(
+                        False, True, "beam_commit_unknown_readback_failed"
+                    )
+                raise
+    if written:
+        return _ResolutionCommitResult(True, False, "python_write")
+
+    exact_terminal = (
+        beam_detail.get("commit_unknown") is True
+        and winner.get("winner_status") == DialecticPhase.RESOLVED.value
+        and winner.get("winner_phase") == DialecticPhase.RESOLVED.value
+        and winner.get("winner_paused_agent_id") == session.paused_agent_id
+        and winner.get("winner_reviewer_agent_id")
+        == session.reviewer_agent_id
+        and winner.get("winner_resolution") == sealed
+    )
+    if exact_terminal:
+        return _ResolutionCommitResult(
+            True, False, "beam_exact_commit_unknown"
+        )
+    if winner.get("winner_status") in {
+        DialecticPhase.RESOLVED.value,
+        DialecticPhase.FAILED.value,
+    }:
+        return _ResolutionCommitResult(False, False, "terminal_conflict")
+    if beam_detail.get("commit_unknown") is True:
+        return _ResolutionCommitResult(
+            False, True, "beam_commit_unknown_unconfirmed"
+        )
+    return _ResolutionCommitResult(False, False, "refused")
+
+
+async def _apply_durable_resolution_effect(
+    session: DialecticSession,
+    resolution: Resolution,
+) -> _ResolutionEffectResult:
+    """Claim and apply the exact effect atomically queued with the decision.
+
+    ``pending -> applying`` grants one live claimant; it is not a promise that
+    a multi-step runtime effect completed exactly once. A crash or task
+    cancellation before the claim leaves ``pending``; after it leaves
+    ``applying`` (or best-effort ``unknown_partial``), both of which are visible
+    for operator reconciliation. We never auto-replay those ambiguous states
+    because conditions or a resume may already have landed before the process
+    died.
+    """
+    sealed = resolution.to_dict()
+    paused_state = getattr(session, "paused_agent_state", {}) or {}
+    pause_token = paused_state.get("pause_token")
+    marker = paused_state.get("pause_effect_required")
+    # Sessions created before this protocol did not carry the discriminator.
+    # Treat them conservatively as effect-bearing; only an explicit server-set
+    # false marker may turn a resolution into an already-applied no-op.
+    effect_required = marker if isinstance(marker, bool) else True
+    owner_token = str(uuid.uuid4())
+    try:
+        effect = await pg_claim_resolution_effect(
+            session.session_id,
+            owner_token,
+            paused_agent_id=session.paused_agent_id,
+            reviewer_agent_id=session.reviewer_agent_id,
+            effect_required=effect_required,
+            pause_token=pause_token,
+            resolution=sealed,
+        )
+    except Exception as exc:
+        return _ResolutionEffectResult("unknown", False, error=str(exc))
+    if effect is None:
+        return _ResolutionEffectResult(
+            "missing", False, error="terminal decision has no effect outbox row"
+        )
+    if (
+        effect.get("paused_agent_id") != session.paused_agent_id
+        or effect.get("reviewer_agent_id") != session.reviewer_agent_id
+        or effect.get("effect_required") is not effect_required
+        or effect.get("pause_token") != pause_token
+        or effect.get("resolution_payload_json") != sealed
+    ):
+        return _ResolutionEffectResult(
+            "conflict",
+            False,
+            error="existing effect does not match terminal participants/payload",
+        )
+    if not effect.get("claimed"):
+        return _ResolutionEffectResult(
+            str(effect.get("state") or "unknown"),
+            False,
+            execution_result=effect.get("execution_result_json"),
+            error=effect.get("last_error"),
+        )
+
+    execution_result: Optional[Dict[str, Any]] = None
+    try:
+        execution_result = await execute_resolution(
+            session,
+            resolution,
+            record_outcome=False,
+            expected_pause_token=pause_token,
+            enforce_pause_token=True,
+        )
+        refusal = execution_result.get("refused")
+        if refusal or execution_result.get("success") is not True:
+            error = (
+                f"runtime effect refused: {refusal}"
+                if refusal
+                else str(
+                    execution_result.get("warning")
+                    or "runtime effect did not report success"
                 )
             )
-    return written
+            await pg_fail_resolution_effect(
+                session.session_id,
+                owner_token,
+                error,
+                execution_result=execution_result,
+            )
+            return _ResolutionEffectResult(
+                "unknown_partial",
+                True,
+                execution_result=execution_result,
+                error=error,
+            )
+
+        try:
+            completed = await pg_complete_resolution_effect(
+                session.session_id, owner_token, execution_result
+            )
+        except Exception as complete_exc:
+            # The UPDATE acknowledgement can be lost after PostgreSQL commits.
+            # Exact readback prevents an applied effect from being mislabeled
+            # partial (and, later, manually "repaired" a second time).
+            try:
+                current = await pg_get_resolution_effect(session.session_id)
+            except Exception:
+                current = None
+            stored_result = (
+                current.get("execution_result_json") if current else None
+            )
+            if (
+                current
+                and current.get("state") == "applied"
+                and stored_result == execution_result
+                and not stored_result.get("manually_reconciled", False)
+            ):
+                # The acknowledgement was lost after our exact payload
+                # committed. No other automatic writer can apply this claim.
+                completed = True
+            else:
+                if current and current.get("state") == "applied":
+                    logger.warning(
+                        "Resolution-effect claimant for %s lost ownership to "
+                        "a different applied result after completion failed",
+                        session.session_id,
+                    )
+                    return _ResolutionEffectResult(
+                        "applied",
+                        False,
+                        execution_result=stored_result,
+                        error="a different reconciliation result owns the effect",
+                    )
+                raise complete_exc
+        if not completed:
+            current = await pg_get_resolution_effect(session.session_id)
+            current_state = (
+                str(current.get("state") or "unknown")
+                if current
+                else "missing"
+            )
+            current_result = (
+                current.get("execution_result_json") if current else None
+            )
+            still_owned = bool(
+                current
+                and current_state == "applying"
+                and current.get("owner_token") == owner_token
+            )
+            logger.warning(
+                "Resolution-effect completion CAS was refused for %s; "
+                "authoritative state is %s",
+                session.session_id,
+                current_state,
+            )
+            return _ResolutionEffectResult(
+                current_state,
+                still_owned,
+                execution_result=(
+                    current_result
+                    if current_result is not None
+                    else execution_result
+                ),
+                error="effect completion compare-and-set was refused",
+            )
+        # Outcome telemetry is downstream of the durable applied marker. Only
+        # an exception followed by our exact persisted result recovers this
+        # claimant's ownership; a definite CAS loss never emits for the winner.
+        try:
+            await record_resolution_outcome(session, resolution, execution_result)
+        except asyncio.CancelledError:
+            # The authoritative marker is already applied. Cancellation may
+            # drop telemetry, but must not turn a completed effect back into an
+            # ambiguous or replayable state.
+            raise
+        except Exception as telemetry_exc:
+            logger.warning(
+                "Resolution-effect telemetry failed for %s after apply: %s",
+                session.session_id,
+                telemetry_exc,
+            )
+        return _ResolutionEffectResult(
+            "applied", True, execution_result=execution_result
+        )
+    except asyncio.CancelledError:
+        # Do not guess where a cancelled multi-step effect stopped. The durable
+        # `applying` state is intentionally left for manual inspection; replay
+        # would duplicate any condition/lifecycle/discovery work that landed.
+        raise
+    except Exception as exc:
+        try:
+            await pg_fail_resolution_effect(
+                session.session_id,
+                owner_token,
+                str(exc),
+                execution_result=execution_result,
+            )
+        except Exception as mark_exc:
+            logger.warning(
+                "Could not mark dialectic resolution effect uncertain for %s: %s",
+                session.session_id,
+                mark_exc,
+            )
+        return _ResolutionEffectResult(
+            "unknown_partial",
+            True,
+            execution_result=execution_result,
+            error=str(exc),
+        )
 
 
 async def _precommit_resolution_authority_refusal(
@@ -821,6 +1114,13 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     session_id = session_data.get("session_id") or "<session_id>"
     session_type = session_data.get("session_type") or "review"
     awaiting_facilitation = bool(session_data.get("awaiting_facilitation", False))
+    resolution_effect_state = session_data.get("resolution_effect_state")
+    effect_needs_reconciliation = bool(
+        phase == "resolved"
+        and resolution_effect_state in {
+            "pending", "applying", "unknown", "unknown_partial"
+        }
+    )
     reviewer_objection_stands = (
         phase == "synthesis"
         and _reviewer_objection_stands_in_session_data(session_data)
@@ -887,7 +1187,19 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
     required_agent_label = None
     recommended_action = "Inspect the session transcript."
 
-    if phase == "thesis":
+    if effect_needs_reconciliation:
+        required_role = "operator"
+        allowed_agent_ids = (
+            [current_agent_id]
+            if operator_caller and current_agent_id
+            else []
+        )
+        recommended_action = (
+            "The decision is terminal, but its runtime effect is not confirmed "
+            "applied. An operator should inspect and reconcile the effect; "
+            "applying/unknown_partial states must not be replayed automatically."
+        )
+    elif phase == "thesis":
         required_role = "paused_agent"
         required_agent_id = paused_agent_id
         required_agent_label = _agent_label(paused_agent_id)
@@ -1035,7 +1347,9 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         )
 
     current_agent_can_submit: Optional[bool]
-    if current_agent_id is None:
+    if effect_needs_reconciliation:
+        current_agent_can_submit = operator_caller
+    elif current_agent_id is None:
         current_agent_can_submit = None
     elif phase == "antithesis" and reviewer_agent_id is None:
         current_agent_can_submit = bool(
@@ -1083,7 +1397,16 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
 
     whose_move = "nobody — session is terminal"
     next_call: Optional[str] = None
-    if phase == "thesis":
+    if effect_needs_reconciliation:
+        reconcile_call = (
+            f"dialectic(action='reconcile_effect', session_id='{session_id}')"
+        )
+        if current_agent_role == "operator":
+            whose_move = "YOURS — inspect and reconcile the committed runtime effect"
+            next_call = reconcile_call
+        else:
+            whose_move = "an operator's — the terminal runtime effect needs reconciliation"
+    elif phase == "thesis":
         if current_agent_role == "paused_agent":
             whose_move = "YOURS — your thesis is owed; the saved brief can be reused"
             next_call = _saved_brief_thesis_call(session_id, session_type)
@@ -1294,9 +1617,55 @@ def _build_dialectic_actionability(session_data: Dict[str, Any]) -> Dict[str, An
         "reviewer_verdict_pending": reviewer_verdict_pending,
         "reviewed_work_authorship": reviewed_work_authorship.as_dict(),
         "reviewer_author_conflict": reviewer_author_conflict,
+        "resolution_effect_state": resolution_effect_state,
         "recommended_action": recommended_action,
         "wait_assessment": wait,
     }
+
+
+async def _attach_public_resolution_effect(
+    session_data: Dict[str, Any], session_id: str
+) -> None:
+    """Attach the non-sensitive effect projection used by public reads.
+
+    The reconstructed-session path loses database-only fields when it passes
+    through ``DialecticSession.to_dict``. Re-read just the state needed for
+    actionability, while keeping owner tokens, execution results, and exception
+    text on the operator-only reconciliation action.
+    """
+    session_data.update({
+        "resolution_effect_state": None,
+        "resolution_effect_state_observed": True,
+        "resolution_effect_attempt_count": 0,
+        "resolution_effect_claimed_at": None,
+        "resolution_effect_applied_at": None,
+        "resolution_effect_uncertain_at": None,
+    })
+    try:
+        effect = await pg_get_resolution_effect(session_id)
+    except Exception as exc:
+        logger.warning(
+            "Could not read resolution effect for %s: %s", session_id, exc
+        )
+        # A read failure is not equivalent to a successful legacy lookup with
+        # no effect row. Preserve that distinction in the public projection so
+        # a resolved session cannot look clean while its runtime effect is
+        # unobservable.
+        session_data["resolution_effect_state"] = "unknown"
+        session_data["resolution_effect_state_observed"] = False
+        return
+    if effect is None:
+        return
+    session_data["resolution_effect_state"] = effect.get("state")
+    session_data["resolution_effect_attempt_count"] = int(
+        effect.get("attempt_count") or 0
+    )
+    for field in ("claimed_at", "applied_at", "uncertain_at"):
+        value = effect.get(field)
+        public_name = f"resolution_effect_{field}"
+        session_data[public_name] = (
+            value.isoformat() if hasattr(value, "isoformat") else value
+        )
 
 
 def _reviewer_authorship_conflict(
@@ -1571,6 +1940,31 @@ async def _apply_reviewer_reassignment(
 _PAUSE_EVIDENCE_SCHEMA = "dialectic.pause_evidence.v1"
 _PAUSE_EISV_KEYS = ("E", "I", "S", "V")
 _PAUSE_SOURCE_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_.-]{0,63}")
+
+
+async def _bind_pause_token(
+    evidence: Dict[str, Any], agent_id: str
+) -> Dict[str, Any]:
+    """Bind a review to the authoritative pause generation at session open."""
+    from src.agent_storage import read_authoritative_pause_binding
+
+    binding = await read_authoritative_pause_binding(agent_id)
+    cached = getattr(mcp_server, "agent_metadata", {}).get(agent_id)
+    cached_status = getattr(cached, "status", None) if cached is not None else None
+    cached_token = getattr(cached, "paused_at", None) if cached is not None else None
+    if cached_status == "paused":
+        if not binding["pause_effect_required"]:
+            raise RuntimeError(
+                "cache reports a pause that is absent from durable status"
+            )
+        if cached_token and cached_token != binding["pause_token"]:
+            raise RuntimeError(
+                "cache and durable state report different pause generations"
+            )
+    bound = dict(evidence)
+    bound["pause_effect_required"] = binding["pause_effect_required"]
+    bound["pause_token"] = binding["pause_token"]
+    return bound
 
 
 def _pause_number(value: Any) -> float | None:
@@ -1937,6 +2331,27 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
     paused_agent_state = embed_reviewed_work_authorship(
         paused_agent_state, reviewed_work_authorship
     )
+    try:
+        paused_agent_state = await _bind_pause_token(
+            paused_agent_state, agent_uuid
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not bind dialectic %s to authoritative agent state: %s",
+            agent_uuid,
+            exc,
+        )
+        return [error_response(
+            "The agent's authoritative pause state could not be verified, so "
+            "the review was not opened.",
+            error_code="PAUSE_BINDING_UNAVAILABLE",
+            error_category="system_error",
+            recovery={
+                "action": "Retry after the agent and identity status stores agree.",
+                "related_tools": ["identity", "health_check"],
+            },
+            arguments=arguments,
+        )]
 
     # Reviewer selection
     auto_open_reviewer_slot = False
@@ -2360,6 +2775,7 @@ async def handle_get_dialectic_session(arguments: Dict[str, Any]) -> Sequence[Te
             # caller sees `attestation` depended on check_timeout, so the same
             # resolved session answered two ways through the same tool.
             attach_attestation(result)
+            await _attach_public_resolution_effect(result, session_id)
             result.update(_build_dialectic_actionability(result))
             return success_response(result)
         
@@ -2507,7 +2923,14 @@ async def handle_list_dialectic_sessions(arguments: Dict[str, Any]) -> Sequence[
             })
 
         if compact:
-            keep = ("session_id", "phase", "status", "created", "paused_agent_label")
+            keep = (
+                "session_id",
+                "phase",
+                "status",
+                "created",
+                "paused_agent_label",
+                "resolution_effect_state",
+            )
             sessions = [
                 {k: sess[k] for k in keep if k in sess}
                 for sess in sessions
@@ -3211,6 +3634,9 @@ async def _run_synthetic_review(
     )
 
     resolved = False
+    terminal_committed = False
+    effect_pending = False
+    commit_unknown = False
     if session.phase == DialecticPhase.RESOLVED:
         # No party signature: party-HMAC minting is retired (#2449), so no key
         # is looked up. Before that, this site once derived a fallback key as
@@ -3219,17 +3645,55 @@ async def _run_synthetic_review(
         try:
             resolution_obj = session.finalize_resolution()
             session.resolution = resolution_obj
-            written = await _commit_converged_resolution(
+            commit = await _commit_converged_resolution(
                 session,
                 resolution_obj,
             )
-            discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
-            if written:
+            discard_receipt_unless_written(
+                resolution_obj,
+                written=commit.terminal_committed,
+                had_receipt=False,
+            )
+            if commit.terminal_committed:
+                terminal_committed = True
                 session.awaiting_facilitation = False
-                resolved = True
-                await _emit_dialectic_event(
-                    "dialectic_resolved", session, action="resume"
+                effect = await _apply_durable_resolution_effect(
+                    session, resolution_obj
                 )
+                if effect.state == "applied":
+                    resolved = True
+                    execution_result = effect.execution_result or {}
+                    newly_applied = bool(
+                        effect.claimed
+                        or (
+                            commit.terminal_committed
+                            and execution_result.get("no_op") is True
+                        )
+                    )
+                    if newly_applied and not effect.claimed:
+                        await record_resolution_outcome(
+                            session, resolution_obj, execution_result
+                        )
+                    if newly_applied:
+                        await _emit_dialectic_event(
+                            "dialectic_resolved", session, action="resume"
+                        )
+                else:
+                    effect_pending = True
+                    logger.warning(
+                        "[DIALECTIC] Synthetic resolution effect for %s is %s: %s",
+                        session.session_id,
+                        effect.state,
+                        effect.error,
+                    )
+            elif commit.commit_unknown:
+                # The remote POST may still commit after this coroutine exits.
+                # Its SQL atomically creates the pending outbox row, so reload
+                # is the only truthful next step; never report a refusal.
+                commit_unknown = True
+                effect_pending = True
+                session.phase = DialecticPhase.SYNTHESIS
+                session.resolution = None
             else:
                 # The DB is the effect owner. A stale/malformed declaration or
                 # participant race may refuse the terminal write after local
@@ -3253,6 +3717,9 @@ async def _run_synthetic_review(
         "synthesis": synthesis,
         "recommendation": synthesis.get("recommendation", "ESCALATE"),
         "resolved": resolved,
+        "terminal_committed": terminal_committed,
+        "commit_unknown": commit_unknown,
+        "effect_pending": effect_pending,
     }
 
 
@@ -3545,6 +4012,39 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     logger.warning("[DIALECTIC] Synthetic review failed: %s", e)
                     review = None
 
+                if review is None and synthetic_abort_reason == "synthetic_reviewer_timeout":
+                    # wait_for cancellation can race an executor-backed BEAM
+                    # request that commits after the coroutine exits. Do not
+                    # write a contradictory facilitation flag or tell the user
+                    # to submit antithesis. The terminal CTE queues an effect if
+                    # it commits; a later get exposes the exact state.
+                    persisted = await load_session_as_dict(session_id)
+                    persisted_phase = str(
+                        (persisted or {}).get("phase") or ""
+                    ).lower()
+                    effect_state = (persisted or {}).get(
+                        "resolution_effect_state"
+                    )
+                    result.update({
+                        "synthetic_review": True,
+                        "reviewer_agent_id": SYNTHETIC_REVIEWER_ID,
+                        "terminal_committed": (
+                            True if persisted_phase == "resolved" else None
+                        ),
+                        "effect_pending": effect_state in {
+                            "pending", "applying", "unknown_partial"
+                        },
+                        "resolution_effect_state": effect_state,
+                        "terminal_state_unknown": persisted_phase != "resolved",
+                        "next_step": (
+                            "Reload this session. If it is resolved, an operator "
+                            "should run dialectic(action='reconcile_effect', "
+                            f"session_id='{session_id}'). Do not submit another "
+                            "antithesis while the timed-out terminal write may still finish."
+                        ),
+                    })
+                    return success_response(result)
+
                 # The coroutine may have persisted its reviewer claim before a
                 # transcript, phase, or synthesis write failed (or before
                 # wait_for cancelled it). That synthetic identity has no
@@ -3586,7 +4086,23 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     result["recommendation"] = review.get("recommendation")
                     result["phase"] = session.phase.value
                     result["resolved"] = review.get("resolved", False)
-                    if review.get("resolved"):
+                    if review.get("terminal_committed"):
+                        result["terminal_committed"] = True
+                    if review.get("effect_pending"):
+                        result["effect_pending"] = True
+                    if review.get("commit_unknown"):
+                        result["commit_unknown"] = True
+                    if review.get("effect_pending"):
+                        result["next_step"] = (
+                            "Reload this session. If the terminal decision committed, "
+                            "an operator should run dialectic(action='reconcile_effect', "
+                            f"session_id='{session_id}')."
+                        )
+                        result["next_steps"] = [
+                            "Do not submit another antithesis or synthesis while the "
+                            "terminal/effect state is being reconciled."
+                        ]
+                    elif review.get("resolved"):
                         result["next_step"] = (
                             f"Dialectic resolved by synthetic reviewer. "
                             f"Recommendation: {review.get('recommendation')}. "
@@ -4329,6 +4845,7 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # defect signed party A's slot with it).
                 resolution = session.finalize_resolution()
                 is_safe, violation = session.check_hard_limits(resolution)
+                newly_applied_resolution_effect = True
     
                 if not is_safe:
                     # Safety violation: mark session as FAILED (not RESOLVED)
@@ -4508,10 +5025,37 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 arguments=arguments,
                             )]
 
-                        written = await _commit_converged_resolution(
+                        commit = await _commit_converged_resolution(
                             session, resolution
                         )
-                        if not written:
+                        if commit.commit_unknown:
+                            discard_receipt_unless_written(
+                                resolution, written=False, had_receipt=False
+                            )
+                            ACTIVE_SESSIONS.pop(session_id, None)
+                            return [error_response(
+                                "The terminal write outcome is unknown because the "
+                                "BEAM response and PostgreSQL readback both failed. "
+                                "If the decision committed, its runtime effect is "
+                                "durably queued for reconciliation.",
+                                error_code="SESSION_RESOLUTION_COMMIT_UNKNOWN",
+                                error_category="system_error",
+                                details={
+                                    "session_id": session_id,
+                                    "terminal_committed": None,
+                                    "effect_state": "unknown",
+                                    "commit_origin": commit.origin,
+                                },
+                                recovery={
+                                    "action": (
+                                        "Reload the session. If it is resolved, inspect "
+                                        "resolution_effect and use dialectic(action='reconcile_effect')."
+                                    ),
+                                    "related_tools": ["dialectic"],
+                                },
+                                arguments=arguments,
+                            )]
+                        if not commit.terminal_committed:
                             discard_receipt_unless_written(
                                 resolution, written=False, had_receipt=False
                             )
@@ -4520,6 +5064,11 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                                 "The persisted session refused the terminal resolution; no resolved outcome was recorded.",
                                 error_code="SESSION_RESOLUTION_WRITE_REFUSED",
                                 error_category="governance_refusal",
+                                details={
+                                    "session_id": session_id,
+                                    "commit_origin": commit.origin,
+                                    "terminal_committed": False,
+                                },
                                 recovery={
                                     "action": (
                                         "Reload the session and resolve any reviewer "
@@ -4582,108 +5131,108 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     result["resolution"] = resolution.to_dict()
                     attach_attestation(result)
 
-                    try:
-                        execution_result = await execute_resolution(
-                            session, resolution, record_outcome=False
+                    effect = await _apply_durable_resolution_effect(
+                        session, resolution
+                    )
+                    result["resolution_effect_state"] = effect.state
+                    execution_result = effect.execution_result or {}
+                    newly_applied_resolution_effect = bool(
+                        effect.claimed
+                        or (
+                            commit.terminal_committed
+                            and effect.state == "applied"
+                            and execution_result.get("no_op") is True
                         )
-                    except Exception as e:
-                        # The decision is already durably committed. Never lie
-                        # by overwriting it as FAILED; expose the unapplied
-                        # runtime effect and route it for reconciliation.
-                        logger.warning(
-                            "Committed dialectic resolution effect failed: %s", e
-                        )
+                    )
+
+                    if effect.state != "applied":
                         result["success"] = False
-                        result["execution_error"] = str(e)
                         result["effect_pending"] = True
-                        await _set_awaiting_facilitation(
-                            session, True, reason="resolution_effect_failed"
-                        )
-                        await save_session(session)
+                        if effect.error:
+                            logger.warning(
+                                "Dialectic resolution effect %s requires "
+                                "reconciliation: %s",
+                                session_id,
+                                effect.error,
+                            )
+                        ACTIVE_SESSIONS.pop(session_id, None)
+                        authority_refusal = execution_result.get("refused")
+                        refusal_codes = {
+                            "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
+                            "review_authorship_invalid": "REVIEW_AUTHORSHIP_METADATA_INVALID",
+                            "reviewer_author_conflict": "REVIEWER_AUTHOR_CONFLICT",
+                        }
                         return [error_response(
-                            "The terminal decision was committed, but its runtime "
-                            "effect failed and requires reconciliation.",
-                            error_code="SESSION_RESOLUTION_EFFECT_FAILED",
-                            error_category="system_error",
+                            (
+                                "The terminal decision was committed, but its runtime "
+                                "effect is not confirmed applied and requires operator "
+                                "reconciliation."
+                            ),
+                            error_code=refusal_codes.get(
+                                authority_refusal,
+                                "SESSION_RESOLUTION_EFFECT_RECONCILIATION_REQUIRED",
+                            ),
+                            error_category=(
+                                "governance_refusal"
+                                if authority_refusal
+                                else "system_error"
+                            ),
                             details={
                                 "session_id": session_id,
                                 "terminal_committed": True,
                                 "effect_pending": True,
+                                "effect_state": effect.state,
+                                "effect_claimed_here": effect.claimed,
+                                "commit_origin": commit.origin,
+                                "effect_reason": (
+                                    authority_refusal or "not_confirmed_applied"
+                                ),
                             },
                             recovery={
                                 "action": (
-                                    "Inspect the paused agent state and reconcile the "
-                                    "committed resolution effect before retrying."
+                                    "Inspect the paused agent and effect state, then use "
+                                    "dialectic(action='reconcile_effect', session_id=...)."
                                 ),
                                 "related_tools": ["dialectic", "check_working_state"],
                             },
                             arguments=arguments,
                         )]
 
+                    # A reflection session has no runtime mutation to claim:
+                    # its outbox row is born applied. The winning terminal
+                    # writer still owns one telemetry emission; an
+                    # already-terminal replay never reaches this branch.
+                    if (
+                        newly_applied_resolution_effect
+                        and not effect.claimed
+                        and execution_result.get("no_op") is True
+                    ):
+                        await record_resolution_outcome(
+                            session, resolution, execution_result
+                        )
+
                     result["execution"] = execution_result
-                    if execution_result.get("success"):
+                    if execution_result.get("no_op"):
+                        result["next_step"] = (
+                            "Review completed. No pause was bound at session open, "
+                            "so no agent resume or condition mutation was authorized."
+                        )
+                    elif execution_result.get("success"):
                         result["next_step"] = next_step_resumed()
                     else:
                         result["next_step"] = next_step_resume_not_applied(
                             execution_result.get("warning")
                         )
 
-                    authority_refusal = execution_result.get("refused")
-                    if authority_refusal in {
-                        "self_review_not_authorizing",
-                        "review_authorship_invalid",
-                        "reviewer_author_conflict",
-                    }:
-                        # A transition-owner refusal after the row commit is a
-                        # reconciliation state, not permission to relabel the
-                        # durable decision or to emit a successful outcome.
-                        result["success"] = False
-                        result["blocked"] = authority_refusal
-                        result["effect_pending"] = True
-                        await _set_awaiting_facilitation(
-                            session, True, reason=authority_refusal
-                        )
-                        await save_session(session)
-                        refusal_code = {
-                            "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
-                            "review_authorship_invalid": "REVIEW_AUTHORSHIP_METADATA_INVALID",
-                            "reviewer_author_conflict": "REVIEWER_AUTHOR_CONFLICT",
-                        }[authority_refusal]
-                        return [error_response(
-                            "The terminal decision was committed, but the runtime "
-                            "transition owner refused its effect on authority grounds.",
-                            error_code=refusal_code,
-                            error_category="governance_refusal",
-                            details={
-                                "session_id": session_id,
-                                "reviewer_agent_id": session.reviewer_agent_id,
-                                "paused_agent_id": session.paused_agent_id,
-                                "terminal_committed": True,
-                                "effect_pending": True,
-                                "detected_at": "resume_transition",
-                            },
-                            recovery={
-                                "action": (
-                                    "Ask an operator to reconcile the committed "
-                                    "decision with the current agent authority state."
-                                ),
-                                "related_tools": ["dialectic", "identity"],
-                            },
-                            arguments=arguments,
-                        )]
-
-                    await record_resolution_outcome(
-                        session, resolution, execution_result
-                    )
-    
                 # Update calibration from dialectic outcome
-                try:
-                    if result.get("action") == "resume":
-                        await update_calibration_from_dialectic(session)
-                    elif not is_safe:
-                        await update_calibration_from_dialectic_disagreement(session)
-                except Exception as cal_e:
-                    logger.debug(f"Calibration update after dialectic: {cal_e}")
+                if newly_applied_resolution_effect:
+                    try:
+                        if result.get("action") == "resume":
+                            await update_calibration_from_dialectic(session)
+                        elif not is_safe:
+                            await update_calibration_from_dialectic_disagreement(session)
+                    except Exception as cal_e:
+                        logger.debug(f"Calibration update after dialectic: {cal_e}")
     
                 # Always invalidate cache after convergence (success or failure)
                 for aid in (session.paused_agent_id, session.reviewer_agent_id):
@@ -4704,9 +5253,10 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
 
                 # Resolution is committed (BEAM or pg fallback above); announce the
                 # terminal outcome. session.phase is RESOLVED or FAILED here.
-                await _emit_dialectic_event(
-                    "dialectic_resolved", session, action=result.get("action")
-                )
+                if newly_applied_resolution_effect:
+                    await _emit_dialectic_event(
+                        "dialectic_resolved", session, action=result.get("action")
+                    )
     
                 await save_session(session)
     
@@ -4956,6 +5506,356 @@ async def handle_reassign_reviewer(arguments: Dict[str, Any]) -> Sequence[TextCo
     })
 
 
+def _resolution_effect_view(effect: Dict[str, Any]) -> Dict[str, Any]:
+    """Stable, JSON-safe operator view of one resolution-effect record."""
+    view = {
+        "session_id": effect.get("session_id"),
+        "state": effect.get("state"),
+        "effect_required": effect.get("effect_required"),
+        "pause_token": effect.get("pause_token"),
+        "owner_token": effect.get("owner_token"),
+        "attempt_count": int(effect.get("attempt_count") or 0),
+        "last_error": effect.get("last_error"),
+        "execution_result": effect.get("execution_result_json"),
+    }
+    for key in ("claimed_at", "applied_at", "uncertain_at", "updated_at"):
+        value = effect.get(key)
+        view[key] = value.isoformat() if hasattr(value, "isoformat") else value
+    return view
+
+
+async def _record_operator_resolution_telemetry(
+    session: DialecticSession,
+    execution_result: Dict[str, Any],
+    *,
+    record_outcome: bool,
+    manually_reconciled: bool,
+) -> None:
+    """Best-effort downstream signals for the winning reconciliation path.
+
+    The durable resolution-effect row remains authoritative. None of these
+    signals may make an already-applied runtime effect replayable, so each is
+    isolated and failures are logged. Callers report only that delivery was
+    attempted: the downstream helpers are deliberately fail-soft and do not
+    provide a durable delivery acknowledgement.
+    """
+    resolution = session.resolution
+    if resolution is None:
+        return
+
+    if record_outcome:
+        try:
+            await record_resolution_outcome(
+                session, resolution, execution_result
+            )
+        except Exception as exc:
+            logger.warning(
+                "Resolution outcome telemetry failed for %s: %s",
+                session.session_id,
+                exc,
+            )
+
+    try:
+        await update_calibration_from_dialectic(session, resolution)
+    except Exception as exc:
+        logger.warning(
+            "Resolution calibration telemetry failed for %s: %s",
+            session.session_id,
+            exc,
+        )
+
+    try:
+        await _emit_dialectic_event(
+            "dialectic_resolved",
+            session,
+            action=resolution.action,
+            manually_reconciled=manually_reconciled,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Resolution lifecycle telemetry failed for %s: %s",
+            session.session_id,
+            exc,
+        )
+
+
+# register=False: consolidated dialectic action owns the public name.
+@mcp_tool("reconcile_dialectic_effect", timeout=30.0, register=False)
+async def handle_reconcile_resolution_effect(
+    arguments: Dict[str, Any],
+) -> Sequence[TextContent]:
+    """Apply a pending effect or acknowledge an operator-repaired partial one.
+
+    Applying/unknown-partial states are never replayed automatically: the worker
+    may have applied only some non-idempotent conditions before it stopped. An
+    operator first confirms an applying worker has stopped and fences that exact
+    claim with ``mark_uncertain``. After inspecting and repairing live state,
+    ``mark_applied`` closes only the resulting unknown-partial record.
+    """
+    try:
+        from ..identity.operator import is_operator_caller
+
+        operator_caller = is_operator_caller()
+    except Exception:
+        operator_caller = False
+    if not operator_caller:
+        return [error_response(
+            "Resolution-effect reconciliation requires an operator credential.",
+            error_code="EFFECT_RECONCILE_FORBIDDEN",
+            error_category="auth_error",
+            recovery={
+                "action": "Ask an authenticated operator to inspect the effect.",
+                "related_tools": ["dialectic", "identity"],
+            },
+            arguments=arguments,
+        )]
+
+    session_id = arguments.get("session_id")
+    disposition = arguments.get("effect_disposition") or "inspect"
+    supplied_owner_token = str(
+        arguments.get("effect_owner_token") or ""
+    ).strip()
+    reason = str(arguments.get("reason") or "").strip()
+    if not session_id:
+        return [error_response(
+            "session_id is required",
+            error_code="MISSING_PARAM",
+            error_category="validation_error",
+            arguments=arguments,
+        )]
+    if disposition not in {
+        "inspect", "apply_pending", "mark_uncertain", "mark_applied"
+    }:
+        return [error_response(
+            "effect_disposition must be 'inspect', 'apply_pending', "
+            "'mark_uncertain', or 'mark_applied'.",
+            error_code="INVALID_EFFECT_DISPOSITION",
+            error_category="validation_error",
+            arguments=arguments,
+        )]
+
+    effect = await pg_get_resolution_effect(session_id)
+    if effect is None:
+        return [error_response(
+            f"No durable resolution effect exists for session '{session_id}'.",
+            error_code="RESOLUTION_EFFECT_NOT_FOUND",
+            error_category="not_found",
+            arguments=arguments,
+        )]
+
+    state = str(effect.get("state") or "unknown")
+    if disposition == "mark_applied" and state == "applied":
+        return success_response({
+            "success": True,
+            "idempotent": True,
+            "message": "Resolution effect is already applied.",
+            "resolution_effect": _resolution_effect_view(effect),
+        })
+    if disposition == "mark_uncertain" and state == "unknown_partial":
+        return success_response({
+            "success": True,
+            "idempotent": True,
+            "message": "Resolution effect is already fenced as unknown_partial.",
+            "resolution_effect": _resolution_effect_view(effect),
+        })
+
+    if disposition in {"mark_uncertain", "mark_applied"} and not reason:
+        return [error_response(
+            "reason is required when changing an ambiguous effect state.",
+            error_code="MISSING_PARAM",
+            error_category="validation_error",
+            arguments=arguments,
+        )]
+
+    if disposition == "mark_uncertain":
+        if not supplied_owner_token:
+            return [error_response(
+                "effect_owner_token from a current inspect response is required "
+                "to fence an abandoned claimant.",
+                error_code="MISSING_PARAM",
+                error_category="validation_error",
+                arguments=arguments,
+            )]
+        quarantined = await pg_quarantine_resolution_effect(
+            session_id,
+            supplied_owner_token,
+            f"operator quarantined abandoned claim: {reason}",
+        )
+        current = await pg_get_resolution_effect(session_id)
+        if not quarantined:
+            return [error_response(
+                "The applying claim changed or is no longer applying; no state "
+                "was changed. Inspect it again before acting.",
+                error_code="RESOLUTION_EFFECT_QUARANTINE_REFUSED",
+                error_category="governance_refusal",
+                details={
+                    "resolution_effect": _resolution_effect_view(
+                        current or effect
+                    )
+                },
+                arguments=arguments,
+            )]
+        return success_response({
+            "success": True,
+            "message": (
+                "Abandoned claim fenced as unknown_partial. Inspect and repair "
+                "live state before marking it applied."
+            ),
+            "resolution_effect": _resolution_effect_view(current or effect),
+        })
+
+    if disposition == "mark_applied":
+        acknowledged = await pg_acknowledge_resolution_effect(session_id, reason)
+        if not acknowledged:
+            current = await pg_get_resolution_effect(session_id)
+            return [error_response(
+                "The effect was not in unknown_partial state; no acknowledgement "
+                "was recorded. A live applying claim must first be confirmed "
+                "stopped and fenced with mark_uncertain.",
+                error_code="RESOLUTION_EFFECT_ACK_REFUSED",
+                error_category="governance_refusal",
+                details={"resolution_effect": _resolution_effect_view(current or effect)},
+                arguments=arguments,
+            )]
+        current = await pg_get_resolution_effect(session_id)
+        # The outbox row is authoritative. These emissions are best-effort
+        # downstream telemetry and run only for the winning acknowledgement.
+        telemetry_attempted = False
+        telemetry_warning = None
+        try:
+            session = await load_session(session_id)
+            if session is not None and session.resolution is not None:
+                manual_result = {
+                    "success": True,
+                    "manually_reconciled": True,
+                    "reason": reason,
+                }
+                telemetry_attempted = True
+                await _record_operator_resolution_telemetry(
+                    session,
+                    manual_result,
+                    record_outcome=True,
+                    manually_reconciled=True,
+                )
+            else:
+                telemetry_warning = (
+                    "The effect is applied, but its terminal session could not "
+                    "be loaded for downstream telemetry."
+                )
+        except Exception as exc:
+            telemetry_warning = (
+                "The effect is applied, but downstream telemetry could not be "
+                "reconstructed."
+            )
+            logger.warning(
+                "Manual effect telemetry failed for %s: %s", session_id, exc
+            )
+        response = {
+            "success": True,
+            "message": "Resolution effect acknowledged after manual reconciliation.",
+            "resolution_effect": _resolution_effect_view(current or effect),
+            "telemetry_attempted": telemetry_attempted,
+            "telemetry_note": (
+                "Downstream outcome, calibration and lifecycle signals are "
+                "best-effort; this response does not attest their delivery."
+            ),
+        }
+        if telemetry_warning:
+            response["telemetry_warning"] = telemetry_warning
+        return success_response(response)
+
+    if state == "pending" and disposition == "apply_pending":
+        session = await load_session(session_id)
+        if session is None or session.resolution is None:
+            return [error_response(
+                "The pending effect cannot be reconstructed from its terminal session.",
+                error_code="RESOLUTION_EFFECT_SESSION_INVALID",
+                error_category="system_error",
+                details={"resolution_effect": _resolution_effect_view(effect)},
+                arguments=arguments,
+            )]
+        applied = await _apply_durable_resolution_effect(
+            session, session.resolution
+        )
+        current = await pg_get_resolution_effect(session_id)
+        if applied.state == "applied":
+            telemetry_attempted = False
+            if applied.claimed:
+                telemetry_attempted = True
+                await _record_operator_resolution_telemetry(
+                    session,
+                    applied.execution_result or {},
+                    record_outcome=False,
+                    manually_reconciled=False,
+                )
+            return success_response({
+                "success": True,
+                "message": "Pending resolution effect applied.",
+                "resolution_effect": _resolution_effect_view(current or effect),
+                "execution": applied.execution_result,
+                "telemetry_owner": applied.claimed,
+                "telemetry_attempted": telemetry_attempted,
+                "telemetry_note": (
+                    "Downstream calibration and lifecycle signals are "
+                    "best-effort; this response does not attest their delivery."
+                ),
+            })
+        return [error_response(
+            "The effect was claimed but is not confirmed applied. Inspect live "
+            "agent state before acknowledging any manual repair.",
+            error_code="SESSION_RESOLUTION_EFFECT_RECONCILIATION_REQUIRED",
+            error_category="system_error",
+            details={
+                "resolution_effect": _resolution_effect_view(current or effect),
+                "effect_error": applied.error,
+            },
+            arguments=arguments,
+        )]
+
+    if state == "pending":
+        return success_response({
+            "success": True,
+            "requires_reconciliation": True,
+            "message": (
+                "Resolution effect is pending and has not been executed. Inspect "
+                "the terminal decision, then explicitly use apply_pending."
+            ),
+            "resolution_effect": _resolution_effect_view(effect),
+            "next_call": (
+                f"dialectic(action='reconcile_effect', session_id='{session_id}', "
+                "effect_disposition='apply_pending')"
+            ),
+        })
+
+    if state == "applied":
+        return success_response({
+            "success": True,
+            "message": "Resolution effect is already applied.",
+            "resolution_effect": _resolution_effect_view(effect),
+        })
+
+    return success_response({
+        "success": False,
+        "requires_manual_reconciliation": True,
+        "message": (
+            "Automatic replay is unsafe because the effect may be partially "
+            "applied. If it is applying, first confirm its worker stopped and "
+            "fence the exact owner token with effect_disposition='mark_uncertain'. "
+            "Then inspect and repair live state before using mark_applied."
+        ),
+        "resolution_effect": _resolution_effect_view(effect),
+        "next_call": (
+            f"dialectic(action='reconcile_effect', session_id='{session_id}', "
+            + (
+                "effect_disposition='mark_uncertain', "
+                f"effect_owner_token='{effect.get('owner_token')}', reason='worker stopped')"
+                if state == "applying"
+                else "effect_disposition='mark_applied', reason='manual repair completed')"
+            )
+        ),
+    })
+
+
 @mcp_tool("llm_assisted_dialectic", timeout=45.0, register=False)
 async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     """
@@ -5064,6 +5964,23 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     pause_evidence = embed_reviewed_work_authorship(
         pause_evidence, reviewed_work_authorship
     )
+    try:
+        pause_evidence = await _bind_pause_token(
+            pause_evidence, agent_uuid
+        )
+    except Exception as exc:
+        logger.warning(
+            "Could not bind LLM dialectic %s to authoritative agent state: %s",
+            agent_uuid,
+            exc,
+        )
+        return [error_response(
+            "The agent's authoritative pause state could not be verified, so "
+            "the review was not opened.",
+            error_code="PAUSE_BINDING_UNAVAILABLE",
+            error_category="system_error",
+            arguments=arguments,
+        )]
     agent_state = _snapshot_agent_state(agent_uuid)
 
     # Run full dialectic
@@ -5099,6 +6016,10 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
     session_id = None
     session = None
     persisted_resolution = False
+    terminal_committed = False
+    commit_unknown = False
+    resolution_effect_state: Optional[str] = None
+    effect_pending = False
     awaiting_facilitation = False
     try:
         from src.dialectic_protocol import DialecticSession, DialecticMessage as DMsg
@@ -5212,19 +6133,59 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         if synth_agrees and session.phase == DialecticPhase.RESOLVED:
             resolution_obj = session.finalize_resolution()
             session.resolution = resolution_obj
-            written = await pg_resolve_session(
-                session_id=session_id,
-                resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
-                status="resolved",
+            commit = await _commit_converged_resolution(
+                session, resolution_obj
             )
-            discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
-            if written:
-                persisted_resolution = True
-                logger.info(
-                    f"LLM dialectic session {session_id} resolved via protocol"
+            discard_receipt_unless_written(
+                resolution_obj,
+                written=commit.terminal_committed,
+                had_receipt=False,
+            )
+            if commit.terminal_committed:
+                terminal_committed = True
+                effect = await _apply_durable_resolution_effect(
+                    session, resolution_obj
                 )
-                await _emit_dialectic_event(
-                    "dialectic_resolved", session, action="resume"
+                resolution_effect_state = effect.state
+                if effect.state == "applied":
+                    persisted_resolution = True
+                    logger.info(
+                        "LLM dialectic session %s resolved and applied via protocol",
+                        session_id,
+                    )
+                    execution_result = effect.execution_result or {}
+                    newly_applied = bool(
+                        effect.claimed
+                        or (
+                            commit.terminal_committed
+                            and execution_result.get("no_op") is True
+                        )
+                    )
+                    if newly_applied and not effect.claimed:
+                        await record_resolution_outcome(
+                            session, resolution_obj, execution_result
+                        )
+                    if newly_applied:
+                        await _emit_dialectic_event(
+                            "dialectic_resolved", session, action="resume"
+                        )
+                else:
+                    effect_pending = True
+                    logger.warning(
+                        "LLM dialectic session %s committed but effect is %s: %s",
+                        session_id,
+                        effect.state,
+                        effect.error,
+                    )
+            elif commit.commit_unknown:
+                commit_unknown = True
+                effect_pending = True
+                session.phase = DialecticPhase.SYNTHESIS
+                session.resolution = None
+                logger.warning(
+                    "LLM dialectic session %s terminal commit outcome is unknown; "
+                    "reload before further protocol writes",
+                    session_id,
                 )
             else:
                 session.phase = DialecticPhase.SYNTHESIS
@@ -5257,11 +6218,17 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         logger.warning(f"Could not persist LLM dialectic session: {e}")
 
     response_data = {
-        "success": True,
+        "success": not effect_pending and not commit_unknown,
         "message": f"Dialectic complete. Recommendation: {recommendation}",
         "recommendation": recommendation,
         "session_id": session_id,
         "resolved": persisted_resolution,
+        "terminal_committed": (
+            terminal_committed if not commit_unknown else None
+        ),
+        "commit_unknown": commit_unknown,
+        "effect_pending": effect_pending,
+        "resolution_effect_state": resolution_effect_state,
         "awaiting_facilitation": awaiting_facilitation,
         "reviewed_work_authorship": reviewed_work_authorship.as_dict(),
         "thesis": {

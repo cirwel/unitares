@@ -342,13 +342,10 @@ class TestLoaderHydratesRuntimeFields:
 
 
 class TestCircuitBreakerPersistsRuntimeState:
-    """Pause path in agent_loop_detection.process_update_authenticated_async
-    must persist paused_at + the 'paused' lifecycle event so the agent record
-    isn't silently empty after the next force-reload (Watcher P011 ext).
-    """
+    """The pause actuator publishes status, token and event atomically."""
 
     @pytest.mark.asyncio
-    async def test_pause_decision_persists_paused_at_and_lifecycle_event(self):
+    async def test_pause_decision_persists_generation_and_lifecycle_event(self):
         from src import agent_loop_detection as ald
         from src import agent_storage
 
@@ -377,8 +374,11 @@ class TestCircuitBreakerPersistsRuntimeState:
              patch.object(ald, "detect_loop_pattern", return_value=(False, "")), \
              patch("src.agent_lifecycle.get_or_create_monitor", return_value=monitor), \
              patch.object(agent_storage, "get_db", return_value=mock_db), \
-             patch.object(agent_storage, "persist_runtime_state",
-                          AsyncMock(return_value=True)) as persist_mock, \
+             patch.object(agent_storage, "pause_agent_with_token",
+                          AsyncMock(return_value={
+                              "applied": True,
+                              "pause_token": "durable",
+                          })) as pause_mock, \
              patch.object(ald, "save_monitor_state_async", AsyncMock()):
             # Disable auto-recovery to avoid touching unrelated code paths
             with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "0"}):
@@ -386,29 +386,119 @@ class TestCircuitBreakerPersistsRuntimeState:
                     AGENT_ID, "test-key", {"task_type": "mixed"}
                 )
 
-        assert persist_mock.await_count >= 1, (
-            "Circuit-breaker pause must call persist_runtime_state so paused_at "
-            "and the 'paused' lifecycle event survive a force-reload — without "
-            "this, the agent record's lifecycle_events stays [] and paused_at "
-            "comes back as null, hiding the pause from anyone querying the agent."
-        )
-        kwargs = persist_mock.await_args.kwargs
-        assert kwargs.get("paused_at"), \
-            "persist_runtime_state must be called with paused_at set"
-        event = kwargs.get("append_lifecycle_event")
-        assert event and event.get("event") == "paused", \
-            "persist_runtime_state must include the 'paused' lifecycle event"
+        pause_mock.assert_awaited_once()
+        kwargs = pause_mock.await_args.kwargs
+        assert kwargs.get("pause_token")
+        event = kwargs.get("lifecycle_event")
+        assert event and event.get("event") == "paused"
         assert "high-risk" in (event.get("reason") or ""), \
             "lifecycle event reason must carry the decision reason"
         assert event.get("actuation_id"), \
             "persisted pause event must carry the runtime actuation id"
         assert result["enforcement"]["actuation_id"] == event["actuation_id"]
-        assert result["enforcement"]["applied_at"] == kwargs["paused_at"]
+        assert result["enforcement"]["applied_at"] == kwargs["pause_token"]
+        assert result["enforcement"]["durable"] is True
         meta.add_lifecycle_event.assert_called_once_with(
             "paused",
             "UNITARES high-risk verdict (risk_score=0.65)",
             actuation_id=event["actuation_id"],
         )
+
+    @pytest.mark.asyncio
+    async def test_pause_storage_failure_stays_local_and_skips_auto_recovery(self):
+        from src import agent_loop_detection as ald
+        from src import agent_storage
+
+        meta = make_agent_meta(status="active")
+        meta.recent_update_timestamps = []
+        meta.recent_decisions = []
+        meta.loop_cooldown_until = None
+        meta.add_recent_update = MagicMock()
+        meta.add_lifecycle_event = MagicMock()
+        monitor = make_monitor()
+        monitor.process_update = MagicMock(return_value={
+            "decision": {"action": "pause", "reason": "high risk"},
+            "metrics": {"coherence": 0.45, "risk_score": 0.65},
+        })
+        mock_db = MagicMock()
+        mock_db.increment_update_count = AsyncMock(return_value=42)
+        auto_recovery = AsyncMock()
+
+        with patch.object(ald, "agent_metadata", {AGENT_ID: meta}), \
+             patch.object(ald, "monitors", {AGENT_ID: monitor}), \
+             patch.object(ald, "verify_agent_ownership", return_value=(True, None)), \
+             patch.object(ald, "detect_loop_pattern", return_value=(False, "")), \
+             patch("src.agent_lifecycle.get_or_create_monitor", return_value=monitor), \
+             patch.object(agent_storage, "get_db", return_value=mock_db), \
+             patch.object(
+                 agent_storage,
+                 "pause_agent_with_token",
+                 AsyncMock(side_effect=RuntimeError("database unavailable")),
+             ), \
+             patch.object(ald, "_auto_initiate_dialectic_recovery", auto_recovery), \
+             patch.object(ald, "save_monitor_state_async", AsyncMock()):
+            with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "1"}):
+                result = await ald.process_update_authenticated_async(
+                    AGENT_ID, "test-key", {"task_type": "mixed"}
+                )
+
+        assert meta.status == "paused"
+        assert meta.paused_at
+        assert result["enforcement"]["durable"] is False
+        assert result["enforcement"]["effect"] == "in_memory_pause_only"
+        assert result["enforcement"]["persistence_error"] == "RuntimeError"
+        assert result["auto_recovery_initiated"] is False
+        auto_recovery.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_existing_durable_pause_generation_is_reused(self):
+        from src import agent_loop_detection as ald
+        from src import agent_storage
+
+        meta = make_agent_meta(status="active")
+        meta.recent_update_timestamps = []
+        meta.recent_decisions = []
+        meta.loop_cooldown_until = None
+        meta.add_recent_update = MagicMock()
+        meta.add_lifecycle_event = MagicMock()
+        monitor = make_monitor()
+        monitor.process_update = MagicMock(return_value={
+            "decision": {"action": "pause", "reason": "high risk"},
+            "metrics": {"coherence": 0.45, "risk_score": 0.65},
+        })
+        mock_db = MagicMock()
+        mock_db.increment_update_count = AsyncMock(return_value=42)
+
+        with patch.object(ald, "agent_metadata", {AGENT_ID: meta}), \
+             patch.object(ald, "monitors", {AGENT_ID: monitor}), \
+             patch.object(ald, "verify_agent_ownership", return_value=(True, None)), \
+             patch.object(ald, "detect_loop_pattern", return_value=(False, "")), \
+             patch("src.agent_lifecycle.get_or_create_monitor", return_value=monitor), \
+             patch.object(agent_storage, "get_db", return_value=mock_db), \
+             patch.object(
+                 agent_storage,
+                 "pause_agent_with_token",
+                 AsyncMock(return_value={
+                     "applied": False,
+                     "reason": "already_paused_different_generation",
+                     "current_pause_token": "pause-existing",
+                 }),
+             ), \
+             patch.object(ald, "save_monitor_state_async", AsyncMock()):
+            with patch.dict("os.environ", {"UNITARES_AUTO_DIALECTIC_RECOVERY": "0"}):
+                result = await ald.process_update_authenticated_async(
+                    AGENT_ID, "test-key", {"task_type": "mixed"}
+                )
+
+        assert meta.status == "paused"
+        assert meta.paused_at == "pause-existing"
+        assert result["enforcement"]["durable"] is True
+        assert result["enforcement"]["reused_pause_generation"] is True
+        assert (
+            result["enforcement"]["effect"]
+            == "durable_pause_generation_already_present"
+        )
+        meta.add_lifecycle_event.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_safety_net_resume_persists_paused_at_clear_and_event(self):

@@ -1143,6 +1143,39 @@ class TestResolveSession:
         assert detail == {"written": False, "existing_status": "active"}
 
     @pytest.mark.asyncio
+    async def test_idempotent_terminal_read_exposes_exact_resolution_snapshot(self, db):
+        """A lost BEAM response can be reconciled without a second/racy read."""
+        instance, pool, conn = db
+        resolution = {"action": "resume", "conditions": ["monitor"], "receipt": "r1"}
+        conn.fetchrow = AsyncMock(side_effect=[
+            None,
+            {
+                "status": "resolved",
+                "phase": "resolved",
+                "paused_agent_id": "paused-A",
+                "reviewer_agent_id": "reviewer-B",
+                "paused_agent_state_json": {},
+                "resolution_json": json.dumps(resolution),
+            },
+        ])
+        detail = {}
+
+        assert await instance.resolve_session(
+            "sess-001", resolution, expected_phase="synthesis", detail=detail
+        ) is True
+        assert detail == {
+            "written": False,
+            "existing_status": "resolved",
+            "existing_phase": "resolved",
+            "existing_paused_agent_id": "paused-A",
+            "existing_reviewer_agent_id": "reviewer-B",
+            "existing_resolution": resolution,
+        }
+        followup_sql = conn.fetchrow.await_args_list[1].args[0]
+        assert "phase" in followup_sql
+        assert "resolution_json" in followup_sql
+
+    @pytest.mark.asyncio
     async def test_resolve_session_not_found(self, db):
         """resolve_session returns False when session missing.
 
@@ -2350,6 +2383,116 @@ class TestSessionTerminalState:
         instance, _pool, conn = db
         conn.fetchrow = AsyncMock(return_value=None)
         assert await instance.get_session_terminal_state("s1") is None
+
+
+class TestResolutionEffectOutbox:
+    @pytest.mark.asyncio
+    async def test_claim_binds_outbox_and_terminal_row_to_exact_decision(self, db):
+        instance, _pool, conn = db
+        resolution = {"action": "resume", "conditions": ["observe"]}
+        conn.fetchrow = AsyncMock(return_value={
+            "session_id": "s1",
+            "paused_agent_id": "paused-a",
+            "reviewer_agent_id": "reviewer-b",
+            "effect_required": True,
+            "pause_token": "pause-1",
+            "resolution_payload_json": resolution,
+            "state": "applying",
+            "claimed": True,
+        })
+
+        row = await instance.claim_resolution_effect(
+            "s1",
+            "owner-1",
+            paused_agent_id="paused-a",
+            reviewer_agent_id="reviewer-b",
+            effect_required=True,
+            pause_token="pause-1",
+            resolution=resolution,
+        )
+
+        assert row["claimed"] is True
+        sql, *params = conn.fetchrow.call_args.args
+        assert params == [
+            "s1", "owner-1", "paused-a", "reviewer-b",
+            json.dumps(resolution), "pause-1", True,
+        ]
+        assert "state = 'pending'" in sql
+        assert "FROM core.dialectic_sessions" in sql
+        assert "s.status = 'resolved'" in sql
+        assert "s.phase = 'resolved'" in sql
+        assert "s.resolution_json = ($5::text)::jsonb" in sql
+
+    @pytest.mark.asyncio
+    async def test_losing_claim_returns_live_row_without_claiming(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(side_effect=[None, {
+            "session_id": "s1",
+            "resolution_payload_json": '{"action": "resume"}',
+            "execution_result_json": '{"success": true}',
+            "state": "applied",
+            "claimed": False,
+        }])
+        row = await instance.claim_resolution_effect(
+            "s1",
+            "owner-2",
+            paused_agent_id="paused-a",
+            reviewer_agent_id="reviewer-b",
+            effect_required=True,
+            pause_token="pause-1",
+            resolution={"action": "resume"},
+        )
+        assert row["claimed"] is False
+        assert row["resolution_payload_json"] == {"action": "resume"}
+        assert row["execution_result_json"] == {"success": True}
+        assert conn.fetchrow.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_complete_is_owner_and_state_guarded(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.complete_resolution_effect(
+            "s1", "owner-1", {"success": True}
+        ) is True
+        sql = conn.fetchrow.call_args.args[0]
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+
+    @pytest.mark.asyncio
+    async def test_failure_records_unknown_partial_not_retryable_failure(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.fail_resolution_effect(
+            "s1", "owner-1", "uncertain", execution_result={"success": False}
+        ) is True
+        sql = conn.fetchrow.call_args.args[0]
+        assert "state = 'unknown_partial'" in sql
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+
+    @pytest.mark.asyncio
+    async def test_acknowledge_only_closes_unknown_partial(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.acknowledge_resolution_effect(
+            "s1", "operator repaired live state"
+        ) is True
+        sql = conn.fetchrow.call_args.args[0]
+        assert "state = 'unknown_partial'" in sql
+        assert "state IN ('applying'" not in sql
+
+    @pytest.mark.asyncio
+    async def test_quarantine_fences_exact_applying_owner(self, db):
+        instance, _pool, conn = db
+        conn.fetchrow = AsyncMock(return_value={"session_id": "s1"})
+        assert await instance.quarantine_resolution_effect(
+            "s1", "owner-1", "worker confirmed stopped"
+        ) is True
+        sql, *params = conn.fetchrow.call_args.args
+        assert params == ["s1", "owner-1", "worker confirmed stopped"]
+        assert "state = 'applying'" in sql
+        assert "owner_token = $2" in sql
+        assert "state = 'unknown_partial'" in sql
 
 
 

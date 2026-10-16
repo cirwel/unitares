@@ -85,6 +85,10 @@ async def _reviewer_converges(paused_key, reviewer_key):
         paused_agent_id="agent-paused",
         reviewer_agent_id="agent-reviewer",
         dispute_type="verification",
+        paused_agent_state={
+            "pause_effect_required": True,
+            "pause_token": "pause-test",
+        },
     )
     session.phase = DialecticPhase.SYNTHESIS
     session.synthesis_round = 1

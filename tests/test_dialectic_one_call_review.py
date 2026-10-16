@@ -49,6 +49,14 @@ def request_env():
         ),
         patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
         patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None),
+        patch(
+            "src.agent_storage.read_authoritative_pause_binding",
+            new=AsyncMock(return_value={
+                "pause_effect_required": False,
+                "pause_token": None,
+                "status": "active",
+            }),
+        ),
     ]
     started = [p.start() for p in patches]
     yield started
@@ -328,6 +336,14 @@ class TestOneCallIdentityForwarding:
             ),
             patch("src.mcp_handlers.context.get_context_agent_id", return_value=None),
             patch(f"{DIALECTIC}.select_reviewer", new_callable=AsyncMock, return_value=None),
+            patch(
+                "src.agent_storage.read_authoritative_pause_binding",
+                new=AsyncMock(return_value={
+                    "pause_effect_required": False,
+                    "pause_token": None,
+                    "status": "active",
+                }),
+            ),
         ]
         started = [p.start() for p in patches]
         yield started
@@ -664,6 +680,39 @@ class TestWhoseMove:
             })
         assert "nobody" in out["whose_move"]
         assert out["next_call"] is None
+
+    def test_unobservable_terminal_effect_requires_operator_attention(self):
+        from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability
+
+        with self._ctx("operator-agent"), self._operator():
+            out = _build_dialectic_actionability({
+                "session_id": "sess-effect-read-failed",
+                "paused_agent_id": "agent-paused",
+                "reviewer_agent_id": "agent-reviewer",
+                "phase": "resolved",
+                "resolution_effect_state": "unknown",
+                "resolution_effect_state_observed": False,
+            })
+
+        assert out["whose_move"].startswith("YOURS")
+        assert "action='reconcile_effect'" in out["next_call"]
+        assert out["required_role"] == "operator"
+
+    @pytest.mark.asyncio
+    async def test_effect_read_failure_is_not_projected_as_legacy_no_row(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            _attach_public_resolution_effect,
+        )
+
+        payload = {"phase": "resolved"}
+        with patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(side_effect=RuntimeError("effect table unavailable")),
+        ):
+            await _attach_public_resolution_effect(payload, "sess-read-failed")
+
+        assert payload["resolution_effect_state"] == "unknown"
+        assert payload["resolution_effect_state_observed"] is False
 
     def test_failed_session_with_facilitation_request_is_actionable(self):
         from src.mcp_handlers.dialectic.handlers import _build_dialectic_actionability

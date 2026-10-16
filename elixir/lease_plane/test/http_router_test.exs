@@ -314,6 +314,105 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
   end
 
+  describe "/v1/dialectic/resolve-with-effect" do
+    test "commits terminal row and the matching v1 effect in one request" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [
+          session_id,
+          Jason.encode!(%{
+            "pause_effect_required" => true,
+            "pause_token" => "pause-http-v1"
+          })
+        ]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: ["monitor"],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution
+        })
+
+      assert resp.status == 200
+      assert parsed(resp)["status"] == "resolved"
+
+      assert %{rows: [["pending", "pause-http-v1", true]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 """
+                 SELECT state, pause_token, effect_required
+                 FROM coordination.dialectic_resolution_effects
+                 WHERE session_id = $1
+                 """,
+                 [session_id]
+               )
+    end
+
+    test "malformed required binding rolls back both terminal row and effect" do
+      session_id = insert_dialectic_session(paused_agent_id: "p", reviewer_agent_id: "r")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      Postgrex.query!(
+        UnitaresLeasePlane.DB,
+        "UPDATE core.dialectic_sessions SET paused_agent_state_json = ($2::text)::jsonb WHERE session_id = $1",
+        [session_id, Jason.encode!(%{"pause_effect_required" => true})]
+      )
+
+      resolution = %{
+        action: "resume",
+        conditions: [],
+        root_cause: "independent review",
+        reasoning: "the parties agreed",
+        signature_a: "",
+        signature_b: "",
+        timestamp: "2026-10-16T00:00:00+00:00",
+        signature_version: 3
+      }
+
+      resp =
+        post_json("/v1/dialectic/resolve-with-effect", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: resolution
+        })
+
+      assert resp.status == 503
+      assert parsed(resp)["error"] == "service_unavailable"
+
+      assert %{rows: [["active"]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT status FROM core.dialectic_sessions WHERE session_id = $1",
+                 [session_id]
+               )
+
+      assert %{rows: [[false]]} =
+               Postgrex.query!(
+                 UnitaresLeasePlane.DB,
+                 "SELECT EXISTS(SELECT 1 FROM coordination.dialectic_resolution_effects WHERE session_id = $1)",
+                 [session_id]
+               )
+    end
+  end
+
   describe "/v1/dialectic/reviewer" do
     test "claim_if_unassigned refuses a later first responder" do
       session_id = insert_dialectic_session(phase: "antithesis", status: "active")

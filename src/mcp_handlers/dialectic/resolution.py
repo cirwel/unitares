@@ -5,13 +5,19 @@ Handles executing resolutions from dialectic sessions.
 Applies conditions and resumes agents based on peer agreement.
 """
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime
+from types import SimpleNamespace
 
 from src.dialectic_protocol import DialecticSession, Resolution
 from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.logging_utils import get_logger
-from ..support.condition_parser import parse_condition, apply_condition
+from ..support.condition_parser import (
+    MAX_DIALECTIC_CONDITIONS,
+    apply_condition,
+    apply_condition_to_metadata,
+    parse_condition,
+)
 from src.mcp_handlers.shared import lazy_mcp_server as mcp_server
 from src.mcp_handlers.observability.outcome_events import _record_outcome_event_inline
 logger = get_logger(__name__)
@@ -90,6 +96,13 @@ async def record_resolution_outcome(
                 "resolution_hash": resolution.hash(),
                 "discovery_id": session.discovery_id,
                 "status_changed": bool(execution_result.get("status_changed")),
+                "no_op": bool(execution_result.get("no_op")),
+                "manually_reconciled": bool(
+                    execution_result.get("manually_reconciled")
+                ),
+                "reconciliation_reason": execution_result.get("reason")
+                if execution_result.get("manually_reconciled")
+                else None,
             },
         })
     except Exception as exc:
@@ -105,6 +118,8 @@ async def execute_resolution(
     resolution: Resolution,
     *,
     record_outcome: bool = True,
+    expected_pause_token: Optional[str] = None,
+    enforce_pause_token: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute the resolution: resume agent with agreed conditions.
@@ -126,13 +141,15 @@ async def execute_resolution(
     # cache.set awaits (~16s) on every resolution call.
     await mcp_server.load_metadata_async()
 
-    if agent_id not in mcp_server.agent_metadata:
+    if agent_id not in mcp_server.agent_metadata and not enforce_pause_token:
         raise ValueError(f"Agent '{agent_id}' not found")
-    
-    meta = mcp_server.agent_metadata[agent_id]
-    
-    # Verify agent is actually paused
-    if meta.status != "paused":
+
+    meta = mcp_server.agent_metadata.get(agent_id)
+
+    # Legacy callers execute against the live cache as before. Durable callers
+    # use the PostgreSQL pause-token CAS below as authority; a cache status read
+    # cannot safely decide whether a later pause generation may be resumed.
+    if not enforce_pause_token and meta.status != "paused":
         return {
             "success": False,
             "warning": f"Agent status is '{meta.status}', not 'paused'. No action taken."
@@ -203,14 +220,27 @@ async def execute_resolution(
         }
     
     # Apply conditions using condition parser
+    original_conditions = list(
+        getattr(meta, "dialectic_conditions", None) or []
+    ) if meta is not None else []
+    staged_meta = SimpleNamespace(dialectic_conditions=[])
     applied_conditions = []
     for condition in resolution.conditions:
         try:
             # Parse condition into structured format
             parsed = parse_condition(condition)
-            
-            # Apply condition to agent metadata
-            apply_result = await apply_condition(parsed, agent_id, mcp_server)
+
+            # A durable effect stages changes off-cache until the authoritative
+            # pause-generation transaction commits. Legacy callers retain the
+            # existing direct cache mutation path.
+            if enforce_pause_token:
+                apply_result = apply_condition_to_metadata(
+                    parsed, agent_id, staged_meta
+                )
+            else:
+                apply_result = await apply_condition(
+                    parsed, agent_id, mcp_server
+                )
             
             applied_conditions.append(apply_result)
         except Exception as e:
@@ -220,40 +250,119 @@ async def execute_resolution(
                 "error": str(e)
             })
             logger.warning(f"Failed to apply condition '{condition}': {e}", exc_info=True)
+
+    failed_conditions = [
+        item for item in applied_conditions if item.get("status") == "failed"
+    ]
+    if failed_conditions:
+        if meta is not None and not enforce_pause_token:
+            meta.dialectic_conditions = original_conditions
+        return {
+            "success": False,
+            "warning": "One or more resolution conditions could not be applied.",
+            "applied_conditions": applied_conditions,
+            "status_changed": False,
+        }
     
     # Resume the agent (if paused - skip if discovery dispute)
     status_changed = False
-    if meta.status == "paused":
+    if enforce_pause_token:
         resume_reason = f"Resumed via dialectic synthesis: {resolution.root_cause}"
+        lifecycle_event = {
+            "event": "resumed",
+            "timestamp": datetime.now().isoformat(),
+            "reason": resume_reason,
+        }
+        from src import agent_storage
+
+        resume = await agent_storage.resume_agent_if_pause_token(
+            agent_id,
+            expected_pause_token=expected_pause_token or "",
+            dialectic_condition_additions=list(staged_meta.dialectic_conditions),
+            lifecycle_event=lifecycle_event,
+        )
+        if not resume.get("applied"):
+            reason = resume.get("reason") or "pause_resume_cas_refused"
+            if reason == "pause_generation_superseded":
+                # The row lock and compare-and-set prove this exact generation
+                # is already gone and this call wrote nothing. Consume it as a
+                # no-op; never resume whichever generation is current now.
+                return {
+                    "success": True,
+                    "no_op": True,
+                    "superseded": True,
+                    "reason": reason,
+                    "resume_cas": resume,
+                    "applied_conditions": [],
+                    "status_changed": False,
+                }
+            return {
+                "success": False,
+                "refused": reason,
+                "warning": (
+                    "The authoritative agent state could not safely consume "
+                    "the reviewed pause generation."
+                ),
+                "resume_cas": resume,
+                "applied_conditions": [],
+                "status_changed": False,
+            }
+
+        durable_conditions = list(resume.get("dialectic_conditions") or [])
+        if meta is not None:
+            # Publish only after commit. Preserve any cache-only additions that
+            # arrived while the transaction waited, and never overwrite a
+            # newer pause generation's status.
+            cache_conditions = list(
+                getattr(meta, "dialectic_conditions", None) or []
+            )
+            for cached in cache_conditions:
+                if cached not in durable_conditions:
+                    durable_conditions.append(cached)
+            meta.dialectic_conditions = durable_conditions[
+                -MAX_DIALECTIC_CONDITIONS:
+            ]
+            if (
+                getattr(meta, "status", None) == "paused"
+                and getattr(meta, "paused_at", None) == expected_pause_token
+            ):
+                meta.status = "active"
+                meta.paused_at = None
+                meta.add_lifecycle_event("resumed", resume_reason)
+        status_changed = True
+    elif meta.status == "paused":
+        resume_reason = f"Resumed via dialectic synthesis: {resolution.root_cause}"
+        lifecycle_event = {
+            "event": "resumed",
+            "timestamp": datetime.now().isoformat(),
+            "reason": resume_reason,
+        }
+        from src import agent_storage
+
+        # Legacy direct callers predate durable dialectic effects. Preserve
+        # their call shape, but a persistence refusal is a failed execution,
+        # never a successful resolution.
+        runtime_persisted = await agent_storage.persist_runtime_state(
+            agent_id,
+            paused_at=None,
+            append_lifecycle_event=lifecycle_event,
+        )
+        status_persisted = await agent_storage.update_agent(
+            agent_id, status="active"
+        )
+        if runtime_persisted is not True or status_persisted is not True:
+            meta.dialectic_conditions = original_conditions
+            return {
+                "success": False,
+                "warning": "The resume could not be persisted authoritatively.",
+                "applied_conditions": applied_conditions,
+                "status_changed": False,
+            }
+
         meta.status = "active"
         meta.paused_at = None
         meta.add_lifecycle_event("resumed", resume_reason)
         status_changed = True
-
-        # P011: persist runtime-state mutations so paused_at=None and the
-        # lifecycle event survive reload (Watcher #81b876bf, #a8b049c8, #9cf3ec6a).
-        try:
-            from src import agent_storage
-            await agent_storage.persist_runtime_state(
-                agent_id,
-                paused_at=None,
-                append_lifecycle_event={
-                    "event": "resumed",
-                    "timestamp": datetime.now().isoformat(),
-                    "reason": resume_reason,
-                },
-            )
-        except Exception as e:
-            logger.warning(
-                f"persist_runtime_state(resumed) failed for {agent_id[:8]}...: {e}"
-            )
-
-        # PostgreSQL: Update status (single source of truth)
-        try:
-            from src import agent_storage
-            await agent_storage.update_agent(agent_id, status="active")
-        except Exception as e:
-            logger.debug(f"PostgreSQL status update failed: {e}")
 
     # If linked to discovery, update discovery status based on resolution
     discovery_updated = False
@@ -302,7 +411,7 @@ async def execute_resolution(
     result = {
         "success": True,
         "agent_id": agent_id,
-        "new_status": meta.status,
+        "new_status": getattr(meta, "status", "active"),
         "applied_conditions": applied_conditions,
         "resolution_hash": resolution.hash(),
         "status_changed": status_changed,

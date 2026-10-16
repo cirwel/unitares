@@ -378,6 +378,64 @@ async def persist_runtime_state(
     return await db.update_identity_metadata(agent_id, updates, merge=True)
 
 
+async def pause_agent_with_token(
+    agent_id: str,
+    *,
+    pause_token: str,
+    lifecycle_event: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Atomically publish a circuit-breaker pause to both durable copies.
+
+    Dialectic sessions bind to this exact ``pause_token``.  Writing only the
+    identity metadata would leave both status columns ``active`` and make a
+    real pause indistinguishable from a reflection session; writing either
+    status separately would expose a disagreement window.  One row-locking
+    transaction therefore owns the status transition, token and audit event.
+    """
+    await _ensure_db_ready()
+    return await get_db().pause_agent_with_token(
+        agent_id,
+        pause_token=pause_token,
+        lifecycle_event=lifecycle_event,
+    )
+
+
+async def resume_agent_if_pause_token(
+    agent_id: str,
+    *,
+    expected_pause_token: str,
+    dialectic_condition_additions: List[Dict[str, Any]],
+    lifecycle_event: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Atomically consume one exact pause generation and persist its effects.
+
+    ``paused_at`` is the monotonic token already stored in identity metadata
+    whenever the runtime enters ``paused``.  A delayed dialectic decision may
+    resume only that generation: a newer pause, an already-resumed agent, or a
+    status/metadata disagreement is refused without mutation.  Conditions,
+    the resume lifecycle event, and both durable status copies land in the same
+    PostgreSQL transaction.
+    """
+    await _ensure_db_ready()
+    return await get_db().resume_agent_if_pause_token(
+        agent_id,
+        expected_pause_token=expected_pause_token,
+        dialectic_condition_additions=dialectic_condition_additions,
+        lifecycle_event=lifecycle_event,
+    )
+
+
+async def read_authoritative_pause_binding(agent_id: str) -> Dict[str, Any]:
+    """Read the session-open pause generation from both durable status copies.
+
+    A cache that still says ``active`` after another process paused the agent
+    must never mint a no-op resolution. Status disagreement, a paused row with
+    no token, or a missing identity therefore fails closed instead of guessing.
+    """
+    await _ensure_db_ready()
+    return await get_db().read_authoritative_pause_binding(agent_id)
+
+
 async def archive_agent(
     agent_id: str,
     *,

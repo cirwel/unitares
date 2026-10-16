@@ -169,7 +169,16 @@ class DialecticDB:
         await self._ensure_pool()
         async with compatible_acquire(self._pool) as conn:
             row = await conn.fetchrow("""
-                SELECT * FROM core.dialectic_sessions WHERE session_id = $1
+                SELECT s.*,
+                       e.state AS resolution_effect_state,
+                       e.attempt_count AS resolution_effect_attempt_count,
+                       e.claimed_at AS resolution_effect_claimed_at,
+                       e.applied_at AS resolution_effect_applied_at,
+                       e.uncertain_at AS resolution_effect_uncertain_at
+                FROM core.dialectic_sessions s
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = s.session_id
+                WHERE s.session_id = $1
             """, session_id)
 
             if not row:
@@ -669,7 +678,10 @@ class DialecticDB:
         ``detail``, when given, is filled with ``written`` (whether THIS call
         mutated the row) and, when it did not, the ``existing_status``: an
         idempotent True wrote nothing, and an instrument must not record it as
-        a write. The return value is unchanged.
+        a write. For an idempotent terminal row it also carries the phase,
+        participant ids, and decoded resolution from that same follow-up read;
+        a caller recovering an ambiguous remote commit can compare the exact
+        winner without a second racy query. The return value is unchanged.
 
         Compare-and-set, as on `mark_awaiting_facilitation`: when
         ``expected_phase``, ``expected_updated_at`` and/or ``expected_reviewer``
@@ -744,10 +756,49 @@ class DialecticDB:
         clear = ", awaiting_facilitation = false" if clear_facilitation else ""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                UPDATE core.dialectic_sessions
-                SET status = $1, phase = $2, resolution_json = $3, updated_at = now(){clear}
-                WHERE session_id = $4 AND status NOT IN ('resolved', 'failed'){cas}{authority_guard}
-                RETURNING session_id, {self._EFFECT_TS}
+                WITH terminal AS (
+                    UPDATE core.dialectic_sessions
+                    SET status = $1, phase = $2, resolution_json = $3,
+                        updated_at = now(){clear}
+                    WHERE session_id = $4
+                      AND status NOT IN ('resolved', 'failed'){cas}{authority_guard}
+                    RETURNING session_id, paused_agent_id, reviewer_agent_id,
+                              paused_agent_state_json, resolution_json,
+                              {self._EFFECT_TS}
+                ), prepared AS (
+                    SELECT terminal.*,
+                           COALESCE(
+                               paused_agent_state_json->'pause_effect_required'
+                                   = 'true'::jsonb,
+                               TRUE
+                           ) AS effect_required
+                    FROM terminal
+                ), enqueued AS (
+                    INSERT INTO coordination.dialectic_resolution_effects (
+                        session_id, paused_agent_id, reviewer_agent_id,
+                        effect_required, pause_token, resolution_payload_json,
+                        state, execution_result_json, applied_at
+                    )
+                    SELECT session_id, paused_agent_id, reviewer_agent_id,
+                           effect_required,
+                           paused_agent_state_json->>'pause_token',
+                           resolution_json,
+                           CASE WHEN effect_required THEN 'pending' ELSE 'applied' END,
+                           CASE WHEN effect_required THEN NULL ELSE
+                               jsonb_build_object(
+                                   'success', true,
+                                   'no_op', true,
+                                   'reason', 'active_at_session_open'
+                               )
+                           END,
+                           CASE WHEN effect_required THEN NULL ELSE clock_timestamp() END
+                    FROM prepared
+                    WHERE $1 = 'resolved'
+                    RETURNING session_id
+                )
+                SELECT terminal.session_id, terminal.effect_ts
+                FROM terminal
+                LEFT JOIN enqueued USING (session_id)
             """, *args)
             if row is not None:
                 logger.info(f"Resolved session {session_id[:16]}... with status {status}")
@@ -755,8 +806,8 @@ class DialecticDB:
                 return True
             # No row written: inspect why (idempotent replay vs conflict vs missing).
             existing = await conn.fetchrow(
-                """SELECT status, paused_agent_id, reviewer_agent_id,
-                          paused_agent_state_json
+                """SELECT status, phase, paused_agent_id, reviewer_agent_id,
+                          paused_agent_state_json, resolution_json
                    FROM core.dialectic_sessions WHERE session_id = $1""",
                 session_id,
             )
@@ -767,6 +818,21 @@ class DialecticDB:
                 logger.warning(f"resolve_session: {session_id[:16]}... not found")
                 return False
             if existing["status"] == status:
+                if detail is not None:
+                    stored_resolution = existing.get("resolution_json")
+                    if isinstance(stored_resolution, str):
+                        try:
+                            stored_resolution = json.loads(stored_resolution)
+                        except (TypeError, json.JSONDecodeError):
+                            stored_resolution = None
+                    detail.update(
+                        existing_phase=existing.get("phase"),
+                        existing_paused_agent_id=existing.get("paused_agent_id"),
+                        existing_reviewer_agent_id=existing.get(
+                            "reviewer_agent_id"
+                        ),
+                        existing_resolution=stored_resolution,
+                    )
                 logger.info(
                     f"resolve_session: {session_id[:16]}... already {status} "
                     "(idempotent no-op, overwrite prevented)"
@@ -802,6 +868,216 @@ class DialecticDB:
                 f"{existing['status']!r}; refused overwrite to {status!r}"
             )
             return False
+
+    async def get_resolution_effect(
+        self, session_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the durable runtime-effect record for a resolved session."""
+        await self._ensure_pool()
+        async with compatible_acquire(self._pool) as conn:
+            row = await conn.fetchrow("""
+                SELECT session_id, paused_agent_id, reviewer_agent_id,
+                       effect_required, pause_token, resolution_payload_json,
+                       state, owner_token,
+                       attempt_count, last_error, execution_result_json,
+                       claimed_at, applied_at, uncertain_at, created_at, updated_at
+                FROM coordination.dialectic_resolution_effects
+                WHERE session_id = $1
+            """, session_id)
+        if row is None:
+            return None
+        result = dict(row)
+        for key in ("resolution_payload_json", "execution_result_json"):
+            value = result.get(key)
+            if isinstance(value, str):
+                try:
+                    result[key] = json.loads(value)
+                except (TypeError, json.JSONDecodeError):
+                    result[key] = None
+        return result
+
+    async def claim_resolution_effect(
+        self,
+        session_id: str,
+        owner_token: str,
+        *,
+        paused_agent_id: str,
+        reviewer_agent_id: str,
+        effect_required: bool,
+        pause_token: Optional[str],
+        resolution: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Claim one pending effect, returning the claim or the live winner.
+
+        The participant and payload predicates bind execution to the exact
+        terminal decision the caller inspected.  Losing a concurrent claim is
+        not an error: the returned row has ``claimed=False`` and exposes the
+        state that now owns reconciliation.
+        """
+        await self._ensure_pool()
+        async with compatible_acquire(self._pool) as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("""
+                    UPDATE coordination.dialectic_resolution_effects AS e
+                    SET state = 'applying', owner_token = $2,
+                        attempt_count = attempt_count + 1,
+                        claimed_at = clock_timestamp(), updated_at = clock_timestamp(),
+                        last_error = NULL, uncertain_at = NULL
+                    WHERE e.session_id = $1
+                      AND e.state = 'pending'
+                      AND e.paused_agent_id = $3
+                      AND e.reviewer_agent_id = $4
+                      AND e.resolution_payload_json = ($5::text)::jsonb
+                      AND e.pause_token IS NOT DISTINCT FROM $6
+                      AND e.effect_required = $7
+                      AND EXISTS (
+                          SELECT 1
+                          FROM core.dialectic_sessions s
+                          WHERE s.session_id = e.session_id
+                            AND s.status = 'resolved'
+                            AND s.phase = 'resolved'
+                            AND s.paused_agent_id = $3
+                            AND s.reviewer_agent_id = $4
+                            AND s.resolution_json = ($5::text)::jsonb
+                            AND s.paused_agent_state_json->>'pause_token'
+                                IS NOT DISTINCT FROM $6
+                            AND COALESCE(
+                                s.paused_agent_state_json->'pause_effect_required'
+                                    = 'true'::jsonb,
+                                TRUE
+                            ) = $7
+                      )
+                    RETURNING *, true AS claimed
+                """, session_id, owner_token, paused_agent_id, reviewer_agent_id,
+                    json.dumps(resolution), pause_token, effect_required)
+                if row is None:
+                    # A second statement gets a fresh READ COMMITTED snapshot.
+                    # A losing concurrent claimant therefore observes the
+                    # winner's applying/applied state, never the pre-wait
+                    # pending row from the first statement's snapshot.
+                    row = await conn.fetchrow("""
+                        SELECT e.*, false AS claimed
+                        FROM coordination.dialectic_resolution_effects e
+                        WHERE e.session_id = $1
+                    """, session_id)
+        if row is None:
+            return None
+        result = dict(row)
+        for key in ("resolution_payload_json", "execution_result_json"):
+            value = result.get(key)
+            if isinstance(value, str):
+                try:
+                    result[key] = json.loads(value)
+                except (TypeError, json.JSONDecodeError):
+                    result[key] = None
+        return result
+
+    async def complete_resolution_effect(
+        self,
+        session_id: str,
+        owner_token: str,
+        execution_result: Dict[str, Any],
+    ) -> bool:
+        """Mark the effect applied, but only for its current claimant."""
+        await self._ensure_pool()
+        async with compatible_acquire(self._pool) as conn:
+            row = await conn.fetchrow("""
+                UPDATE coordination.dialectic_resolution_effects
+                SET state = 'applied',
+                    execution_result_json = ($3::text)::jsonb,
+                    applied_at = clock_timestamp(), updated_at = clock_timestamp(),
+                    last_error = NULL, uncertain_at = NULL
+                WHERE session_id = $1 AND state = 'applying' AND owner_token = $2
+                RETURNING session_id
+            """, session_id, owner_token, json.dumps(execution_result))
+        return row is not None
+
+    async def fail_resolution_effect(
+        self,
+        session_id: str,
+        owner_token: str,
+        error: str,
+        *,
+        execution_result: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Record a claimed effect whose final application is uncertain.
+
+        The worker may already have landed one or more non-idempotent runtime
+        mutations.  The row therefore enters ``unknown_partial`` and is never
+        automatically retried.
+        """
+        await self._ensure_pool()
+        async with compatible_acquire(self._pool) as conn:
+            row = await conn.fetchrow("""
+                UPDATE coordination.dialectic_resolution_effects
+                SET state = 'unknown_partial', last_error = $3,
+                    execution_result_json = CASE
+                        WHEN $4::text IS NULL THEN execution_result_json
+                        ELSE ($4::text)::jsonb
+                    END,
+                    uncertain_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE session_id = $1 AND state = 'applying' AND owner_token = $2
+                RETURNING session_id
+            """, session_id, owner_token, error,
+                json.dumps(execution_result) if execution_result is not None else None)
+        return row is not None
+
+    async def acknowledge_resolution_effect(
+        self,
+        session_id: str,
+        reason: str,
+    ) -> bool:
+        """Close an ambiguous effect after an operator reconciles it manually.
+
+        This never executes the effect. It is deliberately limited to states
+        where automatic replay is unsafe because one or more sub-effects may
+        already have landed.
+        """
+        await self._ensure_pool()
+        result = {
+            "success": True,
+            "manually_reconciled": True,
+            "reason": reason,
+        }
+        async with compatible_acquire(self._pool) as conn:
+            row = await conn.fetchrow("""
+                UPDATE coordination.dialectic_resolution_effects
+                SET state = 'applied',
+                    execution_result_json = ($2::text)::jsonb,
+                    applied_at = clock_timestamp(), updated_at = clock_timestamp()
+                WHERE session_id = $1
+                  AND state = 'unknown_partial'
+                RETURNING session_id
+            """, session_id, json.dumps(result))
+        return row is not None
+
+    async def quarantine_resolution_effect(
+        self,
+        session_id: str,
+        owner_token: str,
+        reason: str,
+    ) -> bool:
+        """Fence an abandoned claimant after an operator verifies it stopped.
+
+        This does not execute, retry, or acknowledge the runtime effect.  The
+        exact owner token makes the transition a compare-and-set against the
+        claim the operator inspected; the resulting ``unknown_partial`` row
+        still requires live-state repair before it can be acknowledged.
+        """
+        await self._ensure_pool()
+        async with compatible_acquire(self._pool) as conn:
+            row = await conn.fetchrow("""
+                UPDATE coordination.dialectic_resolution_effects
+                SET state = 'unknown_partial',
+                    last_error = $3,
+                    uncertain_at = clock_timestamp(),
+                    updated_at = clock_timestamp()
+                WHERE session_id = $1
+                  AND state = 'applying'
+                  AND owner_token = $2
+                RETURNING session_id
+            """, session_id, owner_token, reason)
+        return row is not None
 
     async def has_inflight_saga(self, session_id: str) -> bool:
         """True if a non-terminal resolution saga is in flight for this session.
@@ -1228,6 +1504,7 @@ class DialecticDB:
             FAILED,
             OPEN,
             RESOLVED,
+            RESOLVED_EFFECT_PENDING,
             UNRESOLVED_AWAITING_FACILITATION,
             classify_outcome,
             resolution_rate,
@@ -1247,6 +1524,7 @@ class DialecticDB:
                 SELECT s.status,
                        coalesce(s.awaiting_facilitation, false) AS awaiting_facilitation,
                        a.label AS paused_agent_label,
+                       e.state AS resolution_effect_state,
                        -- ⛔Three-valued ON PURPOSE. `r.agrees IS FALSE` would
                        -- collapse "the reviewer never synthesised" into
                        -- "the reviewer agreed", yielding FALSE for both and
@@ -1259,6 +1537,8 @@ class DialecticDB:
                        END AS standing_rejection
                 FROM core.dialectic_sessions s
                 LEFT JOIN core.agents a ON a.id = s.paused_agent_id
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = s.session_id
                 LEFT JOIN LATERAL (
                     SELECT dm.agrees
                     FROM core.dialectic_messages dm
@@ -1273,6 +1553,7 @@ class DialecticDB:
 
         counts: Dict[str, int] = {
             RESOLVED: 0,
+            RESOLVED_EFFECT_PENDING: 0,
             UNRESOLVED_AWAITING_FACILITATION: 0,
             FAILED: 0,
             CANARY: 0,
@@ -1284,6 +1565,7 @@ class DialecticDB:
                 row["awaiting_facilitation"],
                 row["paused_agent_label"],
                 standing_rejection=row["standing_rejection"],
+                resolution_effect_state=row["resolution_effect_state"],
             )
             counts[outcome] = counts.get(outcome, 0) + 1
 
@@ -1569,6 +1851,15 @@ async def resolve_session_async(
                 existing = detail.get("existing_status")
                 winner.update(winner_status=existing, winner_reason=None,
                               row_missing=existing is None)
+                terminal_snapshot_fields = {
+                    "winner_phase": "existing_phase",
+                    "winner_paused_agent_id": "existing_paused_agent_id",
+                    "winner_reviewer_agent_id": "existing_reviewer_agent_id",
+                    "winner_resolution": "existing_resolution",
+                }
+                for winner_key, detail_key in terminal_snapshot_fields.items():
+                    if detail_key in detail:
+                        winner[winner_key] = detail[detail_key]
             result = written
         rec.respond(outcome=outcome, existing_status=detail.get("existing_status"),
                     effect_ts=detail.get("effect_ts"),
@@ -1576,6 +1867,81 @@ async def resolve_session_async(
                     if isinstance(resolution, dict) else None,
                     **(_winner_fields(winner) if winner is not None and not result else {}))
         return result
+
+
+async def get_resolution_effect_async(
+    session_id: str,
+) -> Optional[Dict[str, Any]]:
+    db = await get_dialectic_db()
+    return await db.get_resolution_effect(session_id)
+
+
+async def claim_resolution_effect_async(
+    session_id: str,
+    owner_token: str,
+    *,
+    paused_agent_id: str,
+    reviewer_agent_id: str,
+    effect_required: bool,
+    pause_token: Optional[str],
+    resolution: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    db = await get_dialectic_db()
+    return await db.claim_resolution_effect(
+        session_id,
+        owner_token,
+        paused_agent_id=paused_agent_id,
+        reviewer_agent_id=reviewer_agent_id,
+        effect_required=effect_required,
+        pause_token=pause_token,
+        resolution=resolution,
+    )
+
+
+async def complete_resolution_effect_async(
+    session_id: str,
+    owner_token: str,
+    execution_result: Dict[str, Any],
+) -> bool:
+    db = await get_dialectic_db()
+    return await db.complete_resolution_effect(
+        session_id, owner_token, execution_result
+    )
+
+
+async def fail_resolution_effect_async(
+    session_id: str,
+    owner_token: str,
+    error: str,
+    *,
+    execution_result: Optional[Dict[str, Any]] = None,
+) -> bool:
+    db = await get_dialectic_db()
+    return await db.fail_resolution_effect(
+        session_id,
+        owner_token,
+        error,
+        execution_result=execution_result,
+    )
+
+
+async def acknowledge_resolution_effect_async(
+    session_id: str,
+    reason: str,
+) -> bool:
+    db = await get_dialectic_db()
+    return await db.acknowledge_resolution_effect(session_id, reason)
+
+
+async def quarantine_resolution_effect_async(
+    session_id: str,
+    owner_token: str,
+    reason: str,
+) -> bool:
+    db = await get_dialectic_db()
+    return await db.quarantine_resolution_effect(
+        session_id, owner_token, reason
+    )
 
 
 async def get_active_sessions_async(

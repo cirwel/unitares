@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "7d75e01378a4ec451d78a0246d5a286f5cd8b5fedcd67b5150794589a2d4a0f6",
+  "surface_sha256": "3c3c18acdde59a1469f307d77d87cd1d03ddb05019d9520da384cb4c97370ca3",
   "capabilities": [
     {
       "name": "start_session",
@@ -103,7 +103,7 @@
       "name": "request_review",
       "implementation": "dialectic",
       "kind": "workflow_alias",
-      "input_schema_sha256": "ae8be28e05c46629397841f2de565ef0a2a4c0021b7c99e8c1924ef53dadeca0",
+      "input_schema_sha256": "aa753d6352bf9ca1e1aa41689f503fb7c3dea488410c20d109625c9703c2cf07",
       "transport_names": {
         "mcp_streamable_http": "request_review",
         "rest_v1_tools": "request_review",
@@ -499,7 +499,7 @@
       "name": "dialectic",
       "implementation": "dialectic",
       "kind": "canonical_tool",
-      "input_schema_sha256": "ec607ddb729cdb154e8f106dd01eb9ac7a4812a591a0881a9f122cbb1467fade",
+      "input_schema_sha256": "6ef36851bcad8e8b37de0934bc4a8e80fb5f27f70c866f5a07cb2938a538bceb",
       "transport_names": {
         "mcp_streamable_http": "dialectic",
         "rest_v1_tools": "dialectic",

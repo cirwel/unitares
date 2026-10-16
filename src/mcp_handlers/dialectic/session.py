@@ -517,12 +517,20 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
         await db._ensure_pool()
         async with compatible_acquire(db._pool) as conn:
             row = await conn.fetchrow("""
-                SELECT session_id, phase, status, session_type,
-                       paused_agent_id, reviewer_agent_id, topic,
-                       created_at, resolution_json, reason, trigger_source,
-                       awaiting_facilitation, synthesis_round,
-                       max_synthesis_rounds, paused_agent_state_json
-                FROM core.dialectic_sessions WHERE session_id = $1
+                SELECT s.session_id, s.phase, s.status, s.session_type,
+                       s.paused_agent_id, s.reviewer_agent_id, s.topic,
+                       s.created_at, s.resolution_json, s.reason, s.trigger_source,
+                       s.awaiting_facilitation, s.synthesis_round,
+                       s.max_synthesis_rounds, s.paused_agent_state_json,
+                       e.state AS resolution_effect_state,
+                       e.attempt_count AS resolution_effect_attempt_count,
+                       e.claimed_at AS resolution_effect_claimed_at,
+                       e.applied_at AS resolution_effect_applied_at,
+                       e.uncertain_at AS resolution_effect_uncertain_at
+                FROM core.dialectic_sessions s
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = s.session_id
+                WHERE s.session_id = $1
             """, session_id)
             if not row:
                 return None
@@ -559,7 +567,20 @@ async def load_session_as_dict(session_id: str) -> Optional[Dict[str, Any]]:
                     row.get("paused_agent_state_json"),
                     expected_declared_by_agent_id=row["paused_agent_id"],
                 ).as_dict(),
+                "resolution_effect_state": row.get("resolution_effect_state"),
+                "resolution_effect_attempt_count": int(
+                    row.get("resolution_effect_attempt_count") or 0
+                ),
             }
+            for field in (
+                "resolution_effect_claimed_at",
+                "resolution_effect_applied_at",
+                "resolution_effect_uncertain_at",
+            ):
+                value = row.get(field)
+                result[field] = (
+                    value.isoformat() if hasattr(value, "isoformat") else value
+                )
 
             res = row["resolution_json"]
             if res:
@@ -674,6 +695,8 @@ async def list_all_sessions(
                     ds.synthesis_round,
                     ds.max_synthesis_rounds,
                     ds.paused_agent_state_json,
+                    e.state AS resolution_effect_state,
+                    e.attempt_count AS resolution_effect_attempt_count,
                     -- The paused agent's LABEL, not just its uuid. The
                     -- test_/demo_ filter below keys on paused_agent_id, which
                     -- is a uuid, so the scheduled probe families
@@ -695,6 +718,8 @@ async def list_all_sessions(
                      LIMIT 1) as synthesizer
                 FROM core.dialectic_sessions ds
                 LEFT JOIN core.agents pa ON pa.id = ds.paused_agent_id
+                LEFT JOIN coordination.dialectic_resolution_effects e
+                  ON e.session_id = ds.session_id
                 LEFT JOIN (
                     SELECT session_id, COUNT(*) as cnt
                     FROM core.dialectic_messages
@@ -746,6 +771,10 @@ async def list_all_sessions(
                         row.get("paused_agent_state_json"),
                         expected_declared_by_agent_id=row["paused_agent_id"],
                     ).as_dict(),
+                    "resolution_effect_state": row.get("resolution_effect_state"),
+                    "resolution_effect_attempt_count": int(
+                        row.get("resolution_effect_attempt_count") or 0
+                    ),
                 }
 
                 # Parse resolution if present

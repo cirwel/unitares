@@ -220,6 +220,265 @@ class IdentityMixin:
                 )
             return "UPDATE 1" in result
 
+    async def pause_agent_with_token(
+        self,
+        agent_id: str,
+        *,
+        pause_token: str,
+        lifecycle_event: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Atomically publish one pause generation to both durable copies."""
+        if not isinstance(pause_token, str) or not pause_token.strip():
+            return {"applied": False, "reason": "pause_token_missing"}
+
+        async with self.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT a.status AS agent_status,
+                           i.status AS identity_status,
+                           i.metadata
+                      FROM core.agents a
+                      JOIN core.identities i ON i.agent_id = a.id
+                     WHERE a.id = $1
+                     FOR UPDATE OF a, i
+                    """,
+                    agent_id,
+                )
+                if row is None:
+                    return {"applied": False, "reason": "agent_not_found"}
+
+                metadata = row["metadata"] or {}
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                agent_status = row["agent_status"]
+                identity_status = row["identity_status"]
+                if agent_status != identity_status:
+                    return {
+                        "applied": False,
+                        "reason": "durable_status_mismatch",
+                        "agent_status": agent_status,
+                        "identity_status": identity_status,
+                    }
+
+                current_token = metadata.get("paused_at")
+                if agent_status == "paused":
+                    if current_token == pause_token:
+                        return {
+                            "applied": True,
+                            "idempotent": True,
+                            "pause_token": pause_token,
+                        }
+                    return {
+                        "applied": False,
+                        "reason": "already_paused_different_generation",
+                        "current_pause_token": current_token,
+                    }
+                if agent_status in {"archived", "deleted"}:
+                    return {
+                        "applied": False,
+                        "reason": "terminal_agent_status",
+                        "agent_status": agent_status,
+                    }
+
+                events = list(metadata.get("lifecycle_events") or [])
+                events.append(lifecycle_event)
+                try:
+                    from src.agent_metadata_model import AgentMetadata
+
+                    max_events = AgentMetadata.MAX_LIFECYCLE_EVENTS
+                except Exception:
+                    max_events = 50
+                metadata_patch = {
+                    "paused_at": pause_token,
+                    "lifecycle_events": events[-max_events:],
+                }
+
+                agent_result = await conn.execute(
+                    """
+                    UPDATE core.agents
+                       SET status = 'paused', updated_at = now()
+                     WHERE id = $1 AND status = $2
+                    """,
+                    agent_id,
+                    agent_status,
+                )
+                if agent_result != "UPDATE 1":
+                    raise RuntimeError("pause CAS lost on core.agents")
+
+                identity_result = await conn.execute(
+                    """
+                    UPDATE core.identities
+                       SET status = 'paused',
+                           metadata = metadata || ($2::text)::jsonb,
+                           updated_at = now()
+                     WHERE agent_id = $1 AND status = $3
+                    """,
+                    agent_id,
+                    json.dumps(metadata_patch),
+                    identity_status,
+                )
+                if identity_result != "UPDATE 1":
+                    raise RuntimeError("pause CAS lost on core.identities")
+
+        return {"applied": True, "pause_token": pause_token}
+
+    async def resume_agent_if_pause_token(
+        self,
+        agent_id: str,
+        *,
+        expected_pause_token: str,
+        dialectic_condition_additions: List[Dict[str, Any]],
+        lifecycle_event: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Consume one exact pause generation and persist its effects."""
+        if not expected_pause_token:
+            return {"applied": False, "reason": "pause_token_missing"}
+
+        async with self.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    """
+                    SELECT a.status AS agent_status,
+                           i.status AS identity_status,
+                           i.metadata
+                      FROM core.agents a
+                      JOIN core.identities i ON i.agent_id = a.id
+                     WHERE a.id = $1
+                     FOR UPDATE OF a, i
+                    """,
+                    agent_id,
+                )
+                if row is None:
+                    return {"applied": False, "reason": "agent_not_found"}
+
+                metadata = row["metadata"] or {}
+                if isinstance(metadata, str):
+                    metadata = json.loads(metadata)
+                current_pause_token = metadata.get("paused_at")
+                if row["agent_status"] != row["identity_status"]:
+                    return {
+                        "applied": False,
+                        "reason": "durable_status_mismatch",
+                        "agent_status": row["agent_status"],
+                        "identity_status": row["identity_status"],
+                        "current_pause_token": current_pause_token,
+                    }
+                if (
+                    row["agent_status"] != "paused"
+                    or current_pause_token != expected_pause_token
+                ):
+                    return {
+                        "applied": False,
+                        "reason": "pause_generation_superseded",
+                        "agent_status": row["agent_status"],
+                        "identity_status": row["identity_status"],
+                        "current_pause_token": current_pause_token,
+                    }
+
+                events = list(metadata.get("lifecycle_events") or [])
+                events.append(lifecycle_event)
+                try:
+                    from src.agent_metadata_model import AgentMetadata
+
+                    max_events = AgentMetadata.MAX_LIFECYCLE_EVENTS
+                except Exception:
+                    max_events = 50
+                try:
+                    from src.mcp_handlers.support.condition_parser import (
+                        MAX_DIALECTIC_CONDITIONS,
+                    )
+
+                    max_conditions = MAX_DIALECTIC_CONDITIONS
+                except Exception:
+                    max_conditions = 20
+                dialectic_conditions = list(
+                    metadata.get("dialectic_conditions") or []
+                )
+                dialectic_conditions.extend(dialectic_condition_additions)
+                dialectic_conditions = dialectic_conditions[-max_conditions:]
+                metadata_patch = {
+                    "paused_at": None,
+                    "lifecycle_events": events[-max_events:],
+                    "dialectic_conditions": dialectic_conditions,
+                }
+
+                agent_result = await conn.execute(
+                    """
+                    UPDATE core.agents
+                       SET status = 'active', updated_at = now()
+                     WHERE id = $1 AND status = 'paused'
+                    """,
+                    agent_id,
+                )
+                if agent_result != "UPDATE 1":
+                    raise RuntimeError("pause resume CAS lost on core.agents")
+
+                identity_result = await conn.execute(
+                    """
+                    UPDATE core.identities
+                       SET status = 'active',
+                           metadata = metadata || ($2::text)::jsonb,
+                           updated_at = now()
+                     WHERE agent_id = $1
+                       AND status = 'paused'
+                       AND metadata->>'paused_at' = $3
+                    """,
+                    agent_id,
+                    json.dumps(metadata_patch),
+                    expected_pause_token,
+                )
+                if identity_result != "UPDATE 1":
+                    raise RuntimeError(
+                        "pause resume CAS lost on core.identities"
+                    )
+
+        return {
+            "applied": True,
+            "pause_token": expected_pause_token,
+            "dialectic_conditions": dialectic_conditions,
+        }
+
+    async def read_authoritative_pause_binding(
+        self,
+        agent_id: str,
+    ) -> Dict[str, Any]:
+        """Read the session-open pause generation from both durable copies."""
+        async with self.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT a.status AS agent_status,
+                       i.status AS identity_status,
+                       i.metadata->>'paused_at' AS pause_token
+                  FROM core.agents a
+                  JOIN core.identities i ON i.agent_id = a.id
+                 WHERE a.id = $1
+                """,
+                agent_id,
+            )
+        if row is None:
+            raise ValueError(f"Agent '{agent_id}' has no durable identity")
+        agent_status = row["agent_status"]
+        identity_status = row["identity_status"]
+        if agent_status != identity_status:
+            raise RuntimeError("durable agent status copies disagree")
+        if agent_status == "paused":
+            token = row["pause_token"]
+            if not isinstance(token, str) or not token.strip():
+                raise RuntimeError(
+                    "paused identity has no pause generation token"
+                )
+            return {
+                "pause_effect_required": True,
+                "pause_token": token,
+                "status": agent_status,
+            }
+        return {
+            "pause_effect_required": False,
+            "pause_token": None,
+            "status": agent_status,
+        }
+
     async def increment_update_count(
         self,
         agent_id: str,

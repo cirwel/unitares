@@ -85,6 +85,10 @@ class TestSynthesisHandlerSerializesPhaseTransition:
             paused_agent_id="agent-paused",
             reviewer_agent_id="agent-reviewer",
             session_type="recovery",
+            paused_agent_state={
+                "pause_effect_required": True,
+                "pause_token": "pause-test",
+            },
         )
         session.phase = DialecticPhase.SYNTHESIS
         session.synthesis_round = 1

@@ -86,11 +86,12 @@ SQL_WRITERS: Dict[Tuple[str, str], Dict[str, object]] = {
         "columns": ("phase", "updated_at"), "observed_via": _OBSERVED_VIA_BEAM},
     (SAGA_EX, "update_reviewer"): {
         "columns": ("reviewer_agent_id", "updated_at"), "observed_via": _OBSERVED_VIA_BEAM},
-    (SAGA_EX, "commit_session_row"): {
+    (SAGA_EX, "guarded_terminal_update_sql"): {
         "columns": ("status", "phase", "updated_at"),
         "observed_via": (
-            f"{_OBSERVED_VIA_BEAM} (resolve); BEAM liveness commits are saga rows with "
-            "reason liveness_timeout, failed-only, benign by construction"
+            f"{_OBSERVED_VIA_BEAM} (resolve; SQL is executed by commit_session_row); "
+            "BEAM liveness commits are saga rows with reason liveness_timeout, "
+            "failed-only, benign by construction"
         )},
 }
 
@@ -161,9 +162,11 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
         "writer": "session creation",
     },
     (HANDLERS, "handle_llm_assisted_dialectic"): {
-        "calls": ("add_message_async", "create_session_async", "update_session_phase_async",
-                  "resolve_session_async"),
-        "writer": "one-call LLM-assisted dialectic (Python only)",
+        "calls": ("add_message_async", "create_session_async", "update_session_phase_async"),
+        "writer": (
+            "one-call LLM-assisted dialectic; terminal resolution delegates to "
+            "the reviewer/phase-CAS commit helper"
+        ),
     },
     (HANDLERS, "_run_synthetic_review"): {
         "calls": ("add_message_async", "beam_update_reviewer",
@@ -189,8 +192,9 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     (ROUTER_EX, "POST /v1/dialectic/reviewer"): {
         "calls": ("update_reviewer",), "writer": "BEAM update_reviewer (from Python)",
         "observed_via": _OBSERVED_VIA_BEAM},
-    (ROUTER_EX, "POST /v1/dialectic/resolve"): {
-        "calls": ("resolve",), "writer": "BEAM resolve (from Python)",
+    (ROUTER_EX, "resolve_dialectic"): {
+        "calls": ("resolve",),
+        "writer": "BEAM resolve / resolve-with-effect (from Python)",
         "observed_via": _OBSERVED_VIA_BEAM},
     (LIVENESS_EX, "fail_stuck"): {
         "calls": ("resolve",), "writer": "BEAM DialecticLiveness (4 h, writes failed only)",

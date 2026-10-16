@@ -1,1 +1,1 @@
-- Interface contract 1.42.0: Dialectic review requests accept requester-declared author-agent UUIDs and recuse those authors from independent reviewer selection, assignment, and verdict paths.
+- Interface contract 1.42.0: Dialectic review requests recuse requester-declared author-agent UUIDs. Terminal decisions now bind a durable resolution-effect record, and the operator-only `reconcile_effect` action inspects pending, applying, applied and unknown-partial effects without automatically replaying ambiguous work.
