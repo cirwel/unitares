@@ -218,7 +218,7 @@ def test_era_windows_inside_one_era(registry):
 
 def test_live_registry_splits_the_2026_10_15_changes():
     crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-17"))
-    assert [b.id for b in crossed] == ["A1", "I1"]
+    assert [b.id for b in crossed if b.effective_at is not None] == ["A1", "I1"]
     # The stop-rule T opens A1's ambiguous interval.
     a1 = next(b for b in crossed if b.id == "A1")
     assert a1.interval == (_t("2026-10-15T13:45"), _t("2026-10-15T14:14:53"))
@@ -505,13 +505,54 @@ def test_basin_read_refuses_a_crossing_window(capsys):
     assert "refused:" in capsys.readouterr().err
 
 
-def test_basin_read_defaults_to_the_current_era():
+def test_current_era_window_start_for_the_live_registry():
+    start, stamp_era = eisv_eras.current_era_window_start()
+    current = next(b for b in eisv_eras.load_boundaries() if b.id == eisv_eras.current_era_id())
+    if current.interval is not None:
+        assert (start, stamp_era) == (current.interval[1], None)
+    else:
+        assert stamp_era == current.id
+    assert eisv_eras.boundaries_crossed(
+        start, start + timedelta(days=1), stamp_filtered=stamp_era is not None) == []
+
+
+def test_basin_read_default_start_matches_the_registry():
     from scripts.analysis import basin_conjunct_binding_read as read
 
-    start = read.current_era_start()
-    current = next(b for b in eisv_eras.load_boundaries() if b.id == eisv_eras.current_era_id())
-    assert start == current.interval[1]
-    assert eisv_eras.boundaries_crossed(start, start + timedelta(days=1)) == []
+    assert read.current_era_start() == eisv_eras.current_era_window_start()[0]
+
+
+def test_current_era_window_start_timed_and_untimed(tmp_path):
+    timed = _write_registry(tmp_path, [_entry("X1", "2026-01-10T00:00:00Z")])
+    assert eisv_eras.current_era_window_start(timed) == (_t("2026-01-10"), None)
+    untimed = tmp_path / "untimed.json"
+    untimed.write_text(json.dumps({"schema": eisv_eras.REGISTRY_SCHEMA, "eras": [
+        _entry("X1", "2026-01-10T00:00:00Z", ambiguous_until="2026-01-10T01:00:00Z"),
+        _entry("S1", None),
+    ]}), encoding="utf-8")
+    assert eisv_eras.current_era_window_start(untimed) == (_t("2026-01-10T01:00"), "S1")
+    assert eisv_eras.boundaries_crossed(
+        _t("2026-01-11"), _t("2026-01-12"), stamp_filtered=True, path=untimed) == []
+    with pytest.raises(eisv_eras.EraCrossingError):
+        eisv_eras.require_single_era(_t("2026-01-11"), _t("2026-01-12"), path=untimed)
+
+
+@pytest.mark.asyncio
+async def test_basin_read_filters_on_the_stamp_for_an_untimed_era(monkeypatch, capsys):
+    from scripts.analysis import basin_conjunct_binding_read as read
+
+    calls = []
+
+    class Conn(_FakeConn):
+        async def fetch(self, query, *args):
+            calls.append(args)
+            return await super().fetch(query, *args)
+
+    monkeypatch.setattr(read.asyncpg, "connect", AsyncMock(return_value=Conn([])))
+    start = _t("2026-10-16T01:00")
+    assert await read.run("db", start, start + timedelta(hours=1), stamp_era="S1") == 0
+    assert calls and all(args[-1] == "S1" for args in calls)
+    assert "era `S1` only" in capsys.readouterr().out
 
 
 def test_require_single_instrument():
@@ -530,7 +571,7 @@ class _FakeConn:
 
     async def fetch(self, query, *args):
         self.queries.append(query)
-        return self.id_rows if "eisv_instrument" in query else []
+        return self.id_rows if "AS instrument_id" in query else []
 
     async def fetchrow(self, query, *args):
         return None
