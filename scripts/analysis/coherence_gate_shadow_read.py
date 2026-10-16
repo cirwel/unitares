@@ -54,6 +54,12 @@ crosses an EISV instrument change (src/eisv_eras.py) is refused unless
 over ``core.agent_state`` rows in the same window. A --input export carries no
 window, so it is not era-checked.
 
+Each soak-read row takes the sensor class (``sensor_eisv_source``) of its
+agent's nearest ``core.agent_state`` row within 10 s, and every statistic is
+reported per sensor class: the physical and behavioral instruments are never
+pooled. The era and id checks cover that 10 s slack. JSONL rows without a
+``sensor_class`` key are reported as ``no_state_row``.
+
 Measurement only: this script changes no flag, threshold, verdict, or weight.
 Choosing k values remains a recorded policy call (proposal section 4).
 """
@@ -99,12 +105,30 @@ DEFAULT_DB_URL = "postgresql://localhost:5432/governance"
 DEFAULT_WINDOW_DAYS = 14
 K_SWEEP = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0]
 
-FETCH_QUERY = """
-    SELECT agent_id, ts, payload
-    FROM audit.events
-    WHERE event_type = 'coherence_gate_shadow'
-      AND ts >= $1::timestamptz AND ts < $2::timestamptz
-    ORDER BY ts
+# Each event takes the sensor class of its agent's nearest state row within
+# this distance: the gate's statistic is computed from that row's instrument.
+JOIN_SLACK = timedelta(seconds=10)
+# Sensor class of a matched state row that carries no sensor_eisv_source.
+UNRECORDED = "unrecorded"
+# Sensor class of an event with no matching state row, or a JSONL row without one.
+UNMATCHED = "no_state_row"
+
+FETCH_QUERY = f"""
+    SELECT e.agent_id, e.ts, e.payload, st.sensor_class
+    FROM audit.events e
+    LEFT JOIN core.identities ident ON ident.agent_id = e.agent_id
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(sr.state_json->>'sensor_eisv_source', '{UNRECORDED}') AS sensor_class
+      FROM core.agent_state sr
+      WHERE sr.identity_id = ident.identity_id
+        AND sr.recorded_at BETWEEN e.ts - interval '{int(JOIN_SLACK.total_seconds())} seconds'
+                               AND e.ts + interval '{int(JOIN_SLACK.total_seconds())} seconds'
+      ORDER BY abs(extract(epoch from sr.recorded_at - e.ts))
+      LIMIT 1
+    ) st ON true
+    WHERE e.event_type = 'coherence_gate_shadow'
+      AND e.ts >= $1::timestamptz AND e.ts < $2::timestamptz
+    ORDER BY e.ts
 """
 
 
@@ -219,6 +243,35 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         },
         "fired_any_at_k_pause": fired_any,
     }
+
+
+def summarize_by_sensor_class(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """``summarize`` per sensor class; the classes are never pooled.
+
+    The physical and behavioral instruments write V at different levels and
+    with different per-agent spread, so a pooled k sweep or percentile is a
+    mixture, and one high-volume agent of either class dominates it.
+    """
+    grouped: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[row.get("sensor_class") or UNMATCHED].append(row)
+    return {
+        "sensor_class_counts": {cls: len(grouped[cls]) for cls in sorted(grouped)},
+        "by_sensor_class": {cls: summarize(grouped[cls]) for cls in sorted(grouped)},
+    }
+
+
+def render_by_sensor_class(report: Dict[str, Any]) -> str:
+    lines = ["== coherence gate shadow — soak read, per sensor class =="]
+    lines.extend(report.get("eisv_era_provenance") or [])
+    lines.append(f"rows by sensor class: {report['sensor_class_counts']}")
+    if not report["by_sensor_class"]:
+        lines.append("no rows")
+    for cls, summary in report["by_sensor_class"].items():
+        lines.append("")
+        lines.append(f"## sensor class: {cls}")
+        lines.append(render(summary))
+    return "\n".join(lines)
 
 
 def render(summary: Dict[str, Any]) -> str:
@@ -545,14 +598,19 @@ async def fetch_rows(
         # One read-only REPEATABLE READ snapshot: the instrument-id check and the
         # read below see the same committed rows.
         async with conn.transaction(isolation="repeatable_read", readonly=True):
+            # The sensor-class lookup reads state rows up to JOIN_SLACK outside
+            # the event window, from any row of the event's agent.
+            state_start, state_end = start - JOIN_SLACK, end + JOIN_SLACK + timedelta(microseconds=1)
             id_rows = await conn.fetch(
-                eisv_era_sql.instrument_id_counts_sql("$1::timestamptz", "$2::timestamptz"),
-                start,
-                end,
+                eisv_era_sql.instrument_id_counts_sql(
+                    "$1::timestamptz", "$2::timestamptz", include_synthetic=True
+                ),
+                state_start,
+                state_end,
             )
             era_lines = eisv_eras.check_window(
-                start,
-                end,
+                state_start,
+                state_end,
                 allow_cross=allow_cross,
                 id_counts={r["instrument_id"]: r["n"] for r in id_rows},
             )
@@ -569,6 +627,7 @@ async def fetch_rows(
             payload = json.loads(payload)
         row = dict(payload or {})
         row.setdefault("agent_id", record["agent_id"])
+        row["sensor_class"] = record["sensor_class"] or UNMATCHED
         rows.append(row)
     return rows, era_lines
 
@@ -615,7 +674,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         end = datetime.now(timezone.utc)
         start = end - timedelta(days=args.window_days)
         # Time check first, so a crossing window is refused before connecting.
-        if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        # It covers the sensor-class lookup's slack around the event window.
+        if eisv_eras.check_window(
+            start - JOIN_SLACK, end + JOIN_SLACK + timedelta(microseconds=1),
+            allow_cross=args.allow_cross_era,
+        ) is None:
             return 2
         fetched = asyncio.run(
             fetch_rows(args.db_url, start, end, args.allow_cross_era)
@@ -624,9 +687,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         rows, era_lines = fetched
 
-    summary = summarize(rows)
-    summary["eisv_era_provenance"] = era_lines
-    print(json.dumps(summary, indent=2) if args.json else render(summary))
+    report = summarize_by_sensor_class(rows)
+    report["eisv_era_provenance"] = era_lines
+    print(json.dumps(report, indent=2) if args.json else render_by_sensor_class(report))
     return 0
 
 
