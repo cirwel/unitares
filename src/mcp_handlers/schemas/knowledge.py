@@ -177,7 +177,8 @@ class SearchKnowledgeGraphParams(AgentIdentityMixin):
         default="prefer_governed",
         description=(
             "Authority policy: prefer_governed down-ranks imported memory in "
-            "close relevance contests; all preserves raw relevance order."
+            "close relevance contests and leaves it out of queryless listings; "
+            "all preserves raw relevance order and lists it."
         ),
     )
     operator: Optional[Literal["AND", "OR"]] = Field(
@@ -611,7 +612,8 @@ class KnowledgeParams(AgentIdentityMixin):
         None,
         description=(
             "Search authority policy. Default prefer_governed down-ranks imported "
-            "memory in close relevance contests; all preserves raw relevance order."
+            "memory in close relevance contests and leaves it out of queryless "
+            "listings; all preserves raw relevance order and lists it."
         ),
     )
     sort_by: Optional[Literal["relevance", "created_at"]] = Field(

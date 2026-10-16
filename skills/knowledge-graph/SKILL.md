@@ -3,7 +3,7 @@ name: knowledge-graph
 description: >
   Use when an agent needs to search the shared knowledge graph, contribute a discovery,
   or update existing entries. Covers search, tagging, discovery types, and status lifecycle.
-last_verified: "2026-10-13"
+last_verified: "2026-10-16"
 freshness_days: 21
 source_files:
   - unitares/src/knowledge_notices.py
@@ -127,6 +127,13 @@ This is a retrieval preference, not a truth verdict. Pass `authority_mode="all"`
 to preserve raw backend order, or filter by a source-memory tag to inspect that
 lane directly. Newest-first reads (`sort_by="created_at"`, or a queryless date
 window) apply no authority reorder: time order is what they asked for.
+
+A queryless listing (no `query`, for example a `status="open"` sweep) leaves
+unpromoted imported memory out by default, because with nothing to match there
+is no contest for the down-rank to decide and imports would fill the page. The
+response reports `imported_omitted` with a hint; the same two routes read them
+(`authority_mode="all"`, or a source-memory tag filter). Check-in memory
+suggestions leave them out as well. A query search still returns them.
 
 ## Quick Contribution
 
