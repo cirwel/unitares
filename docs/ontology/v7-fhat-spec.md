@@ -8,6 +8,18 @@
 
 **Companion to:** `paper-positioning.md` (v7 animating thesis), `plan.md` row R1 (behavioral-continuity verification unblocks variational identity work). Supersedes the (a) path framing in `paper-positioning.md` §"Where v6 could resist the ontology."
 
+> **Claim status (2026-10-16): research hypothesis, spike halted.** The spike
+> tripped its SC2 sanity gate on 2026-04-23, and path (b) was accepted
+> (`paper-positioning.md`, "2026-04-23 update"). The latent meanings in §2.1
+> ("true negative-free-energy", "true accumulated free-energy residual",
+> "true response-distribution entropy") describe what EISV would mean *under
+> this hypothetical generative model*. They are not deployed semantics; for
+> those, see `../EISV_COMPUTATION.md` and the canonical
+> [EISV proprioception contract](eisv-proprioception-contract.md#canonical-operational-doctrine).
+> §5's conclusion that "$S, I, V$ have FEP / Shannon grounding" is also
+> superseded: $V$'s FEP grounding retired with path (b), and no entropy,
+> mutual information or free energy is computed on the deployed path.
+
 ---
 
 ## 0. Framing (v4): UNITARES as the external Markov blanket
