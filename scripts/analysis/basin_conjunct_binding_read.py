@@ -169,9 +169,26 @@ def _table(headers, rows) -> str:
     return "\n".join(out)
 
 
-async def run(db_url: str, start: datetime, end: datetime, crossed=()) -> int:
+Q_INSTRUMENT_IDS = """
+SELECT s.state_json->'eisv_instrument'->>'id' AS instrument_id, count(*) AS n
+FROM core.agent_state s
+WHERE s.recorded_at >= $1::timestamptz AND s.recorded_at < $2::timestamptz
+  AND s.synthetic = false
+GROUP BY 1 ORDER BY 1 NULLS FIRST
+"""
+
+
+async def run(db_url: str, start: datetime, end: datetime, crossed=(),
+              allow_cross: str | None = None) -> int:
     conn = await asyncpg.connect(db_url)
     try:
+        id_rows = await conn.fetch(Q_INSTRUMENT_IDS, start, end)
+        id_counts = {r["instrument_id"]: r["n"] for r in id_rows}
+        try:
+            stamped_ids = eisv_eras.require_single_instrument(id_counts, allow_cross=allow_cross)
+        except eisv_eras.EraCrossingError as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 2
         completeness = await conn.fetch(Q_COMPLETENESS, start, end)
         agreement = await conn.fetch(Q_AGREEMENT, start, end)
         margin = await conn.fetch(Q_E_MARGIN, start, end)
@@ -186,6 +203,12 @@ async def run(db_url: str, start: datetime, end: datetime, crossed=()) -> int:
         print("**Pooled across EISV instrument changes** (allowed by --allow-cross-era): "
               + ", ".join(b.id for b in crossed) + ". Rows on either side of a change "
               "come from different instruments.\n")
+    unstamped = id_counts.get(None, 0)
+    print("Instrument ids in window: "
+          + (", ".join(f"`{k}` ({id_counts[k]} rows)" for k in stamped_ids) or "none stamped")
+          + f"; unstamped rows: {unstamped}.\n")
+    if len(stamped_ids) > 1:
+        print("**Pooled across stamped instrument ids** (allowed by --allow-cross-era).\n")
     print("Verdict-path inputs = `eisv_telemetry.measurement.ode.values` + "
           "`measurement.coherence.value` + `policy_evaluation.inputs.risk_score`; "
           "persisted basin = `policy_evaluation.inputs.basin`.\n")
@@ -260,7 +283,7 @@ def main(argv=None) -> int:
     except eisv_eras.EraCrossingError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2
-    return asyncio.run(run(args.db_url, start, end, crossed))
+    return asyncio.run(run(args.db_url, start, end, crossed, args.allow_cross_era))
 
 
 def current_era_start() -> datetime:

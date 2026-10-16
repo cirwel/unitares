@@ -726,7 +726,9 @@ runtime read of state, history, baselines and calibration filters on
   relaxed for 10–15 minutes after #2834, so those rows are a transient.
 - `src/eisv_eras.py` holds the read side: `require_single_era` refuses a window
   that crosses a change unless the caller gives a reason, `era_windows` splits a
-  window for per-era reporting, and `is_settled` drops the restore transient.
+  window for per-era reporting, `require_single_instrument` refuses stamped rows
+  that carry more than one instrument id (a threshold, flag or overlay change
+  inside one era), and `is_settled` drops the restore transient.
   `scripts/analysis/basin_conjunct_binding_read.py` is the first reader wired
   to it; the others are not yet.
 

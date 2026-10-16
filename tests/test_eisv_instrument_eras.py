@@ -512,3 +512,46 @@ def test_basin_read_defaults_to_the_current_era():
     current = next(b for b in eisv_eras.load_boundaries() if b.id == eisv_eras.current_era_id())
     assert start == current.interval[1]
     assert eisv_eras.boundaries_crossed(start, start + timedelta(days=1)) == []
+
+
+def test_require_single_instrument():
+    assert eisv_eras.require_single_instrument({None: 40, "I1:a": 10}) == ["I1:a"]
+    with pytest.raises(eisv_eras.EraCrossingError, match="2 different EISV instrument ids"):
+        eisv_eras.require_single_instrument({"I1:a": 10, "I1:b": 3})
+    assert eisv_eras.require_single_instrument(
+        {"I1:a": 10, "I1:b": 3}, allow_cross="threshold A/B") == ["I1:a", "I1:b"]
+    assert eisv_eras.require_single_instrument({"I1:a": 10, "I1:b": 0}) == ["I1:a"]
+
+
+class _FakeConn:
+    def __init__(self, id_rows):
+        self.id_rows = id_rows
+        self.queries = []
+
+    async def fetch(self, query, *args):
+        self.queries.append(query)
+        return self.id_rows if "eisv_instrument" in query else []
+
+    async def fetchrow(self, query, *args):
+        return None
+
+    async def close(self):
+        pass
+
+
+@pytest.mark.asyncio
+async def test_basin_read_refuses_mixed_stamped_instruments(monkeypatch, capsys):
+    from scripts.analysis import basin_conjunct_binding_read as read
+
+    conn = _FakeConn([{"instrument_id": "I1:a", "n": 5}, {"instrument_id": "I1:b", "n": 2}])
+    monkeypatch.setattr(read.asyncpg, "connect", AsyncMock(return_value=conn))
+    start = _t("2026-10-16T01:00")
+    assert await read.run("db", start, start + timedelta(hours=1)) == 2
+    assert "2 different EISV instrument ids" in capsys.readouterr().err
+    assert len(conn.queries) == 1
+
+    conn = _FakeConn([{"instrument_id": "I1:a", "n": 5}, {"instrument_id": "I1:b", "n": 2}])
+    monkeypatch.setattr(read.asyncpg, "connect", AsyncMock(return_value=conn))
+    assert await read.run("db", start, start + timedelta(hours=1), allow_cross="A/B") == 0
+    out = capsys.readouterr().out
+    assert "Pooled across stamped instrument ids" in out and "`I1:b` (2 rows)" in out

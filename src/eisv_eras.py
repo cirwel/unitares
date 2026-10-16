@@ -212,6 +212,29 @@ def era_windows(
     return pieces
 
 
+def require_single_instrument(
+    id_counts: Mapping[Optional[str], int], *, allow_cross: Optional[str] = None
+) -> list[str]:
+    """Refuse rows that carry more than one stamped instrument id.
+
+    ``id_counts`` maps ``state_json.eisv_instrument.id`` (``None`` for an
+    unstamped row) to a row count for the selected window. Inside one era the
+    id still changes when a runtime threshold, flag or calibration overlay
+    does, and a time window cannot see that. Unstamped rows are left to the
+    time-based check. Returns the distinct stamped ids, sorted.
+    """
+    ids = sorted(k for k, n in id_counts.items() if k and n)
+    if len(ids) > 1 and not (allow_cross and allow_cross.strip()):
+        listed = ", ".join(f"{k} ({id_counts[k]} rows)" for k in ids)
+        raise EraCrossingError(
+            f"rows carry {len(ids)} different EISV instrument ids: {listed}. Filter on "
+            "state_json.eisv_instrument.id, report per id, or pass a written reason "
+            "to allow the mix.",
+            (),
+        )
+    return ids
+
+
 def is_settled(stamp: Optional[Mapping[str, Any]], min_updates: int = DEFAULT_SETTLED_UPDATES) -> bool:
     """Whether a stamped row is past the restore transient of its instrument.
 
