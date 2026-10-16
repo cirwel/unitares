@@ -135,6 +135,7 @@ include = ["src", "src.*", "governance_core", "governance_core.*", "config", "co
 
 [tool.setuptools.package-data]
 src = ["*.json", "*.yaml"]
+config = ["eisv_instrument_eras.json"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py", "*_test.py"]

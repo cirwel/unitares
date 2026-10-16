@@ -1921,6 +1921,15 @@ async def _post_update_cirs_and_drift(ctx: UpdateContext) -> None:
     # is already how most dialectic sessions strand.
 
 
+def _eisv_instrument_stamp(monitor) -> Optional[dict]:
+    """The row's instrument stamp; ``None`` (row persists unstamped) on any failure."""
+    if monitor is None:
+        return None
+    from src.eisv_instrument import stamp
+
+    return stamp(monitor)
+
+
 async def _post_update_record_state(ctx: UpdateContext) -> bool:
     agent_id = ctx.agent_id
     mcp_server = ctx.mcp_server
@@ -2059,6 +2068,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
             sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
             eisv_telemetry=eisv_telemetry,
             coherence_form=getattr(ctx, "coherence_form", None),
+            eisv_instrument=_eisv_instrument_stamp(monitor),
         )
         logger.debug(f"PostgreSQL: Recorded state for {agent_id}")
     except ValueError:
@@ -2144,6 +2154,7 @@ async def _post_update_record_state(ctx: UpdateContext) -> bool:
                 sensor_eisv_source=ctx.agent_state.get("sensor_eisv_source"),
                 eisv_telemetry=eisv_telemetry,
                 coherence_form=getattr(ctx, "coherence_form", None),
+                eisv_instrument=_eisv_instrument_stamp(monitor),
             )
             logger.debug(f"PostgreSQL: Created agent and recorded state for {agent_id}")
         except Exception as create_error:

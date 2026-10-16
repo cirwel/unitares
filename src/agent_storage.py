@@ -560,6 +560,7 @@ async def record_agent_state(
     sensor_eisv_source: Optional[str] = None,
     eisv_telemetry: Optional[Mapping[str, Any]] = None,
     coherence_form: Optional[str] = None,
+    eisv_instrument: Optional[Mapping[str, Any]] = None,
 ) -> int:
     """
     Record agent EISV state to PostgreSQL.
@@ -683,6 +684,11 @@ async def record_agent_state(
     # remain explicitly identifiable by the key's absence.
     if eisv_telemetry:
         state_json["eisv_telemetry"] = dict(eisv_telemetry)
+    # Which instrument produced this row and how many of the monitor's
+    # check-ins have run under it (src/eisv_instrument.py). Analyses partition
+    # on it instead of on deploy times; absent on rows written before it shipped.
+    if eisv_instrument:
+        state_json["eisv_instrument"] = dict(eisv_instrument)
 
     state_id = await db.record_agent_state(
         identity_id=identity.identity_id,
