@@ -261,3 +261,29 @@ def test_era_crossing_never_fails_the_report(monkeypatch):
     report = _era_crossing(30)
     assert report["schema"] == "eisv.era_crossing.v1"
     assert report["error"].startswith("OSError")
+
+
+def test_calibration_era_report_reaches_back_to_the_oldest_prior_state():
+    from datetime import datetime, timedelta, timezone
+
+    from src.eisv_telemetry_health import _era_crossing
+
+    now = datetime.now(timezone.utc)
+    rows = [
+        {"prior_recorded_at": now - timedelta(days=400)},
+        {"prior_recorded_at": (now - timedelta(days=2)).isoformat()},
+        {"prior_recorded_at": None},
+    ]
+    report = _era_crossing(1, rows)
+    calibration = report["calibration"]
+    assert calibration["window_start"] <= (now - timedelta(days=399)).isoformat()
+    # A year back crosses every registered change after it; the state window may not.
+    assert calibration["pooled_across_changes"] is True
+    assert len(calibration["crossed"]) >= len(report["crossed"])
+
+
+def test_calibration_era_report_defaults_to_the_state_window():
+    from src.eisv_telemetry_health import _era_crossing
+
+    report = _era_crossing(7, [])
+    assert report["calibration"]["window_start"] == report["window_start"]

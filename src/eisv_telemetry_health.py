@@ -746,18 +746,41 @@ def _normalize_json(value: Any) -> dict[str, Any]:
     raise TypeError("telemetry health query did not return a JSON object")
 
 
-def _era_crossing(window_days: int) -> dict[str, Any]:
-    """Instrument changes inside the report window (time-based, never raises).
+def _as_utc(value: Any) -> datetime | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if isinstance(value, datetime) and value.tzinfo is not None:
+        return value.astimezone(timezone.utc)
+    return None
 
-    The aggregates above pool every row in the window, so a window that spans
+
+def _era_crossing(window_days: int, outcome_rows: Sequence[Any] = ()) -> dict[str, Any]:
+    """Instrument changes the report's figures span (time-based, never raises).
+
+    The state aggregates pool every row in the window, so a window that spans
     a maths change mixes instruments; the report says so instead of refusing.
+    Calibration pairs each outcome in the window with its agent's latest state
+    row before it, which can be older than the window, so it gets its own
+    report from the earliest such row.
     """
     try:
         from src import eisv_eras
 
         end = datetime.now(timezone.utc)
-        report = eisv_eras.crossing_report(end - timedelta(days=window_days), end)
+        start = end - timedelta(days=window_days)
+        report = eisv_eras.crossing_report(start, end)
         report["note"] = eisv_eras.crossing_note(report)
+        priors = [
+            ts for ts in (_as_utc(_get(row, "prior_recorded_at")) for row in outcome_rows)
+            if ts is not None
+        ]
+        calibration_start = min([start, *priors])
+        calibration = eisv_eras.crossing_report(calibration_start, end)
+        calibration["note"] = eisv_eras.crossing_note(calibration)
+        report["calibration"] = calibration
         return report
     except Exception as exc:  # the registry is provenance; never fail the route on it
         return {"schema": "eisv.era_crossing.v1", "error": f"{type(exc).__name__}: {exc}"}
@@ -790,7 +813,7 @@ async def query_eisv_telemetry_health(
             for vocabulary in RISK_VOCABULARIES
         ],
         "calibration": build_calibration_summary(outcome_rows),
-        "eisv_instrument_eras": _era_crossing(window_days),
+        "eisv_instrument_eras": _era_crossing(window_days, outcome_rows),
         "semantics": {
             "measurement": "EISV is a proprioceptive estimate, not an outcome judgment.",
             "contract_checks": "Cross-field serialization invariants, not quality scores.",
