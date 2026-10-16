@@ -157,9 +157,21 @@ for this note.
 The archive row is the one finding in this note that could lead to action. The
 fix would be small (the veto reads lifecycle status and vetoes `archived`,
 `deleted` and `paused`), but it is a change to an RCE-gating path, so it
-belongs in its own PR with a failing test written first. Whether archival
-should *also* revoke outstanding continuity tokens is a decision for the
-identity surface, which is single-writer. This note does not make it.
+belongs in its own PR with a failing test written first.
+
+**Revocation without a trusted center.** The brief assumes revocation is a state
+that an enforcement point can look up. That holds inside one deployment, where
+the issuer and the enforcement point share one authority domain: the veto
+already trusts the deployment's own store for verdicts, so reading lifecycle
+status from it adds no new trust assumption. It does not hold across
+deployments. Multi-issuer trust is blocked and unscheduled (decision D3a), and
+a cross-operator design cannot depend on a central lookup. There, revocation
+has to come from authority that expires on its own: short-lived, content-bound
+grants, each enforced against its own issuer's state. That is a further reason
+not to build a standing lease, and a reason not to add a global
+token-revocation list. Whether archival should also revoke outstanding
+continuity tokens remains a decision for the identity surface, which is
+single-writer. This note recommends the local veto check instead.
 
 ### 4. Receipts and observed outcomes
 
