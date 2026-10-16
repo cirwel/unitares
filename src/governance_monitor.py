@@ -375,11 +375,15 @@ class UNITARESMonitor:
     
     def _initialize_fresh_state(self):
         """Initialize fresh state with default values"""
-        # Initialize UNITARES Phase-3 state and theta
+        # Initialize UNITARES Phase-3 state and theta. The S seed sits σ above
+        # the σ = 0 seed, as the S rest does, so S - σ (what Φ, the basin and the
+        # E and I equations read) starts where it does with the setpoint off and
+        # the cold-start transient moves by σ in S alone (contract row 50).
+        from src.monitor_setpoint import setpoint_for_monitor
         self.state.unitaires_state = State(**{
             'E': DEFAULT_STATE.E,
             'I': DEFAULT_STATE.I,
-            'S': DEFAULT_STATE.S,
+            'S': DEFAULT_STATE.S + setpoint_for_monitor(self),
             'V': DEFAULT_STATE.V
         })
         self.state.unitaires_theta = Theta(**{
@@ -456,6 +460,9 @@ class UNITARESMonitor:
                             float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
                         )
                     )
+                from src.eisv_instrument import TRACK_STATE_KEY, restore_track
+
+                restore_track(self, data.pop(TRACK_STATE_KEY, None))
                 div_hist = data.pop('sensor_divergence_history', None)
                 if div_hist:
                     self._sensor_divergence_history = deque(
@@ -529,6 +536,11 @@ class UNITARESMonitor:
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
+            from src.eisv_instrument import TRACK_ATTR, TRACK_STATE_KEY
+
+            instrument_track = getattr(self, TRACK_ATTR, None)
+            if isinstance(instrument_track, dict):
+                state_data[TRACK_STATE_KEY] = dict(instrument_track)
             # Open check-in forecasts, matching the live writer
             # (agent_monitor_state._attach_monitor_transients).
             if self._open_predictions:
@@ -609,7 +621,9 @@ class UNITARESMonitor:
 
     def detect_regime(self) -> str:
         """Detect current operational regime based on state and history."""
-        return _detect_regime(self.state, behavioral=self._behavioral_state)
+        from src.monitor_setpoint import setpoint_for_monitor
+        return _detect_regime(self.state, behavioral=self._behavioral_state,
+                              s_setpoint=setpoint_for_monitor(self))
     
     def _record_sensor_divergence(self, sensor_eisv) -> None:
         """Record model<->body EISV divergence as an observability signal.
@@ -764,12 +778,17 @@ class UNITARESMonitor:
         # default (UNITARES_S_SETPOINT defaults to "1") — when explicitly
         # disabled, s_setpoint stays 0.0 and the dynamics are unchanged. Kept
         # zero-cost on the disabled path (no class resolution unless enabled).
-        from config.governance_config import get_s_setpoint, s_setpoint_enabled
+        # σ comes from the one resolver Φ and the basin also use
+        # (setpoint_for_monitor), so a class that resolves to None reads the
+        # "default" σ in all three and a cached None is re-resolved rather than
+        # frozen at σ = 0 (contract row 51).
+        from config.governance_config import s_setpoint_enabled
+        from src.monitor_setpoint import setpoint_for_monitor
         s_setpoint = 0.0
         if s_setpoint_enabled():
             if not hasattr(self, "_resolved_agent_class"):
                 self._resolved_agent_class = self._resolve_agent_class()
-            s_setpoint = get_s_setpoint(self._resolved_agent_class)
+            s_setpoint = setpoint_for_monitor(self)
 
         self.state.unitaires_state = step_state(
             state=self.state.unitaires_state,
@@ -1065,8 +1084,18 @@ class UNITARESMonitor:
     
     def make_decision(self, risk_score: float, unitares_verdict: str = None,
                       response_tier: str = None, oscillation_state: 'OscillationState' = None,
-                      cirs_result: Dict = None) -> Dict:
-        """Makes autonomous governance decision using UNITARES verdict and CIRS response tier."""
+                      cirs_result: Dict = None,
+                      latest_risk_fast_trip: bool = True) -> Dict:
+        """Makes autonomous governance decision using UNITARES verdict and CIRS response tier.
+
+        The basin is classified on the ODE state with the same S setpoint σ
+        the dynamics and Φ use (contract rows 50-51). The σ is kept on the
+        monitor so the policy-evaluation inputs persist the value the decision
+        actually used.
+        """
+        from src.monitor_setpoint import setpoint_for_monitor
+        s_setpoint = setpoint_for_monitor(self)
+        self._last_basin_s_setpoint = s_setpoint
         return _make_decision(
             self.state,
             risk_score,
@@ -1074,6 +1103,8 @@ class UNITARESMonitor:
             response_tier,
             oscillation_state,
             cirs_result,
+            s_setpoint=s_setpoint,
+            latest_risk_fast_trip=latest_risk_fast_trip,
         )
     
     def simulate_update(self, agent_state: Dict, confidence: Optional[float] = None) -> Dict:
@@ -1573,6 +1604,10 @@ class UNITARESMonitor:
             response_tier=response_tier,
             oscillation_state=oscillation_state,
             cirs_result=cirs_result,
+            # Every risk_history entry is Φ-derived. When the behavioral
+            # assessment owns the verdict, Φ is telemetry and must not move
+            # the action through the F2 fast-trip (contract row 52).
+            latest_risk_fast_trip=(verdict_source != "behavioral_assessment"),
         )
 
         # Shadow-measure a two-sided recent behavioral-V deviation gate against
