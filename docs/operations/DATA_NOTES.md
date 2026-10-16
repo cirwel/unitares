@@ -67,7 +67,7 @@ Columns include an embedded EISV snapshot at outcome time: `eisv_e`, `eisv_i`, `
 |---|---|
 | `core.agents` | Agent registry — one row per registered agent, stores agent metadata and registration timestamp |
 | `core.agent_sessions` | Per-agent session records; maps session IDs to agents and timestamps |
-| `core.agent_baselines` | Per-agent EISV baselines — the "ground truth" reference state for drift detection |
+| `core.agent_baselines` | Per-agent EISV baselines — the reference state that drift is measured against (itself an estimate, not ground truth) |
 | `core.agent_behavioral_baselines` | Behavioral baselines (EMA of observed E/I/S behavior vectors) |
 | `core.identities` | Identity v2 records; maps agent fingerprints to resolved identity claims |
 | `core.sessions` | Session-level metadata including continuity tokens and bind status |
@@ -124,9 +124,9 @@ The exact mapping between the behavioral `verdict` field in `runtime_queries.py`
 | Agent category | Example IDs | Role | Independent? |
 |---|---|---|---|
 | `test_stress` | `test_stress` | Synthetic stress-test fixture used to validate the governance system under intentional high-drift conditions. Not production traffic. | No — synthetic |
-| `eisv-sync-task` | `eisv-sync-task` | Periodic cron task that pushes Lumen's physical sensor-derived EISV into the governance layer. Runs on Lumen's behalf. | Yes — independent ground truth |
+| `eisv-sync-task` | `eisv-sync-task` | Periodic cron task that pushes Lumen's physical sensor-derived EISV into the governance layer. Runs on Lumen's behalf. | Yes — sensor inputs independent of governance |
 | UUID-named LLM dev agents | `69a1a4f7-...`, `7d9966bb-...`, `85e15f04-...` | Claude Code sessions that were actively constructing UNITARES during the deployment window. The system governed its own construction crew. | No — co-constructed |
-| Lumen | `eisv-sync-task` (via sync) + direct Pi agent | Embodied agent on Raspberry Pi with physical sensors. Sensor readings provide independent ground truth regardless of the governance layer. | Yes — clean instrument |
+| Lumen | `eisv-sync-task` (via sync) + direct Pi agent | Embodied agent on Raspberry Pi with physical sensors. Sensor readings are independent of the governance layer (ground truth for what the sensors measured, not for the agent's state). | Yes — independent inputs |
 
 For the seesaw caveat (the circular dependency between the governed population and the governing system), see `docs/operations/DEPLOYMENT_DATA_CAVEAT.md`.
 
