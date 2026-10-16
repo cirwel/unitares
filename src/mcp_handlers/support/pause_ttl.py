@@ -140,10 +140,9 @@ async def _expire_pause_durably(
     try:
         from src import agent_storage
 
-        resume = await agent_storage.resume_agent_if_pause_token(
+        resume = await agent_storage.expire_pause_if_token(
             agent_uuid,
             expected_pause_token=original_paused_at,
-            dialectic_condition_additions=[],
             lifecycle_event=lifecycle_event,
         )
     except Exception as exc:  # noqa: BLE001 — a failed commit stays paused
@@ -157,29 +156,50 @@ async def _expire_pause_durably(
         # A concurrent durable transition won. Reconcile only facts the locked
         # read proved; never clear a newer pause generation from stale cache.
         if resume.get("reason") == "pause_generation_superseded":
-            agent_status = resume.get("agent_status")
-            identity_status = resume.get("identity_status")
             current_token = resume.get("current_pause_token")
-            if agent_status == identity_status == "active" and current_token is None:
-                if (
-                    getattr(meta, "status", None) == "paused"
-                    and getattr(meta, "paused_at", None) == original_paused_at
-                ):
-                    meta.status = "active"
-                    meta.paused_at = None
-                return True
             if (
-                agent_status == identity_status == "paused"
+                resume.get("agent_status") == "paused"
+                and resume.get("identity_status") == "paused"
                 and isinstance(current_token, str)
                 and current_token.strip()
                 and getattr(meta, "paused_at", None) == original_paused_at
             ):
                 meta.paused_at = current_token
+            getattr(meta, "__dict__", {}).pop(
+                "_pause_ttl_recovery_refusal", None
+            )
+        elif resume.get("reason") in {
+            "durable_identity_missing",
+            "operator_reconciliation_required",
+            "terminal_agent_status",
+        }:
+            meta._pause_ttl_recovery_refusal = {
+                "reason": resume.get("reason"),
+                "agent_status": resume.get("agent_status"),
+                "identity_status": resume.get("identity_status"),
+            }
         logger.warning(
             "[pause-ttl] durable pause expiry refused (%s); keeping cache paused",
             resume.get("reason") or "unknown",
         )
         return False
+
+    getattr(meta, "__dict__", {}).pop("_pause_ttl_recovery_refusal", None)
+    if resume.get("already_active") or resume.get("repaired_stale_pause_token"):
+        logger.warning(
+            "[pause-ttl] reconciled stale cache pause against active durable "
+            "state (paused_at=%s)%s",
+            original_paused_at,
+            " (sync path)" if sync_path else "",
+        )
+        if (
+            getattr(meta, "status", None) == "paused"
+            and getattr(meta, "paused_at", None) == original_paused_at
+        ):
+            meta.status = "active"
+            meta.paused_at = None
+            return True
+        return getattr(meta, "status", None) != "paused"
 
     logger.warning(
         "[pause-ttl] auto-expired stale pause (paused_at=%s); categorizer will "
@@ -388,10 +408,12 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
             expires_at = None
     if expires_at:
         re_evaluation = (
-            f"After {expires_at} the next check-in durably resumes the agent before "
-            "it is accepted. A new shared-memory entry starts the same durable "
-            "resume, but that entry remains refused; resubmit it after the pause "
-            "lifts. " + _post_gap_repause_text()
+            f"After {expires_at} the next check-in attempts an exact-token durable "
+            "resume and proceeds only after the durable state is active. A new "
+            "shared-memory entry starts the same attempt, but that entry remains "
+            "refused; resubmit it after the pause lifts. If the durable identity or "
+            "status copies need repair, the refusal names operator reconciliation "
+            "instead. " + _post_gap_repause_text()
         )
     else:
         re_evaluation = "No re-evaluation time is recorded for this pause."
@@ -418,6 +440,28 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
             "can resume the agent. " + re_evaluation
         ),
     }
+    durable_refusal = getattr(meta, "_pause_ttl_recovery_refusal", None)
+    if isinstance(durable_refusal, dict):
+        reason_code = durable_refusal.get("reason") or "unknown"
+        explanations = {
+            "durable_identity_missing": "the durable identity is missing",
+            "operator_reconciliation_required": (
+                "the durable status or pause-token copies disagree"
+            ),
+            "terminal_agent_status": "a durable status is terminal",
+        }
+        recovery["other_exits"] = (
+            "Automatic expiry is blocked because "
+            f"{explanations.get(reason_code, 'durable state could not be verified')}. "
+            "An operator must inspect and repair the durable identity before this "
+            "cache pause can be lifted; cache-only resume is refused."
+        )
+        recovery["durable_reconciliation"] = {
+            "required": True,
+            "reason": reason_code,
+            "agent_status": durable_refusal.get("agent_status"),
+            "identity_status": durable_refusal.get("identity_status"),
+        }
     if expires_at:
         recovery["expires_at"] = expires_at
     return recovery

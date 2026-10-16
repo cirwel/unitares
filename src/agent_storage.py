@@ -425,6 +425,27 @@ async def resume_agent_if_pause_token(
     )
 
 
+async def expire_pause_if_token(
+    agent_id: str,
+    *,
+    expected_pause_token: str,
+    lifecycle_event: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Expire one stale generation with TTL-specific split-state repair.
+
+    This deliberately does not carry dialectic conditions. Matching active
+    status copies are authoritative, and an exact-token active/paused split may
+    be normalized under row locks. Other disagreement remains fail-closed for
+    operator repair.
+    """
+    await _ensure_db_ready()
+    return await get_db().expire_pause_if_token(
+        agent_id,
+        expected_pause_token=expected_pause_token,
+        lifecycle_event=lifecycle_event,
+    )
+
+
 async def read_authoritative_pause_binding(agent_id: str) -> Dict[str, Any]:
     """Read the session-open pause generation from both durable status copies.
 

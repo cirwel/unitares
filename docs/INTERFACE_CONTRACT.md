@@ -676,6 +676,16 @@ Operators can enumerate every non-applied row without mutating it with
 procedure and the limits of `mark_applied` are documented in
 `docs/operations/dialectic-resolution-effects.md`.
 
+Exact-token pause expiry and resolution resume both lock the two durable
+status copies with the identity metadata. TTL expiry has a narrower repair
+path of its own: matching `active` copies are authoritative, and an exact-token
+`active`/`paused` split may be normalized because expiry carries no dialectic
+conditions or verdict effects. Matching active copies clear any stale string
+`paused_at` under an observed-token fence; a different token refuses when a
+durable paused copy exists. Unrelated status, terminal status, or a missing
+durable agent still refuses without mutation and reports that operator
+reconciliation is required.
+
 Compatibility: additive for callers that omit the authorship field or never
 use the recovery action, and deliberately restrictive only when a requester
 declares a conflict. Existing dialectic calls retain their action and parameter
