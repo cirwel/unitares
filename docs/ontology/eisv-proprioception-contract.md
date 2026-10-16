@@ -729,8 +729,20 @@ runtime read of state, history, baselines and calibration filters on
   window for per-era reporting, `require_single_instrument` refuses stamped rows
   that carry more than one instrument id (a threshold, flag or overlay change
   inside one era), and `is_settled` drops the restore transient.
-  `scripts/analysis/basin_conjunct_binding_read.py` is the first reader wired
-  to it; the others are not yet.
+  `check_window` wraps both checks for a script and returns the provenance
+  lines to print beside its result.
+- Wired readers (each refuses a crossing window unless given
+  `--allow-cross-era REASON`, and prints the crossed changes and stamped ids):
+  `basin_conjunct_binding_read.py`, `eisv_history_structure_read.py`,
+  `coherence_gate_shadow_read.py`, `outcome_validation.py`,
+  `eisv_phi_telemetry_redteam.py`, `eisv_residual_autocorr.py` and
+  `eisv_stage_b_safety_floor.py` under `scripts/analysis/`, plus
+  `scripts/verdict_counterfactual.py` and `scripts/dev/grounding_flip_analysis.py`.
+  The registered-read path (`eisv_skeptic_report.fetch_rows`, the ablation
+  matrix, the input snapshot, the prospective cohort) is deliberately not wired:
+  it has its own boundary at T and changing it would change the 12-01 read.
+  Not yet wired: the class-anchor regeneration, the doctor's 7-day checks, the
+  telemetry-health route, and all-time trajectory reads.
 
 There is no per-field exemption. A change that only touches the basin or the
 action still moves behavioral E, I and V on later check-ins, because the action

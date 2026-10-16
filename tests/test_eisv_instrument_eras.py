@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from scripts.analysis import eisv_era_sql
 from src import eisv_eras, eisv_instrument
 from tests import eisv_preservation_driver as driver
 
@@ -214,6 +215,55 @@ def test_era_windows_inside_one_era(registry):
     assert eisv_eras.era_windows(_t("2026-01-11"), _t("2026-01-12"), path=registry) == [
         ("X1", _t("2026-01-11"), _t("2026-01-12")),
     ]
+
+
+def test_check_window_returns_provenance_lines_inside_one_era(registry, capsys):
+    lines = eisv_eras.check_window(_t("2026-01-11"), _t("2026-01-19"), path=registry)
+    assert lines[0].startswith("EISV instrument window: 2026-01-11")
+    assert lines[-1] == "Stamped instrument ids were not checked by this read."
+    assert capsys.readouterr().err == ""
+
+
+def test_check_window_refuses_a_crossing_and_prints_why(registry, capsys):
+    assert eisv_eras.check_window(_t("2026-01-18"), _t("2026-01-22"), path=registry) is None
+    err = capsys.readouterr().err
+    assert err.startswith("refused:") and "X2" in err
+
+
+def test_check_window_with_a_reason_names_the_pooled_changes(registry):
+    lines = eisv_eras.check_window(
+        _t("2026-01-18"), _t("2026-01-22"), allow_cross="volume only", path=registry)
+    assert any("X2 (allowed: volume only)" in line for line in lines)
+
+
+def test_check_window_refuses_mixed_stamped_ids(registry, capsys):
+    counts = {None: 4, "X1:aaa": 3, "X1:bbb": 2}
+    assert eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts=counts, path=registry) is None
+    assert "2 different EISV instrument ids" in capsys.readouterr().err
+    lines = eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts=counts, allow_cross="why", path=registry)
+    assert "unstamped rows: 4." in lines[1]
+    assert lines[2] == "**Pooled across stamped instrument ids** (allowed: why)."
+
+
+def test_check_window_reports_a_single_stamped_id(registry):
+    lines = eisv_eras.check_window(
+        _t("2026-01-11"), _t("2026-01-19"), id_counts={"X1:aaa": 5}, path=registry)
+    assert lines[1] == "Instrument ids: `X1:aaa` (5 rows); unstamped rows: 0."
+
+
+def test_cross_era_argument_and_id_sql():
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    eisv_eras.add_cross_era_argument(parser)
+    assert parser.parse_args(["--allow-cross-era", "why"]).allow_cross_era == "why"
+    assert parser.parse_args([]).allow_cross_era is None
+    sql = eisv_era_sql.instrument_id_counts_sql("%s", "%s")
+    assert "recorded_at >= %s AND recorded_at < %s" in sql
+    assert "synthetic = false" in sql
+    assert "synthetic" not in eisv_era_sql.instrument_id_counts_sql("%s", "%s", include_synthetic=True)
 
 
 def test_live_registry_splits_the_2026_10_15_changes():
