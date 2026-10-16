@@ -1,0 +1,1 @@
+- Interface contract 1.42.0: call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only inference tool taking model, temperature or max_tokens. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.

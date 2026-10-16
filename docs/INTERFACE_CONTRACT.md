@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.42.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -642,3 +642,27 @@ Compatibility: additive for callers. A client that cached the old enum will
 still send valid ids. Schema digests move for `consult` and
 `delegate_inference` (the `host_id` property lost its enum); no other digest
 moves. Client action: none required; read `skipped` and `family` where useful.
+
+## 1.42.0 (2026-10-16)
+
+call_model is deprecated in favour of consult(effort='standard'), which reaches the same local host; it stays callable and is still the only inference tool taking model, temperature or max_tokens. Descriptions and recovery hints stop recommending it, and describe_tool returns a deprecation block. Nothing is added, removed, retyped or renamed.
+
+Affected outputs: `describe_tool(tool_name='call_model')` gains a `deprecation`
+block (`deprecated_since` 2026-10-16, `superseded_by` consult, `migration`);
+`list_tools` keeps listing `call_model`, now with `deprecated: true` and
+`superseded_by: consult`, because a deprecated name the deployment still exposes
+stays in the negotiation index. The descriptions of `call_model`, `consult`,
+`delegate_inference`, `list_inference_hosts`, `describe_inference_host` and
+`dialectic`, and the recovery hints of `delegate_inference`'s missing-extension
+refusal and the dialectic LLM failure, now point at `consult`. Each server call
+of the old name logs `deprecated_tool_called`.
+
+Compatibility: every existing `call_model` call works unchanged, and
+`accepts_host_id_from` still lists it for the HTTP hosts. No input schema
+changes, so no input digest or the surface digest moves. Removal is not
+scheduled: it waits on the gateway intent classifier and the knowledge-graph
+stale-entry check moving off the handler, and on `consult` taking model and
+sampling controls or a further operator decision. Client action: use
+`consult(brief=..., effort='standard')`; a client that needs `model`,
+`temperature` or `max_tokens` keeps calling `call_model` and should say so with
+`leave_note`.
