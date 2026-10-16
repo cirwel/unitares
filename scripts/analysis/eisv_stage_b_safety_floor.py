@@ -21,6 +21,10 @@ too lax; this probe can't tell which without outcomes. Default quantile mode
 does not bound regression risk. Policy-threshold mode measures historical proxy
 disagreement, but generalizing that rate still needs an outcome-matched,
 longitudinally valid design.
+
+The window is the last ``--days`` days up to now. A window that crosses an EISV
+instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
 """
 from __future__ import annotations
 
@@ -29,6 +33,12 @@ import json
 import math
 import random
 import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 
 def welford_std(d):
@@ -437,7 +447,7 @@ def separation_report(safe, non_safe, seed=0, quantile=0.99, threshold=None):
 
 
 
-def main():
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--db-url", default="postgresql://postgres:postgres@localhost:5432/governance")
     ap.add_argument("--days", type=int, default=7)
@@ -448,7 +458,12 @@ def main():
                     help="policy-registered absolute residual threshold. Only this "
                          "mode yields a regression bound; without it the "
                          "false-positive rate is definitional.")
-    args = ap.parse_args()
+    eisv_eras.add_cross_era_argument(ap)
+    args = ap.parse_args(argv)
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.days)
+    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        return 2
 
     # Imported here, not at module scope: the statistics above are pure and must
     # stay importable (and testable) on a machine with no database driver, and
@@ -461,16 +476,23 @@ def main():
     by_verdict = {}  # verdict -> [residual,...]
     n_rows = 0
     with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s"), (start, end))
+        id_counts = {r["instrument_id"]: r["n"] for r in cur.fetchall()}
+        provenance = eisv_eras.check_window(
+            start, end, allow_cross=args.allow_cross_era, id_counts=id_counts)
+        if provenance is None:
+            conn.close()
+            return 2
         cur.execute(
             """
             SELECT state_json->'behavioral_eisv' AS beisv, state_json->>'verdict' AS verdict
             FROM core.agent_state
-            WHERE recorded_at > now() - (%s::int * interval '1 day')
+            WHERE recorded_at > %s AND recorded_at < %s
               AND state_json ? 'behavioral_eisv'
               AND state_json->'behavioral_eisv'->'warmup'->>'is_baselined' = 'true'
               AND state_json ? 'verdict'
             """,
-            (args.days,),
+            (start, end),
         )
         for r in cur:
             beisv = r["beisv"]
@@ -483,6 +505,9 @@ def main():
             by_verdict.setdefault(r["verdict"], []).append(z)
     conn.close()
 
+    for line in provenance:
+        print(line)
+    print()
     print(f"baselined check-ins with computable residual (last {args.days}d): N={n_rows}\n")
     print(f"{'verdict':<12}{'n':>7}{'resid p50':>11}{'p90':>9}{'p99':>9}")
     print("-" * 48)

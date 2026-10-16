@@ -584,3 +584,97 @@ def test_a_zero_realized_rate_yields_no_ratio_rather_than_a_verdict(sf):
     text = _quantile_report(sf, [1.0] * 100, [5.0] * 40)
     assert "UNDEFINED" in text
     assert "SEPARATES" not in text
+
+
+# --- EISV era guard: the window is checked before the database is touched --
+
+class _FixedNow:
+    """Stands in for ``datetime`` in the script so the window is reproducible."""
+
+    def __init__(self, now):
+        self._now = now
+
+    def now(self, tz=None):
+        return self._now
+
+
+def _fake_psycopg2(monkeypatch, connect):
+    import sys
+    import types
+
+    extras = types.ModuleType("psycopg2.extras")
+    extras.RealDictCursor = object()
+    fake = types.ModuleType("psycopg2")
+    fake.extras = extras
+    fake.connect = connect
+    monkeypatch.setitem(sys.modules, "psycopg2", fake)
+    monkeypatch.setitem(sys.modules, "psycopg2.extras", extras)
+
+
+def _no_db(*_a, **_k):
+    raise AssertionError("the database must not be opened")
+
+
+def test_a_window_crossing_an_instrument_change_is_refused_before_the_db(sf, monkeypatch, capsys):
+    from datetime import datetime, timezone
+
+    # Seven days back from here spans A1, I1 and RK1 (2026-10-15/16).
+    monkeypatch.setattr(sf, "datetime", _FixedNow(datetime(2026, 10, 16, 12, tzinfo=timezone.utc)))
+    _fake_psycopg2(monkeypatch, _no_db)
+    assert sf.main([]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("refused:")
+    assert "A1" in err
+
+
+def test_allow_cross_era_lets_the_crossing_window_reach_the_db(sf, monkeypatch):
+    from datetime import datetime, timezone
+
+    class Reached(Exception):
+        pass
+
+    def connect(*_a, **_k):
+        raise Reached
+
+    monkeypatch.setattr(sf, "datetime", _FixedNow(datetime(2026, 10, 16, 12, tzinfo=timezone.utc)))
+    _fake_psycopg2(monkeypatch, connect)
+    with pytest.raises(Reached):
+        sf.main(["--allow-cross-era", "test: pooled on purpose"])
+
+
+def test_mixed_stamped_instrument_ids_are_refused_before_the_read(sf, monkeypatch, capsys):
+    from datetime import datetime, timezone
+
+    executed = []
+
+    class Cur:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, params=None):
+            executed.append(sql)
+
+        def fetchall(self):
+            return [{"instrument_id": "id-a", "n": 3}, {"instrument_id": "id-b", "n": 2},
+                    {"instrument_id": None, "n": 7}]
+
+    class Conn:
+        closed = False
+
+        def cursor(self, **_k):
+            return Cur()
+
+        def close(self):
+            Conn.closed = True
+
+    # Isolate the stamped-id check from the time check.
+    monkeypatch.setattr(sf.eisv_eras, "boundaries_crossed", lambda *a, **k: [])
+    monkeypatch.setattr(sf, "datetime", _FixedNow(datetime(2026, 10, 30, 12, tzinfo=timezone.utc)))
+    _fake_psycopg2(monkeypatch, lambda *_a, **_k: Conn())
+    assert sf.main([]) == 2
+    assert len(executed) == 1 and "eisv_instrument" in executed[0]
+    assert Conn.closed
+    assert "2 different EISV instrument ids" in capsys.readouterr().err

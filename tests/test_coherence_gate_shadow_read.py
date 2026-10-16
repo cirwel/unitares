@@ -248,3 +248,43 @@ def test_cli_positive_control_and_jsonl_input(tmp_path: Path):
     )
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout)["n_eligible"] == 3
+
+
+# ---------------------------------------------------------------------------
+# EISV era guard: a crossing window is refused before any DB connection
+# ---------------------------------------------------------------------------
+
+# A century-long window crosses every registered instrument change, whatever
+# day the suite runs on.
+_CROSSING_WINDOW = ["--window-days", "36500"]
+
+
+class _ConnectCalled(Exception):
+    pass
+
+
+def _forbid_connect(monkeypatch):
+    import asyncpg
+
+    async def _connect(*_args, **_kwargs):
+        raise _ConnectCalled()
+
+    monkeypatch.setattr(asyncpg, "connect", _connect, raising=False)
+
+
+def test_soak_read_refuses_a_cross_era_window_without_connecting(monkeypatch, capsys):
+    _forbid_connect(monkeypatch)
+    assert reader.main(_CROSSING_WINDOW) == 2
+    assert "refused:" in capsys.readouterr().err
+
+
+def test_soak_read_accepts_allow_cross_era_and_proceeds_to_connect(monkeypatch):
+    _forbid_connect(monkeypatch)
+    with pytest.raises(_ConnectCalled):
+        reader.main(_CROSSING_WINDOW + ["--allow-cross-era", "test: pooled on purpose"])
+
+
+def test_render_prints_era_provenance_lines():
+    summary = summarize([_row()])
+    summary["eisv_era_provenance"] = ["EISV instrument window: a .. b."]
+    assert "EISV instrument window: a .. b." in render(summary)
