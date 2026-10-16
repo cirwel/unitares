@@ -13,7 +13,7 @@ observables ──► observation blend ──► EMA state ──► residual /
  drift, tools)                                                               pause/reject
 ```
 
-The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE / thermodynamic model** (`governance_core/`) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
+The **behavioral EISV** path blends runtime observations and controller history, then smooths them into four indices. It owns the assessment after cold start. The **ODE controller** (`governance_core/`; older docs call it the "thermodynamic model", a historical name, not a claim that it computes physical quantities) also affects the final decision: its state supplies structural basin, void and coherence checks, and its coherence and history feed later behavioral observations. The two paths are coupled.
 
 The current implementation has three stages: check-ins 1–2 use the Φ
 cold-start prior; check-ins 3–24 use the behavioral assessment with fixed
