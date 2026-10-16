@@ -388,6 +388,7 @@ class DialecticDB:
         session_id: str,
         reviewer_agent_id: str,
         *,
+        claim_if_unassigned: bool = False,
         winner: Optional[Dict[str, Any]] = None,
         detail: Optional[Dict[str, Any]] = None,
     ) -> bool:
@@ -397,15 +398,22 @@ class DialecticDB:
         across several DB round-trips, and the session can resolve (e.g. via
         the BEAM saga) inside that window. Without the guard the write lands
         on a resolved row. Returns False when refused or missing; pass
-        ``winner={}`` to learn which (see `_record_winner`).
+        ``winner={}`` to learn which (see `_record_winner`). When
+        ``claim_if_unassigned`` is true, the assignment is a NULL-to-reviewer
+        compare-and-set; this is the first-responder boundary that prevents two
+        reviewers that both read an open slot from overwriting one another.
         """
         await self._ensure_pool()
+        open_slot_guard = (
+            " AND reviewer_agent_id IS NULL" if claim_if_unassigned else ""
+        )
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 UPDATE core.dialectic_sessions
                 SET reviewer_agent_id = $1, updated_at = now()
                 WHERE session_id = $2
                   AND status NOT IN ('resolved', 'failed')
+                  {open_slot_guard}
                   AND (
                     paused_agent_state_json IS NULL
                     OR NOT (paused_agent_state_json ? '{REVIEWED_WORK_AUTHORSHIP_STATE_KEY}')
@@ -464,10 +472,16 @@ class DialecticDB:
                     "refused by reviewed-work authorship policy"
                 )
             else:
-                logger.warning(
-                    f"update_session_reviewer: {session_id[:16]}... is terminal as "
-                    f"{existing['status']!r}; reviewer write refused"
-                )
+                if existing["status"] in self.TERMINAL_WRITE_GUARD:
+                    logger.warning(
+                        f"update_session_reviewer: {session_id[:16]}... is terminal as "
+                        f"{existing['status']!r}; reviewer write refused"
+                    )
+                else:
+                    logger.info(
+                        f"update_session_reviewer: {session_id[:16]}... live-row "
+                        "guard changed; reviewer write refused"
+                    )
             return False
 
     async def update_session_status(
@@ -1464,6 +1478,7 @@ async def update_session_reviewer_async(
     session_id: str,
     reviewer_agent_id: str,
     *,
+    claim_if_unassigned: bool = False,
     winner: Optional[Dict[str, Any]] = None,
 ) -> bool:
     async with record_session_write(
@@ -1471,7 +1486,9 @@ async def update_session_reviewer_async(
     ) as rec:
         db = await get_dialectic_db()
         return await _recorded_write(rec, lambda d: db.update_session_reviewer(
-            session_id, reviewer_agent_id, winner=winner, detail=d), winner=winner)
+            session_id, reviewer_agent_id,
+            claim_if_unassigned=claim_if_unassigned,
+            winner=winner, detail=d), winner=winner)
 
 
 async def update_session_status_async(

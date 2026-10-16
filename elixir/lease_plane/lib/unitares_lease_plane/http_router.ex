@@ -387,9 +387,16 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # ---------- /v1/dialectic/reviewer ----------
   # BEAM-owned reviewer assignment/reassignment — the last session-row column.
   post "/v1/dialectic/reviewer" do
+    claim_if_unassigned = Map.get(conn.body_params, "claim_if_unassigned", false)
+
     with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
-         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0 do
-      case UnitaresLeasePlane.DialecticSaga.update_reviewer(sid, rev) do
+         true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0,
+         true <- is_boolean(claim_if_unassigned) do
+      case UnitaresLeasePlane.DialecticSaga.update_reviewer(
+             sid,
+             rev,
+             claim_if_unassigned
+           ) do
         :ok ->
           json(conn, 200, %{ok: true, session_id: sid, reviewer_agent_id: rev})
 
@@ -407,6 +414,9 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
         {:error, :invalid_review_authorship} ->
           json(conn, 409, %{ok: false, error: "invalid_review_authorship"})
+
+        {:error, :reviewer_write_refused} ->
+          json(conn, 409, %{ok: false, error: "reviewer_write_refused"})
 
         {:error, _} ->
           json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})
@@ -453,6 +463,10 @@ defmodule UnitaresLeasePlane.HTTPRouter do
 
           {:error, :session_identity_mismatch} ->
             json(conn, 409, %{ok: false, error: "session_identity_mismatch"})
+
+          {:error, reason}
+          when reason in [:session_phase_mismatch, :session_write_refused] ->
+            json(conn, 409, %{ok: false, error: Atom.to_string(reason)})
 
           {:error, _other} ->
             json(conn, 503, %{ok: false, error: "service_unavailable", reason: "internal error"})

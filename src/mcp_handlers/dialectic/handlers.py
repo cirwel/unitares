@@ -3110,13 +3110,17 @@ async def _run_synthetic_review(
         try:
             persisted = True
             if await beam_update_reviewer(
-                session.session_id, SYNTHETIC_REVIEWER_ID
+                session.session_id,
+                SYNTHETIC_REVIEWER_ID,
+                claim_if_unassigned=True,
             ) is None:
                 with session_write_via(
                     "python_fallback", site="synthetic_first_responder"
                 ):
                     persisted = await pg_update_reviewer(
-                        session.session_id, SYNTHETIC_REVIEWER_ID
+                        session.session_id,
+                        SYNTHETIC_REVIEWER_ID,
+                        claim_if_unassigned=True,
                     )
             if not persisted:
                 restore_before_antithesis()
@@ -3215,10 +3219,9 @@ async def _run_synthetic_review(
         try:
             resolution_obj = session.finalize_resolution()
             session.resolution = resolution_obj
-            written = await pg_resolve_session(
-                session_id=session.session_id,
-                resolution=seal_resolution_for_persistence(session, resolution_obj, status="resolved"),
-                status="resolved",
+            written = await _commit_converged_resolution(
+                session,
+                resolution_obj,
             )
             discard_receipt_unless_written(resolution_obj, written=bool(written), had_receipt=False)
             if written:
@@ -3893,9 +3896,15 @@ async def handle_submit_antithesis(arguments: Dict[str, Any]) -> Sequence[TextCo
             if original_reviewer_id is None and session.reviewer_agent_id == agent_id:
                 try:
                     persisted = True
-                    if await beam_update_reviewer(session_id, agent_id) is None:
+                    if await beam_update_reviewer(
+                        session_id, agent_id, claim_if_unassigned=True
+                    ) is None:
                         with session_write_via("python_fallback", site="first_responder"):
-                            persisted = await pg_update_reviewer(session_id, agent_id)
+                            persisted = await pg_update_reviewer(
+                                session_id,
+                                agent_id,
+                                claim_if_unassigned=True,
+                            )
                     if persisted:
                         result["reviewer_auto_assigned"] = True
                         logger.info("Reviewer auto-assigned for dialectic session")

@@ -58,7 +58,32 @@ async def test_save_session_falls_back_to_python_when_beam_declines(monkeypatch)
         await sess_mod.save_session(_resolved_session())
 
     beam.assert_awaited_once()
-    pg.assert_awaited_once()  # fail-safe fallback
+    pg.assert_awaited_once_with(
+        session_id="sess-save-1",
+        resolution=pg.await_args.kwargs["resolution"],
+        status="resolved",
+        expected_phase="synthesis",
+        expected_reviewer="rev-1",
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_session_failed_fallback_remains_phase_agnostic(monkeypatch):
+    """Liveness may fail a session from any non-terminal phase."""
+    monkeypatch.setattr(sess_mod, "UNITARES_DIALECTIC_WRITE_JSON_SNAPSHOT", False, raising=False)
+    session = _resolved_session()
+    session.phase = DialecticPhase.FAILED
+    beam = AsyncMock(return_value=None)
+    pg = AsyncMock(return_value=True)
+
+    with patch("src.mcp_handlers.dialectic.beam_resolve_client.beam_resolve", beam), \
+         patch("src.dialectic_db.resolve_session_async", pg):
+        await sess_mod.save_session(session)
+
+    pg.assert_awaited_once()
+    assert pg.await_args.kwargs["status"] == "failed"
+    assert "expected_phase" not in pg.await_args.kwargs
+    assert "expected_reviewer" not in pg.await_args.kwargs
 
 
 @pytest.mark.asyncio

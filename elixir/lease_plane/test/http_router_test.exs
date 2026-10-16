@@ -265,6 +265,28 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
       assert parsed(resp)["error"] == "session_identity_mismatch"
     end
 
+    test "resolved transition outside synthesis -> 409 session_phase_mismatch" do
+      session_id =
+        insert_dialectic_session(
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          phase: "antithesis"
+        )
+
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      resp =
+        post_json("/v1/dialectic/resolve", %{
+          session_id: session_id,
+          paused_agent_id: "p",
+          reviewer_agent_id: "r",
+          resolution: %{verdict: "resume"}
+        })
+
+      assert resp.status == 409
+      assert parsed(resp)["error"] == "session_phase_mismatch"
+    end
+
     test "invalid status → 422 schema_invalid" do
       resp =
         post_json("/v1/dialectic/resolve", %{
@@ -289,6 +311,32 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
 
       assert resp.status == 404
       assert parsed(resp)["error"] == "session_not_found"
+    end
+  end
+
+  describe "/v1/dialectic/reviewer" do
+    test "claim_if_unassigned refuses a later first responder" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      first =
+        post_json("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-first",
+          claim_if_unassigned: true
+        })
+
+      assert first.status == 200
+
+      late =
+        post_json("/v1/dialectic/reviewer", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-late",
+          claim_if_unassigned: true
+        })
+
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
     end
   end
 

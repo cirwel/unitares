@@ -1030,6 +1030,7 @@ class TestHandleSubmitAntithesis:
         session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
         session.awaiting_facilitation = True  # set at thesis, never answered
         persisted = AsyncMock()
+        claim = AsyncMock(return_value=True)
 
         with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
              patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
@@ -1037,7 +1038,7 @@ class TestHandleSubmitAntithesis:
              patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
                    new=AsyncMock(return_value=False)), \
              patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)), \
-             patch(f"{DIALECTIC}.pg_update_reviewer", new=AsyncMock(return_value=True)), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=claim), \
              patch(f"{DIALECTIC}.pg_update_awaiting_facilitation", persisted), \
              patch(f"{DIALECTIC}.pg_add_message", new_callable=AsyncMock), \
              patch(f"{DIALECTIC}.beam_update_phase", new=AsyncMock(return_value=None)), \
@@ -1053,7 +1054,51 @@ class TestHandleSubmitAntithesis:
 
         assert session.reviewer_agent_id == "agent-active"
         assert session.awaiting_facilitation is False
+        claim.assert_awaited_once_with(
+            session.session_id,
+            "agent-active",
+            claim_if_unassigned=True,
+        )
         persisted.assert_awaited_once_with(session.session_id, False)
+
+    @pytest.mark.asyncio
+    async def test_first_responder_losing_open_slot_cas_records_no_antithesis(
+        self, mock_server, mock_context_agent,
+    ):
+        """The persisted reviewer winner, not the stale local read, owns the slot."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_antithesis
+
+        session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+        add_message = AsyncMock()
+        claim = AsyncMock(return_value=False)
+
+        with patch(f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)), \
+             patch("src.mcp_handlers.dialectic.reviewer.is_agent_in_active_session",
+                   new=AsyncMock(return_value=False)), \
+             patch("src.mcp_handlers.dialectic.reviewer._has_recently_reviewed",
+                   new=AsyncMock(return_value=False)), \
+             patch(f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)), \
+             patch(f"{DIALECTIC}.pg_update_reviewer", new=claim), \
+             patch(f"{DIALECTIC}.pg_add_message", new=add_message), \
+             mock_context_agent:
+            result = await handle_submit_antithesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-active",
+                "reasoning": "Independent counter-perspective.",
+                "concerns": ["Independent concern"],
+            })
+
+        data = parse_result(result)
+        assert data["success"] is False
+        assert data["error_code"] == "REVIEWER_ASSIGNMENT_REFUSED"
+        claim.assert_awaited_once_with(
+            session.session_id,
+            "agent-active",
+            claim_if_unassigned=True,
+        )
+        add_message.assert_not_awaited()
+        assert session.reviewer_agent_id is None
+        assert session.phase == DialecticPhase.ANTITHESIS
 
     @pytest.mark.asyncio
     async def test_a_self_review_claim_does_not_clear_the_request(

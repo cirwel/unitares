@@ -169,6 +169,8 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
     ), patch(
         f"{DIALECTIC}.pg_update_phase", new=AsyncMock()
     ), patch(
+        f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
+    ), patch(
         f"{DIALECTIC}.pg_resolve_session", new=resolve_row
     ), patch(
         f"{DIALECTIC}._emit_dialectic_event", new=AsyncMock()
@@ -180,10 +182,58 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
         )
 
     update_reviewer.assert_awaited_once_with(
-        session.session_id, "llm-synthetic-reviewer"
+        session.session_id,
+        "llm-synthetic-reviewer",
+        claim_if_unassigned=True,
     )
-    resolve_row.assert_awaited_once()
+    assert resolve_row.await_args.kwargs["expected_phase"] == "synthesis"
+    assert (
+        resolve_row.await_args.kwargs["expected_reviewer"]
+        == "llm-synthetic-reviewer"
+    )
     assert result["resolved"] is True
+
+
+@pytest.mark.asyncio
+async def test_synthetic_reviewer_aborts_when_open_slot_cas_loses():
+    """A peer that claims first keeps the slot and receives no synthetic rows."""
+    from src.mcp_handlers.dialectic.handlers import _run_synthetic_review
+
+    session = _make_session(reviewer_id=None, phase=DialecticPhase.ANTITHESIS)
+    claim = AsyncMock(return_value=False)
+    add_message = AsyncMock()
+    generate_synthesis = AsyncMock(return_value=_synthesis("RESUME"))
+
+    with patch(f"{LLM}.local_endpoint_refusal", return_value=None), patch(
+        f"{LLM}.is_llm_available", new=AsyncMock(return_value=True)
+    ), patch(
+        f"{LLM}.generate_antithesis",
+        new=AsyncMock(return_value=_antithesis("refine")),
+    ), patch(
+        f"{LLM}.generate_synthesis", new=generate_synthesis
+    ), patch(
+        f"{DIALECTIC}.beam_update_reviewer", new=AsyncMock(return_value=None)
+    ), patch(
+        f"{DIALECTIC}.pg_update_reviewer", new=claim
+    ), patch(
+        f"{DIALECTIC}.pg_add_message", new=add_message
+    ):
+        result = await _run_synthetic_review(
+            session,
+            {"root_cause": "rc", "proposed_conditions": ["c"]},
+            "agent-paused",
+        )
+
+    assert result is None
+    claim.assert_awaited_once_with(
+        session.session_id,
+        "llm-synthetic-reviewer",
+        claim_if_unassigned=True,
+    )
+    add_message.assert_not_awaited()
+    generate_synthesis.assert_not_awaited()
+    assert session.reviewer_agent_id is None
+    assert session.phase == DialecticPhase.ANTITHESIS
 
 
 @pytest.mark.asyncio

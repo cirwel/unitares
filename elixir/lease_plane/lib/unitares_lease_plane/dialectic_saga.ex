@@ -12,8 +12,9 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   Two invariants enforced here:
 
     * **Phase guard** — a saga is only claimable for a session that exists and is
-      not already terminal (`resolved` / `failed`). This defends against a
-      retried resolve on an already-finished session minting a stray saga.
+      not already terminal (`resolved` / `failed`), and a `resolved` transition
+      must still be in `synthesis`. This defends against a retried or stale
+      resolve minting a stray saga or closing a row that moved backward.
 
     * **One in-flight saga per session** — the partial unique index
       `idx_saga_one_pending_per_session` makes a second concurrent claim fail;
@@ -49,6 +50,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
           {:error, :session_not_found}
           | {:error, {:session_terminal, String.t()}}
           | {:error, :session_identity_mismatch}
+          | {:error, :session_phase_mismatch}
           | {:error, :invalid_review_authorship}
           | {:error, :reviewer_recused}
           | {:error, :saga_in_flight}
@@ -288,15 +290,37 @@ defmodule UnitaresLeasePlane.DialecticSaga do
              :invalid_reviewer
              | :invalid_review_authorship
              | :reviewer_recused
+             | :reviewer_write_refused
              | :session_not_found
              | :session_terminal
              | term()}
   def update_reviewer(session_id, reviewer)
-      when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 do
+      when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0,
+      do: update_reviewer(session_id, reviewer, false)
+
+  def update_reviewer(_session_id, _reviewer), do: {:error, :invalid_reviewer}
+
+  @spec update_reviewer(String.t(), String.t(), boolean()) ::
+          :ok
+          | {:error,
+             :invalid_reviewer
+             | :invalid_review_authorship
+             | :reviewer_recused
+             | :reviewer_write_refused
+             | :session_not_found
+             | :session_terminal
+             | term()}
+  def update_reviewer(session_id, reviewer, claim_if_unassigned)
+      when is_binary(session_id) and is_binary(reviewer) and byte_size(reviewer) > 0 and
+             is_boolean(claim_if_unassigned) do
+    open_slot_guard =
+      if claim_if_unassigned, do: "AND reviewer_agent_id IS NULL", else: ""
+
     sql = """
     UPDATE core.dialectic_sessions
     SET reviewer_agent_id = $2, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed', 'escalated')
+      #{open_slot_guard}
       AND (
         paused_agent_state_json IS NULL
         OR NOT (paused_agent_state_json ? '#{@reviewed_work_authorship_key}')
@@ -384,7 +408,8 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     end
   end
 
-  def update_reviewer(_session_id, _reviewer), do: {:error, :invalid_reviewer}
+  def update_reviewer(_session_id, _reviewer, _claim_if_unassigned),
+    do: {:error, :invalid_reviewer}
 
   defp validate_reviewer_authorship(params, paused, reviewer) do
     validate_reviewer_authorship_state(Map.get(params, :paused_agent_state), paused, reviewer)
@@ -481,6 +506,7 @@ defmodule UnitaresLeasePlane.DialecticSaga do
     UPDATE core.dialectic_sessions
     SET status = $2, phase = $2, resolution_json = ($3::text)::jsonb, updated_at = now()
     WHERE session_id = $1 AND status NOT IN ('resolved', 'failed')
+      AND ($2 <> 'resolved' OR phase = 'synthesis')
       AND paused_agent_id = $4
       AND reviewer_agent_id = $5
       AND (
@@ -538,16 +564,16 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       {:ok, %{num_rows: 0}} ->
         case Postgrex.query(
                DB,
-               "SELECT status, paused_agent_id, reviewer_agent_id, paused_agent_state_json FROM core.dialectic_sessions WHERE session_id = $1",
+               "SELECT status, phase, paused_agent_id, reviewer_agent_id, paused_agent_state_json FROM core.dialectic_sessions WHERE session_id = $1",
                [session_id]
              ) do
-          {:ok, %{rows: [[existing, _paused, _reviewer, _state]]}}
+          {:ok, %{rows: [[existing, _phase, _paused, _reviewer, _state]]}}
           when existing in @terminal_statuses ->
             # Already terminal (raced/idempotent). The caller commits the
             # losing saga but must report the live winner, not its request.
             {:already_terminal, existing}
 
-          {:ok, %{rows: [[_existing, stored_paused, stored_reviewer, state]]}} ->
+          {:ok, %{rows: [[_existing, stored_phase, stored_paused, stored_reviewer, state]]}} ->
             case validate_resolution_authority(
                    status,
                    stored_paused,
@@ -556,8 +582,14 @@ defmodule UnitaresLeasePlane.DialecticSaga do
                    paused_agent_id,
                    reviewer_agent_id
                  ) do
-              :ok -> {:error, :session_write_refused}
-              error -> error
+              :ok when status == "resolved" and stored_phase != "synthesis" ->
+                {:error, :session_phase_mismatch}
+
+              :ok ->
+                {:error, :session_write_refused}
+
+              error ->
+                error
             end
 
           {:ok, %{rows: []}} ->
@@ -794,15 +826,19 @@ defmodule UnitaresLeasePlane.DialecticSaga do
          requested_status
        ) do
     sql =
-      "SELECT status, paused_agent_id, reviewer_agent_id, paused_agent_state_json " <>
+      "SELECT status, phase, paused_agent_id, reviewer_agent_id, paused_agent_state_json " <>
         "FROM core.dialectic_sessions WHERE session_id = $1"
 
     case Postgrex.query(conn, sql, [session_id]) do
-      {:ok, %{rows: [[status, _paused, _reviewer, _state]]}}
+      {:ok, %{rows: [[status, _phase, _paused, _reviewer, _state]]}}
       when status in ["resolved", "failed"] ->
         {:error, {:session_terminal, status}}
 
-      {:ok, %{rows: [[_status, stored_paused, stored_reviewer, state]]}} ->
+      {:ok, %{rows: [[_status, phase, _paused, _reviewer, _state]]}}
+      when requested_status == "resolved" and phase != "synthesis" ->
+        {:error, :session_phase_mismatch}
+
+      {:ok, %{rows: [[_status, _phase, stored_paused, stored_reviewer, state]]}} ->
         case validate_resolution_authority(
                requested_status,
                stored_paused,

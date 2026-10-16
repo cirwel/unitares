@@ -777,6 +777,24 @@ class TestUpdateSessionReviewer:
         assert instance.TERMINAL_WRITE_GUARD == ("resolved", "failed")
 
     @pytest.mark.asyncio
+    async def test_claim_if_unassigned_is_a_null_to_reviewer_cas(self, db):
+        """Two first responders that read an open slot cannot overwrite."""
+        instance, pool, conn = db
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+
+        assert await instance.update_session_reviewer(
+            "sess-001", "reviewer-B", claim_if_unassigned=True
+        ) is True
+
+        sql = " ".join(conn.fetchrow.await_args.args[0].split())
+        assert "reviewer_agent_id IS NULL" in sql
+
+        conn.fetchrow = AsyncMock(return_value=EFFECT_ROW)
+        await instance.update_session_reviewer("sess-001", "reviewer-C")
+        sql = " ".join(conn.fetchrow.await_args.args[0].split())
+        assert "reviewer_agent_id IS NULL" not in sql
+
+    @pytest.mark.asyncio
     async def test_update_session_reviewer_refuses_declared_author(self, db):
         """The fallback writer enforces the same recusal as the BEAM writer."""
         from src.dialectic_reviewed_work import (
@@ -1788,8 +1806,32 @@ class TestConvenienceWrappers:
         result = await update_session_reviewer_async("s1", "reviewer-B")
 
         mock_singleton.update_session_reviewer.assert_awaited_once_with(
-            "s1", "reviewer-B", winner=None, detail=ANY)
+            "s1",
+            "reviewer-B",
+            claim_if_unassigned=False,
+            winner=None,
+            detail=ANY,
+        )
         assert result is True
+
+    @pytest.mark.asyncio
+    async def test_update_session_reviewer_async_forwards_open_slot_cas(
+        self, mock_singleton
+    ):
+        mock_singleton.update_session_reviewer = AsyncMock(return_value=False)
+
+        result = await update_session_reviewer_async(
+            "s1", "reviewer-B", claim_if_unassigned=True
+        )
+
+        mock_singleton.update_session_reviewer.assert_awaited_once_with(
+            "s1",
+            "reviewer-B",
+            claim_if_unassigned=True,
+            winner=None,
+            detail=ANY,
+        )
+        assert result is False
 
     @pytest.mark.asyncio
     async def test_update_session_status_async(self, mock_singleton):

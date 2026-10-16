@@ -390,11 +390,29 @@ async def save_session(session: DialecticSession, *, defer_terminal: bool = Fals
             )
             written = beam_done is not None
             if beam_done is None:
+                # BEAM's resolved transition is guarded by the persisted
+                # SYNTHESIS phase and reviewer identity.  Preserve those same
+                # compare-and-set predicates on the flag-off/unreachable
+                # Python path; otherwise a BEAM policy refusal could be
+                # followed by an unguarded fallback that closes a row which
+                # moved backward or changed reviewer.  FAILED remains
+                # phase-agnostic so liveness can terminate a stalled session.
+                terminal_expectations = (
+                    {
+                        "expected_phase": DialecticPhase.SYNTHESIS.value,
+                        "expected_reviewer": getattr(
+                            session, "reviewer_agent_id", None
+                        ),
+                    }
+                    if status == "resolved"
+                    else {}
+                )
                 with session_write_via("python_fallback", site="save_session_terminal"):
                     written = bool(await pg_resolve_session(
                         session_id=session.session_id,
                         resolution=resolution_dict,
                         status=status,
+                        **terminal_expectations,
                     ))
             discard_receipt_unless_written(session.resolution, written=written, had_receipt=had_receipt)
         else:

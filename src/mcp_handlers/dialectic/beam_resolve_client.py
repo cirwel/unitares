@@ -228,7 +228,12 @@ async def beam_update_phase(
         return None
 
 
-async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]) -> Optional[Dict[str, Any]]:
+async def beam_update_reviewer(
+    session_id: str,
+    reviewer_agent_id: Optional[str],
+    *,
+    claim_if_unassigned: bool = False,
+) -> Optional[Dict[str, Any]]:
     """Assign/reassign a reviewer via BEAM (sole writer of reviewer_agent_id).
     Returns the BEAM result on success, or ``None`` to fall back to the Python
     `pg_update_reviewer` path. Raises ``BeamDialecticPolicyRefusal`` for an
@@ -248,11 +253,17 @@ async def beam_update_reviewer(session_id: str, reviewer_agent_id: Optional[str]
         return None
 
     def _post():
+        payload = {
+            "session_id": session_id,
+            "reviewer_agent_id": reviewer_agent_id,
+        }
+        if claim_if_unassigned:
+            payload["claim_if_unassigned"] = True
         with httpx.Client(timeout=5.0) as client:
             resp = client.post(
                 f"{base_url}/v1/dialectic/reviewer",
                 headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
-                json={"session_id": session_id, "reviewer_agent_id": reviewer_agent_id},
+                json=payload,
             )
             return resp.status_code, (resp.json() if resp.content else {})
 

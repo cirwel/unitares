@@ -181,6 +181,25 @@ async def test_update_reviewer_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_reviewer_open_slot_claim_is_sent(monkeypatch):
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    fake = _fake_httpx(200, {"ok": True, "session_id": "s1", "reviewer_agent_id": "rev"})
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1", "rev", claim_if_unassigned=True
+        )
+
+    assert out is not None
+    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    assert sent == {
+        "session_id": "s1",
+        "reviewer_agent_id": "rev",
+        "claim_if_unassigned": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_update_reviewer_blank_returns_none(monkeypatch):
     monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
     monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")

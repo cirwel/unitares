@@ -167,11 +167,11 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     },
     (HANDLERS, "_run_synthetic_review"): {
         "calls": ("add_message_async", "beam_update_reviewer",
-                  "update_session_reviewer_async", "update_session_phase_async",
-                  "resolve_session_async"),
+                  "update_session_reviewer_async", "update_session_phase_async"),
         "writer": (
             "synthetic review: persist the selected reviewer before transcript "
-            "messages, then phase and terminal writes"
+            "messages, then phase writes; terminal resolution delegates to the "
+            "reviewer/phase-CAS commit helper"
         ),
     },
     (SESSION, "save_session"): {
