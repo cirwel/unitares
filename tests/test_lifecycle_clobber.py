@@ -248,6 +248,107 @@ class TestExecuteResolutionPersistsRuntimeState:
         assert event and event.get("event") == "resumed"
         assert "agreed root cause" in event.get("reason", "")
 
+    @pytest.mark.asyncio
+    async def test_token_resume_publishes_exact_durable_condition_tail(self):
+        old_conditions = [
+            {"condition": f"old-{index}"} for index in range(20)
+        ]
+        new_conditions = [
+            {"condition": f"new-{index}"} for index in range(15)
+        ]
+        durable_conditions = old_conditions[-5:] + new_conditions
+        pause_token = "2026-04-16T10:00:00+00:00"
+        meta = make_agent_meta(status="paused", paused_at=pause_token)
+        meta.dialectic_conditions = list(old_conditions)
+        meta.add_lifecycle_event = MagicMock()
+
+        session = MagicMock()
+        session.paused_agent_id = AGENT_ID
+        session.reviewer_agent_id = "independent-reviewer"
+        session.paused_agent_state = {}
+        session.discovery_id = None
+        session.session_id = "sess-durable-conditions"
+
+        resolution = MagicMock()
+        resolution.action = "resume"
+        resolution.conditions = []
+        resolution.root_cause = "reviewed correction"
+        resolution.hash.return_value = "resolution-hash"
+
+        mock_server = make_mock_server()
+        mock_server.agent_metadata = {AGENT_ID: meta}
+        mock_server.load_metadata_async = AsyncMock(return_value=None)
+
+        with patch(
+            "src.mcp_handlers.dialectic.resolution.mcp_server", mock_server
+        ), patch(
+            "src.agent_storage.resume_agent_if_pause_token",
+            new=AsyncMock(return_value={
+                "applied": True,
+                "pause_token": pause_token,
+                "dialectic_conditions": durable_conditions,
+            }),
+        ):
+            from src.mcp_handlers.dialectic.resolution import execute_resolution
+
+            result = await execute_resolution(
+                session,
+                resolution,
+                record_outcome=False,
+                expected_pause_token=pause_token,
+                enforce_pause_token=True,
+            )
+
+        assert result["success"] is True
+        assert meta.dialectic_conditions == durable_conditions
+        assert old_conditions[0] not in meta.dialectic_conditions
+        assert all(item in meta.dialectic_conditions for item in new_conditions)
+
+    @pytest.mark.asyncio
+    async def test_token_resume_refusal_leaves_condition_cache_unchanged(self):
+        pause_token = "2026-04-16T10:00:00+00:00"
+        original_conditions = [{"condition": "still authoritative"}]
+        meta = make_agent_meta(status="paused", paused_at=pause_token)
+        meta.dialectic_conditions = list(original_conditions)
+
+        session = MagicMock()
+        session.paused_agent_id = AGENT_ID
+        session.reviewer_agent_id = "independent-reviewer"
+        session.paused_agent_state = {}
+        session.discovery_id = None
+
+        resolution = MagicMock()
+        resolution.action = "resume"
+        resolution.conditions = []
+        resolution.root_cause = "reviewed correction"
+
+        mock_server = make_mock_server()
+        mock_server.agent_metadata = {AGENT_ID: meta}
+        mock_server.load_metadata_async = AsyncMock(return_value=None)
+
+        with patch(
+            "src.mcp_handlers.dialectic.resolution.mcp_server", mock_server
+        ), patch(
+            "src.agent_storage.resume_agent_if_pause_token",
+            new=AsyncMock(return_value={
+                "applied": False,
+                "reason": "durable_status_mismatch",
+            }),
+        ):
+            from src.mcp_handlers.dialectic.resolution import execute_resolution
+
+            result = await execute_resolution(
+                session,
+                resolution,
+                record_outcome=False,
+                expected_pause_token=pause_token,
+                enforce_pause_token=True,
+            )
+
+        assert result["success"] is False
+        assert meta.status == "paused"
+        assert meta.dialectic_conditions == original_conditions
+
 
 class TestPersistRuntimeStateContract:
     """Contract tests for the new agent_storage.persist_runtime_state helper."""
@@ -353,6 +454,10 @@ class TestCircuitBreakerPersistsRuntimeState:
         meta.recent_update_timestamps = []
         meta.recent_decisions = []
         meta.loop_cooldown_until = None
+        meta._pause_ttl_recovery_refusal = {
+            "pause_token": "older-pause",
+            "reason": "operator_reconciliation_required",
+        }
         meta.add_recent_update = MagicMock()
         meta.add_lifecycle_event = MagicMock()
 
@@ -398,6 +503,7 @@ class TestCircuitBreakerPersistsRuntimeState:
         assert result["enforcement"]["actuation_id"] == event["actuation_id"]
         assert result["enforcement"]["applied_at"] == kwargs["pause_token"]
         assert result["enforcement"]["durable"] is True
+        assert "_pause_ttl_recovery_refusal" not in meta.__dict__
         meta.add_lifecycle_event.assert_called_once_with(
             "paused",
             "UNITARES high-risk verdict (risk_score=0.65)",

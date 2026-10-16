@@ -832,6 +832,37 @@ class TestResumeAgentIfPauseToken:
         assert identity_update.args[3] == "pause-1"
 
     @pytest.mark.asyncio
+    async def test_condition_cap_returns_exact_newest_twenty(self):
+        existing = [{"condition": f"old-{index}"} for index in range(20)]
+        additions = [{"condition": f"new-{index}"} for index in range(15)]
+        expected = (existing + additions)[-20:]
+        db, conn, _transaction = _mock_transactional_db(
+            row={
+                "agent_status": "paused",
+                "identity_status": "paused",
+                "metadata": {
+                    "paused_at": "pause-1",
+                    "dialectic_conditions": existing,
+                },
+            },
+            execute_results=("UPDATE 1", "UPDATE 1"),
+        )
+        with patch("src.agent_storage.get_db", return_value=db):
+            from src.agent_storage import resume_agent_if_pause_token
+
+            result = await resume_agent_if_pause_token(
+                "agent-1",
+                expected_pause_token="pause-1",
+                dialectic_condition_additions=additions,
+                lifecycle_event={"event": "dialectic_resumed"},
+            )
+
+        assert result["dialectic_conditions"] == expected
+        identity_update = conn.execute.await_args_list[1]
+        metadata_patch = json.loads(identity_update.args[2])
+        assert metadata_patch["dialectic_conditions"] == expected
+
+    @pytest.mark.asyncio
     async def test_token_mismatch_refuses_without_writes(self):
         db, conn, transaction = _mock_transactional_db(
             row={

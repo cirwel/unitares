@@ -13,7 +13,6 @@ from src.dialectic_protocol import DialecticSession, Resolution
 from src.dialectic_reviewed_work import read_reviewed_work_authorship
 from src.logging_utils import get_logger
 from ..support.condition_parser import (
-    MAX_DIALECTIC_CONDITIONS,
     apply_condition,
     apply_condition_to_metadata,
     parse_condition,
@@ -306,18 +305,10 @@ async def execute_resolution(
 
         durable_conditions = list(resume.get("dialectic_conditions") or [])
         if meta is not None:
-            # Publish only after commit. Preserve any cache-only additions that
-            # arrived while the transaction waited, and never overwrite a
-            # newer pause generation's status.
-            cache_conditions = list(
-                getattr(meta, "dialectic_conditions", None) or []
-            )
-            for cached in cache_conditions:
-                if cached not in durable_conditions:
-                    durable_conditions.append(cached)
-            meta.dialectic_conditions = durable_conditions[
-                -MAX_DIALECTIC_CONDITIONS:
-            ]
+            # Publish only after commit. The locked durable writer owns the
+            # bounded condition list; merging the pre-commit cache here would
+            # resurrect entries that the durable 20-item cap just evicted.
+            meta.dialectic_conditions = durable_conditions
             if (
                 getattr(meta, "status", None) == "paused"
                 and getattr(meta, "paused_at", None) == expected_pause_token

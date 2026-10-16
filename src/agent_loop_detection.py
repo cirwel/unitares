@@ -457,6 +457,13 @@ async def process_update_authenticated_async(
             # pause: no session may be bound to a generation that was not
             # committed durably.  The request handler detects cache/durable
             # disagreement and refuses rather than minting an active no-op.
+            meta_state = getattr(meta, "__dict__", {})
+            ttl_refusal = meta_state.get("_pause_ttl_recovery_refusal")
+            if (
+                not isinstance(ttl_refusal, dict)
+                or ttl_refusal.get("pause_token") != cache_pause_token
+            ):
+                meta_state.pop("_pause_ttl_recovery_refusal", None)
             meta.status = "paused"
             meta.paused_at = cache_pause_token
             actuation_id = mark_circuit_breaker_enforcement_applied(

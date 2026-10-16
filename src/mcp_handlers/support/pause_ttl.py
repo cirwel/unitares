@@ -88,6 +88,47 @@ def _apply_in_memory_expire(meta: Any) -> Optional[str]:
     return original_paused_at
 
 
+_TTL_RECOVERY_REFUSAL_ATTR = "_pause_ttl_recovery_refusal"
+
+
+def _clear_ttl_recovery_refusal(meta: Any, pause_token: str) -> None:
+    """Clear only the refusal record owned by ``pause_token``.
+
+    Multiple TTL attempts can overlap a later pause installation. A completion
+    for generation A must never erase recovery guidance already recorded for
+    generation B.
+    """
+    state = getattr(meta, "__dict__", None)
+    if not isinstance(state, dict):
+        return
+    refusal = state.get(_TTL_RECOVERY_REFUSAL_ATTR)
+    if (
+        isinstance(refusal, dict)
+        and refusal.get("pause_token") == pause_token
+    ):
+        state.pop(_TTL_RECOVERY_REFUSAL_ATTR, None)
+
+
+def _record_ttl_recovery_refusal(
+    meta: Any,
+    *,
+    pause_token: str,
+    resume: dict,
+) -> None:
+    """Record durable repair guidance only for the still-current generation."""
+    if (
+        getattr(meta, "status", None) != "paused"
+        or getattr(meta, "paused_at", None) != pause_token
+    ):
+        return
+    setattr(meta, _TTL_RECOVERY_REFUSAL_ATTR, {
+        "pause_token": pause_token,
+        "reason": resume.get("reason"),
+        "agent_status": resume.get("agent_status"),
+        "identity_status": resume.get("identity_status"),
+    })
+
+
 def _emit_audit(agent_uuid: str, original_paused_at: Optional[str]) -> None:
     """Fire-and-forget audit emit. Never raises."""
     try:
@@ -165,26 +206,24 @@ async def _expire_pause_durably(
                 and getattr(meta, "paused_at", None) == original_paused_at
             ):
                 meta.paused_at = current_token
-            getattr(meta, "__dict__", {}).pop(
-                "_pause_ttl_recovery_refusal", None
-            )
+            _clear_ttl_recovery_refusal(meta, original_paused_at)
         elif resume.get("reason") in {
             "durable_identity_missing",
             "operator_reconciliation_required",
             "terminal_agent_status",
         }:
-            meta._pause_ttl_recovery_refusal = {
-                "reason": resume.get("reason"),
-                "agent_status": resume.get("agent_status"),
-                "identity_status": resume.get("identity_status"),
-            }
+            _record_ttl_recovery_refusal(
+                meta,
+                pause_token=original_paused_at,
+                resume=resume,
+            )
         logger.warning(
             "[pause-ttl] durable pause expiry refused (%s); keeping cache paused",
             resume.get("reason") or "unknown",
         )
         return False
 
-    getattr(meta, "__dict__", {}).pop("_pause_ttl_recovery_refusal", None)
+    _clear_ttl_recovery_refusal(meta, original_paused_at)
     if resume.get("already_active") or resume.get("repaired_stale_pause_token"):
         logger.warning(
             "[pause-ttl] reconciled stale cache pause against active durable "
@@ -440,7 +479,25 @@ def paused_refusal_recovery(meta: Any, agent_uuid: Optional[str] = None) -> dict
             "can resume the agent. " + re_evaluation
         ),
     }
-    durable_refusal = getattr(meta, "_pause_ttl_recovery_refusal", None)
+    state = getattr(meta, "__dict__", None)
+    durable_refusal = (
+        state.get(_TTL_RECOVERY_REFUSAL_ATTR)
+        if isinstance(state, dict)
+        else None
+    )
+    if isinstance(durable_refusal, dict):
+        refusal_token = durable_refusal.get("pause_token")
+        if (
+            getattr(meta, "status", None) != "paused"
+            or not isinstance(refusal_token, str)
+            or refusal_token != getattr(meta, "paused_at", None)
+        ):
+            # Tokenless legacy records and records for an older generation are
+            # stale. Drop only the object we inspected so a newer record cannot
+            # be removed by this read.
+            if state.get(_TTL_RECOVERY_REFUSAL_ATTR) is durable_refusal:
+                state.pop(_TTL_RECOVERY_REFUSAL_ATTR, None)
+            durable_refusal = None
     if isinstance(durable_refusal, dict):
         reason_code = durable_refusal.get("reason") or "unknown"
         explanations = {
