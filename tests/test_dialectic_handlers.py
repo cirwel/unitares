@@ -4240,6 +4240,52 @@ class TestReconcileResolutionEffect:
         telemetry.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_apply_pending_superseded_skips_resume_calibration(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            _ResolutionEffectResult,
+            handle_reconcile_resolution_effect,
+        )
+
+        session = _make_session(phase=DialecticPhase.RESOLVED)
+        session.resolution = _effect_resolution()
+        execution = {
+            "success": True,
+            "no_op": True,
+            "superseded": True,
+            "reason": "pause_generation_superseded",
+        }
+        calibration = AsyncMock(return_value=True)
+        emit = AsyncMock()
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(side_effect=[
+                self._effect("pending"), self._effect("applied")
+            ]),
+        ), patch(
+            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        ), patch(
+            f"{DIALECTIC}._apply_durable_resolution_effect",
+            new=AsyncMock(return_value=_ResolutionEffectResult(
+                "applied", True, execution
+            )),
+        ), patch(
+            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
+        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "apply_pending",
+            }))
+
+        assert data["success"] is True
+        assert data["telemetry_attempted"] is True
+        assert data["execution"] == execution
+        calibration.assert_not_awaited()
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_mark_uncertain_fences_exact_owner(self):
         from src.mcp_handlers.dialectic.handlers import (
             handle_reconcile_resolution_effect,
@@ -4308,6 +4354,62 @@ class TestReconcileResolutionEffect:
         ack.assert_awaited_once_with("s1", "live state repaired")
         outcome.assert_awaited_once()
         calibration.assert_awaited_once_with(session, session.resolution)
+        emit.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_mark_applied_preserves_legacy_noop_and_skips_calibration(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            handle_reconcile_resolution_effect,
+        )
+
+        session = _make_session(phase=DialecticPhase.RESOLVED)
+        session.resolution = _effect_resolution()
+        prior_execution = {
+            "success": True,
+            "no_op": True,
+            "reason": "legacy_unbound_session",
+        }
+        unknown = self._effect(
+            "unknown_partial", execution_result_json=prior_execution
+        )
+        applied = self._effect(
+            "applied", execution_result_json=prior_execution
+        )
+        outcome = AsyncMock()
+        calibration = AsyncMock(return_value=True)
+        emit = AsyncMock()
+        with patch(
+            "src.mcp_handlers.identity.operator.is_operator_caller",
+            return_value=True,
+        ), patch(
+            f"{DIALECTIC}.pg_get_resolution_effect",
+            new=AsyncMock(side_effect=[unknown, applied]),
+        ), patch(
+            f"{DIALECTIC}.pg_acknowledge_resolution_effect",
+            new=AsyncMock(return_value=True),
+        ), patch(
+            f"{DIALECTIC}.load_session", new=AsyncMock(return_value=session)
+        ), patch(
+            f"{DIALECTIC}.record_resolution_outcome", new=outcome
+        ), patch(
+            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
+        ), patch(f"{DIALECTIC}._emit_dialectic_event", new=emit):
+            data = parse_result(await handle_reconcile_resolution_effect({
+                "session_id": "s1",
+                "effect_disposition": "mark_applied",
+                "reason": "operator verified live state",
+            }))
+
+        assert data["success"] is True
+        outcome.assert_awaited_once()
+        execution = outcome.await_args.args[2]
+        assert execution["reason"] == "legacy_unbound_session"
+        assert execution["manually_reconciled"] is True
+        assert (
+            execution["reconciliation_reason"]
+            == "operator verified live state"
+        )
+        calibration.assert_not_awaited()
         emit.assert_awaited_once()
 
     @pytest.mark.asyncio

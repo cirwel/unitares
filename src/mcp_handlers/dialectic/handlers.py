@@ -5379,12 +5379,9 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     try:
                         if result.get("action") == "resume":
                             applied_execution = result.get("execution") or {}
-                            skip_resume_calibration = bool(
-                                applied_execution.get("superseded")
-                                or applied_execution.get("reason")
-                                == "legacy_unbound_session"
-                            )
-                            if not skip_resume_calibration:
+                            if not _resolution_effect_skips_resume_calibration(
+                                applied_execution
+                            ):
                                 await update_calibration_from_dialectic(session)
                         elif not is_safe:
                             await update_calibration_from_dialectic_disagreement(session)
@@ -5681,6 +5678,16 @@ def _resolution_effect_view(effect: Dict[str, Any]) -> Dict[str, Any]:
     return view
 
 
+def _resolution_effect_skips_resume_calibration(
+    execution_result: Dict[str, Any],
+) -> bool:
+    """Return whether a no-op resume lacks an agreement signal to calibrate."""
+    return bool(
+        execution_result.get("superseded")
+        or execution_result.get("reason") == "legacy_unbound_session"
+    )
+
+
 async def _record_operator_resolution_telemetry(
     session: DialecticSession,
     execution_result: Dict[str, Any],
@@ -5712,14 +5719,15 @@ async def _record_operator_resolution_telemetry(
                 exc,
             )
 
-    try:
-        await update_calibration_from_dialectic(session, resolution)
-    except Exception as exc:
-        logger.warning(
-            "Resolution calibration telemetry failed for %s: %s",
-            session.session_id,
-            exc,
-        )
+    if not _resolution_effect_skips_resume_calibration(execution_result):
+        try:
+            await update_calibration_from_dialectic(session, resolution)
+        except Exception as exc:
+            logger.warning(
+                "Resolution calibration telemetry failed for %s: %s",
+                session.session_id,
+                exc,
+            )
 
     try:
         await _emit_dialectic_event(
@@ -5882,11 +5890,22 @@ async def handle_reconcile_resolution_effect(
         try:
             session = await load_session(session_id)
             if session is not None and session.resolution is not None:
-                manual_result = {
+                stored_result = (current or effect).get(
+                    "execution_result_json"
+                )
+                if not isinstance(stored_result, dict):
+                    stored_result = effect.get("execution_result_json")
+                manual_result = (
+                    dict(stored_result)
+                    if isinstance(stored_result, dict)
+                    else {}
+                )
+                manual_result.update({
                     "success": True,
                     "manually_reconciled": True,
-                    "reason": reason,
-                }
+                    "reconciliation_reason": reason,
+                })
+                manual_result.setdefault("reason", reason)
                 telemetry_attempted = True
                 await _record_operator_resolution_telemetry(
                     session,

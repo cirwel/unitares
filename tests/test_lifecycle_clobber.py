@@ -506,6 +506,7 @@ class TestCircuitBreakerPersistsRuntimeState:
         from src import agent_storage
 
         meta = make_agent_meta(status="paused", paused_at="2026-04-16T22:16:36+00:00")
+        pause_token = meta.paused_at
         meta.loop_cooldown_until = None
         meta.loop_detected_at = None
         meta.recent_update_timestamps = []
@@ -516,18 +517,58 @@ class TestCircuitBreakerPersistsRuntimeState:
 
         with patch.object(ald, "agent_metadata", {AGENT_ID: meta}), \
              patch.object(ald, "monitors", {AGENT_ID: monitor}), \
-             patch.object(agent_storage, "persist_runtime_state",
-                          AsyncMock(return_value=True)) as persist_mock:
+             patch.object(
+                 agent_storage,
+                 "resume_agent_if_pause_token",
+                 AsyncMock(return_value={
+                     "applied": True,
+                     "pause_token": pause_token,
+                     "dialectic_conditions": [],
+                 }),
+             ) as resume_mock, \
+             patch.object(
+                 agent_storage,
+                 "persist_runtime_state",
+                 AsyncMock(),
+             ) as persist_mock:
             await ald._safety_net_resume(AGENT_ID, reason="dialectic-failed")
 
         assert meta.status == "active"
-        assert persist_mock.await_count >= 1, (
-            "_safety_net_resume must persist paused_at=None + the resume "
-            "lifecycle event — otherwise the next force-reload re-pauses the "
-            "agent and hides the safety-net resume from the audit trail."
+        resume_mock.assert_awaited_once()
+        kwargs = resume_mock.await_args.kwargs
+        assert kwargs["expected_pause_token"] == pause_token
+        assert kwargs["dialectic_condition_additions"] == []
+        assert kwargs["lifecycle_event"]["event"] == "safety_net_resumed"
+        persist_mock.assert_not_awaited()
+        meta.add_lifecycle_event.assert_called_once_with(
+            "safety_net_resumed",
+            kwargs["lifecycle_event"]["reason"],
         )
-        kwargs = persist_mock.await_args.kwargs
-        assert kwargs.get("paused_at") is None, \
-            "safety-net resume must clear paused_at in the persisted record"
-        event = kwargs.get("append_lifecycle_event")
-        assert event and event.get("event") == "safety_net_resumed"
+
+    @pytest.mark.asyncio
+    async def test_safety_net_resume_refusal_leaves_pause_untouched(self):
+        from src import agent_loop_detection as ald
+        from src import agent_storage
+
+        pause_token = "2026-04-16T22:16:36+00:00"
+        meta = make_agent_meta(status="paused", paused_at=pause_token)
+        meta.add_lifecycle_event = MagicMock()
+        monitor = make_monitor(coherence=0.55, mean_risk=0.40)
+
+        with patch.object(ald, "agent_metadata", {AGENT_ID: meta}), \
+             patch.object(ald, "monitors", {AGENT_ID: monitor}), \
+             patch.object(
+                 agent_storage,
+                 "resume_agent_if_pause_token",
+                 AsyncMock(return_value={
+                     "applied": False,
+                     "reason": "pause_generation_superseded",
+                     "current_pause_token": "newer-pause",
+                 }),
+             ) as resume_mock:
+            await ald._safety_net_resume(AGENT_ID, reason="dialectic-failed")
+
+        resume_mock.assert_awaited_once()
+        assert meta.status == "paused"
+        assert meta.paused_at == pause_token
+        meta.add_lifecycle_event.assert_not_called()
