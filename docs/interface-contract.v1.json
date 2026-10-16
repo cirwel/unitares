@@ -1,6 +1,6 @@
 {
   "schema": "unitares.interface-contract.v1",
-  "version": "1.32.0",
+  "version": "1.41.0",
   "scope": "tool_surface_and_lifecycle_envelopes",
   "mode": "full",
   "advertisement": {
@@ -20,7 +20,7 @@
     "rest_v1_tools",
     "stdio"
   ],
-  "surface_sha256": "050f1530d37f48f028cce950e6841b08f2dce18e54e8d3cebbfc206d5760c1ce",
+  "surface_sha256": "7f0ac6c61c9b5a94363b246ae965e440f41a0ffbe858b713b84f824d21a3931b",
   "capabilities": [
     {
       "name": "start_session",
@@ -312,7 +312,7 @@
       "name": "list_inference_hosts",
       "implementation": "list_inference_hosts",
       "kind": "canonical_tool",
-      "input_schema_sha256": "0edb23d1b0850da0ab0874405ba3822864c3906231ad9fc06e9cd37479a8e859",
+      "input_schema_sha256": "f040948548b5fd80b1818050474f0385d7f4cad63964affeff0ff5df2d73e925",
       "transport_names": {
         "mcp_streamable_http": "list_inference_hosts",
         "rest_v1_tools": "list_inference_hosts",
@@ -334,7 +334,7 @@
       "name": "consult",
       "implementation": "consult",
       "kind": "canonical_tool",
-      "input_schema_sha256": "3f0447e53cc6d874195de4e8e7bb7b9f493b2eefbfd666d927231b6c232c603c",
+      "input_schema_sha256": "b985258864367c2070ec0e3ff4ec409bedf4a89041882d4f6beab40cb6b8a0c9",
       "transport_names": {
         "mcp_streamable_http": "consult",
         "rest_v1_tools": "consult",
@@ -356,7 +356,7 @@
       "name": "delegate_inference",
       "implementation": "delegate_inference",
       "kind": "canonical_tool",
-      "input_schema_sha256": "4689e7c4d6bacdbb151a4077c65e81802e92742fd07375d0346dfad800fe3682",
+      "input_schema_sha256": "ef9dcf3896b578362ae05942e67b40d4a5338af77d2b02131337fd684ee88937",
       "transport_names": {
         "mcp_streamable_http": "delegate_inference",
         "rest_v1_tools": "delegate_inference",
@@ -400,7 +400,7 @@
       "name": "knowledge",
       "implementation": "knowledge",
       "kind": "canonical_tool",
-      "input_schema_sha256": "467e40a2bf5a3792f0fe19ea0e254a1409241f163c9cdbcc6e9612a062308863",
+      "input_schema_sha256": "1979ad398136eb27d846a116f61ca31c217061f61d3a0efec17c7362afd8a859",
       "transport_names": {
         "mcp_streamable_http": "knowledge",
         "rest_v1_tools": "knowledge",

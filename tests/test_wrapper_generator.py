@@ -497,3 +497,66 @@ def test_optional_search_enum_survives_fastmcp_wire_schema(inject_session):
         "auto", "fts", "semantic", "hybrid",
     ]
     assert {"type": "null"} in variants
+
+
+@pytest.mark.parametrize("host_id,expected", [
+    (None, "standard"),
+    ("ollama:local", "standard"),
+    ("hf:router", "standard"),
+    ("claude:host-adapter", "thorough"),
+    ("codex:host-adapter", "thorough"),
+    ("antigravity:host-adapter", "thorough"),
+])
+@pytest.mark.parametrize("supplied_effort", [None, "standard"])
+def test_consult_effort_omission_survives_fastmcp(host_id, expected, supplied_effort):
+    """SDK defaults must not insert standard before the host-dependent default."""
+    from src.mcp_handlers.schemas.core import ConsultParams
+
+    observed = {}
+
+    async def handler(**arguments):
+        observed.update(arguments)
+        observed["resolved_effort"] = ConsultParams.model_validate(arguments).effort
+        return {}
+
+    wrapper = create_typed_wrapper(
+        "consult", ConsultParams.model_json_schema(), lambda name: handler,
+    )
+    tool = Tool.from_function(wrapper, structured_output=False)
+    sent = {"brief": "q", "host_id": host_id, "privacy": "cloud_allowed"}
+    if supplied_effort is not None:
+        sent["effort"] = supplied_effort
+    _run_tool(tool, sent)
+    assert ("effort" in observed) == (supplied_effort is not None)
+    assert observed["resolved_effort"] == (supplied_effort or expected)
+
+
+@pytest.mark.parametrize("include_unconfigured", [None, False, True])
+def test_host_discovery_default_survives_fastmcp(monkeypatch, include_unconfigured):
+    """The advertised default and SDK omission path must both hide unconfigured HF."""
+    import json
+
+    from src.mcp_handlers.schemas.core import ListInferenceHostsParams
+    from src.mcp_handlers.support import inference_registry as registry
+    from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+    monkeypatch.setattr(registry, "_hf_token_present", lambda: False)
+    monkeypatch.setattr(registry, "_ollama_available", lambda: False)
+    observed = {}
+
+    async def handler(**arguments):
+        validated = ListInferenceHostsParams.model_validate(arguments)
+        result = await handle_list_inference_hosts(validated.model_dump())
+        observed.update(json.loads(result[0].text))
+        return {}
+
+    schema = ListInferenceHostsParams.model_json_schema()
+    assert schema["properties"]["include_unconfigured"]["default"] is False
+    wrapper = create_typed_wrapper("list_inference_hosts", schema, lambda name: handler)
+    tool = Tool.from_function(wrapper, structured_output=False)
+    sent = {} if include_unconfigured is None else {"include_unconfigured": include_unconfigured}
+    _run_tool(tool, sent)
+    ids = {host["host_id"] for host in observed["hosts"]}
+    assert ("hf:router" in ids) is (include_unconfigured is True)
+    assert "ollama:local" in ids  # configured but unavailable is still diagnostic evidence
+    assert observed["count"] == len(ids)

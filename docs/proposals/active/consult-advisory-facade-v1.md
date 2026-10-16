@@ -52,15 +52,24 @@ lifecycle controls. They are not aliases for either primary verb.
 consult(
   brief,
   purpose="answer",              # answer | critique | summarize | generate
-  effort="standard",             # standard | thorough
+  effort=<inferred>,             # standard | thorough; omit to follow host, else standard
   privacy="local",               # local | cloud_allowed
   allow_degraded=false,
   response_mode="compact",       # compact | full
+  host_id=null,                   # omitted: automatic; supplied: pin existing host
 )
 ```
 
-Provider, host, model, temperature, token limit, and timeout are deliberately
-absent. Callers that require those controls use the raw inference tools.
+Provider, model, temperature, token limit, and timeout controls remain on the
+raw inference tools. Amended 2026-10-13: optional `host_id` accepts the five
+existing hosts. `ollama:local` and `hf:router` require standard effort;
+`claude:host-adapter`, `codex:host-adapter` and `antigravity:host-adapter` require
+thorough effort. Amended 2026-10-14: when effort is omitted, the selected
+host supplies it; with no host, it remains standard. Explicit effort must
+match the host. Null is outside the advertised effort schema. External hosts
+require `cloud_allowed`. A pinned call requires
+`allow_degraded=false` and never tries another host. Selection grants no
+configuration or identity authority; own-family selection is advisory only.
 
 The lower-overhead effort is named `standard`, not `fast`: neither its HTTP
 provider nor the 480-second public tool boundary is a latency SLA. The internal
@@ -102,12 +111,22 @@ Anything else fails closed without returning the advisory text. The facade
 recomputes the response hash from the text it actually returns.
 
 Compact mode returns the consultation id, status, advice, authority, requested
-policy, delivered effort, whether external processing occurred, degradation
+policy (including `host_id` when selected), delivered effort, whether external processing occurred, degradation
 when applicable, completion state, and any external-cost warning. Full mode
 adds one `diagnostics` object with route, host, provider/model metadata,
 transport, hashes, usage, latency, requester identity, and orchestrator id.
+Alongside `tokens_used`, full diagnostics add `tokens_used_note`: the backend
+aggregate can include input/cache tokens and is not answer length or a
+normalized billing measure. Zero can mean missing usage. See the intent map
+for the per-adapter counting rules. No counters or accounting change. Full
+failure diagnostics retain the backend message (at most 500 characters),
+alongside the existing unvalidated output excerpt. Both are caller-only and
+excluded from compact responses and the durable audit.
 
 ## Routing and degradation
+
+The table describes calls without `host_id`. Explicit selection bypasses
+automatic family selection and peer failover, with the constraints above.
 
 | Effort | Privacy | `allow_degraded` | Resolution |
 |---|---|---:|---|
@@ -115,23 +134,25 @@ transport, hashes, usage, latency, requester identity, and orchestrator id.
 | standard | cloud_allowed | either | Local-first standard lane; approved cloud fallback is permitted |
 | thorough | local | false | Fail: policy cannot be satisfied |
 | thorough | local | true | Explicitly degrade to standard local |
-| thorough | cloud_allowed | false | Reciprocal strong-model host: Claude-family caller → Codex; all other/unknown callers → Claude |
-| thorough | cloud_allowed | true | Reciprocal strong-model host; standard local fallback only after proven pre-execution unavailability |
+| thorough | cloud_allowed | false | First available strong-model peer excluding the inferred caller family |
+| thorough | cloud_allowed | true | Automatic strong-model peer; standard local fallback after proven unavailability with nothing possibly running |
 
-The reciprocal choice is derived from transport-captured harness provenance,
-not from public `consult` arguments: callers cannot name a host through this
-facade. The harness hint is descriptive rather than an authority signal. It
-selects between two operator-enabled routes with the same privacy, cost, and
-accountability class; an unavailable or unknown hint defaults to Claude. The
-resolved host is enforced again as a postcondition before any advice is
-returned, so backend routing drift fails closed.
+Automatic choice is derived from transport-captured harness provenance.
+The harness hint is descriptive, not an authority signal. Available hosts in
+`_THOROUGH_PEERS` are tried in order, excluding the inferred caller family;
+unknown callers try Claude first. Automatic calls may try another peer after
+proven provider unavailability, within the remaining call budget. Explicit
+`host_id` instead pins the named host, with no family exclusion or failover.
+The resolved route is enforced again before advice is returned, so backend
+routing drift fails closed. Both requested selection and actual route are
+retained in the text-free consultation audit.
 
-Fallback is forbidden after execution starts or may have started. In
-particular, a lost spawn acknowledgement, a successful spawn response without
-an agent id, an await timeout, and an ambiguous adapter exception are reported
-as possibly running. Only registry/config preflight failures and explicit spawn
-HTTP rejection are fallback-eligible. Cancellation propagates; the
-orchestrator's child max-runtime remains the orphan backstop.
+Fallback is forbidden when execution may still be running. A terminal quota
+or authentication refusal can be eligible for automatic failover even if a
+process started; malformed output is not proof of provider unavailability.
+Lost spawn acknowledgements, missing agent ids, await timeouts and ambiguous
+adapter exceptions are reported as possibly running. Cancellation propagates;
+the orchestrator's child max-runtime remains the orphan backstop.
 
 ## Implementation boundary
 
@@ -140,7 +161,8 @@ The facade calls typed, transport-neutral `run_model_inference` and
 or parse public response envelopes. Raw handlers adapt those same outcomes back
 to their existing wire contracts.
 
-Strict public validation rejects route controls and other extras. Dispatch-owned
+Strict public validation accepts only the named host enum and existing inputs,
+and rejects raw controls and other extras. Dispatch-owned
 identity and normalization metadata are stripped at ingress and reconstructed
 from trusted middleware context, so `extra="forbid"` does not reject genuine
 identity proof or accept caller-forged private fields.
@@ -156,8 +178,10 @@ slice does not hide working controls before selection data is collected.
 Promotion or further simplification requires:
 
 1. No raw-tool schema or response compatibility regressions.
-2. Compact responses omit route and identity diagnostics; full responses retain them.
-3. No fallback after ambiguous or post-spawn delegated failures.
+2. Compact responses include requested host selection but omit actual route and
+   identity diagnostics; full responses retain them.
+3. No fallback for pinned hosts or ambiguous delegated failures; automatic
+   failover requires proven unavailability and nothing possibly running.
 4. Tool-choice probes select `consult` for advisory intents and
    `request_review` for governed verdict/recovery intents.
 5. Review-summoning telemetry shows that `request_review` either assigns,

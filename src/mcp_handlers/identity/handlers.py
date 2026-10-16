@@ -2979,13 +2979,11 @@ async def handle_onboard_v2(arguments: Dict[str, Any]) -> Sequence[TextContent]:
     # DISPATCHED_CHILD_PIN_NX_SPAWN_REASONS
     # in identity/session.py for the full mechanism).
     #
-    # EXPLICITLY-DECLARED spawn_reason only — never the inferred
-    # `_spawn_reason`. infer_spawn_reason() classifies a succession
-    # onboard (parent_agent_id declared, spawn_reason omitted, thread
-    # has prior nodes) as "subagent" whenever client_hint isn't in the
-    # arguments, which would NX-block a legitimate fresh DRIVER behind
-    # its dead predecessor's still-live pin — the same wrong-resolution
-    # bug in the opposite direction (council block, PR #604). The cost:
+    # EXPLICITLY-DECLARED spawn_reason only, not the descriptive
+    # `_spawn_reason` default. A parent and prior thread nodes do not
+    # declare dispatch; an omitted reason defaults to "new_session".
+    # A legitimate fresh DRIVER must be able to replace its dead
+    # predecessor's still-live pin (council block, PR #604). The cost:
     # a dispatched child that omits spawn_reason keeps today's displacing write;
     # that boundary is documented on the constant and in
     # docs/ontology/identity.md.

@@ -152,7 +152,7 @@ Main tools for sharing work and getting feedback
 - **Workflow alias:** `sync_state`
 - **Related:** `simulate_update`, `get_governance_metrics`, `export(action='history')`
 
-Record a work check-in and get a governance decision: it advances and persists this agent's EISV state, returning proceed or pause. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. get_governance_metrics reads the verdict without writing; simulate_update previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. EISV fields: E=Energy [0,1] (capacity for useful work); I=Information Integrity [0,1] (calibration of claims against results); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Record a work check-in and get a governance decision: it advances and persists this agent's EISV state, returning proceed or pause. A single-use prediction_id comes back only when you supply confidence; without one outcome_event has nothing to grade this check-in against. It binds an identity on first call, but under strict identity a server-inferred binding is refused, so pass start_session's client_session_id. get_governance_metrics reads the verdict without writing; simulate_update previews one without advancing state, though it still appends an audit event. sync_state reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 WHAT IT DOES:
 - Records your update and runs the EISV governance cycle
@@ -300,10 +300,10 @@ Example H5 provenance fields:
 ~~~
 
 EISV FIELD CONTRACT:
-- E — Energy [0, 1]: Productive-capacity estimate blended from decision success, complexity calibration, recent outcomes and a legacy controller level term.
-- I — Information Integrity [0, 1]: Calibration/integrity estimate blended from calibration accuracy, outcome consistency and a legacy controller trend term.
-- S — Entropy [0, 1]: Drift or instability relative to this agent's own normal; lower usually means steadier.
-- V — Valence [-1, 1]: EMA-smoothed Energy minus Information Integrity imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns motion).
+- E — Energy [0, 1]: With behavioral-sensor inputs: smoothed blend of prior decision scores, controller coherence level, complexity divergence, and available outcome, continuity and tool features.
+- I — Information Integrity [0, 1]: With behavioral-sensor inputs: smoothed calibration-error and controller-coherence trend blend, with available outcome-score consistency, continuity and tool-variety features. The handler's calibration input is lifetime fleet strategic error.
+- S — Entropy [0, 1]: With behavioral-sensor inputs: smoothed drift, regime-transition and complexity divergence blend, with available continuity and tool features. Assessment compares this index with thresholds and a learned baseline.
+- V — Valence [-1, 1]: With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. Positive records a positive smoothed gap; negative records the reverse. Its smoothing rate differs from E and I, so it is not generally their current smoothed values subtracted.
 
 ### `get_governance_metrics`
 
@@ -313,7 +313,7 @@ EISV FIELD CONTRACT:
 - **Workflow alias:** `check_working_state`
 - **Related:** `process_agent_update`, `observe(action='agent')`, `export(action='history')`
 
-Read one agent's current governance state: it runs no cycle and mints no identity. It reads your own state only on proof sent with the call (start_session's client_session_id, an X-Session-ID header or a verified continuity_token), never a binding the server inferred; without it, or when it names no agent, the payload is an explicit 'unbound' one rather than a fresh agent. agent_id is not declared on /mcp/, which drops it, and it proves nothing about who is asking. Over REST, directly or through use_tool, it names the agent to read. Through use_tool on /mcp/ it does so unless you are bound as a different agent, which is refused (identity_mismatch); to read another agent while bound, use observe(action='agent', target_agent_id=...). Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. EISV fields: E=Energy [0,1] (capacity for useful work); I=Information Integrity [0,1] (calibration of claims against results); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Read one agent's current governance state: it runs no cycle and mints no identity. It reads your own state only on proof sent with the call (start_session's client_session_id, an X-Session-ID header or a verified continuity_token), never a binding the server inferred; without it, or when it names no agent, the payload is an explicit 'unbound' one rather than a fresh agent. agent_id is not declared on /mcp/, which drops it, and it proves nothing about who is asking. Over REST, directly or through use_tool, it names the agent to read. Through use_tool on /mcp/ it does so unless you are bound as a different agent, which is refused (identity_mismatch); to read another agent while bound, use observe(action='agent', target_agent_id=...). Use process_agent_update to log work and get a proceed/pause decision. check_working_state reaches this same handler and returns the digest envelope in place of this raw payload. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 SEE ALSO:
 - health_check() - System health (server-level, not agent-specific)
@@ -384,10 +384,10 @@ DEPENDENCIES:
 - Workflow: Call after process_agent_update to check current state
 
 EISV FIELD CONTRACT:
-- E — Energy [0, 1]: Productive-capacity estimate blended from decision success, complexity calibration, recent outcomes and a legacy controller level term.
-- I — Information Integrity [0, 1]: Calibration/integrity estimate blended from calibration accuracy, outcome consistency and a legacy controller trend term.
-- S — Entropy [0, 1]: Drift or instability relative to this agent's own normal; lower usually means steadier.
-- V — Valence [-1, 1]: EMA-smoothed Energy minus Information Integrity imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns motion).
+- E — Energy [0, 1]: With behavioral-sensor inputs: smoothed blend of prior decision scores, controller coherence level, complexity divergence, and available outcome, continuity and tool features.
+- I — Information Integrity [0, 1]: With behavioral-sensor inputs: smoothed calibration-error and controller-coherence trend blend, with available outcome-score consistency, continuity and tool-variety features. The handler's calibration input is lifetime fleet strategic error.
+- S — Entropy [0, 1]: With behavioral-sensor inputs: smoothed drift, regime-transition and complexity divergence blend, with available continuity and tool features. Assessment compares this index with thresholds and a learned baseline.
+- V — Valence [-1, 1]: With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. Positive records a positive smoothed gap; negative records the reverse. Its smoothing rate differs from E and I, so it is not generally their current smoothed values subtracted.
 
 ### `simulate_update`
 
@@ -396,7 +396,7 @@ EISV FIELD CONTRACT:
 - **Timeout:** 30s
 - **Related:** `process_agent_update`, `get_governance_metrics`
 
-Run one governance cycle as a dry run and return the decision and metrics a real check-in would have produced, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. EISV fields: E=Energy [0,1] (capacity for useful work); I=Information Integrity [0,1] (calibration of claims against results); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Run one governance cycle as a dry run and return the decision and metrics a real check-in would have produced, with no state advance. Not a no-op though: every call appends an auto_attest audit event, and dialectic conditions on a registered agent still cap complexity inside the preview. Use process_agent_update to record work for real, or check_working_state to read the current verdict without proposing an update. Coherence is tagged with coherence_source and coherence_role; legacy C(V) is controller telemetry, not a health score. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 USE CASES:
 - Test governance decisions without persisting
@@ -477,10 +477,10 @@ DEPENDENCIES:
 - Note: State is NOT modified - this is a dry run
 
 EISV FIELD CONTRACT:
-- E — Energy [0, 1]: Productive-capacity estimate blended from decision success, complexity calibration, recent outcomes and a legacy controller level term.
-- I — Information Integrity [0, 1]: Calibration/integrity estimate blended from calibration accuracy, outcome consistency and a legacy controller trend term.
-- S — Entropy [0, 1]: Drift or instability relative to this agent's own normal; lower usually means steadier.
-- V — Valence [-1, 1]: EMA-smoothed Energy minus Information Integrity imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns motion).
+- E — Energy [0, 1]: With behavioral-sensor inputs: smoothed blend of prior decision scores, controller coherence level, complexity divergence, and available outcome, continuity and tool features.
+- I — Information Integrity [0, 1]: With behavioral-sensor inputs: smoothed calibration-error and controller-coherence trend blend, with available outcome-score consistency, continuity and tool-variety features. The handler's calibration input is lifetime fleet strategic error.
+- S — Entropy [0, 1]: With behavioral-sensor inputs: smoothed drift, regime-transition and complexity divergence blend, with available continuity and tool features. Assessment compares this index with thresholds and a learned baseline.
+- V — Valence [-1, 1]: With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. Positive records a positive smoothed gap; negative records the reverse. Its smoothing rate differs from E and I, so it is not generally their current smoothed values subtracted.
 
 ### `outcome_event`
 
@@ -490,7 +490,7 @@ EISV FIELD CONTRACT:
 - **Workflow alias:** `record_result`
 - **Related:** `record_result`, `process_agent_update`
 
-Record a measurable outcome paired with the calling agent's EISV snapshot, so verdicts can be graded against real outcomes. Pass the single-use prediction_id from a process_agent_update reply to bind this to that check-in's confidence; while the binding is retained, identical retries return the canonical existing outcome, while conflicting reuse is rejected with PREDICTION_REUSE_CONFLICT and the canonical outcome ID. After the binding and canonical outcome expire together, the prediction_id can establish a new canonical submission. With neither a live prediction_id nor a confidence argument the server scrapes an earlier confidence and stamps the row calibration_excluded, so it trains nothing. A caller-supplied verification_source is downgraded to agent_reported_tool_result and provenance keys are stripped from detail, so the row is a self-attestation. record_result reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. EISV fields: E=Energy [0,1] (capacity for useful work); I=Information Integrity [0,1] (calibration of claims against results); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Record a measurable outcome paired with the calling agent's EISV snapshot, so verdicts can be graded against real outcomes. Pass the single-use prediction_id from a process_agent_update reply to bind this to that check-in's confidence; while the binding is retained, identical retries return the canonical existing outcome, while conflicting reuse is rejected with PREDICTION_REUSE_CONFLICT and the canonical outcome ID. After the binding and canonical outcome expire together, the prediction_id can establish a new canonical submission. With neither a live prediction_id nor a confidence argument the server scrapes an earlier confidence and stamps the row calibration_excluded, so it trains nothing. A caller-supplied verification_source is downgraded to agent_reported_tool_result and provenance keys are stripped from detail, so the row is a self-attestation. record_result reaches this same handler and wraps the result in the digest envelope; this canonical name returns the handler's raw payload unchanged. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 Pairs a measurable outcome (drawing completion, test result, task completion)
 with the agent's current EISV snapshot. This enables correlation analysis:
@@ -527,10 +527,10 @@ CURRENT CALIBRATION / PROVENANCE FIELDS:
 - response/detail corroboration metadata: corroboration_grade, evidence_weight, claim_risk, claimed_fields, verified_fields, unverified_fields. Agent-reported task_completed summaries with no independent evidence are claim_only and low-weight.
 
 EISV FIELD CONTRACT:
-- E — Energy [0, 1]: Productive-capacity estimate blended from decision success, complexity calibration, recent outcomes and a legacy controller level term.
-- I — Information Integrity [0, 1]: Calibration/integrity estimate blended from calibration accuracy, outcome consistency and a legacy controller trend term.
-- S — Entropy [0, 1]: Drift or instability relative to this agent's own normal; lower usually means steadier.
-- V — Valence [-1, 1]: EMA-smoothed Energy minus Information Integrity imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns motion).
+- E — Energy [0, 1]: With behavioral-sensor inputs: smoothed blend of prior decision scores, controller coherence level, complexity divergence, and available outcome, continuity and tool features.
+- I — Information Integrity [0, 1]: With behavioral-sensor inputs: smoothed calibration-error and controller-coherence trend blend, with available outcome-score consistency, continuity and tool-variety features. The handler's calibration input is lifetime fleet strategic error.
+- S — Entropy [0, 1]: With behavioral-sensor inputs: smoothed drift, regime-transition and complexity divergence blend, with available continuity and tool features. Assessment compares this index with thresholds and a learned baseline.
+- V — Valence [-1, 1]: With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. Positive records a positive smoothed gap; negative records the reverse. Its smoothing rate differs from E and I, so it is not generally their current smoothed values subtracted.
 
 ### `calibration`
 
@@ -1060,7 +1060,7 @@ DEPENDENCIES:
 - **Workflow alias:** `update_finding` (action `update`)
 - **Related:** `search_knowledge_graph`, `leave_note`
 
-Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update sets each field you pass (a supplied details replaces the stored details; resolution_notes is the one field appended to details). To keep earlier details, resend them with your addition or put the addition in resolution_notes. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
+Store, search, and curate the fleet-wide discovery graph. search/get/list/details/stats serve unbound callers; every other action, audit included, needs a bound identity. store requires summary and adds a new row every call; get takes agent_id or discovery_id, never both; update sets each field you pass (a supplied details replaces the stored details; resolution_notes is the one field appended to details). To keep earlier details, resend them with your addition or put the addition in resolution_notes. note stores an open discovery from summary (or content) and requires that bound identity. supersede links two existing rows and needs AGE. promote creates a new governed claim from imported memory plus non-memory evidence while leaving the source unchanged. dry_run previews cleanup by default but not synthesize, which persists rollups unless you set it. notices reads your proved-process change inbox; acknowledge exact receipts or mute delivery. For one plain search, store or revision use search_shared_memory, store_finding or update_finding; same backend, narrower schema.
 
 promote is router-only and adds no top-level tool.
 
@@ -1087,6 +1087,8 @@ NOTES:
 
 EXAMPLE: knowledge(action="search", query="authentication bugs")
 
+notices reads a caller-proven process inbox, acknowledges exact received revisions, and mutes/unmutes automatic active-call delivery. It never wakes a session. Use acknowledge, acknowledge_gap and muted only with action=notices.
+
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
 | `audit` | required | 60s | — |
@@ -1095,6 +1097,7 @@ EXAMPLE: knowledge(action="search", query="authentication bugs")
 | `get` | pre_onboard | 15s | — |
 | `list` | pre_onboard | 10s | — |
 | `note` | required | 120s | — |
+| `notices` | required | 120s | — |
 | `promote` | required | 20s | — |
 | `search` | pre_onboard | 15s | — |
 | `stats` | pre_onboard | 30s | — |
@@ -1174,7 +1177,7 @@ PARAMS:
 - **Timeout:** 15s
 - **Related:** `agent`, `process_agent_update`
 
-Analyze another agent's or the fleet's governance behavior. agent, compare, similar, anomalies and aggregate serve unbound callers; all but aggregate resolve from an in-memory snapshot that can lag other writers. telemetry, audit_events, outcome_evidence and bridge need a start_session binding and otherwise return a refusal shaped as success. On agent, omitting target_agent_id silently observes you when bound; anomalies writes an audit row per new finding. Use get_governance_metrics for your own state. EISV fields: E=Energy [0,1] (capacity for useful work); I=Information Integrity [0,1] (calibration of claims against results); S=Entropy [0,1] (drift from the agent's own normal); V=Valence [-1,1] (EMA-smoothed E-I imbalance; positive=motion outruns integrity, negative=integrity outruns motion).
+Analyze another agent's or the fleet's governance behavior. agent, compare, similar, anomalies and aggregate serve unbound callers; all but aggregate resolve from an in-memory snapshot that can lag other writers. telemetry, audit_events, outcome_evidence and bridge need a start_session binding and otherwise return a refusal shaped as success. On agent, omitting target_agent_id silently observes you when bound; anomalies writes an audit row per new finding. Use get_governance_metrics for your own state. With behavioral-sensor inputs, EISV fields: E=Energy [0,1] (observations and prior judgments); I=Information Integrity [0,1] (calibration and consistency features); S=Entropy [0,1] (deviations and activity features); V=Valence [-1,1] (separate EMA of raw E_obs-I_obs; positive=positive smoothed gap, negative=negative smoothed gap). Read primary_eisv_source / measurement_source for the producer; other producers share these field names.
 
 ACTIONS:
 - agent: Observe a specific agent's patterns and behavior
@@ -1196,10 +1199,10 @@ EXAMPLES:
 ~~~
 
 EISV FIELD CONTRACT:
-- E — Energy [0, 1]: Productive-capacity estimate blended from decision success, complexity calibration, recent outcomes and a legacy controller level term.
-- I — Information Integrity [0, 1]: Calibration/integrity estimate blended from calibration accuracy, outcome consistency and a legacy controller trend term.
-- S — Entropy [0, 1]: Drift or instability relative to this agent's own normal; lower usually means steadier.
-- V — Valence [-1, 1]: EMA-smoothed Energy minus Information Integrity imbalance. Positive means running hot (motion outruns integrity); negative means running careful (integrity outruns motion).
+- E — Energy [0, 1]: With behavioral-sensor inputs: smoothed blend of prior decision scores, controller coherence level, complexity divergence, and available outcome, continuity and tool features.
+- I — Information Integrity [0, 1]: With behavioral-sensor inputs: smoothed calibration-error and controller-coherence trend blend, with available outcome-score consistency, continuity and tool-variety features. The handler's calibration input is lifetime fleet strategic error.
+- S — Entropy [0, 1]: With behavioral-sensor inputs: smoothed drift, regime-transition and complexity divergence blend, with available continuity and tool features. Assessment compares this index with thresholds and a learned baseline.
+- V — Valence [-1, 1]: With behavioral-sensor inputs: separately EMA-smoothed raw E_obs - I_obs gap. Positive records a positive smoothed gap; negative records the reverse. Its smoothing rate differs from E and I, so it is not generally their current smoothed values subtracted.
 
 | Action | Identity | Timeout (at most) | Older names |
 |---|---|---|---|
@@ -1242,7 +1245,9 @@ Ask an advisory model, and list the hosts that serve one
 - **Timeout:** 5s
 - **Related:** `describe_inference_host`, `consult`, `call_model`, `delegate_inference`
 
-List the inference hosts this deployment has registered, with live readiness; for one known id use describe_inference_host.
+List configured inference hosts by default; include_unconfigured=true returns the full registered inventory.
+
+Configured hosts remain listed during outages or quota/auth cooldowns; inspect available and cooldown before calling. For any registered id, including an unconfigured host, use describe_inference_host.
 
 Read two fields as different questions: available says the adapter could run (a cached readiness check, not a promise), accepts_host_id_from says which tool will take that host as host_id — Ollama and Hugging Face belong to call_model, the Claude, Codex and Antigravity adapters to delegate_inference. Those adapters are an operator extension (the agent orchestrator) that a default install does not run; the extensions field says whether this server has it. Listing works before onboarding; inference calls need a bound identity.
 
@@ -1267,7 +1272,7 @@ Read accepts_host_id_from, not available, to learn which tool will take it. An u
 
 Ask a model for advice, no review record; effort='thorough' needs cloud privacy and an operator extension; on-record: request_review.
 
-Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless allow_degraded=true, which returns a standard local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. Use call_model or delegate_inference only for explicit provider, host, model or timeout control.
+Send a brief, get back advisory model evidence, never a governed verdict. effort='thorough' asks a strong model (Claude, Codex or Antigravity) from a family other than the caller's, when detectable, unless host_id explicitly pins an existing host. It needs privacy='cloud_allowed' and an operator extension a default install lacks (see list_inference_hosts); without both it fails unless automatic routing uses allow_degraded=true, which returns a local answer instead. Requires a bound identity. Audited as event_type='consultation', readable by bound agents: route and keyed hashes, never text (key: record.hash_key). A success also updates your governance state. host_id pins a host and infers omitted effort (standard for Ollama/HF, thorough for CLI); an explicit effort must match. External hosts require cloud_allowed and pinned calls require allow_degraded=false. No host fallback or same-family exclusion applies to explicit selection. Use call_model or delegate_inference for model, provider or timeout control. Full diagnostics explain tokens_used: backend aggregate usage, not answer length or comparable billed cost.
 
 ### `call_model`
 
@@ -1290,7 +1295,7 @@ One synchronous advisory completion on the local Ollama lane or the Hugging Face
 
 Hand a bounded task to a strong-model CLI host (operator extension, off by default); for a raw completion use call_model.
 
-Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s, below the 240s default); past that the client sees a bare transport timeout with no id, so set timeout_s under the client's limit. consult at effort='thorough' takes this same lane without host controls. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
+Operator extension, off on a default install. Sends one bounded prompt to an operator-authorized subscription CLI (Claude, Codex or Antigravity), spawned as an isolated child with no tools, a read-only sandbox, or plan mode in an empty workspace: it answers, it cannot change anything. It requires a bound identity and fails closed until the operator sets UNITARES_HOST_ADAPTER_ENABLED=1 and AGENT_ORCHESTRATOR_BEARER_TOKEN with the host's authenticated CLI on PATH; UNITARES_HOST_ADAPTER_DISABLED_HOSTS switches single hosts off. On server-side timeout the child may still be running — the failure carries an execution id flagged possibly_running, so have it reconciled rather than reissuing. That id only reaches you if the server answers before your own MCP client's per-tool timeout (often ~60s, below the 240s default); past that the client sees a bare transport timeout with no id, so set timeout_s under the client's limit. consult at effort='thorough' takes this same lane with optional host_id selection. A successful call also runs one governance update on your state (Energy accounting), logged as an ordinary auto_attest row.
 
 ## Export & History
 

@@ -1,0 +1,1 @@
+- Interface contract 1.34.0: Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.

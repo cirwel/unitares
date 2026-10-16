@@ -31,8 +31,10 @@ from src.mcp_compat import get_tool_input_schema
 
 pytestmark = pytest.mark.usefixtures("first_party_tool_surface")
 
-#: unitares-host-adapter commit the Nous catalog entry pins (version 0.3.1).
-CATALOG_PIN = "456e74356fdcc5c0df69615df45692652ac15f5b"
+#: unitares-host-adapter commit the Nous catalog entry pins (version 0.3.3).
+#: Compared core.py and bindings/hermes.py with the former 0.3.1 pin:
+#: response parsing and local-config diagnostics changed, not request payloads.
+CATALOG_PIN = "bf534cf031593f785b6022f0edf0fc594c2aa912"
 
 #: The plugin onboards through the first of these that tools/list carries.
 ONBOARD_TOOLS = ("onboard", "start_session")

@@ -156,6 +156,18 @@ _RELATED_DISCOVERY_LIMIT = 5
 _RELATED_SUMMARY_PREVIEW_CHARS = 120
 _SYNC_ROUTINE_BUDGET_BYTES = 2_500
 _SEARCH_LEAN_BUDGET_BYTES = 3_000
+_SEARCH_FULL_MODE_ROUTE = "search_shared_memory(response_mode='full')"
+_SEARCH_FULL_MODE_HINT = f"Re-call {_SEARCH_FULL_MODE_ROUTE} for the complete result set."
+# A lean search shows three digests whatever `limit` asked for, so a caller
+# who asked for twenty rows had one route to row four: the full tier, which
+# serializes every record. An explicit `limit` above the digest count is a
+# request for more rows, and the bounded read answers it with one line per
+# further result (id, type, status, short summary) under `more_results`.
+# The rows have their own budget on top of the digest's, so a search that
+# passes no `limit` is byte-identical to before and still fits 3 KB.
+_SEARCH_MORE_ROW_LIMIT = 17
+_SEARCH_MORE_BUDGET_BYTES = 2_000
+_SEARCH_MORE_SUMMARY_CHARS = 100
 # Default start_session, per mint class (tests/test_response_budgets.py states
 # the measurements). An anonymous mint at thread position 1: continuity_token
 # alone is ~330 B of it. The keyed client_session_id (identity/stable_session.py)
@@ -1158,6 +1170,65 @@ def _compact_related_discoveries(
     return rows, total
 
 
+def _explicit_search_limit(arguments: Optional[Dict[str, Any]]) -> Optional[int]:
+    """The `limit` the caller passed, or None when they left it unset."""
+    value = (arguments or {}).get("limit")
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _append_more_results(
+    envelope: Dict[str, Any],
+    source_payload: Dict[str, Any],
+    arguments: Optional[Dict[str, Any]],
+) -> None:
+    """List the results after the digests, one line each, on an explicit limit.
+
+    Runs after the digest budget has settled. It adds nothing when the caller
+    passed no `limit`, when the limit is within the digest count, or when the
+    budget steps had to drop a digest: a response that could not afford its
+    third digest has no room to promise a fourth result.
+    """
+    limit = _explicit_search_limit(arguments)
+    if limit is None or limit <= _MEMORY_SUGGESTION_LIMIT:
+        return
+    suggestions = envelope.get("memory_suggestions")
+    if not isinstance(suggestions, list) or len(suggestions) != _MEMORY_SUGGESTION_LIMIT:
+        return
+    candidates = source_payload.get("results") or source_payload.get("discoveries")
+    if not isinstance(candidates, list):
+        return
+    rows: List[Dict[str, Any]] = []
+    used = 0
+    window = candidates[_MEMORY_SUGGESTION_LIMIT:limit][:_SEARCH_MORE_ROW_LIMIT]
+    for item in window:
+        if not isinstance(item, dict):
+            continue
+        discovery_id = item.get("discovery_id") or item.get("id")
+        if discovery_id is None:
+            continue
+        row: Dict[str, Any] = {"discovery_id": discovery_id}
+        row.update(_lift(item, "type", "status", "imported_memory", "resolution_notes"))
+        summary = item.get("summary") or item.get("title")
+        if isinstance(summary, str):
+            row["summary"], _ = _summary_preview(summary, _SEARCH_MORE_SUMMARY_CHARS)
+        size = len(json.dumps(row, ensure_ascii=False).encode("utf-8")) + 1
+        if used + size > _SEARCH_MORE_BUDGET_BYTES:
+            break
+        used += size
+        rows.append(row)
+    if not rows:
+        return
+    envelope["more_results"] = rows
+    state = envelope.get("state_summary")
+    if isinstance(state, dict):
+        state["more_results_shown"] = len(rows)
+
+
 def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Surface bounded discovery digests the canonical payload already carries.
 
@@ -1196,8 +1267,10 @@ def _memory_suggestions(payload: Dict[str, Any]) -> Optional[List[Dict[str, Any]
                 "type",
                 "status",
                 "last_activity_days",
+                "imported_memory",
                 "closure_class",
                 "closure_standard",
+                "resolution_notes",
             )
             # A superseded row names what replaced it, so "prefer the newer
             # entry" can be followed without a full-mode re-call. First id
@@ -1958,9 +2031,7 @@ def _raw_governance_policy(
     response_mode = str(
         arguments.get("response_mode") or "lean"
     ).strip().lower()
-    return response_mode == "full", (
-        "Re-call search_shared_memory(response_mode='full') for the complete result set."
-    )
+    return response_mode == "full", _SEARCH_FULL_MODE_HINT
 
 
 def _effective_discovery_retrieval_options(
@@ -2009,7 +2080,7 @@ def _effective_discovery_retrieval_options(
             result["note"] = (
                 "Digest-mode friendly search keeps the upstream result bounded, "
                 "even when include_details=true. Use response_mode='full' with "
-                "include_details=true for every result inline, or open one record "
+                "include_details=true for inline previews (imports capped at 2 KiB), or open one record "
                 "with knowledge(action='details', discovery_id='...')."
             )
         return result
@@ -2027,7 +2098,7 @@ def _effective_discovery_retrieval_options(
         result["note"] = (
             "The digest friendly response returns bounded previews even when "
             "include_details=true. Use response_mode='full' with "
-            "include_details=true for every result inline, or open one record "
+            "include_details=true for inline previews (imports capped at 2 KiB), or open one record "
             "with knowledge(action='details', discovery_id='...')."
         )
     return result
@@ -2182,7 +2253,19 @@ def _attach_response_size(
     envelope["_response_size"] = metadata
 
 
-def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
+def _prune_resolution_notes_hint(envelope: Dict[str, Any], notes_in_more: bool) -> None:
+    """Keep note coaching only while a digest or bounded extra row uses it."""
+    suggestions = envelope.get("memory_suggestions") or []
+    if any(isinstance(row, dict) and "resolution_notes" in row for row in suggestions):
+        return
+    if notes_in_more and len(suggestions) == _MEMORY_SUGGESTION_LIMIT:
+        return
+    envelope.pop("resolution_notes_hint", None)
+
+
+def _enforce_search_projection_budget(
+    envelope: Dict[str, Any], *, notes_in_more: bool = False,
+) -> None:
     """Keep the friendly KG digest inside its declared wire budget.
 
     Result summaries and tags are already bounded independently. This final
@@ -2214,8 +2297,9 @@ def _enforce_search_projection_budget(envelope: Dict[str, Any]) -> None:
     # The staleness note is written before the budget steps so they measure
     # it, and re-checked after them: it goes if no stale digest survived.
     _note_stale_digests(envelope)
+    _prune_resolution_notes_hint(envelope, notes_in_more)
     if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
-        _truncate_search_projection(envelope, wire_bytes)
+        _truncate_search_projection(envelope, wire_bytes, notes_in_more=notes_in_more)
         _note_stale_digests(envelope)
     _restore_digest_attribution(envelope, set_aside, wire_bytes)
 
@@ -2283,10 +2367,17 @@ def _coaching_yields(envelope: Dict[str, Any]) -> List[tuple]:
     # A truncated digest's pointer repeats the route raw_governance_hint names.
     if envelope.get("raw_governance_hint") and "expand_with" in envelope:
         steps.append(("expand_with", None))
+    # Lean search has already omitted the tier ladder. This final wording
+    # reduction preserves its executable route and frees enough space for
+    # the attribution-omitted marker even at the exact budget boundary.
+    if envelope.get("raw_governance_hint") == _SEARCH_FULL_MODE_HINT:
+        steps.append(("raw_governance_hint", _SEARCH_FULL_MODE_ROUTE))
     return steps
 
 
-def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
+def _truncate_search_projection(
+    envelope: Dict[str, Any], wire_bytes, *, notes_in_more: bool = False,
+) -> None:
     """The budget steps proper, run on the attribution-free envelope: drop
     optional coaching, then lower-ranked digests, then compact the last."""
     envelope["projection_truncated"] = True
@@ -2319,6 +2410,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
     ):
         if len(suggestions) > 1:
             suggestions.pop()
+            _prune_resolution_notes_hint(envelope, notes_in_more)
             continue
 
         # A single result can still carry unbounded historical fields (for
@@ -2336,8 +2428,10 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
                 "status",
                 "superseded_by",
                 "last_activity_days",
+                "imported_memory",
                 "closure_class",
                 "closure_standard",
+                "resolution_notes",
             ):
                 value = item.get(key)
                 if value is not None:
@@ -2353,6 +2447,7 @@ def _truncate_search_projection(envelope: Dict[str, Any], wire_bytes) -> None:
 
         if wire_bytes() > _SEARCH_LEAN_BUDGET_BYTES:
             suggestions.pop()
+            _prune_resolution_notes_hint(envelope, notes_in_more)
 
     # The digest set is final now, so its count is settled before any
     # attribution is restored: it must be inside the budget the restore
@@ -2374,8 +2469,8 @@ def _restore_digest_attribution(
     once attribution is whole. Only if something must still be withheld is
     the restore redone with the marker's room reserved, so the marker says
     so. In a bounded search the room freed by then is always more than the
-    marker's ~36 bytes (the tier ladder alone is ~190, and once truncation
-    has dropped it `expand_with` is ~65), so withheld attribution there is
+    marker's ~36 bytes (lean's full-route wording alone can free 37;
+    compact's tier ladder and `expand_with` can free more), so withheld attribution there is
     always marked; the marker-free restore is the fallback for an envelope
     with nothing optional left. Last, each piece that gave way comes back,
     most useful first, if the whole piece still fits beside the attribution.
@@ -2493,6 +2588,15 @@ def build_experience_envelope(
         include_raw=include_raw,
         arguments=arguments,
     )
+    lean_search = (
+        friendly_name == "search_shared_memory"
+        and _mode_in_effect(friendly_name, arguments, source_payload) == "lean"
+    )
+    if lean_search and retrieval_options:
+        # The routine read needs its tier, a way to open evidence, and any
+        # disclosure that an explicit details request was overridden. The
+        # full serialization diagnostics and tier ladder remain in compact.
+        retrieval_options = _lift(retrieval_options, *_RETRIEVAL_KEPT_FOR_ATTRIBUTION)
 
     if canonical_name in {"process_agent_update", "get_governance_metrics"}:
         summary = _action_summary(source_payload, risk)
@@ -2509,7 +2613,7 @@ def build_experience_envelope(
     bounded_metrics = friendly_name == "check_working_state" and not include_raw
     options = (
         None
-        if bounded_sync or bounded_metrics
+        if bounded_sync or bounded_metrics or lean_search
         else _response_options(friendly_name, source_payload, arguments)
     )
 
@@ -2865,6 +2969,14 @@ def build_experience_envelope(
                 "No prior discoveries matched. Broaden terms or search tags before "
                 "recording a new finding."
             )
+        if lean_search and total:
+            # Search is a read: write recipes belong in the write tools.
+            # The structured open_one/full routes below already explain
+            # expansion, while confidence_note keeps the actual caveat.
+            next_action = (
+                "Verify these exploratory matches before acting."
+                if low_confidence else "Read relevant details before acting."
+            )
         state_summary = _lift(
             source_payload,
             "count",
@@ -3053,6 +3165,7 @@ def build_experience_envelope(
     for key in (
         "low_confidence",
         "confidence_note",
+        "resolution_notes_hint",
         "search_degraded",
         "search_degraded_message",
     ):
@@ -3124,7 +3237,13 @@ def build_experience_envelope(
     bounded_search = friendly_name == "search_shared_memory" and not include_raw
     bounded_start = friendly_name == "start_session" and not include_raw
     if bounded_search:
-        _enforce_search_projection_budget(envelope)
+        # Preview the separately bounded extra rows to reserve coaching only
+        # if a note is reachable there. If budgeting later drops a digest,
+        # extras are withheld too, and the hint is reconciled at that step.
+        more_preview = {"memory_suggestions": envelope.get("memory_suggestions")}
+        _append_more_results(more_preview, source_payload, arguments)
+        notes_in_more = any("resolution_notes" in row for row in more_preview.get("more_results", []))
+        _enforce_search_projection_budget(envelope, notes_in_more=notes_in_more)
 
     # Routine sync responses should spend their budget on the decision, not on
     # a size receipt about the decision. Keep the receipt when the projection
@@ -3139,6 +3258,10 @@ def build_experience_envelope(
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _SEARCH_LEAN_BUDGET_BYTES:
             _attach_response_size(envelope, friendly_name, arguments, source_payload)
+        else:
+            # After the 3 KB check, which is the digest's contract: these
+            # rows are bounded by their own budget, not the digest's.
+            _append_more_results(envelope, source_payload, arguments)
     elif bounded_start:
         measured_bytes = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         if measured_bytes > _start_session_budget(envelope):
@@ -3171,7 +3294,7 @@ def _refusal_with_friendly_tool(payload: dict, invoked: str, result):
     ]
 
 
-async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
+async def _apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
     """POST_EXECUTION step. `name` is the canonical (post-alias) tool;
     the invoked name lives in ctx.original_name. Returns the (possibly
     reshaped) handler result; on ANY failure returns it untouched."""
@@ -3233,3 +3356,11 @@ async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, r
             exc_info=True,
         )
         return result
+
+
+async def apply_experience_envelope(name: str, arguments: Dict[str, Any], ctx, result):
+    """Project the existing response, then deliver bounded active-session notices."""
+    from src.knowledge_notices import attach_notices
+
+    projected = await _apply_experience_envelope(name, arguments, ctx, result)
+    return await attach_notices(name, arguments, ctx, projected)

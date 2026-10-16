@@ -400,3 +400,21 @@ def test_workflow_checks_out_unitares_with_full_history():
                 and "repository" not in s.get("with", {})]
     assert len(unitares) == 1
     assert unitares[0]["with"]["fetch-depth"] == 0
+
+
+def test_workflow_app_credentials_are_master_only_and_plugin_scoped():
+    import yaml
+    wf = yaml.safe_load((REPO_ROOT / ".github/workflows/plugin-skill-sync.yml").read_text())
+    triggers = wf.get("on", wf.get(True))
+    assert "pull_request" not in triggers and "pull_request_target" not in triggers
+    job = wf["jobs"]["sync"]
+    assert job["environment"] == "plugin-sync"
+    assert "github.ref == 'refs/heads/master'" in job["if"]
+    app = next(step for step in job["steps"] if step.get("id") == "app")
+    assert app["with"]["repositories"] == "unitares-governance-plugin"
+    assert {k for k in app["with"] if k.startswith("permission-")} == {
+        "permission-contents", "permission-pull-requests"}
+    plugin = next(s for s in job["steps"] if s.get("name") == "Check out the plugin")
+    sync = next(s for s in job["steps"] if "GH_TOKEN" in s.get("env", {}))
+    assert plugin["with"]["token"] == sync["env"]["GH_TOKEN"] == "${{ steps.app.outputs.token }}"
+    assert "PLUGIN_SYNC_TOKEN" not in str(wf)

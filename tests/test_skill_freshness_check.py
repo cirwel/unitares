@@ -1045,3 +1045,63 @@ def test_calendar_age_still_fails_past_the_window(layout: Layout):
     result = layout.run()
     assert result.returncode == 1
     assert "AGING" in result.stdout
+
+
+# --- anchored sources: `path.py#name` and `path.md#Heading` digest one fragment ---
+
+_ANCHORED = "unitares/src/thing.py#keep"
+_TWO_FUNCS = "def keep():\n    return 1\n\n\ndef other():\n    return 2\n"
+
+
+def _fragment_digest(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+
+
+def test_an_anchored_source_stays_fresh_when_another_symbol_changes(layout: Layout):
+    layout.source(_TWO_FUNCS.replace("return 2", "return 3"))
+    layout.skill(last_verified=_day(1), source=_ANCHORED,
+                 digest=_fragment_digest("def keep():\n    return 1\n"))
+    result = layout.run()
+    assert result.returncode == 0, result.stdout
+    assert "FRESH" in result.stdout
+
+
+def test_an_anchored_source_is_stale_when_its_own_symbol_changes(layout: Layout):
+    layout.source(_TWO_FUNCS.replace("return 1", "return 9"))
+    layout.skill(last_verified=_day(1), source=_ANCHORED,
+                 digest=_fragment_digest("def keep():\n    return 1\n"))
+    result = layout.run()
+    assert result.returncode == 1
+    assert "STALE" in result.stdout
+    assert f"{_ANCHORED} changed since" in result.stdout
+
+
+def test_an_anchor_that_no_longer_resolves_is_stale_not_fresh(layout: Layout):
+    layout.source("def other():\n    return 2\n")
+    layout.skill(last_verified=_day(1), source=_ANCHORED,
+                 digest=_fragment_digest("def keep():\n    return 1\n"))
+    result = layout.run()
+    assert result.returncode == 1
+    assert "anchor no longer resolves" in result.stdout
+
+
+def test_anchors_resolve_assignments_methods_and_markdown_sections(tmp_path: Path):
+    spec = importlib.util.spec_from_file_location(
+        "_check_freshness", Path("scripts/client/_check_freshness.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    py = tmp_path / "m.py"
+    py.write_text(
+        "LIMIT = 3\n\n\n@dec\ndef f():\n    pass\n\n\nclass C:\n    def m(self):\n        return 1\n\n    def n(self):\n        return 2\n"
+    )
+    assert mod.fragment_text(py, "LIMIT") == "LIMIT = 3\n"
+    assert mod.fragment_text(py, "f") == "@dec\ndef f():\n    pass\n"
+    assert mod.fragment_text(py, "C.m") == "    def m(self):\n        return 1\n"
+    assert mod.fragment_text(py, "C.zzz") is None
+    md = tmp_path / "d.md"
+    md.write_text("# Title\n\nintro\n\n## Keep\n\nbody\n\n### Sub\n\nmore\n\n## Next\n\nend\n")
+    assert mod.fragment_text(md, "Keep") == "## Keep\n\nbody\n\n### Sub\n\nmore\n\n"
+    assert mod.fragment_text(md, "Next") == "## Next\n\nend\n"
+    assert mod.fragment_text(md, "Missing") is None
+    assert mod.split_anchor("unitares/a.py#x.y") == ("unitares/a.py", "x.y")
+    assert mod.split_anchor("unitares/a.py") == ("unitares/a.py", None)

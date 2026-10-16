@@ -1,5 +1,6 @@
 """Failure modes must not create passing local review records."""
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import pytest
@@ -175,6 +176,38 @@ def test_incomplete_local_review_history_fails_closed(tmp_path, data):
         local.local_completed_rounds(tmp_path, 123, set())
 
 
+@pytest.mark.parametrize('missing', ['head', 'base'])
+def test_cli_missing_local_objects_reports_unreviewed(repo, monkeypatch, capsys, missing):
+    path, head = repo
+    run = path / '.git/local-reviews/pr-123-missing'
+    run.mkdir(parents=True)
+    receipt = {'pr': 123, 'status': 'CLEAN', 'head': head, 'base': head,
+               'started_at': 100, 'architecture': 'gemma4'}
+    receipt[missing] = 'f' * 40
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+    gate = local.gate_module()
+    monkeypatch.setattr(gate, 'ROUND_CAP_ENABLED', True)
+    monkeypatch.setattr(gate, 'repo_slug', lambda: 'o/r')
+    monkeypatch.setattr(gate, 'pr_comments', lambda *a: [])
+    monkeypatch.setattr(gate, 'pr_rounds', lambda *a: gate.CodexRounds())
+    monkeypatch.setattr(local, 'gate_module', lambda: gate)
+    monkeypatch.setattr(local, 'pr_info', lambda *a: {
+        'state': 'OPEN', 'headRefOid': head, 'baseRefOid': head})
+    monkeypatch.setattr(local, 'api', lambda *a: {
+        'details': {'format': 'gguf'}, 'capabilities': ['tools'],
+        'model_info': {'general.architecture': 'gemma4', 'gemma4.context_length': 131072}})
+    monkeypatch.setattr(local, 'review', lambda *a, **kw: pytest.fail('spent budget with missing history'))
+    command = local.command
+    monkeypatch.setattr(local, 'command', lambda *a, **kw:
+                        '' if a[:2] == ('git', 'fetch') else command(*a, **kw))
+    monkeypatch.setattr(Path, 'home', lambda: path)
+    monkeypatch.delenv('OLLAMA_HOST', raising=False)
+    assert local.cli(['--repo', str(path), '--pr', '123', '--model', 'gemma4']) == 2
+    assert 'UNREVIEWED: Local review history incomplete' in capsys.readouterr().err
+    assert json.loads((run / 'manifest.json').read_text()) == receipt
+    assert list(run.parent.iterdir()) == [run]
+
+
 @pytest.mark.parametrize('model, metadata', [
     ('gemma4:cloud', {}), ('qwen:480b-cloud', {}),
     ('innocent-alias', {'remote_host': 'https://ollama.com'}),
@@ -188,3 +221,67 @@ def test_cloud_models_are_rejected_before_source_is_sent(model, metadata):
 def test_validated_local_architecture_does_not_depend_on_alias():
     assert local.local_model_architecture('custom-alias', {'details': {'format': 'gguf'},
         'model_info': {'general.architecture': 'gemma4'}, 'capabilities': ['tools']}) == 'gemma4'
+
+
+def budget_receipt(tmp_path, name, **fields):
+    import json
+    run = tmp_path / name
+    run.mkdir()
+    receipt = {'pr': 123, 'status': 'CLEAN', 'head': 'a' * 40, 'base': 'b' * 40,
+               'model': 'custom-alias', 'architecture': 'gemma4', 'started_at': 200,
+               'review_id': name}
+    receipt.update(fields)
+    (run / 'manifest.json').write_text(json.dumps(receipt))
+
+
+@pytest.fixture
+def budget_gate(monkeypatch):
+    gate = local.gate_module()
+    monkeypatch.setattr(gate, 'diff_key', lambda base, head: base + head)
+    return gate
+
+
+def test_unposted_second_family_finishes_capped_cycle_without_coverage(tmp_path, budget_gate):
+    gate = budget_gate
+    head, key = 'a' * 40, 'b' * 40 + 'a' * 40
+    rounds = gate.count_review_cycles([(100 + i, head, [], key, 'openai') for i in range(3)])
+    budget_receipt(tmp_path, 'pr-123-local')
+    result = local.local_budget_rounds(gate, rounds, tmp_path, 123, set())
+    assert result.count == 3
+    assert result.cycles[-1].families == {'openai', 'google'}
+    assert not result.can_join(head, key, 'google')
+    assert gate.passing_families([], key) == set()
+
+
+@pytest.mark.parametrize('fields', [
+    {}, {'head': 'c' * 40}, {'base': 'd' * 40},
+    {'architecture': 'unknown', 'model': 'custom-alias'},
+])
+def test_unposted_rerun_or_changed_work_consumes_another_cycle(tmp_path, budget_gate, fields):
+    gate = budget_gate
+    rounds = gate.count_review_cycles([(100, 'a' * 40, [], 'b' * 40 + 'a' * 40, 'google')])
+    budget_receipt(tmp_path, 'pr-123-local', **fields)
+    assert local.local_budget_rounds(gate, rounds, tmp_path, 123, set()).count == 2
+
+
+def test_posted_local_receipt_is_counted_only_once(tmp_path, budget_gate):
+    gate = budget_gate
+    rounds = gate.count_review_cycles([(100, 'a' * 40, [], 'b' * 40 + 'a' * 40, 'google')])
+    budget_receipt(tmp_path, 'pr-123-local')
+    assert local.local_budget_rounds(gate, rounds, tmp_path, 123, {'pr-123-local'}) is rounds
+
+
+def test_legacy_local_timestamp_and_unknown_history_are_preserved(tmp_path, budget_gate):
+    gate = budget_gate
+    budget_receipt(tmp_path, 'pr-123-aaaaaaaaaaaa-1700000000000000000', started_at=None)
+    result = local.local_budget_rounds(gate, gate.CodexRounds(unknown_history=True), tmp_path, 123, set())
+    assert result.count == 1
+    assert result.runs[0][0] == 1700000000
+    assert result.unknown_history
+
+
+@pytest.mark.parametrize('when', [None, 'bad', -1, float('inf')])
+def test_local_cycle_with_unknown_time_fails_closed(tmp_path, budget_gate, when):
+    budget_receipt(tmp_path, 'pr-123-local', started_at=when)
+    with pytest.raises(ValueError, match='timestamp'):
+        local.local_budget_rounds(budget_gate, budget_gate.CodexRounds(), tmp_path, 123, set())

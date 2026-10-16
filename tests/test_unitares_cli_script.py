@@ -868,8 +868,9 @@ def test_curl_post_tool_does_not_auto_inject_continuity_token(tmp_path):
     assert "continuity_token" not in args
 
 
-def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
-    """The CLI onboard command should use cached uuid as lineage, not resume."""
+@pytest.mark.parametrize("force_arg", ["", "force", "--force"])
+def test_cmd_onboard_does_not_infer_lineage_from_cache(tmp_path, force_arg):
+    """Cached identities and lineage must not become a fresh caller's ancestry."""
     session_file = tmp_path / "session.json"
     capture = tmp_path / "payload.json"
     include_session_file = tmp_path / "include-session.txt"
@@ -877,6 +878,8 @@ def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
         "uuid": "parent-uuid",
         "client_session_id": "cached-session",
         "continuity_token": "cached-token",
+        "parent_agent_id": "older-parent-uuid",
+        "spawn_reason": "compaction",
     }))
     env = os.environ.copy()
     env["UNITARES_SESSION_FILE"] = str(session_file)
@@ -900,7 +903,7 @@ def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
         "_curl_fetch() { printf '%s' \"$3\" > \"$CAPTURE\"; "
         "printf '%s' \"$4\" > \"$INCLUDE_SESSION_FILE\"; "
         f"printf '%s' '{response}'; }}; "
-        "cmd_onboard cli-unit pytest"
+        f"cmd_onboard cli-unit pytest {force_arg}"
     )
     result = _source_cli_and_run(script, env)
     assert result.returncode == 0, result.stderr
@@ -908,8 +911,10 @@ def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
     payload = json.loads(capture.read_text())
     args = payload["arguments"]
     assert args["force_new"] is True
-    assert args["parent_agent_id"] == "parent-uuid"
-    assert args["spawn_reason"] == "new_session"
+    assert args["name"] == "cli-unit"
+    assert args["purpose"] == "pytest"
+    assert "parent_agent_id" not in args
+    assert "spawn_reason" not in args
     assert "client_session_id" not in args
     assert "continuity_token" not in args
     assert include_session_file.read_text() == "0"
@@ -918,7 +923,8 @@ def test_cmd_onboard_declares_cached_uuid_as_parent(tmp_path):
     assert written["uuid"] == "child-uuid"
     assert written["client_session_id"] == "child-session"
     assert written["continuity_token"] == "child-token"
-    assert written["parent_agent_id"] == "parent-uuid"
+    assert "parent_agent_id" not in written
+    assert "spawn_reason" not in written
 
 
 def test_onboard_with_force_creates_fresh_identity(cli_env):

@@ -13,7 +13,11 @@ First implementation step of ``docs/proposals/active/eisv-core-boundary-v0.md`` 
 
 A later change that is meant to leave the instrument untouched must pass this
 unchanged. A change that is meant to alter EISV behaviour regenerates the golden
-file (see ``tests/eisv_preservation_driver.py``) and says so.
+file (see ``tests/eisv_preservation_driver.py``) and says so; until the
+registered 2026-12-01 read is reported, the same PR records
+``instrument_change_at`` in the stop-rule manifest entry (stop-rule amendment
+2026-10-15), which ``test_a_changed_golden_file_requires_a_recorded_instrument_change``
+enforces against a pinned sha256 of the registered golden file.
 
 Nothing here reads production data or computes an outcome statistic: the
 database test uses synthetic rows in ``governance_test`` only.
@@ -61,17 +65,89 @@ def _run_driver() -> dict:
     return json.loads(completed.stdout)
 
 
+_INSTRUMENT_CHANGE_PATH = (
+    "Under the stop-rule amendment of 2026-10-15 "
+    "(docs/proposals/registered/eisv-outcome-grounding-stop-rule-v0.md, "
+    "'Amendment 2026-10-15: data boundary at the first instrument change'), a "
+    "live-path change is permitted when the same PR sets instrument_change_at on "
+    "the eisv-outcome-grounding-stop-rule-v0 entry of REGISTERED_READ_MANIFEST "
+    "(scripts/analysis/eisv_ablation_matrix.py) to a UTC instant no later than "
+    "its deployment, cites the deployment record, and then regenerates the "
+    "golden file (python -m tests.eisv_preservation_driver --write-golden). The "
+    "registered read then admits only outcomes strictly before that instant."
+)
+
+
 def test_estimator_trajectories_match_golden():
     expected = driver.comparable(json.loads(driver.GOLDEN_PATH.read_text(encoding="utf-8")))
     actual = driver.comparable(_run_driver())
     difference = driver.first_difference(expected, actual)
     assert difference is None, (
         f"The pinned EISV instrument changed: {difference}. Treat this as an "
-        "instrument change, not a stale fixture. Before the registered "
-        "2026-12-01 read's preservation horizon, regenerating the golden file "
-        "needs the operator decision in docs/proposals/active/eisv-core-boundary-v0.md "
-        "§12.1."
+        "instrument change, not a stale fixture. " + _INSTRUMENT_CHANGE_PATH
     )
+
+
+# sha256 of the golden file as registered: the instrument the 2026-12-01 read
+# was registered against. It is never updated. While the golden file matches
+# it, nothing has changed; once it differs, the stop-rule entry must record the
+# instrument change. Pinned 2026-10-15 at master 3af6b8cec.
+REGISTERED_INSTRUMENT_GOLDEN_SHA256 = "c056cb858e04e3d611fa93dd531b43ff6548d0840bd43d7958592f2ec4b19562"
+
+
+def test_a_changed_golden_file_requires_a_recorded_instrument_change():
+    """Mechanical sequencing guard for the 2026-10-15 amendment.
+
+    Scope, stated so this is not over-read: it sees only what the golden
+    trajectories pin, i.e. code paths under the hermetic driver. Deployment
+    flags, plist environment, overlays, config and dependency changes alter
+    the live path without touching this file; for those the rule is
+    procedural, not enforced here.
+    """
+    import hashlib
+
+    from scripts.analysis.eisv_ablation_matrix import registered_read_protocol
+
+    digest = hashlib.sha256(driver.GOLDEN_PATH.read_bytes()).hexdigest()
+    if digest == REGISTERED_INSTRUMENT_GOLDEN_SHA256:
+        return
+    entry = registered_read_protocol("eisv-outcome-grounding-2026-12-01")
+    assert entry is not None
+    assert entry.instrument_change_at is not None, (
+        f"The golden trajectory file changed (sha256 {digest}, registered "
+        f"{REGISTERED_INSTRUMENT_GOLDEN_SHA256}) while the stop-rule manifest entry "
+        "records no instrument_change_at. " + _INSTRUMENT_CHANGE_PATH
+    )
+
+
+def test_the_sequencing_guard_fires_without_a_recorded_change(monkeypatch, tmp_path):
+    import dataclasses
+
+    import scripts.analysis.eisv_ablation_matrix as matrix
+
+    changed = tmp_path / "golden.json"
+    changed.write_bytes(driver.GOLDEN_PATH.read_bytes() + b"\n")
+    monkeypatch.setattr(driver, "GOLDEN_PATH", changed)
+    # The manifest records T since the first instrument change (2026-10-15),
+    # so the unrecorded state is constructed here rather than read from it.
+    unrecorded = tuple(
+        dataclasses.replace(e, instrument_change_at=None)
+        if e.name == "eisv-outcome-grounding-stop-rule-v0"
+        else e
+        for e in matrix.REGISTERED_READ_MANIFEST
+    )
+    monkeypatch.setattr(matrix, "REGISTERED_READ_MANIFEST", unrecorded)
+    with pytest.raises(AssertionError, match="records no instrument_change_at"):
+        test_a_changed_golden_file_requires_a_recorded_instrument_change()
+
+    recorded = tuple(
+        dataclasses.replace(e, instrument_change_at=datetime(2026, 10, 20, tzinfo=timezone.utc))
+        if e.name == "eisv-outcome-grounding-stop-rule-v0"
+        else e
+        for e in matrix.REGISTERED_READ_MANIFEST
+    )
+    monkeypatch.setattr(matrix, "REGISTERED_READ_MANIFEST", recorded)
+    test_a_changed_golden_file_requires_a_recorded_instrument_change()
 
 
 def test_golden_covers_the_scenarios_the_contract_names():

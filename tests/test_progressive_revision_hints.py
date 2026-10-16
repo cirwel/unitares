@@ -55,10 +55,14 @@ def test_store_finding_next_action_is_safe_in_every_process_mode(monkeypatch):
         assert "update_finding(discovery_id" not in action
 
 
-def test_search_next_action_points_at_a_revision_route(monkeypatch):
+def test_richer_search_next_action_points_at_a_revision_route(monkeypatch):
     monkeypatch.setattr(tool_modes, "TOOL_MODE", "progressive")
     payload = {"success": True, "results": [{"id": "d-1", "summary": "x"}], "total_count": 1}
-    env = build_experience_envelope(
-        "search_shared_memory", "knowledge", payload, {"query": "x"}
-    )
-    assert "use_tool(tool_name='update_finding'" in env["next_action"]
+    # Lean omits write coaching; richer response modes must still name a
+    # revision route available on the progressive tool surface.
+    for response_mode in ("compact", "full"):
+        env = build_experience_envelope(
+            "search_shared_memory", "knowledge", payload,
+            {"query": "x", "response_mode": response_mode},
+        )
+        assert "use_tool(tool_name='update_finding'" in env["next_action"]

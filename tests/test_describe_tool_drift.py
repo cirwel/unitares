@@ -20,8 +20,8 @@ def _assert_eisv_contract(text: str) -> None:
     assert "I=Information Integrity [0,1]" in text
     assert "S=Entropy [0,1]" in text
     assert "V=Valence [-1,1]" in text
-    assert "positive=motion outruns integrity" in text
-    assert "negative=integrity outruns motion" in text
+    assert "positive=positive smoothed gap" in text
+    assert "negative=negative smoothed gap" in text
 
 
 def test_short_mcp_descriptions_teach_eisv_to_schema_only_clients():

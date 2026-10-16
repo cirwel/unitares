@@ -1,0 +1,1 @@
+- **PR review:** `review-requested` uses one shared host and existing evidence/budget rules, including required families. Stable App-authored same-repository PRs are eligible; the bootstrap uses App credentials while model subprocesses receive no GitHub credentials. Unavailable ordinary reviews no longer instruct authors to hold finished work in draft (#2802).

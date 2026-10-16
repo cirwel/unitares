@@ -13,7 +13,7 @@ orchestrator, not started by the default install), gated by
 run if something invoked it". ``accepts_host_id_from`` answers the question an
 agent actually has: "which tools will accept this host as a ``host_id``
 argument". They diverge in the ordinary case: every subscription-CLI adapter
-is reachable from ``delegate_inference`` on every install, while ``available``
+is reachable from ``delegate_inference`` and ``consult`` on every install, while ``available``
 goes false on any install where the opt-in flag is off, the CLI is absent, or
 the orchestrator bearer is unset. Reachability is a routing contract and must
 not flap with runtime readiness. A host that advertises itself as usable while
@@ -25,7 +25,7 @@ implementation status in the same change.
 about traffic. This registry does not see all inference: ``llm_delegation.py``
 opens the Ollama endpoint directly for the dialectic, knowledge-synthesis, and
 check-in-coaching paths, none of which take a ``host_id`` or consult this
-module. So ``ollama:local`` carries ``["call_model"]`` — the tools that will
+module. So ``ollama:local`` carries ``["call_model", "consult"]`` — the tools that will
 accept it as an argument — and that is not a claim that ``call_model`` is the
 only code reaching Ollama. Do not "fix" it to enumerate those callers; that
 would answer a question no caller of this registry is asking.
@@ -42,6 +42,7 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
+from src import inference_config
 from src.local_inference_env import (
     classify_endpoint,
     default_local_model,
@@ -116,6 +117,10 @@ class InferenceHost:
     # The optional service this host needs beyond the default install, or None
     # for hosts the default install can reach (see inference_extensions()).
     extension: str | None = None
+    # The model family this host serves, from the shared vocabulary in
+    # src/inference_config.py (an operator file may set it). Descriptive only:
+    # nothing routes on it yet (inference-hosts-config-v0 step 2).
+    family: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -240,9 +245,10 @@ def _hf_token_present() -> bool:
     return bool(os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN"))
 
 
-def _base_hosts() -> list[InferenceHost]:
+def _static_hosts() -> list[InferenceHost]:
     ollama_model = default_local_model()
     hf_configured = _hf_token_present()
+    hf_cooldown = host_availability.cooldown("hf:router")
     # The record describes the configured endpoint, not the loopback default:
     # an endpoint that classifies external is neither local nor free.
     local_route_is_local = classify_endpoint(model_base_url()).is_local
@@ -263,7 +269,7 @@ def _base_hosts() -> list[InferenceHost]:
             # host_id="ollama:local" forces privacy='local', so an endpoint
             # that classifies external cannot be selected by host id; the
             # record says so instead of advertising a call that is refused.
-            accepts_host_id_from=["call_model"] if local_route_is_local else [],
+            accepts_host_id_from=["call_model", "consult"] if local_route_is_local else [],
             notes=(
                 "Local Ollama OpenAI-compatible endpoint. Model names are "
                 "passed through; use `ollama list` on the host for inventory."
@@ -281,15 +287,20 @@ def _base_hosts() -> list[InferenceHost]:
             provider_kind="hf",
             transport="openai_compatible_http",
             configured=hf_configured,
-            available=hf_configured,
+            available=hf_configured and hf_cooldown is None,
             privacy_class="external_cloud",
             cost_class="token_or_free_tier",
             accountability_class="tool_evidence",
             capabilities=["reasoning", "generation", "analysis"],
             models=["deepseek-ai/DeepSeek-R1:fastest", "Qwen/Qwen2.5-72B-Instruct:fastest"],
             implementation_status="active",
-            accepts_host_id_from=["call_model"],
-            notes="Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment.",
+            accepts_host_id_from=["call_model", "consult"],
+            cooldown=hf_cooldown,
+            notes=(
+                "Requires HF_TOKEN or HUGGINGFACE_TOKEN in the server environment. "
+                "Availability means configured with no known quota/auth cooldown; "
+                "credits and authentication are not proactively checked."
+            ),
         ),
         InferenceHost(
             host_id="codex:host-adapter",
@@ -306,9 +317,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["codex"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Codex served ASYNC via the agent-orchestrator, not the sync "
                 "call_model path. Requires "
                 "UNITARES_HOST_ADAPTER_ENABLED=1, a codex CLI (PATH, "
@@ -340,9 +351,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["claude"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Claude (`claude -p`) runs with safe mode, no tools, and no "
                 "session persistence via the agent-orchestrator; it is not on "
                 "the synchronous call_model path. Requires "
@@ -367,9 +378,9 @@ def _base_hosts() -> list[InferenceHost]:
             capabilities=["reasoning", "review", "summarize"],
             models=["antigravity"],
             implementation_status="active",
-            accepts_host_id_from=["delegate_inference"],
+            accepts_host_id_from=["delegate_inference", "consult"],
             notes=(
-                "Agent-callable through delegate_inference. Subscription-backed "
+                "Agent-callable through consult or delegate_inference. Subscription-backed "
                 "Antigravity (`agy -p`, Google) runs in plan mode and its "
                 "sandbox, from an empty temporary workspace with an "
                 "allowlisted environment, via the agent-orchestrator. A turn "
@@ -382,6 +393,13 @@ def _base_hosts() -> list[InferenceHost]:
             ),
         ),
     ]
+
+
+
+def _base_hosts() -> list[InferenceHost]:
+    """The registry's hosts, each with its family from the shared vocabulary."""
+    return [replace(host, family=inference_config.host_family(host.host_id))
+            for host in _static_hosts()]
 
 
 def inference_extensions() -> dict[str, Any]:
@@ -403,7 +421,7 @@ def inference_extensions() -> dict[str, Any]:
 
 def list_inference_hosts(
     *,
-    include_unconfigured: bool = True,
+    include_unconfigured: bool = False,
     provider_kind: str | None = None,
 ) -> list[dict[str, Any]]:
     hosts = _base_hosts()

@@ -131,12 +131,12 @@ class TestInferenceHostRegistry:
     """Tests for list_inference_hosts and describe_inference_host."""
 
     @pytest.mark.asyncio
-    async def test_list_inference_hosts_includes_active_and_placeholder_hosts(self):
+    async def test_explicit_full_inventory_includes_unconfigured_hosts(self):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
              patch.dict(os.environ, {"UNITARES_MODEL_ID": "test-local:latest"}, clear=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
-            result = await handle_list_inference_hosts({})
+            result = await handle_list_inference_hosts({"include_unconfigured": True})
 
         parsed = _parse_text_content(result)
         host_ids = {host["host_id"] for host in parsed["hosts"]}
@@ -155,11 +155,12 @@ class TestInferenceHostRegistry:
         ]
 
     @pytest.mark.asyncio
-    async def test_list_inference_hosts_can_hide_unconfigured_hosts(self):
+    @pytest.mark.parametrize("arguments", [{}, {"include_unconfigured": False}])
+    async def test_list_inference_hosts_defaults_to_configured_hosts(self, arguments):
         with patch("src.mcp_handlers.support.inference_registry._ollama_available", return_value=True), \
              patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False):
             from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
-            result = await handle_list_inference_hosts({"include_unconfigured": False})
+            result = await handle_list_inference_hosts(arguments)
 
         parsed = _parse_text_content(result)
         assert [host["host_id"] for host in parsed["hosts"]] == ["ollama:local"]
@@ -173,6 +174,57 @@ class TestInferenceHostRegistry:
 
         parsed = _parse_text_content(result)
         assert [host["host_id"] for host in parsed["hosts"]] == ["hf:router"]
+
+    @pytest.mark.asyncio
+    async def test_default_listing_keeps_configured_but_unavailable_hosts(self):
+        from src.mcp_handlers.support import inference_registry as registry
+        from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+        with patch.object(registry, "_ollama_available", return_value=False), \
+             patch.object(registry, "_hf_token_present", return_value=False):
+            direct = registry.list_inference_hosts()
+            parsed = _parse_text_content(await handle_list_inference_hosts({}))
+
+        for hosts in (direct, parsed["hosts"]):
+            assert "hf:router" not in {host["host_id"] for host in hosts}
+            local = next(host for host in hosts if host["host_id"] == "ollama:local")
+            assert local["configured"] is True
+            assert local["available"] is False
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_provider_filter_requires_full_inventory(self):
+        from src.mcp_handlers.support.model_inference import handle_list_inference_hosts
+
+        with patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False):
+            default = _parse_text_content(await handle_list_inference_hosts({"provider_kind": "hf"}))
+            full = _parse_text_content(await handle_list_inference_hosts({
+                "provider_kind": "hf", "include_unconfigured": True,
+            }))
+
+        assert default["hosts"] == []
+        assert default["count"] == 0
+        assert full["count"] == 1
+        assert full["hosts"][0]["host_id"] == "hf:router"
+        assert full["hosts"][0]["configured"] is False
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_host_is_describable_but_rejected_before_http(self):
+        from src.mcp_handlers.support import model_inference as mi
+
+        with patch("src.mcp_handlers.support.inference_registry._hf_token_present", return_value=False), \
+             patch.object(mi, "OPENAI_AVAILABLE", True), \
+             patch.object(mi, "OpenAI") as client:
+            described = _parse_text_content(await mi.handle_describe_inference_host({"host_id": "hf:router"}))
+            outcome = await mi.run_model_inference(mi.CallModelRequest(
+                prompt="hello", host_id="hf:router", privacy="cloud", requesting_agent_uuid=None,
+            ))
+
+        assert described["host"]["configured"] is False
+        assert described["host"]["available"] is False
+        assert described["host"]["accepts_host_id_from"] == ["call_model", "consult"]
+        assert outcome.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+        assert outcome.failure.execution_started is False
+        client.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_describe_inference_host_unknown_fails_closed(self):
@@ -200,7 +252,7 @@ class TestInferenceHostRegistry:
         assert parsed["host"]["host_id"] == "ollama:local"
         assert parsed["host"]["provider_kind"] == "ollama"
         assert parsed["host"]["available"] is True
-        assert parsed["host"]["accepts_host_id_from"] == ["call_model"]
+        assert parsed["host"]["accepts_host_id_from"] == ["call_model", "consult"]
     def test_ollama_available_caches_probe_within_ttl(self):
         """The blocking socket probe runs once within the TTL, not per call —
         the bound on event-loop pressure from repeated host-registry reads."""
@@ -266,7 +318,7 @@ class TestInvocationRoutingDisclosure:
             handle_list_inference_hosts,
         )
 
-        listed = _parse_text_content(await handle_list_inference_hosts({}))
+        listed = _parse_text_content(await handle_list_inference_hosts({"include_unconfigured": True}))
         assert listed["hosts"], "registry returned no hosts to check"
 
         for entry in listed["hosts"]:
@@ -294,12 +346,11 @@ class TestInvocationRoutingDisclosure:
         assert parsed["invocation"]["tool_authoritative"] is False
         assert "accepts_host_id_from" in parsed["invocation"]["routing_precedence"]
 
-    def test_consult_is_never_recommended(self):
-        """consult reaches the host adapters but picks the host itself and
-        takes no host_id, so it can never answer "pass this host_id where?"."""
+    def test_consult_can_be_recommended_for_explicit_host_selection(self):
+        """The advisory facade now accepts a registered host_id."""
         from src.mcp_handlers.support.model_inference import _recommended_tool
 
-        assert _recommended_tool({"accepts_host_id_from": ["consult"]}) is None
+        assert _recommended_tool({"accepts_host_id_from": ["consult"]}) == "consult"
 
     def test_no_host_and_malformed_accepts_yield_no_recommendation(self):
         from src.mcp_handlers.support.model_inference import _recommended_tool
@@ -1246,6 +1297,85 @@ class TestParameterHandling:
 
 class TestErrorHandling:
     """Tests for API call error handling."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status,reason", [(401, "auth"), (402, "quota"), (429, "quota")])
+    async def test_hf_observed_failure_gates_every_route_then_recovers(self, monkeypatch, status, reason):
+        from src.mcp_handlers.support import host_availability as ha
+        from src.mcp_handlers.support import inference_registry as registry
+
+        now = [1_790_000_000.0]
+        monkeypatch.setattr(ha.time, "time", lambda: now[0])
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        monkeypatch.setattr(registry, "_ollama_available", lambda: False)
+        monkeypatch.setattr(_mi, "_ollama_available", lambda: False)
+        monkeypatch.setattr(_mi, "OPENAI_AVAILABLE", True)
+        error = Exception("You have no remaining credits; private provider error")
+        error.status_code = status
+        client = MagicMock()
+        client.chat.completions.create.side_effect = error
+        factory = MagicMock(return_value=client)
+        monkeypatch.setattr(_mi, "OpenAI", factory)
+
+        initial = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, provider="hf",
+        ))
+        assert not initial.ok
+        assert initial.failure.details["provider_unavailable"]["reason"] == reason
+        hosts = _parse_text_content(await _mi.handle_list_inference_hosts({}))
+        hf = next(host for host in hosts["hosts"] if host["host_id"] == "hf:router")
+        assert hf["configured"] is True
+        assert hf["available"] is False
+        assert hf["cooldown"]["reason"] == reason
+        assert "private provider error" not in json.dumps(hf)
+        assert hf["accepts_host_id_from"] == ["call_model", "consult"]
+
+        for route in (
+            {"host_id": "hf:router"},
+            {"provider": "hf"},
+            {"model": "hf:org/model"},
+            {"provider": "auto", "privacy": "cloud"},
+        ):
+            blocked = await _mi.run_model_inference(_mi.CallModelRequest(
+                prompt="hello", requesting_agent_uuid=None, **route,
+            ))
+            assert blocked.failure.code == "INFERENCE_HOST_UNAVAILABLE"
+            assert blocked.failure.details["dispatch_phase"] == "preflight"
+            assert blocked.failure.execution_started is False
+            assert hf["cooldown"]["retry_after"] in blocked.failure.recovery["action"]
+        assert factory.call_count == 1
+
+        # Expiry allows one ordinary attempt; success clears the failure history.
+        now[0] += ha.BACKOFF_BASE_S + 1
+        assert registry.get_inference_host("hf:router")["available"] is True
+        client.chat.completions.create.side_effect = None
+        client.chat.completions.create.return_value = _make_mock_response()
+        recovered = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, host_id="hf:router",
+        ))
+        assert recovered.ok
+        assert "hf:router" not in ha._state
+        assert registry.get_inference_host("hf:router")["cooldown"] is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider,status", [
+        ("hf", 403), ("hf", 404), ("hf", 500), ("hf", None), ("ollama", 402),
+    ])
+    async def test_non_account_failures_do_not_disable_hf(self, monkeypatch, provider, status):
+        from src.mcp_handlers.support import host_availability as ha
+
+        monkeypatch.setenv("HF_TOKEN", "hf_test_token")
+        monkeypatch.setattr(_mi, "OPENAI_AVAILABLE", True)
+        error = Exception("private error with quota words but no account failure")
+        error.status_code = status
+        client = MagicMock()
+        client.chat.completions.create.side_effect = error
+        monkeypatch.setattr(_mi, "OpenAI", lambda **kwargs: client)
+        result = await _mi.run_model_inference(_mi.CallModelRequest(
+            prompt="hello", requesting_agent_uuid=None, provider=provider,
+        ))
+        assert not result.ok
+        assert ha.cooldown("hf:router") is None
 
     @pytest.mark.asyncio
     async def test_timeout_error(self):

@@ -20,7 +20,7 @@ wired). See
 [`dormant-capability-registry.md`](../operations/dormant-capability-registry.md)
 for the false-positive history this avoids.
 
-**43 registered tools · 8 consolidated (55 actions) · 9 aliases.**
+**43 registered tools · 8 consolidated (56 actions) · 9 aliases.**
 
 ## Content-addressed snapshots
 
@@ -217,6 +217,7 @@ runs (`from→to`, filled only when the destination is absent).
 | `get` | `src/mcp_handlers/knowledge/handlers.py handle_get_knowledge_graph` | — |
 | `list` | `src/mcp_handlers/knowledge/handlers.py handle_list_knowledge_graph` | — |
 | `note` | `src/mcp_handlers/knowledge/handlers.py handle_knowledge_note` | `content`→`summary` |
+| `notices` | `src/knowledge_notices.py handle_knowledge_notices` | — |
 | `promote` | `src/mcp_handlers/knowledge/handlers.py handle_promote_memory_claim` | `content`→`details` |
 | `search` | `src/mcp_handlers/knowledge/handlers.py handle_search_knowledge_graph` | `query`→`search_query` |
 | `stats` | `src/mcp_handlers/knowledge/handlers.py handle_get_lifecycle_stats` | — |

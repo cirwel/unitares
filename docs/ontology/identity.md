@@ -351,6 +351,15 @@ design. Declare a parent only when a causal relationship actually exists:
   `spawn_reason="explicit"` — the successor inherits a predecessor that has
   finished.
 
+Onboarding helpers do not promote cached UUIDs to parent declarations. A
+caller that knows the causal relationship supplies it explicitly through
+`start_session`/`onboard`. Thread assignment uses the descriptive `new_session`
+default when no reason has been supplied, even if a parent was declared.
+Onboarding recovery paths can supply their own descriptive reasons, such as
+`auto_onboard_no_session` or `orchestrated_thread_anchor`; thread assignment
+preserves them. Neither the client name nor existing thread nodes establish
+compaction or dispatch.
+
 Liveness gates the declaration: declaring a **currently-live** agent as parent
 is rejected at onboard (`lineage_coincidental_rejected`) for a succession
 claim, because a live agent is then a concurrent sibling, not a predecessor.
@@ -417,9 +426,9 @@ properties, not surprises:
 - **Subagent onboards do not displace the pin.** An onboard that
   *explicitly declares* `spawn_reason="subagent"` writes the pin
   only-if-absent (SET NX). This is matched against the declared
-  argument only, never `infer_spawn_reason()`'s guess: inference can
-  label a fresh driver's succession onboard "subagent," and NX-gating
-  on that would lock the new driver behind its dead predecessor's
+  argument only: a parent or existing thread nodes do not declare a
+  dispatch. An omitted reason defaults to `new_session`, so a fresh
+  driver's succession onboard can replace its dead predecessor's
   still-live pin (incident class: 2026-06-10, where the inverse —
   unconditional writes — let each council subagent capture the
   driver's resolution; ~50 driver check-ins scattered across seven

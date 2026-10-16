@@ -65,8 +65,20 @@ veto by removing the label.
   -> push -> draft PR is authorized. Do not stop for a second confirmation just
   to push the branch or open the draft PR.
 - **Do not** direct-push to a shared branch.
+- Before readiness, the owner classifies the PR body as `fix` or `capability`.
+  A capability that adds a tool, action, instrument or model channel is
+  reserved to the operator and stays a draft until the operator rules; fixes,
+  friction reduction, tooling, tests and docs proceed. The 2026-10-09 feature
+  freeze was lifted by the operator on 2026-10-15 (KG decision
+  `2026-10-15T06:03:44.876094+00:00`). A disagreeing reviewer comments rather
+  than holding a fix. Reserved auth, identity, scientific and
+  governance-sensitive gates are unchanged.
 - <a id="branch-ownership"></a>**A PR branch belongs to the session that
-  opened it.** Do not push commits to another session's PR branch, even to
+  opened it.** End every PR body with `UNITARES agent: <uuid>`, the owning
+  session's UNITARES identity: a later session finds the owner by it and can
+  check it against the server. A harness session link may sit beside it; the
+  guard that refused session links in bodies, commits and files was removed on
+  2026-10-14 at the operator's direction. Do not push commits to another session's PR branch, even to
   fix something small. The `claude/` prefix does not tell sessions apart, and
   neither does the commit author reliably: local sessions commit as the
   operator, web sessions as `Claude`, and two web sessions look identical.
@@ -151,11 +163,60 @@ veto by removing the label.
 
 ### Review workflow
 
+**One request path for local and cloud authors.** Add `review-requested` to
+an open PR using GitHub, its REST API, or a connector. No local model CLI or
+`review.sh` is needed on the author's machine. Keep unfinished work draft;
+the request does not mark it ready or authorize a merge. `no-auto-review`
+holds automatic review, even when a request is present.
+
+The opted-in shared host reviews a quiet PR and posts the existing diff-bound
+review record on that PR. One provider attempt runs per scheduled tick. For
+an explicitly requested sensitive diff, a later tick selects an eligible
+missing model family; the normal cycle budget, provider pauses and retry
+limits still apply. Findings require author action before another family is
+started. A request never authorizes extra cycles or an operator waiver.
+
+Read the PR's `review` check: **UNREVIEWED** means no completed coverage,
+**action_required** means findings or required coverage need attention, and
+**success** means review coverage passed. A request label does not prove a
+runner is online; a paused/offline host leaves the PR visibly unreviewed.
+Ordinary work may still proceed after validation with that fact in the body;
+sensitive paths retain their required coverage. `approved-to-merge` remains
+the owning author's separate readiness declaration.
+
+On this operator's host, `com.unitares.review-sweep` is the designated runner.
+`scripts/ops/install-review-sweep.py` installs its bootstrap; it uses only a
+clean checkout of merged `origin/master`, reads PR heads separately, and uses
+`unitares-github` for this repository's fetches and review publication. It
+refuses a missing App runner instead of using the human login across `cirwel`
+repositories. Cloud agents use explicitly provisioned repository-scoped App
+credentials; a missing cloud integration must be reported, never replaced
+with the operator's login. Other installers opt in to their own host and
+credentials.
+Direct local `./scripts/dev/review.sh` remains available and shares the same
+per-PR lock and evidence, so it joins an in-flight host review.
+
+**Review publishers and operator authority.** In addition to the existing
+`OWNER`/`MEMBER`/`COLLABORATOR` accounts, ordinary review records accept the
+UNITARES agents App only when GitHub's comment metadata contains App ID
+`5306351`, bot actor ID `342195540`, and actor type `Bot`. The allowlist lives
+in the trusted base's `review_gate.py`; a login, marker text, or PR-head edit
+cannot add a publisher. This admission also applies to dispositions, review
+history and failure counts. It preserves the diff, provenance, findings and
+model-family checks; a shared bot identity does not prove reviewer independence.
+Bot comments cannot grant an operator waiver, even with a write association.
+The `--review-cycle-grant COMMENT_ID` path lets the App consume a bounded
+user-authored approval; it never lets the App issue one. The `waive` and
+legacy `--authorize-full-review` CLI paths verify a user account via
+GitHub and refuse App credentials or an unreadable actor. All agents use the
+shared App; the operator's user account is reserved for operator actions.
+
 > **Not a merge gate since 2026-10-08, except on auth paths.** A missing or unfinished review no
 > longer holds a PR: the merge queue arms on ready + label + required CI. A diff touching a
 > `second_family_paths` file still needs `review` to pass. What
 > follows still applies to the review you run. The round cap still bounds paid
-> full rounds (another needs the operator's own `--authorize-full-review`), and
+> full cycles (another needs a scoped operator grant or the operator's own
+> `--authorize-full-review`), and
 > a `review` check of `action_required` (undisposed findings, or a sensitive
 > diff with one passing family of two) still parks the PR in the queue. Quality
 > still comes first; the point is that an unavailable reviewer never stops a
@@ -171,7 +232,7 @@ the test run one.
   a 30-minute budget for one provider attempt, and posts a **review record**
   comment. `ship.sh` now waits for it on every PR push and prints the
   findings to its caller. After pushing another way, the **authoring agent**
-  runs the same command without waiting for an operator prompt. If a review
+  requests the shared host or runs the same command locally. If a review
   is already running, the command joins its result instead of treating
   "started" as "finished". A bounded wait that expires reports incomplete.
 - The `review` check (`.github/workflows/review-gate.yml`) succeeds when a
@@ -183,7 +244,7 @@ the test run one.
   that historical status until the next push. GitHub branch protections are
   separate and are not changed by this workflow.
 - Findings: fix and push (the new diff is reviewed; targeted minor-fix verification follows one full review; the
-  [round cap](#round-cap) bounds full rounds), or post rebuttals with
+  [round cap](#round-cap) bounds full cycles), or post rebuttals with
   `./scripts/dev/review.sh dispose <file>` — never drop one silently.
 - A separate human or model code review of the actual diff can be recorded
   with `./scripts/dev/review.sh record <file> --reviewer-name <who> --independent`,
@@ -210,18 +271,21 @@ the test run one.
   "carried across a base merge from `<sha>`" when a carried record decides.
   A conflict resolution, any edit made in a merge, a new commit, or any
   change to an added or removed line stops the carry. A PR that touches a
-  second-family path (`review_policy.json`) is never carried: a base merge
-  that moves its diff key needs a fresh review on the new key. A base merge
+  second-family path (`review_policy.json`) is never carried automatically: a
+  base merge that moves its diff key needs independent follow-up coverage or
+  a full review on the new key. A base merge
   that leaves the PR's files untouched keeps the key, and its records still
   count, as for any PR.
 - The gate proves a review was recorded, not that it was honest: every agent
   posts through the same GitHub account, so a comment cannot distinguish a
   real review from an author's own. A record whose reviewer is the PR's own
   author is not a review.
-- Bot PRs (dependabot) get no exemption: the incident that motivated "no
+- Bot PRs use the same evidence rules: the incident that motivated "no
   mechanical exemption" was a dependency bump. Nobody has to remember them
   either: the optional `review_gate.py sweep` fallback reviews one quiet PR per run
-  from the owner's account or dependabot after 15 minutes without an update.
+  from the owner's account, Dependabot, or the already trusted UNITARES agents
+  App after 15 minutes without an update. Forks and unknown publishers wait
+  for explicit human handling.
   Drafts require the owner's explicit `review-requested` label; unfinished
   drafts are excluded by default. `no-auto-review` holds
   automatic review of intentionally unfinished work. Outside contributors'
@@ -308,34 +372,101 @@ fallback validation.
 
 #### Round cap
 
-Operator decision, 2026-09-30: `ROUND_CAP_ENABLED=True` supersedes the
-September 27 uncapped setting. A PR gets three completed **full** review rounds
-across native, local and external sources. Each local/external receipt records
-its captured head, base, scope and review identity; native artifacts supply
-actual reviewed commit evidence. Duplicate receipts and dispositions do not
-count again. FAILED attempts and targeted fix verification are not full rounds.
-A base change can invalidate coverage but does not replenish the budget.
-Legacy records with insufficient provenance remain legacy: they are neither
-invented full reviews nor a fresh budget. Unknown history requires escalation.
+Operator direction, 2026-10-14, updates the September 30 budget unit: a PR
+gets three **full review cycles**. Operator direction, 2026-10-15, makes the
+budget context-based: a cycle that found a serious problem (a P0/P1 finding,
+or an unlabelled one) does not count toward the three, because the fix of a
+serious finding earns a full review of the fix however many cycles came
+before (a re-review of the same unchanged diff does not). Only posted review
+records can show a serious finding; an unposted local run always counts.
+Clean cycles and cycles with only lesser findings count. The cap stops review that
+has stopped finding serious problems, not review that keeps finding them; a
+backstop of ten cycles in all still bounds a review that never converges. A cycle starts with its first completed
+full review and can include one other, distinct model family on the same
+revision. Repeating a family, requesting a third family, or changing the
+revision/diff starts another cycle. The second family can finish cycle three
+without an extra approval. Unknown families cannot share a cycle. Native
+reviews group by their explicit reviewed commit; where both records carry
+diff keys those must match too. This spending ledger never establishes review
+coverage by itself.
 
-Ordinary code needs one independent full review, then targeted verification of
-minor fixes. The verifier must examine all changed lines and regression
-implications, independently confirm no regressions or uncertainty, answer the
-prior findings, and explicitly attest no unrelated new work. `git config review.verifier ollama:<model>` opts into a local verifier;
-no verifier is required or started by default. A separate independent human or
-model can instead record `record <file> --independent --reviewer-name <who>
---scope fix --reviewed-from <sha> --fixes-only`. A matching prior full findings
-receipt with minor severity is required. Targeted scope never counts as a full
-review or either security family. New work, uncertain scope, or work after a
-clean result requires fresh full review. Without verification, keep UNREVIEWED.
+Receipts deduplicate by actual review identity; dispositions, FAILED attempts
+and targeted follow-ups do not spend cycles. Existing provenance is used
+without inventing a head or family. Unknown legacy history still requires
+escalation. Retargeting or rewriting work does not reset the PR's ledger.
 
-At three full rounds, stop paid requests and escalate unresolved issues. P0/P1
-and security findings remain blockers; budget exhaustion never manufactures
-approval. Only explicit operator authorization permits an additional round:
-`review.sh --authorize-full-review "operator request and reason"`. The reason
-is recorded visibly with the result. `--fresh` and `--reviewer` alone do not
-bypass the cap. Council/dialectic is optional escalation, not another automatic
-review loop. Deterministic tests, lint and CI remain required.
+**Review is collaboration: more minds on the work, with coverage proportional
+to the change (operator direction, 2026-10-13).** Keep completed full reviews
+as evidence. After a clean review or minor findings, `review.sh` normally asks
+an independent reviewer to examine the complete cumulative delta from that
+full review, its interactions with the original work, and all prior findings.
+The reviewer also receives the original diff and review history. Small code
+fixes, documentation corrections and attestation updates can use this route;
+file type alone never exempts a change from scrutiny.
+
+After a base merge, follow-up material distinguishes subsequent PR edits from
+integrated upstream work. Git reconstructs the previously reviewed contribution
+on the base included in the new head; the remaining diff contains every later
+author edit, including resolutions and reversions. The complete base integration
+diff is supplied separately for checking interactions, alongside the original
+and current PR diffs. Upstream file count alone is not expanded PR scope, and an
+empty author delta does not prove that prior reasoning still applies. If Git
+cannot reconstruct the integration conflict-free, the reviewer receives the
+complete unseparated delta and must decline uncertain scope.
+
+A bounded follow-up preserves the original design and security assumptions.
+The reviewer explicitly confirms that scope and reviews every changed line.
+Materially expanded behavior or trust boundaries, invalidated prior reasoning,
+P0/P1 or unclassified source findings, and uncertain scope require a full pass.
+`--fresh` requests that pass. A declined follow-up does not automatically spend
+another round or repeatedly ask the same scope question.
+
+The receipt remains `scope=fix`, with the original reviewed commit and the
+current endpoints. It is additional coverage, not a claim that the original
+reviewers saw later edits. For sensitive changes it preserves the families
+that actually performed the original full reviews; it cannot invent a missing
+second family. Git verifies the source and destination diff keys and ancestry.
+A changed diff without an independent follow-up remains unreviewed, and open
+findings on the current diff remain blockers even if another reviewer is clean.
+Subsequent edits use the cumulative delta from a full review rather than a
+chain of unchecked receipts. Follow-ups do not consume full-review cycles,
+including when the full-cycle budget is exhausted.
+
+A separate human or model may also record this coverage with
+`record <file> --independent --reviewer-name <who> --scope fix
+--reviewed-from <full-review-sha> --fixes-only`. The last flag attests that the
+reviewer examined all changes and interactions, answered prior findings, and
+confirmed a bounded correction or clarification without scope expansion.
+The optional `git config review.verifier ollama:<model>` route remains
+available for minor-finding verification; no verifier is required by default.
+
+After cycle three, a new full cycle needs explicit operator approval. P0/P1
+and security findings remain blockers; exhausting the budget never creates
+approval. The operator may still invoke
+`review.sh --authorize-full-review "operator request and reason"` using a user
+account for one additional invocation. App credentials cannot use that flag.
+
+For an App-executable approval, the capped CLI prints a ready-to-post comment:
+
+```text
+<!-- unitares-review-cycle v1 head=<40-hex-commit> key=<64-hex-diff-key> after=<current-cycle-count> expires=<unix-seconds> -->
+I authorize one additional full review cycle on this revision to finish validation.
+```
+
+The operator posts it on that PR using a trusted **user** account. The App then
+runs `review.sh --fresh --reviewer <provider> --review-cycle-grant <comment-id>`
+for each required family. GitHub supplies the author metadata; quoted markers,
+bot comments, a comment from another PR, mismatched work, unknown history, and
+expired grants are refused before a reviewer starts. The grant expires within
+24 hours of comment creation. Its fixed `after` position allows one additional
+cycle only; repeating a family, changing the revision, or completing that
+cycle exhausts it. The second family must use the same unexpired grant once
+the base budget is exceeded. Each review receipt links its authorization.
+Deleting the grant prevents future use. Approval in chat is not synthesized
+into a user-authored GitHub comment, and no human credential fallback is used.
+
+`--fresh` and `--reviewer` alone never bypass the budget. Council/dialectic
+remains optional escalation. Deterministic tests, lint and CI remain required.
 
 Markdown-only changes under `docs/proposals/**` receive advisory review when
 the **trusted base** policy enables it. Runtime, policy and auth changes cannot
@@ -369,7 +500,8 @@ model and counts as none, so run Antigravity through `review.sh` instead. A reco
 carries its family as a word (`gemini-council`, `gpt-5-reviewer`, `claude-…`);
 an unrecognised name such as `council` counts as none. A passing review is
 `CLEAN`, or `FINDINGS` with every disposition recorded; a fix-verification
-receipt is not a full review and never counts. Open findings still block as
+receipt is not a full review: it preserves only the families of its verified
+full-review sources, never adding the follow-up reviewer's family. Open findings still block as
 before. CI enforces the rule, reading the policy as merged on the PR's base
 ref, never from the PR head, so a PR cannot remove itself from the list; if
 the changed paths cannot be read, it requires the second family.
@@ -386,8 +518,9 @@ files (`review_gate.py`, `review_policy.json`, `review.sh`,
 `review-gate.yml`) can never be waived. The gate bounds the size of the change, not its meaning: a small
 behavioural change on a sensitive path can be waived too, so read the hunks
 before you waive. The comment shows the waived hunks and
-the reason. The gate cannot tell who posted it, since every agent uses the
-operator's account, so an agent runs `waive` only when the operator says to.
+the reason. Bot comments are excluded; cloud agents using the operator's
+account remain indistinguishable from the operator, so an agent runs `waive`
+only when the operator says to and never through the App runner.
 
 `review.sh` never starts the second review itself. When a sensitive diff has
 only one family's pass it exits 3 (distinct from exit 2, reviewers unavailable)
@@ -427,9 +560,11 @@ load, plus `--mode plan --sandbox`. (`--disable-slash-commands` is not used:
 that the reviewer cannot browse the rest of the repository. There is no size
 limit: the material used to be inlined as one command-line argument, capped
 at about 120 KB, and PR #2470's 143 KB diff could not be reviewed at all. The
-default model is Gemini 3.1 Pro (High); `REVIEW_AGY_MODEL` overrides it
-(`default` leaves the choice to `agy`). It was chosen on two PRs, where it was
-the only model that found real defects, so treat it as a starting point. A
+default model is Gemini 4 Argon (High); `REVIEW_AGY_MODEL` overrides it
+(`default` leaves the choice to `agy`). The prior 3.1 Pro pin was no longer
+served on 2026-10-13. Argon replaced the interim 3.8 Flash pin after a replay
+of three past PRs with known defects (one run each): Argon found 5 of them,
+Flash 1 and 3.1 Pro 1. That is a small sample, not a quality guarantee. A
 shell command `agy` reaches for is denied and the conversation is resumed with
 a reminder that only file reads work.
 Content is read only from committed git objects: symlinks, submodules and paths
@@ -479,11 +614,12 @@ operator's), the environment-independent path is a PR comment:
    `review.sh dispose <file> --emit` as described in
    [Recording a review without gh](#recording-a-review-without-gh) and post it
    verbatim. Do not assemble the disposition record by hand.
-   The enabled [round cap](#round-cap) applies here too: after three completed
-   full rounds, stop requests and escalate unresolved findings. Ordinary minor
+   The enabled [round cap](#round-cap) applies here too: after three full
+   cycles that found no P0/P1 (or ten in all), stop requests and escalate
+   unresolved findings. Ordinary minor
    fixes may receive honest targeted verification; security needs full current
    coverage from two families. P0/P1 remain blockers, and an additional full
-   round requires explicit operator authorization with a recorded reason.
+   cycle requires explicit operator authorization with a recorded reason.
 4. If Codex replies "Something went wrong" (for example `Provided git ref …
    does not exist` right after a push), post the request once more. That
    error came from Codex's checkout lagging the push on 2026-09-23 (#2356);
@@ -633,8 +769,8 @@ nine open PRs that is nine update-branch clicks and over two hours of CI per
 pass through the queue, and each merge re-dirties the rest. That is arithmetic,
 not a discipline problem — no amount of care makes it cheaper.
 
-**Queue it instead of watching.** When your PR is ready (CI green, `review`
-check passing), mark it ready and apply `approved-to-merge` in the same step.
+**Queue it instead of watching.** When your PR is ready (CI green, known findings addressed, and required
+sensitive-path review coverage passing), mark it ready and apply `approved-to-merge` in the same step.
 The queue below arms it in turn, GitHub updates the branch when the base moves
 (the repo has "always suggest updating pull request branches" enabled), and it
 merges as soon as the required checks pass. Do not arm with `gh pr merge
@@ -854,7 +990,7 @@ this entirely).
 | Your PR is READY (CI green, `review` passing) | `gh pr ready <n>`, then `gh pr edit <n> --add-label approved-to-merge`; the queue lands it (section 4) |
 | You pushed again after labelling (or its stacked parent merged) | once validation passes again: `gh pr edit <n> --remove-label approved-to-merge`, then `gh pr edit <n> --add-label approved-to-merge` (a label already present records no new approval) |
 | Tempted to stack a third PR on a stack | Fold it into the one below instead |
-| Review round 3 done | Escalate unresolved findings; another full round needs explicit operator authorization ([round cap](#round-cap)) |
+| Third cycle without a P0/P1 done, or tenth in all | Escalate unresolved findings; another full cycle needs explicit operator authorization ([round cap](#round-cap)) |
 | Docs/tests-only, knowingly skipping the PR | `./scripts/dev/ship.sh --direct "msg"` (the opt-out) |
 
 ## Per-entrypoint mapping

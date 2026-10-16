@@ -1,6 +1,6 @@
 # UNITARES public interface contract
 
-**Current contract:** `unitares.interface-contract.v1`, version `1.32.0`
+**Current contract:** `unitares.interface-contract.v1`, version `1.41.0`
 
 UNITARES is MCP-native, but the integration boundary is a set of capabilities,
 not one transport. Every transport negotiates the same complete catalog, while
@@ -352,7 +352,16 @@ The two identifiers serve different jobs:
   one live holder ahead of archived or deleted ones, and a target naming more
   than one agent is refused with `AMBIGUOUS_TARGET` where the first matching
   registry row used to be returned. Only the long description of `target_agent_id`
-  changes, which is outside every input digest, so no digest moves).
+  changes, which is outside every input digest, so no digest moves;
+  1.33.0, 2026-10-13: `search_shared_memory`, output only. A `lean` or
+  `compact` search called with `limit` above 3 lists the results after the
+  three digests under `more_results`, one row each (`discovery_id`, `type`,
+  `status`, a summary bounded at 100 characters), up to 17 rows inside a
+  2,000-byte budget of their own, and reports their number as
+  `state_summary.more_results_shown`. A search with no `limit`, or a `limit`
+  of 3 or less, returns what it did before, and the `full` tier is
+  unchanged. Only the long description of `limit` changes, which is outside
+  every input digest, so no digest moves).
 
 Every `input_schema_sha256` moved in 1.4.0 without a single parameter name,
 type, default or requiredness changing: descriptions live inside the hashed
@@ -396,10 +405,240 @@ newest in-range version, which is 2.x as well. A client
 should negotiate the UNITARES contract above rather than infer compatibility
 from its locally installed MCP package version.
 
-Regenerate the artifact from the repository root with:
+For an output or description change, prepare the release files in one command
+from the repository root (choose the next version deliberately):
+
+```bash
+python3 scripts/dev/prepare_interface_release.py --version 1.34.0 \
+  --slug describe-output --summary "Describe the observable change."
+```
+
+Use `--dry-run` to preview destinations and skills citing affected files. The
+command bumps the source version with a dated note, regenerates the artifact,
+adds a release-entry stub here and writes a changelog fragment. It refuses an
+existing fragment or a nonadvancing version and restores the original files if
+generation fails. Finish the compatibility/digest/client-action prose, re-check
+the listed skills, then explicitly stamp them with a named verifier. It never
+certifies skills on your behalf. Commit all release files with the actual fix.
+
+To regenerate only the artifact from the repository root:
 
 ```bash
 python3 -m src.interface_contract > docs/interface-contract.v1.json
 ```
 
 Then run `tests/test_interface_contract.py` and the normal repository test gate.
+
+## 1.34.0 (2026-10-13)
+
+Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+
+Search and agent-scoped get retain full stored bodies but cap imported inline
+`details` at 2,048 UTF-8 bytes. Oversized rows report `details_truncated`, original
+`details_length` (characters), `details_bytes`, `has_more_details`, and a
+`details_retrieval` argument object for `knowledge(action="details")`. Its explicit
+paged read is unchanged. Native findings and governed promotions are unchanged.
+
+Imported rows carry `imported_memory` with `trust="unreviewed"`, `age_days`
+(or null for an unreadable timestamp) and `age_basis="created_at"`. This age is
+KG row age, not source-file age or time since verification. Routine sync/status
+updates do not reset it. Digest and additional-result rows retain the marker
+inside their existing byte budgets, so fewer rows may fit. No ranking or
+retention policy changes.
+
+The knowledge include_details description changes the knowledge schema digest;
+search_shared_memory retains its brief description and digest. Clients should
+follow `details_retrieval` to read long imported evidence instead of assuming
+inline content is complete. No arguments are removed or retyped.
+
+## 1.35.0 (2026-10-13)
+
+Add bounded replayable knowledge notices for proven active sessions
+
+`knowledge(action="notices")` adds optional `acknowledge` (at most three
+revision UUIDs), `acknowledge_gap` (one gap UUID) and `muted` (boolean).
+The knowledge schema digest changes; no existing argument is removed.
+The action requires a caller-proven process binding and never accepts another
+recipient from an argument. Reads replay; exact acknowledgements cannot erase
+newer revisions or another process's pending notice.
+
+Successful active tool responses may carry `knowledge_changes`: at most three
+coalesced row pointers under a separate 2,048-byte UTF-8 budget. Existing base
+response budgets still apply before this optional field. Each pointer names a
+row, revision, kind, changed fields and details arguments. If `_response_size`
+exists, its measurement includes this field. No background/model work is started.
+Typed refusals and errors pass through without notices.
+
+Recipients are the row owner (on updates) and exact `notify-agent-<UUID>` tags.
+A removed mention revokes its pending pointer. Process identity, not a display
+name or predecessor, owns an inbox. The delivery backlog keeps at most 100
+rows for seven days; lazy trimming reports a stable `gap_token`. Intermediate
+changes to one row deliberately coalesce. Read details before acting, acknowledge
+only received revisions, and rescan before acknowledging a gap. Muting suppresses
+automatic display without granting authority or changing KG status/content.
+
+Migration 074 couples pointers to canonical-table commits for both KG backends.
+No historical events are backfilled. Writer attribution is not inferred from
+ownership: this version exposes no actor field because system mutation paths do
+not consistently carry a proven writer. The current shared KG permits unbound
+row reads; delivery still joins the current row and checks current recipient
+membership. A future row-ACL feature must extend both details and notice checks.
+No credentials, permission checks or scientific instruments are changed.
+
+## 1.35.1 (2026-10-13)
+
+`knowledge(action="notices")` now returns one MCP text-content item containing
+the JSON notice response. Previously its success path nested the content list,
+causing the gateway to stringify the Python representation into `result` instead
+of exposing `notices`, `muted`, `has_more`, and acknowledgement guidance.
+
+This corrects the 1.35.0 output contract without changing inputs, permissions,
+or notice delivery. Schema digests do not move. Clients can read the documented
+JSON fields directly after the server upgrade; no request changes are needed.
+
+## 1.36.0 (2026-10-13)
+
+`consult` accepts optional `host_id` for the five existing advisory hosts.
+HTTP hosts (`ollama:local`, `hf:router`) require standard effort; the three CLI
+adapters require thorough effort. External hosts require `cloud_allowed`.
+Pinned calls reject `allow_degraded=true` and never try another peer or local
+fallback. The compact request receipt and text-free audit include the selected
+host; existing full diagnostics retain the actual route. Selecting the caller's
+own family is permitted for advice and never grants governed-review authority.
+
+Discovery lists `consult` in `accepts_host_id_from` for all five hosts. Raw tool
+contracts and default recommendations remain compatible. `consult`'s input
+schema digest and the aggregate surface hash change; callers omitting `host_id`
+retain automatic routing and need no request changes. Refresh cached schemas
+to use explicit selection.
+
+Full consultation failures retain a bounded, unvalidated adapter-output excerpt
+for the caller, excluded from audit storage. HF HTTP 401/402/429 failures now
+feed the existing bounded auth/quota cooldown; discovery reports the observed
+unavailability, without a model or billing probe. These output/description fixes
+change no raw-tool input schemas.
+
+## 1.37.0 (2026-10-14)
+
+Infer omitted consult effort from a selected host and explain aggregate token usage in full diagnostics.
+
+For `consult`, omitted `effort` becomes thorough for an explicitly selected CLI
+host, otherwise standard. An explicit value is never overwritten; incompatible
+host/effort pairs still fail before dispatch. Privacy, pinning, failover and
+advisory authority are unchanged. The compact request receipt and audit show
+the resolved effort.
+
+The `effort` input retains its string enum and optionality but no longer
+advertises an unconditional standard default. Descriptions state the
+conditional default. Only the `consult` input digest and aggregate surface hash
+move; refresh cached schemas and omit effort to use inference. Existing calls
+with a matching explicit effort, and automatic calls with no host, keep their
+behavior. Null remains outside the advertised effort schema.
+
+Full consultation diagnostics add `tokens_used_note` when a token aggregate is
+present. It explains provider-specific counting and zero-as-unreported behavior.
+Counts, pricing and EISV accounting are unchanged. Compact responses and the
+durable audit do not include this explanatory text. Full failure diagnostics
+also retain the backend message, bounded to 500 characters and excluded from
+compact responses and audit storage; the facade summary and failure semantics
+remain unchanged.
+
+## 1.38.0 (2026-10-14)
+
+KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+
+Output-only compatible addition to knowledge search, agent-scoped get and
+details. A record with recognizable dated `Resolution notes (...)` blocks in its
+full details carries `resolution_notes={source: "details_text", count,
+first_offset, latest_offset}`. Offsets count Unicode characters, matching the
+existing details pagination, and refer to the full stored text before any
+preview or imported-content truncation. Records without such blocks are unchanged.
+The metadata survives canonical lean search, the friendly search digests and
+`more_results`; a response-level `resolution_notes_hint` explains the read route.
+The existing 3,000-byte digest and 2,000-byte extra-row budgets still apply.
+
+Clients may call `knowledge(action="details", discovery_id=..., offset=...)`
+at `latest_offset` to read the last block or `first_offset` to inspect the history.
+The details read returns fresh locations: replacing text can invalidate an earlier
+offset. The locations are parsed from text, not authenticated update receipts;
+the last note may be administrative, and no claim of truth, current policy or
+note-author identity is implied. No excerpts are substituted for original claims.
+Stored content, identity, authority, ranking, input schemas and schema digests
+are unchanged. Existing clients may ignore the added fields; no schema refresh
+is needed to keep using existing inputs.
+
+## 1.39.0 (2026-10-14)
+
+The default/explicit `lean` response from `search_shared_memory` omits the optional
+`response_options` tier ladder and repeated write recipes in `next_action`.
+`discovery_retrieval_options` keeps `current_tier`, `open_one`, and, when present,
+`requested_tier` and `details_omitted_by`. Serialization diagnostics and all-inline
+coaching remain in `compact`; `full` retains the canonical response. Confidence,
+degradation and imported-memory caveats, lifecycle markers, correction pointers,
+and attribution keep their existing semantics and budgets.
+
+Under byte pressure, the full-mode hint may shrink to its executable call while
+preserving the expansion route. This also reserves room for the existing
+attribution-omitted marker after lean coaching is removed. Result summaries,
+ranking, storage and write behavior are unchanged. The digest and extra-row
+budgets remain 3 KB and 2 KB.
+
+This is output shaping within fields already optional under response budgeting;
+input schemas and schema digests are unchanged. Clients must tolerate absent
+optional coaching and should use the structured result count and retrieval tier.
+Request `compact` for serialization diagnostics or `full` for canonical fields.
+
+## 1.40.0 (2026-10-14)
+
+`list_inference_hosts` now defaults `include_unconfigured` to `false` in the
+advertised schema, handler, registry and both Python SDK clients. Omitted
+arguments list configured hosts only, including when `provider_kind` filters
+the result. Configured hosts remain
+listed during outages or quota/auth cooldowns; callers must inspect `available`
+and `cooldown` before selecting a host.
+
+Explicit `include_unconfigured=true` retains the complete registered inventory.
+`describe_inference_host` still accepts any registered host ID, and the static
+host enums remain unchanged. No adapter or invocation capability is removed.
+The discovery description and intent map now explain these distinctions.
+
+The `list_inference_hosts` input-schema digest and aggregate surface digest
+change; output envelope shapes and other input-schema digests are unchanged.
+Clients relying on omission to return every registered host must send
+`include_unconfigured=true`. Refresh cached schemas so clients do not inject
+the previous `true` default. Older Python SDK clients serialize `true` on
+omission; upgrade or explicitly pass `include_unconfigured=False` to request
+configured hosts only. Explicit `false` and `true` retain their existing behavior.
+
+## 1.41.0 (2026-10-15)
+
+`consult` and `delegate_inference` take `host_id` as a bounded string (1 to 128
+characters) instead of an enum. The handler checks it at runtime: `consult`
+accepts the hosts it can route (`ollama:local`, `hf:router` and the three
+host adapters), and `delegate_inference` keeps its registry check on
+`accepts_host_id_from`. Every id accepted before is still accepted; an unknown
+id is refused with the valid ids.
+
+`consult`'s thorough lane takes its host order from the `consult.thorough` job
+in the operator's inference hosts file, or claude, codex, antigravity when no
+job is set, which is the order the per-family peer table gave. Results:
+
+- `family` (compact and full) names the served host's model family, and the
+  audit record's route carries it.
+- `skipped` lists the hosts passed over before the one that served, in order,
+  each with a closed reason code (`disabled`, `unconfigured`, `cooldown`,
+  `excluded_family`) and a sentence. It appears only when a host was skipped,
+  and never on `privacy="local"`, which contacts no thorough host.
+- New refusals: `INFERENCE_CONFIG_INVALID` (the hosts file does not load; the
+  standard lane is unaffected), `CONSULT_NO_ELIGIBLE_HOST` (every host in the
+  job was skipped; with `allow_degraded=true` the call answers locally
+  instead, contacting no thorough host), `CONSULT_HOST_NOT_IN_JOB` and
+  `CONSULT_HOST_DISABLED` for a pinned host. All are recorded.
+
+`list_inference_hosts` and `describe_inference_host` report each host's
+`family` (added in the step 1 change, recorded here).
+
+Compatibility: additive for callers. A client that cached the old enum will
+still send valid ids. Schema digests move for `consult` and
+`delegate_inference` (the `host_id` property lost its enum); no other digest
+moves. Client action: none required; read `skipped` and `family` where useful.

@@ -44,6 +44,8 @@ changes the E/I distribution and every downstream baseline.
 
 For non-embodied agents (the common case), three observations are computed from governance observables. On the MCP check-in path the sensor actually runs in the handler (`src/mcp_handlers/updates/phases.py`), which injects the result as `sensor_eisv` with `sensor_eisv_source="behavioral"`; the monitor recomputes it internally only as a fallback. Embodied agents (e.g. the Raspberry-Pi deployment) instead supply hardware `sensor_eisv` directly (`governance_monitor.py`, the `sensor_eisv` intake path).
 
+**Timing on the live path.** The handler computes the observation before the monitor processes the check-in (`prepare_unlocked_inputs`). It reads `drift_norm`, `complexity_divergence` and the continuity E/I/S inputs from what the monitor stored at the previous check-in, so those inputs lag by one check-in. Tool-usage statistics, recent outcomes and the calibration scalar are read at the current check-in. The monitor-internal fallback reads the current check-in's drift and continuity instead. A check-in's own complexity report and response structure therefore first reach E, I and S at the next check-in (contract ledger row 54).
+
 **E_obs** — decision, controller-level and complexity blend (`_compute_E`):
 ```
 decision_e = exp-weighted (α=0.3) mean of verdict scores over last 10 decisions

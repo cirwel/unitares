@@ -1,0 +1,795 @@
+{
+  "date": "2026-10-13",
+  "dialectic_session": "06abb3f7a18cce6f",
+  "finding_fingerprint": "bdb18ee4e52ee7d6",
+  "before_deploy_commit": "b0dfa98aa",
+  "after_deploy_commit": "0db47012b",
+  "measurement": "Sequential MCP use_tool wall-clock milliseconds; no samples excluded.",
+  "before": [
+    {
+      "name": "nonexistent-tag",
+      "query": "open finding",
+      "tags": [
+        "__probe_tag_missing_verify_20260822__"
+      ],
+      "samples": [
+        {
+          "elapsed_ms": 340,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 213,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 187,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 191,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 185,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 195,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 185,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 190,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 201,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 198,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        }
+      ]
+    },
+    {
+      "name": "sparse-weak-query",
+      "query": "quarterly budget forecast",
+      "tags": [
+        "cross-repo"
+      ],
+      "samples": [
+        {
+          "elapsed_ms": 258,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 268,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 276,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 301,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 349,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 275,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 300,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 257,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 253,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 244,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        }
+      ]
+    }
+  ],
+  "after": [
+    {
+      "name": "original-dogfood-repro",
+      "args": {
+        "query": "dogfood friction",
+        "status": "open",
+        "tags": [
+          "__dogfood_probe_tag_missing_20260822__"
+        ],
+        "limit": 5
+      },
+      "samples": [
+        {
+          "elapsed_ms": 3945,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 231,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 227,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 207,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 223,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 211,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 230,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 231,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 220,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        },
+        {
+          "elapsed_ms": 202,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 0,
+          "ids": [],
+          "tags": []
+        }
+      ]
+    },
+    {
+      "name": "sparse-weak-query",
+      "args": {
+        "query": "quarterly budget forecast",
+        "tags": [
+          "cross-repo"
+        ],
+        "limit": 20
+      },
+      "samples": [
+        {
+          "elapsed_ms": 293,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 321,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 299,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 309,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 302,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 326,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 309,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 309,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 308,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        },
+        {
+          "elapsed_ms": 302,
+          "success": true,
+          "mode": "hybrid_rrf",
+          "count": 2,
+          "ids": [
+            "2026-10-13T18:43:20.747647+00:00",
+            "2026-06-13T20:55:22.147315+00:00"
+          ],
+          "tags": [
+            [
+              "github",
+              "cross-repo",
+              "pr-workflow",
+              "automatic-closure"
+            ],
+            [
+              "dogfood-2026-06-13",
+              "followup",
+              "needs-operator-decision",
+              "p1-3",
+              "identity",
+              "writer-locked",
+              "serialization",
+              "cross-repo"
+            ]
+          ],
+          "low_confidence": true
+        }
+      ]
+    }
+  ]
+}

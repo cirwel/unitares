@@ -2,8 +2,8 @@
 
 A default install runs no agent orchestrator, so the Codex, Claude and
 Antigravity adapters can never serve there. These tests pin that the catalog
-keeps listing them (reachability is a routing contract and does not flap with
-configuration) while every surface an agent reads on such an install says the
+keeps them in the explicit full inventory (reachability is a routing contract
+and does not flap with configuration) while every surface an agent reads on such an install says the
 extension is off and points at the lane that works, instead of listing flags as
 if one were missing.
 """
@@ -39,7 +39,7 @@ def default_install(monkeypatch):
 
 
 def _hosts_by_id():
-    return {host["host_id"]: host for host in registry.list_inference_hosts()}
+    return {host["host_id"]: host for host in registry.list_inference_hosts(include_unconfigured=True)}
 
 
 def test_lane_needs_both_the_flag_and_the_bearer(monkeypatch):
@@ -61,7 +61,7 @@ def test_adapter_records_name_their_extension_and_local_hosts_do_not(default_ins
         assert hosts[host_id]["extension"] == HOST_ADAPTER_EXTENSION
         assert hosts[host_id]["configured"] is False
         # Still listed, still reachable by contract: routing does not flap.
-        assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference"]
+        assert hosts[host_id]["accepts_host_id_from"] == ["delegate_inference", "consult"]
     assert hosts["ollama:local"]["extension"] is None
     assert hosts["hf:router"]["extension"] is None
 

@@ -284,7 +284,27 @@ INTERFACE_CONTRACT_SCHEMA = "unitares.interface-contract.v1"
 # the first matching registry row used to be returned. Only target_agent_id's long
 # description changes, which is outside every input digest, so no digest
 # moves: the version records the behavior change.
-INTERFACE_CONTRACT_VERSION = "1.32.0"
+# 1.33.0 (2026-10-13): search_shared_memory, output only. A lean or compact
+# search called with limit above 3 lists the results after the three digests
+# under more_results, one row each (discovery_id, type, status, a summary
+# bounded at 100 characters), up to 17 rows inside a 2,000-byte budget of
+# their own, and reports their number as state_summary.more_results_shown.
+# A search with no limit, or limit of 3 or less, returns what it did before,
+# and the full tier is unchanged. Only limit's long description changes,
+# which is outside every input digest, so no digest moves: the version
+# records the output change.
+# 1.34.0 (2026-10-13): Imported memory search/get previews are bounded to 2 KiB UTF-8 and disclose unreviewed status and creation age.
+# 1.35.0 (2026-10-13): Add bounded replayable knowledge notices for proven active sessions; canonical notify-agent-<UUID> mentions
+# 1.35.1 (2026-10-13): Return knowledge notices as flat MCP text content with structured JSON fields.
+# 1.36.0 (2026-10-13): consult accepts an optional host_id for the five existing
+# advisory hosts, with pinned routing, matching effort, unchanged privacy and
+# authority gates, and no fallback. Omitted selection keeps automatic routing.
+# 1.37.0 (2026-10-14): Infer omitted consult effort from a selected host; full diagnostics explain aggregate tokens and retain bounded backend failure messages.
+# 1.38.0 (2026-10-14): KG search, get and details reads expose character offsets into appended resolution notes without changing stored claims or ranking.
+# 1.39.0 (2026-10-14): Lean KG search omits repeated coaching while preserving evidence, expansion routes and requested-detail omission disclosures.
+# 1.40.0 (2026-10-14): Inference-host discovery lists configured hosts by default; include_unconfigured=true retains the complete registered inventory.
+# 1.41.0 (2026-10-15): consult and delegate_inference take host_id as a bounded string checked at runtime (every existing id still accepted); consult's thorough lane follows the consult.thorough job (default order unchanged); results report the served host's family and the hosts skipped before it, with reason codes.
+INTERFACE_CONTRACT_VERSION = "1.41.0"
 LIFECYCLE_ENVELOPE_SCHEMA = "unitares.lifecycle-envelope.v1"
 SUPPORTED_MCP_SPECIFIER = ">=1.26.0,<3.0.0"
 FEDERATION_LIFECYCLE_CAPABILITIES = (

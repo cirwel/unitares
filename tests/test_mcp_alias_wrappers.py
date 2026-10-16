@@ -230,6 +230,7 @@ async def test_search_shared_memory_suppresses_detail_serialization_upstream(
     options = result["discovery_retrieval_options"]
     assert options["current_tier"] == "digest"
     assert options["requested_tier"] == "full_inline"
-    assert options["details_serialized"] is False
-    assert result["response_options"]["current"] == "lean"
+    assert options["details_omitted_by"] == "response_mode='lean' before serialization"
+    assert "details_serialized" not in options  # diagnostics remain in compact
+    assert "response_options" not in result
     assert "raw_governance" not in result

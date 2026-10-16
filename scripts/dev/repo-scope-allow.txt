@@ -26,7 +26,7 @@ docs/proposals/archive/2026-06-24-wave-3-gate-framing.md
 # rewriting the ledger's past entries to satisfy the guard would falsify the
 # record. New entries must still be written clean — the allowlist exempts the
 # file, not the practice (2026-08-13).
-docs/ontology/plan.md
+docs/ontology/plan-2026-06-14.md
 
 # Wave 3 §5.2 boundary-cost audit summary — a frozen 2026-06-10 technical
 # record in the same class as the BEAM Wave RFCs above, and additionally a LIVE

@@ -420,7 +420,8 @@ class TestToolMapping:
         assert result.inference.cost_usd == 0.02
 
     @pytest.mark.asyncio
-    async def test_list_inference_hosts_maps_tool(self):
+    @pytest.mark.parametrize("include_unconfigured", [None, False, True])
+    async def test_list_inference_hosts_maps_tool(self, include_unconfigured):
         session = AsyncMock()
         session.call_tool = AsyncMock(return_value=make_mcp_result({
             "success": True,
@@ -430,12 +431,13 @@ class TestToolMapping:
         }))
         client = make_client_with_session(session)
 
-        result = await client.list_inference_hosts(provider_kind="ollama")
+        supplied = {} if include_unconfigured is None else {"include_unconfigured": include_unconfigured}
+        result = await client.list_inference_hosts(provider_kind="ollama", **supplied)
 
         tool_name, args = session.call_tool.call_args[0]
         assert tool_name == "list_inference_hosts"
         assert args["provider_kind"] == "ollama"
-        assert args["include_unconfigured"] is True
+        assert args["include_unconfigured"] is (include_unconfigured is True)
         assert result.hosts[0].host_id == "ollama:local"
 
     @pytest.mark.asyncio
