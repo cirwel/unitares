@@ -102,6 +102,21 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
     end
   end
 
+  defp resolution_effect_reason(session_id) do
+    case Postgrex.query!(
+           DB,
+           """
+           SELECT execution_result_json->>'reason'
+           FROM coordination.dialectic_resolution_effects
+           WHERE session_id = $1
+           """,
+           [session_id]
+         ).rows do
+      [[reason]] -> reason
+      [] -> nil
+    end
+  end
+
   test "claim reserves a fresh saga for a non-terminal session" do
     session_id = insert_dialectic_session()
     on_exit(fn -> cleanup_dialectic_session(session_id) end)
@@ -246,6 +261,21 @@ defmodule UnitaresLeasePlane.DialecticSagaTest do
 
       assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(params)
       assert resolution_effect(session_id) == [false, nil, "applied", true, "resume"]
+      assert resolution_effect_reason(session_id) == "active_at_session_open"
+    end
+
+    test "v1 protocol safely closes a pre-binding session without resuming a later pause" do
+      session_id = insert_dialectic_session()
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      params =
+        session_id
+        |> claim_params(effect_resolution())
+        |> Map.put(:effect_protocol, "v1")
+
+      assert {:ok, %{status: "resolved"}} = DialecticSaga.resolve(params)
+      assert resolution_effect(session_id) == [false, nil, "applied", true, "resume"]
+      assert resolution_effect_reason(session_id) == "legacy_unbound_session"
     end
 
     test "v1 protocol rolls back terminal state when a required pause token is missing" do

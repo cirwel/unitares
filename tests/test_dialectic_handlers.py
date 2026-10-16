@@ -2192,6 +2192,138 @@ class TestHandleSubmitSynthesis:
         assert len(resolved) == 1
 
     @pytest.mark.asyncio
+    async def test_superseded_bound_pause_is_named_and_not_calibrated(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            _ResolutionCommitResult,
+            _ResolutionEffectResult,
+            handle_submit_synthesis,
+        )
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = _effect_resolution()
+        calibration = AsyncMock(return_value=True)
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}._commit_converged_resolution",
+            new=AsyncMock(return_value=_ResolutionCommitResult(
+                True, False, "python_write"
+            )),
+        ), patch(
+            f"{DIALECTIC}._apply_durable_resolution_effect",
+            new=AsyncMock(return_value=_ResolutionEffectResult(
+                "applied",
+                True,
+                {
+                    "success": True,
+                    "no_op": True,
+                    "superseded": True,
+                    "reason": "pause_generation_superseded",
+                    "applied_conditions": [],
+                    "status_changed": False,
+                },
+            )),
+        ), patch(
+            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["observe"],
+                "agrees": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["execution"]["superseded"] is True
+        assert "already consumed or superseded" in data["next_step"]
+        calibration.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_legacy_unbound_session_closes_as_safe_no_op(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        from src.mcp_handlers.dialectic.handlers import (
+            _ResolutionCommitResult,
+            _ResolutionEffectResult,
+            handle_submit_synthesis,
+        )
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.paused_agent_state = {}
+        session.synthesis_round = 1
+        resolution = _effect_resolution()
+        calibration = AsyncMock(return_value=True)
+        outcome = AsyncMock()
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}._commit_converged_resolution",
+            new=AsyncMock(return_value=_ResolutionCommitResult(
+                True, False, "python_write"
+            )),
+        ), patch(
+            f"{DIALECTIC}._apply_durable_resolution_effect",
+            new=AsyncMock(return_value=_ResolutionEffectResult(
+                "applied",
+                False,
+                {
+                    "success": True,
+                    "no_op": True,
+                    "reason": "legacy_unbound_session",
+                },
+            )),
+        ), patch(
+            f"{DIALECTIC}.update_calibration_from_dialectic", new=calibration
+        ), patch(
+            f"{DIALECTIC}.record_resolution_outcome", new=outcome
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, \
+             mock_context_agent:
+            result = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["observe"],
+                "agrees": True,
+            })
+
+        data = parse_result(result)
+        assert data["success"] is True
+        assert data["execution"]["reason"] == "legacy_unbound_session"
+        assert "predates pause-generation binding" in data["next_step"]
+        calibration.assert_not_awaited()
+        outcome.assert_awaited_once_with(
+            session, resolution, data["execution"]
+        )
+
+    @pytest.mark.asyncio
     async def test_independent_reviewer_over_a_live_pause_is_unaffected(
         self, mock_server, mock_pg_add_message, mock_pg_update_phase,
         mock_save_session, mock_pg_resolve_session, mock_context_agent,
@@ -3648,6 +3780,41 @@ class TestDurableResolutionEffect:
             "pause_token": "pause-1",
         }
         return session
+
+    @pytest.mark.asyncio
+    async def test_legacy_unbound_session_is_an_applied_no_op(self):
+        from src.mcp_handlers.dialectic.handlers import (
+            _apply_durable_resolution_effect,
+        )
+
+        session = self._session()
+        session.paused_agent_state = {}
+        resolution = _effect_resolution()
+        execute = AsyncMock()
+        effect = {
+            "paused_agent_id": session.paused_agent_id,
+            "reviewer_agent_id": session.reviewer_agent_id,
+            "effect_required": False,
+            "pause_token": None,
+            "resolution_payload_json": resolution.to_dict(),
+            "state": "applied",
+            "claimed": False,
+            "execution_result_json": {
+                "success": True,
+                "no_op": True,
+                "reason": "legacy_unbound_session",
+            },
+        }
+        with patch(
+            f"{DIALECTIC}.pg_claim_resolution_effect",
+            new=AsyncMock(return_value=effect),
+        ), patch(f"{DIALECTIC}.execute_resolution", new=execute):
+            result = await _apply_durable_resolution_effect(session, resolution)
+
+        assert result.state == "applied"
+        assert result.claimed is False
+        assert result.execution_result == effect["execution_result_json"]
+        execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_claim_execute_complete_then_outcome(self):

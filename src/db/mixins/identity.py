@@ -227,7 +227,11 @@ class IdentityMixin:
         pause_token: str,
         lifecycle_event: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Atomically publish one pause generation to both durable copies."""
+        """Atomically publish one pause generation to both durable copies.
+
+        A nonterminal split-brain status is repaired while the new generation
+        is installed. Terminal status in either copy remains a hard refusal.
+        """
         if not isinstance(pause_token, str) or not pause_token.strip():
             return {"applied": False, "reason": "pause_token_missing"}
 
@@ -253,16 +257,28 @@ class IdentityMixin:
                     metadata = json.loads(metadata)
                 agent_status = row["agent_status"]
                 identity_status = row["identity_status"]
-                if agent_status != identity_status:
+                terminal_statuses = {"archived", "deleted"}
+                if (
+                    agent_status in terminal_statuses
+                    or identity_status in terminal_statuses
+                ):
                     return {
                         "applied": False,
-                        "reason": "durable_status_mismatch",
+                        "reason": "terminal_agent_status",
                         "agent_status": agent_status,
                         "identity_status": identity_status,
                     }
 
                 current_token = metadata.get("paused_at")
-                if agent_status == "paused":
+                status_mismatch = agent_status != identity_status
+                missing_pause_token = (
+                    agent_status == identity_status == "paused"
+                    and not (
+                        isinstance(current_token, str)
+                        and current_token.strip()
+                    )
+                )
+                if agent_status == identity_status == "paused" and not missing_pause_token:
                     if current_token == pause_token:
                         return {
                             "applied": True,
@@ -273,12 +289,6 @@ class IdentityMixin:
                         "applied": False,
                         "reason": "already_paused_different_generation",
                         "current_pause_token": current_token,
-                    }
-                if agent_status in {"archived", "deleted"}:
-                    return {
-                        "applied": False,
-                        "reason": "terminal_agent_status",
-                        "agent_status": agent_status,
                     }
 
                 events = list(metadata.get("lifecycle_events") or [])
@@ -321,7 +331,16 @@ class IdentityMixin:
                 if identity_result != "UPDATE 1":
                     raise RuntimeError("pause CAS lost on core.identities")
 
-        return {"applied": True, "pause_token": pause_token}
+        result = {"applied": True, "pause_token": pause_token}
+        if status_mismatch:
+            result.update({
+                "reconciled_status_mismatch": True,
+                "previous_agent_status": agent_status,
+                "previous_identity_status": identity_status,
+            })
+        if missing_pause_token:
+            result["repaired_missing_pause_token"] = True
+        return result
 
     async def resume_agent_if_pause_token(
         self,

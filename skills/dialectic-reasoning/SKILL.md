@@ -389,6 +389,11 @@ The durable effect row is authoritative; outcome, calibration and lifecycle
 signals are best-effort, and their attempted delivery never makes an applied
 effect replayable.
 
+A session created before pause-generation binding closes with
+`legacy_unbound_session` as an applied no-op. That result never resumes the
+agent's current pause or adds conditions, because the current pause may be a
+newer generation. Open a fresh review to act on the current pause.
+
 A resolved session read also carries an `attestation` block saying what party
 signatures the record actually holds: `bilateral`, `single_signer`, `unsigned`,
 or `legacy_v1`. Read it rather than inferring from the signature fields, and do

@@ -29,6 +29,16 @@ AUTHOR = "22222222-2222-4222-8222-222222222222"
 PEER = "33333333-3333-4333-8333-333333333333"
 
 
+class _AsyncpgRecordLike:
+    """Mapping protocol shape exposed by asyncpg.Record without ABC registration."""
+
+    def __init__(self, values: dict):
+        self._values = values
+
+    def items(self):
+        return self._values.items()
+
+
 def _state(*authors: str) -> dict:
     declaration = declaration_for_request(
         list(authors), declared_by_agent_id=PROXY
@@ -82,12 +92,25 @@ def test_declaration_round_trips_and_legacy_absence_is_disclosed():
 
 
 def test_present_malformed_reserved_marker_fails_closed():
-    declaration = read_reviewed_work_authorship({
-        REVIEWED_WORK_AUTHORSHIP_STATE_KEY: {"status": "declared"}
-    })
+    marker = _state(AUTHOR)[REVIEWED_WORK_AUTHORSHIP_STATE_KEY]
+    marker.pop("reviewed_work_author_agent_ids")
+    declaration = read_reviewed_work_authorship(
+        {REVIEWED_WORK_AUTHORSHIP_STATE_KEY: marker}
+    )
 
     assert declaration.status == "invalid"
     assert declaration.recuses(PEER, paused_agent_id=PROXY) is True
+
+
+def test_asyncpg_record_like_session_row_preserves_declared_authorship():
+    declaration = read_reviewed_work_authorship(_AsyncpgRecordLike({
+        "paused_agent_id": PROXY,
+        "paused_agent_state_json": _state(AUTHOR),
+    }))
+
+    assert declaration.status == "declared"
+    assert declaration.author_agent_ids == (AUTHOR,)
+    assert declaration.recuses(AUTHOR, paused_agent_id=PROXY) is True
 
 
 def test_omitted_declaration_clears_any_inherited_reserved_marker():

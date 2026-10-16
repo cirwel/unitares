@@ -45,6 +45,22 @@ from src.dialectic_protocol import DialecticPhase
 EFFECT_ROW = {"effect_ts": datetime(2026, 9, 27, 12, 0, tzinfo=timezone.utc),
               "session_id": "sess-001", "message_id": 1, "timestamp": None}
 
+
+class _AsyncpgRecordLike:
+    """Small non-Mapping stand-in for asyncpg.Record."""
+
+    def __init__(self, values):
+        self._values = dict(values)
+
+    def __getitem__(self, key):
+        return self._values[key]
+
+    def get(self, key, default=None):
+        return self._values.get(key, default)
+
+    def items(self):
+        return self._values.items()
+
 # ============================================================================
 # Fixtures
 # ============================================================================
@@ -1051,6 +1067,9 @@ class TestResolveSession:
         assert call_args[3] == json.dumps(resolution)
         assert call_args[4] == "sess-001"
         assert "NOT IN ('resolved', 'failed')" in call_args[0]  # idempotent guard
+        assert "legacy_unbound_session" in call_args[0]
+        normalized_sql = " ".join(call_args[0].split())
+        assert "ELSE FALSE END AS effect_required" in normalized_sql
 
     @pytest.mark.asyncio
     async def test_resolve_session_custom_status(self, db):
@@ -1080,12 +1099,12 @@ class TestResolveSession:
         )
         conn.fetchrow = AsyncMock(side_effect=[
             None,
-            {
+            _AsyncpgRecordLike({
                 "status": "active",
                 "paused_agent_id": paused,
                 "reviewer_agent_id": author,
                 "paused_agent_state_json": state,
-            },
+            }),
         ])
         detail = {}
 

@@ -367,15 +367,21 @@ async def _commit_converged_resolution(
     a refusal because this invocation performed no write.
     """
     paused_state = getattr(session, "paused_agent_state", {}) or {}
+    binding_present = "pause_effect_required" in paused_state
     effect_required = paused_state.get("pause_effect_required")
     pause_token = paused_state.get("pause_token")
-    if not isinstance(effect_required, bool):
-        # A session opened before the generation-binding protocol cannot be
-        # retroactively attached to the agent's current pause: that may be a
-        # newer generation. Leave it nonterminal for explicit facilitation.
+    if binding_present and not isinstance(effect_required, bool):
         return _ResolutionCommitResult(
-            False, False, "pause_effect_binding_missing"
+            False, False, "pause_effect_binding_invalid"
         )
+    if not binding_present:
+        # A pre-protocol session cannot safely attach itself to whatever pause
+        # generation happens to be current now.  The terminal writers record
+        # it as an applied no-op instead: the review can close, while no agent
+        # state or condition is mutated.  A fresh review is required to bind a
+        # current pause generation.
+        effect_required = False
+        pause_token = None
     if (
         effect_required
         and not (isinstance(pause_token, str) and pause_token.strip())
@@ -474,9 +480,11 @@ async def _apply_durable_resolution_effect(
     pause_token = paused_state.get("pause_token")
     marker = paused_state.get("pause_effect_required")
     # Sessions created before this protocol did not carry the discriminator.
-    # Treat them conservatively as effect-bearing; only an explicit server-set
-    # false marker may turn a resolution into an already-applied no-op.
-    effect_required = marker if isinstance(marker, bool) else True
+    # Their terminal writer records a non-mutating applied no-op: attaching a
+    # legacy session to the agent's current pause could consume a newer pause.
+    effect_required = marker if isinstance(marker, bool) else False
+    if not isinstance(marker, bool):
+        pause_token = None
     owner_token = str(uuid.uuid4())
     try:
         effect = await pg_claim_resolution_effect(
@@ -5340,10 +5348,25 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
 
                     result["execution"] = execution_result
                     if execution_result.get("no_op"):
-                        result["next_step"] = (
-                            "Review completed. No pause was bound at session open, "
-                            "so no agent resume or condition mutation was authorized."
-                        )
+                        no_op_reason = execution_result.get("reason")
+                        if execution_result.get("superseded"):
+                            result["next_step"] = (
+                                "Review completed, but the pause generation bound to "
+                                "this session was already consumed or superseded. No "
+                                "current pause was resumed and no conditions were applied."
+                            )
+                        elif no_op_reason == "legacy_unbound_session":
+                            result["next_step"] = (
+                                "Review completed as a safe no-op because this session "
+                                "predates pause-generation binding. Open a new review for "
+                                "any current pause; no agent resume or condition mutation "
+                                "was authorized here."
+                            )
+                        else:
+                            result["next_step"] = (
+                                "Review completed. No pause was bound at session open, "
+                                "so no agent resume or condition mutation was authorized."
+                            )
                     elif execution_result.get("success"):
                         result["next_step"] = next_step_resumed()
                     else:
@@ -5354,7 +5377,15 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                 # Update calibration from dialectic outcome
                 if newly_applied_resolution_effect:
                     try:
-                        if result.get("action") == "resume":
+                        skip_resume_calibration = bool(
+                            execution_result.get("superseded")
+                            or execution_result.get("reason")
+                            == "legacy_unbound_session"
+                        )
+                        if (
+                            result.get("action") == "resume"
+                            and not skip_resume_calibration
+                        ):
                             await update_calibration_from_dialectic(session)
                         elif not is_safe:
                             await update_calibration_from_dialectic_disagreement(session)

@@ -503,13 +503,11 @@ defmodule UnitaresLeasePlane.DialecticSaga do
   # terminal transitions (resolved AND failed). Mirrors the Python B-4 guard
   # (#1171): refuses to overwrite an already-terminal row. phase tracks status.
   # A resolved write and its Python runtime-effect handoff are one PostgreSQL
-  # statement on the versioned route. The legacy route must remain a genuinely
-  # separate query: PostgreSQL resolves every relation while parsing a query,
-  # so a conditional CTE that merely skips the INSERT would still break a new
-  # BEAM deployed before migration 075. This lives in the writer rather than a
-  # migration trigger so schema-before-code deploys and application rollbacks
-  # remain compatible with the old writer, which applies the runtime effect
-  # directly.
+  # statement on the versioned route. The legacy route remains a genuinely
+  # separate query for application rollback compatibility after migration 075:
+  # PostgreSQL resolves every relation while parsing a query, so a conditional
+  # CTE that merely skips the INSERT is not a compatibility boundary. Migration
+  # 075 is a hard prerequisite for deploying the versioned writer.
   defp commit_session_row(
          session_id,
          payload,
@@ -523,10 +521,18 @@ defmodule UnitaresLeasePlane.DialecticSaga do
       #{guarded_terminal_update_sql("session_id, paused_agent_id, reviewer_agent_id, paused_agent_state_json, resolution_json")}
     ), prepared AS (
       SELECT terminal.*,
-             COALESCE(
-               paused_agent_state_json->'pause_effect_required' = 'true'::jsonb,
-               true
-             ) AS effect_required
+             CASE
+               WHEN COALESCE(
+                 paused_agent_state_json ? 'pause_effect_required',
+                 false
+               )
+               THEN paused_agent_state_json->'pause_effect_required' = 'true'::jsonb
+               ELSE false
+             END AS effect_required,
+             NOT COALESCE(
+               paused_agent_state_json ? 'pause_effect_required',
+               false
+             ) AS legacy_unbound
       FROM terminal
     ), enqueued AS (
       INSERT INTO coordination.dialectic_resolution_effects
@@ -541,7 +547,10 @@ defmodule UnitaresLeasePlane.DialecticSaga do
                jsonb_build_object(
                  'success', true,
                  'no_op', true,
-                 'reason', 'active_at_session_open'
+                 'reason', CASE
+                   WHEN legacy_unbound THEN 'legacy_unbound_session'
+                   ELSE 'active_at_session_open'
+                 END
                )
              END,
              CASE WHEN effect_required THEN NULL ELSE clock_timestamp() END

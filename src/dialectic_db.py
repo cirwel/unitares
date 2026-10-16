@@ -773,11 +773,21 @@ class DialecticDB:
                               {self._EFFECT_TS}
                 ), prepared AS (
                     SELECT terminal.*,
-                           COALESCE(
-                               paused_agent_state_json->'pause_effect_required'
-                                   = 'true'::jsonb,
-                               TRUE
-                           ) AS effect_required
+                           CASE
+                               WHEN COALESCE(
+                                   paused_agent_state_json
+                                       ? 'pause_effect_required',
+                                   FALSE
+                               )
+                               THEN paused_agent_state_json
+                                   ->'pause_effect_required' = 'true'::jsonb
+                               ELSE FALSE
+                           END AS effect_required,
+                           NOT COALESCE(
+                               paused_agent_state_json
+                                   ? 'pause_effect_required',
+                               FALSE
+                           ) AS legacy_unbound
                     FROM terminal
                 ), enqueued AS (
                     INSERT INTO coordination.dialectic_resolution_effects (
@@ -794,7 +804,11 @@ class DialecticDB:
                                jsonb_build_object(
                                    'success', true,
                                    'no_op', true,
-                                   'reason', 'active_at_session_open'
+                                   'reason', CASE
+                                       WHEN legacy_unbound
+                                           THEN 'legacy_unbound_session'
+                                       ELSE 'active_at_session_open'
+                                   END
                                )
                            END,
                            CASE WHEN effect_required THEN NULL ELSE clock_timestamp() END

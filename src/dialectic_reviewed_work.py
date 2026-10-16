@@ -168,9 +168,29 @@ def embed_reviewed_work_authorship(
     return state
 
 
+def _mapping_view(value: Any) -> Any:
+    """Normalize asyncpg-style records without weakening type checks.
+
+    ``asyncpg.Record`` exposes ``items()``/``get()`` but does not register as a
+    ``collections.abc.Mapping``.  Database refusal diagnostics pass that object
+    here directly, while JSONB payloads and ordinary session dictionaries are
+    already real mappings.  Copy only objects with a usable ``items`` method;
+    everything else keeps the existing malformed/absent handling.
+    """
+    if isinstance(value, Mapping):
+        return value
+    items = getattr(value, "items", None)
+    if callable(items):
+        try:
+            return dict(items())
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
 def _state_from_record(record_or_state: Any) -> tuple[Any, bool]:
     """Return the candidate pause state and whether a reserved key was visible."""
-    value = record_or_state
+    value = _mapping_view(record_or_state)
     if isinstance(value, Mapping):
         if "paused_agent_state" in value:
             value = value.get("paused_agent_state")
@@ -201,6 +221,7 @@ def read_reviewed_work_authorship(
     expected_declared_by_agent_id: str | None = None,
 ) -> ReviewedWorkAuthorship:
     """Read a declaration from a session dict, pause state, or JSONB string."""
+    record_or_state = _mapping_view(record_or_state)
     if expected_declared_by_agent_id is None and isinstance(
         record_or_state, Mapping
     ):
@@ -246,6 +267,13 @@ def read_reviewed_work_authorship(
 
     try:
         raw_authors = marker.get("reviewed_work_author_agent_ids")
+        # ``None`` means omission only on the public request field.  Once the
+        # server-owned marker says ``declared``, the list is mandatory; check
+        # before ``len`` so a corrupt row fails closed instead of raising.
+        if not isinstance(raw_authors, list):
+            raise ReviewedWorkAuthorshipError(
+                "stored reviewed_work_author_agent_ids must be a non-empty list"
+            )
         authors = parse_reviewed_work_author_agent_ids(raw_authors)
         if len(raw_authors) != len(authors):
             return ReviewedWorkAuthorship(
