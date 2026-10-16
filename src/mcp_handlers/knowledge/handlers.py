@@ -3061,8 +3061,14 @@ async def _run_indexed_filter_search(state: _KnowledgeSearchState) -> None:
         # reading exactly `limit` rows let excluded rows take the page. Re-read
         # with a doubling limit until the visible page fills, the rows run
         # out, or the same row ceiling newest-first continuation uses is
-        # reached.
-        fetch_limit = min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+        # reached. Imports are the uncommon case on most graphs, so that
+        # exclusion alone starts at the page size and widens only when it
+        # actually dropped something.
+        fetch_limit = (
+            min(request.limit * 5, NEWEST_FIRST_SCAN_CEILING)
+            if request.exclude_labels
+            else request.limit
+        )
         while True:
             rows = await _read(fetch_limit)
             visible = [

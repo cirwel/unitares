@@ -675,3 +675,25 @@ def test_imported_context_reads_serialized_rows_too():
             "provenance": _promotion_receipt(),
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_queryless_listing_without_imports_reads_one_page():
+    # Omission must not cost every listing a widened read: with no imports on
+    # the page, one read at the page size is the whole cost.
+    from src.mcp_handlers.knowledge.handlers import (
+        _KnowledgeSearchState,
+        _parse_knowledge_search_request,
+        _run_indexed_filter_search,
+    )
+
+    rows = [_discovery(f"finding-{index}") for index in range(10)]
+    graph = _paged_graph(rows)
+    request = _parse_knowledge_search_request({"limit": 3})
+    state = _KnowledgeSearchState(request=request, graph=graph)
+
+    await _run_indexed_filter_search(state)
+
+    assert [row.id for row in state.results] == ["finding-0", "finding-1", "finding-2"]
+    assert graph.query.await_count == 1
+    assert graph.query.call_args.kwargs["limit"] == 3
