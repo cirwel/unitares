@@ -47,6 +47,13 @@ What the control does and does not establish (corrected 2026-08-23):
     is quietness over the observed window -- not efficacy, not outcome
     validity, and not evidence the gate is useless.
 
+The soak read's DB window is ``[now - window-days, now)``. A window that
+crosses an EISV instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed
+(under ``eisv_era_provenance`` with --json). Stamped instrument ids are counted
+over ``core.agent_state`` rows in the same window. A --input export carries no
+window, so it is not era-checked.
+
 Measurement only: this script changes no flag, threshold, verdict, or weight.
 Choosing k values remains a recorded policy call (proposal section 4).
 """
@@ -61,12 +68,16 @@ import os
 import sys
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 from src.behavioral_state import (  # noqa: E402
     V_MAX,
@@ -92,7 +103,7 @@ FETCH_QUERY = """
     SELECT agent_id, ts, payload
     FROM audit.events
     WHERE event_type = 'coherence_gate_shadow'
-      AND ts >= now() - ($1::int * interval '1 day')
+      AND ts >= $1::timestamptz AND ts < $2::timestamptz
     ORDER BY ts
 """
 
@@ -212,6 +223,7 @@ def summarize(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 
 def render(summary: Dict[str, Any]) -> str:
     lines = ["== coherence gate shadow — soak read =="]
+    lines.extend(summary.get("eisv_era_provenance") or [])
     lines.append(f"rows: {summary['n_rows']}  by version: {summary['by_statistic_version']}")
     lines.append(
         f"v2 rows: {summary['n_v2']}  eligible: {summary['n_eligible']}  "
@@ -507,7 +519,17 @@ def load_jsonl(path: str) -> List[Dict[str, Any]]:
     return rows
 
 
-async def fetch_rows(db_url: str, window_days: int) -> List[Dict[str, Any]]:
+async def fetch_rows(
+    db_url: str,
+    start: datetime,
+    end: datetime,
+    allow_cross: Optional[str] = None,
+) -> Optional[Tuple[List[Dict[str, Any]], List[str]]]:
+    """Rows in ``[start, end)`` and the era provenance lines.
+
+    Returns None after printing a refusal when the window's rows carry more
+    than one stamped instrument id and no reason was given.
+    """
     try:
         import asyncpg
     except ImportError:
@@ -520,7 +542,23 @@ async def fetch_rows(db_url: str, window_days: int) -> List[Dict[str, Any]]:
 
     conn = await asyncpg.connect(db_url)
     try:
-        records = await conn.fetch(FETCH_QUERY, window_days)
+        # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+        # read below see the same committed rows.
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            id_rows = await conn.fetch(
+                eisv_era_sql.instrument_id_counts_sql("$1::timestamptz", "$2::timestamptz"),
+                start,
+                end,
+            )
+            era_lines = eisv_eras.check_window(
+                start,
+                end,
+                allow_cross=allow_cross,
+                id_counts={r["instrument_id"]: r["n"] for r in id_rows},
+            )
+            if era_lines is None:
+                return None
+            records = await conn.fetch(FETCH_QUERY, start, end)
     finally:
         await conn.close()
 
@@ -532,7 +570,7 @@ async def fetch_rows(db_url: str, window_days: int) -> List[Dict[str, Any]]:
         row = dict(payload or {})
         row.setdefault("agent_id", record["agent_id"])
         rows.append(row)
-    return rows
+    return rows, era_lines
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -552,6 +590,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="run the injected-excursion control scenarios only (no DB)",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON")
+    eisv_eras.add_cross_era_argument(parser)
     return parser.parse_args(argv)
 
 
@@ -569,10 +608,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.input:
         rows = load_jsonl(args.input)
+        era_lines = [
+            "EISV instrument window: not checked (--input export carries no window)."
+        ]
     else:
-        rows = asyncio.run(fetch_rows(args.db_url, args.window_days))
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=args.window_days)
+        # Time check first, so a crossing window is refused before connecting.
+        if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+            return 2
+        fetched = asyncio.run(
+            fetch_rows(args.db_url, start, end, args.allow_cross_era)
+        )
+        if fetched is None:
+            return 2
+        rows, era_lines = fetched
 
     summary = summarize(rows)
+    summary["eisv_era_provenance"] = era_lines
     print(json.dumps(summary, indent=2) if args.json else render(summary))
     return 0
 

@@ -9,6 +9,8 @@ import datetime as dt
 import math
 import random
 
+import pytest
+
 from scripts.analysis.eisv_history_structure_read import (
     CensusRow,
     build_report,
@@ -267,3 +269,61 @@ def test_build_report_smoke_contains_guards_and_sections():
     assert "History-length census" in report
     assert "carries no phase" in report
     assert "x%" in report
+
+
+# ---------------------------------------------------------------------------
+# EISV era guard: a crossing window is refused before any DB connection
+# ---------------------------------------------------------------------------
+
+# A century-long window crosses every registered instrument change, whatever
+# day the suite runs on.
+_CROSSING_WINDOW = ["--window-days", "36500"]
+
+
+class _ConnectCalled(Exception):
+    pass
+
+
+def _forbid_connect(monkeypatch):
+    import psycopg2
+
+    def _connect(*_args, **_kwargs):
+        raise _ConnectCalled()
+
+    # raising=False: an earlier test in the suite can leave a stub psycopg2
+    # module without ``connect`` in sys.modules.
+    monkeypatch.setattr(psycopg2, "connect", _connect, raising=False)
+
+
+def test_main_refuses_a_cross_era_window_without_connecting(monkeypatch, capsys):
+    from scripts.analysis import eisv_history_structure_read as read
+
+    _forbid_connect(monkeypatch)
+    assert read.main(_CROSSING_WINDOW) == 2
+    assert "refused:" in capsys.readouterr().err
+
+
+def test_main_accepts_allow_cross_era_and_proceeds_to_connect(monkeypatch):
+    from scripts.analysis import eisv_history_structure_read as read
+
+    _forbid_connect(monkeypatch)
+    with pytest.raises(_ConnectCalled):
+        read.main(_CROSSING_WINDOW + ["--allow-cross-era", "test: pooled on purpose"])
+
+
+def test_build_report_prints_era_provenance_lines():
+    report = build_report(
+        census_all=None,
+        census_patterns={},
+        series_stats=[],
+        window_days=14,
+        top=3,
+        generated_at="2026-10-16T00:00:00+00:00",
+        era_lines=[
+            "EISV instrument window: a .. b.",
+            "Instrument ids: `x` (3 rows); unstamped rows: 0.",
+        ],
+    )
+    assert "EISV instrument window: a .. b." in report
+    assert "Instrument ids: `x` (3 rows)" in report
+    assert "all-time census counts rows across every era" in report

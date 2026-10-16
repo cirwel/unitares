@@ -17,6 +17,10 @@ on top would be double-damping. Don't re-introduce it as a magic number; the rea
 question is smoothing *placement* (estimator vs policy), keeping the total near
 today's. See roadmap §8.2.
 
+The window is the last ``--days`` days up to now. A window that crosses an EISV
+instrument change (src/eisv_eras.py) is refused unless
+``--allow-cross-era REASON`` is given, and the crossed changes are printed.
+
 Usage: PYTHONPATH=. python3 scripts/analysis/eisv_residual_autocorr.py
 """
 from __future__ import annotations
@@ -27,8 +31,14 @@ import math
 import statistics
 import sys
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import psycopg2
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from src import eisv_eras  # noqa: E402 — standalone module, no server imports
+from scripts.analysis import eisv_era_sql  # noqa: E402
 
 
 def _std(d):
@@ -59,21 +69,36 @@ def main():
     ap.add_argument("--db-url", default="postgresql://postgres:postgres@localhost:5432/governance")
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--min-series", type=int, default=5)
+    eisv_eras.add_cross_era_argument(ap)
     args = ap.parse_args()
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=args.days)
+    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+        return 2
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
 
     series = defaultdict(list)
     with conn.cursor() as cur:
+        cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s"), (start, end))
+        id_counts = {iid: n for iid, n in cur.fetchall()}
+        provenance = eisv_eras.check_window(
+            start, end, allow_cross=args.allow_cross_era, id_counts=id_counts)
+        if provenance is None:
+            conn.close()
+            return 2
         cur.execute(
             """
             SELECT identity_id, state_json->'behavioral_eisv' AS b
             FROM core.agent_state
-            WHERE recorded_at > now() - (%s::int * interval '1 day')
+            WHERE recorded_at > %s AND recorded_at < %s
               AND state_json ? 'behavioral_eisv'
               AND state_json->'behavioral_eisv'->'warmup'->>'is_baselined' = 'true'
             ORDER BY identity_id, recorded_at
             """,
-            (args.days,),
+            (start, end),
         )
         for iid, b in cur:
             if isinstance(b, str):
@@ -86,6 +111,8 @@ def main():
     pairs = [(xs[i], xs[i + 1]) for xs in series.values()
              if len(xs) >= args.min_series for i in range(len(xs) - 1)]
     usable = sum(1 for xs in series.values() if len(xs) >= args.min_series)
+    for line in provenance:
+        print(line)
     print(f"baselined agents with usable series (≥{args.min_series}): {usable}")
     if not pairs:
         print("no usable residual series")
