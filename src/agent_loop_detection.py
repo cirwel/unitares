@@ -27,6 +27,11 @@ from src.agent_metadata_persistence import load_metadata_async
 from src.perf_monitor import record_ms as _perf_record_ms
 from src.loop_rules import LoopWindow, evaluate_loop_rules
 from src.mcp_handlers.lifecycle.recovery_policy import read_risk_authority, render_risk
+from src.cold_start_risk_confirmation import (
+    CIRCUIT_BREAKER_DURABLE_EFFECT,
+    CIRCUIT_BREAKER_IN_MEMORY_EFFECT,
+    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT,
+)
 
 logger = get_logger(__name__)
 
@@ -458,11 +463,11 @@ async def process_update_authenticated_async(
                 result,
                 actor="agent_loop_detection",
                 effect=(
-                    "durable_pause_generation_already_present"
+                    CIRCUIT_BREAKER_REUSED_DURABLE_EFFECT
                     if reused_pause_generation
-                    else "durable_agent_status_and_pause_generation"
+                    else CIRCUIT_BREAKER_DURABLE_EFFECT
                     if durable_pause_applied
-                    else "in_memory_pause_only"
+                    else CIRCUIT_BREAKER_IN_MEMORY_EFFECT
                 ),
                 actuation_id=actuation_id,
                 applied_at=now,

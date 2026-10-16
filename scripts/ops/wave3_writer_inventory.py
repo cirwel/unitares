@@ -193,8 +193,12 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
     (ROUTER_EX, "POST /v1/dialectic/phase"): {
         "calls": ("update_phase",), "writer": "BEAM phase (from Python)",
         "observed_via": _OBSERVED_VIA_BEAM},
-    (ROUTER_EX, "POST /v1/dialectic/reviewer"): {
-        "calls": ("update_reviewer",), "writer": "BEAM update_reviewer (from Python)",
+    (ROUTER_EX, "update_dialectic_reviewer"): {
+        "calls": ("update_reviewer",),
+        "writer": (
+            "BEAM reviewer assignment and guarded open-slot claim routes "
+            "(from Python)"
+        ),
         "observed_via": _OBSERVED_VIA_BEAM},
     (ROUTER_EX, "resolve_dialectic"): {
         "calls": ("resolve",),

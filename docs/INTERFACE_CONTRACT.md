@@ -682,8 +682,10 @@ declares a conflict. Existing dialectic calls retain their action and parameter
 meanings. Migration 075 is a hard deployment prerequisite for this server
 version: Python session reads and terminal writes use the durable-effect table,
 and the Python client selects the versioned BEAM route whenever BEAM resolution
-is enabled. The BEAM service retains its legacy endpoint only for an older
-application version during a schema-before-code rollout or rollback. The
+is enabled. NULL-to-reviewer claims likewise use a distinct guarded BEAM route,
+so an older service returns 404 before Python falls back to its own guarded
+writer. The BEAM service retains its legacy resolution endpoint only for an
+older application version during a schema-before-code rollout or rollback. The
 `request_review` input digest moves from
 `4beb141a8d9f85f811e249c7ab7a2a2f7bc2fc859a2269e80654e68f0807c7a3` to
 `aa753d6352bf9ca1e1aa41689f503fb7c3dea488410c20d109625c9703c2cf07`;

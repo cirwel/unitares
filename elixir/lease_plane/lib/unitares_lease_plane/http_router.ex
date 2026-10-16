@@ -388,7 +388,17 @@ defmodule UnitaresLeasePlane.HTTPRouter do
   # BEAM-owned reviewer assignment/reassignment — the last session-row column.
   post "/v1/dialectic/reviewer" do
     claim_if_unassigned = Map.get(conn.body_params, "claim_if_unassigned", false)
+    update_dialectic_reviewer(conn, claim_if_unassigned)
+  end
 
+  # New Python uses this distinct route for NULL-to-reviewer claims. An old
+  # BEAM returns 404 before touching the row, allowing a safe Python CAS
+  # fallback during a schema-before-code rollout.
+  post "/v1/dialectic/reviewer/claim" do
+    update_dialectic_reviewer(conn, true)
+  end
+
+  defp update_dialectic_reviewer(conn, claim_if_unassigned) do
     with %{"session_id" => sid, "reviewer_agent_id" => rev} <- conn.body_params,
          true <- is_binary(sid) and byte_size(sid) > 0 and is_binary(rev) and byte_size(rev) > 0,
          true <- is_boolean(claim_if_unassigned) do
@@ -398,7 +408,12 @@ defmodule UnitaresLeasePlane.HTTPRouter do
              claim_if_unassigned
            ) do
         :ok ->
-          json(conn, 200, %{ok: true, session_id: sid, reviewer_agent_id: rev})
+          json(conn, 200, %{
+            ok: true,
+            session_id: sid,
+            reviewer_agent_id: rev,
+            claim_if_unassigned: claim_if_unassigned
+          })
 
         {:error, :session_not_found} ->
           json(conn, 404, %{ok: false, error: "session_not_found"})

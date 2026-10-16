@@ -237,8 +237,10 @@ async def beam_update_reviewer(
 ) -> Optional[Dict[str, Any]]:
     """Assign/reassign a reviewer via BEAM (sole writer of reviewer_agent_id).
     Returns the BEAM result on success, or ``None`` to fall back to the Python
-    `pg_update_reviewer` path. Raises ``BeamDialecticPolicyRefusal`` for an
-    authoritative authorship-policy refusal. ``detail["commit_unknown"]``
+    `pg_update_reviewer` path. Open-slot claims use a distinct route so an old
+    BEAM returns 404 without executing its unconditional reviewer writer.
+    Raises ``BeamDialecticPolicyRefusal`` for an authoritative authorship-policy
+    refusal. ``detail["commit_unknown"]``
     distinguishes a response failure that may have followed the reviewer CAS
     from a definitive non-write, so a first responder can use exact readback
     instead of mistaking its own committed claim for a competing reviewer.
@@ -260,6 +262,11 @@ async def beam_update_reviewer(
 
     def _post():
         nonlocal post_started
+        route = (
+            "/v1/dialectic/reviewer/claim"
+            if claim_if_unassigned
+            else "/v1/dialectic/reviewer"
+        )
         payload = {
             "session_id": session_id,
             "reviewer_agent_id": reviewer_agent_id,
@@ -269,7 +276,7 @@ async def beam_update_reviewer(
         with httpx.Client(timeout=5.0) as client:
             post_started = True
             resp = client.post(
-                f"{base_url}/v1/dialectic/reviewer",
+                f"{base_url}{route}",
                 headers={"Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
                 json=payload,
             )

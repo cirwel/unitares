@@ -418,6 +418,8 @@ class IdentityMixin:
                 dialectic_conditions = dialectic_conditions[-max_conditions:]
                 metadata_patch = {
                     "paused_at": None,
+                    "loop_cooldown_until": None,
+                    "loop_detected_at": None,
                     "lifecycle_events": events[-max_events:],
                     "dialectic_conditions": dialectic_conditions,
                 }

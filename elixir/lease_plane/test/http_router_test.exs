@@ -439,6 +439,31 @@ defmodule UnitaresLeasePlane.HTTPRouterTest do
     end
   end
 
+  describe "/v1/dialectic/reviewer/claim" do
+    test "versioned open-slot route refuses a later first responder" do
+      session_id = insert_dialectic_session(phase: "antithesis", status: "active")
+      on_exit(fn -> cleanup_dialectic_session(session_id) end)
+
+      first =
+        post_json("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-first"
+        })
+
+      assert first.status == 200
+      assert parsed(first)["claim_if_unassigned"] == true
+
+      late =
+        post_json("/v1/dialectic/reviewer/claim", %{
+          session_id: session_id,
+          reviewer_agent_id: "rev-late"
+        })
+
+      assert late.status == 409
+      assert parsed(late)["error"] == "reviewer_write_refused"
+    end
+  end
+
   describe "bearer auth" do
     test "missing Authorization header → 401 permission_denied", ctx do
       resp =

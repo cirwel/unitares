@@ -823,6 +823,8 @@ class TestResumeAgentIfPauseToken:
         metadata_patch = json.loads(identity_update.args[2])
         assert metadata_patch == {
             "paused_at": None,
+            "loop_cooldown_until": None,
+            "loop_detected_at": None,
             "lifecycle_events": [old_event, resume_event],
             "dialectic_conditions": [existing_condition, added_condition],
         }

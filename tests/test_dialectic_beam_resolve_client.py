@@ -230,12 +230,38 @@ async def test_update_reviewer_open_slot_claim_is_sent(monkeypatch):
         )
 
     assert out is not None
-    sent = fake.Client.return_value.__enter__.return_value.post.call_args.kwargs["json"]
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
+    sent = post.call_args.kwargs["json"]
     assert sent == {
         "session_id": "s1",
         "reviewer_agent_id": "rev",
         "claim_if_unassigned": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_update_reviewer_open_slot_old_beam_404_is_safe_fallback(
+    monkeypatch,
+):
+    """A pre-claim-route BEAM returns 404 without touching the session row."""
+    monkeypatch.setenv("UNITARES_DIALECTIC_BEAM_RESOLUTION", "1")
+    monkeypatch.setenv("LEASE_PLANE_BEARER_TOKEN", "tok")
+    detail = {}
+    fake = _fake_httpx(404, {"ok": False, "error": "not_found"})
+
+    with patch.dict(sys.modules, {"httpx": fake}):
+        out = await brc.beam_update_reviewer(
+            "s1",
+            "rev",
+            claim_if_unassigned=True,
+            detail=detail,
+        )
+
+    assert out is None
+    assert detail == {}
+    post = fake.Client.return_value.__enter__.return_value.post
+    assert post.call_args.args[0].endswith("/v1/dialectic/reviewer/claim")
 
 
 @pytest.mark.asyncio
