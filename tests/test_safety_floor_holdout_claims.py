@@ -664,6 +664,11 @@ def test_mixed_stamped_instrument_ids_are_refused_before_the_read(sf, monkeypatc
     class Conn:
         closed = False
 
+        session = {}
+
+        def set_session(self, **kw):
+            Conn.session = kw
+
         def cursor(self, **_k):
             return Cur()
 
@@ -677,4 +682,6 @@ def test_mixed_stamped_instrument_ids_are_refused_before_the_read(sf, monkeypatc
     assert sf.main([]) == 2
     assert len(executed) == 1 and "eisv_instrument" in executed[0]
     assert Conn.closed
+    # The id check and the read share one read-only snapshot.
+    assert Conn.session == {"isolation_level": "REPEATABLE READ", "readonly": True}
     assert "2 different EISV instrument ids" in capsys.readouterr().err

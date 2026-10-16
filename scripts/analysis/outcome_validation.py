@@ -363,30 +363,33 @@ async def main_async(args) -> int:
     print(f"[outcome-validation] connecting...", file=sys.stderr)
     conn = await asyncpg.connect(args.db_url)
     try:
-        id_rows = await conn.fetch(
-            eisv_era_sql.instrument_id_counts_sql(
-                "$1::timestamptz", "$2::timestamptz", include_synthetic=True
-            ),
-            start, end,
-        )
-        era_lines = eisv_eras.check_window(
-            start, end, allow_cross=args.allow_cross_era,
-            id_counts={r["instrument_id"]: r["n"] for r in id_rows},
-        )
-        if era_lines is None:
-            return 2
+        # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+        # reads below see the same committed rows.
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            id_rows = await conn.fetch(
+                eisv_era_sql.instrument_id_counts_sql(
+                    "$1::timestamptz", "$2::timestamptz", include_synthetic=True
+                ),
+                start, end,
+            )
+            era_lines = eisv_eras.check_window(
+                start, end, allow_cross=args.allow_cross_era,
+                id_counts={r["instrument_id"]: r["n"] for r in id_rows},
+            )
+            if era_lines is None:
+                return 2
 
-        print(f"[outcome-validation] fetching state rows (window={args.window_days}d)...",
-              file=sys.stderr)
-        state_rows = await fetch_state_rows(conn, start, end)
-        print(f"[outcome-validation]   {len(state_rows)} state rows with computable E",
-              file=sys.stderr)
+            print(f"[outcome-validation] fetching state rows (window={args.window_days}d)...",
+                  file=sys.stderr)
+            state_rows = await fetch_state_rows(conn, start, end)
+            print(f"[outcome-validation]   {len(state_rows)} state rows with computable E",
+                  file=sys.stderr)
 
-        print(f"[outcome-validation] fetching outcome aggregates (eprocess_eligible=true)...",
-              file=sys.stderr)
-        outcomes = await fetch_outcome_aggregates(conn, start, end)
-        print(f"[outcome-validation]   {len(outcomes)} (agent_id, day) outcome buckets",
-              file=sys.stderr)
+            print(f"[outcome-validation] fetching outcome aggregates (eprocess_eligible=true)...",
+                  file=sys.stderr)
+            outcomes = await fetch_outcome_aggregates(conn, start, end)
+            print(f"[outcome-validation]   {len(outcomes)} (agent_id, day) outcome buckets",
+                  file=sys.stderr)
     finally:
         await conn.close()
 

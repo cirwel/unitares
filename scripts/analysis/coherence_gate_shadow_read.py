@@ -542,20 +542,23 @@ async def fetch_rows(
 
     conn = await asyncpg.connect(db_url)
     try:
-        id_rows = await conn.fetch(
-            eisv_era_sql.instrument_id_counts_sql("$1::timestamptz", "$2::timestamptz"),
-            start,
-            end,
-        )
-        era_lines = eisv_eras.check_window(
-            start,
-            end,
-            allow_cross=allow_cross,
-            id_counts={r["instrument_id"]: r["n"] for r in id_rows},
-        )
-        if era_lines is None:
-            return None
-        records = await conn.fetch(FETCH_QUERY, start, end)
+        # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+        # read below see the same committed rows.
+        async with conn.transaction(isolation="repeatable_read", readonly=True):
+            id_rows = await conn.fetch(
+                eisv_era_sql.instrument_id_counts_sql("$1::timestamptz", "$2::timestamptz"),
+                start,
+                end,
+            )
+            era_lines = eisv_eras.check_window(
+                start,
+                end,
+                allow_cross=allow_cross,
+                id_counts={r["instrument_id"]: r["n"] for r in id_rows},
+            )
+            if era_lines is None:
+                return None
+            records = await conn.fetch(FETCH_QUERY, start, end)
     finally:
         await conn.close()
 

@@ -194,6 +194,9 @@ def main(argv=None) -> int:
 
     print(f"[counterfactual] Connecting to DB...", file=sys.stderr)
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
 
     with conn.cursor() as cur:
         cur.execute(eisv_era_sql.instrument_id_counts_sql("%s", "%s", include_synthetic=True), (start, end))

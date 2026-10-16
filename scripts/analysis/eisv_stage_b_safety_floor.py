@@ -472,6 +472,9 @@ def main(argv=None):
     import psycopg2.extras
 
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
 
     by_verdict = {}  # verdict -> [residual,...]
     n_rows = 0

@@ -206,12 +206,15 @@ def main(argv: list[str] | None = None) -> int:
     start = end - timedelta(hours=args.hours) if args.hours else eisv_eras.ALL_TIME_START
     if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
         return 2
+    rows = fetch(args.db_url, start, end)
+    # Each psql call is its own snapshot, so count instrument ids AFTER the
+    # read: every row the read saw had committed by then, so a mix it pooled
+    # is in this count.
     id_counts = fetch_instrument_ids(args.db_url, start, end)
     provenance = eisv_eras.check_window(
         start, end, allow_cross=args.allow_cross_era, id_counts=id_counts)
     if provenance is None:
         return 2
-    rows = fetch(args.db_url, start, end)
     for line in provenance:
         print(line)
     print()

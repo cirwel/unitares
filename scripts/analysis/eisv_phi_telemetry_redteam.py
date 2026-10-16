@@ -74,6 +74,9 @@ def main():
     if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
         return 2
     conn = psycopg2.connect(args.db_url)
+    # One read-only REPEATABLE READ snapshot: the instrument-id check and the
+    # read below see the same committed rows.
+    conn.set_session(isolation_level="REPEATABLE READ", readonly=True)
 
     transitions = {}   # (floored -> behavioral) -> count
     deescalated = 0
