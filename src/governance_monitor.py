@@ -460,6 +460,9 @@ class UNITARESMonitor:
                             float(getattr(self, "_prediction_ttl_seconds", 3600.0)),
                         )
                     )
+                from src.eisv_instrument import TRACK_STATE_KEY, restore_track
+
+                restore_track(self, data.pop(TRACK_STATE_KEY, None))
                 div_hist = data.pop('sensor_divergence_history', None)
                 if div_hist:
                     self._sensor_divergence_history = deque(
@@ -533,6 +536,11 @@ class UNITARESMonitor:
             # Persist last_update so cross-restart gaps integrate against the real
             # prior check-in time, not the lazy-init wall-clock.
             state_data['last_update_iso'] = self.last_update.isoformat()
+            from src.eisv_instrument import TRACK_ATTR, TRACK_STATE_KEY
+
+            instrument_track = getattr(self, TRACK_ATTR, None)
+            if isinstance(instrument_track, dict):
+                state_data[TRACK_STATE_KEY] = dict(instrument_track)
             # Open check-in forecasts, matching the live writer
             # (agent_monitor_state._attach_monitor_transients).
             if self._open_predictions:
