@@ -266,6 +266,22 @@ def test_cross_era_argument_and_id_sql():
     assert "synthetic" not in eisv_era_sql.instrument_id_counts_sql("%s", "%s", include_synthetic=True)
 
 
+def test_crossing_report_lists_changes_without_refusing(registry):
+    report = eisv_eras.crossing_report(_t("2026-01-18"), _t("2026-01-22"), path=registry)
+    assert report["schema"] == eisv_eras.CROSSING_REPORT_SCHEMA
+    assert report["pooled_across_changes"] is True
+    assert report["current_era"] == "P"
+    assert [c["id"] for c in report["crossed"]] == ["X2"]
+    assert report["crossed"][0]["effective_at"] == "2026-01-20T12:00:00+00:00"
+    assert "X2" in eisv_eras.crossing_note(report)
+
+
+def test_crossing_report_inside_one_era_is_quiet(registry):
+    report = eisv_eras.crossing_report(_t("2026-01-11"), _t("2026-01-19"), path=registry)
+    assert report["pooled_across_changes"] is False and report["crossed"] == []
+    assert eisv_eras.crossing_note(report) == ""
+
+
 def test_live_registry_splits_the_2026_10_15_changes():
     crossed = eisv_eras.boundaries_crossed(_t("2026-10-14"), _t("2026-10-16T02:00"))
     assert [b.id for b in crossed if b.effective_at is not None] == ["A1", "I1"]
