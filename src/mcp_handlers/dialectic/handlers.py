@@ -2337,9 +2337,8 @@ async def handle_request_dialectic_review(arguments: Dict[str, Any]) -> Sequence
         )
     except Exception as exc:
         logger.warning(
-            "Could not bind dialectic %s to authoritative agent state: %s",
-            agent_uuid,
-            exc,
+            "Could not bind dialectic to authoritative agent state (%s)",
+            type(exc).__name__,
         )
         return [error_response(
             "The agent's authoritative pause state could not be verified, so "
@@ -5970,9 +5969,8 @@ async def handle_llm_assisted_dialectic(arguments: Dict[str, Any]) -> Sequence[T
         )
     except Exception as exc:
         logger.warning(
-            "Could not bind LLM dialectic %s to authoritative agent state: %s",
-            agent_uuid,
-            exc,
+            "Could not bind LLM dialectic to authoritative agent state (%s)",
+            type(exc).__name__,
         )
         return [error_response(
             "The agent's authoritative pause state could not be verified, so "

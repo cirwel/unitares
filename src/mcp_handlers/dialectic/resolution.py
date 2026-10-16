@@ -191,10 +191,7 @@ async def execute_resolution(
         expected_declared_by_agent_id=agent_id,
     )
     if reviewed_work_authorship.is_invalid:
-        logger.warning(
-            "Refusing resume for %s: reviewed-work authorship metadata is malformed",
-            agent_id,
-        )
+        logger.warning("Refusing resume: reviewed-work authorship metadata is malformed")
         return {
             "success": False,
             "refused": "review_authorship_invalid",
@@ -207,8 +204,7 @@ async def execute_resolution(
         session.reviewer_agent_id, paused_agent_id=agent_id
     ):
         logger.warning(
-            "Refusing resume for %s: assigned reviewer authored the reviewed work",
-            agent_id,
+            "Refusing resume: assigned reviewer authored the reviewed work"
         )
         return {
             "success": False,

@@ -1,9 +1,9 @@
 {
   "schema": "unitares.skill_attestation.v1",
   "skill": "dialectic-reasoning",
-  "verified_at": "2026-10-16T09:40:46Z",
+  "verified_at": "2026-10-16T09:44:03Z",
   "verified_date": "2026-10-16",
-  "verifier": "Codex 269e26df: re-checked author recusal, durable resolution-effect ownership, pause-token recovery, operator reconciliation, and public recovery hints against the final handlers and identity DAO",
+  "verifier": "Codex 269e26df: re-checked final author-recusal and durable-effect behavior after removing sensitive agent UUIDs from failure logs",
   "source_digests": {
     "unitares/db/postgres/migrations/075_dialectic_resolution_effects.sql": "7c3ad9308fb77a3e",
     "unitares/src/dialectic_db.py": "2dc47c4372e6884f",
@@ -12,8 +12,8 @@
     "unitares/src/mcp_handlers/dialectic/auth.py": "e6bcc28d7e2a4260",
     "unitares/src/mcp_handlers/dialectic/auto_resolve.py": "783b42ee9f213858",
     "unitares/src/mcp_handlers/dialectic/enforcement.py": "ca82f85aba03b159",
-    "unitares/src/mcp_handlers/dialectic/handlers.py": "9deaa88113b886b7",
-    "unitares/src/mcp_handlers/dialectic/resolution.py": "84dfde66d2ea2fc4",
+    "unitares/src/mcp_handlers/dialectic/handlers.py": "84b78c6c7e4d78b0",
+    "unitares/src/mcp_handlers/dialectic/resolution.py": "317b39fb05865f84",
     "unitares/src/mcp_handlers/dialectic/responses.py": "b9ccb7d0e1ed8ba3",
     "unitares/src/mcp_handlers/dialectic/reviewer.py": "7255e0b33348bb86",
     "unitares/src/mcp_handlers/dialectic/session.py": "6ecaaed9ff5e6271",
@@ -25,7 +25,10 @@
   "skill_digest": "e28bbc0be1a437ac",
   "superseded_digests": {
     "unitares/src/mcp_handlers/dialectic/handlers.py": [
-      "1fb6b00ae2801e39"
+      "9deaa88113b886b7"
+    ],
+    "unitares/src/mcp_handlers/dialectic/resolution.py": [
+      "84dfde66d2ea2fc4"
     ]
   }
 }
