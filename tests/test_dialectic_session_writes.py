@@ -11,6 +11,7 @@ terminal, a non-OK answer, no answer, an exception, and a cancellation.
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -326,7 +327,10 @@ def test_every_beam_fallback_python_write_is_attributed():
     pkg = Path(brc.__file__).parent
     for name, expected in (("handlers.py", 8), ("session.py", 2)):
         text = (pkg / name).read_text(encoding="utf-8")
-        assert text.count('session_write_via("python_fallback"') == expected, name
+        attributed = re.findall(
+            r"session_write_via\s*\(\s*[\"']python_fallback[\"']", text
+        )
+        assert len(attributed) == expected, name
 
 
 @pytest.mark.asyncio

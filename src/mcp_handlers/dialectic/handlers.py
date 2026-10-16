@@ -57,7 +57,6 @@ from .responses import (
     missing_session_id_recovery,
     missing_session_or_agent_recovery,
     no_sessions_found_recovery,
-    next_step_execution_failed,
     next_step_negotiate_synthesis,
     next_step_no_consensus,
     next_step_resume_not_applied,
@@ -284,6 +283,51 @@ async def _set_awaiting_facilitation(
         await _emit_dialectic_event(
             "dialectic_facilitation_needed", session, reason=reason
         )
+
+
+async def _commit_converged_resolution(
+    session: DialecticSession,
+    resolution: Resolution,
+) -> bool:
+    """Win the terminal session-row transition before applying runtime effects.
+
+    The reviewer/phase compare-and-set is the authority boundary for a
+    synthesis.  A losing or stale reviewer must not apply conditions or resume
+    the paused agent and only then discover that another writer won.  BEAM owns
+    the terminal write when enabled; the Python fallback carries the same CAS.
+    ``False`` includes an already-terminal BEAM answer because this invocation
+    performed no write and therefore owns no effects.
+    """
+    sealed = seal_resolution_for_persistence(
+        session, resolution, status="resolved"
+    )
+    beam_result = await beam_resolve(
+        session_id=session.session_id,
+        paused_agent_id=session.paused_agent_id,
+        reviewer_agent_id=session.reviewer_agent_id,
+        resolution=sealed,
+    )
+    already_terminal = bool(
+        isinstance(beam_result, dict)
+        and beam_result.get("origin") == ALREADY_TERMINAL_ORIGIN
+    )
+    written = beam_result is not None and not already_terminal
+    if beam_result is None:
+        winner: Dict[str, Any] = {}
+        with session_write_via(
+            "python_fallback", site="converged_resolution"
+        ):
+            written = bool(
+                await pg_resolve_session(
+                    session_id=session.session_id,
+                    resolution=sealed,
+                    status="resolved",
+                    expected_phase=DialecticPhase.SYNTHESIS.value,
+                    expected_reviewer=session.reviewer_agent_id,
+                    winner=winner,
+                )
+            )
+    return written
 
 
 async def check_reviewer_stuck(session: DialecticSession) -> bool:
@@ -3447,20 +3491,46 @@ async def handle_submit_thesis(arguments: Dict[str, Any]) -> Sequence[TextConten
                     "reasoning": reasoning or "",
                 }
                 agent_state = _snapshot_agent_state(agent_id)
+                synthetic_abort_reason = None
                 try:
                     review = await asyncio.wait_for(
                         _run_synthetic_review(session, thesis_dict, agent_id, agent_state),
                         timeout=_synthetic_review_budget(),
                     )
                 except asyncio.TimeoutError:
+                    synthetic_abort_reason = "synthetic_reviewer_timeout"
                     logger.warning(
                         "[DIALECTIC] Synthetic review exceeded budget; session "
                         "%s left awaiting facilitation", session_id,
                     )
                     review = None
                 except Exception as e:
+                    synthetic_abort_reason = "synthetic_reviewer_failed"
                     logger.warning("[DIALECTIC] Synthetic review failed: %s", e)
                     review = None
+
+                # The coroutine may have persisted its reviewer claim before a
+                # transcript, phase, or synthesis write failed (or before
+                # wait_for cancelled it). That synthetic identity has no
+                # resident process to continue later. Mark the claimed session
+                # for facilitation explicitly instead of relying on the open-
+                # slot branch below, which correctly does not fire once the
+                # reviewer column is non-NULL.
+                if (
+                    review is None
+                    and synthetic_abort_reason
+                    and session.reviewer_agent_id == SYNTHETIC_REVIEWER_ID
+                ):
+                    await _set_awaiting_facilitation(
+                        session, True, reason=synthetic_abort_reason
+                    )
+                    result["reviewer_agent_id"] = SYNTHETIC_REVIEWER_ID
+                    result["awaiting_facilitation"] = True
+                    result["note"] = (
+                        "The synthetic reviewer claimed the session but did not "
+                        "finish. Assign an independent reviewer or facilitate "
+                        "the recorded partial review as operator."
+                    )
 
                 if review:
                     result["synthetic_review"] = True
@@ -4331,216 +4401,178 @@ async def handle_submit_synthesis(arguments: Dict[str, Any]) -> Sequence[TextCon
                     result["resolution"] = resolution.to_dict()
                     attach_attestation(result)
     
+                    # The terminal compare-and-set is the effect owner. Win it
+                    # before applying conditions or resuming the agent so a
+                    # stale/reassigned reviewer cannot mutate runtime state and
+                    # only afterwards learn that another writer won.
+                    try:
+                        written = await _commit_converged_resolution(
+                            session, resolution
+                        )
+                        if not written:
+                            discard_receipt_unless_written(
+                                resolution, written=False, had_receipt=False
+                            )
+                            ACTIVE_SESSIONS.pop(session_id, None)
+                            return [error_response(
+                                "The persisted session refused the terminal resolution; no resolved outcome was recorded.",
+                                error_code="SESSION_RESOLUTION_WRITE_REFUSED",
+                                error_category="governance_refusal",
+                                recovery={
+                                    "action": (
+                                        "Reload the session and resolve any reviewer "
+                                        "authorship or concurrent-state conflict."
+                                    ),
+                                    "related_tools": ["dialectic"],
+                                },
+                                arguments=arguments,
+                            )]
+                    except BeamDialecticPolicyRefusal as e:
+                        discard_receipt_unless_written(
+                            resolution, written=False, had_receipt=False
+                        )
+                        session.phase = DialecticPhase.SYNTHESIS
+                        result["success"] = False
+                        result["converged"] = False
+                        result["blocked"] = e.error_code
+                        await _set_awaiting_facilitation(
+                            session, True, reason=e.error_code
+                        )
+                        return [error_response(
+                            str(e),
+                            error_code=_beam_policy_error_code(e),
+                            error_category="governance_refusal",
+                            recovery={
+                                "action": "Ask an operator to assign an independent reviewer.",
+                                "related_tools": ["dialectic"],
+                            },
+                            arguments=arguments,
+                        )]
+                    except Exception as e:
+                        discard_receipt_unless_written(
+                            resolution, written=False, had_receipt=False
+                        )
+                        logger.warning(
+                            "Could not commit terminal dialectic resolution: %s", e
+                        )
+                        ACTIVE_SESSIONS.pop(session_id, None)
+                        return [error_response(
+                            "The terminal resolution could not be persisted; no "
+                            "resolved outcome was recorded.",
+                            error_code="SESSION_RESOLUTION_WRITE_FAILED",
+                            error_category="system_error",
+                            recovery={
+                                "action": (
+                                    "Reload the session before retrying or ask an "
+                                    "operator to reconcile its current reviewer."
+                                ),
+                                "related_tools": ["dialectic"],
+                            },
+                            arguments=arguments,
+                        )]
+
+                    discard_receipt_unless_written(
+                        resolution, written=True, had_receipt=False
+                    )
+                    # The database transition is authoritative; keep a mocked
+                    # or reconstructed protocol object aligned with the row.
+                    session.phase = DialecticPhase.RESOLVED
+                    result["resolution"] = resolution.to_dict()
+                    attach_attestation(result)
+
                     try:
                         execution_result = await execute_resolution(
                             session, resolution, record_outcome=False
                         )
-                        result["execution"] = execution_result
-                        if execution_result.get("success"):
-                            result["next_step"] = next_step_resumed()
-                        else:
-                            result["next_step"] = next_step_resume_not_applied(
-                                execution_result.get("warning")
-                            )
-
-                        # The transition owner refused on authority, not on a
-                        # transient condition. Everything below this point
-                        # commits the session as RESOLVED regardless of whether
-                        # the resume happened — which is correct for "the agent
-                        # was already active" but wrong here, because it would
-                        # close a session whose defect is MISSING INDEPENDENT
-                        # AUTHORITY and emit resolution evidence for a resume
-                        # that never occurred.
-                        #
-                        # Reachable only through the TOCTOU window: the early
-                        # handler guard saw an active agent, and it became
-                        # paused before the mutation. Governed review of this
-                        # guard required that such a rejection be nonterminal
-                        # with "no resolved session write, no condition
-                        # application, no resume calibration, and no
-                        # dialectic_resolved outcome" (session
-                        # cfb3f0085a4d5c06, 2026-08-26).
-                        authority_refusal = execution_result.get("refused")
-                        if authority_refusal in {
-                            "self_review_not_authorizing",
-                            "review_authorship_invalid",
-                            "reviewer_author_conflict",
-                        }:
-                            session.phase = DialecticPhase.SYNTHESIS
-                            result["action"] = "facilitation_required"
-                            result["success"] = False
-                            result["converged"] = False
-                            result["blocked"] = authority_refusal
-                            await _set_awaiting_facilitation(
-                                session, True, reason=authority_refusal
-                            )
-                            try:
-                                await save_session(session)
-                            except Exception as e:
-                                logger.warning(
-                                    f"Could not re-save session after a refused "
-                                    f"unauthorized resume: {e}"
-                                )
-                            refusal_code = {
-                                "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
-                                "review_authorship_invalid": "REVIEW_AUTHORSHIP_METADATA_INVALID",
-                                "reviewer_author_conflict": "REVIEWER_AUTHOR_CONFLICT",
-                            }[authority_refusal]
-                            refusal_message = {
-                                "self_review_not_authorizing": (
-                                    "A self-review cannot release your own pause."
-                                ),
-                                "review_authorship_invalid": (
-                                    "Malformed reviewed-work authorship metadata cannot "
-                                    "authorize a resume."
-                                ),
-                                "reviewer_author_conflict": (
-                                    "A declared author of the reviewed work cannot "
-                                    "authorize its resume as an independent reviewer."
-                                ),
-                            }[authority_refusal]
-                            return [error_response(
-                                f"{refusal_message} The synthesis is recorded; "
-                                "resuming requires an independent reviewer or an operator.",
-                                error_code=refusal_code,
-                                error_category="governance_refusal",
-                                details={
-                                    "session_id": session_id,
-                                    "reviewer_agent_id": session.reviewer_agent_id,
-                                    "paused_agent_id": session.paused_agent_id,
-                                    "awaiting_facilitation": True,
-                                    "detected_at": "resume_transition",
-                                },
-                                recovery={
-                                    "action": (
-                                        "Your synthesis WAS recorded and the session "
-                                        "remains open. An operator can assign an "
-                                        "independent reviewer with "
-                                        "dialectic(action='reassign', "
-                                        f"session_id='{session_id}', "
-                                        "new_reviewer_id='<agent_id>')."
-                                    ),
-                                    "related_tools": ["dialectic", "identity"],
-                                },
-                                arguments=arguments,
-                            )]
-    
-                        # Execution succeeded - mark resolved. When
-                        # UNITARES_DIALECTIC_BEAM_RESOLUTION is on, BEAM owns the
-                        # saga + the terminal session-row write; otherwise (or on
-                        # any BEAM error) fall back to the Python path, whose B-4
-                        # guard still prevents an overwrite. (dialectic-on-BEAM
-                        # Slice 1.2)
-                        try:
-                            # Hard limits, the self-review guard and execution
-                            # have all passed: this is the acceptance point, so
-                            # this is where the deployment receipt is minted.
-                            sealed = seal_resolution_for_persistence(session, resolution, status="resolved")
-                            beam_result = await beam_resolve(
-                                session_id=session_id,
-                                paused_agent_id=session.paused_agent_id,
-                                reviewer_agent_id=session.reviewer_agent_id,
-                                resolution=sealed,
-                            )
-                            already_terminal = bool(
-                                isinstance(beam_result, dict)
-                                and beam_result.get("origin")
-                                == ALREADY_TERMINAL_ORIGIN
-                            )
-                            written = beam_result is not None and not already_terminal
-                            if beam_result is None:
-                                winner: Dict[str, Any] = {}
-                                with session_write_via("python_fallback", site="converged_resolution"):
-                                    written = bool(await pg_resolve_session(
-                                        session_id=session_id,
-                                        resolution=sealed,
-                                        status="resolved",
-                                        expected_phase=DialecticPhase.SYNTHESIS.value,
-                                        expected_reviewer=session.reviewer_agent_id,
-                                        winner=winner,
-                                    ))
-                            if not written:
-                                discard_receipt_unless_written(
-                                    resolution, written=False, had_receipt=False
-                                )
-                                ACTIVE_SESSIONS.pop(session_id, None)
-                                return [error_response(
-                                    "The persisted session refused the terminal resolution; no resolved outcome was recorded.",
-                                    error_code="SESSION_RESOLUTION_WRITE_REFUSED",
-                                    error_category="governance_refusal",
-                                    recovery={
-                                        "action": (
-                                            "Reload the session and resolve any reviewer "
-                                            "authorship or concurrent-state conflict."
-                                        ),
-                                        "related_tools": ["dialectic"],
-                                    },
-                                    arguments=arguments,
-                                )]
-                            discard_receipt_unless_written(resolution, written=written, had_receipt=False)
-                            result["resolution"] = resolution.to_dict()
-                            attach_attestation(result)
-                            await record_resolution_outcome(
-                                session, resolution, execution_result
-                            )
-                        except BeamDialecticPolicyRefusal as e:
-                            discard_receipt_unless_written(
-                                resolution, written=False, had_receipt=False
-                            )
-                            session.phase = DialecticPhase.SYNTHESIS
-                            result["success"] = False
-                            result["converged"] = False
-                            result["blocked"] = e.error_code
-                            await _set_awaiting_facilitation(
-                                session, True, reason=e.error_code
-                            )
-                            return [error_response(
-                                str(e),
-                                error_code=_beam_policy_error_code(e),
-                                error_category="governance_refusal",
-                                recovery={
-                                    "action": "Ask an operator to assign an independent reviewer.",
-                                    "related_tools": ["dialectic"],
-                                },
-                                arguments=arguments,
-                            )]
-                        except Exception as e:
-                            discard_receipt_unless_written(resolution, written=False, had_receipt=False)
-                            logger.warning(f"Could not resolve session in PostgreSQL: {e}")
-                            ACTIVE_SESSIONS.pop(session_id, None)
-                            return [error_response(
-                                "The terminal resolution could not be persisted; no "
-                                "resolved outcome was recorded.",
-                                error_code="SESSION_RESOLUTION_WRITE_FAILED",
-                                error_category="system_error",
-                                recovery={
-                                    "action": (
-                                        "Reload the session before retrying or ask an "
-                                        "operator to reconcile its current reviewer."
-                                    ),
-                                    "related_tools": ["dialectic"],
-                                },
-                                arguments=arguments,
-                            )]
                     except Exception as e:
-                        # Execution failed - mark FAILED, not resolved
-                        session.phase = DialecticPhase.FAILED
+                        # The decision is already durably committed. Never lie
+                        # by overwriting it as FAILED; expose the unapplied
+                        # runtime effect and route it for reconciliation.
+                        logger.warning(
+                            "Committed dialectic resolution effect failed: %s", e
+                        )
                         result["success"] = False
                         result["execution_error"] = str(e)
-                        result["next_step"] = next_step_execution_failed(e)
-                        try:
-                            beam_result = await beam_resolve(
-                                session_id=session_id,
-                                paused_agent_id=session.paused_agent_id,
-                                reviewer_agent_id=session.reviewer_agent_id,
-                                resolution=resolution.to_dict(),
-                                status="failed",
-                            )
-                            if beam_result is None:
-                                with session_write_via("python_fallback", site="execution_failed"):
-                                    await pg_resolve_session(session_id=session_id, resolution=resolution.to_dict(), status="failed")
-                        except Exception as pg_e:
-                            logger.warning(f"Could not mark failed session in PostgreSQL: {pg_e}")
+                        result["effect_pending"] = True
+                        await _set_awaiting_facilitation(
+                            session, True, reason="resolution_effect_failed"
+                        )
+                        await save_session(session)
+                        return [error_response(
+                            "The terminal decision was committed, but its runtime "
+                            "effect failed and requires reconciliation.",
+                            error_code="SESSION_RESOLUTION_EFFECT_FAILED",
+                            error_category="system_error",
+                            details={
+                                "session_id": session_id,
+                                "terminal_committed": True,
+                                "effect_pending": True,
+                            },
+                            recovery={
+                                "action": (
+                                    "Inspect the paused agent state and reconcile the "
+                                    "committed resolution effect before retrying."
+                                ),
+                                "related_tools": ["dialectic", "check_working_state"],
+                            },
+                            arguments=arguments,
+                        )]
+
+                    result["execution"] = execution_result
+                    if execution_result.get("success"):
+                        result["next_step"] = next_step_resumed()
+                    else:
+                        result["next_step"] = next_step_resume_not_applied(
+                            execution_result.get("warning")
+                        )
+
+                    authority_refusal = execution_result.get("refused")
+                    if authority_refusal in {
+                        "self_review_not_authorizing",
+                        "review_authorship_invalid",
+                        "reviewer_author_conflict",
+                    }:
+                        # A transition-owner refusal after the row commit is a
+                        # reconciliation state, not permission to relabel the
+                        # durable decision or to emit a successful outcome.
+                        result["success"] = False
+                        result["blocked"] = authority_refusal
+                        result["effect_pending"] = True
+                        await _set_awaiting_facilitation(
+                            session, True, reason=authority_refusal
+                        )
+                        await save_session(session)
+                        refusal_code = {
+                            "self_review_not_authorizing": "SELF_REVIEW_NOT_AUTHORIZING",
+                            "review_authorship_invalid": "REVIEW_AUTHORSHIP_METADATA_INVALID",
+                            "reviewer_author_conflict": "REVIEWER_AUTHOR_CONFLICT",
+                        }[authority_refusal]
+                        return [error_response(
+                            "The terminal decision was committed, but the runtime "
+                            "transition owner refused its effect on authority grounds.",
+                            error_code=refusal_code,
+                            error_category="governance_refusal",
+                            details={
+                                "session_id": session_id,
+                                "reviewer_agent_id": session.reviewer_agent_id,
+                                "paused_agent_id": session.paused_agent_id,
+                                "terminal_committed": True,
+                                "effect_pending": True,
+                                "detected_at": "resume_transition",
+                            },
+                            recovery={
+                                "action": (
+                                    "Ask an operator to reconcile the committed "
+                                    "decision with the current agent authority state."
+                                ),
+                                "related_tools": ["dialectic", "identity"],
+                            },
+                            arguments=arguments,
+                        )]
+
+                    await record_resolution_outcome(
+                        session, resolution, execution_result
+                    )
     
                 # Update calibration from dialectic outcome
                 try:

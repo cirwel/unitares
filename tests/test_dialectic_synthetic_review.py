@@ -187,6 +187,53 @@ async def test_synthetic_reviewer_persists_open_slot_before_terminal_write():
 
 
 @pytest.mark.asyncio
+async def test_aborted_synthetic_claim_is_routed_to_facilitation(server_patch):
+    """A claimed synthetic slot must not look like a resident reviewer."""
+    from src.mcp_handlers.dialectic.handlers import (
+        ACTIVE_SESSIONS,
+        SYNTHETIC_REVIEWER_ID,
+        handle_submit_thesis,
+    )
+
+    session = _make_session(reviewer_id=None)
+    ACTIVE_SESSIONS[session.session_id] = session
+    facilitation = AsyncMock()
+
+    async def _abort_after_claim(*_args, **_kwargs):
+        session.reviewer_agent_id = SYNTHETIC_REVIEWER_ID
+        raise RuntimeError("transcript write failed")
+
+    import contextlib
+    with contextlib.ExitStack() as stack:
+        for p in _common_patches():
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                f"{DIALECTIC}.pg_update_awaiting_facilitation",
+                new=facilitation,
+            )
+        )
+        stack.enter_context(
+            patch(f"{DIALECTIC}._run_synthetic_review", new=_abort_after_claim)
+        )
+        response = await handle_submit_thesis({
+            "session_id": session.session_id,
+            "agent_id": "agent-paused",
+            "root_cause": "Repeated a failing edit",
+            "proposed_conditions": ["Re-read before each edit"],
+            "reasoning": "Assumed file state unchanged",
+        })
+
+    data = parse_result(response)
+    assert data["success"] is True
+    assert data["reviewer_agent_id"] == SYNTHETIC_REVIEWER_ID
+    assert data["awaiting_facilitation"] is True
+    assert "claimed the session but did not finish" in data["note"]
+    assert session.awaiting_facilitation is True
+    facilitation.assert_awaited_once_with(session.session_id, True)
+
+
+@pytest.mark.asyncio
 async def test_synthetic_terminal_write_refusal_is_not_reported_as_resolved():
     """A false effect-owner write leaves synthesis open and emits no success."""
     from src.mcp_handlers.dialectic.handlers import _run_synthetic_review

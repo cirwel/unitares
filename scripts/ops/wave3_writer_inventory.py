@@ -135,7 +135,17 @@ CALL_SITES: Dict[Tuple[str, str], Dict[str, object]] = {
         "calls": ("add_message_async", "beam_update_phase", "update_session_phase_async",
                   "beam_resolve", "resolve_session_async",
                   "update_session_awaiting_facilitation_async"),
-        "writer": "synthesis: message, phase, terminal resolution, facilitation flag",
+        "writer": (
+            "synthesis: message, phase, hard-limit terminal write, facilitation flag; "
+            "converged resolution delegates to the commit helper"
+        ),
+    },
+    (HANDLERS, "_commit_converged_resolution"): {
+        "calls": ("beam_resolve", "resolve_session_async"),
+        "writer": (
+            "synthesis terminal effect owner: BEAM resolution or reviewer/phase-CAS "
+            "Python fallback, before any runtime effect"
+        ),
     },
     (HANDLERS, "_set_awaiting_facilitation"): {
         "calls": ("update_session_awaiting_facilitation_async",),

@@ -1421,6 +1421,7 @@ class TestHandleSubmitSynthesis:
             signature_version=3,
         )
         resolve_row = AsyncMock(return_value=False)
+        execute = AsyncMock(return_value={"success": True})
         record_outcome = AsyncMock()
         emitted = []
 
@@ -1441,7 +1442,7 @@ class TestHandleSubmitSynthesis:
             session, "check_hard_limits", return_value=(True, None)
         ), patch(
             f"{DIALECTIC}.execute_resolution",
-            new=AsyncMock(return_value={"success": True}),
+            new=execute,
         ), patch(
             f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
         ), patch(
@@ -1466,8 +1467,70 @@ class TestHandleSubmitSynthesis:
         assert resolve_row.await_args.kwargs["winner"] == {
             # The mock does not fill the real writer's winner record.
         }
+        execute.assert_not_awaited()
         record_outcome.assert_not_awaited()
         assert "dialectic_resolved" not in emitted
+
+    @pytest.mark.asyncio
+    async def test_convergence_commits_before_applying_runtime_effects(
+        self, mock_server, mock_pg_add_message, mock_pg_update_phase,
+        mock_save_session, mock_context_agent,
+    ):
+        """The terminal reviewer/phase CAS owns every downstream effect."""
+        from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
+
+        session = _make_session(phase=DialecticPhase.SYNTHESIS)
+        session.synthesis_round = 1
+        resolution = Resolution(
+            action="resume",
+            conditions=["Lower threshold"],
+            root_cause="Agreed cause",
+            reasoning="Agreed reasoning",
+            signature_a="",
+            signature_b="",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            signature_version=3,
+        )
+        order = []
+
+        async def _commit(**_kwargs):
+            order.append("terminal_commit")
+            return True
+
+        async def _execute(*_args, **_kwargs):
+            order.append("runtime_effect")
+            return {"success": True, "applied_conditions": []}
+
+        with patch(
+            f"{DIALECTIC}.load_session",
+            new_callable=AsyncMock,
+            return_value=session,
+        ), patch.object(
+            session,
+            "submit_synthesis",
+            return_value={"success": True, "converged": True, "phase": "resolved"},
+        ), patch.object(
+            session, "finalize_resolution", return_value=resolution
+        ), patch.object(
+            session, "check_hard_limits", return_value=(True, None)
+        ), patch(
+            f"{DIALECTIC}.beam_resolve", new=AsyncMock(return_value=None)
+        ), patch(
+            f"{DIALECTIC}.pg_resolve_session", new=_commit
+        ), patch(
+            f"{DIALECTIC}.execute_resolution", new=_execute
+        ), patch(
+            f"{DIALECTIC}.record_resolution_outcome", new=AsyncMock()
+        ), mock_pg_add_message, mock_pg_update_phase, mock_save_session, mock_context_agent:
+            response = await handle_submit_synthesis({
+                "session_id": session.session_id,
+                "agent_id": "agent-reviewer",
+                "proposed_conditions": ["Lower threshold"],
+                "agrees": True,
+            })
+
+        assert parse_result(response)["success"] is True
+        assert order == ["terminal_commit", "runtime_effect"]
 
     @pytest.mark.asyncio
     async def test_beam_already_terminal_is_not_this_calls_resolution(
@@ -1490,6 +1553,7 @@ class TestHandleSubmitSynthesis:
             signature_version=3,
         )
         pg_resolve = AsyncMock()
+        execute = AsyncMock(return_value={"success": True})
         record_outcome = AsyncMock()
         emitted = []
 
@@ -1510,7 +1574,7 @@ class TestHandleSubmitSynthesis:
             session, "check_hard_limits", return_value=(True, None)
         ), patch(
             f"{DIALECTIC}.execute_resolution",
-            new=AsyncMock(return_value={"success": True}),
+            new=execute,
         ), patch(
             f"{DIALECTIC}.record_resolution_outcome", new=record_outcome
         ), patch(
@@ -1537,6 +1601,7 @@ class TestHandleSubmitSynthesis:
         assert data["success"] is False
         assert data["error_code"] == "SESSION_RESOLUTION_WRITE_REFUSED"
         pg_resolve.assert_not_awaited()
+        execute.assert_not_awaited()
         record_outcome.assert_not_awaited()
         assert "dialectic_resolved" not in emitted
 
@@ -1606,9 +1671,10 @@ class TestHandleSubmitSynthesis:
         chatgpt-codex_fb8d5918) named the window: "an agent observed active for
         reflection could become paused before execute_resolution and then be
         resumed by its own verdict." Here the handler check sees an ACTIVE agent
-        and lets the resolution through; `execute_resolution` then refuses on
-        authority, and that refusal must be nonterminal — no resolved write, no
-        dialectic_resolved, session left answerable.
+        and the terminal CAS wins before the runtime effect. The transition
+        owner still refuses the effect; that mismatch is exposed and routed for
+        reconciliation rather than relabeling the durable decision or emitting
+        a successful outcome.
         """
         from src.mcp_handlers.dialectic.handlers import handle_submit_synthesis
 
@@ -1653,9 +1719,11 @@ class TestHandleSubmitSynthesis:
         assert data["error_code"] == "SELF_REVIEW_NOT_AUTHORIZING"
         # error_response flattens `details` into the payload.
         assert data["detected_at"] == "resume_transition"
-        resolve_row.assert_not_awaited()
+        assert data["terminal_committed"] is True
+        assert data["effect_pending"] is True
+        resolve_row.assert_awaited_once()
         assert "dialectic_resolved" not in emitted
-        assert session.phase == DialecticPhase.SYNTHESIS
+        assert session.phase == DialecticPhase.RESOLVED
         assert session.awaiting_facilitation is True
 
     @pytest.mark.asyncio
