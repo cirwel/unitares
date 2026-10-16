@@ -81,14 +81,20 @@ def _query(db_url: str, sql: str) -> list[dict]:
     return [json.loads(line) for line in out.stdout.splitlines() if line.strip()]
 
 
+# fetch() matches each event to the nearest state row within this distance.
+JOIN_SLACK = timedelta(seconds=3)
+
+
 def fetch_instrument_ids(db_url: str, start: datetime, end: datetime) -> dict:
     """Rows per stamped EISV instrument id in ``[start, end)`` (None = unstamped)."""
-    counts_sql = eisv_era_sql.instrument_id_counts_sql(_ts(start), _ts(end))
+    # The state lookups in fetch() do not exclude synthetic rows, so neither does this.
+    counts_sql = eisv_era_sql.instrument_id_counts_sql(_ts(start), _ts(end), include_synthetic=True)
     rows = _query(db_url, f"SELECT row_to_json(t) FROM ({counts_sql}) t;")
     return {r["instrument_id"]: int(r["n"]) for r in rows}
 
 
 def fetch(db_url: str, start: datetime, end: datetime) -> list[dict]:
+    slack = int(JOIN_SLACK.total_seconds())
     window = f"AND e.ts > {_ts(start)} AND e.ts < {_ts(end)}"
     sql = f"""
     WITH gs AS (
@@ -105,10 +111,10 @@ def fetch(db_url: str, start: datetime, end: datetime) -> list[dict]:
     SELECT row_to_json(t) FROM (
       SELECT gs.*, a.label,
         (SELECT st.volatility FROM core.agent_state st
-           WHERE st.recorded_at BETWEEN gs.ts - interval '3s' AND gs.ts + interval '3s'
+           WHERE st.recorded_at BETWEEN gs.ts - interval '{slack}s' AND gs.ts + interval '{slack}s'
            ORDER BY abs(extract(epoch from st.recorded_at - gs.ts)) LIMIT 1) AS v,
         (SELECT COALESCE(st.risk_score,0) FROM core.agent_state st
-           WHERE st.recorded_at BETWEEN gs.ts - interval '3s' AND gs.ts + interval '3s'
+           WHERE st.recorded_at BETWEEN gs.ts - interval '{slack}s' AND gs.ts + interval '{slack}s'
            ORDER BY abs(extract(epoch from st.recorded_at - gs.ts)) LIMIT 1) AS risk,
         extract(epoch from (now() - gs.ts))/3600.0 AS age_h
       FROM gs LEFT JOIN core.agents a ON a.id::text = gs.agent_id
@@ -204,15 +210,20 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=args.hours) if args.hours else eisv_eras.ALL_TIME_START
-    if eisv_eras.check_window(start, end, allow_cross=args.allow_cross_era) is None:
+    # The read matches each event to state rows up to JOIN_SLACK away, so the
+    # state rows it can use span the event window widened by that much.
+    # BETWEEN is inclusive, the guard's window is [start, end): add 1 µs.
+    state_start = start - JOIN_SLACK
+    state_end = end + JOIN_SLACK + timedelta(microseconds=1)
+    if eisv_eras.check_window(state_start, state_end, allow_cross=args.allow_cross_era) is None:
         return 2
     rows = fetch(args.db_url, start, end)
     # Each psql call is its own snapshot, so count instrument ids AFTER the
     # read: every row the read saw had committed by then, so a mix it pooled
     # is in this count.
-    id_counts = fetch_instrument_ids(args.db_url, start, end)
+    id_counts = fetch_instrument_ids(args.db_url, state_start, state_end)
     provenance = eisv_eras.check_window(
-        start, end, allow_cross=args.allow_cross_era, id_counts=id_counts)
+        state_start, state_end, allow_cross=args.allow_cross_era, id_counts=id_counts)
     if provenance is None:
         return 2
     for line in provenance:
